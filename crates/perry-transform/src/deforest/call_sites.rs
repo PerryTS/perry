@@ -202,13 +202,17 @@ fn try_consumer_fuse_pattern(
     out_param_ids: &HashMap<FuncId, LocalId>,
 ) -> Option<(usize, Vec<Stmt>)> {
     let (callee_id, outer_id) = match_consumer_fuse_pattern(stmts, producers)?;
-    let (call_args, type_args) = match &stmts[0] {
+    let (call_args, type_args, call_offset) = match &stmts[0] {
         Stmt::Let {
-            init: Some(Expr::Call {
-                args, type_args, ..
-            }),
+            init:
+                Some(Expr::Call {
+                    args,
+                    type_args,
+                    byte_offset,
+                    ..
+                }),
             ..
-        } => (args.clone(), type_args.clone()),
+        } => (args.clone(), type_args.clone(), *byte_offset),
         _ => return None,
     };
 
@@ -228,7 +232,7 @@ fn try_consumer_fuse_pattern(
         args: new_args,
         type_args,
         // #5247: deforestation-fused call; no single source offset.
-        byte_offset: 0,
+        byte_offset: call_offset,
     };
     Some((
         2,
@@ -425,6 +429,7 @@ fn try_rewrite_single_stmt(
                     callee,
                     args,
                     type_args,
+                    byte_offset: call_offset,
                     ..
                 }),
         } => match callee.as_ref() {
@@ -445,7 +450,7 @@ fn try_rewrite_single_stmt(
                         callee: callee.clone(),
                         args: new_args,
                         type_args: type_args.clone(),
-                        byte_offset: 0,
+                        byte_offset: *call_offset,
                     }),
                 ));
                 let let_stmt = Stmt::Let {

@@ -105,7 +105,12 @@ fn block(stmts: &mut [Stmt], counts: &HashMap<LocalId, usize>) {
         let Stmt::Let {
             id,
             mutable: false,
-            init: Some(Expr::Call { callee, args, .. }),
+            init: Some(Expr::Call {
+                callee,
+                args,
+                byte_offset: call_offset,
+                ..
+            }),
             ..
         } = &stmts[i]
         else {
@@ -147,7 +152,7 @@ fn block(stmts: &mut [Stmt], counts: &HashMap<LocalId, usize>) {
                 Expr::Number(capture as f64),
             ],
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset: *call_offset,
         };
         if let Stmt::Let { init, .. } = &mut stmts[i] {
             *init = Some(projected);

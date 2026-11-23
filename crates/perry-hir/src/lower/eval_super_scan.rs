@@ -50,8 +50,8 @@ struct Scan {
 
 /// The "super is illegal here" throw, exposed for the indirect-eval
 /// parse-failure path in `const_fold_fn.rs`.
-pub(crate) fn throw_eval_super_unexpected_expr() -> Expr {
-    throw_eval_syntax_error_expr("'super' keyword unexpected here")
+pub(crate) fn throw_eval_super_unexpected_expr(byte_offset: u32) -> Expr {
+    throw_eval_syntax_error_expr("'super' keyword unexpected here", byte_offset)
 }
 
 /// Scan parsed eval-body statements for an abrupt completion that is illegal at
@@ -68,7 +68,7 @@ pub(crate) fn throw_eval_super_unexpected_expr() -> Expr {
 /// fold emit the spec-faithful runtime `SyntaxError` instead. Returns the throw
 /// expression on the first violation found. (test262 language/eval-code
 /// {direct,indirect}/parse-failure-{3,4,5})
-pub(crate) fn check_eval_illegal_abrupt(stmts: &[ast::Stmt]) -> Option<Expr> {
+pub(crate) fn check_eval_illegal_abrupt(stmts: &[ast::Stmt], byte_offset: u32) -> Option<Expr> {
     fn walk(stmt: &ast::Stmt, loop_depth: u32, switch_depth: u32) -> Option<&'static str> {
         use ast::Stmt as S;
         match stmt {
@@ -128,16 +128,16 @@ pub(crate) fn check_eval_illegal_abrupt(stmts: &[ast::Stmt]) -> Option<Expr> {
     fn walk_list(stmts: &[ast::Stmt], loop_depth: u32, switch_depth: u32) -> Option<&'static str> {
         stmts.iter().find_map(|s| walk(s, loop_depth, switch_depth))
     }
-    walk_list(stmts, 0, 0).map(throw_eval_syntax_error_expr)
+    walk_list(stmts, 0, 0).map(|msg| throw_eval_syntax_error_expr(msg, byte_offset))
 }
 
 /// Public wrapper around the eval-`SyntaxError` throw expression, for the
 /// general indirect-eval fold's parse-failure / illegal-statement paths.
-pub(crate) fn throw_eval_syntax_error_public(msg: &str) -> Expr {
-    throw_eval_syntax_error_expr(msg)
+pub(crate) fn throw_eval_syntax_error_public(msg: &str, byte_offset: u32) -> Expr {
+    throw_eval_syntax_error_expr(msg, byte_offset)
 }
 
-fn throw_eval_syntax_error_expr(msg: &str) -> Expr {
+fn throw_eval_syntax_error_expr(msg: &str, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -147,7 +147,7 @@ fn throw_eval_syntax_error_expr(msg: &str) -> Expr {
         }),
         args: vec![Expr::String(msg.to_string())],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -156,6 +156,7 @@ fn throw_eval_syntax_error_expr(msg: &str) -> Expr {
 pub(crate) fn check_direct_eval_super_private(
     ctx: &LoweringContext,
     stmts: &[ast::Stmt],
+    byte_offset: u32,
 ) -> Option<Expr> {
     let mut scan = Scan::default();
     for s in stmts {
@@ -170,11 +171,13 @@ pub(crate) fn check_direct_eval_super_private(
     if scan.super_call && !super_call_ok {
         return Some(throw_eval_syntax_error_expr(
             "'super' keyword unexpected here",
+            byte_offset,
         ));
     }
     if scan.super_prop && !super_prop_ok {
         return Some(throw_eval_syntax_error_expr(
             "'super' keyword unexpected here",
+            byte_offset,
         ));
     }
     // Class field initializers have no arguments object — `arguments` in a
@@ -182,6 +185,7 @@ pub(crate) fn check_direct_eval_super_private(
     if scan.arguments_ref && ctx.in_class_field_init {
         return Some(throw_eval_syntax_error_expr(
             "'arguments' is not allowed in class field initializer",
+            byte_offset,
         ));
     }
     // ES2025 §15.2.1.1: `new.target` in a direct eval body is only legal when
@@ -190,18 +194,19 @@ pub(crate) fn check_direct_eval_super_private(
     if scan.new_target && !ctx.in_nonarrow_fn {
         return Some(throw_eval_syntax_error_expr(
             "new.target expression is not allowed here",
+            byte_offset,
         ));
     }
     check_private_refs(&scan, |name| {
         ctx.private_scopes
             .iter()
             .any(|s| s.members.contains_key(name))
-    })
+    }, byte_offset)
 }
 
 /// Indirect eval: global code — no super of either kind, and private names
 /// must be declared inside the eval source itself.
-pub(crate) fn check_indirect_eval_super_private(stmts: &[ast::Stmt]) -> Option<Expr> {
+pub(crate) fn check_indirect_eval_super_private(stmts: &[ast::Stmt], byte_offset: u32) -> Option<Expr> {
     let mut scan = Scan::default();
     for s in stmts {
         scan_stmt(&mut scan, s, true);
@@ -209,23 +214,25 @@ pub(crate) fn check_indirect_eval_super_private(stmts: &[ast::Stmt]) -> Option<E
     if scan.super_call || scan.super_prop {
         return Some(throw_eval_syntax_error_expr(
             "'super' keyword unexpected here",
+            byte_offset,
         ));
     }
     // Indirect eval is global code — it has no new.target binding.
     if scan.new_target {
         return Some(throw_eval_syntax_error_expr(
             "new.target expression is not allowed here",
+            byte_offset,
         ));
     }
-    check_private_refs(&scan, |_| false)
+    check_private_refs(&scan, |_| false, byte_offset)
 }
 
-fn check_private_refs(scan: &Scan, outer_declares: impl Fn(&str) -> bool) -> Option<Expr> {
+fn check_private_refs(scan: &Scan, outer_declares: impl Fn(&str) -> bool, byte_offset: u32) -> Option<Expr> {
     for name in &scan.private_refs {
         if !scan.private_decls.contains(name) && !outer_declares(name) {
             return Some(throw_eval_syntax_error_expr(&format!(
                 "Private field '{name}' must be declared in an enclosing class"
-            )));
+            ), byte_offset));
         }
     }
     None

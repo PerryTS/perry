@@ -364,7 +364,7 @@ pub(crate) fn lower_new_member_native(
                     }),
                     args: Vec::new(),
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: new_byte_offset,
                 });
                 return Ok(Some(Expr::Sequence(exprs)));
             }

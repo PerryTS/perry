@@ -28,12 +28,12 @@ use for_await_targets::{
     web_readable_stream_values_receiver,
 };
 
-fn async_iterator_method_call(iterable: Expr) -> Expr {
+fn async_iterator_method_call(iterable: Expr, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::IndexGet {
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
             object: Box::new(iterable),
             index: Box::new(Expr::SymbolFor(Box::new(Expr::String(
@@ -42,7 +42,7 @@ fn async_iterator_method_call(iterable: Expr) -> Expr {
         }),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -606,7 +606,7 @@ fn lower_runtime_for_await_iterator(
         }),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: for_of_stmt.span.lo.0,
     };
     let next_call = Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0);
     module.init.push(Stmt::Let {
@@ -805,7 +805,7 @@ pub(super) fn lower_stmt_for_of_inner(
             // prototype replacements, once at loop entry (#9788).
             Expr::GetIterator(Box::new(iter_expr))
         } else if is_filehandle_readlines_for_await || is_fs_dir_for_await {
-            async_iterator_method_call(iter_expr)
+            async_iterator_method_call(iter_expr, for_of_stmt.span.lo.0)
         } else if is_node_readable_for_await {
             Expr::Call {
                 byte_end: 0,
@@ -817,7 +817,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 }),
                 args: vec![],
                 type_args: vec![],
-                byte_offset: 0,
+                byte_offset: for_of_stmt.span.lo.0,
             }
         } else if is_readline_interface_for_await {
             // rl.iterator() -> readline async-iterator object; .next() then
@@ -866,7 +866,7 @@ pub(super) fn lower_stmt_for_of_inner(
             }),
             args: vec![],
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset: for_of_stmt.span.lo.0,
         };
         let next_call = if needs_await {
             Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0)

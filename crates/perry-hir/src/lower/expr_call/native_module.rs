@@ -108,7 +108,7 @@ fn is_node_stream_class_name(name: &str) -> bool {
 /// reads and stores are the ordinary `[[Get]]`/`[[Set]]` node performs, so an
 /// accessor on a user prototype level sees them. The call's value is
 /// `undefined`.
-fn event_emitter_constructor_call(args: Vec<Expr>) -> Expr {
+fn event_emitter_constructor_call(args: Vec<Expr>, byte_offset: u32) -> Expr {
     let mut it = args.into_iter();
     let receiver = it.next().unwrap_or(Expr::Undefined);
     let options = it.next().unwrap_or(Expr::Undefined);
@@ -121,7 +121,7 @@ fn event_emitter_constructor_call(args: Vec<Expr>) -> Expr {
         }),
         args: vec![receiver, options],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     }];
     exprs.extend(it);
     exprs.push(Expr::Undefined);

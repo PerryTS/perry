@@ -538,7 +538,7 @@ fn sync_delegate_call(route: &DelegationRoute, name: &str, value: LocalId) -> Ex
         }),
         args: vec![Expr::LocalGet(route.iter_id), Expr::LocalGet(value)],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: route.byte_offset,
     })
 }
 

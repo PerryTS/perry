@@ -6,6 +6,7 @@
 //! `[a, b] = arr` and `{a, b} = obj` (these last two desugar to a
 //! sequence expression of individual assignments).
 
+use swc_common::Spanned;
 use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
 use swc_ecma_ast as ast;
@@ -70,7 +71,7 @@ pub(crate) fn lower_rhs_with_assignment_name(
     result
 }
 
-pub(crate) fn throw_type_error_const_assignment(name: &str) -> Expr {
+pub(crate) fn throw_type_error_const_assignment(name: &str, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -80,11 +81,11 @@ pub(crate) fn throw_type_error_const_assignment(name: &str) -> Expr {
         }),
         args: vec![Expr::String(name.to_string())],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
-fn throw_restricted_function_property_assignment() -> Expr {
+fn throw_restricted_function_property_assignment(byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -94,11 +95,11 @@ fn throw_restricted_function_property_assignment() -> Expr {
         }),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
-fn throw_reference_error_unresolvable_assignment(name: &str) -> Expr {
+fn throw_reference_error_unresolvable_assignment(name: &str, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -108,7 +109,7 @@ fn throw_reference_error_unresolvable_assignment(name: &str) -> Expr {
         }),
         args: vec![Expr::String(name.to_string())],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -322,7 +323,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         // still a declared binding (var hoisting) — self-assignment before
         // the declaration statement is fine and yields undefined.
         if ctx.lookup_local(name).is_none() {
-            return Ok(throw_reference_error_unresolvable_assignment(name));
+            return Ok(throw_reference_error_unresolvable_assignment(name, assign.span.lo.0));
         }
     }
 
@@ -555,7 +556,7 @@ pub(crate) fn lower_ident_assignment(
     if targets_class_inner {
         Ok(Expr::Sequence(vec![
             *value,
-            throw_type_error_const_assignment(&name),
+            throw_type_error_const_assignment(&name, byte_offset),
         ]))
     } else if let Some(id) = ctx.lookup_local(&name) {
         if ctx.is_local_immutable(id) {
@@ -564,7 +565,7 @@ pub(crate) fn lower_ident_assignment(
             // `TypeError: Assignment to constant variable.`
             return Ok(Expr::Sequence(vec![
                 *value,
-                throw_type_error_const_assignment(&name),
+                throw_type_error_const_assignment(&name, byte_offset),
             ]));
         }
         // A JavaScript `var` inferred from an array literal can later hold an
@@ -616,7 +617,7 @@ pub(crate) fn lower_ident_assignment(
             }),
             args: vec![Expr::ClassRef(class_name), *value],
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset: byte_offset,
         })
     } else if ctx.lookup_func(&name).is_some() {
         // v0.5.757: don't shadow a class/function binding with an
@@ -633,7 +634,7 @@ pub(crate) fn lower_ident_assignment(
             if matches!(name.as_str(), "undefined" | "NaN" | "Infinity") {
                 return Ok(Expr::Sequence(vec![
                     *value,
-                    throw_type_error_const_assignment(&name),
+                    throw_type_error_const_assignment(&name, byte_offset),
                 ]));
             }
             // #5989: strict-mode assignment to an existing global
@@ -743,7 +744,7 @@ fn lower_assignment_target(
                     {
                         return Ok(Expr::Sequence(vec![
                             *value,
-                            throw_restricted_function_property_assignment(),
+                            throw_restricted_function_property_assignment(byte_offset),
                         ]));
                     }
                 }
@@ -761,7 +762,7 @@ fn lower_assignment_target(
                         if matches!(prop_ident.sym.as_ref(), "caller" | "arguments") {
                             return Ok(Expr::Sequence(vec![
                                 *value,
-                                throw_restricted_function_property_assignment(),
+                                throw_restricted_function_property_assignment(byte_offset),
                             ]));
                         }
                     }
@@ -1222,7 +1223,7 @@ fn array_assignment_iife(
         callee: Box::new(super::expr_function::lower_arrow(ctx, &arrow)?),
         args: vec![*value],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset: pat.span().lo.0,
         byte_end: 0,
     })
 }

@@ -1531,7 +1531,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     // prototype replacements, once at loop entry (#9788).
                     Expr::GetIterator(Box::new(iter_expr_raw))
                 } else if is_filehandle_readlines_for_await || is_fs_dir_for_await {
-                    async_iterator_method_call(iter_expr_raw)
+                    async_iterator_method_call(iter_expr_raw, for_of_stmt.span.lo.0)
                 } else if is_node_readable_for_await {
                     Expr::Call {
                         byte_end: 0,
@@ -1543,7 +1543,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         }),
                         args: vec![],
                         type_args: vec![],
-                        byte_offset: 0,
+                        byte_offset: for_of_stmt.span.lo.0,
                     }
                 } else if is_readline_interface_for_await {
                     Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
@@ -1585,7 +1585,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     }),
                     args: vec![],
                     type_args: vec![],
-                    byte_offset: 0,
+                    byte_offset: for_of_stmt.span.lo.0,
                 };
                 let next_call = if needs_await {
                     Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0)

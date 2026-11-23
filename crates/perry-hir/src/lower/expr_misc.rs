@@ -198,7 +198,7 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         Expr::Bool(update.prefix),
                     ],
                     type_args: vec![],
-                    byte_offset: 0,
+                    byte_offset: update.span.lo.0,
                 });
             };
             if ctx.is_local_immutable(id) {
@@ -227,9 +227,9 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         }),
                         args: vec![Expr::LocalGet(id)],
                         type_args: vec![],
-                        byte_offset: 0,
+                        byte_offset: update.span.lo.0,
                     },
-                    throw_type_error_const_assignment(&name),
+                    throw_type_error_const_assignment(&name, update.span.lo.0),
                 ]));
             }
             let op = match update.op {
