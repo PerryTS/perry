@@ -91,6 +91,12 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, obj);
                 self.emit_memcall(func, "reflect_get_prototype_of", 1);
             }
+            Expr::ObjectIs(a, b) => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, a);
+                self.emit_store_arg(func, 1, b);
+                self.emit_memcall(func, "object_is", 2);
+            }
             Expr::Object(fields) => {
                 self.emit_frame_begin(func, 0);
                 self.emit_memcall(func, "object_new", 0);

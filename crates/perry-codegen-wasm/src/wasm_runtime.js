@@ -2338,6 +2338,8 @@ const __memDispatch = {
   parse_float: (val) => parseFloat(String(val)),
   js_mod: (a, b) => a % b,
   is_null_or_undefined: (val) => (val === null || val === undefined) ? 1 : 0,
+  // SameValue: NaN is itself and 0 is not -0, unlike `===`.
+  object_is: (a, b) => Object.is(a, b),
 
   // Objects — args are plain JS values (obj is the object itself, key is a string, etc.)
   object_new: () => ({}),
