@@ -239,7 +239,7 @@ fn emit_nullish_store_test(
     super::wpfacts_access::note_tested(ctx, object);
 }
 
-fn lower_runtime_property_set_by_name(
+pub(crate) fn lower_runtime_property_set_by_name(
     ctx: &mut FnCtx<'_>,
     object: &Expr,
     property: &str,
@@ -502,6 +502,25 @@ pub(crate) fn emit_nullish_write_guard(
     ctx.current_block = ok_idx;
 }
 
+/// A key a constructor defines with attributes (`FamilyKey::Defined`) on the
+/// receiver's class is no slot store's: a non-writable one's `[[Set]]` fails,
+/// which only the by-name `[[Set]]` sees.
+pub(crate) fn attributed_class_key(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
+    let shape_class = || ctx.ptr_shape_store_fact(object).map(|f| f.class_name.clone());
+    receiver_class_name(ctx, object)
+        .or_else(shape_class)
+        .is_some_and(|class| class_key_attributed(ctx, &class, property))
+}
+
+/// Does `class`'s family hold `property` as a key its constructor defines
+/// with attributes?
+pub(crate) fn class_key_attributed(ctx: &FnCtx<'_>, class: &str, property: &str) -> bool {
+    ctx.class_ids
+        .get(class)
+        .and_then(|id| ctx.program_layouts.families.get(id))
+        .is_some_and(|f| f.keys.iter().any(|(k, _)| k == property && k.attrs() != 0))
+}
+
 /// Lower an `Expr::PropertySet`.
 ///
 /// `assignment_strict` is the assignment's own `Throw` flag (ES2024 SS6.2.5.7
@@ -544,6 +563,15 @@ fn lower_store(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Res
             byte_offset,
             ..
         } => {
+            if attributed_class_key(ctx, object, property) {
+                return lower_runtime_property_set_by_name(
+                    ctx,
+                    object,
+                    property,
+                    value,
+                    assignment_strict,
+                );
+            }
             // ACCBUILD2 P4: a compound `o.k op= v` (13.15.3) whose PutValue
             // the facts prove calls one setter: the base is the HIR's temp,
             // evaluated once; GetValue is the value's read of the same key on

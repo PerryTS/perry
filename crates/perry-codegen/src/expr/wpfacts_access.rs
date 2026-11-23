@@ -1656,6 +1656,14 @@ pub(crate) fn prove_store(
     access: Access,
 ) -> Option<StoreProof> {
     let proof = prove(ctx, object, property, access)?;
+    // A non-writable defined key's `[[Set]]` fails; no proof stores its slot.
+    if proof
+        .class_names
+        .iter()
+        .any(|class| super::property_set::class_key_attributed(ctx, class, property))
+    {
+        return None;
+    }
     let site = site_id(ctx, property);
     record(
         ctx,
