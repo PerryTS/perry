@@ -22,3 +22,19 @@ console.log([typeof fp, fp.constructor === F, Object.keys(fp).length, (F as any)
         "object,true,0,true,t,true,true,true,undefined"
     );
 }
+
+// An object whose prototype chain reaches a function is an object, not a function.
+#[test]
+fn an_object_inheriting_from_a_function_is_not_a_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function F() {}
+const a: any = Object.create(F);
+const b: any = Object.setPrototypeOf({}, F);
+console.log([typeof a, typeof b, typeof F].join(","));
+"#
+        ),
+        "object,object,function"
+    );
+}
