@@ -36,8 +36,7 @@ case, and re-boxed at the return. Each local decision is correct. The sum is the
    call results, object fields and array elements. Codegen reads it and obeys it. Codegen
    never picks a representation itself: no per-site heuristics, no profitability rule, no
    local promotion. This is the target design. While P5 is partial (§8), codegen still chooses
-   per site in these places: the RFC §5.2 profitability term (`collectors/repsel_benefit.rs`), the
-   `$idx$i32` index-split clones, the `spec_abi` tuples, and the per-function collectors
+   per site in these places: the `$idx$i32` index-split clones, the `spec_abi` tuples, and the per-function collectors
    (`facts_int32_locals`) for a local the facts do not cover.
 2. **Representation-typed signatures are the internal ABI.** A function's parameters and
    return are passed in their representations. A boxed adapter exists only for a function
@@ -190,8 +189,8 @@ memo: the representation is a field of the node's facts.
   INT32 tag.
 - **P4: fields and elements** (landed for admitted templates). §7, with I32 at rest for the
   fields and elements wpfacts admits.
-- **P5: retire the heuristics** (partial: the per-body profitability refusal is gone). Delete
-  the RFC §5.2 profitability term (`collectors/repsel_benefit.rs`), the `$idx$i32` index-split
+- **P5: retire the heuristics** (partial: the RFC §5.2 profitability term is gone; int
+  demand decides). Delete the `$idx$i32` index-split
   clones, `spec_abi` tuples, `facts_int32_locals` and the remaining per-site representation
   choices in codegen, so that codegen has exactly one source for representation.
 
