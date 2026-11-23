@@ -28,3 +28,29 @@ inAsync().then((v) => console.log(v));
         "true,true,true,true,true,true,true,true | true,true,true,TypeError | TypeError\ntrue,true"
     );
 }
+
+// An async function, a generator and an async generator answer their own
+// intrinsic prototype, declared and as an expression. Expected output is Node's.
+#[test]
+fn get_prototype_of_a_function_answers_its_kind() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const AsyncProto = Object.getPrototypeOf(async () => {});
+const GenProto = Object.getPrototypeOf(function* () {});
+const AsyncGenProto = Object.getPrototypeOf(async function* () {});
+async function a() {}
+function* g() { yield 1; }
+async function* ag() { yield 1; }
+const ae = async function () {};
+const ge = function* () { yield 1; };
+const age = async function* () { yield 1; };
+function plain() {}
+console.log([AsyncProto !== Function.prototype, GenProto !== Function.prototype, AsyncGenProto !== Function.prototype, AsyncProto !== GenProto, GenProto !== AsyncGenProto].join(","));
+console.log([Object.getPrototypeOf(a) === AsyncProto, Object.getPrototypeOf(g) === GenProto, Object.getPrototypeOf(ag) === AsyncGenProto, Reflect.getPrototypeOf(a) === AsyncProto, Object.getPrototypeOf(plain) === Function.prototype].join(","));
+console.log([Object.getPrototypeOf(ae) === AsyncProto, Object.getPrototypeOf(ge) === GenProto, Object.getPrototypeOf(age) === AsyncGenProto].join(","));
+"#
+        ),
+        "true,true,true,true,true\ntrue,true,true,true,true\ntrue,true,true"
+    );
+}

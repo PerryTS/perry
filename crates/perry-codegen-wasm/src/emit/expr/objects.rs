@@ -219,9 +219,10 @@ impl<'a> FuncEmitCtx<'a> {
                             .get(&func_idx)
                             .copied()
                             .unwrap_or(func_idx);
-                        self.emit_frame_begin(func, 1);
+                        self.emit_frame_begin(func, 2);
                         self.emit_store_const(func, 0, table_idx as f64);
-                        self.emit_memcall(func, "function_value", 1);
+                        self.emit_store_const(func, 1, self.emitter.fn_proto_code(func_idx));
+                        self.emit_memcall(func, "function_value", 2);
                         return true;
                     }
                 }

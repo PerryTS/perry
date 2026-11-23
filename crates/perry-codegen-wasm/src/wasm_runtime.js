@@ -1639,9 +1639,11 @@ function wrapImportsForI64(imports) {
 // object that has `funcIdx` / `captures` fields, at no per-closure cost.
 class __PerryClosure {
   // Non-enumerable, so `for...in` and `Object.keys` see only a closure's own properties.
-  constructor(funcIdx, captureCount) {
+  // `protoKind` indexes `__fnKindProtos`; a plain function has none.
+  constructor(funcIdx, captureCount, protoKind) {
     __defineHidden(this, 'funcIdx', funcIdx);
     __defineHidden(this, 'captures', new Array(captureCount | 0));
+    if (protoKind) __defineHidden(this, 'protoKind', protoKind);
   }
 }
 // A function expression whose body reads its own `this`: its body takes the
@@ -1666,12 +1668,17 @@ function __callClosureMethod(closure, receiver, args) {
 function __typeOf(v) {
   return __isPerryClosure(v) ? 'function' : typeof v;
 }
-// A closure's host prototype is its class's; the program sees Function.prototype.
-// The closure records no function kind, so an async or generator function answers
-// Function.prototype too.
-function __programPrototype(proto) {
+// The prototype a function of each kind has: plain, async, generator, async generator.
+const __fnKindProtos = [
+  Function.prototype,
+  Object.getPrototypeOf(async function () {}),
+  Object.getPrototypeOf(function* () {}),
+  Object.getPrototypeOf(async function* () {}),
+];
+// A closure's host prototype is its class's; the program sees its kind's.
+function __programPrototype(obj, proto) {
   return proto === __PerryClosure.prototype || proto === __PerryReceiverClosure.prototype
-    ? Function.prototype
+    ? __fnKindProtos[obj.protoKind | 0]
     : proto;
 }
 
@@ -2344,8 +2351,8 @@ const __memDispatch = {
   },
   object_set_prototype_of: (obj, proto) => Object.setPrototypeOf(obj, proto),
   // Object.getPrototypeOf boxes a primitive; Reflect.getPrototypeOf throws for one.
-  object_get_prototype_of: (obj) => __programPrototype(Object.getPrototypeOf(obj)),
-  reflect_get_prototype_of: (obj) => __programPrototype(Reflect.getPrototypeOf(obj)),
+  object_get_prototype_of: (obj) => __programPrototype(obj, Object.getPrototypeOf(obj)),
+  reflect_get_prototype_of: (obj) => __programPrototype(obj, Reflect.getPrototypeOf(obj)),
   // `super[key]` with HomeObject `home`: the lookup starts at home's [[Prototype]]
   // at call time (see __superGet, which also takes a class method's home).
   object_super_get: (home, receiver, key) => __superGet(home, key, receiver),
@@ -2513,15 +2520,17 @@ const __memDispatch = {
   // Captures are stored as BigInt (i64 NaN-boxed bits).
   // __jsValueToBits converts JS values to BigInt for WASM calls.
   // __bitsToJsValue converts BigInt return values back to JS.
-  closure_new: (funcIdx, captureCount, receivesThis) =>
-    receivesThis ? new __PerryReceiverClosure(funcIdx, captureCount) : new __PerryClosure(funcIdx, captureCount),
+  closure_new: (funcIdx, captureCount, receivesThis, protoKind) =>
+    receivesThis
+      ? new __PerryReceiverClosure(funcIdx, captureCount, protoKind)
+      : new __PerryClosure(funcIdx, captureCount, protoKind),
   // A function declaration used as a value: one closure per function, so it keeps its
   // identity and properties across reads, with the `prototype` object an ordinary
   // function has (`prototype.constructor` is the function).
-  function_value: (funcIdx) => {
+  function_value: (funcIdx, protoKind) => {
     let fn = __functionValues.get(funcIdx);
     if (!fn) {
-      fn = new __PerryClosure(funcIdx, 0);
+      fn = new __PerryClosure(funcIdx, 0, protoKind);
       const prototype = {};
       Object.defineProperty(prototype, 'constructor', { value: fn, writable: true, configurable: true });
       Object.defineProperty(fn, 'prototype', { value: prototype, writable: true });
