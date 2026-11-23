@@ -59,7 +59,8 @@ with a linear gradient between two RGBA colors that spans the canvas;
 `direction` `0` runs top to bottom and `1` left to right. The path is
 closed straight down to the bottom edge, so the example above shades the area
 under its line on every backend; a path with fewer than two points fills
-nothing. Only `moveTo`/`lineTo` points shape the area, joined in order into one
+nothing. Only `moveTo`/`lineTo` and `arc` points (an arc as short segments) shape
+the area, joined in order into one
 outline: a later `moveTo` continues it rather than starting a separate area,
 so draw one series per `beginPath`. The fill color set by `setFillColor` is
 unchanged afterwards.
@@ -76,23 +77,27 @@ unchanged afterwards.
 |----------|---------------|--------|
 | Web | HTML5 Canvas | Wired |
 | WASM | HTML5 Canvas via JS bridge | Wired |
-| macOS | Core Graphics (CGContext) | Partial infrastructure; stateful API incomplete |
-| iOS | Core Graphics (CGContext) | Partial infrastructure; stateful API incomplete |
-| Linux | Cairo | Partial infrastructure; stateful API incomplete |
-| Windows | GDI command buffer | Partial infrastructure; stateful API incomplete |
-| Android | Canvas/Bitmap | Partial infrastructure; stateful API incomplete |
+| macOS | Core Graphics (CGContext) | Wired |
+| iOS, tvOS, visionOS | Core Graphics (CGContext) | Wired |
+| Linux | Cairo | Wired |
+| Windows | GDI command buffer | Wired |
+| Android | Canvas/Bitmap | Wired |
+| watchOS | — | Ignored (no-op) |
 
-The native parity matrix currently marks `setFillColor`, `setStrokeColor`,
-`setLineWidth`, `fillRect`, `strokeRect`, `arc`, `closePath`, `fill`, and
-stateful `stroke` unsupported. `setFont` and `fillText` draw text natively on
+The stateful API (`setFillColor`, `setStrokeColor`, `setLineWidth`,
+`fillRect`, `strokeRect`, `beginPath`, `moveTo`, `lineTo`, `arc`, `closePath`,
+`fill` and `stroke`) follows HTML canvas: fill and stroke start black with a
+line width of 1, `arc` takes radians and runs clockwise, and `fill` uses the
+nonzero rule. watchOS ignores the whole API. Windows draws opaque, because GDI
+has no alpha; macOS and Windows flatten arcs to short line segments.
+`setFont` and `fillText` draw text natively on
 macOS, iOS, tvOS, visionOS, Android, Linux and Windows, in the current fill
 color with `y` on the alphabetic baseline; watchOS ignores them. Windows draws
 text opaque, because GDI text has no alpha, and Linux uses only the first
 family of the font list. `setFont` reads the CSS `font` shorthand with `px` or
 `pt` sizes; any other spec leaves the font unchanged. `Canvas()` creation,
 clear/begin/move/line primitives, the lower-level colored stroke and gradient
-entries, and image drawing have native implementations, but that lower-level
-surface does not make the HTML-style examples above fully functional.
+entries, and image drawing have native implementations.
 
 ## Next Steps
 

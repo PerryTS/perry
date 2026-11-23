@@ -120,13 +120,41 @@ fn command_batch_renders(commands: &[DrawCmd]) -> bool {
     })
 }
 
+/// The points of an HTML canvas `arc` (clockwise, a span of 2π or more the whole circle), as
+/// chords of about two pixels, at least 8 per full turn, for the point list the colored
+/// stroke() and fillGradient read.
+fn arc_chords(x: f32, y: f32, r: f32, start: f32, end: f32) -> impl Iterator<Item = (f32, f32)> {
+    let tau = std::f32::consts::TAU;
+    let sweep = if end - start >= tau {
+        tau
+    } else {
+        (end - start).rem_euclid(tau)
+    };
+    let min_steps = (8.0 * sweep / tau).ceil().max(1.0) as usize;
+    let steps = ((sweep * r / 2.0).ceil() as usize).clamp(min_steps, 4096);
+    (0..=steps).map(move |i| {
+        let angle = start + sweep * i as f32 / steps as f32;
+        (x + r * angle.cos(), y + r * angle.sin())
+    })
+}
+
 /// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
-/// replays alone and the state lasts until its next setter, as in HTML canvas. Records the
-/// setters in `commands` into `state` for the next batch.
+/// replays alone and the state lasts as in HTML canvas: a setter until the next one, the
+/// current path until the next BeginPath. Records the state `commands` leave into `state`.
 fn carry_state(state: &mut Vec<DrawCmd>, commands: Vec<DrawCmd>) -> Vec<DrawCmd> {
     let mut batch = state.clone();
+    let is_path = |cmd: &DrawCmd| {
+        matches!(
+            cmd,
+            DrawCmd::MoveTo(..) | DrawCmd::LineTo(..) | DrawCmd::Arc(..) | DrawCmd::ClosePath
+        )
+    };
     for cmd in &commands {
-        if matches!(
+        if matches!(cmd, DrawCmd::BeginPath) {
+            state.retain(|kept| !is_path(kept));
+        } else if is_path(cmd) {
+            state.push(cmd.clone());
+        } else if matches!(
             cmd,
             DrawCmd::SetFillColor(_)
                 | DrawCmd::SetStrokeColor(_)
@@ -383,35 +411,19 @@ fn build_path<'local>(env: &mut jni::Env<'local>, segs: &[PathSeg]) -> Option<JO
                 let _ = env.call_method(&path, jni::jni_str!("close"), jni::jni_sig!("()V"), &[]);
             }
             PathSeg::Arc(cx, cy, r, start, end) => {
-                let sweep = (end - start).to_degrees();
-                if sweep.abs() >= 359.99 {
-                    if let Ok(dir_class) =
-                        env.find_class(jni::jni_str!("android/graphics/Path$Direction"))
-                    {
-                        if let Ok(cw) = env
-                            .get_static_field(
-                                &dir_class,
-                                jni::jni_str!("CW"),
-                                jni::jni_sig!("Landroid/graphics/Path$Direction;"),
-                            )
-                            .and_then(|v| v.l())
-                        {
-                            let _ = env.call_method(
-                                &path,
-                                jni::jni_str!("addCircle"),
-                                jni::jni_sig!("(FFFLandroid/graphics/Path$Direction;)V"),
-                                &[
-                                    JValue::Float(cx),
-                                    JValue::Float(cy),
-                                    JValue::Float(r),
-                                    JValue::Object(&cw),
-                                ],
-                            );
-                        }
-                    }
+                // HTML's clockwise sweep, the rule arc_chords uses; a positive sweep runs clockwise on screen.
+                let tau = std::f32::consts::TAU;
+                let sweep = if end - start >= tau {
+                    tau
                 } else {
-                    // Canvas arcs connect from the current point, as arcTo
-                    // with forceMoveTo=false does.
+                    (end - start).rem_euclid(tau)
+                }
+                .to_degrees();
+                // Canvas arcs connect from the current point, as arcTo with forceMoveTo=false
+                // does. arcTo wraps a 360° sweep to nothing, so a full turn is two halves.
+                let parts = if sweep >= 359.99 { 2 } else { 1 };
+                for part in 0..parts {
+                    let part_sweep = sweep / parts as f32;
                     let _ = env.call_method(
                         &path,
                         jni::jni_str!("arcTo"),
@@ -421,8 +433,8 @@ fn build_path<'local>(env: &mut jni::Env<'local>, segs: &[PathSeg]) -> Option<JO
                             JValue::Float(cy - r),
                             JValue::Float(cx + r),
                             JValue::Float(cy + r),
-                            JValue::Float(start.to_degrees()),
-                            JValue::Float(sweep),
+                            JValue::Float(start.to_degrees() + part_sweep * part as f32),
+                            JValue::Float(part_sweep),
                             JValue::Bool(false),
                         ],
                     );
@@ -666,6 +678,7 @@ fn repaint(handle: i64) {
                         DrawCmd::SetLineWidth(w) => cur_width = *w,
                         DrawCmd::ClosePath => segs.push(PathSeg::Close),
                         DrawCmd::Arc(cx, cy, r, sa, ea) => {
+                            path_points.extend(arc_chords(*cx, *cy, *r, *sa, *ea));
                             segs.push(PathSeg::Arc(*cx, *cy, *r, *sa, *ea));
                         }
                         DrawCmd::FillRect(x, y, w, h) | DrawCmd::StrokeRect(x, y, w, h) => {
@@ -1275,6 +1288,12 @@ pub fn stroke_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
 }
 
 pub fn arc(handle: i64, x: f64, y: f64, r: f64, start: f64, end: f64) {
+    if !([x, y, r, start, end].iter().all(|v| v.is_finite()) && r >= 0.0) {
+        return;
+    }
+    // Whole turns come off in f64, so huge angles keep their sweep once cast to f32.
+    let turns = (start / std::f64::consts::TAU).floor() * std::f64::consts::TAU;
+    let (start, end) = (start - turns, end - turns);
     push_cmd(
         handle,
         |d| {

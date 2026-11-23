@@ -174,12 +174,22 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
 }
 
 /// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
-/// replays alone and the state lasts until its next setter, as in HTML canvas. Records the
-/// setters in `commands` into `state` for the next batch.
+/// replays alone and the state lasts as in HTML canvas: a setter until the next one, the
+/// current path until the next BeginPath. Records the state `commands` leave into `state`.
 fn carry_state(state: &mut Vec<DrawCommand>, commands: Vec<DrawCommand>) -> Vec<DrawCommand> {
     let mut batch = state.clone();
+    let is_path = |cmd: &DrawCommand| {
+        matches!(
+            cmd,
+            DrawCommand::MoveTo(..) | DrawCommand::LineTo(..) | DrawCommand::ClosePath
+        )
+    };
     for cmd in &commands {
-        if matches!(
+        if matches!(cmd, DrawCommand::BeginPath) {
+            state.retain(|kept| !is_path(kept));
+        } else if is_path(cmd) {
+            state.push(cmd.clone());
+        } else if matches!(
             cmd,
             DrawCommand::SetFillColor { .. }
                 | DrawCommand::SetStrokeColor { .. }
@@ -656,6 +666,28 @@ pub fn move_to(handle: i64, x: f64, y: f64) {
     }
 }
 
+/// Adds a circular arc as HTML canvas does: a line from the current point to the arc's
+/// start, then the arc clockwise on screen from `start` to `end` (radians). The arc is
+/// recorded as short chords so fill, stroke and fillGradient share the one point list.
+pub fn arc(handle: i64, x: f64, y: f64, r: f64, start: f64, end: f64) {
+    if !([x, y, r, start, end].iter().all(|v| v.is_finite()) && r >= 0.0) {
+        return;
+    }
+    let tau = std::f64::consts::TAU;
+    let sweep = if end - start >= tau {
+        tau
+    } else {
+        (end - start).rem_euclid(tau)
+    };
+    // About 2pt per chord, at least 8 per full turn.
+    let steps = ((sweep * r / 2.0).ceil() as usize)
+        .clamp((8.0 * sweep / tau).ceil().max(1.0) as usize, 4096);
+    for i in 0..=steps {
+        let a = start + sweep * i as f64 / steps as f64;
+        line_to(handle, x + r * a.cos(), y + r * a.sin());
+    }
+}
+
 /// Line to point.
 pub fn line_to(handle: i64, x: f64, y: f64) {
     if let Some(key) = get_canvas_key(handle) {
@@ -985,6 +1017,45 @@ mod tests {
     use perry_runtime as _;
 
     #[test]
+    fn arc_records_a_clockwise_chord_path_from_start_to_end() {
+        let mtm =
+            MainThreadMarker::new().expect("panic-abort tests run on the process main thread");
+        let _app = NSApplication::sharedApplication(mtm);
+        let canvas = create(100.0, 100.0);
+        arc(canvas, 50.0, 50.0, 10.0, 0.0, std::f64::consts::FRAC_PI_2);
+        arc(canvas, 0.0, 0.0, f64::NAN, 0.0, 1.0);
+        let key = get_canvas_key(canvas).unwrap();
+        let points: Vec<(f64, f64)> = CANVAS_COMMANDS.with(|cmds| {
+            cmds.borrow()[&key]
+                .iter()
+                .map(|c| match c {
+                    DrawCommand::LineTo(x, y) => (*x, *y),
+                    _ => panic!("arc recorded a command other than LineTo"),
+                })
+                .collect()
+        });
+        let close = |(x, y): (f64, f64), (ex, ey): (f64, f64)| {
+            (x - ex).abs() < 1e-9 && (y - ey).abs() < 1e-9
+        };
+        assert!(
+            close(points[0], (60.0, 50.0)),
+            "starts at angle 0: {:?}",
+            points[0]
+        );
+        assert!(
+            close(*points.last().unwrap(), (50.0, 60.0)),
+            "ends a quarter turn clockwise on screen (y down)"
+        );
+        assert!(
+            points.len() >= 9,
+            "a quarter circle of radius 10 is several chords"
+        );
+        assert!(points
+            .iter()
+            .all(|&(x, y)| ((x - 50.0).hypot(y - 50.0) - 10.0).abs() < 1e-9));
+    }
+
+    #[test]
     fn clear_rect_records_its_rect_after_earlier_commands() {
         let mtm =
             MainThreadMarker::new().expect("panic-abort tests run on the process main thread");
@@ -1078,6 +1149,80 @@ mod tests {
                 ] if *r == 1.0 && font.size == 24.0 && text == "b"
             ),
             "a later batch replays with the fill color and font set before the previous paint"
+        );
+    }
+
+    #[test]
+    fn current_path_carries_until_the_next_begin_path() {
+        let mtm =
+            MainThreadMarker::new().expect("panic-abort tests run on the process main thread");
+        let _app = NSApplication::sharedApplication(mtm);
+        let canvas = create(100.0, 100.0);
+        let key = get_canvas_key(canvas).unwrap();
+        begin_path(canvas);
+        move_to(canvas, 0.0, 0.0);
+        line_to(canvas, 10.0, 10.0);
+        stroke_path(canvas);
+        assert!(take_frame(key).is_some());
+        set_stroke_color(canvas, 1.0, 0.0, 0.0, 1.0);
+        stroke_path(canvas);
+        let batch = take_frame(key).unwrap();
+        assert!(
+            matches!(
+                batch.as_slice(),
+                [
+                    DrawCommand::MoveTo(x0, y0),
+                    DrawCommand::LineTo(x1, y1),
+                    DrawCommand::SetStrokeColor { .. },
+                    DrawCommand::StrokePath,
+                ] if (*x0, *y0, *x1, *y1) == (0.0, 0.0, 10.0, 10.0)
+            ),
+            "stroke() keeps the path, so a later batch strokes it again"
+        );
+        begin_path(canvas);
+        fill_rect(canvas, 0.0, 0.0, 1.0, 1.0);
+        assert!(take_frame(key).is_some());
+        stroke_path(canvas);
+        let batch = take_frame(key).unwrap();
+        assert!(
+            matches!(
+                batch.as_slice(),
+                [DrawCommand::SetStrokeColor { .. }, DrawCommand::StrokePath]
+            ),
+            "beginPath drops the carried path"
+        );
+    }
+
+    #[test]
+    fn invalid_line_width_keeps_the_previous_one() {
+        use crate::lib_ffi::style_and_canvas as ffi;
+        let mtm =
+            MainThreadMarker::new().expect("panic-abort tests run on the process main thread");
+        let _app = NSApplication::sharedApplication(mtm);
+        let canvas = create(100.0, 100.0);
+        for w in [4.0, 0.0, f64::NAN, -1.0, f64::INFINITY] {
+            ffi::perry_ui_canvas_set_line_width(canvas, w);
+        }
+        let key = get_canvas_key(canvas).unwrap();
+        let commands = CANVAS_COMMANDS.with(|cmds| cmds.borrow()[&key].clone());
+        assert!(matches!(commands.as_slice(), [DrawCommand::SetLineWidth(w)] if *w == 4.0));
+    }
+
+    #[test]
+    fn non_finite_rects_record_nothing() {
+        use crate::lib_ffi::style_and_canvas as ffi;
+        let mtm =
+            MainThreadMarker::new().expect("panic-abort tests run on the process main thread");
+        let _app = NSApplication::sharedApplication(mtm);
+        let canvas = create(100.0, 100.0);
+        ffi::perry_ui_canvas_fill_rect(canvas, f64::NAN, 0.0, 10.0, 10.0);
+        ffi::perry_ui_canvas_stroke_rect(canvas, 0.0, 0.0, f64::INFINITY, 10.0);
+        ffi::perry_ui_canvas_fill_rect(canvas, 10.0, 10.0, -5.0, -5.0);
+        let key = get_canvas_key(canvas).unwrap();
+        let commands = CANVAS_COMMANDS.with(|cmds| cmds.borrow()[&key].clone());
+        assert!(
+            matches!(commands.as_slice(), [DrawCommand::FillRect { w, h, .. }] if (*w, *h) == (-5.0, -5.0)),
+            "only the finite rect records, negative sizes included"
         );
     }
 

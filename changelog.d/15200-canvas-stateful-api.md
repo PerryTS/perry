@@ -1,0 +1,1 @@
+`setStrokeColor`, `setLineWidth`, `fillRect`, `strokeRect`, `arc`, `closePath`, `fill` and `stroke()` draw on tvOS, visionOS, GTK4 and Windows, and `arc` on macOS and iOS, instead of doing nothing. Windows no longer draws a stray 1px black line along `moveTo`/`lineTo` points.

@@ -171,15 +171,24 @@ pub extern "C" fn perry_ui_canvas_set_stroke_color(h: i64, r: f64, g: f64, b: f6
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_set_line_width(h: i64, w: f64) {
-    widgets::canvas::set_line_width(h, w);
+    // HTML canvas keeps the previous width when the new one is not finite and positive.
+    if w.is_finite() && w > 0.0 {
+        widgets::canvas::set_line_width(h, w);
+    }
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_fill_rect(h: i64, x: f64, y: f64, w: f64, ht: f64) {
-    widgets::canvas::fill_rect(h, x, y, w, ht);
+    // HTML canvas ignores a fillRect with any non-finite argument.
+    if [x, y, w, ht].iter().all(|v| v.is_finite()) {
+        widgets::canvas::fill_rect(h, x, y, w, ht);
+    }
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_stroke_rect(h: i64, x: f64, y: f64, w: f64, ht: f64) {
-    widgets::canvas::stroke_rect(h, x, y, w, ht);
+    // HTML canvas ignores a strokeRect with any non-finite argument.
+    if [x, y, w, ht].iter().all(|v| v.is_finite()) {
+        widgets::canvas::stroke_rect(h, x, y, w, ht);
+    }
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, x: f64, y: f64, w: f64, ht: f64) {
@@ -190,7 +199,9 @@ pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, x: f64, y: f64, w: f64, ht:
     widgets::canvas::clear_rect(h, x, y, w, ht);
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_arc(_h: i64, _x: f64, _y: f64, _r: f64, _sa: f64, _ea: f64) {}
+pub extern "C" fn perry_ui_canvas_arc(h: i64, x: f64, y: f64, r: f64, sa: f64, ea: f64) {
+    widgets::canvas::arc(h, x, y, r, sa, ea);
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_close_path(h: i64) {
     widgets::canvas::close_path(h);
