@@ -70,6 +70,7 @@ impl WasmModuleEmitter {
             "object_has_property",
             "object_assign",
             "object_coerce",
+            "symbol_for",
             "object_coerce_has_property",
             "array_new",
             "array_constructor_single",

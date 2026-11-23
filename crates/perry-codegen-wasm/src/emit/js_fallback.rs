@@ -227,7 +227,7 @@ impl WasmModuleEmitter {
                     self.emit_js_stmt(out, s, locals, indent + 1);
                 }
                 let cond = self.emit_js_expr(condition, locals);
-                out.push_str(&format!("{pad}    }} while (isTruthy({cond}));\n"));
+                out.push_str(&format!("{pad}    }} while (toJsValue({cond}));\n"));
             }
             Stmt::Labeled { label: name, body } if labels_a_loop(body) => {
                 self.emit_js_labeled_stmt(out, body, locals, indent, &format!("{label}{name}: "));
