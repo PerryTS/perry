@@ -3529,6 +3529,8 @@ pub struct Model {
     pub top_pred: FxHashMap<NodeId, (NodeId, u32)>,
     pub cur_src: NodeId,
     pub cur_why: u32,
+    /// `PERRY_FACTS_STOP_ON_TOP` (`topstop`): `None` when off.
+    pub stop_top: Option<Box<crate::topstop::StopTop>>,
     pub top_vals: FxHashMap<String, NodeId>,
     /// The function whose body generation is walking (`NO_FN` outside).
     pub cur_fn: FnIdx,
