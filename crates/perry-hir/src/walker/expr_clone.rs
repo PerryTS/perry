@@ -769,7 +769,7 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             args: Shallow::shallow(args, n),
         },
         Expr::This => Expr::This,
-        Expr::SuperCall(a0) => Expr::SuperCall(Shallow::shallow(a0, n)),
+        Expr::SuperCall(a0, byte_offset) => Expr::SuperCall(Shallow::shallow(a0, n), *byte_offset),
         Expr::SuperMethodCall { method, args } => Expr::SuperMethodCall {
             method: method.clone(),
             args: Shallow::shallow(args, n),

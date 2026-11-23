@@ -385,7 +385,7 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::This => {
                 func.instruction(&Instruction::LocalGet(self.this_local.unwrap_or(0)));
             }
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 // Call parent constructor: super(args)
                 // this is local 0 in the current constructor
                 let mut called = false;

@@ -134,7 +134,7 @@ pub(crate) fn class_final(
             for stmt in &ctor.body {
                 let valid = match stmt {
                     Stmt::Let { init, .. } => init.as_ref().is_none_or(value_proof),
-                    Stmt::Expr(Expr::SuperCall(args)) if c.extends_name.is_some() => {
+                    Stmt::Expr(Expr::SuperCall(args, _)) if c.extends_name.is_some() => {
                         supers += 1;
                         supers == 1 && args.iter().all(value_proof)
                     }

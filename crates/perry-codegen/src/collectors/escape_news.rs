@@ -499,7 +499,7 @@ fn collect_used_new_fields_in_expr(
             }
         }
         Expr::New { args, .. }
-        | Expr::SuperCall(args)
+        | Expr::SuperCall(args, _)
         | Expr::StaticMethodCall { args, .. }
         | Expr::SuperMethodCall { args, .. }
         | Expr::MathMin(args)

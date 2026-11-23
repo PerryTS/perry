@@ -129,7 +129,7 @@ impl SH for Expr {
             Expr::ClassStaticSymbolSet { class_name, key, value, } => { tag(h, 48); class_name.hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::StaticMethodCall { class_name, method_name, args, } => { tag(h, 49); class_name.hash(h); method_name.hash(h); args.hash(h); }
             Expr::This => tag(h, 50),
-            Expr::SuperCall(args) => { tag(h, 51); args.hash(h); }
+            Expr::SuperCall(args, _) => { tag(h, 51); args.hash(h); }
             Expr::SuperMethodCall { method, args } => { tag(h, 52); method.hash(h); args.hash(h); }
             Expr::SuperMethodCallSpread { method, args } => { tag(h, 12509); method.hash(h); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::SuperPropertyGet { property } => { tag(h, 461); property.hash(h); }

@@ -227,7 +227,7 @@ fn lower_constructor_in_scope(
     // `this.name = name` at the start of the constructor body.
     let super_pos = body
         .iter()
-        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_) | Expr::SuperCallSpread(_))));
+        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_, _) | Expr::SuperCallSpread(_))));
     if !field_stores.is_empty() {
         // After super() and the parameter properties, as TypeScript emits.
         let at = match super_pos {

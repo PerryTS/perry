@@ -1111,7 +1111,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(object);
                 self.collect_strings_in_expr(index);
             }
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 for a in args {
                     self.collect_strings_in_expr(a);
                 }

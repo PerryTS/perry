@@ -376,7 +376,7 @@ pub fn invalidate_exact_receivers_for_expr(expr: &Expr, facts: &mut ExactReceive
         | Expr::CallSpread { .. }
         | Expr::NativeMethodCall { .. }
         | Expr::StaticMethodCall { .. }
-        | Expr::SuperCall(_)
+        | Expr::SuperCall(_, _)
         | Expr::SuperMethodCall { .. }
         | Expr::New { .. }
         | Expr::NewDynamic { .. }

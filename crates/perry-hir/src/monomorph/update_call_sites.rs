@@ -292,7 +292,7 @@ fn update_call_sites_in_expr(
             }
         }
         Expr::Await(inner, _) => update_call_sites_in_expr(inner, ctx, lookup),
-        Expr::SuperCall(args) => {
+        Expr::SuperCall(args, _) => {
             for arg in args.iter_mut() {
                 update_call_sites_in_expr(arg, ctx, lookup);
             }

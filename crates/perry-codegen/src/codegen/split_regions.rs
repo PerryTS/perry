@@ -246,7 +246,7 @@ fn frame_bound_expr(e: &Expr, facts: &ModuleFacts) -> Option<&'static str> {
     Some(match e {
         Expr::This | Expr::ModuleTopThis => "this",
         Expr::NewTarget => "new.target",
-        Expr::SuperCall(_)
+        Expr::SuperCall(_, _)
         | Expr::SuperCallSpread(_)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }

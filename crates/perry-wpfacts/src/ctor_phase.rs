@@ -1225,7 +1225,7 @@ impl<'a> W<'a> {
             {
                 self.expr(st, ds);
             }
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 for a in args {
                     self.expr(st, a);
                 }

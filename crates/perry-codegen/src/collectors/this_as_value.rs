@@ -334,7 +334,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             captures_this: true,
             ..
         } => true,
-        Expr::SuperCall(_)
+        Expr::SuperCall(_, _)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }
         | Expr::SuperPropertySet { .. }

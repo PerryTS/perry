@@ -1318,7 +1318,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
                 replace_this_in_expr(a, this_id);
             }
         }
-        Expr::SuperCall(args) => {
+        Expr::SuperCall(args, _) => {
             for a in args {
                 replace_this_in_expr(a, this_id);
             }

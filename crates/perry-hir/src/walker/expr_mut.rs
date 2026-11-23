@@ -839,7 +839,7 @@ where
         }
 
         // ─── Vec<Expr> children ───────────────────────────────────────────
-        Expr::Array(elements, _) | Expr::Sequence(elements) | Expr::SuperCall(elements) => {
+        Expr::Array(elements, _) | Expr::Sequence(elements) | Expr::SuperCall(elements, _) => {
             for e in elements {
                 f(e);
             }

@@ -1463,7 +1463,7 @@ pub(crate) fn stmt_reads_this(stmt: &Stmt) -> bool {
 fn expr_reads_this(e: &Expr) -> bool {
     match e {
         Expr::This
-        | Expr::SuperCall(_)
+        | Expr::SuperCall(_, _)
         | Expr::SuperCallSpread(_)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }

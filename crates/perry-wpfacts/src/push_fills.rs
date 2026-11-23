@@ -183,7 +183,7 @@ impl Scan<'_> {
         match e {
             Expr::This
             | Expr::ThisProvenClass(_)
-            | Expr::SuperCall(_)
+            | Expr::SuperCall(_, _)
             | Expr::SuperCallSpread(_)
             | Expr::SuperMethodCall { .. }
             | Expr::SuperMethodCallSpread { .. }

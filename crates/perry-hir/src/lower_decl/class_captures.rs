@@ -1180,7 +1180,7 @@ fn early_capture_stash_slot(body: &mut Vec<Stmt>) -> Option<usize> {
 }
 
 fn is_super_call(expr: &Expr) -> bool {
-    matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_))
+    matches!(expr, Expr::SuperCall(_, _) | Expr::SuperCallSpread(_))
 }
 
 /// True when `expr` is or contains a `super(…)` call outside nested closures

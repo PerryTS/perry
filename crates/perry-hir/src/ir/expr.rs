@@ -883,8 +883,8 @@ pub enum Expr {
     // This expression
     This,
 
-    // Super constructor call: super(args)
-    SuperCall(Vec<Expr>),
+    // Super constructor call: super(args), at its source offset
+    SuperCall(Vec<Expr>, u32),
 
     // Super method call: super.method(args)
     SuperMethodCall {
@@ -3071,7 +3071,7 @@ impl Expr {
             | Expr::Logical { byte_offset, .. }
             | Expr::PutValueSet { byte_offset, .. }
             | Expr::DynamicImport { byte_offset, .. } => Some(*byte_offset),
-            Expr::Await(_, o) => Some(*o),
+            Expr::Await(_, o) | Expr::SuperCall(_, o) => Some(*o),
             _ => None,
         }
     }
