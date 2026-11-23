@@ -474,7 +474,10 @@ follow the same rule in later phases). `Boxed` is ⊤ and always sound.
 
 - **F64**: the node's values are all Numbers (the `prims` fact is exactly `{number}`).
 - **I32**: F64 holds, *and* the interval fact proves every value integral and inside
-  `[-2^31, 2^31)`, *and* the node carries **int demand** (below).
+  `[-2^31, 2^31)`, *and* the node carries **int demand** (below). The interval may admit `-0`
+  only when no use of the value can observe the sign of a zero (a division, `**`, `Object.is`,
+  a native operand and every use the facts do not classify observe it); otherwise `-0` must be
+  impossible.
 - **Boxed**: everything else, including every ⊤ node.
 
 **Int demand** replaces the §5.2 profitability term with a fact. It is a backward property
@@ -488,7 +491,7 @@ callee, the field and the array element. That shared answer is what removes the 
 
 Demand also flows from an integer rule's result back to its operands (`+ - * %`, unary `-`,
 `++`/`--`, a loop test's clip, `Math.abs`/`min`/`max` and the integral roundings), and
-through filters. A node whose `-0` no use can observe tolerates `-0`.
+through filters.
 
 **The ring rule.** `+` and `-` on I32 operands have a result that is exact in a double (below
 2^33). When the interval fact proves that result inside i32, the node is I32 and lowers to a
@@ -498,9 +501,10 @@ qualifies only when the interval proves `|a·b| < 2^53`, because `(a*b)|0` is no
 `Math.imul(a, b)` above that bound. No other operation is inferred as integral (§5.3 still
 holds).
 
-**Joins.** A copy edge from an I32 node into an F64 node is a widening (`sitofp`, exact). Under
-this rule widening can only happen where the program itself merges an integer with a
-non-integer, which is a real join rather than a representation disagreement. A copy edge into
+**Joins.** A copy edge from an I32 node into an F64 node is a widening (`sitofp`, exact). It
+happens where the program merges an integer with a non-integer, and where an int-demanded value
+is copied into a node with no int demand (one whose consumers are all double arithmetic). Both
+are exact and test no tag; they are the one representation change inside proven code. A copy edge into
 `Boxed` is a boundary (§10.6).
 
 ### 10.4 Representation-typed ABI
@@ -511,13 +515,15 @@ non-integer, which is a real join rather than a representation disagreement. A c
   module budgets, `PERRY_SPECIALIZED_ABI_MAX` and the boxed-plus-one-tuple scheme: there is
   nothing to bound, because there are no clones.
 - A resolved call (the call graph edge is known, so the callee set is exactly known)
-  passes and receives raw values. A call that resolves to several callees with different
-  signatures calls through the join of those signatures, computed by the solver as a
-  property of the callee set.
+  passes and receives raw values. Main serves a typed signature only to a call whose callee
+  is exactly one body at every copy of the call, with no spread; any other call, including one
+  that resolves to several callees, takes the boxed entry. Calling several differently typed
+  callees through the join of their signatures is open P2 work.
 - **Boxed adapters** are emitted only for escaping functions: a function whose value reaches a
   ⊤ node, a native callback, a dynamic call site, a module export consumed outside the program,
   or a reflective surface. The adapter unboxes under the §5.5 contracts and calls the typed
-  body. Non-escaping functions have no boxed entry at all.
+  body. Non-escaping functions have no boxed entry at all. This is open P2 work: today every
+  function keeps its boxed entry.
 - Methods follow the same rule (receiver plus parameters). This absorbs the approved "Phase 2
   for methods" work: `spec_abi` on methods becomes the general ABI, not a special case.
 - GC: raw pointer parameters keep the §5.6 spill-to-shadow-slot rule. Raw scalars are not roots.
@@ -564,7 +570,12 @@ carry a representation like any other node. Their layouts do not change:
 
 **I32 at rest.** An I32 field is an I32 lane of its shape and an I32 element an I32 word
 (`INTERNAL_WORD_TAG | (u32)v`); both are decoded and encoded only through the layout accessor
-(perry-runtime `layout_slot.rs`). Proven code reads the facts, never the header bit.
+(perry-runtime `layout_slot.rs`). Proven code reads the facts, never the header bit. This
+layout applies only to templates wpfacts admits (`rest_elems`, `rest_fields`): an Array no
+generic reader (a builtin, a protocol, a spread, native code) can reach, and a class without
+heritage whose instances no generic reader such as JSON can reach. Every other template keeps
+the ordinary JSValue layout, and a lane-key site whose receiver the facts do not prove goes
+through `js_object_rest_get` / `js_object_rest_set`.
 
 ### 10.8 Phasing
 
@@ -588,7 +599,8 @@ memo: the representation is a field of the node's facts.
   The calling convention itself, the boxed adapters and the retirement are the remaining work.
 - **P3: canonical Numbers** (landed). §10.5. No Number is INT32-boxed, and no reader tests the
   INT32 tag.
-- **P4: fields and elements** (landed). §10.7, with I32 at rest for fields and elements.
+- **P4: fields and elements** (landed for admitted templates). §10.7, with I32 at rest for the
+  fields and elements wpfacts admits.
 - **P5: retire the heuristics** (partial: the per-body profitability refusal is gone). Delete
   the §5.2 profitability term (`collectors/repsel_benefit.rs`), the `$idx$i32` index-split
   clones, `spec_abi` tuples, `facts_int32_locals` and the remaining per-site representation
