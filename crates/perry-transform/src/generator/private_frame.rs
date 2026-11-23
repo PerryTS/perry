@@ -600,11 +600,14 @@ fn lower_list(
             body,
             captures,
             params,
+            byte_offset,
             ..
         } = obj.as_mut()
         else {
             unreachable!()
         };
+        // The step closure stands at the generator function it lowers.
+        let frame_offset = *byte_offset;
         for p in params.iter_mut() {
             if let Some(id) = map.get(&p.id) {
                 p.id = *id;
@@ -678,7 +681,7 @@ fn lower_list(
                     then_branch: vec![
                         Stmt::Expr(Expr::LocalSet(done, Box::new(Expr::Bool(true)))),
                         Stmt::Expr(Expr::LocalSet(step, Box::new(Expr::Number(1.0)))),
-                        Stmt::Return(Some(Expr::LocalGet(arg)), 0 /*HPOS*/),
+                        Stmt::Return(Some(Expr::LocalGet(arg)), frame_offset),
                     ],
                     else_branch: None,
                 },
@@ -689,7 +692,7 @@ fn lower_list(
                 condition: Expr::LocalGet(done),
                 then_branch: vec![
                     Stmt::Expr(Expr::LocalSet(step, Box::new(Expr::Number(1.0)))),
-                    Stmt::Return(Some(Expr::Undefined), 0 /*HPOS*/),
+                    Stmt::Return(Some(Expr::Undefined), frame_offset),
                 ],
                 else_branch: None,
             },
@@ -699,7 +702,7 @@ fn lower_list(
         prefix.append(body);
         let catch_id = *next_local;
         *next_local += 1;
-        *body = super::lower::wrap_generator_resume_body(prefix, executing, done, catch_id, false);
+        *body = super::lower::wrap_generator_resume_body(prefix, executing, done, catch_id, false, frame_offset);
         // The HIR remapper above also updates the explicit control identities.
         let _ = (i32_controls, i1_controls);
         let mut replacement = Vec::new();

@@ -4260,7 +4260,9 @@ fn lower_module(
     // the inliner would erase its call before the backend emits the real work.
     if hir.async_init_function.is_some() {
         let id = entry_outline::max_func_id(hir) + 1;
-        let finish = perry_hir::Function { byte_offset: 0 /*HPOS*/,
+        // The completion phase stands at the module construct, like the
+        // resumable body it finishes.
+        let finish = perry_hir::Function { byte_offset: hir.byte_offset,
             id,
             name: "async module completion".into(),
             type_params: Vec::new(),
