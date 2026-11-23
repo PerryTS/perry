@@ -246,3 +246,36 @@ console.log((s === Symbol.for("k")) + " " + (Symbol.iterator === Symbol["iterato
         "[\"x1\"] 1 2 3\ntrue true Symbol(Symbol.asyncIterator)"
     );
 }
+
+// A symbol key computed in an object literal after a spread stays a symbol.
+// Expected output is Node's.
+#[test]
+fn a_symbol_key_after_an_object_spread_stays_a_symbol() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const base = { a: 1 };
+const o: any = { ...base, [Symbol.iterator]: 2 };
+console.log(o[Symbol.iterator] + " " + JSON.stringify(Object.keys(o)) + " " + (Symbol.iterator in o));
+"#
+        ),
+        "2 [\"a\"] true"
+    );
+}
+
+// Evaluating the same symbol again reuses its handle rather than taking a new one.
+#[test]
+fn a_repeated_symbol_reuses_its_handle() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+const K: any = class {};
+let n = 0;
+for (let i = 0; i < 200; i++) if (K[Symbol.iterator] === undefined) n++;
+console.log(n);
+"#,
+            "console.log(handleStore.size < 200);"
+        ),
+        "200\ntrue"
+    );
+}

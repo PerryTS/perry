@@ -72,12 +72,16 @@ const stringTable = [];
 const handleStore = new Map();
 let nextHandleId = 1;
 const objectHandles = new WeakMap();
+// A Map, not the WeakMap: a registered symbol cannot be a weak key.
+const symbolHandles = new Map();
 
 function allocHandle(obj) {
   const reference = obj !== null && (typeof obj === 'object' || typeof obj === 'function');
   if (reference && objectHandles.has(obj)) return objectHandles.get(obj);
+  if (typeof obj === 'symbol' && symbolHandles.has(obj)) return symbolHandles.get(obj);
   const id = nextHandleId++;
   if (reference) objectHandles.set(obj, id);
+  else if (typeof obj === 'symbol') symbolHandles.set(obj, id);
   handleStore.set(id, obj);
   return id;
 }
@@ -2338,11 +2342,11 @@ const __memDispatch = {
   // Objects — args are plain JS values (obj is the object itself, key is a string, etc.)
   object_new: () => ({}),
   object_set: (obj, key, value) => {
-    if (obj && typeof obj === 'object') obj[String(key)] = value; return obj;
+    if (obj && typeof obj === 'object') obj[typeof key === 'symbol' ? key : String(key)] = value; return obj;
   },
   object_get: (obj, key) => {
     if (!obj || typeof obj !== 'object') return undefined;
-    return obj[String(key)];
+    return obj[typeof key === 'symbol' ? key : String(key)];
   },
   // A literal's property is defined, so a setter on its prototype does not run.
   object_literal_define: (obj, key, value) => {
