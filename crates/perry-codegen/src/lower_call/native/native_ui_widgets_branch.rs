@@ -433,16 +433,13 @@
         if let Some(sig) = perry_ui_table_lookup(method) {
             return lower_perry_ui_table_call(ctx, sig, args);
         }
-        // Fail fast at compile time so a missing/misspelled method
-        // surfaces as an error instead of silently returning 0.0 —
-        // which used to compile, link, and run with a zero widget
-        // handle (no window, or null-pointer crash at the caller).
-        bail!(
-            "perry/ui: '{}' is not a known function (args: {}). \
-             Check the spelling and consult types/perry/ui/index.d.ts \
-             for the supported API surface.",
-            method,
-            args.len()
-        );
+        // The module fails in `compile_module` once lowering has listed
+        // every unknown call; the placeholder value is never emitted.
+        // Recorded before the arguments lower, so an error inside them cannot
+        // drop it; they still lower so unknown calls nested in them are listed.
+        crate::unknown_ui_calls::record(method, args.len());
+        let (_, arg_group) = super::lower_call_args_rooted(ctx, args)?;
+        arg_group.release(ctx);
+        return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
     }
 }
