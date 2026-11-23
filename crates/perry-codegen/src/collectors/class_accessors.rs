@@ -107,7 +107,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn function(name: &str) -> Function {
-        Function {
+        Function { byte_offset: 0,
             id: 0,
             name: name.to_string(),
             type_params: Vec::new(),

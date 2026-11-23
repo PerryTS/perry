@@ -286,7 +286,7 @@ mod tests {
             &[("process.env.DEV", DefineValue::Str("false".into()))],
             false,
         );
-        let cond = Expr::Compare {
+        let cond = Expr::Compare { byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::EnvGet("DEV".into())),
             right: Box::new(Expr::String("true".into())),
@@ -305,7 +305,7 @@ mod tests {
     fn node_env_production_default_keeps_then() {
         // if (process.env.NODE_ENV === "production") { B } in node_modules.
         let define = HashMap::new();
-        let cond = Expr::Compare {
+        let cond = Expr::Compare { byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::EnvGet("NODE_ENV".into())),
             right: Box::new(Expr::String("production".into())),
@@ -323,7 +323,7 @@ mod tests {
     fn unconfigured_env_not_folded() {
         // No define, not node_modules ⇒ condition stays runtime, if untouched.
         let define = HashMap::new();
-        let cond = Expr::Compare {
+        let cond = Expr::Compare { byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::EnvGet("DEBUG".into())),
             right: Box::new(Expr::String("1".into())),

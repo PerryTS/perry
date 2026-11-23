@@ -114,7 +114,7 @@ fn ir_opts(is_entry: bool) -> CompileOptions {
 }
 
 fn field(name: &str, ty: Type) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -127,7 +127,7 @@ fn field(name: &str, ty: Type) -> ClassField {
 }
 
 fn array_field(name: &str) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -140,7 +140,7 @@ fn array_field(name: &str) -> ClassField {
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -152,7 +152,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 }
 
 fn func(id: u32, name: &str, params: Vec<Param>, return_type: Type, body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -289,7 +289,7 @@ fn bump_method() -> Function {
         vec![Stmt::Expr(Expr::PropertySet {
             object: Box::new(Expr::This),
             property: "value".to_string(),
-            value: Box::new(Expr::Binary {
+            value: Box::new(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(this_get("value")),
                 right: Box::new(Expr::Number(1.0)),
@@ -310,11 +310,11 @@ fn scale_method() -> Function {
         "scale",
         vec![param(70, "f", Type::Number)],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::Binary {
+        vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Mul,
             left: Box::new(this_get("value")),
             right: Box::new(Expr::LocalGet(70)),
-        }))],
+        }), 0)],
     )
 }
 
@@ -361,19 +361,19 @@ fn point_class() -> Class {
         "norm2",
         Vec::new(),
         Type::Number,
-        vec![Stmt::Return(Some(Expr::Binary {
+        vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
-            left: Box::new(Expr::Binary {
+            left: Box::new(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Mul,
                 left: Box::new(this_get("x")),
                 right: Box::new(this_get("x")),
             }),
-            right: Box::new(Expr::Binary {
+            right: Box::new(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Mul,
                 left: Box::new(this_get("y")),
                 right: Box::new(this_get("y")),
             }),
-        }))],
+        }), 0)],
     );
     let mut c = class(
         102,
@@ -426,7 +426,7 @@ fn ptr_shape_local_module() -> Module {
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::LocalGet(2)),
                 property: "x".to_string(),
-                value: Box::new(Expr::Binary {
+                value: Box::new(Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::PropertyGet {
                         byte_end: 0,
@@ -447,13 +447,13 @@ fn ptr_shape_local_module() -> Module {
             // shape-proven.
             Stmt::Expr(Expr::LocalSet(
                 3,
-                Box::new(Expr::Binary {
+                Box::new(Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(3)),
                     right: Box::new(call(Expr::LocalGet(2), "norm2", Vec::new())),
                 }),
             )),
-            Stmt::Return(Some(Expr::LocalGet(3))),
+            Stmt::Return(Some(Expr::LocalGet(3)), 0),
         ],
     )];
     m.init_kind = ModuleInitKind::Eager;
@@ -485,7 +485,7 @@ fn array_registry_class() -> Class {
                     mutable: true,
                     init: Some(Expr::Number(0.0)),
                 })),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(112)),
                     right: Box::new(Expr::PropertyGet {
@@ -502,7 +502,7 @@ fn array_registry_class() -> Class {
                 }),
                 body: vec![Stmt::Expr(Expr::LocalSet(
                     111,
-                    Box::new(Expr::Binary {
+                    Box::new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(111)),
                         right: Box::new(Expr::IndexGet {
@@ -515,7 +515,7 @@ fn array_registry_class() -> Class {
                     }),
                 ))],
             },
-            Stmt::Return(Some(Expr::LocalGet(111))),
+            Stmt::Return(Some(Expr::LocalGet(111)), 0),
         ],
     );
     class(
@@ -563,7 +563,7 @@ fn ptr_array_cache_module() -> Module {
                     121,
                     Box::new(call(Expr::LocalGet(122), "scan", Vec::new())),
                 )),
-                Stmt::Return(Some(Expr::LocalGet(121))),
+                Stmt::Return(Some(Expr::LocalGet(121)), 0),
             ],
         ),
         // A typed parameter is aliased by construction. Exact-shape guards
@@ -581,7 +581,7 @@ fn ptr_array_cache_module() -> Module {
                 Expr::LocalGet(124),
                 "scan",
                 Vec::new(),
-            )))],
+            )), 0)],
         ),
     ];
     m.init_kind = ModuleInitKind::Eager;
@@ -618,14 +618,14 @@ fn guarded_boolean_site_module(boolean_body: bool) -> Module {
         // does not trust an erased source annotation.
         Type::Boolean,
         vec![Stmt::Return(Some(if boolean_body {
-            Expr::Compare {
+            Expr::Compare { byte_offset: 0,
                 op: perry_hir::CompareOp::Gt,
                 left: Box::new(Expr::LocalGet(131)),
                 right: Box::new(this_get("limit")),
             }
         } else {
             Expr::Integer(1)
-        }))],
+        }), 0)],
     );
     let mut m = Module::new(if boolean_body {
         "guarded_boolean_result.ts"
@@ -649,10 +649,10 @@ fn guarded_boolean_site_module(boolean_body: bool) -> Module {
         vec![
             Stmt::If {
                 condition: call(Expr::LocalGet(133), "accepts", vec![Expr::LocalGet(134)]),
-                then_branch: vec![Stmt::Return(Some(Expr::Integer(1)))],
+                then_branch: vec![Stmt::Return(Some(Expr::Integer(1)), 0)],
                 else_branch: None,
             },
-            Stmt::Return(Some(Expr::Integer(0))),
+            Stmt::Return(Some(Expr::Integer(0)), 0),
         ],
     )];
     m.init_kind = ModuleInitKind::Eager;
@@ -666,7 +666,7 @@ fn bitset_truthiness_site_module(proven_index: bool) -> Module {
     const CALLER_MASK_ID: u32 = 145;
     const CALLER_INDEX_ID: u32 = 146;
 
-    let bitset_test = Expr::Binary {
+    let bitset_test = Expr::Binary { byte_offset: 0,
         op: BinaryOp::BitAnd,
         left: Box::new(Expr::IndexGet {
             element_offset: 0,
@@ -677,7 +677,7 @@ fn bitset_truthiness_site_module(proven_index: bool) -> Module {
                 op: perry_hir::UnaryOp::BitNot,
                 operand: Box::new(Expr::Unary {
                     op: perry_hir::UnaryOp::BitNot,
-                    operand: Box::new(Expr::Binary {
+                    operand: Box::new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Div,
                         left: Box::new(Expr::LocalGet(INDEX_ID)),
                         right: Box::new(Expr::Integer(32)),
@@ -685,10 +685,10 @@ fn bitset_truthiness_site_module(proven_index: bool) -> Module {
                 }),
             }),
         }),
-        right: Box::new(Expr::Binary {
+        right: Box::new(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Shl,
             left: Box::new(Expr::Integer(1)),
-            right: Box::new(Expr::Binary {
+            right: Box::new(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Mod,
                 left: Box::new(Expr::LocalGet(INDEX_ID)),
                 right: Box::new(Expr::Integer(32)),
@@ -703,7 +703,7 @@ fn bitset_truthiness_site_module(proven_index: bool) -> Module {
             param(INDEX_ID, "index", Type::Any),
         ],
         Type::Any,
-        vec![Stmt::Return(Some(bitset_test))],
+        vec![Stmt::Return(Some(bitset_test), 0)],
     );
     let call_index = if proven_index {
         Expr::Integer(7)
@@ -729,10 +729,10 @@ fn bitset_truthiness_site_module(proven_index: bool) -> Module {
                     "has",
                     vec![Expr::LocalGet(CALLER_MASK_ID), call_index],
                 ),
-                then_branch: vec![Stmt::Return(Some(Expr::Integer(1)))],
+                then_branch: vec![Stmt::Return(Some(Expr::Integer(1)), 0)],
                 else_branch: None,
             },
-            Stmt::Return(Some(Expr::Integer(0))),
+            Stmt::Return(Some(Expr::Integer(0)), 0),
         ],
     );
 
@@ -892,11 +892,11 @@ fn fcmp_one_outside_the_plain_number_guard(body: &str) -> bool {
 #[test]
 fn noncanonical_bitwise_method_does_not_gain_raw_number_truthiness() {
     let mut module = bitset_truthiness_site_module(true);
-    module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::Binary {
+    module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
         op: BinaryOp::BitAnd,
         left: Box::new(Expr::LocalGet(141)),
         right: Box::new(Expr::LocalGet(142)),
-    }))];
+    }), 0)];
     let ir = emit(&module, false);
     let probe = function_body(&ir, "__probeBitset(");
     assert!(
@@ -1089,7 +1089,7 @@ fn field_value_arguments_to_sibling_methods_keep_the_proven_this_clone() {
             Expr::This,
             "scale",
             vec![this_get("value")],
-        )))],
+        )), 0)],
     ));
     let mut m = Module::new("pshape_field_value_args.ts");
     m.classes = vec![counter];
@@ -1102,7 +1102,7 @@ fn field_value_arguments_to_sibling_methods_keep_the_proven_this_clone() {
             Expr::LocalGet(2),
             "scaleByValue",
             Vec::new(),
-        )))],
+        )), 0)],
     )];
     m.init_kind = ModuleInitKind::Eager;
     let ir = emit(&m, false);
@@ -1119,7 +1119,7 @@ fn field_value_arguments_to_sibling_methods_keep_the_proven_this_clone() {
         "leak",
         vec![param(94, "other", Type::Any)],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::Number(1.0)))],
+        vec![Stmt::Return(Some(Expr::Number(1.0)), 0)],
     ));
     counter.methods.push(func(
         95,
@@ -1130,7 +1130,7 @@ fn field_value_arguments_to_sibling_methods_keep_the_proven_this_clone() {
             Expr::This,
             "leak",
             vec![Expr::This],
-        )))],
+        )), 0)],
     ));
     let mut m = Module::new("pshape_this_value_arg.ts");
     m.classes = vec![counter];
@@ -1143,7 +1143,7 @@ fn field_value_arguments_to_sibling_methods_keep_the_proven_this_clone() {
             Expr::LocalGet(2),
             "leakSelf",
             Vec::new(),
-        )))],
+        )), 0)],
     )];
     m.init_kind = ModuleInitKind::Eager;
     let ir = emit(&m, false);
@@ -1383,9 +1383,9 @@ fn row_class() -> Class {
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
                 property: "score".to_string(),
-                value: Box::new(Expr::Binary {
+                value: Box::new(Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Add,
-                    left: Box::new(Expr::Binary {
+                    left: Box::new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Mul,
                         left: Box::new(this_get("weight")),
                         right: Box::new(Expr::LocalGet(82)),
@@ -1395,7 +1395,7 @@ fn row_class() -> Class {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(this_get("score"))),
+            Stmt::Return(Some(this_get("score")), 0),
         ],
     );
     let tag = func(
@@ -1403,7 +1403,7 @@ fn row_class() -> Class {
         "tag",
         Vec::new(),
         Type::Number,
-        vec![Stmt::Return(Some(this_get("id")))],
+        vec![Stmt::Return(Some(this_get("id")), 0)],
     );
     class(
         103,
@@ -1431,11 +1431,11 @@ fn tower_site_module() -> Module {
         "probe",
         vec![param(2, "r", Type::Named("Shaped".to_string()))],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::Binary {
+        vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(call(Expr::LocalGet(2), "rescore", vec![Expr::Number(1.5)])),
             right: Box::new(call(Expr::LocalGet(2), "tag", Vec::new())),
-        }))],
+        }), 0)],
     )];
     m.init_kind = ModuleInitKind::Eager;
     m
@@ -1453,14 +1453,14 @@ fn indexed_tower_site_module() -> Module {
         "lookup",
         vec![param(INDEX_ID, "index", Type::Any)],
         Type::Any,
-        vec![Stmt::Return(Some(Expr::Binary {
+        vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::synthetic_index_get(
                 Box::new(this_get("values")),
                 Box::new(Expr::LocalGet(INDEX_ID)),
             )),
             right: Box::new(this_get("id")),
-        }))],
+        }), 0)],
     ));
 
     let mut module = Module::new("pshape_index_tower.ts");
@@ -1474,7 +1474,7 @@ fn indexed_tower_site_module() -> Module {
             Expr::LocalGet(2),
             "lookup",
             vec![Expr::Integer(0)],
-        )))],
+        )), 0)],
     )];
     module.init_kind = ModuleInitKind::Eager;
     module
@@ -1797,11 +1797,11 @@ fn is_dynamic_method_fallback(line: &str) -> bool {
 fn polymorphic_array_site_module() -> Module {
     let mut m = guarded_site_module();
     let mut own = bump_method();
-    own.body = vec![Stmt::Return(Some(Expr::Binary {
+    own.body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(this_get("value")),
         right: Box::new(Expr::Number(1.0)),
-    }))];
+    }), 0)];
     m.classes[0]
         .methods
         .iter_mut()
@@ -1971,15 +1971,15 @@ fn class_array_field_coercion_before_later_read_keeps_old_dispatch() {
         .iter_mut()
         .find(|f| f.name == "bump")
         .unwrap()
-        .body = vec![Stmt::Return(Some(Expr::Binary {
+        .body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
-        left: Box::new(Expr::Binary {
+        left: Box::new(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Mul,
             left: Box::new(this_get("value")),
             right: Box::new(Expr::Integer(3)),
         }),
         right: Box::new(this_get("value")),
-    }))];
+    }), 0)];
     let ir = emit_static(&m, false);
     let caller = function_body(&ir, "__probe(");
     assert!(!caller.contains("method_direct.sub0."));
@@ -1994,7 +1994,7 @@ fn class_array_subclass_callback_keeps_its_public_body() {
         "tick",
         Vec::new(),
         Type::Void,
-        vec![Stmt::Return(None)],
+        vec![Stmt::Return(None, 0)],
     ));
     m.classes[1].methods[0].body.insert(
         0,

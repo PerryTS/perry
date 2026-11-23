@@ -1396,7 +1396,7 @@ mod tests {
     }
 
     fn declaration_guard_for(ty: Type, aliases: &HashMap<String, Type>) -> Option<SpecParamGuard> {
-        let params = [perry_hir::Param {
+        let params = [perry_hir::Param { byte_offset: 0,
             id: 1,
             name: "value".to_string(),
             ty,
@@ -1617,10 +1617,10 @@ mod tests {
     fn suspension_scan_stays_in_the_current_function_body() {
         let direct = vec![perry_hir::Stmt::Return(Some(perry_hir::Expr::Await(
             Box::new(perry_hir::Expr::Undefined),
-        )))];
+         0,)), 0)];
         assert!(body_contains_await(&direct));
 
-        let nested = vec![perry_hir::Stmt::Expr(perry_hir::Expr::Closure {
+        let nested = vec![perry_hir::Stmt::Expr(perry_hir::Expr::Closure { byte_offset: 0,
             func_id: 9,
             params: Vec::new(),
             return_type: Type::Void,
@@ -1655,7 +1655,7 @@ mod tests {
             heritage_lexically_shadowed: false,
             fields: fields
                 .into_iter()
-                .map(|(field, ty)| perry_hir::ClassField {
+                .map(|(field, ty)| perry_hir::ClassField { byte_offset: 0,
                     origin: perry_hir::ClassFieldOrigin::Definition,
                     name: field.to_string(),
                     key_expr: None,
@@ -1925,7 +1925,7 @@ mod tests {
         let mut shadowed = class(6, "Shadowed", None, vec![("value", Type::Number)]);
         shadowed.getters.push((
             "value".to_string(),
-            perry_hir::Function {
+            perry_hir::Function { byte_offset: 0,
                 id: 60,
                 name: "get_value".to_string(),
                 type_params: Vec::new(),

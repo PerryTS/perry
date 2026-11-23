@@ -214,7 +214,7 @@ pub(super) fn normalize(stmts: &[Stmt], child: u32) -> Vec<Stmt> {
 mod tests {
     use super::*;
     fn intrinsic(method: &str, args: Vec<Expr>) -> Expr {
-        Expr::NativeMethodCall {
+        Expr::NativeMethodCall { byte_offset: 0,
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,
@@ -223,7 +223,7 @@ mod tests {
         }
     }
     fn fixture() -> Vec<Stmt> {
-        let mode = Expr::Compare {
+        let mode = Expr::Compare { byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(21)),
             right: Box::new(Expr::Bool(true)),
@@ -251,7 +251,7 @@ mod tests {
                         Expr::LocalGet(20),
                         Expr::LocalSet(
                             22,
-                            Box::new(Expr::Conditional {
+                            Box::new(Expr::Conditional { byte_offset: 0,
                                 condition: Box::new(mode),
                                 then_expr: Box::new(Expr::GetIterator(Box::new(Expr::LocalGet(
                                     20,
@@ -278,7 +278,7 @@ mod tests {
         for mode in 0..4 {
             let mut body = fixture();
             match mode {
-                1 => body.push(Stmt::Return(Some(Expr::LocalGet(20)))),
+                1 => body.push(Stmt::Return(Some(Expr::LocalGet(20)), 0)),
                 2 => body.push(Stmt::Expr(Expr::LocalSet(21, Box::new(Expr::Bool(false))))),
                 3 => body.push(Stmt::Expr(Expr::LocalSet(22, Box::new(Expr::LocalGet(90))))),
                 _ => {}

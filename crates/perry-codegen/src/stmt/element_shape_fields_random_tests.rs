@@ -47,7 +47,7 @@ fn rows_field(index: Expr, prop: &str) -> Expr {
 fn add_to_sum(value: Expr) -> Stmt {
     Stmt::Expr(Expr::LocalSet(
         SUM2_ID,
-        Box::new(Expr::Binary {
+        Box::new(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(SUM2_ID)),
             right: Box::new(value),
@@ -56,7 +56,7 @@ fn add_to_sum(value: Expr) -> Stmt {
 }
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -116,7 +116,7 @@ fn modulo_index() -> Stmt {
 /// ```
 fn access_module(body: Vec<Stmt>) -> Module {
     let mut m = Module::new("element_shape_loop.ts");
-    let param = |id: u32, name: &str, ty: Type| perry_hir::Param {
+    let param = |id: u32, name: &str, ty: Type| perry_hir::Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -125,7 +125,7 @@ fn access_module(body: Vec<Stmt>) -> Module {
         is_rest: false,
         arguments_object: None,
     };
-    m.functions = vec![perry_hir::Function {
+    m.functions = vec![perry_hir::Function { byte_offset: 0,
         id: 902,
         name: "run".to_string(),
         type_params: Vec::new(),
@@ -155,7 +155,7 @@ fn access_module(body: Vec<Stmt>) -> Module {
                 name: "limit".to_string(),
                 ty: Type::Number,
                 mutable: false,
-                init: Some(Expr::Binary {
+                init: Some(Expr::Binary { byte_offset: 0,
                     op: BinaryOp::BitOr,
                     left: Box::new(Expr::LocalGet(COUNT2_ID)),
                     right: Box::new(Expr::Integer(0)),
@@ -169,7 +169,7 @@ fn access_module(body: Vec<Stmt>) -> Module {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(COUNTER2_ID)),
                     right: Box::new(Expr::LocalGet(LIMIT2_ID)),
@@ -181,7 +181,7 @@ fn access_module(body: Vec<Stmt>) -> Module {
                 }),
                 body,
             },
-            Stmt::Return(Some(Expr::LocalGet(SUM2_ID))),
+            Stmt::Return(Some(Expr::LocalGet(SUM2_ID)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -219,7 +219,7 @@ fn fields_body() -> Vec<Stmt> {
             property: "length".to_string(),
             byte_offset: 0,
         }),
-        add_to_sum(Expr::Conditional {
+        add_to_sum(Expr::Conditional { byte_offset: 0,
             condition: Box::new(rows_field(Expr::LocalGet(ALIAS_ID), "active")),
             then_expr: Box::new(Expr::Integer(1)),
             else_expr: Box::new(Expr::Integer(0)),
@@ -628,7 +628,7 @@ fn two_accumulators_decline() {
         add_to_sum(rows_field(Expr::LocalGet(ALIAS_ID), "id")),
         Stmt::Expr(Expr::LocalSet(
             CURSOR_ID,
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(CURSOR_ID)),
                 right: Box::new(rows_field(Expr::LocalGet(ALIAS_ID), "id")),
@@ -646,7 +646,7 @@ fn two_accumulators_decline() {
 fn a_ternary_with_a_non_constant_arm_declines() {
     let body = vec![
         modulo_index(),
-        add_to_sum(Expr::Conditional {
+        add_to_sum(Expr::Conditional { byte_offset: 0,
             condition: Box::new(rows_field(Expr::LocalGet(ALIAS_ID), "active")),
             then_expr: Box::new(rows_field(Expr::LocalGet(ALIAS_ID), "id")),
             else_expr: Box::new(Expr::Integer(0)),
@@ -663,7 +663,7 @@ fn a_ternary_with_a_non_constant_arm_declines() {
 fn a_ternary_on_something_other_than_an_element_read_declines() {
     let body = vec![
         modulo_index(),
-        add_to_sum(Expr::Conditional {
+        add_to_sum(Expr::Conditional { byte_offset: 0,
             condition: Box::new(Expr::LocalGet(COUNTER2_ID)),
             then_expr: Box::new(Expr::Integer(1)),
             else_expr: Box::new(Expr::Integer(0)),
@@ -684,7 +684,7 @@ fn a_class_typed_array_declines_the_string_length_read() {
     let ir = emit(&element_shape_module(
         vec![Stmt::Expr(Expr::LocalSet(
             SUM_ID,
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(SUM_ID)),
                 right: Box::new(Expr::PropertyGet {

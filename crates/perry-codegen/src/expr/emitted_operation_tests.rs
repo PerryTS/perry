@@ -6,12 +6,12 @@ use perry_hir::{types::Type, CompareOp, Expr, Function, Module, Param, Stmt};
 
 fn assembly(expr: Expr) -> String {
     let mut module = Module::new("emit_cost");
-    module.functions.push(Function {
+    module.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: vec![],
         params: (1..=2)
-            .map(|id| Param {
+            .map(|id| Param { byte_offset: 0,
                 id,
                 name: format!("p{id}"),
                 ty: Type::Any,
@@ -22,7 +22,7 @@ fn assembly(expr: Expr) -> String {
             })
             .collect(),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(expr))],
+        body: vec![Stmt::Return(Some(expr), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -71,7 +71,7 @@ fn instruction_count(asm: &str) -> usize {
 
 #[test]
 fn literal_integer_compare_emits_at_most_24_instructions() {
-    let asm = assembly(Expr::Compare {
+    let asm = assembly(Expr::Compare { byte_offset: 0,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(1)),
         right: Box::new(Expr::Number(80.0)),

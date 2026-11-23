@@ -1053,7 +1053,7 @@ mod sync_delegation_result_tests {
 
     #[test]
     fn unfinished_return_and_throw_results_are_preserved() {
-        let route = DelegationRoute {
+        let route = DelegationRoute { byte_offset: 0,
             is_async: false,
             suspend_state_lo: 0,
             suspend_state_hi: 4,
@@ -1104,7 +1104,7 @@ mod sync_delegation_result_tests {
         else {
             panic!("done");
         };
-        assert!(matches!(&yielded[0], Stmt::Return(Some(Expr::LocalGet(id))) if id == result_id));
+        assert!(matches!(&yielded[0], Stmt::Return(Some(Expr::LocalGet(id)), _) if id == result_id));
         let routes = build_yield_star_throw_routes(
             &[route],
             &[],
@@ -1128,14 +1128,14 @@ mod sync_delegation_result_tests {
         else {
             panic!("done");
         };
-        assert!(matches!(&yielded[0], Stmt::Return(Some(Expr::LocalGet(2)))));
+        assert!(matches!(&yielded[0], Stmt::Return(Some(Expr::LocalGet(2)), _)));
         assert!(
             matches!(&finished[0], Stmt::Expr(Expr::LocalSet(3, value)) if matches!(**value, Expr::Number(4.0)))
         );
     }
     #[test]
     fn sync_protocol_calls_do_not_get_the_call_property() {
-        let route = DelegationRoute {
+        let route = DelegationRoute { byte_offset: 0,
             is_async: false,
             suspend_state_lo: 0,
             suspend_state_hi: 4,

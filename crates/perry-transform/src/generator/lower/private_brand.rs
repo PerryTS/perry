@@ -267,7 +267,7 @@ mod tests {
     use super::*;
 
     fn closure(is_arrow: bool, body: Vec<Stmt>) -> Expr {
-        Expr::Closure {
+        Expr::Closure { byte_offset: 0,
             func_id: 40,
             params: vec![],
             return_type: Type::Any,
@@ -303,9 +303,9 @@ mod tests {
     #[test]
     fn plain_functions_in_class_bodies_capture_their_evaluation() {
         let mut body = vec![
-            Stmt::Expr(closure(false, vec![Stmt::Return(Some(private_read()))])),
-            Stmt::Expr(closure(true, vec![Stmt::Return(Some(private_read()))])),
-            Stmt::Expr(closure(false, vec![Stmt::Return(Some(Expr::Undefined))])),
+            Stmt::Expr(closure(false, vec![Stmt::Return(Some(private_read()), 0)])),
+            Stmt::Expr(closure(true, vec![Stmt::Return(Some(private_read()), 0)])),
+            Stmt::Expr(closure(false, vec![Stmt::Return(Some(Expr::Undefined), 0)])),
         ];
         let mut next = 100;
         let blocked = std::collections::HashSet::new();
@@ -361,7 +361,7 @@ mod tests {
                 panic!("expected closure");
             };
             assert!(captures.is_empty());
-            assert!(matches!(body.as_slice(), [Stmt::Return(_)]));
+            assert!(matches!(body.as_slice(), [Stmt::Return(_, _)]));
         }
         // Inside an arrow that does not capture `this`, the capture must not
         // introduce a `this` read.
@@ -369,7 +369,7 @@ mod tests {
             true,
             vec![Stmt::Expr(closure(
                 false,
-                vec![Stmt::Return(Some(private_read()))],
+                vec![Stmt::Return(Some(private_read()), 0)],
             ))],
         ))];
         process_body(&mut in_arrow, true, &mut cx);
@@ -391,9 +391,9 @@ mod tests {
     fn closures_in_expression_only_positions_are_never_wrapped() {
         let mut ctor_copy = vec![Stmt::Expr(closure(
             false,
-            vec![Stmt::Return(Some(private_read()))],
+            vec![Stmt::Return(Some(private_read()), 0)],
         ))];
-        let mut field_init = closure(false, vec![Stmt::Return(Some(private_read()))]);
+        let mut field_init = closure(false, vec![Stmt::Return(Some(private_read()), 0)]);
         let mut blocked = std::collections::HashSet::new();
         collect_direct_closures(&field_init, &mut blocked);
         let mut next = 100;
@@ -413,13 +413,13 @@ mod tests {
                 panic!()
             };
             assert!(captures.is_empty());
-            assert!(matches!(body.as_slice(), [Stmt::Return(_)]));
+            assert!(matches!(body.as_slice(), [Stmt::Return(_, _)]));
         }
     }
 
     fn assert_return_cleanup(body: &mut Vec<Stmt>) {
         for index in 0..body.len() {
-            if matches!(body[index], Stmt::Return(_)) {
+            if matches!(body[index], Stmt::Return(_, _)) {
                 assert!(
                     index > 0
                         && matches!(&body[index - 1], Stmt::Expr(Expr::PrivateLexicalBrandPop)),
@@ -435,13 +435,13 @@ mod tests {
     #[test]
     fn private_generator_continuations_restore_captured_environment() {
         for is_async in [false, true] {
-            let mut function = Function {
+            let mut function = Function { byte_offset: 0,
                 id: 1,
                 name: "gen".into(),
                 type_params: vec![],
                 params: vec![],
                 return_type: Type::Any,
-                body: vec![Stmt::Expr(Expr::Yield {
+                body: vec![Stmt::Expr(Expr::Yield { byte_offset: 0,
                     delegate: false,
                     value: Some(Box::new(Expr::PrivateGuard {
                         class_name: "C".into(),

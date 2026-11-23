@@ -29,7 +29,7 @@ use perry_hir::ir::{Expr, Module, Param, Stmt};
 use perry_hir::types::{FuncId, LocalId, Type};
 
 fn empty_module() -> Module {
-    Module {
+    Module { byte_offset: 0,
         name: "test".to_string(),
         imports: vec![],
         exports: vec![],
@@ -73,7 +73,7 @@ fn empty_module() -> Module {
 }
 
 fn nmc(method: &str, args: Vec<Expr>) -> Expr {
-    Expr::NativeMethodCall {
+    Expr::NativeMethodCall { byte_offset: 0,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,
@@ -83,7 +83,7 @@ fn nmc(method: &str, args: Vec<Expr>) -> Expr {
 }
 
 fn closure(params: Vec<Param>, body: Vec<Stmt>) -> Expr {
-    Expr::Closure {
+    Expr::Closure { byte_offset: 0,
         func_id: 0 as FuncId,
         params,
         return_type: Type::Any,
@@ -101,7 +101,7 @@ fn closure(params: Vec<Param>, body: Vec<Stmt>) -> Expr {
 }
 
 fn param(id: LocalId, name: &str) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -113,7 +113,7 @@ fn param(id: LocalId, name: &str) -> Param {
 }
 
 fn app_with_body(body: Expr) -> Stmt {
-    Stmt::Expr(Expr::NativeMethodCall {
+    Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,
@@ -136,7 +136,7 @@ fn full_phase2_app_emits_canonical_arkui() {
         name: "counter".to_string(),
         ty: Type::Any,
         mutable: false,
-        init: Some(Expr::NativeMethodCall {
+        init: Some(Expr::NativeMethodCall { byte_offset: 0,
             module: "perry/ui".to_string(),
             class_name: None,
             object: None,
@@ -286,7 +286,7 @@ fn full_phase2_app_emits_canonical_arkui() {
             vec![Stmt::Return(Some(nmc(
                 "Text",
                 vec![Expr::LocalGet(item_id)],
-            )))],
+            )), 0)],
         )),
     };
 
@@ -308,7 +308,7 @@ fn full_phase2_app_emits_canonical_arkui() {
                 vec![Stmt::Return(Some(nmc(
                     "Text",
                     vec![Expr::LocalGet(lazy_item_id)],
-                )))],
+                )), 0)],
             )),
         }],
     );
@@ -542,7 +542,7 @@ fn minimal_counter_app_emits_clean_page() {
         name: "c".to_string(),
         ty: Type::Any,
         mutable: false,
-        init: Some(Expr::NativeMethodCall {
+        init: Some(Expr::NativeMethodCall { byte_offset: 0,
             module: "perry/ui".to_string(),
             class_name: None,
             object: None,

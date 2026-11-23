@@ -319,18 +319,18 @@ mod tests {
     fn fixture() -> Module {
         let mut m = Module::new("async_owner");
         m.class_family_syntax = Some(Default::default());
-        m.functions.push(Function {
+        m.functions.push(Function { byte_offset: 0,
             id: 0,
             name: "suspended".into(),
             type_params: vec![],
             params: vec![],
             return_type: Type::Any,
             body: vec![
-                Stmt::Expr(Expr::Yield {
+                Stmt::Expr(Expr::Yield { byte_offset: 0,
                     value: Some(Box::new(Expr::Number(7.0))),
                     delegate: false,
                 }),
-                Stmt::Return(Some(Expr::Number(8.0))),
+                Stmt::Return(Some(Expr::Number(8.0)), 0),
             ],
             is_async: false,
             is_generator: true,
@@ -450,7 +450,7 @@ mod tests {
                 let Stmt::Expr(call) = m.init.pop().unwrap() else {
                     unreachable!()
                 };
-                m.init.push(Stmt::Return(Some(call)));
+                m.init.push(Stmt::Return(Some(call), 0));
             }
             super::super::transform_generators(&mut m);
             assert!(
@@ -466,7 +466,7 @@ mod tests {
             match mode {
                 0 => m.functions[0].captures.push(91),
                 1 => {
-                    m.functions[0].params.push(perry_hir::Param {
+                    m.functions[0].params.push(perry_hir::Param { byte_offset: 0,
                         id: 91,
                         name: "callback".into(),
                         ty: Type::Any,
@@ -484,11 +484,11 @@ mod tests {
                     }));
                 }
                 2 => m.functions[0].is_strict = false,
-                _ => m.functions[0].body.push(Stmt::Expr(Expr::Closure {
+                _ => m.functions[0].body.push(Stmt::Expr(Expr::Closure { byte_offset: 0,
                     func_id: 9,
                     params: vec![],
                     return_type: Type::Any,
-                    body: vec![Stmt::Return(Some(Expr::LocalGet(91)))],
+                    body: vec![Stmt::Return(Some(Expr::LocalGet(91)), 0)],
                     captures: vec![91],
                     mutable_captures: vec![],
                     captures_this: false,
@@ -550,10 +550,10 @@ mod tests {
                     mutable: false,
                     init: Some(call),
                 },
-                Stmt::Expr(Expr::Await(Box::new(Expr::LocalGet(90)))),
+                Stmt::Expr(Expr::Await(Box::new(Expr::LocalGet(90)), 0)),
             ];
             match mode {
-                1 => m.init.push(Stmt::Return(Some(Expr::LocalGet(90)))),
+                1 => m.init.push(Stmt::Return(Some(Expr::LocalGet(90)), 0)),
                 2 => m.init.push(Stmt::Let {
                     id: 91,
                     name: "alias".into(),

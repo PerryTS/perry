@@ -13,7 +13,7 @@ const B: u32 = 2;
 const X: u32 = 3;
 
 fn param(id: u32, ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -25,7 +25,7 @@ fn param(id: u32, ty: Type) -> Param {
 }
 
 fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -42,7 +42,7 @@ fn function_ir(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> String {
         type_args: Vec::new(),
         byte_offset: 0,
     }));
-    module.functions.push(Function {
+    module.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: Vec::new(),
@@ -88,7 +88,7 @@ fn const_then_return(init: Expr, ty: Type) -> Vec<Stmt> {
             mutable: false,
             init: Some(init),
         },
-        Stmt::Return(Some(Expr::LocalGet(X))),
+        Stmt::Return(Some(Expr::LocalGet(X)), 0),
     ]
 }
 
@@ -143,7 +143,7 @@ fn number_of_possibly_bigint_bitwise_result_keeps_its_coercion() {
                 BinaryOp::BitAnd,
                 Expr::LocalGet(A),
                 right,
-            )))))],
+            )))), 0)],
         )
     };
     let unknown = number_of(Expr::LocalGet(B));
@@ -177,7 +177,7 @@ fn unproven_bitwise_operands_take_a_guarded_int32_arm() {
                 op,
                 Expr::LocalGet(A),
                 Expr::LocalGet(B),
-            )))],
+            )), 0)],
         );
         assert!(
             ir.contains("guarded_arith.numeric"),
@@ -245,7 +245,7 @@ fn guarded_bitwise_arm_is_range_tested_and_converts_with_fptosi() {
                 op,
                 Expr::LocalGet(A),
                 Expr::LocalGet(B),
-            )))],
+            )), 0)],
         );
         assert!(
             ir.contains("call double @llvm.fabs.f64(") && ir.contains(", 0x43E0000000000000"),
@@ -276,7 +276,7 @@ fn bitwise_result_with_a_number_operand_is_an_int32_operand() {
             BinaryOp::BitOr,
             masked(A, 3),
             masked(B, 5),
-        )))],
+        )), 0)],
     );
     assert!(
         !has_toint32_wrap(&int32_operands),
@@ -290,7 +290,7 @@ fn bitwise_result_with_a_number_operand_is_an_int32_operand() {
             BinaryOp::BitOr,
             Expr::NumberCoerce(Box::new(Expr::LocalGet(A))),
             Expr::NumberCoerce(Box::new(Expr::LocalGet(B))),
-        )))],
+        )), 0)],
     );
     assert!(
         has_toint32_wrap(&number_operands),

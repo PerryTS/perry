@@ -31,7 +31,7 @@ use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Param
 const PARAM_ID: u32 = 3;
 
 fn field(name: &str, ty: Type) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -78,11 +78,11 @@ fn point_class(field_ty: Type) -> Class {
 fn probe_module(field_ty: Type) -> Module {
     let mut m = Module::new("class_field_get_shape.ts");
     m.classes = vec![point_class(field_ty)];
-    m.functions = vec![Function {
+    m.functions = vec![Function { byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
-        params: vec![Param {
+        params: vec![Param { byte_offset: 0,
             id: PARAM_ID,
             name: "p".to_string(),
             ty: Type::Named("Point".to_string()),
@@ -97,7 +97,7 @@ fn probe_module(field_ty: Type) -> Module {
             byte_offset: 0,
             object: Box::new(Expr::LocalGet(PARAM_ID)),
             property: "x".to_string(),
-        }))],
+        }), 0)],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -143,11 +143,11 @@ fn memo_hits_share_a_managed_receiver_handle() {
         object: Box::new(Expr::LocalGet(PARAM_ID)),
         property: "x".into(),
     };
-    m.functions[0].body = vec![Stmt::Return(Some(Expr::Binary {
+    m.functions[0].body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
         op: perry_hir::BinaryOp::Add,
         left: Box::new(get.clone()),
         right: Box::new(get),
-    }))];
+    }), 0)];
     let ir =
         String::from_utf8(compile_module(&m, super::class_field_barrier_tests::ir_opts()).unwrap())
             .unwrap();

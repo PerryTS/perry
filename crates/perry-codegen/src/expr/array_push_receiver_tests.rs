@@ -18,7 +18,7 @@ fn push_ir(owned: bool) -> String {
     let params = if owned {
         Vec::new()
     } else {
-        vec![Param {
+        vec![Param { byte_offset: 0,
             id: 0,
             name: "a".to_string(),
             ty: arr.clone(),
@@ -43,8 +43,8 @@ fn push_ir(owned: bool) -> String {
         value: Box::new(Expr::Number(7.0)),
         field_writeback: None,
     }));
-    body.push(Stmt::Return(Some(Expr::LocalGet(0))));
-    hir.functions.push(Function {
+    body.push(Stmt::Return(Some(Expr::LocalGet(0)), 0));
+    hir.functions.push(Function { byte_offset: 0,
         id: 0,
         name: "pushes".to_string(),
         type_params: Vec::new(),

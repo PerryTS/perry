@@ -107,7 +107,7 @@ fn assert_default_barrier_env_not_disabled() {
 }
 
 fn field(name: &str, ty: Type) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -120,7 +120,7 @@ fn field(name: &str, ty: Type) -> ClassField {
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -135,7 +135,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 /// closed-shape object literal (`lower/context.rs::mint_anon_shape_class`) and
 /// the shape a hand-written data class already has.
 fn param_prologue_ctor(field_name: &str, param_id: u32, param_ty: Type) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id: 90,
         name: "constructor".to_string(),
         type_params: Vec::new(),
@@ -191,7 +191,7 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>, constructor: Option<Funct
 
 fn module_with_new(class: Class, args: Vec<Expr>) -> Module {
     let class_name = class.name.clone();
-    Module {
+    Module { byte_offset: 0,
         name: "class_field_store_pointer_test.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -200,7 +200,7 @@ fn module_with_new(class: Class, args: Vec<Expr>) -> Module {
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function {
+        functions: vec![Function { byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -213,7 +213,7 @@ fn module_with_new(class: Class, args: Vec<Expr>) -> Module {
                 type_args: Vec::new(),
                 byte_offset: 0,
                 cap_args_appended: 0,
-            }))],
+            }), 0)],
             is_async: false,
             is_generator: false,
             is_strict: false,
@@ -374,7 +374,7 @@ fn module_with_local_receiver_store(class: Class, stored: Expr) -> Module {
             object: Box::new(Expr::LocalGet(5)),
             property: "v".to_string(),
             byte_offset: 0,
-        })),
+        }), 0),
     ];
     module.functions[0].return_type = Type::Any;
     module
@@ -465,7 +465,7 @@ fn module_with_param_receiver_raw_f64_store(strict: bool, stored: Expr) -> Modul
             byte_offset: 0,
             byte_end: 0,
         }),
-        Stmt::Return(Some(Expr::LocalGet(8))),
+        Stmt::Return(Some(Expr::LocalGet(8)), 0),
     ];
     module
 }

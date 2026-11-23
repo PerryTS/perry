@@ -13,7 +13,7 @@ use perry_hir::types::{FunctionType, Type};
 use perry_hir::{Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Any,
@@ -56,11 +56,11 @@ fn closure_value_call_ir(file: &str, argc: usize) -> String {
         name: "f".to_string(),
         ty: function_type(argc),
         mutable: false,
-        init: Some(Expr::Closure {
+        init: Some(Expr::Closure { byte_offset: 0,
             func_id: 7,
             params: params(100, argc),
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::LocalGet(100 + argc as u32 - 1)))],
+            body: vec![Stmt::Return(Some(Expr::LocalGet(100 + argc as u32 - 1)), 0)],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -112,13 +112,13 @@ fn a_narrow_closure_value_call_keeps_the_fixed_arity_fast_path() {
 #[test]
 fn function_value_wrappers_take_every_declared_param() {
     let mut module = Module::new("closure_call_arity_wrapper.ts");
-    module.functions = vec![Function {
+    module.functions = vec![Function { byte_offset: 0,
         id: 1,
         name: "wide".to_string(),
         type_params: Vec::new(),
         params: params(10, 18),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::LocalGet(27)))],
+        body: vec![Stmt::Return(Some(Expr::LocalGet(27)), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,

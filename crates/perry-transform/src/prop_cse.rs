@@ -584,7 +584,7 @@ mod tests {
 
     fn guard(prop: &str, lit: &str, body: Vec<Stmt>) -> Stmt {
         Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(read(N, prop)),
                 right: Box::new(Expr::String(lit.to_string())),
@@ -595,7 +595,7 @@ mod tests {
     }
 
     fn diverging(prop: &str, lit: &str) -> Stmt {
-        guard(prop, lit, vec![Stmt::Return(Some(Expr::Integer(0)))])
+        guard(prop, lit, vec![Stmt::Return(Some(Expr::Integer(0)), 0)])
     }
 
     /// Every `local.prop` read still present anywhere in `stmts`.
@@ -704,12 +704,12 @@ mod tests {
     #[test]
     fn loose_equality_is_not_analyzable() {
         let mk = |lit: &str| Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0,
                 op: CompareOp::LooseEq,
                 left: Box::new(read(N, "kind")),
                 right: Box::new(Expr::String(lit.to_string())),
             },
-            then_branch: vec![Stmt::Return(None)],
+            then_branch: vec![Stmt::Return(None, 0)],
             else_branch: None,
         };
         let mut body = vec![mk("num"), mk("str"), mk("var")];
@@ -722,7 +722,7 @@ mod tests {
     /// Relational compares coerce too.
     #[test]
     fn relational_compare_is_not_analyzable() {
-        assert!(!guard_expr_is_analyzable(&Expr::Compare {
+        assert!(!guard_expr_is_analyzable(&Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(read(N, "kind")),
             right: Box::new(Expr::Integer(1)),
@@ -778,12 +778,12 @@ mod tests {
     fn a_key_first_read_later_is_not_hoisted_above_the_earlier_guards() {
         let other: LocalId = 2;
         let later = |lit: &str| Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(read(other, "y")),
                 right: Box::new(Expr::String(lit.to_string())),
             },
-            then_branch: vec![Stmt::Return(None)],
+            then_branch: vec![Stmt::Return(None, 0)],
             else_branch: None,
         };
         let mut body = vec![diverging("kind", "num"), later("a"), later("b")];
@@ -804,20 +804,20 @@ mod tests {
     fn a_short_circuited_read_is_not_a_candidate() {
         let other: LocalId = 2;
         let g = |lit: &str| Stmt::If {
-            condition: Expr::Logical {
+            condition: Expr::Logical { byte_offset: 0,
                 op: perry_hir::LogicalOp::And,
-                left: Box::new(Expr::Compare {
+                left: Box::new(Expr::Compare { byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(read(N, "kind")),
                     right: Box::new(Expr::String("bin".to_string())),
                 }),
-                right: Box::new(Expr::Compare {
+                right: Box::new(Expr::Compare { byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(read(other, "y")),
                     right: Box::new(Expr::String(lit.to_string())),
                 }),
             },
-            then_branch: vec![Stmt::Return(None)],
+            then_branch: vec![Stmt::Return(None, 0)],
             else_branch: None,
         };
         let mut body = vec![g("a"), g("b")];
@@ -839,7 +839,7 @@ mod tests {
             diverging("op", "+"),
             diverging("op", "-"),
             diverging("op", "*"),
-            Stmt::Return(None),
+            Stmt::Return(None, 0),
         ];
         let mut body = vec![guard("kind", "bin", inner)];
         let mut next = 100;
@@ -855,7 +855,7 @@ mod tests {
     }
 
     fn fn_with(body: Vec<Stmt>) -> Function {
-        Function {
+        Function { byte_offset: 0,
             id: 1,
             name: "f".to_string(),
             type_params: vec![],

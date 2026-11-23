@@ -22,13 +22,13 @@ fn compile_native_instance_call(
     args: Vec<Expr>,
 ) -> String {
     let mut module = Module::new("native_module_rooting_test.ts");
-    module.functions.push(Function {
+    module.functions.push(Function { byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Any,
-        body: vec![Stmt::Expr(Expr::NativeMethodCall {
+        body: vec![Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
             module: native_module.to_string(),
             class_name: class_name.map(str::to_string),
             object: object.map(Box::new),

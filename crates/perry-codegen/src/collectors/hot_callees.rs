@@ -847,11 +847,11 @@ mod recursion_participant_tests {
     use perry_hir::{Function, Param};
 
     fn func(id: u32, body: Vec<Stmt>) -> Function {
-        Function {
+        Function { byte_offset: 0,
             id,
             name: format!("f{id}"),
             type_params: Vec::new(),
-            params: vec![Param {
+            params: vec![Param { byte_offset: 0,
                 id: id * 10,
                 name: "n".to_string(),
                 ty: Type::Number,
@@ -880,7 +880,7 @@ mod recursion_participant_tests {
             args: vec![Expr::Integer(1)],
             type_args: Vec::new(),
             byte_offset: 0,
-        }))
+        }), 0)
     }
 
     fn new_expr() -> Expr {
@@ -1023,7 +1023,7 @@ mod recursion_participant_tests {
         module.functions.push(func(5, vec![call_stmt(6)]));
         module
             .functions
-            .push(func(6, vec![Stmt::Return(Some(Expr::Integer(0)))]));
+            .push(func(6, vec![Stmt::Return(Some(Expr::Integer(0)), 0)]));
         module.functions.push(func(7, vec![call_stmt(1)]));
 
         let got = collect_recursion_participants(&module);

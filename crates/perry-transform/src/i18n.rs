@@ -761,7 +761,7 @@ mod tests {
     use super::*;
 
     fn t(key: &str) -> Expr {
-        Expr::NativeMethodCall {
+        Expr::NativeMethodCall { byte_offset: 0,
             module: "perry/i18n".into(),
             class_name: None,
             object: None,
@@ -825,7 +825,7 @@ mod tests {
     }
 
     fn class_function(name: &str, key: &str, id: u32) -> perry_hir::Function {
-        perry_hir::Function {
+        perry_hir::Function { byte_offset: 0,
             id,
             name: name.into(),
             type_params: Vec::new(),
@@ -997,9 +997,9 @@ mod tests {
 
     #[test]
     fn traverses_closure_bodies_and_parameter_defaults() {
-        let expr = Expr::Closure {
+        let expr = Expr::Closure { byte_offset: 0,
             func_id: 0,
-            params: vec![perry_hir::Param {
+            params: vec![perry_hir::Param { byte_offset: 0,
                 id: 0,
                 name: "arg".into(),
                 ty: perry_hir::types::Type::String,

@@ -13,7 +13,7 @@ fn index(a: u32, i: Expr) -> Expr {
     }
 }
 fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op,
         left: Box::new(l),
         right: Box::new(r),
@@ -41,7 +41,7 @@ fn ir_with_param_type(
 ) -> String {
     let kind = receiver;
     let mut m = Module::new("indexed_owner_contract");
-    let param = |id, name: &str, ty| Param {
+    let param = |id, name: &str, ty| Param { byte_offset: 0,
         id,
         name: name.into(),
         ty,
@@ -50,7 +50,7 @@ fn ir_with_param_type(
         is_rest: false,
         arguments_object: None,
     };
-    m.functions.push(Function {
+    m.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "operate".into(),
         type_params: vec![],
@@ -63,7 +63,7 @@ fn ir_with_param_type(
         body: vec![
             Stmt::For {
                 init: Some(Box::new(let_(3, Expr::Integer(0), true))),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(get(3)),
                     right: Box::new(Expr::Integer(4)),
@@ -75,7 +75,7 @@ fn ir_with_param_type(
                 }),
                 body,
             },
-            Stmt::Return(Some(index(1, Expr::Integer(0)))),
+            Stmt::Return(Some(index(1, Expr::Integer(0))), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -95,7 +95,7 @@ fn ir_with_param_type(
             .iter()
             .map(|id| param(*id, &format!("p{id}"), Type::Number))
             .collect();
-        def.body = vec![Stmt::Return(Some(f.expression.to_hir()))];
+        def.body = vec![Stmt::Return(Some(f.expression.to_hir()), 0)];
         m.functions.push(def);
     }
     String::from_utf8(
@@ -298,7 +298,7 @@ fn static_allocation_range_and_numeric_proofs_remove_all_admission_checks() {
 fn nested_numeric_loops_keep_scalar_recurrences_in_native_slots() {
     let inner = Stmt::For {
         init: Some(Box::new(let_(8, Expr::Integer(0), true))),
-        condition: Some(Expr::Compare {
+        condition: Some(Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(get(8)),
             right: Box::new(Expr::Integer(4)),
@@ -422,7 +422,7 @@ fn numeric_string_region_admits_conditional_scalar_updates_and_keeps_all_exits()
     let body = vec![
         let_(4, string_code(get(3)), false),
         Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(get(4)),
                 right: Box::new(Expr::Integer(59)),
@@ -476,7 +476,7 @@ fn string_region_rejects_rebinding_and_calls_before_any_body_effect() {
     for body in [
         vec![
             Stmt::If {
-                condition: Expr::Compare {
+                condition: Expr::Compare { byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(string_code(get(3))),
                     right: Box::new(Expr::Integer(59)),
@@ -501,7 +501,7 @@ fn string_region_rejects_rebinding_and_calls_before_any_body_effect() {
             }),
         ],
         vec![Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0,
                 op: CompareOp::Gt,
                 left: Box::new(string_code(get(3))),
                 right: Box::new(Expr::Integer(0)),

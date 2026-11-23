@@ -382,7 +382,7 @@ fn imported_worker_messaging_constructors_keep_worker_threads_routing() {
     };
     assert!(
         matches!(initializer("a"), Some(Expr::NativeMethodCall {
-            module, class_name: None, object: None, method, args,
+            module, class_name: None, object: None, method, args, ..
         }) if module == "worker_threads" && method == "MessageChannel" && args.is_empty()),
         "MessageChannel should call the worker_threads native factory: {module:#?}"
     );

@@ -224,7 +224,7 @@ mod tests {
     use perry_hir::{ArgumentsObjectMeta, Class, Function, Param};
 
     fn param(name: &str, is_rest: bool, arguments_object: bool) -> Param {
-        Param {
+        Param { byte_offset: 0,
             id: 0,
             name: name.to_string(),
             ty: Type::Any,
@@ -251,7 +251,7 @@ mod tests {
             extends_expr: None,
             heritage_lexically_shadowed: false,
             fields: Vec::new(),
-            constructor: ctor_params.map(|params| Function {
+            constructor: ctor_params.map(|params| Function { byte_offset: 0,
                 id: 7,
                 name: format!("{}_constructor", name),
                 type_params: Vec::new(),

@@ -4,7 +4,7 @@ use perry_hir::types::Type;
 use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Param, Stmt};
 const PARAM_ID: u32 = 3;
 fn field(name: &str, ty: Type) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -53,7 +53,7 @@ fn point_class(field_ty: Type) -> Class {
 fn probe_module(field_ty: Type) -> Module {
     let mut m = Module::new("accessor_guard.ts");
     let mut class = point_class(field_ty);
-    let mut getter = Function {
+    let mut getter = Function { byte_offset: 0,
         id: 200,
         name: "get_value".into(),
         type_params: Vec::new(),
@@ -64,7 +64,7 @@ fn probe_module(field_ty: Type) -> Module {
             object: Box::new(Expr::This),
             property: "x".into(),
             byte_offset: 0,
-        }))],
+        }), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -77,7 +77,7 @@ fn probe_module(field_ty: Type) -> Module {
     class.getters.push(("value".into(), getter.clone()));
     getter.id = 201;
     getter.name = "set_value".into();
-    getter.params.push(Param {
+    getter.params.push(Param { byte_offset: 0,
         id: 4,
         name: "value".into(),
         ty: Type::Any,
@@ -95,11 +95,11 @@ fn probe_module(field_ty: Type) -> Module {
     })];
     class.setters.push(("value".into(), getter));
     m.classes = vec![class];
-    m.functions = vec![Function {
+    m.functions = vec![Function { byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
-        params: vec![Param {
+        params: vec![Param { byte_offset: 0,
             id: PARAM_ID,
             name: "p".to_string(),
             ty: Type::Named("Meter".to_string()),
@@ -122,7 +122,7 @@ fn probe_module(field_ty: Type) -> Module {
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(PARAM_ID)),
                 property: "value".to_string(),
-            })),
+            }), 0),
         ],
         is_async: false,
         is_generator: false,

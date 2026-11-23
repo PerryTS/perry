@@ -20,7 +20,7 @@ const RECV: u32 = 50;
 /// fields and a `this.f = f` constructor.
 fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
     let field_names = ["a", "m"];
-    let field = |name: &str| ClassField {
+    let field = |name: &str| ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -33,7 +33,7 @@ fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
     let params: Vec<Param> = field_names
         .iter()
         .enumerate()
-        .map(|(i, name)| Param {
+        .map(|(i, name)| Param { byte_offset: 0,
             id: param_base + i as u32,
             name: (*name).to_string(),
             ty: Type::Any,
@@ -65,7 +65,7 @@ fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: field_names.iter().map(|name| field(name)).collect(),
-        constructor: Some(Function {
+        constructor: Some(Function { byte_offset: 0,
             id: ctor_id,
             name: "constructor".to_string(),
             type_params: Vec::new(),
@@ -112,7 +112,7 @@ fn this_a() -> Expr {
 /// store and two reads. The string store keeps the body off the typed-f64
 /// closure clones, so the public symbol is the ordinary body.
 fn method(func_id: u32, is_arrow: bool, is_strict: bool) -> Expr {
-    Expr::Closure {
+    Expr::Closure { byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -124,11 +124,11 @@ fn method(func_id: u32, is_arrow: bool, is_strict: bool) -> Expr {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::Binary {
+            Stmt::Return(Some(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(this_a()),
                 right: Box::new(this_a()),
-            })),
+            }), 0),
         ],
         captures: Vec::new(),
         mutable_captures: Vec::new(),
@@ -292,7 +292,7 @@ fn home_classes_name_only_unambiguous_dynamic_this_methods() {
     hir.init.push(new_shape(SHAPE, method(9, false, false)));
     hir.init
         .push(new_shape(OTHER_SHAPE, method(9, false, false)));
-    hir.functions.push(Function {
+    hir.functions.push(Function { byte_offset: 0,
         id: 30,
         name: "make".to_string(),
         type_params: Vec::new(),

@@ -62,7 +62,7 @@ fn prop(recv: u32, name: &str) -> Expr {
 }
 
 fn param(id: u32) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Any,
@@ -74,7 +74,7 @@ fn param(id: u32) -> Param {
 }
 
 fn func(id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: format!("f{id}"),
         type_params: vec![],
@@ -178,7 +178,7 @@ fn a_key_that_may_be_a_string_exposes_the_receiver() {
             Stmt::Expr(get(10, Expr::LocalGet(12))),
             Stmt::Expr(get(
                 11,
-                Expr::Binary {
+                Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(13)),
                     right: Box::new(Expr::Integer(1)),
@@ -341,7 +341,7 @@ fn a_canonical_numeric_string_key_is_an_element_key() {
 fn an_exposure_in_a_closure_or_another_function_is_remote() {
     // const a = ...; a.buffer;           (own body: late)
     // const b = ...; () => b.buffer;     (closure: remote)
-    let closure = Expr::Closure {
+    let closure = Expr::Closure { byte_offset: 0,
         func_id: 99,
         params: vec![],
         return_type: Type::Any,
@@ -395,7 +395,7 @@ fn the_statement_probe_flags_every_exposing_use() {
 fn a_direct_call_key_is_never_a_string_only_if_every_return_is() {
     // f(i) { return i | 0; }  g(i) { return "buffer"; }  h(i) { return h(i); }
     // a[f(1)];  b[g(1)];  c[h(1)];  d[k(1)] where k is not a module function.
-    let or0 = |id: u32| Expr::Binary {
+    let or0 = |id: u32| Expr::Binary { byte_offset: 0,
         op: BinaryOp::BitOr,
         left: Box::new(Expr::LocalGet(id)),
         right: Box::new(Expr::Integer(0)),
@@ -412,16 +412,16 @@ fn a_direct_call_key_is_never_a_string_only_if_every_return_is() {
             Stmt::Expr(get(13, call(99, vec![Expr::Integer(1)]))),
         ],
         vec![
-            func(1, vec![param(20)], vec![Stmt::Return(Some(or0(20)))]),
+            func(1, vec![param(20)], vec![Stmt::Return(Some(or0(20)), 0)]),
             func(
                 2,
                 vec![param(30)],
-                vec![Stmt::Return(Some(Expr::String("buffer".to_string())))],
+                vec![Stmt::Return(Some(Expr::String("buffer".to_string())), 0)],
             ),
             func(
                 3,
                 vec![param(40)],
-                vec![Stmt::Return(Some(call(3, vec![Expr::LocalGet(40)])))],
+                vec![Stmt::Return(Some(call(3, vec![Expr::LocalGet(40)])), 0)],
             ),
         ],
     );
@@ -446,12 +446,12 @@ fn a_returned_parameter_follows_its_arguments() {
             func(
                 1,
                 vec![param(20)],
-                vec![Stmt::Return(Some(Expr::LocalGet(20)))],
+                vec![Stmt::Return(Some(Expr::LocalGet(20)), 0)],
             ),
             func(
                 2,
                 vec![param(30)],
-                vec![Stmt::Return(Some(Expr::LocalGet(30)))],
+                vec![Stmt::Return(Some(Expr::LocalGet(30)), 0)],
             ),
         ],
     );
@@ -462,9 +462,9 @@ fn a_returned_parameter_follows_its_arguments() {
 
 #[test]
 fn an_async_or_generator_callee_key_exposes_the_receiver() {
-    let mut f = func(1, vec![], vec![Stmt::Return(Some(Expr::Integer(0)))]);
+    let mut f = func(1, vec![], vec![Stmt::Return(Some(Expr::Integer(0)), 0)]);
     f.is_async = true;
-    let mut g = func(2, vec![], vec![Stmt::Return(Some(Expr::Integer(0)))]);
+    let mut g = func(2, vec![], vec![Stmt::Return(Some(Expr::Integer(0)), 0)]);
     g.is_generator = true;
     let m = module(
         vec![

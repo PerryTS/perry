@@ -7,7 +7,7 @@ const TOTAL: u32 = 11;
 const COUNTER: u32 = 12;
 
 fn string_array_param() -> Param {
-    Param {
+    Param { byte_offset: 0,
         id: STRINGS,
         name: "strings".to_string(),
         ty: Type::Array(Box::new(Type::String)),
@@ -24,13 +24,13 @@ fn sum_lengths() -> Function {
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(STRINGS)),
-        index: Box::new(Expr::Binary {
+        index: Box::new(Expr::Binary { byte_offset: 0,
             op: BinaryOp::BitAnd,
             left: Box::new(Expr::LocalGet(COUNTER)),
             right: Box::new(Expr::Integer(3)),
         }),
     };
-    Function {
+    Function { byte_offset: 0,
         id: 1,
         name: "sumLengths".to_string(),
         type_params: Vec::new(),
@@ -52,7 +52,7 @@ fn sum_lengths() -> Function {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(COUNTER)),
                     right: Box::new(Expr::Integer(1000)),
@@ -64,7 +64,7 @@ fn sum_lengths() -> Function {
                 }),
                 body: vec![Stmt::Expr(Expr::LocalSet(
                     TOTAL,
-                    Box::new(Expr::Binary {
+                    Box::new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(TOTAL)),
                         right: Box::new(Expr::PropertyGet {
@@ -76,7 +76,7 @@ fn sum_lengths() -> Function {
                     }),
                 ))],
             },
-            Stmt::Return(Some(Expr::LocalGet(TOTAL))),
+            Stmt::Return(Some(Expr::LocalGet(TOTAL)), 0),
         ],
         is_async: false,
         is_generator: false,

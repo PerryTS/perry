@@ -747,7 +747,7 @@ mod tests {
     }
 
     fn bin(op: BinaryOp, l: Box<Expr>, r: Box<Expr>) -> Box<Expr> {
-        Box::new(Expr::Binary {
+        Box::new(Expr::Binary { byte_offset: 0,
             op,
             left: l,
             right: r,
@@ -787,12 +787,12 @@ mod tests {
             op: UpdateOp::Increment,
             prefix: false,
         };
-        let lt = Expr::Compare {
+        let lt = Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: lg(1),
             right: lg(2),
         };
-        let le = Expr::Compare {
+        let le = Expr::Compare { byte_offset: 0,
             op: CompareOp::Le,
             left: lg(1),
             right: lg(2),
@@ -800,7 +800,7 @@ mod tests {
         let mut r = |e: &Expr| range(e);
         assert_eq!(for_step_fits(None, Some(&lt), &upd, &[], &mut r), Some(1));
         assert_eq!(for_step_fits(None, Some(&le), &upd, &[], &mut r), None);
-        let small = Expr::Compare {
+        let small = Expr::Compare { byte_offset: 0,
             op: CompareOp::Le,
             left: lg(1),
             right: Box::new(Expr::Integer(100)),
@@ -815,7 +815,7 @@ mod tests {
     fn symbolic_stride_is_not_proven() {
         // `for (…; j <= n; j += i)` with int32 `n` and `i`: `n + i` can exceed i32.
         let upd = Expr::LocalSet(1, bin(BinaryOp::Add, lg(1), lg(3)));
-        let le = Expr::Compare {
+        let le = Expr::Compare { byte_offset: 0,
             op: CompareOp::Le,
             left: lg(1),
             right: lg(2),
@@ -835,7 +835,7 @@ mod tests {
     }
 
     fn square_guard(op: CompareOp, bound: Expr) -> Expr {
-        Expr::Compare {
+        Expr::Compare { byte_offset: 0,
             op,
             left: bin(BinaryOp::Mul, lg(1), lg(1)),
             right: Box::new(bound),
@@ -933,7 +933,7 @@ mod tests {
             None
         );
         // Not the whole condition.
-        let conj = Expr::Logical {
+        let conj = Expr::Logical { byte_offset: 0,
             op: LogicalOp::And,
             left: Box::new(cond.clone()),
             right: Box::new(Expr::Bool(true)),
@@ -951,7 +951,7 @@ mod tests {
     }
 
     fn length_bound(op: CompareOp) -> Expr {
-        Expr::Compare {
+        Expr::Compare { byte_offset: 0,
             op,
             left: lg(1),
             right: Box::new(Expr::PropertyGet {
@@ -1008,7 +1008,7 @@ mod tests {
     }
 
     fn square_guard_plain(op: CompareOp, bound: Expr) -> Expr {
-        Expr::Compare {
+        Expr::Compare { byte_offset: 0,
             op,
             left: lg(1),
             right: Box::new(bound),

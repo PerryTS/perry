@@ -8,7 +8,7 @@
 use super::*;
 
 fn mul(left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op: BinaryOp::Mul,
         left: Box::new(left),
         right: Box::new(right),
@@ -39,7 +39,7 @@ fn sqrt_times_sin_loop_ir() -> String {
                     )),
                 ))],
             ),
-            Stmt::Return(Some(local(1))),
+            Stmt::Return(Some(local(1)), 0),
         ],
     )
 }
@@ -74,15 +74,15 @@ fn math_result_divide_and_subtract_stay_inline() {
         vec![
             number_let(1, "a", false, int(9)),
             number_let(2, "b", false, int(3)),
-            Stmt::Return(Some(Expr::Binary {
+            Stmt::Return(Some(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Div,
-                left: Box::new(Expr::Binary {
+                left: Box::new(Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::MathCbrt(Box::new(local(1)))),
                     right: Box::new(Expr::MathLog(Box::new(local(2)))),
                 }),
                 right: Box::new(Expr::MathExp(Box::new(local(2)))),
-            })),
+            }), 0),
         ],
     );
     assert!(
@@ -109,7 +109,7 @@ fn dynamic_operand_multiply_keeps_bigint_aware_helper() {
         vec![Stmt::Return(Some(mul(
             Expr::MathSqrt(Box::new(int(4))),
             local(2),
-        )))],
+        )), 0)],
     );
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
     assert!(

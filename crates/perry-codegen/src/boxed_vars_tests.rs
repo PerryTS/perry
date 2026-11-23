@@ -3,11 +3,11 @@ use perry_hir::types::Type;
 use perry_hir::{Expr, Stmt};
 
 fn closure(func_id: u32, captured_id: u32) -> Expr {
-    Expr::Closure {
+    Expr::Closure { byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::LocalGet(captured_id)))],
+        body: vec![Stmt::Return(Some(Expr::LocalGet(captured_id)), 0)],
         captures: vec![captured_id],
         mutable_captures: Vec::new(),
         captures_this: false,
@@ -43,7 +43,7 @@ fn generator_confined_captures_are_slots_and_shared_captures_are_cells() {
             fixed_state: true,
             i32_controls: vec![1],
             i1_controls: vec![],
-        })),
+        }), 0),
     ];
     assert!(!collect_boxed_vars(&stmts).contains(&1));
     let mut numbers = HashSet::new();

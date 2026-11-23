@@ -109,7 +109,7 @@ mod tests {
     use perry_hir::Expr;
 
     fn ret(value: i64) -> Stmt {
-        Stmt::Return(Some(Expr::Integer(value)))
+        Stmt::Return(Some(Expr::Integer(value)), 0)
     }
 
     fn effect(value: i64) -> Stmt {
@@ -140,7 +140,7 @@ mod tests {
     fn trailing_bare_return_becomes_its_value() {
         let out = discard_inlined_returns(vec![effect(1), ret(2)]).unwrap();
         assert_eq!(dump(&out), dump(&[effect(1), effect(2)]));
-        let out = discard_inlined_returns(vec![effect(1), Stmt::Return(None)]).unwrap();
+        let out = discard_inlined_returns(vec![effect(1), Stmt::Return(None, 0)]).unwrap();
         assert_eq!(dump(&out), dump(&[effect(1)]));
     }
 
@@ -281,13 +281,13 @@ mod tests {
     use std::collections::HashMap;
 
     fn function(id: FuncId, params: Vec<LocalId>, body: Vec<Stmt>) -> Function {
-        Function {
+        Function { byte_offset: 0,
             id,
             name: format!("f{id}"),
             type_params: Vec::new(),
             params: params
                 .into_iter()
-                .map(|id| Param {
+                .map(|id| Param { byte_offset: 0,
                     id,
                     name: format!("p{id}"),
                     ty: Type::Number,
@@ -321,7 +321,7 @@ mod tests {
     }
 
     fn greater(local: LocalId, value: i64) -> Expr {
-        Expr::Compare {
+        Expr::Compare { byte_offset: 0,
             op: CompareOp::Gt,
             left: Box::new(Expr::LocalGet(local)),
             right: Box::new(Expr::Integer(value)),
@@ -347,7 +347,7 @@ mod tests {
             vec![1],
             vec![if_stmt_on(
                 greater(1, 1),
-                vec![Stmt::Return(Some(Expr::String("early".into())))],
+                vec![Stmt::Return(Some(Expr::String("early".into())), 0)],
             )],
         );
         let caller = function(
@@ -359,7 +359,7 @@ mod tests {
                     condition: Expr::Bool(false),
                     body: Vec::new(),
                 },
-                Stmt::Return(Some(Expr::String("after".into()))),
+                Stmt::Return(Some(Expr::String("after".into())), 0),
             ],
         );
         let mut module = Module::new("inline-10416.ts");
@@ -372,7 +372,7 @@ mod tests {
         assert!(!format!("{body:?}").contains("FuncRef(1)"), "{body:?}");
         assert_eq!(body.len(), 3, "{body:?}");
         assert!(!stmt_contains_return(&body[0]), "{body:?}");
-        assert!(matches!(&body[2], Stmt::Return(Some(Expr::String(s))) if s == "after"));
+        assert!(matches!(&body[2], Stmt::Return(Some(Expr::String(s)), _) if s == "after"));
         let init = &module.init;
         assert!(!format!("{init:?}").contains("FuncRef(1)"), "{init:?}");
         assert!(!contains_return(init), "{init:?}");
@@ -407,7 +407,7 @@ mod tests {
                     mutable: false,
                     init: Some(Expr::LocalGet(2)),
                 },
-                Stmt::Return(Some(Expr::LocalGet(3))),
+                Stmt::Return(Some(Expr::LocalGet(3)), 0),
             ],
         );
         let caller = function(
@@ -497,9 +497,9 @@ mod tests {
             )
         };
 
-        let dead = candidate(vec![Stmt::Return(None), set_x.clone()]);
+        let dead = candidate(vec![Stmt::Return(None, 0), set_x.clone()]);
         assert!(try_inline(&dead).is_none());
-        let live = candidate(vec![set_x, Stmt::Return(None)]);
+        let live = candidate(vec![set_x, Stmt::Return(None, 0)]);
         let (stmts, result) = try_inline(&live).expect("a trailing `return;` still inlines");
         assert_eq!(stmts.len(), 1);
         assert!(matches!(result, Expr::Undefined));

@@ -16,7 +16,7 @@ fn set(id: u32, rhs: Expr) -> Stmt {
 }
 
 fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op,
         left: Box::new(l),
         right: Box::new(r),
@@ -47,7 +47,7 @@ fn u8_get(arr_id: u32, idx: Expr) -> Expr {
 
 /// Params: `arr: Int32Array` (id 0), `off: number` (id 1) unless overridden.
 fn int32_array_param(id: u32) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: HirType::Named("Int32Array".to_string()),
@@ -59,7 +59,7 @@ fn int32_array_param(id: u32) -> Param {
 }
 
 fn number_param(id: u32) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: HirType::Number,
@@ -71,7 +71,7 @@ fn number_param(id: u32) -> Param {
 }
 
 fn any_param(id: u32) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: HirType::Any,
@@ -198,7 +198,7 @@ fn return_observation_excludes_local() {
     let params = [int32_array_param(0), number_param(1)];
     let stmts = vec![
         let_stmt(5, HirType::Any, Some(idx_get(0, Expr::LocalGet(1)))),
-        Stmt::Return(Some(Expr::LocalGet(5))),
+        Stmt::Return(Some(Expr::LocalGet(5)), 0),
     ];
     let got = run(&stmts, &params);
     assert!(
@@ -220,7 +220,7 @@ fn returned_bitwise_result_keeps_local_eligible() {
             BinaryOp::BitAnd,
             Expr::LocalGet(5),
             Expr::Integer(0xff),
-        ))),
+        )), 0),
     ];
     let got = run(&stmts, &params);
     assert!(
@@ -260,7 +260,7 @@ fn assert_byte_read_uses_observation_constrained_i32_proof(read: Expr) {
             BinaryOp::BitOr,
             Expr::LocalGet(5),
             Expr::Integer(0),
-        ))),
+        )), 0),
     ];
     assert!(
         run(&coerced, &[]).contains(&5),
@@ -346,7 +346,7 @@ fn conditional_bitwise_normalization_does_not_dominate_later_read() {
             then_branch: vec![set(5, xor(Expr::LocalGet(5), Expr::Integer(7)))],
             else_branch: None,
         },
-        Stmt::Return(Some(Expr::LocalGet(5))),
+        Stmt::Return(Some(Expr::LocalGet(5)), 0),
     ];
     let guarded = HashSet::from([0]);
     let got = collect(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);
@@ -368,7 +368,7 @@ fn unreachable_nested_normalization_does_not_license_later_read() {
             ],
             condition: Expr::Bool(false),
         },
-        Stmt::Return(Some(Expr::LocalGet(5))),
+        Stmt::Return(Some(Expr::LocalGet(5)), 0),
     ];
     let guarded = HashSet::from([0]);
     let got = collect(&stmts, &params, &HashMap::new(), &HashMap::new(), &guarded);

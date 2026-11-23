@@ -274,11 +274,11 @@ mod tests {
     /// (forcing the "dead from here" clear).
     fn rooted_local_ir() -> String {
         let mut hir = HirModule::new("inline_shadow_slot_test");
-        hir.functions.push(Function {
+        hir.functions.push(Function { byte_offset: 0,
             id: 0,
             name: "roots".to_string(),
             type_params: Vec::new(),
-            params: vec![Param {
+            params: vec![Param { byte_offset: 0,
                 id: 0,
                 name: "o".to_string(),
                 ty: Type::Any,
@@ -300,7 +300,7 @@ mod tests {
                 Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::LocalGet(0)))),
                 // proven-non-pointer store -> root clear
                 Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Number(1.0)))),
-                Stmt::Return(Some(Expr::LocalGet(1))),
+                Stmt::Return(Some(Expr::LocalGet(1)), 0),
             ],
             is_async: false,
             is_generator: false,

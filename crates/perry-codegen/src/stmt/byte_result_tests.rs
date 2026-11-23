@@ -1,7 +1,7 @@
 use perry_hir::{types::Type, CompareOp, Expr, Function, Module, Param, Stmt, UpdateOp};
 fn ir() -> String {
     let mut m = Module::new("general_byte_scanner");
-    let param = |id, name: &str, ty| Param {
+    let param = |id, name: &str, ty| Param { byte_offset: 0,
         id,
         name: name.into(),
         ty,
@@ -10,7 +10,7 @@ fn ir() -> String {
         is_rest: false,
         arguments_object: None,
     };
-    m.functions.push(Function {
+    m.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "scan".into(),
         type_params: vec![],
@@ -29,7 +29,7 @@ fn ir() -> String {
             },
             Stmt::For {
                 init: None,
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::LocalGet(3)),
@@ -54,17 +54,17 @@ fn ir() -> String {
                         }),
                     },
                     Stmt::If {
-                        condition: Expr::Compare {
+                        condition: Expr::Compare { byte_offset: 0,
                             op: CompareOp::Eq,
                             left: Box::new(Expr::LocalGet(4)),
                             right: Box::new(Expr::Integer(34)),
                         },
-                        then_branch: vec![Stmt::Return(Some(Expr::LocalGet(2)))],
+                        then_branch: vec![Stmt::Return(Some(Expr::LocalGet(2)), 0)],
                         else_branch: None,
                     },
                 ],
             },
-            Stmt::Return(Some(Expr::Integer(-1))),
+            Stmt::Return(Some(Expr::Integer(-1)), 0),
         ],
         is_async: false,
         is_generator: false,

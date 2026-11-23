@@ -19,7 +19,7 @@ fn let_stmt(id: LocalId, name: &str, init: Expr) -> Stmt {
 }
 
 fn function(id: FuncId, name: &str, body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -38,7 +38,7 @@ fn function(id: FuncId, name: &str, body: Vec<Stmt>) -> Function {
 }
 
 fn closure(func_id: FuncId, body: Vec<Stmt>) -> Expr {
-    Expr::Closure {
+    Expr::Closure { byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -96,7 +96,7 @@ fn empty_class(name: &str) -> Class {
 }
 
 fn ret(expr: Expr) -> Stmt {
-    Stmt::Return(Some(expr))
+    Stmt::Return(Some(expr), 0)
 }
 
 fn run(module: &mut Module, exports_may_run_early: bool) {
@@ -123,7 +123,7 @@ fn call_spread(callee: Expr, spread: Expr) -> Expr {
 }
 
 fn guarded(id: LocalId, name: &str, access: Expr) -> Expr {
-    Expr::Sequence(vec![tdz_check::check(id, name), access])
+    Expr::Sequence(vec![tdz_check::check(id, name, 0), access])
 }
 
 fn dbg<T: std::fmt::Debug>(value: &T) -> String {
@@ -141,7 +141,7 @@ fn a_top_level_read_before_the_declarator_throws_and_one_after_does_not() {
     run(&mut module, false);
     assert_eq!(
         dbg(&module.init[0]),
-        dbg(&Stmt::Expr(tdz_check::throw("x")))
+        dbg(&Stmt::Expr(tdz_check::throw("x", 0)))
     );
     assert_eq!(dbg(&module.init[2]), dbg(&Stmt::Expr(Expr::LocalGet(X))));
 }
@@ -181,7 +181,7 @@ fn a_top_level_write_before_the_declarator_evaluates_the_value_then_throws() {
         dbg(&module.init[0]),
         dbg(&Stmt::Expr(Expr::Sequence(vec![
             call(Expr::FuncRef(1)),
-            tdz_check::throw("x")
+            tdz_check::throw("x", 0)
         ])))
     );
 }
@@ -337,7 +337,7 @@ fn a_checked_write_evaluates_the_value_before_the_check() {
         dbg(&module.functions[0].body),
         dbg(&vec![Stmt::Expr(Expr::LocalSet(
             Y,
-            Box::new(tdz_check::check_then(Y, "y", Expr::Integer(2)))
+            Box::new(tdz_check::check_then(Y, "y", Expr::Integer(2), 0))
         ))])
     );
 }
@@ -466,7 +466,7 @@ fn an_exported_binding_is_named_after_its_declarator_when_an_importer_can_run_fi
         dbg(&module.init),
         dbg(&vec![
             let_stmt(X, "x", Expr::Integer(7)),
-            Stmt::Expr(tdz_check::check(X, "x")),
+            Stmt::Expr(tdz_check::check(X, "x", 0)),
         ])
     );
 }

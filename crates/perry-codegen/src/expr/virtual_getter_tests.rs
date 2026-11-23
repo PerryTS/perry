@@ -4,13 +4,13 @@ use perry_hir::types::Type;
 use perry_hir::{Class, Expr, Function, Module, Stmt};
 
 fn function(id: u32, name: &str, value: Expr) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(value))],
+        body: vec![Stmt::Return(Some(value), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,

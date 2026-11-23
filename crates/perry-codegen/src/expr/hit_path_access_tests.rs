@@ -10,7 +10,7 @@ use perry_hir::types::Type;
 use perry_hir::{Class, ClassField, Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -22,7 +22,7 @@ fn param(id: u32, ty: Type) -> Param {
 }
 
 fn function(params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: vec![],
@@ -95,7 +95,7 @@ fn declared_typed_array_length_reads_the_header_inline() {
             object: Box::new(Expr::LocalGet(1)),
             property: "length".into(),
             byte_offset: 0,
-        }))],
+        }), 0)],
     ));
     let fast =
         block_body(&ir, "plen.fast").unwrap_or_else(|| panic!("no inline length arm:\n{ir}"));
@@ -161,7 +161,7 @@ fn declared_typed_array_unproven_index_access_is_inline() {
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(Expr::LocalGet(2)),
-        }))],
+        }), 0)],
     ));
     assert!(
         get.contains("ta.read.load")
@@ -234,7 +234,7 @@ fn owner_element_store_join_has_no_bag_arm() {
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::LocalGet(2)),
-            })),
+            }), 0),
         ],
     ));
     let stores = labels(&ir, "bytes.store.");
@@ -325,7 +325,7 @@ fn plain_double_array_literal_skips_notes_and_marking() {
         vec![Stmt::Return(Some(Expr::Array(
             vec![Expr::LocalGet(1), Expr::LocalGet(2), Expr::Number(3.0)],
             None,
-        )))],
+        )), 0)],
     ));
     let plain = block_body(&ir, "arrlit.plain_numbers")
         .unwrap_or_else(|| panic!("no plain-number arm:\n{ir}"));
@@ -362,7 +362,7 @@ fn point_class() -> Class {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField {
+        fields: vec![ClassField { byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "x".to_string(),
             key_expr: None,
@@ -409,7 +409,7 @@ fn class_field_read_is_the_shape_site_read() {
             object: Box::new(Expr::LocalGet(1)),
             property: "x".into(),
             byte_offset: 0,
-        }))],
+        }), 0)],
     );
     // `x = 0`: born on an `F64` lane, so the read is raw.
     let mut point = point_class();

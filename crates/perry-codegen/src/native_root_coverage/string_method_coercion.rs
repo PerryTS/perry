@@ -27,12 +27,12 @@ const ARG_PARAM: u32 = 101;
 
 fn method_module(name: &str, property: &str, args: Vec<Expr>) -> Module {
     let mut module = bare_module(name);
-    let receiver = Expr::Binary {
+    let receiver = Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::String("receiver-".to_string())),
         right: Box::new(Expr::LocalGet(RECV_PARAM)),
     };
-    let param = |id: u32, name: &str, ty: Type| Param {
+    let param = |id: u32, name: &str, ty: Type| Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -41,7 +41,7 @@ fn method_module(name: &str, property: &str, args: Vec<Expr>) -> Module {
         is_rest: false,
         arguments_object: None,
     };
-    module.functions = vec![Function {
+    module.functions = vec![Function { byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -61,7 +61,7 @@ fn method_module(name: &str, property: &str, args: Vec<Expr>) -> Module {
             args,
             type_args: Vec::new(),
             byte_offset: 0,
-        }))],
+        }), 0)],
         is_async: false,
         is_generator: false,
         is_strict: false,

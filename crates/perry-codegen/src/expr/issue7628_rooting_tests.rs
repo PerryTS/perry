@@ -79,7 +79,7 @@ use super::slice8_rooting_tests::{call_operand_of, producer_line};
 
 fn compile_body(name: &str, body: Vec<Stmt>) -> String {
     let mut hir = HirModule::new(name);
-    hir.functions.push(Function {
+    hir.functions.push(Function { byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
@@ -267,7 +267,7 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
             element_offset: 0,
             byte_offset: 0,
             byte_end: 0,
-        }))),
+        }), 0)),
     );
     let write = require_call_line(&unproven, "js_put_value_set_dynamic");
     let produced = producer_line(&unproven, &returned_register(&unproven));
@@ -297,7 +297,7 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
                 element_offset: 0,
                 byte_offset: 0,
                 byte_end: 0,
-            })),
+            }), 0),
         ],
     );
     let typed_write = require_call_line(&typed, "js_put_value_set_dynamic");

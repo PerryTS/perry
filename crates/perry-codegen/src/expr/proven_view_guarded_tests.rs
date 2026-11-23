@@ -11,7 +11,7 @@ use perry_hir::types::Type;
 use perry_hir::{BinaryOp, Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -34,7 +34,7 @@ fn probe_ir(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> String {
 /// `(symbol, body)` for the public entry and every clone of `probe`.
 fn probe_functions(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Vec<(String, String)> {
     let mut module = Module::new(name);
-    module.functions.push(Function {
+    module.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: vec![],
@@ -104,7 +104,7 @@ fn get(view: u32, index: Expr) -> Expr {
 }
 
 fn sub1(e: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op: BinaryOp::Sub,
         left: Box::new(e),
         right: Box::new(Expr::Integer(1)),
@@ -127,7 +127,7 @@ fn swap_body(view_init: Expr, extra: Vec<Stmt>) -> Vec<Stmt> {
             byte_offset: 0,
             byte_end: 0,
         }),
-        Stmt::Return(Some(get(10, Expr::LocalGet(11)))),
+        Stmt::Return(Some(get(10, Expr::LocalGet(11))), 0),
     ]);
     body
 }
@@ -176,7 +176,7 @@ fn a_possibly_string_key_is_never_guarded() {
             Type::Named("Int32Array".into()),
             int32_new(Expr::Integer(8)),
         ),
-        Stmt::Return(Some(get(10, Expr::LocalGet(1)))),
+        Stmt::Return(Some(get(10, Expr::LocalGet(1))), 0),
     ];
     let ir = probe_ir("gview_any_key", vec![param(1, Type::Any)], body);
     assert!(!ir.contains("pview.gget"), "{ir}");
@@ -192,7 +192,7 @@ fn a_non_object_length_owns_the_storage_and_a_parameter_does_not() {
         let_(20, true, Type::Number, Expr::Integer(4)),
         Stmt::Expr(Expr::LocalSet(
             20,
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(20)),
                 right: Box::new(Expr::Integer(4)),

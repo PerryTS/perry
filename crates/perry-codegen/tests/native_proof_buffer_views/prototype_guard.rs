@@ -33,7 +33,7 @@ fn a_reader_named_write_elsewhere_does_not_deopt_the_fold() {
             buffer_let(3, "other", int(8)),
             own_set(3, "readInt32BE"),
             Stmt::Expr(proven_buffer_read(1, "readInt32BE", int(0))),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
         proven_opts(),
     );
@@ -59,7 +59,7 @@ fn an_own_reader_on_the_receiver_never_folds() {
             buffer_let(1, "buf", int(8)),
             own_set(1, "readInt32BE"),
             Stmt::Expr(buffer_read(1, "readInt32BE", int(0))),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
     assert!(
@@ -102,7 +102,7 @@ fn reader_site_ir(name: &str, proven: &[u32]) -> String {
                 type_args: Vec::new(),
                 byte_offset: SITE,
             }),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
         opts,
     )

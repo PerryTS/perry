@@ -3,7 +3,7 @@
 use perry_hir::{types::Type, BinaryOp, CompareOp, Expr, Function, Module, Param, Stmt, UpdateOp};
 
 fn param(id: u32, ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty,
@@ -32,7 +32,7 @@ fn get(id: u32, index: Expr) -> Expr {
     }
 }
 fn add(left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -41,7 +41,7 @@ fn add(left: Expr, right: Expr) -> Expr {
 fn loop_body(bound: Expr, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
         init: Some(Box::new(local(10, Type::Number, true, Expr::Integer(0)))),
-        condition: Some(Expr::Compare {
+        condition: Some(Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(10)),
             right: Box::new(bound),
@@ -57,7 +57,7 @@ fn loop_body(bound: Expr, body: Vec<Stmt>) -> Stmt {
 fn compile(name: &str, params: Vec<Param>, body: Vec<Stmt>, kind: u8) -> String {
     let argc = params.len();
     let mut m = Module::new(name);
-    m.functions.push(Function {
+    m.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: vec![],
@@ -141,7 +141,7 @@ fn native_f64_loop_reads_through_the_checked_view_access() {
                     )),
                 ))],
             ),
-            Stmt::Return(Some(Expr::LocalGet(11))),
+            Stmt::Return(Some(Expr::LocalGet(11)), 0),
         ],
         perry_hir::TYPED_ARRAY_KIND_FLOAT64,
     );
@@ -188,7 +188,7 @@ fn native_packed_columns_resolve_each_owner_data_word() {
                 },
                 vec![Stmt::Expr(set(2, set(3, set(2, get(3, key())))))],
             ),
-            Stmt::Return(Some(Expr::Integer(0))),
+            Stmt::Return(Some(Expr::Integer(0)), 0),
         ],
         perry_hir::TYPED_ARRAY_KIND_UINT32,
     );
@@ -221,7 +221,7 @@ fn native_rmw_resolves_data_before_read_and_after_rhs() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::Integer(0))),
+            Stmt::Return(Some(Expr::Integer(0)), 0),
         ],
         perry_hir::TYPED_ARRAY_KIND_UINT32,
     );

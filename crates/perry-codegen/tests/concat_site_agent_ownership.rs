@@ -6,7 +6,7 @@ use perry_hir::{BinaryOp, Expr, Module, Stmt};
 #[test]
 fn concat_site_cells_and_fill_address_are_agent_local_in_worker_graphs() {
     let mut module = Module::new("concat_helper.ts");
-    module.init.push(Stmt::Expr(Expr::Binary {
+    module.init.push(Stmt::Expr(Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::String("worker-".into())),
         right: Box::new(Expr::Integer(1)),
@@ -50,7 +50,7 @@ fn concat_site_cells_and_fill_address_are_agent_local_in_worker_graphs() {
 fn concurrent_compiles_have_independent_agent_ownership() {
     let compile = |workers, agents| {
         let mut module = Module::new("ownership_helper.ts");
-        module.init.push(Stmt::Expr(Expr::Binary {
+        module.init.push(Stmt::Expr(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::String("agent-".into())),
             right: Box::new(Expr::Integer(1)),

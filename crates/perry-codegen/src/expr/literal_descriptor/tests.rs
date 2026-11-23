@@ -4,7 +4,7 @@ use perry_hir::{Class, ClassField, Expr, Function, Module, Param, Stmt};
 fn fixture(records: usize, fields: usize) -> Module {
     let class_name = "__AnonShape_descriptor_test";
     let params: Vec<_> = (0..fields)
-        .map(|i| Param {
+        .map(|i| Param { byte_offset: 0,
             id: i as u32 + 1,
             name: format!("k{i}"),
             ty: Type::Number,
@@ -14,7 +14,7 @@ fn fixture(records: usize, fields: usize) -> Module {
             arguments_object: None,
         })
         .collect();
-    let constructor = Function {
+    let constructor = Function { byte_offset: 0,
         id: 1,
         name: "constructor".into(),
         type_params: vec![],
@@ -51,7 +51,7 @@ fn fixture(records: usize, fields: usize) -> Module {
         native_extends: None,
         heritage_lexically_shadowed: false,
         fields: (0..fields)
-            .map(|i| ClassField {
+            .map(|i| ClassField { byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: format!("k{i}"),
                 ty: Type::Number,
@@ -297,7 +297,7 @@ fn born_wide_factory_uses_return_shape_fact() {
     producer.name = "make".into();
     producer.params.clear();
     producer.return_type = Type::Any;
-    producer.body = vec![Stmt::Return(Some(literal_new()))];
+    producer.body = vec![Stmt::Return(Some(literal_new()), 0)];
     module.functions.push(producer);
     module.init = vec![
         literal_binding(Expr::Call {
@@ -313,7 +313,7 @@ fn born_wide_factory_uses_return_shape_fact() {
 }
 
 fn literal_closure(body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
-    Expr::Closure {
+    Expr::Closure { byte_offset: 0,
         func_id: 2002,
         params: vec![],
         return_type: Type::Void,
@@ -499,7 +499,7 @@ fn born_wide_global_binding_and_static_putvalue_key() {
 #[test]
 fn born_wide_closure_factory_uses_the_same_return_facts() {
     let mut module = fixture(1, 2);
-    let mut producer = literal_closure(vec![Stmt::Return(Some(literal_new()))], vec![]);
+    let mut producer = literal_closure(vec![Stmt::Return(Some(literal_new()), 0)], vec![]);
     if let Expr::Closure { return_type, .. } = &mut producer {
         *return_type = Type::Any;
     }

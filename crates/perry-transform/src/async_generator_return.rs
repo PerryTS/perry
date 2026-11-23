@@ -66,11 +66,11 @@ mod tests {
 
     #[test]
     fn returns_in_try_await_their_operand_and_bare_returns_do_not() {
-        let mut body = vec![Stmt::Try {
-            body: vec![Stmt::Return(Some(Expr::LocalGet(1)))],
+        let mut body = vec![Stmt::Try { byte_offset: 0,
+            body: vec![Stmt::Return(Some(Expr::LocalGet(1)), 0)],
             catch: Some(perry_hir::CatchClause {
                 param: None,
-                body: vec![Stmt::Return(None)],
+                body: vec![Stmt::Return(None, 0)],
             }),
             finally: None,
             forof_completion: None,
@@ -85,17 +85,17 @@ mod tests {
             panic!("try");
         };
         assert!(
-            matches!(&inner[0], Stmt::Return(Some(Expr::Await(op))) if matches!(**op, Expr::LocalGet(1)))
+            matches!(&inner[0], Stmt::Return(Some(Expr::Await(op, _)), _) if matches!(**op, Expr::LocalGet(1)))
         );
-        assert!(matches!(&c.body[0], Stmt::Return(None)));
+        assert!(matches!(&c.body[0], Stmt::Return(None, _)));
     }
 
     #[test]
     fn an_existing_await_is_not_awaited_twice() {
-        let mut body = vec![Stmt::Return(Some(Expr::Await(Box::new(Expr::LocalGet(1)))))];
+        let mut body = vec![Stmt::Return(Some(Expr::Await(Box::new(Expr::LocalGet(1)), 0)), 0)];
         await_returned_operands(&mut body);
         assert!(
-            matches!(&body[0], Stmt::Return(Some(Expr::Await(op))) if matches!(**op, Expr::LocalGet(1)))
+            matches!(&body[0], Stmt::Return(Some(Expr::Await(op, _)), _) if matches!(**op, Expr::LocalGet(1)))
         );
     }
 }

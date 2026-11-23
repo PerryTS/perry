@@ -2316,11 +2316,11 @@ mod tests {
     fn nested_closure_expr(depth: usize) -> Expr {
         let mut expr = Expr::Integer(1);
         for func_id in 0..depth as u32 {
-            expr = Expr::Closure {
+            expr = Expr::Closure { byte_offset: 0,
                 func_id,
                 params: Vec::new(),
                 return_type: Type::Any,
-                body: vec![Stmt::Return(Some(expr))],
+                body: vec![Stmt::Return(Some(expr), 0)],
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,
@@ -2392,7 +2392,7 @@ mod tests {
     /// parameter: a local argument keeps its parameter-binding boundary, so
     /// inlining `keep(x)` yields the setup `let e = x`.
     fn keep_candidate() -> HashMap<FuncId, Function> {
-        let param = perry_hir::Param {
+        let param = perry_hir::Param { byte_offset: 0,
             id: 100,
             name: "e".to_string(),
             ty: Type::Any,
@@ -2401,13 +2401,13 @@ mod tests {
             is_rest: false,
             arguments_object: None,
         };
-        let keep = Function {
+        let keep = Function { byte_offset: 0,
             id: 7,
             name: "keep".to_string(),
             type_params: Vec::new(),
             params: vec![param],
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::LocalGet(100)))],
+            body: vec![Stmt::Return(Some(Expr::LocalGet(100)), 0)],
             is_async: false,
             is_generator: false,
             is_exported: false,
@@ -2479,7 +2479,7 @@ mod tests {
                 Expr::LocalSet(1, Box::new(Expr::Integer(1))),
                 call(Expr::FuncRef(7), vec![Expr::LocalGet(1)]),
             ]),
-            Expr::Binary {
+            Expr::Binary { byte_offset: 0,
                 op: perry_hir::BinaryOp::Add,
                 left: Box::new(Expr::LocalSet(1, Box::new(Expr::Integer(1)))),
                 right: Box::new(call(Expr::FuncRef(7), vec![Expr::LocalGet(1)])),

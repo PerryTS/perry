@@ -540,7 +540,7 @@ mod tests {
     #[test]
     fn general_native_call_through_crypto() {
         let mut m = empty_module();
-        m.init.push(Stmt::Expr(Expr::NativeMethodCall {
+        m.init.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
             module: "crypto".into(),
             class_name: None,
             object: None,

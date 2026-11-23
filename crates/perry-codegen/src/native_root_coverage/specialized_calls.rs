@@ -6,11 +6,11 @@ use super::*;
 #[test]
 fn a_last_use_typed_array_is_live_across_the_specialized_call() {
     let mut module = bare_module("last_use_typed_array.ts");
-    module.functions.push(Function {
+    module.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "consume".to_string(),
         type_params: Vec::new(),
-        params: vec![Param {
+        params: vec![Param { byte_offset: 0,
             id: 10,
             name: "array".to_string(),
             ty: Type::Any,
@@ -31,7 +31,7 @@ fn a_last_use_typed_array_is_live_across_the_specialized_call() {
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(10)),
                 index: Box::new(Expr::Integer(0)),
-            }))])
+            }), 0)])
             .collect(),
         is_async: false,
         is_generator: false,

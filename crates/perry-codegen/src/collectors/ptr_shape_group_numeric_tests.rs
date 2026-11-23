@@ -25,7 +25,7 @@ const CTOR_PZ2: u32 = 103;
 const METH_PV: u32 = 110;
 
 fn field(name: &str) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -38,7 +38,7 @@ fn field(name: &str) -> ClassField {
 }
 
 fn num_param(id: u32, name: &str) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -71,7 +71,7 @@ fn class_p() -> Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![field("x"), field("y")],
-        constructor: Some(Function {
+        constructor: Some(Function { byte_offset: 0,
             id: 900,
             name: "constructor".to_string(),
             type_params: Vec::new(),
@@ -112,7 +112,7 @@ fn class_p() -> Class {
 fn class_q() -> Class {
     let mut q = class_p();
     q.name = "Q".to_string();
-    q.methods = vec![Function {
+    q.methods = vec![Function { byte_offset: 0,
         id: 901,
         name: "setX".to_string(),
         type_params: Vec::new(),
@@ -171,7 +171,7 @@ fn counted_loop(idx: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
             mutable: true,
             init: Some(Expr::Number(0.0)),
         })),
-        condition: Some(Expr::Compare {
+        condition: Some(Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx)),
             right: Box::new(bound),
@@ -232,7 +232,7 @@ fn store_field(id: u32, property: &str, value: Expr) -> Stmt {
 
 /// `i + 1` over the loop counter.
 fn counter_plus_one(idx: u32) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(idx)),
         right: Box::new(Expr::Integer(1)),
@@ -411,7 +411,7 @@ fn guarded_numeric_parameter_proves_derived_constructor_argument() {
                 new_of(
                     "P",
                     vec![
-                        Expr::Binary {
+                        Expr::Binary { byte_offset: 0,
                             op: BinaryOp::Add,
                             left: Box::new(Expr::LocalGet(BASE)),
                             right: Box::new(Expr::LocalGet(2)),
@@ -660,7 +660,7 @@ fn class_base() -> Class {
     let mut b = class_p();
     b.name = "Base".to_string();
     b.fields = vec![field("z")];
-    b.constructor = Some(Function {
+    b.constructor = Some(Function { byte_offset: 0,
         id: 902,
         name: "constructor".to_string(),
         type_params: Vec::new(),
@@ -686,14 +686,14 @@ fn class_d_extends_base() -> Class {
     d.name = "D".to_string();
     d.extends_name = Some("Base".to_string());
     d.fields = vec![field("x")];
-    d.constructor = Some(Function {
+    d.constructor = Some(Function { byte_offset: 0,
         id: 903,
         name: "constructor".to_string(),
         type_params: Vec::new(),
         params: vec![num_param(CTOR_PX, "x"), num_param(CTOR_PZ2, "z")],
         return_type: Type::Void,
         body: vec![
-            Stmt::Expr(Expr::SuperCall(vec![Expr::LocalGet(CTOR_PZ2)])),
+            Stmt::Expr(Expr::SuperCall(vec![Expr::LocalGet(CTOR_PZ2)], 0)),
             this_store("x", Expr::LocalGet(CTOR_PX)),
         ],
         is_async: false,
@@ -832,7 +832,7 @@ fn numeric_accumulator_is_numeric_by_construction() {
         },
         Stmt::Expr(Expr::LocalSet(
             3,
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(3)),
                 right: Box::new(Expr::Number(1.0)),
@@ -869,7 +869,7 @@ fn bigint_typed_view_addition_is_not_numeric_by_construction() {
                 name: format!("mixed_sum_{offset}"),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Binary {
+                init: Some(Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::synthetic_index_get(
                         Box::new(Expr::LocalGet(view_id)),
@@ -926,7 +926,7 @@ fn non_numeric_writes_and_bindings_are_excluded() {
             mutable: true,
             init: Some(Expr::Number(0.0)),
         },
-        Stmt::Expr(Expr::Closure {
+        Stmt::Expr(Expr::Closure { byte_offset: 0,
             func_id: 99,
             params: Vec::new(),
             return_type: Type::Any,
@@ -1063,7 +1063,7 @@ fn literal_array_sum_loses_its_proof_to_an_element_store() {
             arr_len(40),
             vec![Stmt::Expr(Expr::LocalSet(
                 41,
-                Box::new(Expr::Binary {
+                Box::new(Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(41)),
                     right: Box::new(Expr::IndexGet {

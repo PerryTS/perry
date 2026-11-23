@@ -4,7 +4,7 @@ use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, Param, Stmt};
 
 fn runtime(method: &str, args: Vec<Expr>) -> Expr {
-    Expr::NativeMethodCall {
+    Expr::NativeMethodCall { byte_offset: 0,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -13,16 +13,16 @@ fn runtime(method: &str, args: Vec<Expr>) -> Expr {
     }
 }
 fn ir(expr: Expr) -> String {
-    ir_body(vec![Stmt::Return(Some(expr))])
+    ir_body(vec![Stmt::Return(Some(expr), 0)])
 }
 fn ir_body(body: Vec<Stmt>) -> String {
     let mut m = Module::new("array_record_unsigned");
-    m.functions.push(Function {
+    m.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "read".into(),
         type_params: vec![],
         params: vec![
-            Param {
+            Param { byte_offset: 0,
                 id: 1,
                 name: "array".into(),
                 ty: Type::Array(Box::new(Type::Any)),
@@ -31,7 +31,7 @@ fn ir_body(body: Vec<Stmt>) -> String {
                 is_rest: false,
                 arguments_object: None,
             },
-            Param {
+            Param { byte_offset: 0,
                 id: 2,
                 name: "cursor".into(),
                 ty: Type::Number,
@@ -151,7 +151,7 @@ fn array_record_cursor_increment_keeps_full_unsigned_range() {
             byte_end: 0,
             object: Box::new(Expr::LocalGet(1)),
             index: Box::new(runtime("arrayRecordIndex", vec![Expr::LocalGet(3)])),
-        })),
+        }), 0),
     ]);
     assert!(
         ll.lines().any(|line| line.contains("fadd double")),
@@ -194,7 +194,7 @@ fn array_record_length_uses_the_existing_indexed_property_read() {
 
 #[test]
 fn array_record_length_comparison_is_native_numeric() {
-    let ll = ir(Expr::Compare {
+    let ll = ir(Expr::Compare { byte_offset: 0,
         op: perry_hir::CompareOp::Lt,
         left: Box::new(runtime("arrayRecordIndex", vec![Expr::Integer(0)])),
         right: Box::new(runtime("arrayRecordLength", vec![Expr::LocalGet(1)])),
@@ -216,13 +216,13 @@ fn array_record_length_comparison_is_native_numeric() {
 #[test]
 fn array_record_boolean_condition_stays_boolean_through_control_flow() {
     let ll = ir_body(vec![Stmt::If {
-        condition: Expr::Sequence(vec![Expr::Conditional {
+        condition: Expr::Sequence(vec![Expr::Conditional { byte_offset: 0,
             condition: Box::new(runtime("arrayRecordNeedsIterator", vec![Expr::LocalGet(1)])),
             then_expr: Box::new(Expr::Bool(true)),
             else_expr: Box::new(Expr::Bool(false)),
         }]),
-        then_branch: vec![Stmt::Return(Some(Expr::Integer(1)))],
-        else_branch: Some(vec![Stmt::Return(Some(Expr::Integer(0)))]),
+        then_branch: vec![Stmt::Return(Some(Expr::Integer(1)), 0)],
+        else_branch: Some(vec![Stmt::Return(Some(Expr::Integer(0)), 0)]),
     }]);
     assert!(
         !ll.lines()
@@ -250,7 +250,7 @@ fn array_record_local_flow_preserves_numeric_cursor_and_boolean_entry() {
         },
         Stmt::For {
             init: None,
-            condition: Some(Expr::Compare {
+            condition: Some(Expr::Compare { byte_offset: 0,
                 op: perry_hir::CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(3)),
                 right: Box::new(runtime("arrayRecordLength", vec![Expr::LocalGet(1)])),
@@ -261,16 +261,16 @@ fn array_record_local_flow_preserves_numeric_cursor_and_boolean_entry() {
                 prefix: false,
             }),
             body: vec![Stmt::If {
-                condition: Expr::Compare {
+                condition: Expr::Compare { byte_offset: 0,
                     op: perry_hir::CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(4)),
                     right: Box::new(Expr::Bool(true)),
                 },
-                then_branch: vec![Stmt::Return(Some(Expr::LocalGet(3)))],
+                then_branch: vec![Stmt::Return(Some(Expr::LocalGet(3)), 0)],
                 else_branch: None,
             }],
         },
-        Stmt::Return(Some(Expr::LocalGet(3))),
+        Stmt::Return(Some(Expr::LocalGet(3)), 0),
     ]);
     for callee in [
         "js_numeric_step",
@@ -341,7 +341,7 @@ fn completion_flags_preserve_truthiness_without_boolean_constructor_evidence() {
     for (done, constructed) in [
         (Expr::Bool(true), true),
         (
-            Expr::Compare {
+            Expr::Compare { byte_offset: 0,
                 op: perry_hir::CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(1)),
                 right: Box::new(Expr::Bool(true)),
@@ -375,13 +375,13 @@ fn completion_flags_preserve_truthiness_without_boolean_constructor_evidence() {
 
 #[test]
 fn constructed_done_predicate_keeps_normal_completion_outlined() {
-    let done = Expr::Compare {
+    let done = Expr::Compare { byte_offset: 0,
         op: perry_hir::CompareOp::Eq,
         left: Box::new(Expr::LocalGet(2)),
         right: Box::new(Expr::Bool(true)),
     };
-    let ll = ir(Expr::Conditional {
-        condition: Box::new(Expr::Compare {
+    let ll = ir(Expr::Conditional { byte_offset: 0,
+        condition: Box::new(Expr::Compare { byte_offset: 0,
             op: perry_hir::CompareOp::Eq,
             left: Box::new(Expr::LocalGet(2)),
             right: Box::new(Expr::Bool(true)),
@@ -449,7 +449,7 @@ fn ordinary_indexed_length_keeps_main_hot_guard() {
 }
 
 fn stack_record_ir(fused: bool) -> String {
-    let mode = || Expr::Compare {
+    let mode = || Expr::Compare { byte_offset: 0,
         op: perry_hir::CompareOp::Eq,
         left: Box::new(Expr::LocalGet(4)),
         right: Box::new(Expr::Bool(true)),
@@ -485,7 +485,7 @@ fn stack_record_ir(fused: bool) -> String {
                     Expr::LocalGet(3),
                     Expr::LocalSet(
                         6,
-                        Box::new(Expr::Conditional {
+                        Box::new(Expr::Conditional { byte_offset: 0,
                             condition: Box::new(mode()),
                             then_expr: Box::new(Expr::GetIterator(Box::new(Expr::LocalGet(3)))),
                             else_expr: Box::new(Expr::LocalGet(3)),
@@ -512,7 +512,7 @@ fn stack_record_ir(fused: bool) -> String {
             } else {
                 None
             },
-            condition: Some(Expr::Compare {
+            condition: Some(Expr::Compare { byte_offset: 0,
                 op: perry_hir::CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(5)),
                 right: Box::new(runtime(
@@ -621,7 +621,7 @@ fn stack_record_ir(fused: bool) -> String {
         Stmt::Expr(Expr::LocalSet(6, Box::new(Expr::Undefined))),
         Stmt::Expr(Expr::LocalSet(7, Box::new(Expr::Undefined))),
         Stmt::Expr(Expr::LocalSet(8, Box::new(Expr::Undefined))),
-        Stmt::Return(Some(Expr::LocalGet(5))),
+        Stmt::Return(Some(Expr::LocalGet(5)), 0),
     ]);
     ll
 }
@@ -889,11 +889,11 @@ fn array_stack_entry_owns_acquisition_without_a_second_dispatch() {
 fn ir_proven(proven: bool, expr: Expr) -> String {
     use crate::codegen::{ElisionFacts, ProgramFactsView};
     let mut m = Module::new("array_record_unsigned");
-    m.functions.push(Function {
+    m.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "read".into(),
         type_params: vec![],
-        params: vec![Param {
+        params: vec![Param { byte_offset: 0,
             id: 1,
             name: "array".into(),
             ty: Type::Array(Box::new(Type::Any)),
@@ -903,7 +903,7 @@ fn ir_proven(proven: bool, expr: Expr) -> String {
             arguments_object: None,
         }],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(expr))],
+        body: vec![Stmt::Return(Some(expr), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,

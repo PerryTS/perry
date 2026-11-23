@@ -553,7 +553,7 @@ mod tests {
     use std::collections::HashMap;
 
     fn function(name: &str, body: Vec<Stmt>) -> Function {
-        Function {
+        Function { byte_offset: 0,
             id: 0,
             name: name.to_string(),
             type_params: Vec::new(),
@@ -572,7 +572,7 @@ mod tests {
     }
 
     fn field(name: &str) -> ClassField {
-        ClassField {
+        ClassField { byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: name.to_string(),
             key_expr: None,

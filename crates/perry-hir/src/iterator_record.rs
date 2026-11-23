@@ -688,7 +688,7 @@ mod tests {
             &mut ctx,
             vec![Expr::Integer(1), Expr::Integer(2)],
             &mut setup,
-        );
+         0,);
         assert_eq!(plan.scalars.as_ref().unwrap().len(), 2);
         assert!(
             matches!(&setup[2], Stmt::Let { init: Some(Expr::NativeMethodCall { method, args, .. }), .. }
@@ -746,7 +746,7 @@ mod tests {
     fn array_record_guards_allocations_and_reads_live_length() {
         let mut ctx = LoweringContext::new("array_record.ts");
         let mut setup = Vec::new();
-        let mut plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![], None), &mut setup);
+        let mut plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![], None), &mut setup, 0);
         assert_eq!(
             plan.array, plan.source,
             "the indexed record must reuse the source rather than a declared-array alias"
@@ -788,8 +788,8 @@ mod tests {
         );
 
         assert!(matches!(value.as_ref(), Expr::Conditional {
-            condition, then_expr, else_expr,
-        } if matches!(condition.as_ref(), Expr::Compare { op: CompareOp::Eq, left, right }
+            condition, then_expr, else_expr, ..
+        } if matches!(condition.as_ref(), Expr::Compare { op: CompareOp::Eq, left, right, .. }
                 if matches!(left.as_ref(), Expr::LocalGet(id) if *id == plan.use_iter)
                     && matches!(right.as_ref(), Expr::Bool(true)))
             && matches!(then_expr.as_ref(), Expr::GetIterator(_))
@@ -797,13 +797,13 @@ mod tests {
 
         assert!(
             matches!(plan.next_init(99), Expr::Conditional { condition, then_expr, .. }
-            if matches!(condition.as_ref(), Expr::Compare { op: CompareOp::Eq, left, right }
+            if matches!(condition.as_ref(), Expr::Compare { op: CompareOp::Eq, left, right, .. }
                 if matches!(left.as_ref(), Expr::LocalGet(id) if *id == plan.use_iter)
                     && matches!(right.as_ref(), Expr::Bool(true)))
             && matches!(then_expr.as_ref(), Expr::NativeMethodCall { method, .. } if method == "iteratorNextMethod"))
         );
         let Expr::Conditional { else_expr, .. } =
-            plan.step(crate::lower::iterator_step_call(99, 100, 101))
+            plan.step(crate::lower::iterator_step_call(99, 100, 101, 0))
         else {
             panic!()
         };
@@ -942,8 +942,8 @@ mod tests {
             &mut ctx,
             vec![Expr::Integer(10), Expr::Integer(20)],
             &mut setup,
-        );
-        let first = plan.step_at(crate::lower::iterator_step_call(99, 100, 101), Some(0));
+         0,);
+        let first = plan.step_at(crate::lower::iterator_step_call(99, 100, 101, 0), Some(0));
         let Expr::Conditional { else_expr, .. } = first else {
             panic!()
         };
@@ -954,7 +954,7 @@ mod tests {
             if matches!(value.as_ref(), Expr::LocalGet(id) if *id == plan.scalars.as_ref().unwrap()[0])));
         assert!(matches!(&success[1], Expr::LocalSet(id, value)
             if *id == plan.index && matches!(value.as_ref(), Expr::Integer(1))));
-        let exhausted = plan.step_at(crate::lower::iterator_step_call(99, 100, 101), Some(2));
+        let exhausted = plan.step_at(crate::lower::iterator_step_call(99, 100, 101, 0), Some(2));
         assert!(!format!("{exhausted:?}").contains("IndexGet"));
         assert!(matches!(exhausted, Expr::Conditional { else_expr, .. }
             if matches!(else_expr.as_ref(), Expr::Sequence(body)
@@ -970,12 +970,12 @@ mod tests {
             Expr::Undefined,
             Type::Array(Box::new(Type::Number)),
             &mut setup,
-        );
+         0,);
         assert!(matches!(&setup[1], Stmt::Let {
             init: Some(Expr::NativeMethodCall { args, .. }), .. }
             if matches!(args.last(), Some(Expr::Bool(true)))));
 
-        let _general = IteratorRecordPlan::new(&mut ctx, Expr::Undefined, &mut setup);
+        let _general = IteratorRecordPlan::new(&mut ctx, Expr::Undefined, &mut setup, 0);
         assert!(matches!(&setup[4], Stmt::Let {
             init: Some(Expr::NativeMethodCall { args, .. }), .. }
             if !matches!(args.last(), Some(Expr::Bool(true)))));
@@ -998,13 +998,13 @@ mod tests {
     fn array_record_counted_step_preserves_continue_and_close_state() {
         let mut ctx = LoweringContext::new("array_record.ts");
         let mut setup = Vec::new();
-        let plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![], None), &mut setup);
+        let plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![], None), &mut setup, 0);
         let state = ctx.fresh_local();
         let lowered = plan.drive(
             &mut ctx,
             99,
             100,
-            vec![Stmt::Try {
+            vec![Stmt::Try { byte_offset: 0,
                 body: vec![
                     Stmt::Let {
                         id: state,
@@ -1121,7 +1121,7 @@ mod tests {
                             let Expr::Compare {
                                 op: CompareOp::Eq,
                                 left,
-                                right,
+                                right, ..
                             } = &args[1]
                             else {
                                 panic!("mutable private done must become a constructed predicate");

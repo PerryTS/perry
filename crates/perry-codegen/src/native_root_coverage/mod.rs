@@ -195,7 +195,7 @@ pub(crate) fn ir_opts(target: &str, is_entry: bool) -> CompileOptions {
 }
 
 fn bare_module(name: &str) -> Module {
-    Module {
+    Module { byte_offset: 0,
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -244,11 +244,11 @@ fn bare_module(name: &str) -> Module {
 /// unrolls, and an unrolled loop has no back edge to make claims about.
 pub(crate) fn probe_module(name: &str, body: Vec<Stmt>) -> Module {
     let mut module = bare_module(name);
-    module.functions = vec![Function {
+    module.functions = vec![Function { byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
-        params: vec![Param {
+        params: vec![Param { byte_offset: 0,
             id: 100,
             name: "n".to_string(),
             ty: Type::Number,

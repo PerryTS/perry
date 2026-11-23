@@ -93,7 +93,7 @@ const PLAIN: u32 = 103;
 /// an ordinary rooted slot.
 fn module_with_boxed_local() -> Module {
     let mut m = Module::new("boxed_root.ts");
-    let f = Function {
+    let f = Function { byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: Vec::new(),
@@ -112,7 +112,7 @@ fn module_with_boxed_local() -> Module {
                 name: "bump".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Closure {
+                init: Some(Expr::Closure { byte_offset: 0,
                     func_id: 2,
                     params: Vec::new(),
                     return_type: Type::Any,
@@ -145,7 +145,7 @@ fn module_with_boxed_local() -> Module {
                 type_args: Vec::new(),
                 byte_offset: 0,
             }),
-            Stmt::Return(Some(Expr::LocalGet(PLAIN))),
+            Stmt::Return(Some(Expr::LocalGet(PLAIN)), 0),
         ],
         is_async: false,
         is_generator: false,

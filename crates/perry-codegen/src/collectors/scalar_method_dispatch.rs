@@ -1034,7 +1034,7 @@ mod tests {
             native_extends: None,
             extends_expr: None,
             heritage_lexically_shadowed: false,
-            fields: vec![ClassField {
+            fields: vec![ClassField { byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "value".to_string(),
                 key_expr: None,
@@ -1045,7 +1045,7 @@ mod tests {
                 decorators: Vec::new(),
             }],
             constructor: None,
-            methods: vec![Function {
+            methods: vec![Function { byte_offset: 0,
                 id: 2,
                 name: "getValue".to_string(),
                 type_params: Vec::new(),
@@ -1056,7 +1056,7 @@ mod tests {
                     byte_offset: 0,
                     object: Box::new(Expr::This),
                     property: "value".to_string(),
-                }))],
+                }), 0)],
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -1112,7 +1112,7 @@ mod tests {
             args: Vec::new(),
             type_args: Vec::new(),
             byte_offset: 0,
-        }))
+        }), 0)
     }
 
     /// `(obj as any).<key> = () => 99` — lowers to `PutValueSet` since #4126.
@@ -1215,7 +1215,7 @@ mod tests {
     fn prototype_mutation_anywhere_in_the_module_escapes_the_receiver() {
         let class = summarizable_class("C");
         let mut module = Module::new("m.ts");
-        module.functions.push(Function {
+        module.functions.push(Function { byte_offset: 0,
             id: 9,
             name: "mutate".to_string(),
             type_params: Vec::new(),

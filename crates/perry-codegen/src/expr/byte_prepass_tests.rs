@@ -3,7 +3,7 @@ use crate::{compile_module, CompileOptions};
 use perry_hir::{types::Type, CompareOp, Expr, Function, Module, Param, Stmt, UpdateOp};
 
 fn param(id: u32, ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -15,7 +15,7 @@ fn param(id: u32, ty: Type) -> Param {
 }
 
 fn function(body: Vec<Stmt>, params: Vec<Param>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id: 1,
         name: "witness".into(),
         type_params: vec![],
@@ -60,7 +60,7 @@ fn call_callback() -> Stmt {
 fn loop_body(body: Vec<Stmt>) -> Stmt {
     Stmt::For {
         init: None,
-        condition: Some(Expr::Compare {
+        condition: Some(Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(3)),
             right: Box::new(Expr::Integer(4)),
@@ -393,7 +393,7 @@ fn shared_and_native_byte_views_take_the_runtime_arm() {
                         args: vec![Expr::LocalGet(1), Expr::LocalGet(3)],
                         type_args: vec![],
                         byte_offset: 0,
-                    })),
+                    }), 0),
                 ],
                 vec![param(3, Type::Any)],
             ));
@@ -406,7 +406,7 @@ fn shared_and_native_byte_views_take_the_runtime_arm() {
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(1)),
                     index: Box::new(Expr::LocalGet(3)),
-                }))],
+                }), 0)],
                 vec![
                     param(
                         1,

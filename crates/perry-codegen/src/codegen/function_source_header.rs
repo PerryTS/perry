@@ -253,7 +253,7 @@ mod tests {
     use perry_hir::Param;
 
     fn param(name: &str, rest: bool) -> Param {
-        Param {
+        Param { byte_offset: 0,
             id: 1,
             name: name.to_string(),
             ty: Type::Any,
@@ -283,7 +283,7 @@ mod tests {
     fn closure_expr(func_id: u32, params: Vec<Param>, is_arrow: bool) -> (FuncId, Expr) {
         (
             func_id,
-            Expr::Closure {
+            Expr::Closure { byte_offset: 0,
                 func_id,
                 params,
                 return_type: Type::Any,

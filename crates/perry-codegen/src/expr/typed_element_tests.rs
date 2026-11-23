@@ -32,7 +32,7 @@ const KINDS: [(&str, u8); 11] = [
 ];
 
 fn field(name: &str, ty: Type) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -75,7 +75,7 @@ fn holder(fields: Vec<ClassField>) -> Class {
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -87,7 +87,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 }
 
 fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -175,7 +175,7 @@ fn kind_module(kind: &str) -> Module {
             10,
             "get",
             vec![holder_param(), param(2, "i", Type::Number)],
-            vec![Stmt::Return(Some(element(1, "f", 2)))],
+            vec![Stmt::Return(Some(element(1, "f", 2)), 0)],
         ),
         function(
             11,
@@ -305,7 +305,7 @@ fn arena_module(call_between: bool) -> Module {
         }));
     }
     make.push(store(1, "right", 4, Expr::LocalGet(3)));
-    make.push(Stmt::Return(Some(Expr::LocalGet(4))));
+    make.push(Stmt::Return(Some(Expr::LocalGet(4)), 0));
     m.functions = vec![
         function(
             20,
@@ -317,7 +317,7 @@ fn arena_module(call_between: bool) -> Module {
             ],
             make,
         ),
-        function(21, "effect", Vec::new(), vec![Stmt::Return(None)]),
+        function(21, "effect", Vec::new(), vec![Stmt::Return(None, 0)]),
         function(
             22,
             "check",
@@ -331,15 +331,15 @@ fn arena_module(call_between: bool) -> Module {
                     init: Some(element(1, "left", 2)),
                 },
                 Stmt::If {
-                    condition: Expr::Compare {
+                    condition: Expr::Compare { byte_offset: 0,
                         op: CompareOp::Lt,
                         left: Box::new(Expr::LocalGet(5)),
                         right: Box::new(Expr::Integer(0)),
                     },
-                    then_branch: vec![Stmt::Return(Some(Expr::Integer(1)))],
+                    then_branch: vec![Stmt::Return(Some(Expr::Integer(1)), 0)],
                     else_branch: None,
                 },
-                Stmt::Return(Some(Expr::LocalGet(5))),
+                Stmt::Return(Some(Expr::LocalGet(5)), 0),
             ],
         ),
     ];

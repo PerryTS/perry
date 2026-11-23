@@ -980,7 +980,7 @@ mod tests {
     }
 
     fn capturing_closure(captures: Vec<u32>) -> Expr {
-        Expr::Closure {
+        Expr::Closure { byte_offset: 0,
             func_id: 0,
             params: vec![],
             return_type: HirType::Void,
@@ -1081,7 +1081,7 @@ mod tests {
                 Stmt::Expr(index_set(
                     ARR,
                     Expr::Integer(1),
-                    Expr::Binary {
+                    Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(index_get(ARR, Expr::Integer(1))),
                         right: Box::new(Expr::Integer(1)),
@@ -1093,7 +1093,7 @@ mod tests {
                 Stmt::Expr(property_get(Expr::LocalGet(ARR), "length")),
             ),
             ("numeric push", Stmt::Expr(push(ARR, Expr::Number(1.0)))),
-            ("bare return", Stmt::Return(Some(Expr::LocalGet(ARR)))),
+            ("bare return", Stmt::Return(Some(Expr::LocalGet(ARR)), 0)),
         ];
         for (label, stmt) in uses {
             assert!(

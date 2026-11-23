@@ -94,7 +94,7 @@ fn entry_opts() -> CompileOptions {
 }
 
 fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
-    Module {
+    Module { byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -142,7 +142,7 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
 /// release correctly skips; only function-scoped cells release).
 fn ir_for_fn_body(name: &str, body: Vec<Stmt>) -> String {
     let mut m = module_with_init(name, Vec::new());
-    m.functions.push(perry_hir::Function {
+    m.functions.push(perry_hir::Function { byte_offset: 0,
         id: 7000,
         name: "driver".to_string(),
         type_params: Vec::new(),
@@ -192,7 +192,7 @@ fn activation_frame() -> Vec<Stmt> {
 fn release_boxes_lowers_each_kind_to_its_entry_point() {
     let mut body = activation_frame();
     body.push(Stmt::ReleaseBoxes(vec![STATE, DONE, SENT]));
-    body.push(Stmt::Return(Some(Expr::Undefined)));
+    body.push(Stmt::Return(Some(Expr::Undefined), 0));
     let ir = ir_for_fn_body("release_kinds", body);
     // The activation frame is one scope object (control words included), and
     // the release ends the activation's lifecycle token once for all of it.
@@ -220,7 +220,7 @@ fn release_boxes_lowers_each_kind_to_its_entry_point() {
 #[test]
 fn release_boxes_lowers_through_closure_captures() {
     let mut body = activation_frame();
-    body.push(Stmt::Expr(Expr::Closure {
+    body.push(Stmt::Expr(Expr::Closure { byte_offset: 0,
         func_id: 900,
         params: Vec::new(),
         return_type: Type::Any,
@@ -228,7 +228,7 @@ fn release_boxes_lowers_through_closure_captures() {
             // Reference a cell so the body is not trivially empty.
             Stmt::Expr(Expr::LocalSet(SENT, Box::new(Expr::Undefined))),
             Stmt::ReleaseBoxes(vec![STATE, DONE, SENT]),
-            Stmt::Return(Some(Expr::Undefined)),
+            Stmt::Return(Some(Expr::Undefined), 0),
         ],
         captures: vec![STATE, DONE, SENT],
         mutable_captures: vec![STATE, DONE, SENT],
@@ -240,7 +240,7 @@ fn release_boxes_lowers_through_closure_captures() {
         is_async: false,
         is_generator: false,
     }));
-    body.push(Stmt::Return(Some(Expr::Undefined)));
+    body.push(Stmt::Return(Some(Expr::Undefined), 0));
     let ir = ir_for_fn_body("release_captures", body);
     let step = ir
         .split("\ndefine ")
@@ -263,16 +263,16 @@ fn release_boxes_lowers_through_closure_captures() {
 #[test]
 fn escaped_user_closure_inside_step_keeps_its_box_capture_edge() {
     let mut body = activation_frame();
-    body.push(Stmt::Expr(Expr::Closure {
+    body.push(Stmt::Expr(Expr::Closure { byte_offset: 0,
         func_id: 900,
         params: Vec::new(),
         return_type: Type::Any,
         body: vec![
-            Stmt::Expr(Expr::Closure {
+            Stmt::Expr(Expr::Closure { byte_offset: 0,
                 func_id: 901,
                 params: Vec::new(),
                 return_type: Type::Any,
-                body: vec![Stmt::Return(Some(Expr::LocalGet(SENT)))],
+                body: vec![Stmt::Return(Some(Expr::LocalGet(SENT)), 0)],
                 captures: vec![SENT],
                 mutable_captures: Vec::new(),
                 captures_this: false,
@@ -284,7 +284,7 @@ fn escaped_user_closure_inside_step_keeps_its_box_capture_edge() {
                 is_generator: false,
             }),
             Stmt::ReleaseBoxes(vec![STATE, DONE, SENT]),
-            Stmt::Return(Some(Expr::Undefined)),
+            Stmt::Return(Some(Expr::Undefined), 0),
         ],
         captures: vec![STATE, DONE, SENT],
         mutable_captures: vec![STATE, DONE, SENT],
@@ -296,7 +296,7 @@ fn escaped_user_closure_inside_step_keeps_its_box_capture_edge() {
         is_async: false,
         is_generator: false,
     }));
-    body.push(Stmt::Return(Some(Expr::Undefined)));
+    body.push(Stmt::Return(Some(Expr::Undefined), 0));
 
     let ir = ir_for_fn_body("release_nested_user_capture", body);
     let tracked_edges = ir
@@ -319,7 +319,7 @@ fn escaped_user_closure_inside_step_keeps_its_box_capture_edge() {
 fn release_of_an_unknown_id_is_skipped() {
     let mut body = activation_frame();
     body.push(Stmt::ReleaseBoxes(vec![99]));
-    body.push(Stmt::Return(Some(Expr::Undefined)));
+    body.push(Stmt::Return(Some(Expr::Undefined), 0));
     let ir = ir_for_fn_body("release_unknown", body);
     assert!(
         !ir.contains("call void @js_box_release("),

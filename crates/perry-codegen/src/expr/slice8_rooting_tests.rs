@@ -195,7 +195,7 @@ fn assert_reread_below_operand(
 /// `LocalGet` needs the slot the declaration creates.
 fn compile_body(name: &str, body: Vec<Stmt>) -> String {
     let mut hir = HirModule::new(name);
-    hir.functions.push(Function {
+    hir.functions.push(Function { byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),

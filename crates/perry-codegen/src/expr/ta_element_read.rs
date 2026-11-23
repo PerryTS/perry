@@ -495,7 +495,7 @@ mod tests {
             "Float32Array",
             "Float64Array",
         ] {
-            let param = |id, name: &str, ty| Param {
+            let param = |id, name: &str, ty| Param { byte_offset: 0,
                 id,
                 name: name.to_owned(),
                 ty,
@@ -505,7 +505,7 @@ mod tests {
                 arguments_object: None,
             };
             let mut module = Module::new("typed_loop_read.ts");
-            module.functions.push(Function {
+            module.functions.push(Function { byte_offset: 0,
                 id: 10,
                 name: "scan".to_owned(),
                 type_params: vec![],
@@ -522,7 +522,7 @@ mod tests {
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(1)),
                         index: Box::new(Expr::LocalGet(2)),
-                    }))],
+                    }), 0)],
                 }],
                 is_async: false,
                 is_generator: false,

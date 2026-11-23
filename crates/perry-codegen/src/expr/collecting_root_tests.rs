@@ -6,14 +6,14 @@ use perry_hir::{BinaryOp, Class, Expr, Function, Module, Param, Stmt};
 use std::collections::{BTreeMap, BTreeSet};
 
 fn probe(params: Vec<Type>, result: Expr) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
         params: params
             .into_iter()
             .enumerate()
-            .map(|(i, ty)| Param {
+            .map(|(i, ty)| Param { byte_offset: 0,
                 id: i as u32 + 1,
                 name: format!("p{i}"),
                 ty,
@@ -24,7 +24,7 @@ fn probe(params: Vec<Type>, result: Expr) -> Function {
             })
             .collect(),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(result))],
+        body: vec![Stmt::Return(Some(result), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -360,7 +360,7 @@ fn assert_hot_has_no_temp_traffic(
 }
 
 fn add(left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),

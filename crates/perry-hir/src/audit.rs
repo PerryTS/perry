@@ -344,7 +344,7 @@ mod tests {
     }
 
     fn native_call(module: &str, method: &str) -> Expr {
-        Expr::NativeMethodCall {
+        Expr::NativeMethodCall { byte_offset: 0,
             module: module.to_string(),
             class_name: None,
             object: None,

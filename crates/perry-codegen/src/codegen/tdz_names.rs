@@ -162,7 +162,7 @@ mod tests {
             Stmt::PreallocateTdzBoxes(vec![1]),
             local(0, "ordinary"),
             local(1, "later"),
-            Stmt::Expr(Expr::Closure {
+            Stmt::Expr(Expr::Closure { byte_offset: 0,
                 func_id: 0,
                 params: Vec::new(),
                 return_type: Type::Any,

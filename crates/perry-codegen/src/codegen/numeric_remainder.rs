@@ -96,7 +96,7 @@ mod tests {
     fn ordinary_remainder_uses_the_shared_checked_number_operation() {
         let ir = crate::temp_root_coverage::main_ir_for(
             "ordinary_checked_remainder",
-            vec![Stmt::Expr(Expr::Binary {
+            vec![Stmt::Expr(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Mod,
                 left: Box::new(Expr::Number(5.5)),
                 right: Box::new(Expr::Number(2.0)),

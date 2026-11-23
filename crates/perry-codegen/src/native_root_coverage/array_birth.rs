@@ -50,11 +50,11 @@ fn array_elements_and_reduce_callback_are_live_across_inline_births() {
         let mut module = bare_module("reduce_initial_birth.ts");
         module.init.push(Stmt::Expr(Expr::ArrayReduceRight {
             array: Box::new(Expr::Array(vec![Expr::Integer(1)], None)),
-            callback: Box::new(Expr::Closure {
+            callback: Box::new(Expr::Closure { byte_offset: 0,
                 func_id: 7,
                 params: Vec::new(),
                 return_type: Type::Any,
-                body: vec![Stmt::Return(Some(Expr::Undefined))],
+                body: vec![Stmt::Return(Some(Expr::Undefined), 0)],
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,

@@ -6,22 +6,22 @@ use crate::{
 use perry_hir::{types::Type, BinaryOp, Expr, Param, Stmt};
 
 fn comparator(effect: bool) -> Expr {
-    let mut body = vec![Stmt::Return(Some(Expr::Binary {
+    let mut body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
         op: BinaryOp::Sub,
         left: Box::new(Expr::LocalGet(17)),
         right: Box::new(Expr::LocalGet(23)),
-    }))];
+    }), 0)];
     if effect {
         body.insert(
             0,
             Stmt::Expr(Expr::LocalSet(17, Box::new(Expr::Number(0.0)))),
         );
     }
-    Expr::Closure {
+    Expr::Closure { byte_offset: 0,
         func_id: 99,
         params: [17, 23]
             .into_iter()
-            .map(|id| Param {
+            .map(|id| Param { byte_offset: 0,
                 id,
                 name: format!("p{id}"),
                 ty: Type::Number,
@@ -79,7 +79,7 @@ fn numeric_sort_operation_selected_only_with_a_whole_body_effect_proof() {
 fn keyed_sort_certificate_selects_a_rooted_property_operation() {
     let mut cmp = comparator(false);
     if let Expr::Closure { body, .. } = &mut cmp {
-        if let Stmt::Return(Some(Expr::Binary { left, right, .. })) = &mut body[0] {
+        if let Stmt::Return(Some(Expr::Binary { left, right, .. }), _) = &mut body[0] {
             *left = Box::new(Expr::PropertyGet {
                 byte_end: 0,
                 byte_offset: 0,

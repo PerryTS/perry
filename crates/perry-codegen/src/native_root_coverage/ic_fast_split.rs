@@ -32,7 +32,7 @@ fn point_class() -> Class {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField {
+        fields: vec![ClassField { byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "x".to_string(),
             key_expr: None,
@@ -62,7 +62,7 @@ fn point_class() -> Class {
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -81,7 +81,7 @@ fn split_module() -> Module {
     let mut module = bare_module("ic_fast_split.ts");
     module.classes = vec![point_class()];
     module.functions = (0..4000u32)
-        .map(|i| Function {
+        .map(|i| Function { byte_offset: 0,
             id: 10_000 + i,
             name: format!("pad{i}"),
             type_params: Vec::new(),
@@ -98,7 +98,7 @@ fn split_module() -> Module {
             was_unrolled: false,
         })
         .collect();
-    module.functions.push(Function {
+    module.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -152,7 +152,7 @@ fn split_module() -> Module {
                     Expr::LocalGet(24),
                 ],
                 None,
-            ))),
+            )), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -282,7 +282,7 @@ fn read_site_memos_preserve_leaf_and_collecting_root_contracts() {
                 },
             ),
         );
-        let Some(Stmt::Return(Some(Expr::Array(values, _)))) = function.body.last_mut() else {
+        let Some(Stmt::Return(Some(Expr::Array(values, _)), _)) = function.body.last_mut() else {
             panic!("fixture must retain the lookup result");
         };
         values.push(Expr::LocalGet(25));

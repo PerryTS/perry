@@ -467,7 +467,7 @@ fn phase2_v35_widget_set_hidden_in_closure_emits_state_binding() {
     // App({body: VStack(0, [Button("Open", () => widgetSetHidden(formContainer, 0)),
     //                       formContainer])})
     let body_id: LocalId = 101;
-    let onclick = Expr::Closure {
+    let onclick = Expr::Closure { byte_offset: 0,
         func_id: 0,
         params: vec![],
         return_type: perry_hir::types::Type::Any,

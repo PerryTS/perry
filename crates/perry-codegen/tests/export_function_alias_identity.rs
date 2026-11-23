@@ -12,13 +12,13 @@ fn empty_opts() -> CompileOptions {
 }
 
 fn test_function(id: u32, value: f64) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: "lex".to_string(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Number(value)))],
+        body: vec![Stmt::Return(Some(Expr::Number(value)), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -38,7 +38,7 @@ fn dollar_export_aliases_resolve_function_identity_not_sanitized_spelling() {
         function.name = name.into();
         function.is_exported = true;
         function.params = (0..arity)
-            .map(|i| Param {
+            .map(|i| Param { byte_offset: 0,
                 id: id * 100 + i,
                 name: format!("a{i}"),
                 ty: Type::Any,

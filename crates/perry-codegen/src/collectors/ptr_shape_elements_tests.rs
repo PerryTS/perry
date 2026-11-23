@@ -15,7 +15,7 @@ use perry_hir::{ClassField, CompareOp, Function, Module, Param, UpdateOp};
 // ── Fixture builders ───────────────────────────────────────────────────────
 
 fn field(name: &str) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -140,7 +140,7 @@ fn store_x(id: u32) -> Stmt {
 fn bounded_loop(idx: u32, arr: u32, body: Vec<Stmt>) -> Stmt {
     bounded_loop_cond(
         idx,
-        Expr::Compare {
+        Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx)),
             right: Box::new(Expr::PropertyGet {
@@ -280,7 +280,7 @@ fn promote(stmts: &[Stmt], classes: &HashMap<String, &Class>) -> HashMap<u32, Pt
 }
 
 fn callback_param(id: u32, ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -294,7 +294,7 @@ fn callback_param(id: u32, ty: Type) -> Param {
 fn inline_for_each(func_id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Stmt {
     Stmt::Expr(Expr::ArrayForEach {
         array: Box::new(Expr::LocalGet(1)),
-        callback: Box::new(Expr::Closure {
+        callback: Box::new(Expr::Closure { byte_offset: 0,
             func_id,
             params,
             return_type: Type::Any,
@@ -636,7 +636,7 @@ fn returned_array_is_still_proven() {
         let_arr(1, "rows"),
         let_c(2, "row"),
         push(1, Expr::LocalGet(2)),
-        Stmt::Return(Some(Expr::LocalGet(1))),
+        Stmt::Return(Some(Expr::LocalGet(1)), 0),
     ];
     assert!(promote(&stmts, &classes).contains_key(&2));
 }
@@ -681,7 +681,7 @@ fn array_captured_by_a_closure_denies_the_push() {
         let_arr(1, "rows"),
         let_c(2, "row"),
         push(1, Expr::LocalGet(2)),
-        Stmt::Expr(Expr::Closure {
+        Stmt::Expr(Expr::Closure { byte_offset: 0,
             func_id: 99,
             params: Vec::new(),
             return_type: Type::Any,
@@ -963,7 +963,7 @@ fn a_loop_bounded_by_a_non_array_length_does_not_license_the_read() {
         },
         bounded_loop_cond(
             5,
-            Expr::Compare {
+            Expr::Compare { byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(5)),
                 right: Box::new(Expr::PropertyGet {
@@ -993,7 +993,7 @@ fn a_constant_bound_does_not_license_the_read() {
         push(1, new_c()),
         bounded_loop_cond(
             5,
-            Expr::Compare {
+            Expr::Compare { byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(5)),
                 right: Box::new(Expr::Number(10.0)),
@@ -1251,7 +1251,7 @@ fn terminal_guarded_for_of_retains_the_index_arm_facts() {
             Vec::new(),
             vec![let_elem(32, "iterated", 30, 31), read_x(32)],
         ),
-        Stmt::Return(Some(Expr::Number(0.0))),
+        Stmt::Return(Some(Expr::Number(0.0)), 0),
     ];
     let promoted = promote(&stmts, &classes);
     assert!(promoted.contains_key(&2), "the pushed producer");
@@ -1645,7 +1645,7 @@ fn the_module_barrier_still_denies_element_facts() {
     let c = class_c();
     let cs = [c];
     let classes = classes_of(&cs);
-    let barrier = Function {
+    let barrier = Function { byte_offset: 0,
         id: 3,
         name: "b".to_string(),
         type_params: Vec::new(),
@@ -1687,7 +1687,7 @@ fn an_inadmissible_element_class_denies_the_array() {
     // rule it is written for.
     c.getters = vec![(
         "derived".to_string(),
-        perry_hir::Function {
+        perry_hir::Function { byte_offset: 0,
             id: 50,
             name: "derived".to_string(),
             type_params: Vec::new(),

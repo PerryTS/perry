@@ -21,7 +21,7 @@ const H: u32 = 2;
 const TOWER_FRACTION_MASK: &str = "4503599627370495";
 
 fn number_param() -> Param {
-    Param {
+    Param { byte_offset: 0,
         id: A,
         name: "a".to_string(),
         ty: Type::Number,
@@ -44,7 +44,7 @@ fn converting_bodies(target: Option<&str>, body: Vec<Stmt>) -> Vec<String> {
         type_args: Vec::new(),
         byte_offset: 0,
     }));
-    module.functions.push(Function {
+    module.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: Vec::new(),
@@ -97,11 +97,11 @@ fn converting_bodies(target: Option<&str>, body: Vec<Stmt>) -> Vec<String> {
 const DIAMOND_TARGET: &str = "x86_64-unknown-linux-gnu";
 
 fn returning(expr: Expr) -> Vec<Stmt> {
-    vec![Stmt::Return(Some(expr))]
+    vec![Stmt::Return(Some(expr), 0)]
 }
 
 fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -250,7 +250,7 @@ fn a_toint32_result_enters_an_i32_slot_without_a_second_conversion() {
                 Expr::Integer(0),
             )),
         )),
-        Stmt::Return(Some(Expr::LocalGet(H))),
+        Stmt::Return(Some(Expr::LocalGet(H)), 0),
     ];
     for ir in converting_bodies(Some(DIAMOND_TARGET), body) {
         assert!(

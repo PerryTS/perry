@@ -1094,7 +1094,7 @@ mod tests {
             name: format!("cell_{}", id),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::NativeMethodCall {
+            init: Some(Expr::NativeMethodCall { byte_offset: 0,
                 module: "perry/ui".to_string(),
                 class_name: None,
                 object: None,
@@ -1105,14 +1105,14 @@ mod tests {
     }
 
     fn handle_call(method: &str, state_id: LocalId) -> Stmt {
-        Stmt::Expr(Expr::NativeMethodCall {
+        Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
             module: "perry/ui".to_string(),
             class_name: None,
             object: None,
             method: method.to_string(),
             args: vec![
                 Expr::LocalGet(state_id),
-                Expr::Closure {
+                Expr::Closure { byte_offset: 0,
                     func_id: 100,
                     params: vec![],
                     return_type: Type::Any,
@@ -1132,7 +1132,7 @@ mod tests {
     }
 
     fn set_method_call(state_id: LocalId, value: &str) -> Stmt {
-        Stmt::Expr(Expr::NativeMethodCall {
+        Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
             module: "perry/ui".to_string(),
             class_name: Some("State".to_string()),
             object: Some(Box::new(Expr::LocalGet(state_id))),
@@ -1240,7 +1240,7 @@ mod tests {
         module
             .init
             .push(state_let(0, "State", Expr::String("v".to_string())));
-        module.functions.push(Function {
+        module.functions.push(Function { byte_offset: 0,
             id: 0,
             name: "main".to_string(),
             params: vec![],

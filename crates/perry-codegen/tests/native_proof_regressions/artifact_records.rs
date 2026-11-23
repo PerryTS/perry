@@ -37,7 +37,7 @@ fn native_library_handle_runtime_lowering_records_contracts() {
                 vec![extern_call("make_thing", Vec::new(), Type::Any)],
                 Type::Void,
             )),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
 
@@ -114,7 +114,7 @@ fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
                 byte_end: 0,
                 object: Box::new(local(1)),
                 index: Box::new(int(0)),
-            })),
+            }), 0),
         ],
     );
 
@@ -199,7 +199,7 @@ fn artifact_records_write_barrier_child_js_value_bits() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
 
@@ -264,7 +264,7 @@ fn artifact_records_unproven_class_field_store_claims_no_raw_f64_facts() {
                 byte_offset: 0,
                 object: Box::new(local(1)),
                 property: "x".to_string(),
-            })),
+            }), 0),
         ],
     );
 

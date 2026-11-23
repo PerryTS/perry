@@ -710,11 +710,11 @@ mod tests {
         use perry_hir::{Function, Module, Param};
         crate::temp_root_coverage::under_both_lowerings(|mode| {
             let mut module = Module::new("buffer_param_owner.ts");
-            module.functions.push(Function {
+            module.functions.push(Function { byte_offset: 0,
                 id: 10,
                 name: "read".into(),
                 type_params: vec![],
-                params: vec![Param {
+                params: vec![Param { byte_offset: 0,
                     id: 1,
                     name: "view".into(),
                     ty: Type::Named("Buffer".into()),
@@ -743,7 +743,7 @@ mod tests {
                         args: vec![Expr::Integer(0)],
                         type_args: vec![],
                         byte_offset: 0,
-                    })),
+                    }), 0),
                 ],
                 is_async: false,
                 is_generator: false,
@@ -843,11 +843,11 @@ mod tests {
     fn executed_calls_dirty_the_hoisted_byte_access_proof() {
         use perry_hir::{Function, Module, Param};
         let mut module = Module::new("byte_proof_dirty.ts");
-        module.functions.push(Function {
+        module.functions.push(Function { byte_offset: 0,
             id: 10,
             name: "read".into(),
             type_params: vec![],
-            params: vec![Param {
+            params: vec![Param { byte_offset: 0,
                 id: 1,
                 name: "view".into(),
                 ty: Type::Named("Buffer".into()),
@@ -876,7 +876,7 @@ mod tests {
                     args: vec![Expr::Integer(0)],
                     type_args: vec![],
                     byte_offset: 0,
-                })),
+                }), 0),
             ],
             is_async: false,
             is_generator: false,
