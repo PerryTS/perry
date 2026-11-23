@@ -1,0 +1,1 @@
+`canvas.fillGradient(r1, g1, b1, a1, r2, g2, b2, a2, direction)` is callable from TypeScript on native, web and WASM targets. It fills the area under the current path with a linear gradient (area charts); the filled shape still differs by backend, see `docs/src/ui/canvas.md`.
