@@ -25,6 +25,9 @@ impl Model {
             }
             // Rule PXCHAIN: only a Proxy in the closure acts (`proxy_apply`).
             Cons::ChainSet { .. } | Cons::ChainRecv { .. } => {}
+            // Rule PXDEFINE: an ordinary object's definition is the store
+            // itself; only a Proxy runs a trap (`proxy_apply`).
+            Cons::DefineOwn { .. } => {}
             // Rule PXRECV: a Proxy's forward to the ordinary objects of its
             // target, with the original receiver (a Proxy target: `proxy_apply`).
             Cons::FwdLoad {

@@ -78,3 +78,41 @@ fn proxy_forward_to_a_proxy_passes_the_original_receiver() {
     site(t, SET_OUT, "px.x;", false).unwrap();
     site(t, SET_KEEP, "px.x;", true).unwrap();
 }
+
+/// `px.x = v` without a `set` trap: target.[[Set]](x, v, px) defines `x`
+/// on the Receiver, px.[[DefineOwnProperty]] (10.1.9.2 step 2.d/2.e), whose
+/// `defineProperty` trap is passed a descriptor holding `v`. Before, the
+/// trap never ran and `v` stayed proven (unsound).
+#[test]
+fn proxy_set_forward_runs_the_define_property_trap() {
+    let h = "defineProperty(t: any, k: any, d: any) { external(d.value); return true; }";
+    site("{}", h, "px.x = payload;", false).unwrap();
+    let keep = "defineProperty(t: any, k: any, d: any) { return true; }";
+    site("{}", keep, "px.x = payload;", true).unwrap();
+    // Not stored: the trap does not run.
+    site("{}", h, "", true).unwrap();
+}
+
+/// The same [[Set]] reads the Receiver's own descriptor first
+/// (Receiver.[[GetOwnProperty]], step 2.c): the Proxy's
+/// `getOwnPropertyDescriptor` trap runs.
+#[test]
+fn proxy_set_forward_runs_the_descriptor_trap() {
+    let h = "getOwnPropertyDescriptor(t: any, k: any) { external(payload); return undefined; }";
+    site("{}", h, "px.x = 1;", false).unwrap();
+    site("{}", h, "", true).unwrap();
+}
+
+/// A Proxy on the chain of an ordinary receiver: the define is on the
+/// receiver (ordinary), so no `defineProperty` trap runs.
+#[test]
+fn proxy_on_the_chain_set_defines_on_the_ordinary_receiver() {
+    let h = "defineProperty(t: any, k: any, d: any) { external(d.value); return true; }";
+    site(
+        "{}",
+        h,
+        "const receiver: any = Object.create(px);\nreceiver.x = payload;",
+        true,
+    )
+    .unwrap();
+}

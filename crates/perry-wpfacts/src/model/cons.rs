@@ -527,6 +527,16 @@ pub enum Cons {
         region: NodeId,
         recv: Tok,
     },
+    /// Rule PXDEFINE: [[DefineOwnProperty]] of `key` with a data descriptor
+    /// whose [[Value]] is `value` on each object of the node, throwing into
+    /// `region`. A Proxy runs its `defineProperty` trap and forwards to its
+    /// target (10.5.6); on an ordinary object the definition is the store
+    /// that made it (its own field), so the rule adds nothing there.
+    DefineOwn {
+        key: Key,
+        value: NodeId,
+        region: NodeId,
+    },
     /// The node is `this`: continue a `super.key` lookup at `start` with
     /// each `this` token as the receiver.
     Super { start: Tok, key: Key, act: ChainAct },
@@ -1193,6 +1203,7 @@ impl Cons {
             Cons::ChainRecv { .. } => "chainrecv",
             Cons::FwdLoad { .. } => "fwdload",
             Cons::FwdStore { .. } => "fwdstore",
+            Cons::DefineOwn { .. } => "defineown",
             Cons::Super { .. } => "super",
             Cons::SuperFrom { .. } => "super-from",
             Cons::SuperCtor { .. } => "superctor",

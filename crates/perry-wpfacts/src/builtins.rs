@@ -527,6 +527,32 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
     t
 }
 
+/// Rule PXDEFINE: the descriptor object a `defineProperty` trap call
+/// `call` is passed (10.5.6 step 6, 6.2.6.4 FromPropertyDescriptor of the
+/// data descriptor of an ordinary [[Set]], 10.1.9.2 steps 2.d / 2.e): a new
+/// ordinary object, one per trap call, with `value` ⊇ `value`, the Boolean
+/// `writable`, `enumerable`, `configurable` (step 2.e; 2.d passes `value`
+/// alone) and no `get` / `set`.
+pub(crate) fn trap_descriptor(m: &mut Model, call: CallId, value: NodeId) -> Tok {
+    let tm = site_template(m, call, "descriptor", false, false);
+    let ctx = m.birth_ctx(call);
+    let t = m.site_tok(tm, ctx);
+    let va = m.atom("value");
+    let fv = m.field(t, va);
+    m.edge(value, fv);
+    for name in ["writable", "enumerable", "configurable"] {
+        let a = m.atom(name);
+        let f = m.field(t, a);
+        m.add_prim(f, prim::BOOL | prim::UNDEF);
+    }
+    for name in ["get", "set"] {
+        let a = m.atom(name);
+        let f = m.field(t, a);
+        m.add_prim(f, prim::UNDEF);
+    }
+    t
+}
+
 /// The view of `what` born at `call` whose [[ViewedArrayBuffer]] its
 /// birth writes itself (`Cons::ViewedBuffer`).
 fn site_view(m: &mut Model, call: CallId, what: &'static str) -> Tok {

@@ -297,6 +297,10 @@ impl Model {
                 self.packet_key(key),
                 self.packet_token(recv, packet)
             ),
+            Cons::DefineOwn { key, value, region } => format!(
+                "DefineOwn key={:?} value={value} region={region}",
+                self.packet_key(key)
+            ),
             Cons::StoreTopProto { origin, src } => format!(
                 "StoreTopProto origin={:?} src={:?}",
                 self.packet_token(origin, packet),

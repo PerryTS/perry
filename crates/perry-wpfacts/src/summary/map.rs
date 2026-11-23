@@ -280,6 +280,11 @@ pub fn map_cons(
             region: n(region),
             recv,
         },
+        DefineOwn { key, value, region } => DefineOwn {
+            key,
+            value: n(value),
+            region: n(region),
+        },
         Super { start, key, act } => Super {
             start,
             key,

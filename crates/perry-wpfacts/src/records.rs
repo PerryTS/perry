@@ -353,6 +353,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::ChainRecv { .. }
         | Cons::FwdLoad { .. }
         | Cons::FwdStore { .. }
+        | Cons::DefineOwn { .. }
         | Cons::HolderStep { .. }
         | Cons::VisitHolders { .. }
         | Cons::VisitStop { .. }

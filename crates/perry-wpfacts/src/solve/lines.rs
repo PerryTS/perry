@@ -182,6 +182,9 @@ impl Model {
                 recv,
                 ..
             } => format!("fwdstore {n} {key:?} {src} {region} {recv}"),
+            Cons::DefineOwn { key, value, region } => {
+                format!("defineown {n} {key:?} {value} {region}")
+            }
             Cons::Super { start, key, act } => {
                 format!("super {n} {start} {} {act:?}", self.key_name(*key))
             }

@@ -215,6 +215,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::ChainRecv { .. }
         | Cons::FwdLoad { .. }
         | Cons::FwdStore { .. }
+        | Cons::DefineOwn { .. }
         | Cons::SuperCtor { .. }
         | Cons::SuperCtorParent { .. }
         | Cons::Accessor { .. }
