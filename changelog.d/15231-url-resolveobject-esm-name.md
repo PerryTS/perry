@@ -1,0 +1,1 @@
+`url.resolveObject`, `http._connectionListener` and `module.runMain` carry Node's function `name` (`urlResolveObject`, `connectionListener`, `executeUserEntryPoint`) through every import form, ESM bindings included; `realm_declared_keys.tsv` lists the `Blob`/`File` prototype accessors.
