@@ -257,7 +257,9 @@ impl Model {
                     .pts
                     .to_sorted()
                     .into_iter()
-                    .filter(|&t| escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t))
+                    .filter(|&t| {
+                        escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                    })
                     .collect();
                 self.ledger_again_beside_top(n, &gone);
             }
@@ -726,7 +728,9 @@ impl Model {
         for (reason, retained) in sinks {
             let root = l.enter_sink(n);
             for &t in toks {
-                if retained != Some(t) && escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t) {
+                if retained != Some(t)
+                    && escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                {
                     l.again(t, reason, std::panic::Location::caller());
                 }
             }
@@ -1626,7 +1630,11 @@ impl Model {
             && toks.iter().any(|&t| t == crate::model::TOP)
         {
             let k = self.top_origin_id(n);
-            let rest: Vec<Tok> = toks.iter().copied().filter(|&t| t != crate::model::TOP).collect();
+            let rest: Vec<Tok> = toks
+                .iter()
+                .copied()
+                .filter(|&t| t != crate::model::TOP)
+                .collect();
             if !rest.is_empty() || prim != 0 {
                 self.apply_tokens_on_b(n, c, Tokens::Slice(&rest), prim);
             }
@@ -2045,7 +2053,17 @@ impl Model {
                 self.note_nopos(std::panic::Location::caller(), "implicit-request");
             }
             let what = || format!("{proto:?} touch on {}", self.tok_words(t));
-            let w = if self.stop_top.as_ref().unwrap().shared_key.contains_key(&(t, proto)) { String::new() } else { what() };
+            let w = if self
+                .stop_top
+                .as_ref()
+                .unwrap()
+                .shared_key
+                .contains_key(&(t, proto))
+            {
+                String::new()
+            } else {
+                what()
+            };
             let s = self.stop_top.as_mut().unwrap();
             let id = s.shared_call((t, proto), || w, p);
             if !self.implicit_done.contains_key(&(t, proto)) {

@@ -1287,7 +1287,11 @@ impl Model {
         inst: Tok,
         dst: NodeId,
     ) {
-        let mut r = if self.sum.ready { self.ret_for(call, ftok) } else { NO_NODE };
+        let mut r = if self.sum.ready {
+            self.ret_for(call, ftok)
+        } else {
+            NO_NODE
+        };
         // A summarized body: its runs bound at this call return into a
         // body-result node (`Model::call_result_dst`), which gives the
         // `new` result its objects; the guard reads it as F's ret.
@@ -1309,8 +1313,19 @@ impl Model {
         }
         let this = self.node_named("ctor-this", || format!("ctor-this({ftok})"));
         self.add_tok(this, inst);
-        let test = if derived { guard::UNDEF } else { guard::NOT_OBJECT };
-        self.cons(r, Cons::Guard { test, from: this, dst });
+        let test = if derived {
+            guard::UNDEF
+        } else {
+            guard::NOT_OBJECT
+        };
+        self.cons(
+            r,
+            Cons::Guard {
+                test,
+                from: this,
+                dst,
+            },
+        );
     }
 
     /// Objects a constructor returns replace `this` as the `new` result.

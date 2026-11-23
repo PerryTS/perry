@@ -1709,7 +1709,10 @@ fn realm_described_statics_are_the_realm_declaration() {
     );
     // Perry's RegExp owns its realm declaration, no legacy accessors.
     assert!(ns_statics(BuiltinNs::RegExp).members.is_some());
-    assert!(matches!(ns_member(BuiltinNs::RegExp, "escape"), Some(Some(_))));
+    assert!(matches!(
+        ns_member(BuiltinNs::RegExp, "escape"),
+        Some(Some(_))
+    ));
     assert_eq!(ns_member(BuiltinNs::RegExp, "$1"), Some(None));
 }
 

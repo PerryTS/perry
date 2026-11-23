@@ -1150,7 +1150,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 }
                 Some(n) if hostval_global(m, t, key, n, dst) => {}
                 _ => {
-                    pn151_note("globalThis-top-arm", name.as_deref().unwrap_or("[computed]"));
+                    pn151_note(
+                        "globalThis-top-arm",
+                        name.as_deref().unwrap_or("[computed]"),
+                    );
                     // A host global, or under a computed key any global: the
                     // Function constructor only under a key that may be
                     // "Function" (E14, DECISIONS 235). The program stores
@@ -1286,7 +1289,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             _ if hostval_load(m, t, module, key, name.as_deref(), dst) => {}
             _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
             _ => {
-                pn151_note(&format!("module-top-arm {module}"), name.as_deref().unwrap_or("[computed]"));
+                pn151_note(
+                    &format!("module-top-arm {module}"),
+                    name.as_deref().unwrap_or("[computed]"),
+                );
                 m.add_top(dst, |_| {
                     format!(
                         "native module ref {module}.{}",
@@ -1893,7 +1899,8 @@ pub(crate) fn pn151_note(arm: &str, n: &str) {
     if !pn151_diag() {
         return;
     }
-    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
     let k = format!("{arm} {n}");
     let mut g = SEEN.lock().unwrap();
     if g.get_or_insert_with(Default::default).insert(k.clone()) {
@@ -1954,7 +1961,6 @@ fn pn151_ruleb_load(m: &mut Model, t: Tok, key: Key, name: Option<&str>, dst: No
         }
     }
 }
-
 
 fn hostval() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
