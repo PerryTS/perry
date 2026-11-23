@@ -1,7 +1,7 @@
 use super::*;
 
 mod constants_keys;
-use constants_keys::{DEPRECATED_CONSTANTS_KEYS, ZLIB_CONSTANTS_KEYS};
+use constants_keys::{CRYPTO_CONSTANTS_KEYS, DEPRECATED_CONSTANTS_KEYS, ZLIB_CONSTANTS_KEYS};
 
 const ASYNC_HOOKS_DEFAULT_KEYS: &[&[u8]] = &[
     b"AsyncLocalStorage",
@@ -1279,6 +1279,7 @@ pub(crate) fn native_module_enumerable_keys(module_name: &str) -> Option<&'stati
         // export surface so wildcard interop + object spread copy the exports.
         // The table lives beside crypto's value-resolution in `constants.rs`.
         "crypto" => Some(super::constants::CRYPTO_NAMESPACE_KEYS),
+        "crypto.constants" => Some(CRYPTO_CONSTANTS_KEYS),
         "sqlite" => Some(&[
             b"Database",
             b"DatabaseSync",

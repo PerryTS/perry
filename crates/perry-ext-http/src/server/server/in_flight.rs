@@ -12,7 +12,7 @@ use super::{
     object_handle, owned_server_handles, with_base_server, with_base_server_mut,
     HttpPendingRequest, HttpServer,
 };
-use crate::server::request::close_incoming_message;
+use crate::server::request::{close_incoming_message, retire_incoming_message};
 use crate::server::response::{is_legacy_response_handle, response_state};
 
 /// A request whose handler returned before finishing the response. It lives
@@ -70,15 +70,15 @@ fn finalize_request_handles(request_handle: i64, response_handle: i64) {
 /// deadline-gated quarantine through the request's grace window so a
 /// long-suspended handler that resumes and writes hits an empty slot rather
 /// than a recycled response (see `perry_ffi::drop_handle_until`). The request
-/// id always takes the one-tick path — `IncomingMessage` has no late-write
-/// surface, and it is closed here first.
+/// is closed here first, then retired: JS may keep reading it, and its payload
+/// lives until no value names it.
 pub(crate) fn finalize_request_handles_deferred(
     request_handle: i64,
     response_handle: i64,
     recycle_deadline: Option<Instant>,
 ) {
     close_incoming_message(request_handle);
-    perry_ffi::drop_handle(request_handle);
+    retire_incoming_message(request_handle);
     retire_response(response_handle, recycle_deadline);
 }
 
@@ -109,6 +109,7 @@ pub(crate) fn reap_in_flight_requests() {
     let mut to_finalize = Vec::new();
     let mut drain_listeners: Vec<Vec<i64>> = Vec::new();
     let mut heap_drains = Vec::new();
+    let mut to_close = Vec::new();
     for server in owned_server_handles() {
         let mut index = 0;
         loop {
@@ -141,10 +142,17 @@ pub(crate) fn reap_in_flight_requests() {
             // grace window.
             let peer_gone =
                 crate::server::response::stream_receiver_gone(object_handle(response.get()));
-            if ended || peer_gone {
+            // Node retires the request after the response's `'close'`: an
+            // ended response waits for it, and a dead connection closes its
+            // response on this tick and retires the request on the next.
+            let closed = crate::server::response::response_close_emitted(handle);
+            if closed && (ended || peer_gone) {
                 let _ = with_base_server_mut(server, |s| s.in_flight.remove(index));
                 to_finalize.push((request, response, (!ended).then_some(deadline)));
             } else {
+                if peer_gone && !closed {
+                    to_close.push(roots.root_nanbox(response.get()));
+                }
                 index += 1;
             }
         }
@@ -154,6 +162,9 @@ pub(crate) fn reap_in_flight_requests() {
     }
     for response in heap_drains {
         crate::server::response_payload::emit(object_handle(response.get()), "drain");
+    }
+    for response in to_close {
+        crate::server::response::close_abandoned_response(object_handle(response.get()));
     }
     // Retire after the walk; teardown can deliver close callbacks.
     for (req, res, recycle_deadline) in to_finalize {
@@ -168,7 +179,9 @@ pub(crate) fn reap_in_flight_requests() {
 /// fresh (rooted) word.
 pub(crate) fn finalize_or_park_request(pending: &HttpPendingRequest) {
     let response = pending.response_handle();
-    if response_writable_ended(response) {
+    if response_writable_ended(response)
+        && crate::server::response::response_close_emitted(response)
+    {
         finalize_request_handles(pending.request_handle, response);
         return;
     }

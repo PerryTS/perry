@@ -131,6 +131,10 @@ pub(crate) fn field(handle_id: usize, key: *const crate::StringHeader) -> Option
                 | "httpVersionMinor"
                 | "httpVersion"
                 | "complete"
+                // Readable accessors whose state lives in the native request.
+                | "readable"
+                | "readableEnded"
+                | "destroyed"
                 | "rawHeaders"
                 | "rawTrailers"
                 | "joinDuplicateHeaders"
