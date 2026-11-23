@@ -228,3 +228,21 @@ console.log([K.prototype === kp, D2.prototype === dp].join(","));
         "true,true"
     );
 }
+
+// A static field with a computed key is stored under the key its expression evaluates
+// to: a well-known symbol, a registered symbol or a string (#15112). Expected output is Node's.
+#[test]
+fn a_computed_static_field_is_stored_under_its_evaluated_key() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const s = Symbol.for("k");
+class A { static [Symbol.iterator] = 1; static [s] = 2; static ["x" + 1] = 3; }
+const K: any = A;
+console.log(JSON.stringify(Object.keys(A)) + " " + K[Symbol.iterator] + " " + K[s] + " " + K.x1);
+console.log((s === Symbol.for("k")) + " " + (Symbol.iterator === Symbol["iterator"]) + " " + String(Symbol.asyncIterator));
+"#
+        ),
+        "[\"x1\"] 1 2 3\ntrue true Symbol(Symbol.asyncIterator)"
+    );
+}

@@ -2395,6 +2395,11 @@ const __memDispatch = {
     return (key in obj) ? 1 : 0;
   },
   object_coerce: (v) => Object(v),
+  // HIR names a well-known symbol `@@__perry_wk_<name>`.
+  symbol_for: (key) => {
+    const k = String(key);
+    return k.startsWith('@@__perry_wk_') ? Symbol[k.slice(13)] : Symbol.for(k);
+  },
   // `key in Object(v)` without handing the temporary wrapper back as a handle.
   object_coerce_has_property: (obj, key) => (key in Object(obj)) ? 1 : 0,
   object_assign: (target, source) => {
