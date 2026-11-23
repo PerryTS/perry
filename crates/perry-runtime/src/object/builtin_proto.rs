@@ -1858,6 +1858,10 @@ pub unsafe extern "C-unwind" fn js_builtin_proto_generic_call3(
 /// `undefined`, or node's TypeError for null / undefined.
 #[no_mangle]
 pub extern "C-unwind" fn js_collection_size_get(recv: f64) -> f64 {
+    let value = crate::value::JSValue::from_bits(recv.to_bits());
+    if value.is_undefined() || value.is_null() {
+        crate::error::js_throw_type_error_property_access(u32::from(value.is_null()), b"size".as_ptr(), 4);
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let recv = scope.root_nanbox_f64(recv);
     // The interned key may allocate on first use; the receiver is rooted.
