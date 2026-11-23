@@ -340,7 +340,7 @@ pub fn collect_closure_captured_local_ids(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 visit_expr(discriminant, out);
                 for case in cases {
@@ -452,7 +452,7 @@ pub fn collect_mutated_local_ids(stmts: &[Stmt], out: &mut std::collections::Has
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 visit_expr(discriminant, out);
                 for case in cases {
@@ -803,7 +803,7 @@ pub fn find_max_local_id(stmts: &[Stmt]) -> LocalId {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 check_expr(discriminant, max_id);
                 for case in cases {

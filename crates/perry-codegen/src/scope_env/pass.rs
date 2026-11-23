@@ -257,7 +257,7 @@ impl Rewrite<'_> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(discriminant);
                 for case in cases {

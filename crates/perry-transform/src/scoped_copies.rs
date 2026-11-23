@@ -210,7 +210,7 @@ fn fold_nested(stmt: &mut Stmt, avail: &mut Avail, cx: &Census) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             fold_expr(discriminant, cx);
             for case in cases {
@@ -290,7 +290,7 @@ fn reads_in_stmt(stmt: &Stmt, q: LocalId) -> usize {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             reads_in_expr(discriminant, q)
                 + cases
@@ -380,7 +380,7 @@ fn rename_in_stmt(stmt: &mut Stmt, q: LocalId, p: LocalId) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             rename_in_expr(discriminant, q, p);
             for c in cases {

@@ -201,7 +201,7 @@ fn visit_stmt(stmt: &Stmt, module_constants: &HashMap<u32, f64>, scan: &mut Scan
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             visit_expr(discriminant, module_constants, scan);
             for case in cases {

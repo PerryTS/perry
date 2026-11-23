@@ -1129,7 +1129,7 @@ fn rewrite_return_record_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 rewrite_return_record_expr(discriminant, record_id, field_locals);
                 for case in cases {
@@ -1576,7 +1576,7 @@ fn stmts_are_safe(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 expr_is_safe(discriminant, array_id, aliases, fields)
                     && cases.iter().all(|case| {
@@ -1719,7 +1719,7 @@ fn rewrite_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 rewrite_expr(discriminant, array_id, aliases, fields);
                 for case in cases {

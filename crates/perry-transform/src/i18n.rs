@@ -406,7 +406,7 @@ fn collect_keys_from_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_keys_from_expr(discriminant, key_to_idx, keys);
             for case in cases {
@@ -647,7 +647,7 @@ fn replace_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             replace_in_expr(
                 discriminant,

@@ -320,7 +320,7 @@ pub(crate) fn collect_local_writes<'a>(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 walk_expr(discriminant, out);
                 for case in cases {

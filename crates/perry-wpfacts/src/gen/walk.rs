@@ -2066,7 +2066,7 @@ impl<'a> Gen<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 let d = self.expr_zs(fx, discriminant);
                 // `===` against case values: no coercion, identity.

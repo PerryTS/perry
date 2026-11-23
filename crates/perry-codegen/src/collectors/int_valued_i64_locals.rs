@@ -229,7 +229,7 @@ impl Walk {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases,
+                    cases, ..
                 } => {
                     self.seed_expr(discriminant);
                     for c in cases {
@@ -319,7 +319,7 @@ impl Walk {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases,
+                    cases, ..
                 } => {
                     self.judge_expr(discriminant);
                     for c in cases {
@@ -478,7 +478,7 @@ fn collect_written_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
                     }
                     Stmt::Switch {
                         discriminant,
-                        cases,
+                        cases, ..
                     } => {
                         self.expr(discriminant);
                         for c in cases {

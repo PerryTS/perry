@@ -110,7 +110,7 @@ fn update_call_sites_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             update_call_sites_in_expr(discriminant, ctx, lookup);
             for case in cases {

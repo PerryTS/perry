@@ -577,7 +577,7 @@ fn writes_in_stmt<'a>(s: &'a Stmt, id: u32, out: &mut Vec<Step<'a>>) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             writes_in_expr(discriminant, id, out)
                 && cases.iter().all(|c| {

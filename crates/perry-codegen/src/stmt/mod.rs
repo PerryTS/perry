@@ -865,7 +865,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // preceding case is valid JS.
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => lower_switch(ctx, discriminant, cases),
 
         // Labeled statement: set the pending label so the next loop

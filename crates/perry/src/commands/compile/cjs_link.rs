@@ -223,7 +223,7 @@ fn stmt(s: &mut Stmt, open: bool) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             expr(discriminant, open);
             for c in cases {

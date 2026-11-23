@@ -292,7 +292,7 @@ fn for_each_stmt_expr(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for case in cases {
@@ -457,7 +457,7 @@ fn for_each_stmt_expr_shallow(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for c in cases {
@@ -677,7 +677,7 @@ fn allowed_refs_stmt(stmt: &Stmt, id: LocalId) -> usize {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             allowed_refs(discriminant, id, false)
                 + cases
@@ -896,7 +896,7 @@ impl Rewriter<'_> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(discriminant);
                 for case in cases {
@@ -1096,7 +1096,7 @@ fn rewrite_refs_stmt(stmt: &mut Stmt, id: LocalId) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             rewrite_refs_expr(discriminant, id);
             for case in cases {

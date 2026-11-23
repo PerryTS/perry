@@ -160,7 +160,7 @@ fn collect_stmt_uses(stmt: &Stmt, uses: &mut HashMap<u32, LocalUses>) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_expr_uses(discriminant, uses);
             for case in cases {

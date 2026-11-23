@@ -1242,6 +1242,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 discriminant = Expr::LocalGet(id);
             }
             result.push(Stmt::Switch {
+                byte_offset: switch_stmt.span.lo.0,
                 discriminant,
                 cases,
             });

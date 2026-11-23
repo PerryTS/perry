@@ -497,7 +497,7 @@ fn collect_nested_closure_boxed_vars_in_stmt(stmt: &perry_hir::Stmt, out: &mut H
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_nested_closure_boxed_vars_in_expr(discriminant, out);
             for case in cases {
@@ -921,7 +921,7 @@ fn collect_closure_refs_and_writes_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_closure_refs_and_writes_in_expr(discriminant, refs, writes);
             for case in cases {
@@ -1162,7 +1162,7 @@ fn collect_outer_writes_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) 
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_outer_writes_in_expr(discriminant, out);
             for case in cases {
@@ -1377,7 +1377,7 @@ fn collect_write_ids_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_write_ids_in_expr(discriminant, out);
             for case in cases {

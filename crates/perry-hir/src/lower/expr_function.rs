@@ -1752,7 +1752,7 @@ fn insert_class_capture_refresh_inside_expressions(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 visit_expr(discriminant, regs);
                 for case in cases {

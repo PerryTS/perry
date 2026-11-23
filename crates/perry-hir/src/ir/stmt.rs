@@ -71,6 +71,8 @@ pub enum Stmt {
     Switch {
         discriminant: Expr,
         cases: Vec<SwitchCase>,
+        /// Source byte offset (`span.lo.0`) of the `switch` statement.
+        byte_offset: u32,
     },
     /// Pre-allocate slot+box for a set of LocalIds at function-body
     /// entry. Emitted by `lower_fn_body_block_stmt` to support hoisted
@@ -126,6 +128,7 @@ impl Stmt {
         match self {
             Stmt::Return(_, o) => Some(*o),
             Stmt::Try { byte_offset, .. } => Some(*byte_offset),
+            Stmt::Switch { byte_offset, .. } => Some(*byte_offset),
             _ => None,
         }
     }

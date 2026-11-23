@@ -582,7 +582,7 @@ fn pointer_locals(
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases,
+                    cases, ..
                 } => {
                     memo.collect_expr_writes(discriminant, writes);
                     for case in cases {

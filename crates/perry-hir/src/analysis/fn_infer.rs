@@ -733,7 +733,7 @@ fn for_each_stmt_expr<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for c in cases {
@@ -836,7 +836,7 @@ fn walk_stmts<'a>(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 walk_local(discriminant, on_expr);
                 for c in cases {

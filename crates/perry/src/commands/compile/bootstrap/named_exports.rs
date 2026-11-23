@@ -548,7 +548,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut Refs) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             visit_expr(discriminant, out);
             for case in cases {

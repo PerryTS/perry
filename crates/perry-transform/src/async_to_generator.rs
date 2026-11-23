@@ -352,7 +352,7 @@ fn rewrite_async_closures_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             rewrite_async_closures_in_expr(discriminant, work, next_local_id, next_func_id);
             for case in cases.iter_mut() {
@@ -705,7 +705,7 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             hoist_awaits_in_expr_full(discriminant, next_id, hoisted);
             for case in cases.iter_mut() {
@@ -1258,7 +1258,7 @@ fn rewrite_stmt(stmt: &mut Stmt, had_await: &mut bool) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             rewrite_expr(discriminant, had_await);
             for case in cases.iter_mut() {
@@ -1370,7 +1370,7 @@ fn strip_in_stmt(stmt: &mut Stmt, non_promise: &mut HashSet<LocalId>) {
         Stmt::Labeled { body, .. } => strip_in_stmt(body, non_promise),
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             strip_in_expr(discriminant, non_promise);
             for case in cases {
@@ -1630,7 +1630,7 @@ fn scan_stmt_for_async_closures(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             scan_expr_for_async_closures(discriminant, found);
             for case in cases {
@@ -1730,7 +1730,7 @@ fn stmt_contains_await(stmt: &Stmt, found: &mut bool) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             expr_contains_await_shallow(discriminant, found)
                 || cases.iter().any(|c| body_contains_await(&c.body))

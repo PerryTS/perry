@@ -293,7 +293,7 @@ impl<'a> Flow<'a> {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases,
+                    cases, ..
                 } => {
                     self.expression(scope, discriminant);
                     for case in cases {
@@ -701,7 +701,7 @@ fn stmts_mut(body: &mut [Stmt], f: &mut impl FnMut(&mut Expr)) {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 expr_mut(discriminant, f);
                 for case in cases {

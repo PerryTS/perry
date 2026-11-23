@@ -452,7 +452,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases,
+                    cases, ..
                 } => {
                     rewrite_call_init(
                         discriminant,

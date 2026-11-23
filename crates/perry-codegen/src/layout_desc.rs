@@ -658,7 +658,7 @@ fn walk_stmts<'a>(body: &'a [Stmt], out: &mut Vec<&'a [(String, Expr)]>) {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 walk_expr(discriminant, out);
                 for c in cases {

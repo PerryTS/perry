@@ -1149,7 +1149,7 @@ pub fn collect_refs_in_closure_bodies_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_refs_in_closure_bodies_expr(discriminant, out);
             for case in cases {

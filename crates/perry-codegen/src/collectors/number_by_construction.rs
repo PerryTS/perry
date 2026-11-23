@@ -537,7 +537,7 @@ impl<'h> NumberAtReadFlow<'_, 'h> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(discriminant, &mut state.set, false);
                 // Tests run in source order until one matches; a case body is

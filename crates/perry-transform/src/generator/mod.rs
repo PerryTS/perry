@@ -391,7 +391,7 @@ fn transform_generator_closures_in_stmts(
                     }
                     Stmt::Switch {
                         discriminant,
-                        cases,
+                        cases, ..
                     } => {
                         for case in cases.iter_mut().rev() {
                             push_stmt_slice(&mut stack, &mut case.body);

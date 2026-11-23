@@ -454,7 +454,7 @@ pub(crate) fn collect_written_locals(stmts: &[Stmt], out: &mut HashSet<u32>) {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases,
+                    cases, ..
                 } => {
                     in_expr(discriminant, out);
                     for c in cases {
@@ -540,7 +540,7 @@ fn for_each_let(stmts: &[Stmt], f: &mut dyn FnMut(u32, Option<&Expr>, bool)) {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 for_each_let_in_expr(discriminant, f);
                 for c in cases {
@@ -669,7 +669,7 @@ fn scan_level_writes(stmts: &[Stmt], id: u32, st: &State, f: &mut dyn FnMut(Opti
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 scan_level_writes_in_expr(discriminant, id, st, f);
                 for c in cases {
@@ -915,7 +915,7 @@ fn walk_stmts(stmts: &[Stmt], guard: &HashMap<u32, GuardedLevel>, st: &mut State
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 walk_expr(discriminant, guard, st);
                 for c in cases {
@@ -1474,7 +1474,7 @@ fn walk_accumulator_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 walk_accumulator_expr(
                     discriminant,

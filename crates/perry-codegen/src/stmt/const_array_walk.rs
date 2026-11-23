@@ -242,7 +242,7 @@ fn body_cost(stmts: &[Stmt]) -> usize {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 expr_cost(discriminant)
                     + cases

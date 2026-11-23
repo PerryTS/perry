@@ -342,7 +342,7 @@ pub fn fix_class_field_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             fix_class_field_expr(
                 discriminant,
@@ -908,7 +908,7 @@ pub fn fix_native_instance_stmt_with_locals(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             fix_native_instance_expr_with_locals(
                 discriminant,

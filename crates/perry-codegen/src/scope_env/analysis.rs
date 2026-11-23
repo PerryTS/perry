@@ -211,7 +211,7 @@ impl Analyzer<'_> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(discriminant, num);
                 for case in cases {
@@ -328,7 +328,7 @@ pub(super) fn stmt_exprs<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for case in cases {

@@ -1106,7 +1106,7 @@ impl Census<'_> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(discriminant, None);
                 for c in cases {

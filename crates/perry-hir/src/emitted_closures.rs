@@ -58,7 +58,7 @@ pub fn collect_closure_refs_in_stmts<'a>(
             }
             crate::Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 collect_closure_refs_in_expr(discriminant, seen, out);
                 for case in cases {
