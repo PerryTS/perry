@@ -1,0 +1,1 @@
+`worker.terminate()` on a worker spinning in a call-free loop no longer aborts with `worker base handoff found no base trap` in `--output-type staticlib` builds on Linux without `--debug-symbols`: every function of a module that receives loop interrupt polls now carries an unwind table, so the interrupt can unwind through bodies the optimizer marked `nounwind` (#14788).
