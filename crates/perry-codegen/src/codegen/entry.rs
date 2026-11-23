@@ -279,10 +279,12 @@ pub(super) fn compile_module_entry(
             llmod.declare_function("perry_geisterhand_start", VOID, &[I32]);
         }
         // A static archive does not extract members that contain only
-        // constructors. Keep Perry's generated embedded-asset object in the
-        // final host link by making the module entry reference its anchor.
+        // constructors. Keep Perry's generated embedded-asset and feature
+        // installer objects in the final host link by making the module entry
+        // reference their anchors.
         if has_native_staticlib_anchor {
             llmod.declare_function("perry_embedded_assets_link_anchor", VOID, &[]);
+            llmod.declare_function(crate::stubs::FEATURE_INSTALLS_LINK_ANCHOR, VOID, &[]);
         }
         // #1178 — bake `[ios] app_group` from perry.toml into a single
         // `perry_app_group_init(ptr, len)` call at the top of `main`,
@@ -549,9 +551,9 @@ pub(super) fn compile_module_entry(
         main.add_pre_return_void_call("js_typed_feedback_maybe_dump_trace");
         let _ = main.create_block("entry");
         if has_native_staticlib_anchor {
-            main.block_mut(0)
-                .unwrap()
-                .call_void("perry_embedded_assets_link_anchor", &[]);
+            let entry = main.block_mut(0).unwrap();
+            entry.call_void("perry_embedded_assets_link_anchor", &[]);
+            entry.call_void(crate::stubs::FEATURE_INSTALLS_LINK_ANCHOR, &[]);
         }
         if crate::verify_facts::enabled() {
             main.block_mut(0)

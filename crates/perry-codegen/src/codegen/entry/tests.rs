@@ -130,6 +130,15 @@ fn staticlib_entry_retains_embedded_asset_registration_member() {
 }
 
 #[test]
+fn staticlib_entry_retains_feature_installer_member() {
+    let anchor = crate::stubs::FEATURE_INSTALLS_LINK_ANCHOR;
+    let ir = emitted_ir("staticlib");
+    assert!(ir.contains(&format!("declare void @{anchor}()")));
+    assert!(ir.contains(&format!("call void @{anchor}()")));
+    assert!(!emitted_ir("dylib").contains(anchor));
+}
+
+#[test]
 fn wasi_staticlib_entry_does_not_reference_native_embedded_asset_anchor() {
     assert!(!super::staticlib_asset_anchor_enabled(
         "staticlib",
