@@ -1734,7 +1734,11 @@ impl<'a> Gen<'a> {
                 .local_source_spans
                 .get(id)
                 .map(|sp| std::mem::replace(&mut self.m.stop_top.as_mut().unwrap().gen_pos, (fx.module, sp.start))),
-            _ => None,
+            Stmt::Let { .. } => None,
+            _ => match (self.m.stop_top.as_mut(), s.byte_offset().filter(|&o| o != 0)) {
+                (Some(st), Some(o)) => Some(std::mem::replace(&mut st.gen_pos, (fx.module, o))),
+                _ => None,
+            },
         };
         self.stmt_inner(fx, s);
         if let Some(p0) = pos0 {
