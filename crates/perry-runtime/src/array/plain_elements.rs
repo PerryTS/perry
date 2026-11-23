@@ -252,7 +252,7 @@ unsafe fn set_index(obj: *mut ObjectHeader, index: u32, value: f64, admit: bool)
 unsafe fn install(obj: *mut ObjectHeader) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_h = scope.root_raw_mut_ptr(obj);
-    let (_, obj) = obj_h.across_mut::<ObjectHeader, _>(|| {
+    let (_, _) = obj_h.across_mut::<ObjectHeader, _>(|| {
         crate::object::object_meta_ensure(
             crate::meta_obj_runtime_born!(obj),
             crate::object::MetaReason::PlainElements,

@@ -874,22 +874,6 @@ pub(crate) unsafe fn arguments_object_get_field(
     None
 }
 
-/// The value of own key `key_bits` that an own-slot walk (JSON.stringify)
-/// must read: a mapped index is the parameter's cell, not the slot (the slot
-/// keeps the birth value; the cell is the live binding). `None` for every
-/// other object and key, so the caller keeps its slot value.
-pub(crate) unsafe fn arguments_object_mapped_value(
-    obj: *const ObjectHeader,
-    key_bits: u64,
-) -> Option<f64> {
-    let state = arguments_state(obj)?;
-    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let bytes = crate::string::js_string_key_bytes(JSValue::from_bits(key_bits), &mut sso)?;
-    let index = super::canonical_array_index(std::str::from_utf8(bytes).ok()?)?;
-    let cell = state.mapped_box(index)?;
-    Some(crate::r#box::js_box_get(cell))
-}
-
 pub(crate) unsafe fn arguments_object_set_field(
     obj: *mut ObjectHeader,
     key: *const crate::StringHeader,
