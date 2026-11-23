@@ -1,0 +1,1 @@
+A store to a key a class constructor defines with `Object.defineProperty(this, k, { value })` goes through `[[Set]]`: a non-writable key throws a `TypeError` in strict code and keeps its value in sloppy code, instead of being overwritten in its slot.
