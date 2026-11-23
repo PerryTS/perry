@@ -2333,7 +2333,7 @@ impl<'a> Gen<'a> {
             Expr::StaticFieldSet {
                 class_name,
                 field_name,
-                value,
+                value, ..
             } => {
                 let c = self.class_value(mi, class_name);
                 let v = self.expr(fx, value);

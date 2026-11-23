@@ -575,7 +575,8 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             class_name,
             field_name,
             value,
-        } => Expr::StaticFieldSet {
+            byte_offset,
+        } => Expr::StaticFieldSet { byte_offset: *byte_offset,
             class_name: class_name.clone(),
             field_name: field_name.clone(),
             value: Shallow::shallow(value, n),

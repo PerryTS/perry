@@ -70,7 +70,7 @@ pub(crate) fn prepare_ordered_class_computed_names(
     ) {
         ordered.push((
             source_order,
-            Expr::StaticFieldSet {
+            Expr::StaticFieldSet { byte_offset: 0 /*HPOS ClassField*/,
                 class_name: registration_class_name.to_string(),
                 field_name: name.clone(),
                 value: Box::new(value),

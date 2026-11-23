@@ -554,7 +554,7 @@ impl JsEmitter {
             Expr::StaticFieldGet { class_name, field_name } => {
                 let _ = write!(self.output, "{}.{}", class_name, field_name);
             }
-            Expr::StaticFieldSet { class_name, field_name, value } => {
+            Expr::StaticFieldSet { class_name, field_name, value, .. } => {
                 let _ = write!(self.output, "({}.{} = ", class_name, field_name);
                 self.emit_expr(value);
                 self.output.push(')');

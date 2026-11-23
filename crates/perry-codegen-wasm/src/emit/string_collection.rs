@@ -713,7 +713,7 @@ impl WasmModuleEmitter {
             Expr::StaticFieldSet {
                 class_name,
                 field_name,
-                value,
+                value, ..
             } => {
                 self.intern_string(class_name);
                 self.intern_string(field_name);
