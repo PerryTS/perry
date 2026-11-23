@@ -659,7 +659,7 @@ fn lower_list(
             *next_local += 1;
             params.insert(
                 0,
-                perry_hir::Param {
+                perry_hir::Param { byte_offset: frame_offset,
                     id: op,
                     name: "__frame_op".into(),
                     ty: Type::Number,

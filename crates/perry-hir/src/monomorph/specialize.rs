@@ -20,7 +20,7 @@ pub fn specialize_function(func: &Function, type_args: &[Type], new_id: FuncId) 
         params: func
             .params
             .iter()
-            .map(|p| Param {
+            .map(|p| Param { byte_offset: p.byte_offset,
                 id: p.id,
                 name: p.name.clone(),
                 ty: substitute_type(&p.ty, &substitutions),
@@ -93,7 +93,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             params: ctor
                 .params
                 .iter()
-                .map(|p| Param {
+                .map(|p| Param { byte_offset: p.byte_offset,
                     id: p.id,
                     name: p.name.clone(),
                     ty: substitute_type(&p.ty, &substitutions),
@@ -128,7 +128,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                     params: m
                         .params
                         .iter()
-                        .map(|p| Param {
+                        .map(|p| Param { byte_offset: p.byte_offset,
                             id: p.id,
                             name: p.name.clone(),
                             ty: substitute_type(&p.ty, &substitutions),
@@ -192,7 +192,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                         params: f
                             .params
                             .iter()
-                            .map(|p| Param {
+                            .map(|p| Param { byte_offset: p.byte_offset,
                                 id: p.id,
                                 name: p.name.clone(),
                                 ty: substitute_type(&p.ty, &substitutions),
@@ -237,7 +237,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                         .function
                         .params
                         .iter()
-                        .map(|p| Param {
+                        .map(|p| Param { byte_offset: p.byte_offset,
                             id: p.id,
                             name: p.name.clone(),
                             ty: substitute_type(&p.ty, &substitutions),

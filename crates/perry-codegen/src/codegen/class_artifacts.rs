@@ -741,7 +741,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                         opts.constructor_param_counts,
                     );
                     let found_params: Vec<perry_hir::Param> = (0..n)
-                        .map(|i| perry_hir::Param {
+                        .map(|i| perry_hir::Param { byte_offset: 0 /*HPOS*/,
                             id: 0xFFFF_0000 + i as u32,
                             name: format!("__forward_arg{}", i),
                             ty: perry_hir::types::Type::Any,

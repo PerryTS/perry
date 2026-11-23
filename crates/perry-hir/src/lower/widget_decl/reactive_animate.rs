@@ -213,7 +213,7 @@ pub(crate) fn try_desugar_reactive_animate(
         let inner_func_id = ctx.fresh_func();
         let inner_scope = ctx.enter_scope();
         let v_param_id = ctx.define_local("__v".to_string(), Type::Any);
-        let v_param = Param {
+        let v_param = Param { byte_offset: call.span.lo.0,
             id: v_param_id,
             name: "__v".to_string(),
             ty: Type::Any,

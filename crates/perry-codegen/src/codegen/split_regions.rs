@@ -799,7 +799,7 @@ fn try_extract(
             .cloned()
             .unwrap_or_else(|| format!("v{id}"));
         param_desc.push(format!("{}:{}", name, type_name(&proof)));
-        params.push(Param {
+        params.push(Param { byte_offset: 0 /*HPOS*/,
             id: fresh,
             name,
             ty: proof,

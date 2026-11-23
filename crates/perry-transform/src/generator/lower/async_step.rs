@@ -326,7 +326,7 @@ pub fn build_async_step_driver_direct(
     let step_closure = Expr::Closure { byte_offset: fn_offset,
         func_id: step_func_id,
         params: vec![
-            perry_hir::Param {
+            perry_hir::Param { byte_offset: fn_offset,
                 id: value_param_id,
                 name: "__step_value".to_string(),
                 ty: any_ty.clone(),
@@ -335,7 +335,7 @@ pub fn build_async_step_driver_direct(
                 decorators: Vec::new(),
                 arguments_object: None,
             },
-            perry_hir::Param {
+            perry_hir::Param { byte_offset: fn_offset,
                 id: is_error_param_id,
                 name: "__step_is_error".to_string(),
                 ty: bool_ty.clone(),

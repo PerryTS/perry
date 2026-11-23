@@ -221,7 +221,7 @@ pub(crate) fn sig_body(
     }
     g.body.drain(at..at + len);
     let mut out = super::signature_entry::sig_function(&g, &plan.defaults)?;
-    let lane = |p: &Param, id: u32, what: &str| Param {
+    let lane = |p: &Param, id: u32, what: &str| Param { byte_offset: p.byte_offset,
         id,
         name: format!("{}${what}", p.name),
         ty: Type::Any,

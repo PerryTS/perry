@@ -709,4 +709,7 @@ pub struct Param {
     /// Metadata for the hidden raw-arguments binding used to materialize the
     /// ECMAScript `arguments` object in the callee prologue.
     pub arguments_object: Option<ArgumentsObjectMeta>,
+    /// Source byte offset of the parameter's own span (its pattern, default
+    /// and rest marker). Excluded from stable-hashing, like `Function::byte_offset`.
+    pub byte_offset: u32,
 }
