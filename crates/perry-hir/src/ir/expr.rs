@@ -3048,6 +3048,35 @@ pub enum PathWin32Method {
 }
 
 impl Expr {
+    /// Source byte offset of the expression, for the variants that carry one
+    /// (the construct's own position; 0 = built by the compiler with none).
+    pub fn byte_offset(&self) -> Option<u32> {
+        match self {
+            Expr::Binary { byte_offset, .. }
+            | Expr::Compare { byte_offset, .. }
+            | Expr::Call { byte_offset, .. }
+            | Expr::CallSpread { byte_offset, .. }
+            | Expr::NativeMethodCall { byte_offset, .. }
+            | Expr::PropertyGet { byte_offset, .. }
+            | Expr::PropertySet { byte_offset, .. }
+            | Expr::PropertyUpdate { byte_offset, .. }
+            | Expr::IndexGet { byte_offset, .. }
+            | Expr::IndexSet { byte_offset, .. }
+            | Expr::IndexUpdate { byte_offset, .. }
+            | Expr::Yield { byte_offset, .. }
+            | Expr::New { byte_offset, .. }
+            | Expr::NewDynamic { byte_offset, .. }
+            | Expr::NewDynamicSpread { byte_offset, .. }
+            | Expr::Closure { byte_offset, .. }
+            | Expr::PutValueSet { byte_offset, .. }
+            | Expr::DynamicImport { byte_offset, .. } => Some(*byte_offset),
+            Expr::Await(_, o) => Some(*o),
+            _ => None,
+        }
+    }
+}
+
+impl Expr {
     /// The callable global fetch used by ordinary and spread-call lowering.
     /// Imported or locally shadowed functions named fetch are not this callee.
     pub fn is_global_fetch_callee(&self) -> bool {
