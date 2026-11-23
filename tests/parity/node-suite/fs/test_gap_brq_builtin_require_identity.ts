@@ -15,5 +15,5 @@ async function check() {
   console.log("named-export", dynamic.readFileSync === fs.readFileSync);
 }
 check();
-import { fs as namedFs } from "./fixtures/BRQ-builtin-requires.cjs";
+import { fs as namedFs } from "../../../fixtures/programs/fixtures/BRQ-builtin-requires.cjs";
 console.log("named-cjs-export", namedFs === fs);

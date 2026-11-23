@@ -2,10 +2,10 @@
 // `exports`/`module.exports` (plus `default` and `module.exports`), never its
 // non-exported top-level classes, functions or consts.
 import * as ns from "../../../fixtures/programs/gap_cjs_namespace_exports_helper.cjs";
-import lib from "./gap_cjs_namespace_exports_helper.cjs";
+import lib from "../../../fixtures/programs/gap_cjs_namespace_exports_helper.cjs";
 import * as solo from "../../../fixtures/programs/gap_cjs_namespace_exports_default_helper.cjs";
-import Solo from "./gap_cjs_namespace_exports_default_helper.cjs";
-import { Pub, Alias } from "./gap_cjs_namespace_exports_helper.cjs";
+import Solo from "../../../fixtures/programs/gap_cjs_namespace_exports_default_helper.cjs";
+import { Pub, Alias } from "../../../fixtures/programs/gap_cjs_namespace_exports_helper.cjs";
 
 const nsAny: any = ns;
 console.log("keys", Object.keys(ns).sort().join(","));

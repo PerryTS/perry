@@ -19,7 +19,7 @@ async function lazyErr(): Promise<number> {
   return new m.ParseError().code();
 }
 async function neverCalled(): Promise<number> {
-  const m = await import("./fixtures/issue_11244_inliner_import_edges/err.ts");
+  const m = await import("../../../fixtures/programs/fixtures/issue_11244_inliner_import_edges/err.ts");
   return new m.ParseError().code() + 1;
 }
 import { W } from "../../../fixtures/programs/fixtures/issue_11244_inliner_import_edges/w.ts";
