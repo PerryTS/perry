@@ -58,7 +58,11 @@ pub unsafe extern "C" fn js_bcrypt_hash(
         return raw;
     };
     pool::submit_or_run_inline(
-        move || salt_or_rounds.hash(&password).ok_or_else(|| "Invalid salt".to_string()),
+        move || {
+            salt_or_rounds
+                .hash(&password)
+                .ok_or_else(|| "Invalid salt".to_string())
+        },
         move |outcome| settle_string(promise, outcome, "bcrypt.hash"),
     );
     raw
