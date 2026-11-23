@@ -790,17 +790,18 @@ fn ensure_selected_export(
     let allocated = if submod_key == "trace_events" {
         let scope = crate::gc::RuntimeHandleScope::new();
         let allocated_handle = scope.root_raw_mut_ptr(allocated);
-        crate::object::set_bound_native_closure_name(
-            allocated_handle.get_raw_mut_ptr(),
-            export.name,
-        );
-        crate::object::set_builtin_closure_length(
-            allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
-            crate::closure::info_arity(export.info).unwrap_or(0),
-        );
-        crate::object::set_builtin_closure_non_constructable(
-            allocated_handle.get_raw_mut_ptr::<ClosureHeader>() as usize,
-        );
+        allocated_handle.with_mut_ptr(|allocated_handle_ptr| {
+            crate::object::set_bound_native_closure_name(allocated_handle_ptr, export.name)
+        });
+        allocated_handle.with_mut_ptr::<ClosureHeader, _>(|allocated_handle_ptr| {
+            crate::object::set_builtin_closure_length(
+                allocated_handle_ptr as usize,
+                crate::closure::info_arity(export.info).unwrap_or(0),
+            )
+        });
+        allocated_handle.with_mut_ptr::<ClosureHeader, _>(|allocated_handle_ptr| {
+            crate::object::set_builtin_closure_non_constructable(allocated_handle_ptr as usize)
+        });
         allocated_handle.get_raw_mut_ptr()
     } else if let Some(decorated) =
         maybe_decorate_test_export(submod_key, export, key_name, allocated)

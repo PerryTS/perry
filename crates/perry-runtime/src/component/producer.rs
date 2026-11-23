@@ -46,20 +46,18 @@ pub(super) fn install(owner: f64) {
         crate::fn_info!(types, 0),
         1,
     ));
-    crate::closure::js_closure_set_capture_f64(
-        closure.get_raw_mut_ptr(),
-        0,
-        owner.get_nanbox_f64(),
-    );
-    crate::object::set_builtin_closure_non_constructable(
-        closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-    );
+    closure.with_mut_ptr(|closure_ptr| {
+        crate::closure::js_closure_set_capture_f64(closure_ptr, 0, owner.get_nanbox_f64())
+    });
+    closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_ptr| {
+        crate::object::set_builtin_closure_non_constructable(closure_ptr as usize)
+    });
     set_field(
         owner.get_nanbox_f64(),
         b"asyncTypes",
-        crate::value::js_nanbox_pointer(
-            closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64
-        ),
+        closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_ptr| {
+            crate::value::js_nanbox_pointer(closure_ptr as i64)
+        }),
     );
 }
 
@@ -137,29 +135,31 @@ extern "C" fn types(
             .into_iter()
             .enumerate()
             {
-                crate::closure::js_closure_set_capture_f64(
-                    create.get_raw_mut_ptr(),
-                    slot as u32,
-                    value,
-                );
+                create.with_mut_ptr(|create_ptr| {
+                    crate::closure::js_closure_set_capture_f64(create_ptr, slot as u32, value)
+                });
             }
-            crate::object::set_builtin_closure_non_constructable(
-                create.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-            );
+            create.with_mut_ptr::<crate::closure::ClosureHeader, _>(|create_ptr| {
+                crate::object::set_builtin_closure_non_constructable(create_ptr as usize)
+            });
             set_field(
                 factory.get_nanbox_f64(),
                 b"create",
-                crate::value::js_nanbox_pointer(
-                    create.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-                ),
+                create.with_mut_ptr::<crate::closure::ClosureHeader, _>(|create_ptr| {
+                    crate::value::js_nanbox_pointer(create_ptr as i64)
+                }),
             );
-            crate::array::js_array_set_f64(
-                output.get_raw_mut_ptr(),
-                position as u32,
-                factory.get_nanbox_f64(),
-            );
+            output.with_mut_ptr(|output_ptr| {
+                crate::array::js_array_set_f64(
+                    output_ptr,
+                    position as u32,
+                    factory.get_nanbox_f64(),
+                )
+            });
         }
-        crate::value::js_nanbox_pointer(output.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64)
+        output.with_mut_ptr::<crate::array::ArrayHeader, _>(|output_ptr| {
+            crate::value::js_nanbox_pointer(output_ptr as i64)
+        })
     });
     drop((bytes, types, schema, display, display_bytes));
     finish(outcome)

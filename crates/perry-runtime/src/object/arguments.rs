@@ -541,8 +541,10 @@ fn arguments_object_birth(
         fields.add(1).write(pair.as_ref().map_or_else(
             || callee.get_nanbox_f64().to_bits(),
             |pair| {
-                crate::value::js_nanbox_pointer(pair.get_raw_mut_ptr::<ArrayHeader>() as i64)
-                    .to_bits()
+                pair.with_mut_ptr::<ArrayHeader, _>(|pair_ptr| {
+                    crate::value::js_nanbox_pointer(pair_ptr as i64)
+                })
+                .to_bits()
             },
         ));
         fields.add(2).write(values.get_nanbox_f64().to_bits());

@@ -469,11 +469,13 @@ pub(crate) unsafe fn try_dynamic_store(
     let atom = crate::string::property_atom_from_value(key.to_bits());
     // The layout does not hold the key (probed above): the write is the
     // overflow's existing entry or one append.
-    super::overflow::store_unfixed_routed(
-        owner.get_raw_mut_ptr::<ObjectHeader>(),
-        (atom & crate::value::POINTER_MASK) as *const crate::StringHeader,
-        value.get_nanbox_f64(),
-    );
+    owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+        super::overflow::store_unfixed_routed(
+            owner_ptr,
+            (atom & crate::value::POINTER_MASK) as *const crate::StringHeader,
+            value.get_nanbox_f64(),
+        )
+    });
     Some(value.get_nanbox_f64())
 }
 
@@ -582,8 +584,12 @@ unsafe fn try_warm_array_transition(
     // A declined append may have interned a key and collected. Repair the
     // outer receiver, rather than returning the bag as the receiver.
     *refresh = Some((
-        crate::value::js_nanbox_pointer(owner.get_raw_mut_ptr::<crate::ArrayHeader>() as i64),
-        crate::value::js_nanbox_string(key_root.get_raw_const_ptr::<crate::StringHeader>() as i64),
+        owner.with_mut_ptr::<crate::ArrayHeader, _>(|owner_ptr| {
+            crate::value::js_nanbox_pointer(owner_ptr as i64)
+        }),
+        key_root.with_const_ptr::<crate::StringHeader, _>(|key_root_ptr| {
+            crate::value::js_nanbox_string(key_root_ptr as i64)
+        }),
         value_root.get_nanbox_f64(),
     ));
     stored.map(|_| value_root.get_nanbox_f64())
@@ -693,7 +699,9 @@ unsafe fn try_array_store(
                     )
                 });
             }
-            crate::value::js_nanbox_pointer(proto_bag_root.get_raw_mut_ptr::<ObjectHeader>() as i64)
+            proto_bag_root.with_mut_ptr::<ObjectHeader, _>(|proto_bag_root_ptr| {
+                crate::value::js_nanbox_pointer(proto_bag_root_ptr as i64)
+            })
         } else if crate::gc_type_is_object!(header.obj_type) {
             proto_root.get_nanbox_f64()
         } else {
@@ -860,13 +868,18 @@ unsafe fn apply_proven_add(
     key: &crate::gc::RuntimeHandle<'_>,
     value: &crate::gc::RuntimeHandle<'_>,
 ) -> Option<f64> {
-    if super::object_set_field_by_name_transition_chain_proven_value(
-        owner.get_raw_mut_ptr::<ObjectHeader>(),
-        key.get_raw_const_ptr::<crate::StringHeader>(),
-        value.get_nanbox_f64(),
-        &mut None,
-    )
-    .is_some()
+    if key
+        .with_const_ptr::<crate::StringHeader, _>(|key_ptr| {
+            owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+                super::object_set_field_by_name_transition_chain_proven_value(
+                    owner_ptr,
+                    key_ptr,
+                    value.get_nanbox_f64(),
+                    &mut None,
+                )
+            })
+        })
+        .is_some()
     {
         return Some(value.get_nanbox_f64());
     }
@@ -914,19 +927,19 @@ unsafe fn apply_proven_add(
         let keys = super::object_keys(obj);
         let parent =
             super::canonical_keys::canonical_prefix(&proof, keys, (slot as u32).min(keys.count()));
-        let next = super::canonical_keys::extend_key(
-            &proof,
-            parent,
-            key.get_raw_const_ptr::<crate::StringHeader>(),
-        );
-        super::field_rep_store::publish_key_add_edge(
-            owner.get_raw_mut_ptr::<ObjectHeader>(),
-            next.view(),
-            predecessor_rep,
-            slot as u32,
-            Some(value.get_nanbox_f64().to_bits()),
-            true,
-        );
+        let next = key.with_const_ptr::<crate::StringHeader, _>(|key_ptr| {
+            super::canonical_keys::extend_key(&proof, parent, key_ptr)
+        });
+        owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+            super::field_rep_store::publish_key_add_edge(
+                owner_ptr,
+                next.view(),
+                predecessor_rep,
+                slot as u32,
+                Some(value.get_nanbox_f64().to_bits()),
+                true,
+            )
+        });
         let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
         if super::overflow::has_overflow(obj) {
             return None;
@@ -937,9 +950,11 @@ unsafe fn apply_proven_add(
             crate::JSValue::from_bits(value.get_nanbox_f64().to_bits()),
         );
         let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
-        if let Some(atom) = super::store_key::interned_key_for_store(
-            crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64),
-        ) {
+        if let Some(atom) =
+            super::store_key::interned_key_for_store(key.with_const_ptr::<crate::StringHeader, _>(
+                |key_ptr| crate::value::js_nanbox_string(key_ptr as i64),
+            ))
+        {
             super::transition_cache_insert(
                 std::ptr::null(),
                 predecessor,
@@ -951,11 +966,15 @@ unsafe fn apply_proven_add(
         }
         return Some(value.get_nanbox_f64());
     }
-    super::object_ops::ensure_key_in_keys_array_for_value(
-        owner.get_raw_mut_ptr::<ObjectHeader>(),
-        key.get_raw_const_ptr::<crate::StringHeader>(),
-        value.get_nanbox_f64(),
-    );
+    key.with_const_ptr::<crate::StringHeader, _>(|key_ptr| {
+        owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+            super::object_ops::ensure_key_in_keys_array_for_value(
+                owner_ptr,
+                key_ptr,
+                value.get_nanbox_f64(),
+            )
+        })
+    });
     let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
     // Appending can transfer the list to the receiver's dictionary. That
     // store no longer has a shape-owned slot; the complete setter writes it.
@@ -1051,8 +1070,9 @@ unsafe fn try_function_store(
         if !record.object_kind().is_ordinary_layout() {
             return None;
         }
-        let name =
-            crate::string::header_str_checked(key_root.get_raw_const_ptr::<crate::StringHeader>())?;
+        let name = key_root.with_const_ptr::<crate::StringHeader, _>(|key_root_ptr| {
+            crate::string::header_str_checked(key_root_ptr)
+        })?;
         // A FunctionDictionary's prototype is per-object, so its shared
         // ShapeId cannot authorize a chain. Ask the actual prototype shape's
         // own attributes plus its inherited-chain fact. The named bag retains

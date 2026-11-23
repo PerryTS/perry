@@ -135,7 +135,7 @@ unsafe fn class_evaluation_prototype_value(obj: *const ObjectHeader) -> f64 {
             super::super::class_registry::static_parent_prototype_bits(class_id)
         }
     };
-    finish_class_evaluation_prototype(class.get_raw_mut_ptr(), parent_proto)
+    class.with_mut_ptr(|class_ptr| finish_class_evaluation_prototype(class_ptr, parent_proto))
 }
 
 pub(crate) unsafe fn finish_class_evaluation_prototype(

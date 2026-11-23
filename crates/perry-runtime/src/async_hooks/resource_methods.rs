@@ -116,7 +116,9 @@ fn bind_deferred_receiver(receiver: f64, callback: f64, this_arg: f64) -> i64 {
     .into_iter()
     .enumerate()
     {
-        js_closure_set_capture_f64(closure.get_raw_mut_ptr(), index as u32, value);
+        closure.with_mut_ptr(|closure_ptr| {
+            js_closure_set_capture_f64(closure_ptr, index as u32, value)
+        });
     }
     // An explicit thisArg is FunctionPrototypeBind of the method in Node, so
     // the name follows the method's public `name`; implicit stays anonymous.
@@ -130,18 +132,22 @@ fn bind_deferred_receiver(receiver: f64, callback: f64, this_arg: f64) -> i64 {
             name.push_str(&js_string_value_to_string(method_name));
         }
     }
-    crate::object::set_bound_native_closure_name(closure.get_raw_mut_ptr::<ClosureHeader>(), &name);
+    closure.with_mut_ptr::<ClosureHeader, _>(|closure_ptr| {
+        crate::object::set_bound_native_closure_name(closure_ptr, &name)
+    });
     // Node copies `fn.length` through ordinary Get, whatever its type.
     let length = unsafe {
         crate::value::js_get_property(callback.get_nanbox_f64(), b"length".as_ptr() as i64, 6)
     };
     let length = scope.root_nanbox_f64(length);
-    crate::closure::closure_define_data_with_attrs(
-        closure.get_raw_mut_ptr::<ClosureHeader>() as usize,
-        "length",
-        length.get_nanbox_f64(),
-        crate::object::PropertyAttrs::new(false, false, true),
-    );
+    closure.with_mut_ptr::<ClosureHeader, _>(|closure_ptr| {
+        crate::closure::closure_define_data_with_attrs(
+            closure_ptr as usize,
+            "length",
+            length.get_nanbox_f64(),
+            crate::object::PropertyAttrs::new(false, false, true),
+        )
+    });
     closure.get_raw_mut_ptr::<ClosureHeader>() as i64
 }
 

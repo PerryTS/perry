@@ -59,9 +59,11 @@ pub(super) fn create(promise: f64, arguments: f64, context: f64) -> f64 {
     .into_iter()
     .enumerate()
     {
-        crate::array::js_array_set_f64(row.get_raw_mut_ptr(), column as u32, value);
+        row.with_mut_ptr(|row_ptr| crate::array::js_array_set_f64(row_ptr, column as u32, value));
     }
-    crate::value::js_nanbox_pointer(row.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64)
+    row.with_mut_ptr::<crate::array::ArrayHeader, _>(|row_ptr| {
+        crate::value::js_nanbox_pointer(row_ptr as i64)
+    })
 }
 
 pub(super) fn row(rows: f64, slot: u32) -> f64 {

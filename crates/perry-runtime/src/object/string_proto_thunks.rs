@@ -419,9 +419,9 @@ pub(super) extern "C" fn string_proto_index_of_thunk(
     }
     let needle = scope.root_string_ptr(needle);
     let from = crate::string::js_string_index_to_i32(position.get_nanbox_f64());
-    crate::string::js_string_index_of_from(
-        string.get_raw_const_ptr(),
-        needle.get_raw_const_ptr(),
-        from,
-    ) as f64
+    string.with_const_ptr(|string_ptr| {
+        needle.with_const_ptr(|needle_ptr| {
+            crate::string::js_string_index_of_from(string_ptr, needle_ptr, from)
+        })
+    }) as f64
 }

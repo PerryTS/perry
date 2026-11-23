@@ -89,9 +89,9 @@ pub extern "C" fn js_component_http_server_new(options: f64) -> f64 {
         crate::object::define_builtin_data_property(
             object_pointer(owner.get_nanbox_f64()).unwrap(),
             key.get_raw_const_ptr(),
-            crate::value::js_nanbox_string(
-                address.get_raw_const_ptr::<crate::string::StringHeader>() as i64,
-            ),
+            address.with_const_ptr::<crate::string::StringHeader, _>(|address_ptr| {
+                crate::value::js_nanbox_string(address_ptr as i64)
+            }),
             "address".to_owned(),
             crate::object::PropertyAttrs::new(false, true, false),
         );
@@ -134,18 +134,20 @@ pub extern "C" fn js_component_http_handle(server: f64, component: f64, interfac
             crate::async_context::capture_context(),
         ));
         promise.set_raw_mut_ptr(crate::promise::js_promise_new());
-        crate::promise::set_promise_context_snapshot(promise.get_raw_mut_ptr(), unsafe {
-            (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
-                .snapshot
-                .clone()
+        promise.with_mut_ptr(|promise_ptr| {
+            crate::promise::set_promise_context_snapshot(promise_ptr, unsafe {
+                (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
+                    .snapshot
+                    .clone()
+            })
         });
         owner.set_nanbox_f64(payload::alloc_closed(&OPERATION, &[]));
         for key in [&b"promise"[..], &b"server"[..], &b"component"[..]] {
             // Reload handles individually: state_set may move all three.
             let value = match key {
-                b"promise" => crate::value::js_nanbox_pointer(
-                    promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64,
-                ),
+                b"promise" => promise.with_mut_ptr::<crate::promise::Promise, _>(|promise_ptr| {
+                    crate::value::js_nanbox_pointer(promise_ptr as i64)
+                }),
                 b"server" => server.get_nanbox_f64(),
                 _ => component.get_nanbox_f64(),
             };
@@ -184,7 +186,9 @@ pub extern "C" fn js_component_http_handle(server: f64, component: f64, interfac
         )
         .unwrap_or_else(|_| fail("Cannot attach component HTTP operation"));
         pump::enqueue(owner.get_nanbox_f64());
-        crate::value::js_nanbox_pointer(promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64)
+        promise.with_mut_ptr::<crate::promise::Promise, _>(|promise_ptr| {
+            crate::value::js_nanbox_pointer(promise_ptr as i64)
+        })
     });
     if result.is_err() {
         payload::close(owner.get_nanbox_f64(), &OPERATION);

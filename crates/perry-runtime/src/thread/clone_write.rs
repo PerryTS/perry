@@ -384,8 +384,9 @@ impl Writer<'_> {
         for (index, source) in self.sources.iter().enumerate() {
             if let Some((handle, low)) = source {
                 self.seen.insert(
-                    crate::value::resolve_forwarding(handle.get_raw_const_ptr::<u8>() as usize)
-                        | low,
+                    handle.with_const_ptr::<u8, _>(|handle_ptr| {
+                        crate::value::resolve_forwarding(handle_ptr as usize)
+                    }) | low,
                     index as u32,
                 );
             }

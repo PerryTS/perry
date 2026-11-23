@@ -534,10 +534,12 @@ pub(crate) fn class_declaration_value_store_known(
             let mut arr = crate::array::js_array_alloc(count as u32);
             let arr_h = scope.root_raw_mut_ptr(arr);
             for _ in 0..count {
-                arr = crate::array::js_array_push_f64(
-                    arr_h.get_raw_mut_ptr::<crate::ArrayHeader>(),
-                    f64::from_bits(crate::value::TAG_UNDEFINED),
-                );
+                arr = arr_h.with_mut_ptr::<crate::ArrayHeader, _>(|arr_h_ptr| {
+                    crate::array::js_array_push_f64(
+                        arr_h_ptr,
+                        f64::from_bits(crate::value::TAG_UNDEFINED),
+                    )
+                });
                 arr_h.set_raw_mut_ptr(arr);
             }
             let arr = arr_h.get_raw_mut_ptr::<crate::ArrayHeader>();
@@ -558,13 +560,17 @@ pub(crate) fn class_declaration_value_store_known(
     let mut values = values;
     if crate::array::js_array_length(values) as usize <= index {
         let arr_h = scope.root_raw_mut_ptr(values);
-        while crate::array::js_array_length(arr_h.get_raw_mut_ptr::<crate::ArrayHeader>()) as usize
+        while arr_h.with_mut_ptr::<crate::ArrayHeader, _>(|arr_h_ptr| {
+            crate::array::js_array_length(arr_h_ptr)
+        }) as usize
             <= index
         {
-            let grown = crate::array::js_array_push_f64(
-                arr_h.get_raw_mut_ptr::<crate::ArrayHeader>(),
-                f64::from_bits(crate::value::TAG_UNDEFINED),
-            );
+            let grown = arr_h.with_mut_ptr::<crate::ArrayHeader, _>(|arr_h_ptr| {
+                crate::array::js_array_push_f64(
+                    arr_h_ptr,
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                )
+            });
             arr_h.set_raw_mut_ptr(grown);
         }
         values = arr_h.get_raw_mut_ptr::<crate::ArrayHeader>();

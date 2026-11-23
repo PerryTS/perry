@@ -44,20 +44,26 @@ pub(in crate::component) fn register(
     let request = scope.root_nanbox_f64(text(request.as_bytes()));
     let promise =
         scope.root_raw_mut_ptr(crate::promise::js_promise_resolved(value.get_nanbox_f64()));
-    crate::promise::js_promise_mark_internally_handled(promise.get_raw_mut_ptr());
+    promise.with_mut_ptr(|promise_ptr| {
+        crate::promise::js_promise_mark_internally_handled(promise_ptr)
+    });
     let record = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(6));
     for (index, value) in [
         request.get_nanbox_f64(),
         (origin as u32) as f64,
         ((origin >> 32) as u32) as f64,
-        crate::value::js_nanbox_pointer(promise.get_raw_mut_ptr::<Promise>() as i64),
+        promise.with_mut_ptr::<Promise, _>(|promise_ptr| {
+            crate::value::js_nanbox_pointer(promise_ptr as i64)
+        }),
         lifetime.get_nanbox_f64(),
         schema.get_nanbox_f64(),
     ]
     .into_iter()
     .enumerate()
     {
-        crate::array::js_array_set_f64(record.get_raw_mut_ptr(), index as u32, value);
+        record.with_mut_ptr(|record_ptr| {
+            crate::array::js_array_set_f64(record_ptr, index as u32, value)
+        });
     }
     let driver_owner = scope.root_nanbox_f64(owner(component.get_nanbox_f64()));
     let entries = scope.root_nanbox_f64(import_list(driver_owner.get_nanbox_f64()));
@@ -67,9 +73,9 @@ pub(in crate::component) fn register(
             crate::array::js_array_set_f64(
                 array_pointer(entries.get_nanbox_f64()).unwrap(),
                 index,
-                crate::value::js_nanbox_pointer(
-                    record.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64,
-                ),
+                record.with_mut_ptr::<crate::array::ArrayHeader, _>(|record_ptr| {
+                    crate::value::js_nanbox_pointer(record_ptr as i64)
+                }),
             );
             return;
         }
@@ -77,9 +83,9 @@ pub(in crate::component) fn register(
     let grown = crate::array::js_array_set_f64_extend(
         array_pointer(entries.get_nanbox_f64()).unwrap(),
         count,
-        crate::value::js_nanbox_pointer(
-            record.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
-        ),
+        record.with_mut_ptr::<crate::array::ArrayHeader, _>(|record_ptr| {
+            crate::value::js_nanbox_pointer(record_ptr as i64)
+        }),
     );
     payload::state_set(
         driver_owner.get_nanbox_f64(),

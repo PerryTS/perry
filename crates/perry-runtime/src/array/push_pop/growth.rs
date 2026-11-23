@@ -193,10 +193,9 @@ pub(super) unsafe fn adopt_sparse_indices(arr: *mut ArrayHeader) -> *mut ArrayHe
             continue;
         };
         crate::array::note_array_slot(arr, index as usize, value.to_bits());
-        crate::array::named_props::array_named_property_delete_by_name(
-            head.get_raw_mut_ptr::<ArrayHeader>(),
-            &key,
-        );
+        head.with_mut_ptr::<ArrayHeader, _>(|head_ptr| {
+            crate::array::named_props::array_named_property_delete_by_name(head_ptr, &key)
+        });
     }
     head.get_raw_mut_ptr::<ArrayHeader>()
 }

@@ -171,8 +171,7 @@ pub(crate) fn construct(args: &[f64]) -> f64 {
         port(source.get_nanbox_f64(), "source");
     }
     let event = allocate(
-        event_type
-            .with_const_ptr::<StringHeader, _>(|t| crate::value::js_nanbox_string(t as i64)),
+        event_type.with_const_ptr::<StringHeader, _>(|t| crate::value::js_nanbox_string(t as i64)),
     );
     let event = scope.root_raw_mut_ptr(event);
     let set = |slot, value| event.with_mut_ptr(|ptr| state::set(ptr, slot, value));

@@ -106,20 +106,22 @@ fn wrap(
             ("dispose", crate::fn_info!(dispose, 0)),
         ] {
             let function = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 1));
-            crate::closure::js_closure_set_capture_f64(
-                function.get_raw_mut_ptr(),
-                0,
-                wrapper.get_nanbox_f64(),
-            );
-            crate::object::set_builtin_closure_non_constructable(
-                function.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-            );
+            function.with_mut_ptr(|function_ptr| {
+                crate::closure::js_closure_set_capture_f64(
+                    function_ptr,
+                    0,
+                    wrapper.get_nanbox_f64(),
+                )
+            });
+            function.with_mut_ptr::<crate::closure::ClosureHeader, _>(|function_ptr| {
+                crate::object::set_builtin_closure_non_constructable(function_ptr as usize)
+            });
             set_field(
                 wrapper.get_nanbox_f64(),
                 name.as_bytes(),
-                crate::value::js_nanbox_pointer(
-                    function.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-                ),
+                function.with_mut_ptr::<crate::closure::ClosureHeader, _>(|function_ptr| {
+                    crate::value::js_nanbox_pointer(function_ptr as i64)
+                }),
             );
         }
         let row = payload::record(owner.get_nanbox_f64(), id as f64);

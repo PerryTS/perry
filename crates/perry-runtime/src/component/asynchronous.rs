@@ -128,10 +128,12 @@ fn submit_kind(
                 crate::async_context::capture_context(),
             ));
             promise.set_raw_mut_ptr(crate::promise::js_promise_new());
-            crate::promise::set_promise_context_snapshot(promise.get_raw_mut_ptr(), unsafe {
-                (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
-                    .snapshot
-                    .clone()
+            promise.with_mut_ptr(|promise_ptr| {
+                crate::promise::set_promise_context_snapshot(promise_ptr, unsafe {
+                    (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
+                        .snapshot
+                        .clone()
+                })
             });
         } else {
             // HTTP's existing public Promise already owns its ALS snapshot.
@@ -141,9 +143,10 @@ fn submit_kind(
                     .cast_mut(),
             );
         }
-        let (record, ids) = callback::saved::capture(crate::value::js_nanbox_pointer(
-            promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64,
-        ));
+        let (record, ids) =
+            callback::saved::capture(promise.with_mut_ptr::<crate::promise::Promise, _>(
+                |promise_ptr| crate::value::js_nanbox_pointer(promise_ptr as i64),
+            ));
         saved_context.set_nanbox_f64(record);
         owner.set_nanbox_f64(payload::alloc_closed(&OPERATION, &[]));
         payload::state_set(
@@ -168,9 +171,9 @@ fn submit_kind(
             owner.get_nanbox_f64(),
             &OPERATION,
             b"promise",
-            crate::value::js_nanbox_pointer(
-                promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64
-            ),
+            promise.with_mut_ptr::<crate::promise::Promise, _>(|promise_ptr| {
+                crate::value::js_nanbox_pointer(promise_ptr as i64)
+            }),
         );
         if !http_request.is_null() {
             payload::state_set(
@@ -215,7 +218,9 @@ fn submit_kind(
         crate::stdlib_pump::js_register_aux_has_active(has_active);
         PENDING.with(|q| q.borrow_mut().push(link));
         unsafe { wake(crate::agent::current_agent()) };
-        crate::value::js_nanbox_pointer(promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64)
+        promise.with_mut_ptr::<crate::promise::Promise, _>(|promise_ptr| {
+            crate::value::js_nanbox_pointer(promise_ptr as i64)
+        })
     });
     if result.is_err() {
         payload::close(owner.get_nanbox_f64(), &OPERATION);

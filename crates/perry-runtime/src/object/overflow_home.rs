@@ -363,7 +363,7 @@ impl MetaHome {
         let scope = crate::gc::RuntimeHandleScope::new();
         let home = scope.root_raw_mut_ptr(owner as *mut u8);
         let t = start_in::<true>(owner, 0);
-        MetaHome::install(home.get_raw_mut_ptr::<u8>() as usize, t);
+        home.with_mut_ptr::<u8, _>(|home_ptr| MetaHome::install(home_ptr as usize, t));
         t
     }
 

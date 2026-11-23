@@ -1279,10 +1279,9 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
     let property_key_handle = scope.root_nanbox_f64(property_key);
     let key_str = crate::value::js_jsvalue_to_string(property_key_handle.get_nanbox_f64());
     if !key_str.is_null() {
-        return js_object_delete_field(
-            obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
-            key_str as *const crate::StringHeader,
-        );
+        return obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj_handle_ptr| {
+            js_object_delete_field(obj_handle_ptr, key_str as *const crate::StringHeader)
+        });
     }
 
     // For other types, delete succeeds vacuously

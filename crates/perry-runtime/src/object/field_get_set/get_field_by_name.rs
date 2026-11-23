@@ -1618,11 +1618,11 @@ fn get_field_by_name_past_data_probe(
                                 let scope = crate::gc::RuntimeHandleScope::new();
                                 let key_root = scope.root_string_ptr(key);
                                 if let Some(v) =
-                                    crate::object::prototype_chain::resolve_inherited_field_from_prototype(
+                                    key_root.with_const_ptr::<crate::StringHeader, _>(|key_root_ptr| crate::object::prototype_chain::resolve_inherited_field_from_prototype(
                                         addr,
                                         proto.to_bits(),
-                                        key_root.get_raw_const_ptr::<crate::StringHeader>(),
-                                    )
+                                        key_root_ptr,
+                                    ))
                                 {
                                     return v;
                                 }

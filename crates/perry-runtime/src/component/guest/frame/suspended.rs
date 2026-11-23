@@ -25,8 +25,8 @@ pub unsafe extern "C" fn perry_component_frame_import_begin(pointer: *mut c_void
         }
         let scope = RuntimeHandleScope::new();
         let promise = scope.root_raw_mut_ptr(crate::promise::js_promise_new());
-        let promise = owner.add(crate::value::js_nanbox_pointer(
-            promise.get_raw_mut_ptr::<crate::promise::Promise>() as i64,
+        let promise = owner.add(promise.with_mut_ptr::<crate::promise::Promise, _>(
+            |promise_ptr| crate::value::js_nanbox_pointer(promise_ptr as i64),
         ));
         let saved = als::alloc_snapshot_holder(als::capture_context());
         let snapshot = owner.add(crate::value::js_nanbox_pointer(saved as i64));

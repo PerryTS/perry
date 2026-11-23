@@ -129,15 +129,17 @@ impl<'a> InvocationFrame<'a> {
         .into_iter()
         .enumerate()
         {
-            crate::array::js_array_set_f64(row.get_raw_mut_ptr(), index as u32, value);
+            row.with_mut_ptr(|row_ptr| {
+                crate::array::js_array_set_f64(row_ptr, index as u32, value)
+            });
         }
         let index = crate::array::js_array_length(array_pointer(rows.get_nanbox_f64()).unwrap());
         let grown = crate::array::js_array_set_f64_extend(
             array_pointer(rows.get_nanbox_f64()).unwrap(),
             index,
-            crate::value::js_nanbox_pointer(
-                row.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
-            ),
+            row.with_mut_ptr::<crate::array::ArrayHeader, _>(|row_ptr| {
+                crate::value::js_nanbox_pointer(row_ptr as i64)
+            }),
         );
         rows.set_nanbox_f64(crate::value::js_nanbox_pointer(grown as i64));
         let slot = |column| RowSlot {

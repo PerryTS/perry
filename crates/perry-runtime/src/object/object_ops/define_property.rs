@@ -909,14 +909,16 @@ pub(crate) unsafe fn apply_property_descriptor(
                 } else {
                     crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
                 };
-                set_accessor_descriptor(
-                    closure_handle.get_raw_mut_ptr::<u8>() as usize,
-                    key_rust.clone(),
-                    AccessorDescriptor {
-                        get: get_bits.get_nanbox_u64(),
-                        set: set_bits,
-                    },
-                );
+                closure_handle.with_mut_ptr::<u8, _>(|closure_handle_ptr| {
+                    set_accessor_descriptor(
+                        closure_handle_ptr as usize,
+                        key_rust.clone(),
+                        AccessorDescriptor {
+                            get: get_bits.get_nanbox_u64(),
+                            set: set_bits,
+                        },
+                    )
+                });
             } else {
                 let value_field = descriptor.read_named(b"value");
                 clear_accessor_descriptor(closure_ptr, &key_rust);
@@ -943,11 +945,13 @@ pub(crate) unsafe fn apply_property_descriptor(
                 .unwrap_or_else(|| existing_attrs.map(|a| a.enumerable()).unwrap_or(false));
             let configurable = read_bool(b"configurable")
                 .unwrap_or_else(|| existing_attrs.map(|a| a.configurable()).unwrap_or(false));
-            set_property_attrs(
-                closure_handle.get_raw_mut_ptr::<u8>() as usize,
-                key_rust,
-                PropertyAttrs::new(writable, enumerable, configurable),
-            );
+            closure_handle.with_mut_ptr::<u8, _>(|closure_handle_ptr| {
+                set_property_attrs(
+                    closure_handle_ptr as usize,
+                    key_rust,
+                    PropertyAttrs::new(writable, enumerable, configurable),
+                )
+            });
             return true;
         }
 

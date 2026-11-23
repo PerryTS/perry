@@ -116,11 +116,14 @@ pub(crate) fn enumerable_keys(receiver: f64) -> Option<*mut crate::ArrayHeader> 
     with_keys_target(receiver, |target| {
         let scope = crate::gc::RuntimeHandleScope::new();
         let keys = scope.root_raw_mut_ptr(js_object_keys_value(target));
-        let count = crate::array::js_array_length(keys.get_raw_mut_ptr::<crate::ArrayHeader>());
+        let count = keys.with_mut_ptr::<crate::ArrayHeader, _>(|keys_ptr| {
+            crate::array::js_array_length(keys_ptr)
+        });
         let output = scope.root_raw_mut_ptr(crate::array::js_array_alloc(count));
         for index in 0..count {
-            let value =
-                crate::array::js_array_get(keys.get_raw_mut_ptr::<crate::ArrayHeader>(), index);
+            let value = keys.with_mut_ptr::<crate::ArrayHeader, _>(|keys_ptr| {
+                crate::array::js_array_get(keys_ptr, index)
+            });
             let mut sso = [0; crate::value::SHORT_STRING_MAX_LEN];
             if unsafe { crate::string::js_string_key_bytes(value, &mut sso) }
                 == Some(b"then".as_slice())
@@ -161,8 +164,11 @@ pub extern "C" fn js_create_deferred_namespace(evaluate: i64) -> f64 {
         ));
         let symbol = crate::symbol::well_known_symbol("toStringTag");
         let symbol_value = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(symbol as i64));
-        let receiver =
-            || crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64);
+        let receiver = || {
+            obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {
+                crate::value::js_nanbox_pointer(obj_ptr as i64)
+            })
+        };
         crate::symbol::define_symbol_data_property(
             receiver(),
             symbol_value.get_nanbox_f64(),
@@ -170,11 +176,13 @@ pub extern "C" fn js_create_deferred_namespace(evaluate: i64) -> f64 {
                 crate::value::js_nanbox_string(p as i64)
             }),
         );
-        crate::symbol::set_symbol_property_attrs(
-            obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
-            (symbol_value.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
-            PropertyAttrs::new(false, false, false),
-        );
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {
+            crate::symbol::set_symbol_property_attrs(
+                obj_ptr as usize,
+                (symbol_value.get_nanbox_u64() & crate::value::POINTER_MASK) as usize,
+                PropertyAttrs::new(false, false, false),
+            )
+        });
         // Property installation can restamp a birth's shape. Apply the
         // canonical namespace's null-prototype/non-extensibility invariants
         // only after all private and symbol slots have been installed.
@@ -182,16 +190,18 @@ pub extern "C" fn js_create_deferred_namespace(evaluate: i64) -> f64 {
         (*obj.get_raw_mut_ptr::<ObjectHeader>()).class_id = DEFERRED_NAMESPACE_CLASS_ID;
         // Existing exotic-read marking invalidates shape-only method and
         // prototype memos, not just the generic property probes.
-        super::proto_validity::mark_exotic_read_receiver(
-            obj.get_raw_mut_ptr::<ObjectHeader>() as usize
-        );
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {
+            super::proto_validity::mark_exotic_read_receiver(obj_ptr as usize)
+        });
         // Exotic-read marking moves prototype authority into metadata. Null
         // has no shape identity word to copy, so publish its explicit link
         // through the existing prototype funnel after that transition.
-        super::prototype_chain::object_set_static_prototype(
-            obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
-            crate::value::TAG_NULL,
-        );
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {
+            super::prototype_chain::object_set_static_prototype(
+                obj_ptr as usize,
+                crate::value::TAG_NULL,
+            )
+        });
         receiver()
     }
 }

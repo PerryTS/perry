@@ -718,8 +718,9 @@ unsafe fn table_first_append(
     let owner = scope.root_raw_mut_ptr(obj);
     let value = scope.root_nanbox_f64(value);
     let key = scope.root_nanbox_u64(atom);
-    let t =
-        crate::object::overflow::start_empty(owner.get_raw_mut_ptr::<crate::ObjectHeader>(), live);
+    let t = owner.with_mut_ptr::<crate::ObjectHeader, _>(|owner_ptr| {
+        crate::object::overflow::start_empty(owner_ptr, live)
+    });
     // Direct to the inner install: the out-of-line wrapper (overflow::install)
     // would put a call on this hot first append.
     let o = owner.get_raw_mut_ptr::<crate::ObjectHeader>();
@@ -880,7 +881,8 @@ mod tests {
         assert_eq!(crate::object::shapes::test_cached_transition_stamps(), 0);
         // The first receiver's entry is its own.
         assert_eq!(
-            read(first_handle.get_raw_mut_ptr::<crate::ObjectHeader>()),
+            first_handle
+                .with_mut_ptr::<crate::ObjectHeader, _>(|first_handle_ptr| read(first_handle_ptr)),
             11.0
         );
 
@@ -898,7 +900,9 @@ mod tests {
             47.0
         );
         assert_eq!(
-            read(user_class_handle.get_raw_mut_ptr::<crate::ObjectHeader>()),
+            user_class_handle.with_mut_ptr::<crate::ObjectHeader, _>(|user_class_handle_ptr| read(
+                user_class_handle_ptr
+            )),
             47.0
         );
         assert_eq!(crate::object::test_transition_fast_hits(), 0);

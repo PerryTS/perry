@@ -190,10 +190,12 @@ unsafe fn shared_pairs<'s>(
             set,
             ..Default::default()
         });
-        let next = crate::array::js_array_push(
-            pairs.get_raw_mut_ptr(),
-            crate::JSValue::from_bits(crate::value::js_nanbox_pointer(pair as i64).to_bits()),
-        );
+        let next = pairs.with_mut_ptr(|pairs_ptr| {
+            crate::array::js_array_push(
+                pairs_ptr,
+                crate::JSValue::from_bits(crate::value::js_nanbox_pointer(pair as i64).to_bits()),
+            )
+        });
         pairs.set_raw_mut_ptr(next);
     }
     let mut state = proto.with_mut_ptr::<ObjectHeader, _>(|p| raw_field(p, JS_STATE_KEY));

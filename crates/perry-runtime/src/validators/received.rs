@@ -455,9 +455,10 @@ fn received_has_enumerable_own_keys(value: f64) -> bool {
     let symbols = scope.root_raw_const_ptr(unsafe {
         crate::symbol::js_object_get_own_property_symbols(value.get_nanbox_f64())
     } as *const crate::array::ArrayHeader);
-    let count = crate::array::js_array_length(symbols.get_raw_const_ptr());
+    let count = symbols.with_const_ptr(|symbols_ptr| crate::array::js_array_length(symbols_ptr));
     (0..count).any(|i| {
-        let key = crate::array::js_array_get_f64(symbols.get_raw_const_ptr(), i);
+        let key =
+            symbols.with_const_ptr(|symbols_ptr| crate::array::js_array_get_f64(symbols_ptr, i));
         crate::object::js_object_property_is_enumerable(value.get_nanbox_f64(), key).to_bits()
             == crate::value::TAG_TRUE
     })

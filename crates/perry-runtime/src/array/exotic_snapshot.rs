@@ -58,11 +58,9 @@ pub(super) unsafe fn exotic_snapshot(
     };
     let store = |index: u32, value: f64| {
         // Published at once: the next getter can collect or throw.
-        note_array_slot(
-            out.get_raw_mut_ptr::<ArrayHeader>(),
-            index as usize,
-            value.to_bits(),
-        );
+        out.with_mut_ptr::<ArrayHeader, _>(|out_ptr| {
+            note_array_slot(out_ptr, index as usize, value.to_bits())
+        });
     };
     // Nothing can be inherited through the default chain while no index
     // lives on a prototype: past the store only the named layout's own

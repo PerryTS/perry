@@ -1731,17 +1731,22 @@ pub(crate) unsafe fn put_own_define_proven(
     )
     .is_none()
     {
-        crate::object::object_ops::define_property_force_store_value(
-            bag_root.get_raw_mut_ptr::<ObjectHeader>(),
-            key_root.get_raw_const_ptr::<crate::StringHeader>(),
-            value_root.get_nanbox_f64(),
-        );
+        key_root.with_const_ptr::<crate::StringHeader, _>(|key_root_ptr| {
+            bag_root.with_mut_ptr::<ObjectHeader, _>(|bag_root_ptr| {
+                crate::object::object_ops::define_property_force_store_value(
+                    bag_root_ptr,
+                    key_root_ptr,
+                    value_root.get_nanbox_f64(),
+                )
+            })
+        });
     }
     let ptr = (owner.get_nanbox_f64().to_bits() & crate::value::POINTER_MASK) as usize;
     // The ordinary function writer also revives a deleted configurable key.
     // The bag's new data binding and the function's deletion state must agree.
-    let name =
-        crate::string::header_str_checked(key_root.get_raw_const_ptr::<crate::StringHeader>())?;
+    let name = key_root.with_const_ptr::<crate::StringHeader, _>(|key_root_ptr| {
+        crate::string::header_str_checked(key_root_ptr)
+    })?;
     state_clear_deleted(ptr, name);
     crate::closure::shape::refresh_closure_shape(ptr);
     Some(value_root.get_nanbox_f64())

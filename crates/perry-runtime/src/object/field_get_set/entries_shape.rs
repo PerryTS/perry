@@ -250,7 +250,7 @@ pub(super) unsafe fn array_own_enumerable(
     };
     let mut index = 0u32;
     loop {
-        let live = clean_arr_ptr(source.get_raw_const_ptr::<ArrayHeader>());
+        let live = source.with_const_ptr::<ArrayHeader, _>(|source_ptr| clean_arr_ptr(source_ptr));
         if index >= dense.min((*live).length).min((*live).capacity) {
             break;
         }
@@ -268,7 +268,7 @@ pub(super) unsafe fn array_own_enumerable(
         index += 1;
     }
     for name in far.iter().chain(named.iter()) {
-        let live = clean_arr_ptr(source.get_raw_const_ptr::<ArrayHeader>());
+        let live = source.with_const_ptr::<ArrayHeader, _>(|source_ptr| clean_arr_ptr(source_ptr));
         if let Some(value) = crate::array::array_named_property_get_by_name(live, name) {
             emit(name, value);
         } else if mode == ArrayEnum::Keys && crate::object::canonical_array_index(name).is_none() {

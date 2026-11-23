@@ -72,7 +72,9 @@ fn field(object: f64, name: &[u8]) -> f64 {
     ));
     object_pointer(object.get_nanbox_f64())
         .map(|pointer| {
-            crate::object::js_object_get_field_by_name_f64(pointer, key.get_raw_const_ptr())
+            key.with_const_ptr(|key_ptr| {
+                crate::object::js_object_get_field_by_name_f64(pointer, key_ptr)
+            })
         })
         .unwrap_or_else(undefined)
 }

@@ -478,7 +478,7 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
     for i in 0..prefix {
         place(t, i);
     }
-    install(owner.get_raw_mut_ptr::<ObjectHeader>(), t);
+    owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| install(owner_ptr, t));
     t
 }
 
@@ -554,12 +554,14 @@ pub(crate) unsafe fn insert(
     let owner = scope.root_raw_mut_ptr(obj);
     let val = scope.root_nanbox_f64(f64::from_bits(value));
     let atom = crate::string::property_atom(key);
-    insert_key_bits(
-        owner.get_raw_mut_ptr::<ObjectHeader>(),
-        crate::JSValue::string_ptr(atom as *mut _).bits(),
-        val.get_nanbox_f64().to_bits(),
-        attrs,
-    )
+    owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+        insert_key_bits(
+            owner_ptr,
+            crate::JSValue::string_ptr(atom as *mut _).bits(),
+            val.get_nanbox_f64().to_bits(),
+            attrs,
+        )
+    })
 }
 
 pub(crate) unsafe fn insert_key_bits(
@@ -773,13 +775,10 @@ pub(crate) unsafe fn append_fixed_ref(obj: *mut ObjectHeader, key: u64, slot: u3
     } else {
         key
     };
-    let entry = insert_key_bits(
-        owner.get_raw_mut_ptr::<ObjectHeader>(),
-        key,
-        crate::value::TAG_UNDEFINED,
-        0,
-    );
-    let t = table(owner.get_raw_mut_ptr::<ObjectHeader>());
+    let entry = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+        insert_key_bits(owner_ptr, key, crate::value::TAG_UNDEFINED, 0)
+    });
+    let t = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| table(owner_ptr));
     *value_at(t, entry) = crate::value::INTERNAL_WORD_TAG | slot as u64;
     *attrs_at(t, entry) |= SLOT_REF;
 }
@@ -1125,7 +1124,9 @@ pub unsafe extern "C" fn perry_overflow_set(
         let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
         let t = ensure(obj);
         if let Some(slot) = find(t, crate::JSValue::string_ptr(key as *mut _).bits()) {
-            set_entry_attrs(owner.get_raw_mut_ptr::<ObjectHeader>(), t, slot, attrs);
+            owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+                set_entry_attrs(owner_ptr, t, slot, attrs)
+            });
         }
     }
 }
