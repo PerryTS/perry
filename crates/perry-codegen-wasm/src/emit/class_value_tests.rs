@@ -241,9 +241,10 @@ class A { static [Symbol.iterator] = 1; static [s] = 2; static ["x" + 1] = 3; }
 const K: any = A;
 console.log(JSON.stringify(Object.keys(A)) + " " + K[Symbol.iterator] + " " + K[s] + " " + K.x1);
 console.log((s === Symbol.for("k")) + " " + (Symbol.iterator === Symbol["iterator"]) + " " + String(Symbol.asyncIterator));
+console.log(String(Symbol.for("@@__perry_wk_noSuchName")));
 "#
         ),
-        "[\"x1\"] 1 2 3\ntrue true Symbol(Symbol.asyncIterator)"
+        "[\"x1\"] 1 2 3\ntrue true Symbol(Symbol.asyncIterator)\nSymbol(@@__perry_wk_noSuchName)"
     );
 }
 
