@@ -107,3 +107,22 @@ fn realmval_blob_type_reads_its_declared_result() {
     assert!(!ks[0].top, "{:?}", ks[0]);
     assert_eq!(ks[0].prims & prim::STR, prim::STR, "{:?}", ks[0]);
 }
+
+/// STOP3 (c09 stop, builtins.rs:430 `argument of builtin Module("Atomics")
+/// .toJSON`): a named-key call on a host namespace object calls what [[Get]]
+/// of the key reads. `Atomics` and `Intl` own no `toJSON`/`foo` (the read is
+/// `undefined`, the call a TypeError: no value), and `toString` is
+/// `Object.prototype.toString` (a string): no result is ⊤.
+#[test]
+fn stop3_host_namespace_call_calls_the_read_value() {
+    let reads: Vec<String> = [
+        "(Atomics as any).toJSON()",
+        "(Atomics as any).foo(1)",
+        "(Intl as any).toJSON()",
+        "(Atomics as any).toString()",
+    ]
+    .iter()
+    .map(|s| s.to_string())
+    .collect();
+    assert_eq!(top_reads("", reads), Vec::<String>::new());
+}
