@@ -56,10 +56,11 @@ are method calls on the returned handle.
 
 `fillGradient` fills the area between the current path and the bottom edge
 with a linear gradient between two RGBA colors that spans the canvas;
-`direction` `0` runs top to bottom and `1` left to right. That area-chart
-shape holds on macOS, iOS, tvOS, visionOS and Linux. Android fills the path
-closed on itself (it needs three points), WASM fills the current path, and
-Windows and the web backend fill the whole canvas.
+`direction` `0` runs top to bottom and `1` left to right. The path is
+closed straight down to the bottom edge, so the example above shades the area
+under its line on every backend; a path with fewer than two points fills
+nothing. Only `moveTo`/`lineTo` points shape the area, and the fill color set
+by `setFillColor` is unchanged afterwards.
 
 ### Text
 

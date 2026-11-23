@@ -53,8 +53,8 @@ export interface CanvasMethods {
     /**
      * Fill the area between the current path (`moveTo`/`lineTo`) and the
      * bottom edge with a linear gradient spanning the canvas, as in an area
-     * chart. `direction` 0 runs top to bottom, 1 runs left to right. The
-     * filled shape differs by backend; see docs/src/ui/canvas.md.
+     * chart. `direction` 0 runs top to bottom, 1 runs left to right. A path
+     * with fewer than two points fills nothing.
      */
     fillGradient(
         r1: number, g1: number, b1: number, a1: number,

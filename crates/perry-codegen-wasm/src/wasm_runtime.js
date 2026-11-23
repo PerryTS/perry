@@ -4629,9 +4629,10 @@ function perry_ui_canvas_stroke_rect(h, x, y, w, ht) { const el = uiGet(h); if (
 function perry_ui_canvas_clear_rect(h, x, y, w, ht) { const el = uiGet(h); if (el?._ctx) el._ctx.clearRect(x, y, w || el.width, ht || el.height); }
 function perry_ui_canvas_set_fill_color(h, r, g, b, a) { const el = uiGet(h); if (el?._ctx) el._ctx.fillStyle = `rgba(${r*255|0},${g*255|0},${b*255|0},${a})`; }
 function perry_ui_canvas_set_stroke_color(h, r, g, b, a) { const el = uiGet(h); if (el?._ctx) el._ctx.strokeStyle = `rgba(${r*255|0},${g*255|0},${b*255|0},${a})`; }
-function perry_ui_canvas_begin_path(h) { const el = uiGet(h); if (el?._ctx) el._ctx.beginPath(); }
-function perry_ui_canvas_move_to(h, x, y) { const el = uiGet(h); if (el?._ctx) el._ctx.moveTo(x, y); }
-function perry_ui_canvas_line_to(h, x, y) { const el = uiGet(h); if (el?._ctx) el._ctx.lineTo(x, y); }
+// _pathPts mirrors the moveTo/lineTo points for fillGradient; a 2D context does not expose its path.
+function perry_ui_canvas_begin_path(h) { const el = uiGet(h); if (el?._ctx) { el._ctx.beginPath(); el._pathPts = []; } }
+function perry_ui_canvas_move_to(h, x, y) { const el = uiGet(h); if (el?._ctx) { el._ctx.moveTo(x, y); (el._pathPts ||= []).push([x, y]); } }
+function perry_ui_canvas_line_to(h, x, y) { const el = uiGet(h); if (el?._ctx) { el._ctx.lineTo(x, y); (el._pathPts ||= []).push([x, y]); } }
 function perry_ui_canvas_arc(h, x, y, radius, startAngle, endAngle) { const el = uiGet(h); if (el?._ctx) el._ctx.arc(x, y, radius, startAngle, endAngle); }
 function perry_ui_canvas_close_path(h) { const el = uiGet(h); if (el?._ctx) el._ctx.closePath(); }
 function perry_ui_canvas_fill(h) { const el = uiGet(h); if (el?._ctx) el._ctx.fill(); }
@@ -4692,12 +4693,18 @@ function perry_ui_canvas_draw_image(h, image, ...args) {
 }
 
 function perry_ui_canvas_fill_gradient(h, r1, g1, b1, a1, r2, g2, b2, a2, direction) {
-  const el = uiGet(h); if (!el?._ctx) return;
+  const el = uiGet(h); const pts = el?._pathPts;
+  if (!el?._ctx || !pts || pts.length < 2) return;
   const ctx = el._ctx;
-  const grad = direction === 1 ? ctx.createLinearGradient(0, 0, el.width, 0) : ctx.createLinearGradient(0, 0, 0, el.height);
+  const grad = direction < 0.5 ? ctx.createLinearGradient(0, 0, 0, el.height) : ctx.createLinearGradient(0, 0, el.width, 0);
   grad.addColorStop(0, `rgba(${r1*255|0},${g1*255|0},${b1*255|0},${a1})`);
   grad.addColorStop(1, `rgba(${r2*255|0},${g2*255|0},${b2*255|0},${a2})`);
-  ctx.fillStyle = grad; ctx.fill();
+  // The area between the path and the bottom edge, as an area chart; Path2D and
+  // save/restore leave the current path and fillStyle as they were.
+  const area = new Path2D();
+  pts.forEach(([x, y], i) => i ? area.lineTo(x, y) : area.moveTo(x, y));
+  area.lineTo(pts[pts.length - 1][0], el.height); area.lineTo(pts[0][0], el.height); area.closePath();
+  ctx.save(); ctx.fillStyle = grad; ctx.fill(area); ctx.restore();
 }
 
 // ---------- Menu ----------

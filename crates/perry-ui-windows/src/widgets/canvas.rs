@@ -223,8 +223,24 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                         current_pen = pen;
                     }
                     DrawCmd::FillGradient(r1, g1, b1, _a1, r2, g2, b2, _a2, direction) => {
+                        if path_points.len() < 2 {
+                            continue;
+                        }
                         let mut rect = RECT::default();
                         let _ = GetClientRect(hwnd, &mut rect);
+                        // Clipped to the area between the path and the bottom edge, as an area chart.
+                        let mut area: Vec<POINT> =
+                            path_points.iter().map(|&(x, y)| POINT { x, y }).collect();
+                        area.push(POINT {
+                            x: path_points[path_points.len() - 1].0,
+                            y: rect.bottom,
+                        });
+                        area.push(POINT {
+                            x: path_points[0].0,
+                            y: rect.bottom,
+                        });
+                        let clip = CreatePolygonRgn(&area, WINDING);
+                        SelectClipRgn(hdc, Some(clip));
                         let vertical = direction < 0.5;
 
                         let steps = if vertical {
@@ -258,6 +274,8 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                             let _ = FillRect(hdc, &band, brush);
                             let _ = DeleteObject(brush.into());
                         }
+                        SelectClipRgn(hdc, None);
+                        let _ = DeleteObject(clip.into());
                     }
                     DrawCmd::DrawImage(image, sx, sy, sw, sh, dx, dy, dw, dh) => {
                         use windows::Win32::Graphics::GdiPlus::*;
