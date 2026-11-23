@@ -22,7 +22,7 @@ fn dark_mode_ir(target: Option<&str>) -> String {
         is_deferred_require: false,
         is_adopted_require: false,
     });
-    module.functions.push(Function {
+    module.functions.push(Function { byte_offset: 0,
         id: 0,
         name: "darkModeResult".into(),
         type_params: vec![],
@@ -38,7 +38,7 @@ fn dark_mode_ir(target: Option<&str>) -> String {
             args: vec![],
             type_args: vec![],
             byte_offset: 0,
-        }))],
+        }), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,

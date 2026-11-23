@@ -1,7 +1,7 @@
 use super::*;
 
 fn async_generator_with_delegations(id: FuncId, delegations: usize) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: "many_delegations".to_string(),
         type_params: Vec::new(),
@@ -9,7 +9,7 @@ fn async_generator_with_delegations(id: FuncId, delegations: usize) -> Function 
         return_type: Type::Any,
         body: (0..delegations)
             .map(|_| {
-                Stmt::Expr(Expr::Yield {
+                Stmt::Expr(Expr::Yield { byte_offset: 0,
                     value: Some(Box::new(Expr::GlobalGet(0))),
                     delegate: true,
                 })
@@ -77,8 +77,8 @@ fn return_before_start_does_not_enter_finally() {
     let mut module = Module::new("unstarted_return");
     let mut function = async_generator_with_delegations(1, 0);
     function.is_async = false;
-    function.body = vec![Stmt::Try {
-        body: vec![Stmt::Expr(Expr::Yield {
+    function.body = vec![Stmt::Try { byte_offset: 0,
+        body: vec![Stmt::Expr(Expr::Yield { byte_offset: 0,
             value: Some(Box::new(Expr::Number(1.0))),
             delegate: false,
         })],

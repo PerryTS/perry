@@ -46,7 +46,7 @@ fn stub_inert(e: &Expr) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => stub_inert(condition) && stub_inert(then_expr) && stub_inert(else_expr),
         _ => false,
     }
@@ -75,7 +75,7 @@ fn call(args: Vec<Expr>) -> Expr {
 }
 
 fn add(left: Expr, right: Expr) -> Expr {
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -83,7 +83,7 @@ fn add(left: Expr, right: Expr) -> Expr {
 }
 
 fn lt(left: Expr, right: Expr) -> Expr {
-    Expr::Compare {
+    Expr::Compare { byte_offset: 0,
         op: CompareOp::Lt,
         left: Box::new(left),
         right: Box::new(right),
@@ -91,7 +91,7 @@ fn lt(left: Expr, right: Expr) -> Expr {
 }
 
 fn closure(body: Vec<Stmt>) -> Expr {
-    Expr::Closure {
+    Expr::Closure { byte_offset: 0,
         func_id: 0,
         params: vec![],
         return_type: Type::Any,
@@ -587,7 +587,7 @@ fn constants_reads_and_non_coercing_operators_are_not_enders() {
         Stmt::Expr(Expr::Number(1.0)),
         Stmt::Expr(num(NUM)),
         // `===` never coerces, so it stays open to operands of any type.
-        Stmt::Expr(Expr::Compare {
+        Stmt::Expr(Expr::Compare { byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(num(OBJ)),
             right: Box::new(Expr::Null),
@@ -736,7 +736,7 @@ fn throw_and_try_contribute_an_unwind_edge() {
     let thrown = vec![Stmt::Throw(Expr::Number(1.0))];
     assert!(has(&thrown, RegionEnder::UnwindEdge));
 
-    let tried = vec![Stmt::Try {
+    let tried = vec![Stmt::Try { byte_offset: 0,
         body: vec![Stmt::Expr(num(NUM))],
         catch: Some(CatchClause {
             param: None,
@@ -804,7 +804,7 @@ fn battery() -> Vec<(&'static str, Vec<Stmt>)> {
         ),
         (
             "strict equality on an object",
-            vec![Stmt::Expr(Expr::Compare {
+            vec![Stmt::Expr(Expr::Compare { byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(num(OBJ)),
                 right: Box::new(Expr::Null),
@@ -825,7 +825,7 @@ fn battery() -> Vec<(&'static str, Vec<Stmt>)> {
             "c1: a conditional of primitives under +",
             vec![Stmt::Expr(add(
                 num(NUM),
-                Expr::Conditional {
+                Expr::Conditional { byte_offset: 0,
                     condition: Box::new(lt(num(NUM), num(NUM2))),
                     then_expr: Box::new(Expr::Integer(1)),
                     else_expr: Box::new(Expr::Integer(-1)),
@@ -844,7 +844,7 @@ fn battery() -> Vec<(&'static str, Vec<Stmt>)> {
             "c1: a conditional with an object arm under +",
             vec![Stmt::Expr(add(
                 num(NUM),
-                Expr::Conditional {
+                Expr::Conditional { byte_offset: 0,
                     condition: Box::new(lt(num(NUM), num(NUM2))),
                     then_expr: Box::new(num(OBJ)),
                     else_expr: Box::new(Expr::Integer(1)),
@@ -891,7 +891,7 @@ fn battery() -> Vec<(&'static str, Vec<Stmt>)> {
         ),
         (
             "conditional over clean operands",
-            vec![Stmt::Expr(Expr::Conditional {
+            vec![Stmt::Expr(Expr::Conditional { byte_offset: 0,
                 condition: Box::new(Expr::Bool(true)),
                 then_expr: Box::new(num(NUM)),
                 else_expr: Box::new(num(NUM2)),

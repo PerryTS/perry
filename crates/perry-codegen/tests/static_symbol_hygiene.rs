@@ -78,13 +78,13 @@ fn empty_opts() -> CompileOptions {
 }
 
 fn static_method(id: u32, value: f64) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: "lex".to_string(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Number(value)))],
+        body: vec![Stmt::Return(Some(Expr::Number(value)), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -98,13 +98,13 @@ fn static_method(id: u32, value: f64) -> Function {
 }
 
 fn instance_method(id: u32, value: f64) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: "lex".to_string(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Number(value)))],
+        body: vec![Stmt::Return(Some(Expr::Number(value)), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -148,7 +148,7 @@ fn class_with_static(id: u32, value: f64) -> Class {
 }
 
 fn duplicate_static_module() -> Module {
-    Module {
+    Module { byte_offset: 0,
         name: "marked_symbol_hygiene.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
@@ -195,7 +195,7 @@ fn class_with_instance_and_static_method() -> Module {
     let mut class = class_with_static(11, 2.0);
     class.methods.push(instance_method(301, 1.0));
 
-    Module {
+    Module { byte_offset: 0,
         name: "static_instance_symbol_hygiene.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),

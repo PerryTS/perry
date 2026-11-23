@@ -203,7 +203,7 @@ fn a_finite_numeric_param_offset_is_stored_at_the_new_site() {
     };
     match &mut ctor.body[1] {
         Stmt::Expr(Expr::PropertySet { value, .. }) => {
-            *value = Box::new(Expr::Binary {
+            *value = Box::new(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Add,
                 left: seed,
                 right: Box::new(Expr::Integer(1)),

@@ -417,7 +417,7 @@ mod tests {
         ctx.react_default_import_local = Some("React".to_string());
         ctx.register_imported_func("React".to_string(), "React".to_string());
         let call =
-            react_create_element_call(&mut ctx, Expr::String("div".to_string()), &Expr::Null)
+            react_create_element_call(&mut ctx, Expr::String("div".to_string()), &Expr::Null, 0)
                 .expect("react mode must produce a createElement call");
         match call {
             Expr::Call { callee, args, .. } => {
@@ -435,7 +435,7 @@ mod tests {
     fn jsx_keeps_native_adapter_without_react_import() {
         let mut ctx = LoweringContext::new("test.tsx");
         assert!(
-            react_create_element_call(&mut ctx, Expr::String("div".to_string()), &Expr::Null)
+            react_create_element_call(&mut ctx, Expr::String("div".to_string()), &Expr::Null, 0)
                 .is_none(),
             "without a react import the native js_jsx adapter must stay in effect"
         );

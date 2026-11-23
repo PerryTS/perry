@@ -286,7 +286,7 @@ mod allocation_tests {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => stub_inert(condition) && stub_inert(then_expr) && stub_inert(else_expr),
             _ => false,
         }
@@ -307,7 +307,7 @@ mod allocation_tests {
     }
 
     fn lt(left: Expr, right: Expr) -> Expr {
-        Expr::Compare {
+        Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(left),
             right: Box::new(right),
@@ -315,7 +315,7 @@ mod allocation_tests {
     }
 
     fn add(left: Expr, right: Expr) -> Expr {
-        Expr::Binary {
+        Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(left),
             right: Box::new(right),
@@ -404,7 +404,7 @@ mod allocation_tests {
             CompareOp::LooseEq,
             CompareOp::LooseNe,
         ] {
-            let e = Expr::Compare {
+            let e = Expr::Compare { byte_offset: 0,
                 op,
                 left: Box::new(Expr::LocalGet(OBJ)),
                 right: Box::new(Expr::Integer(0)),
@@ -453,7 +453,7 @@ mod allocation_tests {
     /// pins that: it passes with NOTHING proven inert.
     #[test]
     fn strict_equality_stays_open_to_any_operand() {
-        let e = Expr::Compare {
+        let e = Expr::Compare { byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(OBJ)),
             right: Box::new(Expr::Null),
@@ -470,7 +470,7 @@ mod allocation_tests {
             operand: Box::new(Expr::LocalGet(OBJ)),
         };
         let type_of = Expr::TypeOf(Box::new(Expr::LocalGet(OBJ)));
-        let and = Expr::Logical {
+        let and = Expr::Logical { byte_offset: 0,
             op: LogicalOp::And,
             left: Box::new(Expr::LocalGet(OBJ)),
             right: Box::new(Expr::LocalGet(OBJ)),

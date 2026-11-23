@@ -39,7 +39,7 @@ use perry_hir::{Expr, Function, Module as HirModule, Stmt};
 /// Compile a one-function module and return its LLVM IR.
 fn compile_body(name: &str, body: Vec<Stmt>) -> String {
     let mut hir = HirModule::new(name);
-    hir.functions.push(Function {
+    hir.functions.push(Function { byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
@@ -319,7 +319,7 @@ fn console_inspector_noops_evaluate_arguments_in_order_and_return_undefined() {
                 console_call_expr("log", vec![Expr::String("first side effect".into())]),
                 console_call_expr("error", vec![Expr::String("second side effect".into())]),
             ],
-        )))],
+        )), 0)],
     );
     let log = require_call_line(&ir, "js_console_log_spread");
     let error = require_call_line(&ir, "js_console_error_spread");

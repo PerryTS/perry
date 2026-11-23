@@ -22,7 +22,7 @@ fn ir_opts() -> CompileOptions {
 }
 
 fn param(ty: Type) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id: NUM_ID,
         name: "n".to_string(),
         ty,
@@ -34,7 +34,7 @@ fn param(ty: Type) -> Param {
 }
 
 fn module_with(params: Vec<Param>, body: Vec<Stmt>) -> Module {
-    Module {
+    Module { byte_offset: 0,
         name: "num2str_inline.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
@@ -45,7 +45,7 @@ fn module_with(params: Vec<Param>, body: Vec<Stmt>) -> Module {
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function {
+        functions: vec![Function { byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -102,7 +102,7 @@ fn ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
 
 fn number_n() -> Expr {
     // `n * 1` — numeric by construction, whatever the parameter's proof.
-    Expr::Binary {
+    Expr::Binary { byte_offset: 0,
         op: BinaryOp::Mul,
         left: Box::new(Expr::LocalGet(NUM_ID)),
         right: Box::new(Expr::Integer(1)),
@@ -125,7 +125,7 @@ fn method(object: Expr, property: &str, args: Vec<Expr>) -> Expr {
 }
 
 fn returns(e: Expr) -> Vec<Stmt> {
-    vec![Stmt::Return(Some(e))]
+    vec![Stmt::Return(Some(e), 0)]
 }
 
 /// Every spelling of a number's conversion gets the inline arm.
@@ -140,7 +140,7 @@ fn each_spelling_of_a_number_conversion_is_inlined() {
         ("n.toString()", method(number_n(), "toString", Vec::new())),
         (
             "\"\" + n",
-            Expr::Binary {
+            Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::String(String::new())),
                 right: Box::new(number_n()),
@@ -181,7 +181,7 @@ fn an_unproven_operand_keeps_the_runtime_call() {
 /// SSO arm the inline lowering has no `cca.sso_fast` block.
 #[test]
 fn a_string_coerced_local_reads_char_codes_inline() {
-    let concat = Expr::Binary {
+    let concat = Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::String(String::new())),
         right: Box::new(number_n()),
@@ -204,7 +204,7 @@ fn a_string_coerced_local_reads_char_codes_inline() {
                 Expr::LocalGet(STR_ID),
                 "charCodeAt",
                 vec![Expr::Integer(0)],
-            ))),
+            )), 0),
         ];
         let ir = ir(vec![param(Type::Number)], body);
         assert!(

@@ -692,7 +692,7 @@ mod tests {
     const POINT_ID: u32 = 42;
 
     fn closure(func_id: u32, body: Vec<Stmt>) -> Expr {
-        Expr::Closure {
+        Expr::Closure { byte_offset: 0,
             func_id,
             params: Vec::new(),
             return_type: Type::Any,
@@ -967,7 +967,7 @@ mod tests {
             heritage_lexically_shadowed: false,
             fields: ["x", "y"]
                 .iter()
-                .map(|n| ClassField {
+                .map(|n| ClassField { byte_offset: 0,
                     origin: perry_hir::ClassFieldOrigin::Definition,
                     name: n.to_string(),
                     key_expr: None,
@@ -1014,12 +1014,12 @@ mod tests {
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(POINT_ID)),
                 property: "x".to_string(),
-            })),
+            }), 0),
         ]
     }
 
     fn compute_fn() -> Function {
-        Function {
+        Function { byte_offset: 0,
             id: 17,
             name: "compute".to_string(),
             type_params: Vec::new(),

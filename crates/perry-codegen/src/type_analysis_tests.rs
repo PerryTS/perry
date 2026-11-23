@@ -258,7 +258,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         heritage_lexically_shadowed: false,
         fields: Vec::new(),
         constructor: None,
-        methods: vec![perry_hir::Function {
+        methods: vec![perry_hir::Function { byte_offset: 0,
             id: 4,
             name: "baseScore".to_string(),
             type_params: Vec::new(),
@@ -277,7 +277,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         }],
         getters: vec![(
             "baseLabel".to_string(),
-            perry_hir::Function {
+            perry_hir::Function { byte_offset: 0,
                 id: 5,
                 name: "get_baseLabel".to_string(),
                 type_params: Vec::new(),
@@ -318,7 +318,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![perry_hir::ClassField {
+        fields: vec![perry_hir::ClassField { byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "label".to_string(),
             key_expr: None,
@@ -329,7 +329,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
             decorators: Vec::new(),
         }],
         constructor: None,
-        methods: vec![perry_hir::Function {
+        methods: vec![perry_hir::Function { byte_offset: 0,
             id: 3,
             name: "score".to_string(),
             type_params: Vec::new(),
@@ -350,7 +350,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         setters: Vec::new(),
         static_accessor_names: Vec::new(),
         static_accessor_fn_ids: Vec::new(),
-        static_fields: vec![perry_hir::ClassField {
+        static_fields: vec![perry_hir::ClassField { byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "count".to_string(),
             key_expr: None,
@@ -360,7 +360,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
             is_readonly: false,
             decorators: Vec::new(),
         }],
-        static_methods: vec![perry_hir::Function {
+        static_methods: vec![perry_hir::Function { byte_offset: 0,
             id: 2,
             name: "make".to_string(),
             type_params: Vec::new(),

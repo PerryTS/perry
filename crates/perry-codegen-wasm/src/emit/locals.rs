@@ -544,7 +544,7 @@ mod scoped_collection_tests {
 
     #[test]
     fn parameter_default_capture_preserves_parameter_slots() {
-        let param = Param {
+        let param = Param { byte_offset: 0,
             id: 2,
             name: "arg".into(),
             ty: perry_hir::types::Type::Any,

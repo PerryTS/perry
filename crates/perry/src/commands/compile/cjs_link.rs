@@ -269,7 +269,7 @@ mod tests {
 
     fn open_if(then: Vec<Stmt>, otherwise: Vec<Stmt>) -> Stmt {
         Stmt::If {
-            condition: Expr::NativeMethodCall {
+            condition: Expr::NativeMethodCall { byte_offset: 0,
                 module: "__perry_runtime".to_string(),
                 class_name: None,
                 object: None,
@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn a_condition_used_as_a_value_is_an_error() {
-        let mut m = module_with(vec![Stmt::Expr(Expr::NativeMethodCall {
+        let mut m = module_with(vec![Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
             module: "__perry_runtime".to_string(),
             class_name: None,
             object: None,

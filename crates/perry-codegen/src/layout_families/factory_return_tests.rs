@@ -119,7 +119,7 @@ fn dynamic(callee: Expr) -> Expr {
 }
 
 fn logical(left: Expr, right: Expr) -> Expr {
-    Expr::Logical {
+    Expr::Logical { byte_offset: 0,
         op: LogicalOp::Or,
         left: Box::new(left),
         right: Box::new(right),

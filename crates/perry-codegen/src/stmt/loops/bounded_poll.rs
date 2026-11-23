@@ -876,7 +876,7 @@ mod tests {
     fn add_assign(id: u32, step: Expr) -> Expr {
         Expr::LocalSet(
             id,
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(id)),
                 right: Box::new(step),
@@ -922,7 +922,7 @@ mod tests {
         let sub = |l: Expr, r: Expr| {
             Expr::LocalSet(
                 1,
-                Box::new(Expr::Binary {
+                Box::new(Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(l),
                     right: Box::new(r),
@@ -938,7 +938,7 @@ mod tests {
 
     #[test]
     fn a_selected_step_of_both_signs_is_one_direction_only_with_its_test() {
-        let pick = |a: i64, b: i64| Expr::Conditional {
+        let pick = |a: i64, b: i64| Expr::Conditional { byte_offset: 0,
             condition: Box::new(Expr::LocalGet(9)),
             then_expr: Box::new(int(a)),
             else_expr: Box::new(int(b)),
@@ -1031,7 +1031,7 @@ mod tests {
     }
 
     fn cmp(op: perry_hir::CompareOp, left: Expr, right: Expr) -> Expr {
-        Expr::Compare {
+        Expr::Compare { byte_offset: 0,
             op,
             left: Box::new(left),
             right: Box::new(right),
@@ -1039,7 +1039,7 @@ mod tests {
     }
 
     fn and(left: Expr, right: Expr) -> Expr {
-        Expr::Logical {
+        Expr::Logical { byte_offset: 0,
             op: perry_hir::LogicalOp::And,
             left: Box::new(left),
             right: Box::new(right),
@@ -1069,7 +1069,7 @@ mod tests {
         assert_eq!(guard_window(&cmp(Lt, c(), Expr::LocalGet(2)), 1), open);
         assert_eq!(guard_window(&cmp(Lt, Expr::LocalGet(2), int(8)), 1), open);
         assert_eq!(guard_window(&cmp(Ne, c(), int(8)), 1), open);
-        let or = Expr::Logical {
+        let or = Expr::Logical { byte_offset: 0,
             op: perry_hir::LogicalOp::Or,
             left: Box::new(cmp(Lt, c(), int(8))),
             right: Box::new(cmp(Lt, c(), int(4))),

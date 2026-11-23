@@ -3,7 +3,7 @@ use perry_hir::types::Type;
 use perry_hir::{ClassField, ClassFieldOrigin, Function, Param};
 
 fn param(id: u32) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Number,
@@ -15,7 +15,7 @@ fn param(id: u32) -> Param {
 }
 
 fn ctor(params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id: 1,
         name: "constructor".into(),
         type_params: vec![],
@@ -65,7 +65,7 @@ fn class(name: &str, constructor: Option<Function>) -> Class {
 }
 
 fn field(name: &str, init: Option<Expr>) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -130,7 +130,7 @@ fn a_class_without_a_constructor_is_closed() {
 
 #[test]
 fn an_operator_on_a_parameter_may_run_code() {
-    let sum = Expr::Binary {
+    let sum = Expr::Binary { byte_offset: 0,
         op: perry_hir::BinaryOp::Add,
         left: Box::new(Expr::LocalGet(1)),
         right: Box::new(Expr::Integer(1)),

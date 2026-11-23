@@ -45,7 +45,7 @@ fn projected(module: &Module) -> bool {
 #[test]
 fn projects_repeated_capture_and_null_check() {
     let m = optimized(vec![
-        Stmt::Expr(Expr::Compare {
+        Stmt::Expr(Expr::Compare { byte_offset: 0,
             op: CompareOp::Ne,
             left: Box::new(Expr::LocalGet(2)),
             right: Box::new(Expr::Null),
@@ -71,7 +71,7 @@ fn projects_repeated_capture_and_null_check() {
 #[test]
 fn rejects_escapes_metadata_aliases_writes_and_multiple_captures() {
     for extra in [
-        Stmt::Return(Some(Expr::LocalGet(2))),
+        Stmt::Return(Some(Expr::LocalGet(2)), 0),
         Stmt::Expr(Expr::PropertyGet {
             byte_end: 0,
             object: Box::new(Expr::LocalGet(2)),
@@ -141,7 +141,7 @@ fn rejects_function_capture_metadata_even_without_localget() {
     if let Stmt::While { body, .. } = &mut module.init[0] {
         body[0] = init();
     }
-    module.functions.push(Function {
+    module.functions.push(Function { byte_offset: 0,
         id: 10,
         name: "closure".into(),
         type_params: vec![],

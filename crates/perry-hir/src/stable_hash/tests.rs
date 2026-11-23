@@ -337,7 +337,7 @@ fn module_metadata_affects_hash() {
 
     // Add a function
     let mut m_fn = empty_module();
-    m_fn.functions.push(Function {
+    m_fn.functions.push(Function { byte_offset: 0,
         id: 7,
         name: "f".to_string(),
         type_params: vec![],
@@ -398,12 +398,12 @@ fn cross_process_determinism_in_process_proxy() {
 /// Module shape mirrored by the example binary. Keep them in sync.
 pub(crate) fn canonical_module() -> Module {
     let mut m = Module::new("canonical");
-    m.functions.push(Function {
+    m.functions.push(Function { byte_offset: 0,
         id: 1,
         name: "add".to_string(),
         type_params: vec![],
         params: vec![
-            Param {
+            Param { byte_offset: 0,
                 id: 0,
                 name: "a".to_string(),
                 ty: Type::Number,
@@ -412,7 +412,7 @@ pub(crate) fn canonical_module() -> Module {
                 arguments_object: None,
                 decorators: vec![],
             },
-            Param {
+            Param { byte_offset: 0,
                 id: 1,
                 name: "b".to_string(),
                 ty: Type::Number,
@@ -423,11 +423,11 @@ pub(crate) fn canonical_module() -> Module {
             },
         ],
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Binary {
+        body: vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(0)),
             right: Box::new(Expr::LocalGet(1)),
-        }))],
+        }), 0)],
         is_async: false,
         is_generator: false,
         is_strict: false,

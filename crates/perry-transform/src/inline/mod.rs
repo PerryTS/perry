@@ -820,7 +820,7 @@ mod tests {
     use perry_hir::{ImportSpecifier, ModuleKind, Param};
 
     fn function(id: FuncId, body: Vec<Stmt>) -> Function {
-        Function {
+        Function { byte_offset: 0,
             id,
             name: format!("f{}", id),
             type_params: Vec::new(),
@@ -919,8 +919,8 @@ mod tests {
 
     #[test]
     fn pod_value_parameters_preserve_the_call_copy_boundary() {
-        let mut func = function(1, vec![Stmt::Return(None)]);
-        func.params.push(Param {
+        let mut func = function(1, vec![Stmt::Return(None, 0)]);
+        func.params.push(Param { byte_offset: 0,
             id: 1,
             name: "value".to_string(),
             ty: Type::Generic {
@@ -939,7 +939,7 @@ mod tests {
 
     #[test]
     fn nonprimitive_local_inline_argument_keeps_a_parameter_binding() {
-        let params = vec![Param {
+        let params = vec![Param { byte_offset: 0,
             id: 1,
             name: "value".to_string(),
             ty: Type::Any,
@@ -974,7 +974,7 @@ mod tests {
 
     #[test]
     fn typed_array_inline_argument_keeps_reference_substitution() {
-        let params = vec![Param {
+        let params = vec![Param { byte_offset: 0,
             id: 1,
             name: "values".to_string(),
             ty: Type::Named("Int32Array".to_string()),
@@ -1084,7 +1084,7 @@ mod tests {
             ("ParseError".to_string(), "code".to_string()),
             candidate(
                 1,
-                vec![Stmt::Return(Some(extern_ref("CODE")))],
+                vec![Stmt::Return(Some(extern_ref("CODE")), 0)],
                 vec![("CODE".to_string(), "/util.ts".to_string())],
             ),
         );
@@ -1148,7 +1148,7 @@ mod tests {
             ("ParseError".to_string(), "code".to_string()),
             candidate(
                 1,
-                vec![Stmt::Return(Some(extern_ref("CODE")))],
+                vec![Stmt::Return(Some(extern_ref("CODE")), 0)],
                 vec![("CODE".to_string(), "/util.ts".to_string())],
             ),
         );
@@ -1157,7 +1157,7 @@ mod tests {
             ("Other".to_string(), "m".to_string()),
             candidate(
                 2,
-                vec![Stmt::Return(Some(extern_ref("UNUSED")))],
+                vec![Stmt::Return(Some(extern_ref("UNUSED")), 0)],
                 vec![("UNUSED".to_string(), "/unused.ts".to_string())],
             ),
         );
@@ -1257,7 +1257,7 @@ mod tests {
                 args: Vec::new(),
                 type_args: Vec::new(),
                 byte_offset: 0,
-            }))],
+            }), 0)],
         );
         let mut root = function(
             2,
@@ -1267,7 +1267,7 @@ mod tests {
                 args: Vec::new(),
                 type_args: Vec::new(),
                 byte_offset: 0,
-            }))],
+            }), 0)],
         );
         root.name = "operation".to_string();
         root.is_exported = true;
@@ -1405,7 +1405,7 @@ mod tests {
                 class_name: "Registry".to_string(),
                 method_name: "of".to_string(),
                 args: vec![Expr::Object(Vec::new())],
-            }))],
+            }), 0)],
         );
         root.name = "store".to_string();
         root.is_exported = true;
@@ -1414,7 +1414,7 @@ mod tests {
         assert!(gather_cross_module_functions(&source).is_empty());
         assert!(matches!(
             &source.functions[0].body[0],
-            Stmt::Return(Some(Expr::StaticMethodCall { class_name, .. }))
+            Stmt::Return(Some(Expr::StaticMethodCall { class_name, .. }), _)
                 if class_name == "Registry"
         ));
     }
@@ -1429,7 +1429,7 @@ mod tests {
                 args: Vec::new(),
                 type_args: Vec::new(),
                 byte_offset: 0,
-            }))]
+            }), 0)]
         };
         let mut first = function(1, call(2));
         first.is_exported = true;
@@ -1451,9 +1451,9 @@ mod tests {
                     property: "removed".to_string(),
                     byte_offset: 0,
                 },
-            ))))],
+            ))), 0)],
         );
-        helper.params.push(Param {
+        helper.params.push(Param { byte_offset: 0,
             id: 10,
             name: "value".to_string(),
             ty: Type::Any,
@@ -1470,7 +1470,7 @@ mod tests {
                 args: vec![Expr::Undefined],
                 type_args: Vec::new(),
                 byte_offset: 0,
-            }))],
+            }), 0)],
         );
         root.name = "reshape".to_string();
         root.is_exported = true;
@@ -1483,7 +1483,7 @@ mod tests {
             object: Box::new(Expr::LocalGet(10)),
             property: "removed".to_string(),
             byte_offset: 0,
-        }))];
+        }), 0)];
         assert!(
             gather_cross_module_functions(&barrier_free).contains_key("reshape"),
             "the helper graph must otherwise be eligible for localization"
@@ -1561,8 +1561,8 @@ mod tests {
             let Stmt::Expr(constructor) = anon_new(class_name) else {
                 unreachable!()
             };
-            source.functions[0].body = vec![Stmt::Return(Some(Expr::LocalGet(1)))];
-            source.functions[0].params.push(Param {
+            source.functions[0].body = vec![Stmt::Return(Some(Expr::LocalGet(1)), 0)];
+            source.functions[0].params.push(Param { byte_offset: 0,
                 id: 1,
                 name: "value".into(),
                 ty: Type::Any,
@@ -1588,7 +1588,7 @@ mod tests {
     #[test]
     fn cross_module_free_function_with_module_local_is_rejected() {
         let mut source = Module::new("/src/constants.ts");
-        let mut reads_module_binding = function(1, vec![Stmt::Return(Some(Expr::LocalGet(99)))]);
+        let mut reads_module_binding = function(1, vec![Stmt::Return(Some(Expr::LocalGet(99)), 0)]);
         reads_module_binding.name = "withinLimit".to_string();
         reads_module_binding.is_exported = true;
         source.functions.push(reads_module_binding);
@@ -1607,7 +1607,7 @@ mod tests {
         };
 
         let mut source = Module::new("/src/utils.ts");
-        let mut helper = function(1, vec![Stmt::Return(Some(enum_member.clone()))]);
+        let mut helper = function(1, vec![Stmt::Return(Some(enum_member.clone()), 0)]);
         helper.name = "isHtml".to_string();
         helper.is_exported = true;
         source.functions.push(helper.clone());
@@ -1648,7 +1648,7 @@ mod tests {
                 deferred_error: None,
                 synchronous: true,
                 deferred: false,
-            }))],
+            }), 0)],
         );
         loads_relative_module.name = "loadAlpha".to_string();
         loads_relative_module.is_exported = true;
@@ -1669,7 +1669,7 @@ mod tests {
                 filename: Box::new(Expr::String("./worker.ts".to_string())),
                 options: None,
                 is_eval: false,
-            }))],
+            }), 0)],
         );
         starts_relative_worker.name = "startWorker".to_string();
         starts_relative_worker.is_exported = true;
@@ -1695,7 +1695,7 @@ mod tests {
                 args: Vec::new(),
                 type_args: Vec::new(),
                 byte_offset: 0,
-            }))],
+            }), 0)],
         );
         root.name = "operation".to_string();
         let candidate = FunctionCandidate {
@@ -1785,15 +1785,15 @@ mod tests {
             vec![
                 Stmt::If {
                     condition: Expr::Bool(false),
-                    then_branch: vec![Stmt::Return(Some(record(1)))],
+                    then_branch: vec![Stmt::Return(Some(record(1)), 0)],
                     else_branch: None,
                 },
-                Stmt::Return(Some(record(2))),
+                Stmt::Return(Some(record(2)), 0),
             ],
         );
         resolver.name = "resolve".to_string();
 
-        let wrapped_call = Expr::NativeMethodCall {
+        let wrapped_call = Expr::NativeMethodCall { byte_offset: 0,
             module: "__perry_runtime".to_string(),
             class_name: None,
             object: None,
@@ -1854,10 +1854,10 @@ mod tests {
             vec![
                 Stmt::If {
                     condition: Expr::Bool(false),
-                    then_branch: vec![Stmt::Return(Some(record(1)))],
+                    then_branch: vec![Stmt::Return(Some(record(1)), 0)],
                     else_branch: None,
                 },
-                Stmt::Return(Some(record(2))),
+                Stmt::Return(Some(record(2)), 0),
             ],
         );
         resolver.name = "resolve".to_string();
@@ -1883,7 +1883,7 @@ mod tests {
                     object: Box::new(Expr::LocalGet(10)),
                     property: "type".to_string(),
                     byte_offset: 0,
-                })),
+                }), 0),
             ],
         );
         method.name = "exists".to_string();
@@ -1920,7 +1920,7 @@ mod tests {
                 mutable: false,
                 init: Some(Expr::Object(Vec::new())),
             },
-            Stmt::Return(Some(Expr::LocalGet(original_id))),
+            Stmt::Return(Some(Expr::LocalGet(original_id)), 0),
         ];
         let mut module = Module::new("inline-spans.ts");
         module.functions.push(function(1, body));

@@ -527,7 +527,7 @@ mod tests {
     }
 
     fn add(id: u32, d: i64) -> Expr {
-        Expr::Binary {
+        Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(id)),
             right: Box::new(Expr::Integer(d)),
@@ -588,7 +588,7 @@ mod tests {
             let_int(1, 2),
             set(
                 1,
-                Expr::Binary {
+                Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Mul,
                     left: Box::new(Expr::LocalGet(1)),
                     right: Box::new(Expr::Integer(3)),
@@ -608,7 +608,7 @@ mod tests {
             let_int(1, 2),
             set(
                 1,
-                Expr::Binary {
+                Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::Integer(5)),
                     right: Box::new(Expr::LocalGet(1)),
@@ -649,7 +649,7 @@ mod tests {
     fn rejects_closure_written_local() {
         let stmts = vec![
             let_int(1, 0),
-            Stmt::Expr(Expr::Closure {
+            Stmt::Expr(Expr::Closure { byte_offset: 0,
                 func_id: 0,
                 params: vec![],
                 return_type: Type::Void,
@@ -676,7 +676,7 @@ mod tests {
     fn rejects_mutable_capture() {
         let stmts = vec![
             let_int(1, 0),
-            Stmt::Expr(Expr::Closure {
+            Stmt::Expr(Expr::Closure { byte_offset: 0,
                 func_id: 0,
                 params: vec![],
                 return_type: Type::Void,
@@ -722,7 +722,7 @@ mod tests {
                     condition: Expr::Bool(true),
                     then_branch: vec![set(
                         1,
-                        Expr::Binary {
+                        Expr::Binary { byte_offset: 0,
                             op: BinaryOp::Mul,
                             left: Box::new(Expr::LocalGet(1)),
                             right: Box::new(Expr::Integer(3)),

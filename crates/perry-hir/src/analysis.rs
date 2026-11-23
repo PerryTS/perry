@@ -1443,7 +1443,7 @@ mod local_refs_depth_tests {
             .spawn(|| {
                 let mut expr = Expr::LocalGet(DEPTH);
                 for id in 0..DEPTH {
-                    expr = Expr::Conditional {
+                    expr = Expr::Conditional { byte_offset: 0,
                         condition: Box::new(Expr::LocalGet(id)),
                         then_expr: Box::new(Expr::Undefined),
                         else_expr: Box::new(expr),

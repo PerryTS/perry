@@ -78,7 +78,7 @@ fn empty_opts() -> CompileOptions {
 }
 
 fn param(id: u32, name: &str) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -90,7 +90,7 @@ fn param(id: u32, name: &str) -> Param {
 }
 
 fn module_with_recursive_constructor_return() -> Module {
-    let ctor = Function {
+    let ctor = Function { byte_offset: 0,
         id: 1,
         name: "constructor".to_string(),
         type_params: Vec::new(),
@@ -105,7 +105,7 @@ fn module_with_recursive_constructor_return() -> Module {
                 type_args: Vec::new(),
                 byte_offset: 0,
                 cap_args_appended: 0,
-            }))],
+            }), 0)],
             else_branch: None,
         }],
         is_async: false,
@@ -119,7 +119,7 @@ fn module_with_recursive_constructor_return() -> Module {
         decorators: Vec::new(),
     };
 
-    Module {
+    Module { byte_offset: 0,
         name: "constructor_recursion.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

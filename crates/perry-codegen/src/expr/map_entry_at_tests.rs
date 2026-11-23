@@ -5,7 +5,7 @@ use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, name: &str) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -28,13 +28,13 @@ fn entry_read_ir(value_slot: bool) -> String {
             idx: Box::new(Expr::LocalGet(11)),
         }
     };
-    let f = Function {
+    let f = Function { byte_offset: 0,
         id: 1,
         name: "read".to_string(),
         type_params: Vec::new(),
         params: vec![param(10, "m"), param(11, "i")],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(read))],
+        body: vec![Stmt::Return(Some(read), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,

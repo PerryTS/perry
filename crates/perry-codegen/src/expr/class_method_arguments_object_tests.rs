@@ -132,7 +132,7 @@ fn ir_opts() -> CompileOptions {
 /// The synthesized `arguments` parameter #677 appends: trailing, `is_rest`, and
 /// the ONLY parameter carrying `arguments_object`.
 fn synthetic_arguments_param() -> Param {
-    Param {
+    Param { byte_offset: 0,
         id: TAIL_ID,
         name: "arguments".to_string(),
         ty: Type::Any,
@@ -151,7 +151,7 @@ fn synthetic_arguments_param() -> Param {
 /// A user `...rest`. Same `is_rest`, no `arguments_object` — the pair the call
 /// site has to tell apart.
 fn user_rest_param() -> Param {
-    Param {
+    Param { byte_offset: 0,
         id: TAIL_ID,
         name: "rest".to_string(),
         ty: Type::Any,
@@ -163,7 +163,7 @@ fn user_rest_param() -> Param {
 }
 
 fn fixed(id: u32, name: &str) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -193,7 +193,7 @@ fn module_with_tail(tail: Param) -> Module {
         heritage_lexically_shadowed: false,
         fields: Vec::new(),
         constructor: None,
-        methods: vec![Function {
+        methods: vec![Function { byte_offset: 0,
             id: 20,
             name: "m".to_string(),
             type_params: Vec::new(),
@@ -204,7 +204,7 @@ fn module_with_tail(tail: Param) -> Module {
                 object: Box::new(Expr::LocalGet(TAIL_ID)),
                 property: "length".to_string(),
                 byte_offset: 0,
-            }))],
+            }), 0)],
             is_async: false,
             is_generator: false,
             is_strict: true,
@@ -269,7 +269,7 @@ fn emit(m: &Module) -> String {
 #[test]
 fn an_entry_observation_needs_no_readiness_state() {
     let mut module = module_with_tail(synthetic_arguments_param());
-    module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::LocalGet(TAIL_ID)))];
+    module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::LocalGet(TAIL_ID)), 0)];
     let ir = emit(&module);
     let method = ir
         .split("define ")
@@ -289,13 +289,13 @@ fn an_entry_observation_needs_no_readiness_state() {
 fn an_unexecuted_arguments_branch_does_not_birth_an_object() {
     let mut module = module_with_tail(synthetic_arguments_param());
     module.classes[0].methods[0].body = vec![Stmt::If {
-        condition: Expr::Compare {
+        condition: Expr::Compare { byte_offset: 0,
             op: perry_hir::CompareOp::Lt,
             left: Box::new(Expr::LocalGet(A_ID)),
             right: Box::new(Expr::Number(0.0)),
         },
-        then_branch: vec![Stmt::Return(Some(Expr::LocalGet(TAIL_ID)))],
-        else_branch: Some(vec![Stmt::Return(Some(Expr::LocalGet(B_ID)))]),
+        then_branch: vec![Stmt::Return(Some(Expr::LocalGet(TAIL_ID)), 0)],
+        else_branch: Some(vec![Stmt::Return(Some(Expr::LocalGet(B_ID)), 0)]),
     }];
     let ir = emit(&module);
     let method = ir
@@ -341,7 +341,7 @@ fn a_class_method_reading_arguments_is_handed_every_passed_argument() {
         byte_end: 0,
         object: Box::new(Expr::LocalGet(TAIL_ID)),
         index: Box::new(Expr::Integer(0)),
-    }))];
+    }), 0)];
     let ir = emit(&module);
 
     assert!(

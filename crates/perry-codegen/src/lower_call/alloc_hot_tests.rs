@@ -130,7 +130,7 @@ fn cell_class() -> Class {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField {
+        fields: vec![ClassField { byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "v".to_string(),
             key_expr: None,
@@ -171,7 +171,7 @@ fn tiny_factory_class(prefix_stmts: usize) -> Class {
         type_args: Vec::new(),
         byte_offset: 0,
         cap_args_appended: 0,
-    })));
+    }), 0));
     Class {
         id: 4,
         name: "Factory".to_string(),
@@ -183,7 +183,7 @@ fn tiny_factory_class(prefix_stmts: usize) -> Class {
         heritage_lexically_shadowed: false,
         fields: Vec::new(),
         constructor: None,
-        methods: vec![Function {
+        methods: vec![Function { byte_offset: 0,
             id: FACTORY_METHOD_ID,
             name: "make".to_string(),
             type_params: Vec::new(),
@@ -252,7 +252,7 @@ fn walk_module(recurse: bool) -> Module {
     let mut body: Vec<Stmt> = Vec::new();
     if recurse {
         body.push(Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0,
                 op: CompareOp::Gt,
                 left: Box::new(Expr::LocalGet(N_ID)),
                 right: Box::new(Expr::Number(0.0)),
@@ -260,7 +260,7 @@ fn walk_module(recurse: bool) -> Module {
             then_branch: vec![Stmt::Expr(Expr::Call {
                 byte_end: 0,
                 callee: Box::new(Expr::FuncRef(WALK_ID)),
-                args: vec![Expr::Binary {
+                args: vec![Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::LocalGet(N_ID)),
                     right: Box::new(Expr::Number(1.0)),
@@ -278,12 +278,12 @@ fn walk_module(recurse: bool) -> Module {
         type_args: Vec::new(),
         byte_offset: 0,
         cap_args_appended: 0,
-    })));
-    m.functions = vec![Function {
+    }), 0));
+    m.functions = vec![Function { byte_offset: 0,
         id: WALK_ID,
         name: "walk".to_string(),
         type_params: Vec::new(),
-        params: vec![Param {
+        params: vec![Param { byte_offset: 0,
             id: N_ID,
             name: "n".to_string(),
             ty: Type::Number,
@@ -338,7 +338,7 @@ fn indirect_closure_module(site_count: u32, call_in_loop: bool) -> Module {
             name: format!("stage_{i}"),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::Closure {
+            init: Some(Expr::Closure { byte_offset: 0,
                 func_id: STAGE_FUNC_BASE + i,
                 params: Vec::new(),
                 return_type: Type::Named("Cell".to_string()),
@@ -349,7 +349,7 @@ fn indirect_closure_module(site_count: u32, call_in_loop: bool) -> Module {
                     type_args: Vec::new(),
                     byte_offset: 0,
                     cap_args_appended: 0,
-                }))],
+                }), 0)],
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,
@@ -432,7 +432,7 @@ fn the_hot_cache_read_is_marked_gc_leaf_in_bodies_without_root_slots() {
         return;
     }
     let mut module = Module::new("rootless.ts");
-    module.functions = vec![Function {
+    module.functions = vec![Function { byte_offset: 0,
         id: WALK_ID,
         name: "rootless".to_string(),
         type_params: Vec::new(),
@@ -447,7 +447,7 @@ fn the_hot_cache_read_is_marked_gc_leaf_in_bodies_without_root_slots() {
             args: Vec::new(),
             type_args: Vec::new(),
             byte_offset: 0,
-        }))],
+        }), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,

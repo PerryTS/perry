@@ -336,21 +336,21 @@ mod tests {
         Expr::LocalGet(id)
     }
     fn mul(l: Expr, r: Expr) -> Expr {
-        Expr::Binary {
+        Expr::Binary { byte_offset: 0,
             op: BinaryOp::Mul,
             left: Box::new(l),
             right: Box::new(r),
         }
     }
     fn add(l: Expr, r: Expr) -> Expr {
-        Expr::Binary {
+        Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(l),
             right: Box::new(r),
         }
     }
     fn sub(l: Expr, r: Expr) -> Expr {
-        Expr::Binary {
+        Expr::Binary { byte_offset: 0,
             op: BinaryOp::Sub,
             left: Box::new(l),
             right: Box::new(r),

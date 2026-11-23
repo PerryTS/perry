@@ -6,7 +6,7 @@ use perry_hir::{Expr, Module, Stmt};
 
 fn compile_hidden_call(hidden: bool) -> String {
     let mut module = Module::new("ui_i64_boolean_args");
-    module.init.push(Stmt::Expr(Expr::NativeMethodCall {
+    module.init.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
         module: "perry/ui".into(),
         class_name: None,
         object: None,

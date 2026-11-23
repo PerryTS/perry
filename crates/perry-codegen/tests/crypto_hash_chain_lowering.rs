@@ -93,7 +93,7 @@ fn entry_opts() -> CompileOptions {
 }
 
 fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
-    Module {
+    Module { byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -139,7 +139,7 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
 /// Compile `body` as the body of a plain function and return the module IR.
 fn ir_for_fn_body(name: &str, body: Vec<Stmt>) -> String {
     let mut m = module_with_init(name, Vec::new());
-    m.functions.push(perry_hir::Function {
+    m.functions.push(perry_hir::Function { byte_offset: 0,
         id: 7000,
         name: "driver".to_string(),
         type_params: Vec::new(),
@@ -213,7 +213,7 @@ fn hash_chain_lowers_to_frame_state_calls() {
     let u1 = call(crypto(), CHAIN_UPDATE, vec![init, s("request-path")]);
     let u2 = call(crypto(), CHAIN_UPDATE, vec![u1, s("more"), s("utf8")]);
     let digest = call(crypto(), CHAIN_DIGEST, vec![u2, s("hex")]);
-    let ir = ir_for_fn_body("hash_chain", vec![Stmt::Return(Some(digest))]);
+    let ir = ir_for_fn_body("hash_chain", vec![Stmt::Return(Some(digest), 0)]);
     assert_handle_free(&ir, "js_crypto_chain_hash_init");
     let chain_calls = ir.matches("call double @js_crypto_chain_update(").count();
     assert_eq!(chain_calls, 2, "one runtime call per update:\n{ir}");
@@ -236,7 +236,7 @@ fn block_local_hmac_lowers_to_frame_state_calls() {
             CHAIN_UPDATE,
             vec![Expr::LocalGet(1), s("payload")],
         )),
-        Stmt::Return(Some(call(crypto(), CHAIN_DIGEST, vec![Expr::LocalGet(1)]))),
+        Stmt::Return(Some(call(crypto(), CHAIN_DIGEST, vec![Expr::LocalGet(1)])), 0),
     ];
     let ir = ir_for_fn_body("hmac_local", body);
     assert_handle_free(&ir, "js_crypto_chain_hmac_init");
@@ -252,7 +252,7 @@ fn every_init_site_gets_its_own_slot() {
     };
     let body = vec![
         Stmt::Expr(chain("md5")),
-        Stmt::Return(Some(chain("sha512"))),
+        Stmt::Return(Some(chain("sha512")), 0),
     ];
     let ir = ir_for_fn_body("two_sites", body);
     assert_eq!(
@@ -269,7 +269,7 @@ fn escaping_create_hash_still_registers_a_handle() {
         crypto(),
         "createHash",
         vec![s("sha1")],
-    )))];
+    )), 0)];
     let ir = ir_for_fn_body("escaping", body);
     assert!(ir.contains("call double @js_crypto_create_hash("), "{ir}");
     assert!(

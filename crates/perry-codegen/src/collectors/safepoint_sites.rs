@@ -222,7 +222,7 @@ mod tests {
     }
 
     fn empty_closure(body: Vec<Stmt>) -> Expr {
-        Expr::Closure {
+        Expr::Closure { byte_offset: 0,
             func_id: 0,
             params: vec![],
             return_type: Type::Any,
@@ -250,7 +250,7 @@ mod tests {
             },
             // A call buried in a nested closure body must NOT be counted.
             Stmt::Expr(empty_closure(vec![Stmt::Expr(call(vec![]))])),
-            Stmt::Return(Some(call(vec![]))),
+            Stmt::Return(Some(call(vec![])), 0),
         ];
         assert_eq!(count_safepoint_sites(&stmts), 3);
     }

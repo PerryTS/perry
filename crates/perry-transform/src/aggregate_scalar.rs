@@ -1784,7 +1784,7 @@ mod tests {
                 }),
             },
             Stmt::Expr(if observe_identity {
-                Expr::Compare {
+                Expr::Compare { byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::LocalGet(2)),
@@ -1961,7 +1961,7 @@ mod tests {
                 condition: Expr::Bool(false),
             },
             Stmt::Expr(if observe_identity {
-                Expr::Compare {
+                Expr::Compare { byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(1)),
                     right: Box::new(Expr::LocalGet(1)),

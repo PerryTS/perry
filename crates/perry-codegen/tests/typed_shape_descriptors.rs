@@ -104,7 +104,7 @@ fn object_type(fields: &[(&str, Type)]) -> Type {
 }
 
 fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Module {
-    Module {
+    Module { byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -113,7 +113,7 @@ fn base_module(name: &str, body: Vec<Stmt>, interfaces: Vec<Interface>) -> Modul
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function {
+        functions: vec![Function { byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -212,7 +212,7 @@ fn scalar_object_literal_skips_pure_unobserved_initializers() {
                     ("used".to_string(), Expr::Integer(7)),
                     (
                         "unused".to_string(),
-                        Expr::Binary {
+                        Expr::Binary { byte_offset: 0,
                             op: BinaryOp::Add,
                             left: Box::new(Expr::String("drop_".to_string())),
                             right: Box::new(Expr::Integer(1)),
@@ -225,7 +225,7 @@ fn scalar_object_literal_skips_pure_unobserved_initializers() {
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "used".to_string(),
-            })),
+            }), 0),
         ],
         Vec::new(),
     );
@@ -254,7 +254,7 @@ fn scalar_array_literal_skips_pure_unobserved_initializers() {
                 init: Some(Expr::Array(
                     vec![
                         Expr::Integer(7),
-                        Expr::Binary {
+                        Expr::Binary { byte_offset: 0,
                             op: BinaryOp::Add,
                             left: Box::new(Expr::String("drop_".to_string())),
                             right: Box::new(Expr::Integer(1)),
@@ -270,7 +270,7 @@ fn scalar_array_literal_skips_pure_unobserved_initializers() {
                 byte_end: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 index: Box::new(Expr::Integer(0)),
-            })),
+            }), 0),
         ],
         Vec::new(),
     );
@@ -306,7 +306,7 @@ fn scalar_object_literal_keeps_observable_unobserved_initializers() {
                 byte_offset: 0,
                 object: Box::new(Expr::LocalGet(1)),
                 property: "used".to_string(),
-            })),
+            }), 0),
         ],
         Vec::new(),
     );
@@ -330,7 +330,7 @@ fn scalar_object_literal_keeps_initializers_read_by_update() {
                 mutable: false,
                 init: Some(Expr::Object(vec![(
                     "count".to_string(),
-                    Expr::Binary {
+                    Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(Expr::String("4".to_string())),
                         right: Box::new(Expr::Integer(1)),
@@ -345,7 +345,7 @@ fn scalar_object_literal_keeps_initializers_read_by_update() {
                 strict: true,
                 byte_offset: 0,
                 byte_end: 0,
-            })),
+            }), 0),
         ],
         Vec::new(),
     );
@@ -368,7 +368,7 @@ fn numeric_array_literal_avoids_layout_note_calls() {
         vec![Stmt::Return(Some(Expr::Array(
             vec![Expr::Number(1.0), Expr::Number(2.0), Expr::Number(3.0)],
             None,
-        )))],
+        )), 0)],
         Vec::new(),
     );
 
@@ -386,7 +386,7 @@ fn mixed_array_literal_emits_layout_note_calls() {
         vec![Stmt::Return(Some(Expr::Array(
             vec![Expr::Number(1.0), Expr::String("heap".to_string())],
             None,
-        )))],
+        )), 0)],
         Vec::new(),
     );
 
@@ -409,7 +409,7 @@ fn number_typed_local_array_literal_keeps_runtime_layout_note() {
                 mutable: false,
                 init: Some(Expr::String("heap".to_string())),
             },
-            Stmt::Return(Some(Expr::Array(vec![Expr::LocalGet(1)], None))),
+            Stmt::Return(Some(Expr::Array(vec![Expr::LocalGet(1)], None)), 0),
         ],
         Vec::new(),
     );
@@ -445,7 +445,7 @@ fn number_typed_local_array_push_keeps_layout_note_and_barrier() {
                 value: Box::new(Expr::LocalGet(1)),
                 field_writeback: None,
             }),
-            Stmt::Return(Some(Expr::LocalGet(2))),
+            Stmt::Return(Some(Expr::LocalGet(2)), 0),
         ],
         Vec::new(),
     );
@@ -491,7 +491,7 @@ fn c262_array_spread_uses_strict_iterator_append_and_preserves_holes() {
                 ArrayElement::Expr(Expr::Number(1.0)),
                 ArrayElement::Hole,
                 ArrayElement::Spread(Expr::LocalGet(1)),
-            ]))),
+            ])), 0),
         ],
         Vec::new(),
     );
@@ -530,7 +530,7 @@ fn c262_array_has_own_property_uses_object_prototype_dispatch() {
                 args: vec![Expr::String("0".to_string())],
                 type_args: vec![],
                 byte_offset: 0,
-            })),
+            }), 0),
         ],
         Vec::new(),
     );
@@ -557,11 +557,11 @@ fn c262_addition_assignment_operands_use_dynamic_add_helper() {
                 mutable: true,
                 init: Some(Expr::Number(0.0)),
             },
-            Stmt::Return(Some(Expr::Binary {
+            Stmt::Return(Some(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalSet(1, Box::new(Expr::Number(1.0)))),
                 right: Box::new(Expr::LocalGet(1)),
-            })),
+            }), 0),
         ],
         Vec::new(),
     );
@@ -596,7 +596,7 @@ fn bounded_integer_array_store_module() -> Module {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::PropertyGet {
@@ -622,14 +622,14 @@ fn bounded_integer_array_store_module() -> Module {
                 body: vec![Stmt::Expr(Expr::synthetic_index_set(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(Expr::LocalGet(2)),
-                    Box::new(Expr::Binary {
+                    Box::new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::Integer(1)),
                     }),
                 ))],
             },
-            Stmt::Return(Some(Expr::LocalGet(1))),
+            Stmt::Return(Some(Expr::LocalGet(1)), 0),
         ],
         Vec::new(),
     )
@@ -711,7 +711,7 @@ fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::PropertyGet {
@@ -732,7 +732,7 @@ fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
                     Box::new(Expr::LocalGet(2)),
                 ))],
             },
-            Stmt::Return(Some(Expr::LocalGet(1))),
+            Stmt::Return(Some(Expr::LocalGet(1)), 0),
         ],
         Vec::new(),
     );
@@ -777,7 +777,7 @@ fn integer_arithmetic_array_push_omits_inbounds_layout_note_and_barrier() {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::Integer(8)),
@@ -789,7 +789,7 @@ fn integer_arithmetic_array_push_omits_inbounds_layout_note_and_barrier() {
                 }),
                 body: vec![Stmt::Expr(Expr::ArrayPush {
                     array_id: 1,
-                    value: Box::new(Expr::Binary {
+                    value: Box::new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Mul,
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::Number(1.5)),
@@ -797,7 +797,7 @@ fn integer_arithmetic_array_push_omits_inbounds_layout_note_and_barrier() {
                     field_writeback: None,
                 })],
             },
-            Stmt::Return(Some(Expr::LocalGet(1))),
+            Stmt::Return(Some(Expr::LocalGet(1)), 0),
         ],
         Vec::new(),
     );
@@ -879,7 +879,7 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
                 Box::new(Expr::Integer(0)),
                 Box::new(Expr::LocalGet(1)),
             )),
-            Stmt::Return(Some(Expr::LocalGet(2))),
+            Stmt::Return(Some(Expr::LocalGet(2)), 0),
         ],
         Vec::new(),
     );
@@ -974,7 +974,7 @@ fn point_literal_uses_typed_shape_path() {
                     ("y".to_string(), Expr::Number(2.5)),
                 ])),
             },
-            Stmt::Return(Some(Expr::LocalGet(1))),
+            Stmt::Return(Some(Expr::LocalGet(1)), 0),
         ],
     );
 

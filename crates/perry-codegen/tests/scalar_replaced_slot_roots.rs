@@ -134,7 +134,7 @@ fn entry_opts() -> CompileOptions {
 }
 
 fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
-    Module {
+    Module { byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -631,7 +631,7 @@ fn bind_is_hoisted_into_the_entry_block_ahead_of_the_storing_loop() {
         vec![
             let_stmt(9, "n", Expr::Number(3.0)),
             Stmt::While {
-                condition: Expr::Compare {
+                condition: Expr::Compare { byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(9)),
                     right: Box::new(Expr::Number(3.0)),

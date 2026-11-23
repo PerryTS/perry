@@ -50,7 +50,7 @@ fn alias_store() -> Stmt {
     Stmt::Expr(Expr::IndexSet {
         object: Box::new(Expr::LocalGet(BASE_TEMP)),
         index: Box::new(Expr::LocalGet(KEY_TEMP)),
-        value: Box::new(Expr::Binary {
+        value: Box::new(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::IndexGet {
                 element_offset: 0,
@@ -73,7 +73,7 @@ fn expanded_store() -> Stmt {
     Stmt::Expr(Expr::IndexSet {
         object: Box::new(Expr::LocalGet(ARRAY)),
         index: Box::new(Expr::LocalGet(COUNTER)),
-        value: Box::new(Expr::Binary {
+        value: Box::new(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::IndexGet {
                 element_offset: 0,
@@ -116,9 +116,9 @@ fn folds_the_canonical_compound_assignment_to_the_expanded_store() {
 #[test]
 fn folds_an_arithmetic_key_initialiser() {
     // `a[i * 2 + 1] += 1` spills the whole index expression into the key temp.
-    let key = Expr::Binary {
+    let key = Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
-        left: Box::new(Expr::Binary {
+        left: Box::new(Expr::Binary { byte_offset: 0,
             op: BinaryOp::Mul,
             left: Box::new(Expr::LocalGet(COUNTER)),
             right: Box::new(Expr::Integer(2)),
@@ -217,7 +217,7 @@ fn declines_when_the_last_statement_is_not_an_expression() {
     let body = vec![
         temp(BASE_TEMP, "__cmpd_base_5", false, Expr::LocalGet(ARRAY)),
         temp(KEY_TEMP, "__cmpd_key_6", false, Expr::LocalGet(COUNTER)),
-        Stmt::Return(Some(Expr::LocalGet(BASE_TEMP))),
+        Stmt::Return(Some(Expr::LocalGet(BASE_TEMP)), 0),
     ];
     assert!(packed_f64_range_loop_compound_alias_fold(&body).is_none());
 }
@@ -249,7 +249,7 @@ fn the_logical_assignment_shape_folds_but_stays_unversionable() {
     let body = vec![
         temp(BASE_TEMP, "__cmpd_base_5", false, Expr::LocalGet(ARRAY)),
         temp(KEY_TEMP, "__cmpd_key_6", false, Expr::LocalGet(COUNTER)),
-        Stmt::Expr(Expr::Logical {
+        Stmt::Expr(Expr::Logical { byte_offset: 0,
             op: perry_hir::LogicalOp::Or,
             left: Box::new(Expr::IndexGet {
                 element_offset: 0,

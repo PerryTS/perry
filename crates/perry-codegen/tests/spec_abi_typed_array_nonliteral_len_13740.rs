@@ -15,7 +15,7 @@ const S: u32 = 102;
 const I: u32 = 103;
 
 fn param(id: u32, name: &str) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -41,7 +41,7 @@ fn sum_function() -> Function {
         object: local(ARR),
         index: local(I),
     };
-    Function {
+    Function { byte_offset: 0,
         id: 7,
         name: "sum".to_string(),
         type_params: Vec::new(),
@@ -63,14 +63,14 @@ fn sum_function() -> Function {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: local(I),
                     right: local(N),
                 }),
                 update: Some(Expr::LocalSet(
                     I,
-                    Box::new(Expr::Binary {
+                    Box::new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Add,
                         left: local(I),
                         right: Box::new(Expr::Integer(1)),
@@ -78,14 +78,14 @@ fn sum_function() -> Function {
                 )),
                 body: vec![Stmt::Expr(Expr::LocalSet(
                     S,
-                    Box::new(Expr::Binary {
+                    Box::new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Add,
                         left: local(S),
                         right: Box::new(read),
                     }),
                 ))],
             },
-            Stmt::Return(Some(Expr::LocalGet(S))),
+            Stmt::Return(Some(Expr::LocalGet(S)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -173,7 +173,7 @@ fn literal_length_typed_array_param_keeps_number_accumulator() {
 fn non_literal_length_typed_array_param_keeps_number_accumulator() {
     let ir = compile(&module_with_len(
         "spec_ta_len_shift_13740.ts",
-        Expr::Binary {
+        Expr::Binary { byte_offset: 0,
             op: BinaryOp::Shl,
             left: Box::new(Expr::Integer(1)),
             right: Box::new(Expr::Integer(20)),

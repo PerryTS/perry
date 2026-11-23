@@ -34,7 +34,7 @@ const RET_UNDEFINED: &str = "ret double 0x7FFC000000000001";
 const OVERRIDE_CALL: &str = "@js_ctor_return_override(";
 
 fn field(name: &str) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -47,7 +47,7 @@ fn field(name: &str) -> ClassField {
 }
 
 fn param(id: u32, name: &str) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -71,7 +71,7 @@ fn ctor(tail: Vec<Stmt>) -> Function {
         byte_end: 0,
     })];
     body.extend(tail);
-    Function {
+    Function { byte_offset: 0,
         id: 900,
         name: "constructor".to_string(),
         type_params: Vec::new(),
@@ -201,7 +201,7 @@ fn a_derived_constructor_with_an_ordinary_base_returns_undefined() {
                 405,
                 "Sub",
                 Some("Base"),
-                vec![Stmt::Expr(Expr::SuperCall(vec![Expr::LocalGet(1)]))],
+                vec![Stmt::Expr(Expr::SuperCall(vec![Expr::LocalGet(1)], 0))],
             ),
         ],
         "Sub",
@@ -230,7 +230,7 @@ fn a_value_returning_constructor_still_publishes_its_this() {
             404,
             "Swap",
             None,
-            vec![Stmt::Return(Some(Expr::LocalGet(1)))],
+            vec![Stmt::Return(Some(Expr::LocalGet(1)), 0)],
         )],
         "Swap",
     ));
@@ -253,13 +253,13 @@ fn a_value_returning_base_makes_its_subclass_publish() {
                 404,
                 "SwapBase",
                 None,
-                vec![Stmt::Return(Some(Expr::LocalGet(1)))],
+                vec![Stmt::Return(Some(Expr::LocalGet(1)), 0)],
             ),
             class(
                 405,
                 "Leaf",
                 Some("SwapBase"),
-                vec![Stmt::Expr(Expr::SuperCall(vec![Expr::LocalGet(1)]))],
+                vec![Stmt::Expr(Expr::SuperCall(vec![Expr::LocalGet(1)], 0))],
             ),
         ],
         "Leaf",

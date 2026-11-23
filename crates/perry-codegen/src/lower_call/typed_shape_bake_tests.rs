@@ -106,7 +106,7 @@ fn ir_opts() -> CompileOptions {
 }
 
 fn field(name: &str, ty: Type) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -126,12 +126,12 @@ const I_ID: u32 = 7;
 /// param-assigned prologue `ctor_prologue_param_assigned_fields` admits, which
 /// is what makes the layout declarable at allocation at all (#7510).
 fn two_field_ctor(f0: &str, f1: &str, f1_ty: Type) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id: 900,
         name: "constructor".to_string(),
         type_params: Vec::new(),
         params: vec![
-            Param {
+            Param { byte_offset: 0,
                 id: A_ID,
                 name: "a".to_string(),
                 ty: Type::Number,
@@ -140,7 +140,7 @@ fn two_field_ctor(f0: &str, f1: &str, f1_ty: Type) -> Function {
                 is_rest: false,
                 arguments_object: None,
             },
-            Param {
+            Param { byte_offset: 0,
                 id: B_ID,
                 name: "b".to_string(),
                 ty: f1_ty,
@@ -216,7 +216,7 @@ fn two_field_class(name: &str, f1_ty: Type) -> Class {
 /// fold the layout into. An outlined `js_object_alloc_class_inline_keys` site
 /// keeps the runtime declare, by design.
 pub(super) fn loop_new_module(name: &str, f1_ty: Type, second: Expr) -> Module {
-    let first = Expr::Binary {
+    let first = Expr::Binary { byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(I_ID)),
         right: Box::new(Expr::Integer(1)),
@@ -244,7 +244,7 @@ fn loop_new_module_with(name: &str, f1_ty: Type, first: Expr, second: Expr) -> M
             mutable: true,
             init: Some(Expr::Integer(0)),
         })),
-        condition: Some(Expr::Compare {
+        condition: Some(Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(I_ID)),
             right: Box::new(Expr::Integer(1000)),
@@ -283,11 +283,11 @@ fn loop_new_module_with(name: &str, f1_ty: Type, first: Expr, second: Expr) -> M
             }),
         ],
     }];
-    m.functions = vec![Function {
+    m.functions = vec![Function { byte_offset: 0,
         id: 10,
         name: "sink".to_string(),
         type_params: Vec::new(),
-        params: vec![Param {
+        params: vec![Param { byte_offset: 0,
             id: 30,
             name: "p".to_string(),
             ty: Type::Named(name.to_string()),
@@ -302,7 +302,7 @@ fn loop_new_module_with(name: &str, f1_ty: Type, first: Expr, second: Expr) -> M
             object: Box::new(Expr::LocalGet(30)),
             property: "a".to_string(),
             byte_offset: 0,
-        }))],
+        }), 0)],
         is_async: false,
         is_generator: false,
         is_strict: false,

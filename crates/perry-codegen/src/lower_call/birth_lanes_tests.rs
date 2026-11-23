@@ -9,7 +9,7 @@ use perry_hir::{BinaryOp, Class, ClassField, Expr, Function, Param, Stmt};
 use super::birth_lanes::chain_birth_f64_fields;
 
 fn field(name: &str, ty: Type, init: Option<Expr>) -> ClassField {
-    ClassField {
+    ClassField { byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -22,7 +22,7 @@ fn field(name: &str, ty: Type, init: Option<Expr>) -> ClassField {
 }
 
 fn number_param(id: u32) -> Param {
-    Param {
+    Param { byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Number,
@@ -34,7 +34,7 @@ fn number_param(id: u32) -> Param {
 }
 
 fn function(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id: 700,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -167,7 +167,7 @@ fn constructor_body_arithmetic_is_a_first_write() {
                 name: "t".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Binary {
+                init: Some(Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Mul,
                     left: Box::new(Expr::LocalGet(1)),
                     right: Box::new(Expr::Integer(2)),
@@ -175,7 +175,7 @@ fn constructor_body_arithmetic_is_a_first_write() {
             },
             store(
                 "n",
-                Expr::Binary {
+                Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::Integer(1)),
@@ -262,7 +262,7 @@ fn a_subclass_field_read_early_through_an_override_stays_any() {
             "constructor",
             vec![number_param(1)],
             vec![
-                Stmt::Expr(Expr::SuperCall(Vec::new())),
+                Stmt::Expr(Expr::SuperCall(Vec::new(), 0)),
                 store("x", Expr::LocalGet(1)),
             ],
         )

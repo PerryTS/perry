@@ -2384,7 +2384,7 @@ mod tests {
     }
 
     fn ushr0(left: Expr) -> Expr {
-        Expr::Binary {
+        Expr::Binary { byte_offset: 0,
             op: BinaryOp::UShr,
             left: Box::new(left),
             right: Box::new(Expr::Integer(0)),
@@ -2452,7 +2452,7 @@ mod tests {
                 const_let(1, int32_new(Expr::LocalGet(50))),
                 const_let(
                     2,
-                    int32_new(Expr::Binary {
+                    int32_new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Sub,
                         left: Box::new(Expr::LocalGet(50)),
                         right: Box::new(Expr::Integer(1)),
@@ -2479,7 +2479,7 @@ mod tests {
         let ids = known_ids(vec![
             const_let(
                 1,
-                int32_new(Expr::Binary {
+                int32_new(Expr::Binary { byte_offset: 0,
                     op: BinaryOp::Mul,
                     left: Box::new(rows_length()),
                     right: Box::new(Expr::Integer(7)),
@@ -2494,7 +2494,7 @@ mod tests {
             ),
             const_let(
                 3,
-                int32_new(Expr::Compare {
+                int32_new(Expr::Compare { byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(99)),
                     right: Box::new(rows_length()),
@@ -2524,7 +2524,7 @@ mod tests {
     }
 
     fn facts_with_spec_numeric_param(stmts: &[Stmt]) -> TypeFacts {
-        let params = vec![perry_hir::Param {
+        let params = vec![perry_hir::Param { byte_offset: 0,
             id: 1,
             name: "n".into(),
             ty: Type::Number,
@@ -2617,7 +2617,7 @@ mod tests {
                 mutable_number_let(2, ushr0(Expr::LocalGet(1))),
                 Stmt::Expr(Expr::LocalSet(
                     2,
-                    Box::new(ushr0(Expr::Binary {
+                    Box::new(ushr0(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::BitXor,
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::Integer(0x1234)),
@@ -2640,7 +2640,7 @@ mod tests {
                 mutable_number_let(2, ushr0(Expr::Integer(0x9E3779B9))),
                 Stmt::Expr(Expr::LocalSet(
                     2,
-                    Box::new(Expr::Binary {
+                    Box::new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::BitOr,
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::Integer(0)),
@@ -2663,7 +2663,7 @@ mod tests {
             mutable_number_let(1, Expr::Integer(0)),
             Stmt::For {
                 init: Some(Box::new(mutable_number_let(2, Expr::Integer(0)))),
-                condition: Some(Expr::Compare {
+                condition: Some(Expr::Compare { byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::Integer(1000)),
@@ -2675,10 +2675,10 @@ mod tests {
                 }),
                 body: vec![Stmt::Expr(Expr::LocalSet(
                     1,
-                    Box::new(Expr::Binary {
+                    Box::new(Expr::Binary { byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(1)),
-                        right: Box::new(Expr::Binary {
+                        right: Box::new(Expr::Binary { byte_offset: 0,
                             op: BinaryOp::Mod,
                             left: Box::new(Expr::LocalGet(2)),
                             right: Box::new(Expr::Integer(10)),
@@ -2967,7 +2967,7 @@ mod tests {
         let graph = collect_hir_facts(
             &[
                 number_array_let(1, &[1, 2, 3]),
-                Stmt::Expr(Expr::Await(Box::new(Expr::Undefined))),
+                Stmt::Expr(Expr::Await(Box::new(Expr::Undefined), 0)),
             ],
             &HashSet::new(),
             &HashSet::new(),
@@ -3039,7 +3039,7 @@ mod tests {
     // image_convolution-style i32 chains keep their shadow slots.
     #[test]
     fn const_copy_of_live_integer_accumulator_stays_integer() {
-        let bitor0 = |left: Expr| Expr::Binary {
+        let bitor0 = |left: Expr| Expr::Binary { byte_offset: 0,
             op: BinaryOp::BitOr,
             left: Box::new(left),
             right: Box::new(Expr::Integer(0)),
@@ -3280,7 +3280,7 @@ mod tests {
     /// parameter) still proves the Number result.
     #[test]
     fn bigint_capable_bitwise_init_is_not_an_integer_local() {
-        let any_param = |id: u32| perry_hir::Param {
+        let any_param = |id: u32| perry_hir::Param { byte_offset: 0,
             id,
             name: format!("p{id}"),
             ty: Type::Any,
@@ -3296,7 +3296,7 @@ mod tests {
             mutable: false,
             init: Some(init),
         };
-        let bin = |op: BinaryOp, left: Expr, right: Expr| Expr::Binary {
+        let bin = |op: BinaryOp, left: Expr, right: Expr| Expr::Binary { byte_offset: 0,
             op,
             left: Box::new(left),
             right: Box::new(right),

@@ -1460,7 +1460,7 @@ mod tests {
                     mutable: false,
                     init: Some(Expr::String("x".into())),
                 },
-                Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)))),
+                Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)), 0)),
                 Stmt::Expr(Expr::LocalGet(id)),
             ],
         }];
@@ -1483,7 +1483,7 @@ mod tests {
                     mutable: false,
                     init: Some(Expr::String("x".into())),
                 },
-                Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)))),
+                Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)), 0)),
                 Stmt::Expr(Expr::LocalGet(id)),
             ],
         }];
@@ -1522,7 +1522,7 @@ mod tests {
         rest_in_try: bool,
     ) -> Vec<Stmt> {
         let (x, read) = (X, 3);
-        let closure = Expr::Closure {
+        let closure = Expr::Closure { byte_offset: 0,
             func_id: 900,
             params: Vec::new(),
             return_type: Type::Any,
@@ -1557,10 +1557,10 @@ mod tests {
                 mutable: false,
                 init: Some(Expr::Integer(1)),
             },
-            Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)))),
+            Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)), 0)),
         ]);
         if rest_in_try {
-            loop_body.push(Stmt::Try {
+            loop_body.push(Stmt::Try { byte_offset: 0,
                 body: rest,
                 catch: None,
                 finally: Some(vec![Stmt::Expr(Expr::Undefined)]),
@@ -1592,14 +1592,14 @@ mod tests {
     }
 
     fn closure_return(stmts: &[Stmt]) -> &Expr {
-        let [Stmt::Return(Some(read))] = closure_body(stmts) else {
+        let [Stmt::Return(Some(read), _)] = closure_body(stmts) else {
             panic!("the closure body changed shape: {:?}", closure_body(stmts));
         };
         read
     }
 
     fn reads_closure(read: Expr) -> Vec<Stmt> {
-        vec![Stmt::Return(Some(read))]
+        vec![Stmt::Return(Some(read), 0)]
     }
 
     fn writes_closure(write: Expr) -> Vec<Stmt> {
@@ -1646,7 +1646,7 @@ mod tests {
         let Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } = closure_return(&stmts)
         else {
             panic!("the read is not checked: {:?}", closure_return(&stmts));
@@ -1806,7 +1806,7 @@ mod tests {
         let [Expr::IndexSet { value, .. }, Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         }] = write.as_slice()
         else {
             panic!("{write:?}");

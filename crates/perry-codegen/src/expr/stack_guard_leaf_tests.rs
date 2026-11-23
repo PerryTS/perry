@@ -5,7 +5,7 @@ use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, ModuleInitKind, Stmt};
 
 fn function(id: u32, name: &str, body: Vec<Stmt>) -> Function {
-    Function {
+    Function { byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -60,11 +60,11 @@ fn body_of<'a>(ir: &'a str, name: &str) -> &'a str {
 fn a_leaf_drops_its_check_and_a_recursive_body_keeps_it() {
     let mut m = Module::new("stack_guard_leaf.ts");
     m.functions = vec![
-        function(1, "leaf", vec![Stmt::Return(Some(Expr::Number(1.0)))]),
+        function(1, "leaf", vec![Stmt::Return(Some(Expr::Number(1.0)), 0)]),
         // The self-call sits in the body's first block, the block the check
         // branches to.
-        function(2, "rec", vec![Stmt::Return(Some(call(2)))]),
-        function(3, "outer", vec![Stmt::Return(Some(call(1)))]),
+        function(2, "rec", vec![Stmt::Return(Some(call(2)), 0)]),
+        function(3, "outer", vec![Stmt::Return(Some(call(1)), 0)]),
     ];
     m.init = vec![Stmt::Expr(call(2)), Stmt::Expr(call(3))];
     m.init_kind = ModuleInitKind::Eager;
@@ -97,13 +97,13 @@ fn a_call_on_one_branch_moves_the_check_in_front_of_its_block() {
         vec![
             Stmt::If {
                 condition: Expr::LocalGet(10),
-                then_branch: vec![Stmt::Return(Some(call(1)))],
+                then_branch: vec![Stmt::Return(Some(call(1)), 0)],
                 else_branch: None,
             },
-            Stmt::Return(Some(Expr::Number(2.0))),
+            Stmt::Return(Some(Expr::Number(2.0)), 0),
         ],
     );
-    branchy.params = vec![perry_hir::Param {
+    branchy.params = vec![perry_hir::Param { byte_offset: 0,
         id: 10,
         name: "flag".to_string(),
         ty: Type::Boolean,
@@ -114,7 +114,7 @@ fn a_call_on_one_branch_moves_the_check_in_front_of_its_block() {
     }];
     m.functions = vec![
         // Recursive, so the call to it can run JS.
-        function(1, "rec", vec![Stmt::Return(Some(call(1)))]),
+        function(1, "rec", vec![Stmt::Return(Some(call(1)), 0)]),
         branchy,
     ];
     m.init = vec![Stmt::Expr(Expr::Call {
@@ -165,9 +165,9 @@ fn the_dominated_check_pass_reads_the_emitted_check_on_each_target() {
     for target in ["aarch64-apple-darwin", "x86_64-unknown-linux-gnu"] {
         let mut m = Module::new("stack_guard_leaf.ts");
         m.functions = vec![
-            function(1, "leaf", vec![Stmt::Return(Some(Expr::Number(1.0)))]),
-            function(2, "rec", vec![Stmt::Return(Some(call(2)))]),
-            function(3, "outer", vec![Stmt::Return(Some(call(1)))]),
+            function(1, "leaf", vec![Stmt::Return(Some(Expr::Number(1.0)), 0)]),
+            function(2, "rec", vec![Stmt::Return(Some(call(2)), 0)]),
+            function(3, "outer", vec![Stmt::Return(Some(call(1)), 0)]),
         ];
         m.init = vec![Stmt::Expr(call(2)), Stmt::Expr(call(3))];
         m.init_kind = ModuleInitKind::Eager;

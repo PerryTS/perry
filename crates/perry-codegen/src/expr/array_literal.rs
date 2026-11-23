@@ -107,13 +107,13 @@ mod empty_birth_tests {
     #[test]
     fn empty_literal_uses_the_bump_birth_with_initialized_append_reserve() {
         let mut hir = Module::new("empty_birth");
-        hir.functions.push(Function {
+        hir.functions.push(Function { byte_offset: 0,
             id: 0,
             name: "empty".into(),
             type_params: Vec::new(),
             params: Vec::new(),
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::Array(Vec::new(), None)))],
+            body: vec![Stmt::Return(Some(Expr::Array(Vec::new(), None)), 0)],
             is_async: false,
             is_generator: false,
             is_strict: true,
@@ -169,13 +169,13 @@ mod empty_birth_tests {
         let n = super::INLINE_ARRAY_MAX_ELEMENTS + 1;
         let elements = (0..n).map(|i| Expr::String(format!("s{i}"))).collect();
         let mut hir = Module::new("outlined_birth");
-        hir.functions.push(Function {
+        hir.functions.push(Function { byte_offset: 0,
             id: 0,
             name: "outlined".into(),
             type_params: Vec::new(),
             params: Vec::new(),
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::Array(elements, None)))],
+            body: vec![Stmt::Return(Some(Expr::Array(elements, None)), 0)],
             is_async: false,
             is_generator: false,
             is_strict: true,

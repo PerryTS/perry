@@ -80,7 +80,7 @@ fn ir_opts() -> CompileOptions {
 }
 
 fn mock_property_call(args: Vec<Expr>) -> Stmt {
-    Stmt::Expr(Expr::NativeMethodCall {
+    Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
         module: "test".to_string(),
         class_name: None,
         object: None,

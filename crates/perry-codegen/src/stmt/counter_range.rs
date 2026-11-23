@@ -302,7 +302,7 @@ mod tests {
     const LIMIT: u32 = 9;
 
     fn add(left: Expr, right: Expr) -> Expr {
-        Expr::Binary {
+        Expr::Binary { byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(left),
             right: Box::new(right),
@@ -310,7 +310,7 @@ mod tests {
     }
 
     fn mul(left: Expr, right: Expr) -> Expr {
-        Expr::Binary {
+        Expr::Binary { byte_offset: 0,
             op: BinaryOp::Mul,
             left: Box::new(left),
             right: Box::new(right),
@@ -328,7 +328,7 @@ mod tests {
     }
 
     fn lt(left: Expr, right: Expr) -> Expr {
-        Expr::Compare {
+        Expr::Compare { byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(left),
             right: Box::new(right),
@@ -573,7 +573,7 @@ mod tests {
         let cond = lt(Expr::LocalGet(COUNTER), Expr::LocalGet(LIMIT));
         let update = Expr::LocalSet(
             COUNTER,
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: 0,
                 op: BinaryOp::Sub,
                 left: Box::new(Expr::LocalGet(COUNTER)),
                 right: Box::new(Expr::LocalGet(STRIDE)),

@@ -215,7 +215,7 @@ mod tests {
                 label: "fnv".to_string(),
                 body: Box::new(counted_loop(vec![imul_call()])),
             },
-            Stmt::Switch {
+            Stmt::Switch { byte_offset: 0,
                 discriminant: Expr::Integer(0),
                 cases: vec![SwitchCase {
                     test: None,

@@ -4,7 +4,7 @@ use perry_hir::Expr;
 
 #[test]
 fn structural_leaf_kinds_and_unknown_initializers_are_candidates() {
-    let call = Expr::Binary {
+    let call = Expr::Binary { byte_offset: 0,
         op: perry_hir::BinaryOp::Add,
         left: Box::new(Expr::String("a".into())),
         right: Box::new(Expr::Number(1.0)),
