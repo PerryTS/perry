@@ -479,7 +479,13 @@ impl RealmManifest {
                 O::Promise { value, reject } => value.iter().chain(reject.iter()).any(unknown),
                 O::Species { args, .. } => args.iter().any(unknown),
                 O::Union(members) => members.iter().any(unknown),
-                O::Prim(_) | O::Slot(_) | O::Native(_) | O::Namespace(_) | O::Bound | O::Json => {
+                O::Prim(_)
+                | O::Slot(_)
+                | O::Native(_)
+                | O::Namespace(_)
+                | O::Bound
+                | O::Json
+                | O::Never => {
                     false
                 }
             }

@@ -2646,7 +2646,7 @@ fn chain_any_node(m: &mut Model, fam: Family, what: Option<&'static str>, key: K
             continue;
         }
         let a = m.atom(name);
-        loads::family_member(m, fam, what, a, n);
+        loads::family_member(m, None, fam, what, a, n);
     }
     if object_method {
         let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));

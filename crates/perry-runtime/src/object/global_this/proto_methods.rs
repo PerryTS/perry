@@ -260,7 +260,7 @@ fn install_object_prototype_dunder_proto(proto_obj: *mut ObjectHeader) {
         return;
     }
     let getter = crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("Object.prototype.__proto__.<get>")] export crate::object::global_this::proto_methods::object_prototype_dunder_proto_getter_thunk, 0; with_name("get __proto__"), with_declared(0)),
+        crate::fn_info!(#[realm("Object.prototype.__proto__.<get>", effects = { returns(proto(this)) })] export crate::object::global_this::proto_methods::object_prototype_dunder_proto_getter_thunk, 0; with_name("get __proto__"), with_declared(0)),
         0,
     );
     let setter = crate::closure::js_closure_alloc(

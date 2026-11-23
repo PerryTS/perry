@@ -70,7 +70,7 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
         ("arg" | "rest" | "returned", Some(_)) => {
             (tagged(name, index(name, inner)?), Vec::new())
         }
-        (step @ ("elems" | "iterated" | "values"), Some(inner)) => {
+        (step @ ("elems" | "iterated" | "values" | "proto"), Some(inner)) => {
             let Value::Object(mut base) = slot(inner)? else { unreachable!() };
             let Some(Value::Array(mut steps)) = base.remove("steps") else { unreachable!() };
             let tag = if step == "values" { "own_values" } else { step };
@@ -103,7 +103,7 @@ fn slot(ts: &[Token<'_>]) -> Result<Value, String> {
         }
         _ => {
             return Err(format!(
-                "unknown effect slot `{}` (this, result, callee, arg(N), rest(N), returned(N), elems(slot), iterated(slot), values(slot), strkey(slot), field(slot, key), islot(slot, name))",
+                "unknown effect slot `{}` (this, result, callee, arg(N), rest(N), returned(N), elems(slot), iterated(slot), values(slot), proto(slot), strkey(slot), field(slot, key), islot(slot, name))",
                 info::text(ts)
             ))
         }
@@ -277,6 +277,7 @@ fn value(ts: &[Token<'_>]) -> Result<Value, String> {
         ("bound", None) => Ok(Value::String("bound".into())),
         ("json", None) => Ok(Value::String("json".into())),
         ("unknown", None) => Ok(Value::String("unknown".into())),
+        ("never", None) => Ok(Value::String("never".into())),
         ("species", Some(inner)) => {
             let parts = info::split(inner, ",");
             let usage = "species(slot, args = [operand, ...], elems = [slot, ...])";
@@ -515,6 +516,19 @@ pub fn parse_text(text: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::parse_text;
+
+    /// `proto(s)` is a value step; `never` a whole result.
+    #[test]
+    fn proto_step_and_never_result_parse() {
+        assert_eq!(
+            parse_text("{ returns(proto(this)) }").unwrap(),
+            r#"[{"returns":{"slot":{"root":"this","steps":["proto"]}}}]"#
+        );
+        assert_eq!(
+            parse_text("{ returns(never) }").unwrap(),
+            r#"[{"returns":"never"}]"#
+        );
+    }
 
     #[test]
     fn each_verb_parses_to_the_schema_form() {

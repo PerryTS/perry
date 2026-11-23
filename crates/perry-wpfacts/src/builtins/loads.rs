@@ -120,7 +120,7 @@ pub(super) fn family_load(
     {
         m.add_prim(dst, prim::UNDEF);
     }
-    family_member(m, fam, what, a, dst);
+    family_member(m, Some(t), fam, what, a, dst);
     // Described or not, a key a store into ⊤ may have written onto the
     // chain reads what was stored, unless the read is final (DEC 250).
     if !intrinsic_unwritten(m, fam, what, a, NativeMiss::Load(dst)) {
@@ -147,9 +147,13 @@ fn regexp_literal_source(m: &mut Model, t: Tok, name: &str) -> Option<StrSet> {
 /// `dst` ⊇ the described member `a` of family `fam`'s intrinsic chain (of a
 /// value of kind `what`), as the realm defines it: the native, the data
 /// kinds, the constructor, the prototype. What a store wrote there is the
-/// caller's (`family_load` per key, `family_any` once for any key).
+/// caller's (`family_load` per key, `family_any` once for any key). An
+/// accessor's getter runs on receiver `t` (its declaration, `getter_load`);
+/// with no receiver (`chain_any_node`: one node for every value of the
+/// family) an accessor reads the undeclared getter's result.
 pub(super) fn family_member(
     m: &mut Model,
+    t: Option<Tok>,
     fam: Family,
     what: Option<&'static str>,
     a: Atom,
@@ -166,7 +170,12 @@ pub(super) fn family_member(
     match members::member(fam, &name) {
         // An accessor of the realm (a getter the model lists as a method):
         // the getter's result, never the getter or a method.
-        Some(Mem::Fn) if realm_accessor(m, fam, what, &name) => undeclared_getter_result(m, dst),
+        Some(Mem::Fn) if realm_accessor(m, fam, what, &name) => {
+            match (t, declared_accessor(m, fam, what, &name)) {
+                (Some(t), Some(e)) => super::effects::getter_load(m, e, t, a, dst),
+                _ => undeclared_getter_result(m, dst),
+            }
+        }
         Some(Mem::Fn) => {
             let bf = match member_native(m, fam, what, &name) {
                 Some(n) => {
@@ -716,7 +725,7 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
         // its [[Prototype]] chain, else `undefined` (ECMA-262 10.1.8.1
         // OrdinaryGet), never a builtin function the realm does not name.
         Some(Mem::Fn) if !m.unit_mode && m.native_shape(t).is_some() => {
-            family_member(m, members::ns_chain(ns), None, a, dst);
+            family_member(m, Some(t), members::ns_chain(ns), None, a, dst);
             m.add_prim(dst, prim::UNDEF);
             if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                 opaque_member(m, dst);

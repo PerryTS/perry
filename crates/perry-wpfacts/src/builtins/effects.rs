@@ -195,7 +195,7 @@ fn names_root(effects: &[RealmEffect], root: RealmSlotRoot) -> bool {
             RealmOperand::Union(us) => us.iter().any(|u| operand(u, slot, root)),
             // BoundFunctionCreate binds the receiver.
             RealmOperand::Bound => root == RealmSlotRoot::This,
-            RealmOperand::Json | RealmOperand::Unknown => false,
+            RealmOperand::Json | RealmOperand::Unknown | RealmOperand::Never => false,
         }
     }
     let operand = |o: &RealmOperand| operand(o, &slot, root);
@@ -390,9 +390,11 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
                 (match (&proto[..], elems.is_empty(), fields.is_empty()) {
                     (_, true, true) => true,
                     ("Array.prototype", _, true) => elems.iter().all(operand),
-                    ("Object.prototype", true, _) => {
-                        fields.iter().all(|f| operand_in(&f.value, true))
-                    }
+                    ("Array.prototype", _, false) => false,
+                    // An ordinary object, or another prototype's object
+                    // with own data fields (a PerformanceMark's `name`,
+                    // `entryType`, `startTime`, `duration`).
+                    (_, true, false) => fields.iter().all(|f| operand_in(&f.value, true)),
                     _ => false,
                 }) && slots.iter().all(|f| operand(&f.value))
             }
@@ -409,6 +411,8 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             RealmOperand::Species { .. } | RealmOperand::Bound => false,
             RealmOperand::Union(us) => us.iter().all(|u| operand_in(u, field)),
             RealmOperand::Json | RealmOperand::Unknown => true,
+            // No value at all: a whole result only (the manifest's check).
+            RealmOperand::Never => true,
         }
     }
     !effects.is_empty()
@@ -592,6 +596,20 @@ impl Run {
                     spread: vec![],
                 }
             }
+            // The prototype of the values of the slot the step is taken in.
+            (r, [inner @ .., RealmSlotStep::Proto]) => {
+                let of = RealmSlot {
+                    root: r,
+                    steps: Cow::Owned(inner.to_vec()),
+                };
+                let Some(n) = self.node(m, &of) else {
+                    return Vals::default();
+                };
+                Vals {
+                    nodes: vec![self.proto_of(m, n)],
+                    spread: vec![],
+                }
+            }
             // A step over a slot more than one deep: the same step on the
             // values of the slot it is taken in.
             (r, [inner @ .., last]) if !inner.is_empty() => {
@@ -607,7 +625,9 @@ impl Run {
                         nodes: vec![],
                         spread: vec![n],
                     },
-                    RealmSlotStep::Iterated | RealmSlotStep::OwnValues => {
+                    RealmSlotStep::Iterated
+                    | RealmSlotStep::OwnValues
+                    | RealmSlotStep::Proto => {
                         unreachable!("a value step is taken above")
                     }
                     st @ (RealmSlotStep::Field(_)
@@ -679,6 +699,10 @@ impl Run {
                     nodes: vec![self.value_step(m, base, st)],
                     spread: vec![],
                 },
+                RealmSlotStep::Proto => Vals {
+                    nodes: vec![self.proto_of(m, base)],
+                    spread: vec![],
+                },
                 st @ (RealmSlotStep::Field(_)
                 | RealmSlotStep::Internal(_)
                 | RealmSlotStep::StrKey) => {
@@ -693,6 +717,17 @@ impl Run {
             };
         }
         cur
+    }
+
+    /// `proto(n)`: ToObject of `n`'s values (ECMA-262 7.1.18: a primitive's
+    /// wrapper, born at this call; `null` and `undefined` throw), then
+    /// [[GetPrototypeOf]] of each (`Cons::ProtoOf`, as
+    /// `Object.getPrototypeOf` reads it): an object or `null`.
+    fn proto_of(&mut self, m: &mut Model, n: NodeId) -> NodeId {
+        let o = super::to_object(m, n, self.call);
+        let dst = m.node_l("native-proto");
+        m.cons(o, Cons::ProtoOf { dst });
+        dst
     }
 
     /// The values step `st` takes from node `n`: what iterating it yields
@@ -794,6 +829,8 @@ impl Run {
                 unreachable!("interpretable() takes species as a result only")
             }
             RealmOperand::Bound => unreachable!("interpretable() takes bound as a result only"),
+            // The manifest admits `never` as a whole result only.
+            RealmOperand::Never => unreachable!("never is a whole result only"),
             // What JSON.parse makes (`builtins::json_value`).
             RealmOperand::Json => {
                 let n = m.node_l("native-json");
@@ -830,9 +867,10 @@ impl Run {
         fields: &[RealmField],
     ) -> Tok {
         let what = match proto {
-            _ if !fields.is_empty() => "hostrecord",
-            // An ordinary object with no own fields (`navigator.locks`).
+            // An ordinary object, with or without own fields
+            // (`navigator.locks`).
             Cow::Borrowed("Object.prototype") => "hostrecord",
+            Cow::Owned(p) if p == "Object.prototype" => "hostrecord",
             Cow::Borrowed("Array.prototype") => "Array",
             // The Date object `new Date(t)` makes (constructors.rs).
             Cow::Borrowed("Date.prototype") => "Date",
@@ -979,6 +1017,9 @@ impl Run {
                     self.returns(m, u);
                 }
             }
+            // The call returns no value on any path: it throws (a realm
+            // TypeError, THROWN-REALM's), so nothing reaches the result.
+            RealmOperand::Never => {}
             // A constructor declaration never binds (`names_this`): a bound
             // function always has its receiver as the target.
             RealmOperand::Bound => {
@@ -1032,7 +1073,10 @@ fn step_key(m: &mut Model, st: &RealmSlotStep) -> Key {
         RealmSlotStep::Internal(k) => Key::Named(internal_atom(m, k)),
         // Read back: any String key (the exclusion is the store's).
         RealmSlotStep::StrKey => Key::any(),
-        RealmSlotStep::Elems | RealmSlotStep::Iterated | RealmSlotStep::OwnValues => {
+        RealmSlotStep::Elems
+        | RealmSlotStep::Iterated
+        | RealmSlotStep::OwnValues
+        | RealmSlotStep::Proto => {
             unreachable!("an elements or value step has no key")
         }
     }
@@ -1398,6 +1442,7 @@ fn slot_text(s: &RealmSlot) -> String {
             RealmSlotStep::Iterated => format!("iterated({out})"),
             RealmSlotStep::OwnValues => format!("values({out})"),
             RealmSlotStep::StrKey => format!("strkey({out})"),
+            RealmSlotStep::Proto => format!("proto({out})"),
             RealmSlotStep::Field(k) => format!("field({out}, {k})"),
             RealmSlotStep::Internal(k) => format!("islot({out}, {k})"),
         };

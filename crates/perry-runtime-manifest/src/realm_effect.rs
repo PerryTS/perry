@@ -54,6 +54,10 @@ pub enum RealmSlotStep {
     StrKey,
     Field(Cow<'static, str>),
     Internal(Cow<'static, str>),
+    /// The prototype of the slot's value (`proto(s)`): ToObject, then
+    /// [[GetPrototypeOf]] (ECMA-262 7.1.18, 10.1.1; the `__proto__` getter,
+    /// 20.1.3.8.1): an object or `null`. A value only: no store goes there.
+    Proto,
 }
 
 /// `this`, `arg(0)`, `elems(this)`, `field(arg(0), key)`, ...
@@ -161,6 +165,10 @@ pub enum RealmOperand {
     Unknown,
     /// Any one of these values (at least two; no union inside a union).
     Union(Cow<'static, [RealmOperand]>),
+    /// No value: the call never returns normally (`returns(never)`, the
+    /// whole result: %ThrowTypeError%, ECMA-262 10.2.4.1, throws a realm
+    /// TypeError on every call).
+    Never,
 }
 
 /// One own data field of a fresh object: its key and its value.
@@ -244,6 +252,9 @@ impl RealmOperand {
             Self::Prim(_) => Ok(()),
             Self::Slot(slot) => slot.validate(at),
             Self::Bound | Self::Json | Self::Unknown => Ok(()),
+            Self::Never => Err(format!(
+                "{at}: `never` is a whole result only: `returns(never)`, alone"
+            )),
             Self::Fresh {
                 proto,
                 elems,
@@ -344,6 +355,7 @@ pub fn validate_effects(
             | RealmOperand::Bound
             | RealmOperand::Json
             | RealmOperand::Unknown
+            | RealmOperand::Never
             | RealmOperand::Native(_)
             | RealmOperand::Namespace(_) => {}
             RealmOperand::Slot(slot) => out.push(slot),
@@ -436,6 +448,21 @@ pub fn validate_effects(
                     ));
                 }
                 dst.validate(at)?;
+                if dst.steps.contains(&RealmSlotStep::Proto) {
+                    return Err(format!("{at}: `proto(..)` is a value, not a store destination"));
+                }
+            }
+            // `never` is the whole result: no other `returns` beside it.
+            RealmEffect::Returns(RealmOperand::Never) => {
+                let returns = effects
+                    .iter()
+                    .filter(|e| matches!(e, RealmEffect::Returns(_)))
+                    .count();
+                if returns > 1 {
+                    return Err(format!(
+                        "{at}: `returns(never)` cannot be combined with another `returns`"
+                    ));
+                }
             }
             RealmEffect::Returns(value) => operand(value)?,
             RealmEffect::Escapes(slot) => not_result(slot)?,
@@ -475,6 +502,7 @@ pub mod emit {
             RealmSlotStep::Iterated => format!("{p}RealmSlotStep::Iterated"),
             RealmSlotStep::OwnValues => format!("{p}RealmSlotStep::OwnValues"),
             RealmSlotStep::StrKey => format!("{p}RealmSlotStep::StrKey"),
+            RealmSlotStep::Proto => format!("{p}RealmSlotStep::Proto"),
             RealmSlotStep::Field(k) => {
                 format!("{p}RealmSlotStep::Field(::std::borrow::Cow::Borrowed({k:?}))")
             }
@@ -495,6 +523,7 @@ pub mod emit {
             RealmOperand::Bound => format!("{p}RealmOperand::Bound"),
             RealmOperand::Json => format!("{p}RealmOperand::Json"),
             RealmOperand::Unknown => format!("{p}RealmOperand::Unknown"),
+            RealmOperand::Never => format!("{p}RealmOperand::Never"),
             RealmOperand::Fresh {
                 proto,
                 elems,
