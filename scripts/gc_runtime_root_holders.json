@@ -187,12 +187,6 @@
       "why": "The per-agent Function.prototype OBJECT (the prototype the base Function ShapeId names), read by the shape-proven fn.bind/call/apply path. Visited by `closure::shape::scan_function_prototype_roots_mut` from the registered `object::scan_object_cache_roots_mut`, which keeps it alive and rewrites the slot when it moves. Uncovered here only because that registered scanner is in another file (same pattern as NULL_STUB_SLOT)."
     },
     {
-      "file": "crates/perry-runtime/src/closure/shape.rs",
-      "name": "VERDICT_CACHE",
-      "verdict": "not_a_gc_pointer",
-      "why": "Per-agent (keyed Function ShapeId u32, verdict bits u8) pairs for the Function.prototype bind/call/apply arm. Ids and flag bits, never an address; ShapeIds are never reused, so an entry can go unused but not stale."
-    },
-    {
       "file": "crates/perry-runtime/src/event_pump/agent_loop.rs",
       "name": "AGENT_LOOP",
       "verdict": "not_a_gc_pointer",
@@ -2491,12 +2485,6 @@
       "why": "Cell<bool> set while the runtime runs its own builtin definitions (as_builtin_definition, #10697), so installs onto non-Map/Set/Date owners do not arm PERRY_OWN_NAMED_PROP_INSTALLED. A flag, never an address."
     },
     {
-      "file": "crates/perry-runtime/src/closure/shape.rs",
-      "name": "PROTOTYPE_SLOT_CACHE",
-      "verdict": "not_a_gc_pointer",
-      "why": "Per-agent cache of (ShapeId, inline slot index) u32 pairs. ShapeIds are numbers that are never reused and slot indices are integers; no heap address or NaN-boxed value is stored, so an entry can only go unused, never dangle."
-    },
-    {
       "file": "crates/perry-runtime/src/object/class_registry/decl_prototype_birth.rs",
       "name": "BORN_FINAL_BUILDS",
       "verdict": "test_only",
@@ -2756,12 +2744,6 @@
       "why": "Test-only pair of numeric deallocation count and freed-byte total, incremented when native Set backing is released. Neither component stores a Set or backing address."
     },
     {
-      "file": "crates/perry-runtime/src/test_support.rs",
-      "name": "PRISTINE_ARENA_FIXTURE",
-      "verdict": "not_a_gc_pointer",
-      "why": "Boolean test bootstrap opt-out for fixtures requiring a pristine arena. It stores no runtime state, scanner or GC object."
-    },
-    {
       "file": "crates/perry-runtime/src/gc/verify_honest.rs",
       "name": "NOT_A_CELL",
       "verdict": "not_a_gc_pointer",
@@ -2910,12 +2892,6 @@
       "name": "WORKER_IPC_ENABLED",
       "verdict": "not_a_gc_pointer",
       "why": "Boolean bootstrap snapshot of whether this Worker environment enables IPC facade members. WorkerProcessState installs only a bool; no address or NaN-boxed value is stored."
-    },
-    {
-      "file": "crates/perry-runtime/src/gc/progress.rs",
-      "name": "GC_STATS",
-      "verdict": "not_a_gc_pointer",
-      "why": "#13443 folded the seven per-counter TLS declarations (FORWARDED_STUB_MEMBERSHIP_RECOVERIES, BLOCK_PERSIST_FORCE_MARKS, ADOPTED_BLOCKS, HOLE_REBUILD_BLOCKS_SKIPPED, BLOCK_SKIP_RECLAIMED_*) into one `GcStats` behind this slot and moved it from gc/telemetry.rs to gc/progress.rs. Every GcStats field is a u64 counter, the [u64; GC_RECENT_PAUSE_WINDOW] duration ring, or a u8 cursor/len into it: no address, never traced, never read as a pointer."
     },
     {
       "file": "crates/perry-runtime/src/gc/mark.rs",
@@ -4269,12 +4245,6 @@
     {
       "file": "crates/perry-runtime/src/box/activation.rs",
       "name": "NEXT_ASYNC_BOX_ACTIVATION_ID"
-    },
-    {
-      "file": "crates/perry-runtime/src/node_stream_event_emitter_capture.rs",
-      "name": "CAPTURE_DEFAULT",
-      "verdict": "not_a_gc_pointer",
-      "why": "Cell<Option<CaptureSite>> contains only four u32 layout facts: the bound EventEmitter export bag ShapeId, current prototype ShapeId, data slot index and live inline count. No heap pointer or NaN-boxed value. A miss proves the native getter and ordinary symbol data descriptor; every use reloads the prototype and compares both shape stamps before loading its live value. Mutable stores are observed directly and descriptor edits invalidate the proof."
     }
   ]
 }

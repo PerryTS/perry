@@ -4112,6 +4112,32 @@
    ],
    "verdict": "no_heap_address",
    "why": "Test and wasm-image-selftest builds only: immutable string-literal images (GcHeader, StringHeader, eight literal bytes, hash 0) built by the const fn literal_image; scalar headers and bytes in static data, never an arena address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/global_fetch.rs",
+   "names": [
+    "OBJECT_URL_CREATE",
+    "OBJECT_URL_RESOLVE"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicPtr holding perry-stdlib extern \"C\" object-URL function pointers, stored once by js_register_object_url_fns (global_fetch.rs:223-224); code addresses, never a heap pointer."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/proto_validity.rs",
+   "names": [
+    "PROTOTYPE_SERIAL_NEXT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicU64 prototype-serial counter: fetch_add/fetch_max/load, and store of an image-restored serial (proto_validity.rs:566). Numbers only, never an address."
+  },
+  {
+   "file": "crates/perry-runtime/src/object/shapes.rs",
+   "names": [
+    "SHAPE_SEMANTIC_NEXT",
+    "PROTO_ID_UNIQUE_NEXT"
+   ],
+   "verdict": "no_heap_address",
+   "why": "AtomicU64 generation and prototype-identity counters: fetch_add/load, and store of an image-restored generation (shapes.rs:8088). Numbers only; as_ptr() at shapes.rs:8186-8191 exposes the counter cell itself, not a heap address."
   }
  ]
 }
