@@ -125,6 +125,21 @@ pub(crate) fn declared_member(name: &str) -> Option<&'static RealmEntry> {
     (interpretable(e.effects) && !names_this(e.effects)).then_some(e)
 }
 
+/// The host function value a `native(path)` operand names: the realm's
+/// function, method or constructor of that path (`node:fs.FileReadStream`,
+/// the constructor `fs.ReadStream` and `fs.FileReadStream` hold), whether or
+/// not the runtime declares what a call of it does. The operand
+/// is the value, never a call: a call of it runs its declaration when it
+/// has one (`declared_member`) and takes the undeclared native's path
+/// otherwise, as every other reference to it does (`hostval_member`).
+pub(crate) fn native_value(path: &str) -> Option<&'static RealmEntry> {
+    use perry_hir::realm_manifest::RealmKind as K;
+    declared_member(path).or_else(|| {
+        super::members::realm_entry(path)
+            .filter(|e| matches!(e.kind, K::Function | K::Method | K::Constructor))
+    })
+}
+
 /// The declaration of the bound_method constructor `name`
 /// (`node:inspector.Session`) whose effects the runtime declares at its
 /// body (`declared_member`): what `new` of it does, in forms `run_construct`
@@ -401,7 +416,7 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             }
             // A host function value whose own declaration runs.
             RealmOperand::Native(path) => {
-                declared_member(path).is_some_and(|e| field || !names_callee(e.effects))
+                native_value(path).is_some_and(|e| field || !names_callee(e.effects))
             }
             // The realm's one namespace object of that path.
             RealmOperand::Namespace(path) => super::members::realm_entry(path)
@@ -771,8 +786,8 @@ impl Run {
                 n
             }
             RealmOperand::Native(path) => {
-                let identity = declared_member(path)
-                    .expect("interpretable() takes a declared native only")
+                let identity = native_value(path)
+                    .expect("interpretable() takes a realm native only")
                     .name;
                 let f = m.tok(TokKind::BuiltinFn(crate::model::Native::Member {
                     identity,
@@ -876,7 +891,7 @@ impl Run {
         match o {
             RealmOperand::Native(path) => {
                 let e =
-                    declared_member(path).expect("interpretable() takes a declared native only");
+                    native_value(path).expect("interpretable() takes a realm native only");
                 if !names_callee(e.effects) {
                     return self.operand(m, o);
                 }

@@ -1719,7 +1719,7 @@ pub(super) fn web_webcrypto_proto_methods(builtin_name: &str, proto_obj: *mut Ob
             install_webcrypto_proto_getter(
                 proto_obj,
                 "subtle",
-                crate::fn_info!(#[realm("Crypto.prototype.subtle.<get>", effects = { stores(fresh); returns(namespace("node:crypto.subtle")) }, constructible = true)] export crate::object::global_this::ctor_thunks::webcrypto_subtle_getter_thunk, 0; with_name("get subtle"), with_declared(0)),
+                crate::fn_info!(#[realm("Crypto.prototype.subtle.<get>", effects = { returns(namespace("node:crypto.subtle")) }, constructible = true)] export crate::object::global_this::ctor_thunks::webcrypto_subtle_getter_thunk, 0; with_name("get subtle"), with_declared(0)),
             );
             install_webcrypto_proto_method(
                 proto_obj,

@@ -1202,6 +1202,12 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
             _ if hostval_load(m, t, "require", key, name.as_deref(), dst) => {}
             _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
+            // REALMVAL: every member the `require` declaration gives has a
+            // value side (RealmManifest::validate) that an arm above reads.
+            _ if !m.unit_mode => unreachable!(
+                "REALMVAL: require member `{}` has no modelled value",
+                name.as_deref().unwrap_or("[computed]")
+            ),
             _ => {
                 let bf = builtin_fn(m, "require.<x>");
                 m.add_tok(dst, bf);
@@ -1260,6 +1266,11 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 }
                 _ if hostval_load(m, t, "process", key, name.as_deref(), dst) => {}
                 _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
+                // REALMVAL: as `require` above, for the process declaration.
+                _ if !m.unit_mode => unreachable!(
+                    "REALMVAL: process member `{}` has no modelled value",
+                    name.as_deref().unwrap_or("[computed]")
+                ),
                 _ => {
                     m.add_top(dst, |_| {
                         format!("process.{}", name.as_deref().unwrap_or("[computed]"))
@@ -1304,6 +1315,12 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
             _ if hostval_load(m, t, module, key, name.as_deref(), dst) => {}
             _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
+            // REALMVAL: as `require` above, for the module's namespace
+            // declaration.
+            _ if !m.unit_mode => unreachable!(
+                "REALMVAL: {module} member `{}` has no modelled value",
+                name.as_deref().unwrap_or("[computed]")
+            ),
             _ => {
                 m.add_top(dst, |_| {
                     format!(

@@ -780,8 +780,11 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     }
     // Accessors, value properties, aliases and the seal: phase A.
     if phases.core() {
+        // The one webcrypto namespace object the runtime keeps
+        // (`webcrypto_namespace`): the same object every read, and nothing
+        // a program holds is written.
         let getter = crate::closure::js_closure_alloc(
-            crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc, effects = { stores(fresh); returns(namespace("node:crypto.webcrypto")) })] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc, effects = { returns(namespace("node:crypto.webcrypto")) })] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0)),
             0,
         );
         let getter_bits = if getter.is_null() {
@@ -803,9 +806,12 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
         // enumerable, configurable); so does Perry. The getter builds the object
         // on the first read and keeps it in its one capture, so `navigator.language`
         // reads LC_ALL / LANG on first use, not while the realm is populated.
+        // Its declared result is the realm's one navigator object (the
+        // `navigator` namespace: the same object every read); the capture
+        // that keeps it is no property, so no program value is written.
         {
             let getter = crate::closure::js_closure_alloc(
-                crate::fn_info!(#[realm("navigator.<get>", provider = closure_alloc, capture = [undefined], effects = { stores(fresh); returns(namespace("navigator")) })] export crate::navigator::global_this_navigator_getter_thunk, 0; with_declared(0)),
+                crate::fn_info!(#[realm("navigator.<get>", provider = closure_alloc, capture = [undefined], effects = { returns(namespace("navigator")) })] export crate::navigator::global_this_navigator_getter_thunk, 0; with_declared(0)),
                 1,
             );
             let getter_bits = if getter.is_null() {
