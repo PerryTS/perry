@@ -1,0 +1,1 @@
+`canvas.clearRect(x, y, w, h)` clears only its rectangle on the native backends (macOS, iOS, tvOS, visionOS, Android, GTK4, Windows) instead of wiping the whole canvas; drawing outside the rectangle in the same frame survives. Windows clears to white, as `clear()` does.
