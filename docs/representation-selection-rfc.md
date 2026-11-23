@@ -1,6 +1,6 @@
 # RFC: Type-Driven Representation Selection — unbox-by-default for statically-typed values
 
-**Status:** Draft / RFC, v2 (2026-07-27); amended 2026-11-08 (§10, one whole-program representation, accepted)
+**Status:** Draft / RFC, v2 (2026-07-27); §10 (one whole-program representation) accepted 2026-11-08
 **Scope:** all value classes — scalars, strings, objects, typed arrays, closures — not only numeric code.
 **Driving benchmark:** bcryptjs `_encipher` (real, unrolled) — must compile to unboxed native and beat V8.
 
@@ -486,6 +486,10 @@ and pays no conversion. A chess square feeds indices on every path, so it is I32
 flows. Because demand is a whole-program fact, it gives the same answer in the caller, the
 callee, the field and the array element. That shared answer is what removes the churn.
 
+Demand also flows from an integer rule's result back to its operands (`+ - * %`, unary `-`,
+`++`/`--`, a loop test's clip, `Math.abs`/`min`/`max` and the integral roundings), and
+through filters. A node whose `-0` no use can observe tolerates `-0`.
+
 **The ring rule.** `+` and `-` on I32 operands have a result that is exact in a double (below
 2^33). When the interval fact proves that result inside i32, the node is I32 and lowers to a
 native `add`/`sub` with no check. When every consumer of the result is a ToInt32 context, the
@@ -522,9 +526,8 @@ non-integer, which is a real join rather than a representation disagreement. A c
 
 - Proven code never creates an INT32-boxed Number. When an F64 or I32 value is boxed at a
   boundary, it boxes as a raw double.
-- Proven readers never test the INT32 tag. An INT32 box can only arrive from a boundary (native
-  code, the runtime's generic paths, a ⊤ value), and the §5.5 F64 acceptance contract
-  canonicalizes it on entry.
+- No Number is INT32-boxed. The runtime has no API that builds one, and compiled code never
+  tests for the INT32 tag on a Number, proven or not.
 - Heap storage is already canonical on the proven paths: number fields are raw IEEE bits
   (§5.7 4b, finding 1), `runtime_store_jsvalue_slot` canonicalizes INT32 stores (4b.2), and
   `canonicalize_array_numeric_store_bits` does the same for arrays.
@@ -543,8 +546,8 @@ Every boundary is explicit in the IR, and a per-module dump lists them with thei
 (§10.8, P0). A conversion anywhere else is a bug in the facts or a codegen site that is not yet
 following them; it is never a tuning choice.
 
-The chess engine (`~/projects/chess`) is closed by design. The owner confirmed on 2026-11-08
-that none of these boundaries should occur in its hot paths. That makes it the end-to-end test:
+The chess benchmark is closed by design: none of these boundaries occurs in its hot paths.
+That makes it the end-to-end test:
 **any boundary in a chess hot function is a defect to fix, not a cost to accept.**
 
 ### 10.7 Fields and array elements
@@ -559,38 +562,37 @@ carry a representation like any other node. Their layouts do not change:
   so arrays that are passed to callees qualify as well.
 - **Int32Array and other int typed-array elements** are I32 at rest already.
 
-**Open point: I32 at rest.** An I32 field still stores double bits, so an I32-rep read is a
-`fcvtzs`. There are two ways to close this. (a) Store i32 in the slot. That is the rejected 4b
-path: a third layout mask plus a probe at about 25 generic readers. (b) Keep double storage and
-make the read an operation of the field's representation. This RFC chooses **(b) by default**
-and reopens (a) only if P4 measures the read conversion as material on chess. Under the
-whole-program model, the generic readers would see an I32 slot only on objects the facts prove
-never reach them. That difference from the original 4b assessment is worth measuring, but it is
-not assumed.
+**I32 at rest.** An I32 field is an I32 lane of its shape and an I32 element an I32 word
+(`INTERNAL_WORD_TAG | (u32)v`); both are decoded and encoded only through the layout accessor
+(perry-runtime `layout_slot.rs`). Proven code reads the facts, never the header bit.
 
 ### 10.8 Phasing
 
-Each phase is sound on its own and ships with probes, parity tests, an env switch
-(`PERRY_WP_REP_<PHASE>=0` restores the previous behaviour), a changelog fragment, rustfmt and
-the file-size allowlist. Per the structural-only rule, no phase adds a cache, a side table or a
+Each phase is sound on its own and ships with probes, parity tests, an env switch that restores
+the previous behaviour (`PERRY_WP_REP_P1`, `PERRY_WP_REP_P2`, `PERRY_WP_REP_TEMPS`,
+`PERRY_FACTS_AT_REST`, `PERRY_FACTS_INT_DEMAND`), a changelog fragment, rustfmt and the
+file-size allowlist. P3 has none: the INT32 encoding it removed no longer exists. Per the structural-only rule, no phase adds a cache, a side table or a
 memo: the representation is a field of the node's facts.
 
-- **P0: export.** wpfacts computes `rep` and the int-demand fact for every node and exports it
+- **P0: export** (landed; the boundary census is open). wpfacts computes `rep` and the int-demand fact for every node and exports it
   to codegen (bindings, params, returns, call results, fields, elements), with a dump and a
   boundary census per module. No codegen change. Acceptance: chess and the tssrc corpus dumps
   show which nodes are I32, F64 and Boxed, and tssrc compile RSS stays within +5 %.
-- **P1: locals and temporaries obey.** Binding slots, loop phis and expression temporaries
+- **P1: locals and temporaries obey** (landed). Binding slots, loop phis and expression temporaries
   take the fact's representation, and the ring rule applies to `+ - *`. This subsumes
   `facts_int32_locals` and the Phase 1 canonical-i32-locals collector.
-- **P2: typed signatures.** §10.4 for functions and methods, with boxed adapters only for
-  escaping functions. This retires `spec_abi_sites`, the tuple keys and the budgets.
-- **P3: canonical Numbers.** §10.5. Proven readers drop the INT32 tag test, and proven boxing
-  never emits INT32.
-- **P4: fields and elements.** §10.7, plus the measurement that decides the open point.
-- **P5: retire the heuristics.** Delete the §5.2 profitability term
-  (`collectors/repsel_benefit.rs`), the `$idx$i32` index-split clones, `spec_abi` tuples,
-  `facts_int32_locals` and the remaining per-site representation choices in codegen, so that
-  codegen has exactly one source for representation.
+- **P2: typed signatures** (partial). §10.4 for functions and methods, with boxed adapters only
+  for escaping functions. This retires `spec_abi_sites`, the tuple keys and the budgets. Landed
+  (#14328): wpfacts computes the signatures, a parameter the facts give `I32` takes the
+  canonical-i32 slot at entry, and a call whose every callee returns only Numbers is a Number.
+  The calling convention itself, the boxed adapters and the retirement are the remaining work.
+- **P3: canonical Numbers** (landed). §10.5. No Number is INT32-boxed, and no reader tests the
+  INT32 tag.
+- **P4: fields and elements** (landed). §10.7, with I32 at rest for fields and elements.
+- **P5: retire the heuristics** (partial: the per-body profitability refusal is gone). Delete
+  the §5.2 profitability term (`collectors/repsel_benefit.rs`), the `$idx$i32` index-split
+  clones, `spec_abi` tuples, `facts_int32_locals` and the remaining per-site representation
+  choices in codegen, so that codegen has exactly one source for representation.
 
 ### 10.9 Acceptance
 
