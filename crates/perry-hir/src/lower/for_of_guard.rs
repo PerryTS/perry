@@ -140,6 +140,7 @@ pub(crate) fn admitted_typed_array_holder(
     ctx: &mut LoweringContext,
     source: Expr,
     out: &mut Vec<Stmt>,
+    byte_offset: u32,
 ) -> Expr {
     let id = ctx.fresh_local();
     let name = format!("{TEMP_PREFIX}ta_{id}");
@@ -152,7 +153,7 @@ pub(crate) fn admitted_typed_array_holder(
         init: Some(source),
     });
     Expr::Conditional {
-        condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+        condition: Box::new(Expr::Compare { byte_offset,
             op: CompareOp::Eq,
             left: Box::new(runtime("typedArrayForOfAdmits", vec![Expr::LocalGet(id)])),
             right: Box::new(Expr::Bool(true)),

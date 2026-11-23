@@ -52,7 +52,7 @@ pub(crate) fn lower_destructuring_assignment_stmt(
     // #10086: `[x, y] = [y, x]` and `[a, b] = <proven array>` do not need the
     // iterator protocol unless `Array.prototype[Symbol.iterator]` is patched.
     if let ast::AssignTargetPat::Array(arr_pat) = pat {
-        if let Some((mut result, plan)) = array_fast::plan_for_source(ctx, &arr_pat.elems, rhs)? {
+        if let Some((mut result, plan)) = array_fast::plan_for_source(ctx, &arr_pat.elems, rhs, arr_pat.span.lo.0)? {
             result.extend(lower_array_assignment_from_expr(
                 ctx,
                 arr_pat,
@@ -155,7 +155,15 @@ fn lower_array_assignment_from_expr(
                 done_id,
                 Box::new(Expr::Bool(true)),
             )));
-            body.extend(source.rest(ctx, rest_id, rest_name, iter_id, next_id, rest_done_id));
+            body.extend(source.rest(
+                ctx,
+                rest_id,
+                rest_name,
+                iter_id,
+                next_id,
+                rest_done_id,
+                arr_pat.span.lo.0,
+            ));
             body.push(Stmt::Expr(Expr::LocalSet(
                 done_id,
                 Box::new(Expr::Bool(true)),
@@ -180,12 +188,28 @@ fn lower_array_assignment_from_expr(
         if let Some(elem_pat) = elem {
             let (prepare, target, default_value) = prepare_target_with_default(ctx, elem_pat)?;
             body.extend(prepare);
-            let pull = iterator_next_value_stmts(ctx, iter_id, next_id, done_id, value_id, true);
+            let pull = iterator_next_value_stmts(
+                ctx,
+                iter_id,
+                next_id,
+                done_id,
+                value_id,
+                true,
+                arr_pat.span.lo.0,
+            );
             body.extend(source.pull(idx, value_id, pull));
             let assigned = value_with_default(ctx, Expr::LocalGet(value_id), default_value)?;
             body.extend(assign_prepared_target(ctx, target, assigned)?);
         } else {
-            let pull = iterator_next_value_stmts(ctx, iter_id, next_id, done_id, value_id, false);
+            let pull = iterator_next_value_stmts(
+                ctx,
+                iter_id,
+                next_id,
+                done_id,
+                value_id,
+                false,
+                arr_pat.span.lo.0,
+            );
             body.extend(source.pull(idx, value_id, pull));
         }
     }
@@ -227,6 +251,7 @@ fn iterator_next_value_stmts(
     done_id: LocalId,
     value_id: LocalId,
     read_value: bool,
+    byte_offset: u32,
 ) -> Vec<Stmt> {
     let (step_id, step_name) = fresh_destruct_local(ctx, "destruct_step", Type::Boolean);
     let mut pull_next = vec![
@@ -255,7 +280,7 @@ fn iterator_next_value_stmts(
             )),
         },
         Stmt::If {
-            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
+            condition: Expr::Compare { byte_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(step_id)),
                 right: Box::new(Expr::Bool(true)),
@@ -287,7 +312,7 @@ fn iterator_next_value_stmts(
     }
 
     vec![Stmt::If {
-        condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
+        condition: Expr::Compare { byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(done_id)),
             right: Box::new(Expr::Bool(true)),
@@ -358,6 +383,7 @@ fn lower_object_assignment_from_expr(
                         Some(init) => Expr::Conditional {
                             condition: Box::new(super::pattern_binding::is_strictly_undefined(
                                 read.clone(),
+                                assign.span.lo.0,
                             )),
                             then_expr: Box::new(super::pattern_binding::lower_default_named(
                                 ctx,
@@ -648,7 +674,7 @@ fn assign_prepared_target(
         })]),
         PreparedTarget::Array(arr) => {
             let mut setup = Vec::new();
-            let plan = array_fast::FastPlan::new(ctx, value, &mut setup);
+            let plan = array_fast::FastPlan::new(ctx, value, &mut setup, arr.span.lo.0);
             setup.extend(lower_array_assignment_from_expr(
                 ctx,
                 &arr,

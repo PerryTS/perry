@@ -372,14 +372,18 @@ pub(crate) fn opt_call_receiver_repeatable(expr: &Expr) -> bool {
 /// call dispatches the builtin), while a user object missing the method still
 /// short-circuits (#830 preserved). Non-repeatable receivers keep the plain
 /// function-value check to avoid double-evaluating side effects.
-pub(crate) fn opt_call_func_nullish_guard(receiver: &Expr, func_value: Expr) -> Expr {
-    let func_nullish = Expr::Compare { byte_offset: 0 /*HPOS*/,
+pub(crate) fn opt_call_func_nullish_guard(
+    receiver: &Expr,
+    func_value: Expr,
+    byte_offset: u32,
+) -> Expr {
+    let func_nullish = Expr::Compare { byte_offset,
         op: CompareOp::LooseEq,
         left: Box::new(func_value),
         right: Box::new(Expr::Null),
     };
     if opt_call_receiver_repeatable(receiver) {
-        let not_string = Expr::Compare { byte_offset: 0 /*HPOS*/,
+        let not_string = Expr::Compare { byte_offset,
             op: CompareOp::Ne,
             left: Box::new(Expr::TypeOf(Box::new(receiver.clone()))),
             right: Box::new(Expr::String("string".to_string())),

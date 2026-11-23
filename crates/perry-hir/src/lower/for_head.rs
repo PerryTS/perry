@@ -238,17 +238,18 @@ pub(crate) fn guard_for_in_body(
     keys_id: LocalId,
     idx_id: LocalId,
     body: Vec<Stmt>,
+    byte_offset: u32,
 ) -> Vec<Stmt> {
     let key = || {
         Box::new(Expr::IndexGet {
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(keys_id)),
             index: Box::new(Expr::LocalGet(idx_id)),
         })
     };
-    let type_is = |name: &str| Expr::Compare { byte_offset: 0 /*HPOS*/,
+    let type_is = |name: &str| Expr::Compare { byte_offset,
         op: CompareOp::Eq,
         left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(obj_id)))),
         right: Box::new(Expr::String(name.to_string())),
@@ -574,6 +575,7 @@ pub(crate) fn map_set_delete_safe_for_of(
     arr_id: LocalId,
     idx_id: LocalId,
     is_set: bool,
+    byte_offset: u32,
 ) -> (Vec<Stmt>, Expr, Vec<Stmt>) {
     let ep_id = ctx.fresh_local(); // compaction epoch last synchronised with
     let nx_id = ctx.fresh_local(); // js_*_cursor_next result
@@ -592,7 +594,7 @@ pub(crate) fn map_set_delete_safe_for_of(
             }),
             args,
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset,
         }
     };
     // nx = cursor_next(coll, idx, ep); ep = epoch(coll); idx = nx; nx >= 0
@@ -613,7 +615,7 @@ pub(crate) fn map_set_delete_safe_for_of(
             Box::new(extern_call(epoch_fn, vec![Expr::LocalGet(arr_id)])),
         ),
         Expr::LocalSet(idx_id, Box::new(Expr::LocalGet(nx_id))),
-        Expr::Compare { byte_offset: 0 /*HPOS*/,
+        Expr::Compare { byte_offset,
             op: CompareOp::Ge,
             left: Box::new(Expr::LocalGet(nx_id)),
             right: Box::new(Expr::Number(0.0)),
