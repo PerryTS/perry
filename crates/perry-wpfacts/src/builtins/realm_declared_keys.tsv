@@ -374,6 +374,7 @@ accessor	SuppressedError	caller	Function.prototype.arguments.<get>	Function.prot
 accessor	Symbol	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	Symbol	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
 accessor	Symbol	caller	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
+accessor	Symbol.prototype	description	Symbol.prototype.description.<get>
 accessor	SyntaxError	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	SyntaxError	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
 accessor	SyntaxError	caller	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>

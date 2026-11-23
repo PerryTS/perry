@@ -89,6 +89,19 @@ pub(super) fn install_primitive_proto_methods(
                 crate::fn_info!(#[realm(Symbol.prototype.valueOf)] export crate::object::primitive_proto_thunks::symbol_proto_value_of_thunk, 0; with_declared(0), with_flags(crate::closure::FN_BUILTIN)),
                 0,
             );
+            let getter = crate::closure::js_closure_alloc(
+                crate::fn_info!(#[realm("Symbol.prototype.description.<get>", effects = { returns(prim(str | undefined)) })] export crate::object::primitive_proto_thunks::symbol_proto_description_getter_thunk, 0; with_name("get description"), with_declared(0), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                0,
+            );
+            if !getter.is_null() {
+                unsafe {
+                    super::object_ops::install_builtin_getter(
+                        proto_obj,
+                        "description",
+                        crate::value::js_nanbox_pointer(getter as i64).to_bits(),
+                    );
+                }
+            }
         }
         "BigInt" => {
             let to_string = ipm(
@@ -448,6 +461,14 @@ pub(super) extern "C" fn symbol_proto_to_string_thunk(
     let s =
         unsafe { crate::symbol::js_symbol_to_string(symbol) } as *mut crate::string::StringHeader;
     string_value(s)
+}
+
+pub(super) extern "C" fn symbol_proto_description_getter_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    this: crate::closure::JsThis,
+) -> f64 {
+    let symbol = symbol_receiver_or_throw(this, "description");
+    unsafe { crate::symbol::js_symbol_description(symbol) }
 }
 
 pub(super) extern "C" fn bigint_proto_value_of_thunk(
