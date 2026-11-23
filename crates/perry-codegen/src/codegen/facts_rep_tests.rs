@@ -1,4 +1,4 @@
-//! The facts' `I32` decides a binding's slot (representation RFC §10):
+//! The facts' `I32` decides a binding's slot (`internals/representation.md`):
 //! a parameter takes the canonical-i32 slot at entry (phase P2 first slice,
 //! `facts_rep::bind_params`), and a `let` takes it on the facts' proof
 //! alone (P1), with no per-function integer proof. Without the fact both

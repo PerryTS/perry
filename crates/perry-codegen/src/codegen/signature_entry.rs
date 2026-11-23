@@ -1,4 +1,4 @@
-//! P2 (DESIGN-p2-typed-signatures rev 2.3 §3–§5): typed functions.
+//! P2: typed functions.
 //!
 //! A function is typed when wpfacts gives it a non-Boxed `Signature`, at
 //! least one same-module `typed_calls` site reaches it, and no excluded tier
@@ -169,7 +169,7 @@ fn typed_plan_or(
     if sig.params.len() != f.params.len() {
         return Err("the signature and the parameters differ in number");
     }
-    // DESIGN-p4l4 VR-3b: a record slot the `value_records` rewrite lowered
+    // VR-3b: a record slot the `value_records` rewrite lowered
     // is the record's lanes (`record_sig`).
     let record_fn = cm.wpfacts.record_fns.contains_key(&f.id);
     if !record_fn
@@ -196,7 +196,7 @@ fn typed_plan_or(
     if cm.typed_i1_functions.contains(&f.id)
         || cm.typed_string_functions.contains(&f.id)
         || cm.funcs_reading_dynamic_this.contains(&f.id)
-        // DESIGN-p4l4 VR-3b: a record function leaves the arena tier
+        // VR-3b: a record function leaves the arena tier
         // (`select`). The births that made it a self-recursive allocator
         // are the copies of its records, which `F$sig` and its typed calls
         // never birth.
@@ -206,7 +206,7 @@ fn typed_plan_or(
     }
     // CWN 11-09 (T6 as the selector): every tier `F$sig` would subsume must
     // be no more precise than the signature, parameter by parameter.
-    // DESIGN-p4l4 VR-3b: not for a record function. Without its `$sig` the
+    // VR-3b: not for a record function. Without its `$sig` the
     // record crosses boxed (a birth at each call and key reads in the
     // body), which no subsumed tier's precision pays for.
     let all = |want: FactsRep| sig.params.iter().all(|r| at_least(*r, want));
@@ -543,7 +543,7 @@ pub(crate) fn select_methods(
                 probe(&class.name, &m.name, sig, Some("default"));
                 continue;
             }
-            // DESIGN-p4l4 VR-3b: the lane signature of a record plan.
+            // VR-3b: the lane signature of a record plan.
             let (lane_sig, record) = match super::record_sig::expand(sig, m, &facts, &defaults) {
                 Some((lanes, record)) => (lanes, Some(record)),
                 None => (sig.clone(), None),
@@ -614,7 +614,7 @@ pub(crate) fn select_methods(
             } else {
                 None
             };
-            // DESIGN-p4l4 VR-3b: not for a record method (`typed_plan`).
+            // VR-3b: not for a record method (`typed_plan`).
             if less_precise.is_some() && record.is_none() {
                 probe(&class.name, &m.name, sig, less_precise);
                 continue;
@@ -1058,7 +1058,7 @@ fn emit_entry(
     params.extend(f.params.iter().map(|p| (DOUBLE, format!("%arg{}", p.id))));
     let sig_name = super::spec_entry_name(public_name, plan);
     let check = crate::verify_facts::enabled();
-    // DESIGN-p4l4 VR-3b (`record_sig`): the lanes of a record slot have the
+    // VR-3b (`record_sig`): the lanes of a record slot have the
     // slot's own site, and the entry of a record-returning function is one
     // false proof.
     let record = plan.record.as_ref();

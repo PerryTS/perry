@@ -1,5 +1,5 @@
 #!/bin/bash
-# P3 B1 negative control (DESIGN-p3 rev 3.1 §5, REVIEW-p3 D4): build a runtime
+# P3 B1 negative control (REVIEW-p3 D4): build a runtime
 # whose `js_math_round` returns an INT32-boxed word, for the S0 entry
 # `canonical-number-negative` (scripts/test-verify-facts-s0.py
 # --canonnum-runtime <target>/release).

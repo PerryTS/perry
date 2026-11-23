@@ -33,7 +33,7 @@ pub extern "C" fn js_math_trunc(value: f64) -> f64 {
 #[no_mangle]
 pub extern "C" fn js_math_round(value: f64) -> f64 {
     let rounded = crate::object::js_math_round_value(js_math_to_number(value));
-    // P3 B1 negative control (DESIGN-p3 rev 3.1 §5, REVIEW-p3 D4): a runtime
+    // P3 B1 negative control (REVIEW-p3 D4): a runtime
     // built with `PERRY_FACTS_SABOTAGE=canonnum` returns an INT32-boxed word
     // from this declared-NUM builtin, so a consumer that trusts the NUM fact
     // must be caught by its check-mode witness (rc 86). Build-time, so an

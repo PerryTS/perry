@@ -1,4 +1,4 @@
-//! −0 tolerance, the generator's half (RFC §10.3 as amended, PR D; the
+//! −0 tolerance, the generator's half (`internals/representation.md` §3, PR D; the
 //! solve's half is `crate::zero_sign`).
 //!
 //! A Number node may keep an integer interval while it may hold `-0` only

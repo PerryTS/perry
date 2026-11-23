@@ -254,7 +254,7 @@ fn bodies_with_contracts(g: &Gen, nodes: &[NodeId]) -> Vec<BodyRef> {
     out
 }
 
-/// The one representation of a value (representation RFC §10.3): what the
+/// The one representation of a value (`internals/representation.md` §3): what the
 /// whole-program facts give the binding, which codegen obeys.
 ///
 /// It has no order: the derived one would not be the lattice (REVIEW-p4l1
@@ -273,7 +273,7 @@ pub enum Rep {
     /// Only plain program Arrays (DESIGN-p4l1 §2.1-2.2, `arr_rep`).
     Arr(ArrRep),
     /// Only instances of one admitted value-record template, or (`opt`)
-    /// `undefined` (DESIGN-p4l4 §1.1, `rep_of`). Its fields by value; until
+    /// `undefined` (`rep_of`). Its fields by value; until
     /// codegen lowers records (VR-3) its slot encoding is the Boxed word.
     Record(RecRep),
 }
@@ -333,7 +333,7 @@ pub enum Enc {
     Boxed,
     F64,
     I32,
-    /// A value record: its fields by value (DESIGN-p4l4 §1.3), one lane
+    /// A value record: its fields by value, one lane
     /// per layout word (and a presence lane when it may be `undefined`).
     Record,
 }
@@ -382,7 +382,7 @@ impl Rep {
             (Rep::I32, Rep::I32) => Rep::I32,
             (Rep::F64 | Rep::I32, Rep::Arr(_)) | (Rep::Arr(_), Rep::F64 | Rep::I32) => Rep::Boxed,
             (Rep::Arr(x), Rep::Arr(y)) => Rep::Arr(ArrRep::join(x, y)),
-            // DESIGN-p4l4 §1.1: one template joins with itself (`opt` OR'd).
+            // A Record joins: one template joins with itself (`opt` OR'd).
             (Rep::Record(x), Rep::Record(y)) if x.tmpl == y.tmpl => Rep::Record(RecRep {
                 tmpl: x.tmpl,
                 opt: x.opt || y.opt,
@@ -673,7 +673,7 @@ pub struct ModuleBindings {
     /// Call byte offsets whose result is a Number at every copy of the call
     /// the program holds, and at every call that starts at that offset
     /// (`f(a)(b)`, `o.m(a).n(b)`): every callee the site reaches returns
-    /// only Numbers (representation RFC §10.4, the call's return
+    /// only Numbers (`internals/representation.md` §4, the call's return
     /// representation). Method calls and calls of any other callee. Sorted.
     pub number_calls: Vec<u32>,
     /// Call spans (`Expr::Call::byte_offset`, `byte_end`) whose result holds
@@ -689,9 +689,9 @@ pub struct ModuleBindings {
     /// P2: typed signatures by HIR function id, sorted (`signatures`).
     pub signatures: Vec<(u32, crate::signatures::Signature)>,
     /// P2: call byte offset -> the one body `(module, func_id)` a typed
-    /// entry serves, sorted (`signatures`, DESIGN-p2 §2).
+    /// entry serves, sorted (`signatures`).
     pub typed_calls: Vec<(u32, (u32, u32))>,
-    /// DESIGN-p4l4 VR-3b: the functions whose Record signature slots stay
+    /// VR-3b: the functions whose Record signature slots stay
     /// Boxed because a source call of the body is not one of its typed
     /// calls in its module (`signatures`), sorted: their callers pass a
     /// materialized copy.
@@ -1000,7 +1000,7 @@ fn facts_of(g: &Gen, nodes: &[NodeId]) -> BindingFacts {
     out
 }
 
-/// DESIGN-p4l4 §1.1: `Record` when every token of the node is an instance
+/// `Record` when every token of the node is an instance
 /// of one admitted value-record template (`Model::records`), its primitives
 /// are within `undefined` (which sets `opt`), and it holds no ⊤ or marker.
 fn record_rep(m: &Model, nodes: &[NodeId]) -> Option<RecRep> {
@@ -1060,7 +1060,7 @@ pub(crate) fn arr_rep_beside(m: &Model, nodes: &[NodeId], ignored: u16) -> Optio
             let TokKind::Obj(tm, _) = m.toks[t as usize] else {
                 return None;
             };
-            // A record array is its own representation (DESIGN-p4l4 B1).
+            // A record array is its own representation (B1).
             if m.record_arrays.contains_key(&tm) {
                 return None;
             }
@@ -1176,7 +1176,7 @@ pub(crate) fn elem_demand(m: &Model, t: Tok, node: &crate::model::Node) -> bool 
 }
 
 /// The Number representation of what `nodes` hold together (a field over
-/// its template's tokens; I32 at rest, RFC §10.7): F64 when every value is
+/// its template's tokens; I32 at rest, `internals/representation.md` §7): F64 when every value is
 /// a Number, I32 when also every one is an int32 (the joined interval) and
 /// one reaches an int consumer (demand); Boxed for anything else, and for
 /// no node or no value. The negative control `restfield` claims I32 for
@@ -1229,7 +1229,7 @@ fn rep_of(b: &BindingFacts) -> Rep {
 
 /// The dump's representation probe (N1, `PERRY_FACTS_DUMP` only): one
 /// `# rep` line per Number local (F64, I32, an interval or an int use)
-/// with what decides its representation (RFC §10.3): the prims, the
+/// with what decides its representation (`internals/representation.md` §3): the prims, the
 /// interval, int demand and whether the binding is itself an int
 /// consumer's operand. A local is named by its node, readable with
 /// `PERRY_FACTS_RELATIONS=1`; otherwise by its id (`local=`), the HIR
@@ -1314,11 +1314,11 @@ pub(crate) fn rep_probe(g: &Gen) -> Vec<String> {
     out
 }
 
-/// The at-rest probe (I32 at rest, RFC §10.7; `PERRY_FACTS_DUMP` only): one
+/// The at-rest probe (I32 at rest, `internals/representation.md` §7; `PERRY_FACTS_DUMP` only): one
 /// `# rest field` line per class or literal field whose nodes hold Numbers
 /// and one `# rest elem` line per plain Array template whose element nodes
 /// do, each with the join over the template's tokens of what decides the
-/// slot's representation (RFC §10.3): the prims, the tokens, the interval
+/// slot's representation (`internals/representation.md` §3): the prims, the tokens, the interval
 /// and int demand.
 fn rest_probe(m: &Model) -> Vec<String> {
     let mut out = Vec::new();

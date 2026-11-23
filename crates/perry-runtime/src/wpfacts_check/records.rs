@@ -1,4 +1,4 @@
-//! Check mode for value records (DESIGN-p4l4 B7, L4; VR-2).
+//! Check mode for value records (B7, L4; VR-2).
 //!
 //! Under `PERRY_VERIFY_FACTS=1` with `PERRY_FACTS_VALUE_RECORDS=1` the
 //! compiler claims every instance of a template the facts admit as a value
@@ -66,7 +66,7 @@ pub extern "C" fn perry_verify_facts_record_identity(
     0
 }
 
-/// DESIGN-p4l4 VR-4b: the receiver of a record-array intrinsic. The facts
+/// VR-4b: the receiver of a record-array intrinsic. The facts
 /// say it holds only record arrays (R6); anything else is a false proof.
 /// Returns 0.
 #[no_mangle]

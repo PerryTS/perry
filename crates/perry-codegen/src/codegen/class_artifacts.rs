@@ -95,7 +95,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
         true,
         |llmod, strings, class| {
             for method in &class.methods {
-                // P2 (DESIGN-p2 §3.2): a typed method is `M$sig` plus its
+                // P2: a typed method is `M$sig` plus its
                 // boxed entry; no other tier is emitted for it.
                 if let Some(tm) = cross_module.typed_methods.get(&method.id) {
                     let body = super::record_sig::sig_body(

@@ -1,4 +1,4 @@
-//! VR-0 (DESIGN-p4l4 §2.2): every identity route of the program is a
+//! VR-0: every identity route of the program is a
 //! `Cons::Identity` on the compared values, only with value records on.
 use crate::model::{Cons, IdentityRoute, Model, TokKind};
 

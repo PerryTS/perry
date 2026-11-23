@@ -1,4 +1,4 @@
-//! Value records in codegen (DESIGN-p4l4 VR-3a, `PERRY_FACTS_VALUE_RECORDS=1`).
+//! Value records in codegen (VR-3a, `PERRY_FACTS_VALUE_RECORDS=1`).
 //!
 //! A local the facts give `Rep::Record` (`ElisionFacts::record_locals`) is
 //! its fields by value: before lowering, each such binding becomes one local

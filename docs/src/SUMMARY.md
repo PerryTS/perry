@@ -206,6 +206,7 @@
 - [The GC rooting invariant (codegen)](internals/gc-rooting-invariant.md)
   - [Runtime claim diagnostics](internals/runtime-claim-checks.md)
 - [Program facts](internals/program-facts.md)
+  - [Whole-program representation](internals/representation.md)
 - [Local binding type evidence](internals/local-binding-type-evidence.md)
 - [Codegen mechanisms and workload evidence](internals/codegen-mechanisms.md)
 - [Incremental GC step bounds](internals/gc-step-bounds.md)

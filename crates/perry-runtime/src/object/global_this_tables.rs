@@ -423,7 +423,7 @@ pub(crate) fn constructor_identity(value: f64) -> Option<BuiltinConstructorIdent
 }
 
 /// The call capture of a builtin constructor: its identity in the
-/// runtime-internal 0x7FFE word space (DESIGN-p3 §1.2, R4), the same word the
+/// runtime-internal 0x7FFE word space (R4), the same word the
 /// realm image writes for `RealmValue::Int32` (`realm_image/atoms.rs`). It is
 /// never a JS value, and never a Number (P3 B4a: nothing builds an INT32
 /// Number).

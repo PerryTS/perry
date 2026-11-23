@@ -1,4 +1,4 @@
-//! I32 at rest, PR B (representation RFC §10.7; DESIGN-n1-at-rest §3): the
+//! I32 at rest, PR B (`internals/representation.md` §7): the
 //! I32 element storage kind of an Array template.
 //!
 //! An Array template is **at rest** when every element slot of every Array

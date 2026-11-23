@@ -1,4 +1,4 @@
-//! P3 B1 (DESIGN-p3 rev 3.1 §2.2, REVIEW-p3 D2): every non-test use of
+//! P3 B1 (REVIEW-p3 D2): every non-test use of
 //! `prim::NUM` in perry-wpfacts has a row in `NUM_SEEDS.md` citing the runtime
 //! function or lowering that produces the value. The counts are compared per
 //! file, so moving a line does not break the test; adding a seed does, until

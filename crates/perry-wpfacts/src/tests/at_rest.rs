@@ -1,4 +1,4 @@
-//! I32 at rest (RFC §10.7): the intervals of field and element nodes, as
+//! I32 at rest (`internals/representation.md` §7): the intervals of field and element nodes, as
 //! the dump's `# rest` probe lines report them.
 
 use super::*;
