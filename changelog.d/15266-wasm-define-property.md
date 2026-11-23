@@ -1,0 +1,1 @@
+`--target web`: `Object.defineProperty` and `Object.defineProperties` define the property instead of evaluating to `undefined`, and a closure getter or setter runs with the receiver as `this` (#15127).

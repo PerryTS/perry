@@ -1638,6 +1638,11 @@ function wrapImportsForI64(imports) {
 // What closure_new makes. Its class, not its keys, tells a closure from a plain
 // object that has `funcIdx` / `captures` fields, at no per-closure cost.
 class __PerryClosure {
+  // A brand, not `instanceof`: an object whose prototype chain reaches a closure is no closure.
+  #brand;
+  static is(v) {
+    return typeof v === 'object' && v !== null && #brand in v;
+  }
   // Its index in `__fnKindProtos`: private, so no program property can change it.
   #protoKind;
   // Non-enumerable, so `for...in` and `Object.keys` see only a closure's own properties.
@@ -1657,7 +1662,7 @@ let __closureReceiver;
 // One value per function declaration, keyed by its table index (`function_value`).
 const __functionValues = new Map();
 function __isPerryClosure(v) {
-  return v instanceof __PerryClosure;
+  return __PerryClosure.is(v);
 }
 // `receiver.m(...args)` where `m` is a Perry closure. The receiver is cleared
 // after the call either way, so no later closure entry can see it.
@@ -2384,6 +2389,8 @@ const __memDispatch = {
     const obj = Object.create(proto);
     return props === undefined ? obj : Object.defineProperties(obj, __hostDescriptors(props));
   },
+  object_define_property: (obj, key, desc) => Object.defineProperty(obj, key, __hostDescriptor(desc)),
+  object_define_properties: (obj, props) => Object.defineProperties(obj, __hostDescriptors(props)),
   object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
   // `{ a, ...rest } = obj`: a new object with obj's own enumerable keys, symbols
   // included, except the statically named ones (CopyDataProperties). Defined, not
@@ -2940,7 +2947,7 @@ const __memDispatch = {
   class_extends_null: (className) => { classParentTable[String(className)] = null; },
   // `class A extends F` with a user function F: A's prototype inherits F's current one.
   class_extends_value: (className, value) => {
-    if (value instanceof __PerryClosure && (value.prototype === null || __holdsProperties(value.prototype))) {
+    if (__isPerryClosure(value) && (value.prototype === null || __holdsProperties(value.prototype))) {
       __classFunctionParentProtos.set(String(className), value.prototype);
     }
   },
@@ -3174,6 +3181,8 @@ const __memDispatch = {
 
   // Error — args are plain JS values
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
+  error_new_kind: (kind, msg) =>
+    new ([Error, TypeError, RangeError, ReferenceError, SyntaxError][kind] || Error)(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
   // `super(msg)` in a class extending a built-in Error: the instance is a plain
   // object (see __classInstance), so it takes the message the Error constructor would
@@ -6087,33 +6096,45 @@ function __constructHostFunction(fn, args) {
 
 const hostCallbacks = new WeakMap();
 
-// A descriptor map whose accessors the host can call. A Perry closure is not callable
-// by the host, so its accessor runs it with the receiver as `this`. Each descriptor is
-// copied, reading its fields once in ToPropertyDescriptor's order, so the caller's map
-// and descriptors stay as they are.
+// A descriptor whose accessors the host can call. A Perry closure is not callable by
+// the host, so its accessor runs it with the receiver as `this`. The descriptor is
+// copied, reading its fields once in ToPropertyDescriptor's order, so the caller's
+// descriptor stays as it is.
+function __hostDescriptor(desc) {
+  if (!__holdsProperties(desc)) return desc;
+  const copy = Object.create(null);
+  for (const field of ['enumerable', 'configurable', 'value', 'writable', 'get', 'set']) {
+    if (!(field in desc)) continue;
+    const v = desc[field];
+    copy[field] = (field === 'get' || field === 'set') ? __hostAccessor(v) : v;
+  }
+  return copy;
+}
+
+// One wrapper per closure, so redefining a non-configurable accessor with the same
+// closure is a no-op, as it is for a host function.
+const hostAccessors = new WeakMap();
+function __hostAccessor(v) {
+  if (!__isPerryClosure(v)) return v;
+  let fn = hostAccessors.get(v);
+  if (!fn) {
+    fn = function (...args) {
+      const result = __callClosureMethod(v, this, args);
+      __memDispatch.propagate_exception(true);
+      return result;
+    };
+    hostAccessors.set(v, fn);
+  }
+  return fn;
+}
+
+// A descriptor map of `__hostDescriptor` copies; the caller's map stays as it is.
 function __hostDescriptors(props) {
   if (!__holdsProperties(props)) return props;
   const descs = Object.create(null);
   for (const key of Reflect.ownKeys(props)) {
     if (!Object.prototype.propertyIsEnumerable.call(props, key)) continue;
-    const desc = props[key];
-    if (!__holdsProperties(desc)) {
-      descs[key] = desc;
-      continue;
-    }
-    const copy = Object.create(null);
-    for (const field of ['enumerable', 'configurable', 'value', 'writable', 'get', 'set']) {
-      if (!(field in desc)) continue;
-      const v = desc[field];
-      copy[field] = (field === 'get' || field === 'set') && __isPerryClosure(v)
-        ? function (...args) {
-            const result = __callClosureMethod(v, this, args);
-            __memDispatch.propagate_exception(true);
-            return result;
-          }
-        : v;
-    }
-    descs[key] = copy;
+    descs[key] = __hostDescriptor(props[key]);
   }
   return descs;
 }
