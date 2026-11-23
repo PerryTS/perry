@@ -70,8 +70,11 @@ impl Model {
             return true;
         }
 
+        // No family model: a prototype method whose effects the runtime
+        // declares without naming `this` runs its declaration, whatever the
+        // receiver (`Performance.prototype.toJSON` as JSON's protocol call).
         let Some((fam, what, name)) = builtins::native_model(self, t) else {
-            return false;
+            return self.declared_proto_call(call, t, identity);
         };
         let key = self.atom(&name.replace("@@", builtins::WK_PREFIX));
         let r = match (this_tok, &self.calls[call as usize].this) {

@@ -340,7 +340,7 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 ),
                 (
                     "toJSON",
-                    crate::fn_info!(#[realm(Performance.prototype.toJSON, constructible = true)] export crate::perf_hooks::prototypes::performance_methods::to_json, 0; with_declared(0)),
+                    crate::fn_info!(#[realm(Performance.prototype.toJSON, constructible = true, effects = { stores(fresh); returns(fresh(Object.prototype)) })] export crate::perf_hooks::prototypes::performance_methods::to_json, 0; with_declared(0)),
                     0,
                     true,
                 ),
