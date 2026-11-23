@@ -1,0 +1,1 @@
+`for (k in v)` over a primitive (`5`, `"ab"`, `true`) visits the enumerable keys its prototype chain carries, as Node does after `Number.prototype.x = 1`, and the for-in deletion guard checks a primitive receiver through `Object(v)` instead of running `in` on the primitive.
