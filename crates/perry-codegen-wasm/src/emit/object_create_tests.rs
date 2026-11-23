@@ -55,6 +55,23 @@ inAsync().then((v) => console.log("async " + v));
     );
 }
 
+// An async body reads a descriptor as a sync one does. Expected output is Node's.
+#[test]
+fn get_own_property_descriptor_in_async_body() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function s() { const d: any = Object.getOwnPropertyDescriptor({ a: 1 }, "a"); return [d.value, d.writable, d.enumerable, d.configurable].join(","); }
+async function f() { const d: any = Object.getOwnPropertyDescriptor({ a: 1 }, "a"); return [d.value, d.writable, d.enumerable, d.configurable].join(","); }
+async function g() { return Object.getOwnPropertyDescriptor({ a: 1 }, "b") === undefined; }
+console.log(s());
+f().then((v) => console.log("async " + v)).then(() => g()).then((v) => console.log("missing " + v));
+"#
+        ),
+        "1,true,true,true\nasync 1,true,true,true\nmissing true"
+    );
+}
+
 // `Object.defineProperty` and `Object.defineProperties` accessors that are Perry
 // closures run with the receiver as `this`. Expected output is Node's.
 #[test]
