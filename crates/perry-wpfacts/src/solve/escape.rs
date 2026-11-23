@@ -74,26 +74,49 @@ impl Model {
         if t == TOP {
             return;
         }
-        // A value reaches unknown code: unknown code exists and holds the
-        // realm (`hold_realm`).
+        // A value reaches unknown code: that code gets the value and what it
+        // reaches. Whole program under the closed world (owner 2026-11-14: no
+        // eval, no `new Function`, no open native addon) and R-GLOBAL (owner
+        // 2026-11-18), it is the runtime's own code, which never names an
+        // intrinsic by an arbitrary name: the global names it reads
+        // (`global_runtime_reads`, the declared constructors) and the statics
+        // (`members::realm_read_statics`) sink what the program stores there at
+        // the store, and the protocol members it reads on a value are loads on
+        // that value and its chain. So the escape hands over the value, never
+        // the realm. Per unit, or beside an unseen module or interpreted code,
+        // other code may name the realm: it is held (`hold_realm`). A value
+        // the program stored onto a built-in object (E20) is a write into the
+        // realm the runtime reads by name: it is held then too.
+        // PREMISE (owner-approved 2026-11-19): unknown code handed a value
+        // never writes or replaces a member of an intrinsic it reaches along
+        // that value's chain (`Array.from.k = v` through
+        // `a.constructor.__proto__`).
+        let holds = !self.realm_held
+            && (self.unit_mode
+                || self.unseen_module_runs
+                || self.interp_runs
+                || self
+                    .reasons
+                    .get(reason as usize)
+                    .is_some_and(|r| r.starts_with("E20")));
         if crate::unksrc::on() {
             let why = format!(
                 "{} [tok {t} {:?}]",
                 self.reasons[reason as usize], self.toks[t as usize]
             );
             crate::unksrc::note("escape", &self.reasons[reason as usize], u32::MAX, u32::MAX);
-            if !self.realm_held {
+            if holds {
                 crate::unksrc::held("escape_body", &why, u32::MAX, u32::MAX);
             }
         }
-        if !self.realm_held && self.prov.is_some() {
+        if holds && self.prov.is_some() {
             self.why_hold_r("escape", u32::MAX, Some(t), reason);
         }
-        if self.keysnap.is_some() && !self.realm_held {
+        if self.keysnap.is_some() && holds {
             self.keysnap_at(false, "escape (escape_body)", None, reason, Some(t));
             self.keysnap_at(true, "escape (escape_body)", None, reason, Some(t));
         }
-        if !self.realm_held {
+        if holds {
             let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
             self.hold_realm(r);
         }
@@ -416,10 +439,10 @@ impl Model {
     /// may call them with any receiver and catch what they throw
     /// (`escape_fn_params`: their throw region feeds ESCRAISE).
     fn escaped_accessor_runs(&mut self, t: Tok, w: NodeId, reason: u32) {
-        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w));
+        self.accessor_walk(t, t, Key::any(), ChainAct::Store(w, self.thrown));
         let r = self.node_l("escaped-load");
         self.sink_node(r, reason);
-        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r));
+        self.accessor_walk(t, t, Key::any(), ChainAct::Load(r, self.thrown));
         let fns = self.esc_accessors;
         for setter in [false, true] {
             self.accessor_walk(t, t, Key::any(), ChainAct::Lookup { dst: fns, setter });
@@ -1174,7 +1197,7 @@ impl Model {
         // writes into each other's storage: the overlap is not transitive.
         if builtins::builtin_function(self, t) {
             let read = self.node_l("escaped-native-fields");
-            self.builtin_field_use(t, Key::any(), ChainAct::Load(read));
+            self.builtin_field_use(t, Key::any(), ChainAct::Load(read, self.thrown));
             if !self.unit_mode {
                 self.proto_value(t, read);
             }

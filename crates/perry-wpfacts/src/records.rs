@@ -268,6 +268,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::Objects { .. }
         | Cons::NotNullish { .. }
         | Cons::NotBuffer { .. }
+        | Cons::NotObjectProto { .. }
         | Cons::NotRegExp { .. }
         | Cons::NotNull { .. }
  | Cons::RecordEntry { .. }
@@ -361,7 +362,8 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::ThisTo { .. }
         | Cons::ThisInst { .. }
         | Cons::OverrideThis { .. }
-        | Cons::BuiltinCallee => Reject(R5Proto(c.kind_name().into())),
+        | Cons::BuiltinCallee
+        | Cons::ProxyCallee { .. } => Reject(R5Proto(c.kind_name().into())),
         Cons::NativeThis { .. } => Reject(R5Native {
             site: "native".into(),
             slot: "this".into(),
@@ -387,6 +389,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::EnumKeyAny { .. }
         | Cons::OwnValues { .. }
         | Cons::OwnKeys { .. }
+        | Cons::OwnNames { .. }
         | Cons::OwnDescValues { .. } => Reject(R5Iterate(c.kind_name().into())),
         // Accessors.
         Cons::Accessor { .. }
@@ -416,6 +419,7 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         | Cons::Objects { .. }
         | Cons::NotNullish { .. }
         | Cons::NotBuffer { .. }
+        | Cons::NotObjectProto { .. }
         | Cons::NotRegExp { .. }
         | Cons::NotNull { .. }
         | Cons::RecordEntry { .. }
@@ -834,14 +838,36 @@ impl<'a, 'g> Scan<'a, 'g> {
             }
             out
         };
-        let typed = with_copies(
-            &mut g
-                .mods
+        let locals: FxHashSet<NodeId> = g
+            .mods
+            .iter()
+            .flat_map(|mo| mo.locals.values().copied())
+            .collect();
+        // DEADARM: a read of a local inside an `if` arm is the arm's gated
+        // copy of it (`Gen::region_read`, `Model::name_of`): a read of the
+        // same name, so it belongs to every set its binding is in.
+        let gated = |of: &FxHashSet<NodeId>| -> Vec<NodeId> {
+            m.name_of
                 .iter()
-                .flat_map(|mo| mo.locals.values().copied())
+                .filter(|(r, l)| of.contains(*l) && m.labels[**r as usize] == "live-read")
+                .map(|(r, _)| *r)
+                .collect()
+        };
+        let gated_locals = gated(&locals);
+        let typed = with_copies(
+            &mut locals
+                .iter()
+                .copied()
+                .chain(gated_locals)
                 .chain(g.load_sites.iter().map(|&(_, _, _, n)| n)),
         );
-        let relays = with_copies(&mut m.for_of_relays.iter().copied());
+        let relays = with_copies(
+            &mut m
+                .for_of_relays
+                .iter()
+                .copied()
+                .chain(gated(&m.for_of_relays)),
+        );
         let aggregates: FxHashSet<NodeId> = m
             .all_fields
             .iter()
@@ -1329,6 +1355,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     | Cons::Objects { .. }
                                     | Cons::NotNullish { .. }
                                     | Cons::NotBuffer { .. }
+                                    | Cons::NotObjectProto { .. }
                                     | Cons::NotRegExp { .. }
                                     | Cons::NotNull { .. }
                                     | Cons::RecordEntry { .. }
@@ -1896,6 +1923,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::Objects { .. }
                 | Cons::NotNullish { .. }
                 | Cons::NotBuffer { .. }
+                | Cons::NotObjectProto { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::NotNull { .. }
                 | Cons::RecordEntry { .. }

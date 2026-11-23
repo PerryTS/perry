@@ -83,6 +83,7 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
                 key: Key::Named(a),
                 src: v,
                 site,
+                region: m.thrown,
             },
         );
     }
@@ -216,7 +217,11 @@ pub fn global_value_written(m: &Model, np: Tok, a: Atom) -> bool {
 /// have written the key: the read takes ⊤ as before.
 pub fn global_value_stored(m: &Model, np: Tok, a: Atom) -> bool {
     let (top, own) = written_by(m, np, a, true, &|w| {
-        w.opaque || !w.stored.is_empty() || w.accessor || !w.getters.is_empty() || !w.setters.is_empty()
+        w.opaque
+            || !w.stored.is_empty()
+            || w.accessor
+            || !w.getters.is_empty()
+            || !w.setters.is_empty()
     });
     top || own
 }
@@ -230,7 +235,10 @@ pub fn global_maybe_deleted(m: &mut Model, np: Tok, a: Atom, dst: NodeId) {
     if !global_value_written(m, np, a) {
         return;
     }
-    if matches!(m.atoms[a as usize].as_str(), "undefined" | "NaN" | "Infinity") {
+    if matches!(
+        m.atoms[a as usize].as_str(),
+        "undefined" | "NaN" | "Infinity"
+    ) {
         return;
     }
     m.add_prim(dst, prim::UNDEF);
@@ -266,17 +274,28 @@ fn written_by(
     let num_read = m.atoms[a as usize] == crate::model::NUM_KEY;
     // A named write onto the global object that only a program store made:
     // its value is in the global's field.
-    let stored = |t: Tok| {
+    let stored_key = |t: Tok, k: Atom| {
         field_carries_stores
             && super::global_object(m, t)
-            && !m.accessors.contains_key(&(t, a))
+            && !m.accessors.contains_key(&(t, k))
             && !m.native_given.iter().any(|&(w, _)| w == t)
+    };
+    let stored = |t: Tok| stored_key(t, a);
+    // A computed read of the global object takes the field of each named
+    // key it may spell (`global_shaped_read`, `global_shaped_replay`): a
+    // named program store it may name is one of those fields, not a write
+    // of a value the read misses (`g["globalThis"] = globalThis`).
+    let field_named = |t: Tok, k: Option<Atom>| {
+        k.is_some_and(|k| {
+            let n = &m.atoms[k as usize];
+            n != crate::STAR_KEY && n != crate::model::NUM_KEY && stored_key(t, k)
+        })
     };
     let hit = |t: Tok| {
         has(t, None)
             || (has(t, Some(a)) && !stored(t))
             || num.is_some_and(|n| has(t, Some(n)))
-            || (any && any_on(t, &|_| true))
+            || (any && any_on(t, &|k| !field_named(t, k)))
             || (num_read
                 && any_on(t, &|k| {
                     k.is_some_and(|k| crate::solve::numeric_key(&m.atoms[k as usize]))
@@ -1586,7 +1605,7 @@ pub(super) fn native_method(
                     spread: c.spread.clone(),
                     ret,
                     site: call2,
-                    region: m.thrown,
+                    region: m.calls[call as usize].region,
                 },
                 move |m, tg, call2| m.cons(tg, Cons::Call { call: call2 }),
             );

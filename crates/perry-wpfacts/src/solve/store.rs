@@ -642,10 +642,7 @@ impl Model {
         // with a data descriptor over a configurable accessor), so it takes
         // the ordinary path: a write of that key and no other.
         if let Key::Named(a) = key {
-            let define = self
-                .stores
-                .get(site as usize)
-                .is_some_and(|s| s.desc.starts_with("defineProperty"));
+            let define = self.define_site(site);
             if !elem
                 && !theirs
                 && !define
@@ -666,7 +663,14 @@ impl Model {
         if !theirs {
             if let Some(f) = self.builtin_field(t, key) {
                 self.edge(src, f);
-                self.accessor_walk(t, t, key, ChainAct::Store(src));
+                if !self.define_site(site) {
+                    self.accessor_walk(
+                        t,
+                        t,
+                        key,
+                        ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
+                    );
+                }
                 let cp = self.cp(t);
                 if self.callthis_done.insert((cp, u32::MAX, t)) {
                     self.cons(cp, Cons::StoreTopProto { origin: t, src });
@@ -1046,6 +1050,7 @@ impl Model {
                 Cons::Implicit {
                     reason: r,
                     proto: Protocol::ToPrimitive,
+                    region: self.thrown,
                 },
             );
             return;
@@ -1158,11 +1163,24 @@ impl Model {
             }
         }
         // Setters on the chain (and own accessors), including an accessor
-        // installed through another token that may denote this native.
-        self.builtin_field_use(t, key, ChainAct::Store(src));
-        // A setter a declaration made the receiver with (`onabort`).
-        self.with_b(|m| builtins::declared_setter_store(m, t, key, src));
-        self.accessor_walk(t, t, key, ChainAct::Store(src));
+        // installed through another token that may denote this native. A
+        // definition runs none: [[DefineOwnProperty]] calls no setter
+        // (ECMA-262 10.1.6.3), so no setter's throw reaches any region.
+        if !self.define_site(site) {
+            self.builtin_field_use(
+                t,
+                key,
+                ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
+            );
+            // A setter a declaration made the receiver with (`onabort`).
+            self.with_b(|m| builtins::declared_setter_store(m, t, key, src));
+            self.accessor_walk(
+                t,
+                t,
+                key,
+                ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
+            );
+        }
         if !self.is_array_like(t) {
             let cp = self.cp(t);
             if self.callthis_done.insert((cp, u32::MAX, t)) {
@@ -1187,11 +1205,32 @@ impl Model {
                 TokKind::Builtin(_) | TokKind::BuiltinFn(_) => true,
                 _ => false,
             };
+        // A plain (non-callable) namespace object (`performance`, `console`,
+        // `Math`, a builtin module namespace) is the same: a named key the
+        // runtime never reads by name is that object's own property, which
+        // only program reads see (the field above and the native data write
+        // replayed on its reads). Closed world (owner 2026-11-14) and
+        // R-GLOBAL (owner 2026-11-18): only program code reads it by name, so
+        // the stored value reaches no unknown code and the realm stays the
+        // program's (no E20 sink, no `hold_realm`).
+        let plain_ns = !elem && builtins::plain_namespace_own_store(self, t, key);
         if (!builtins::builtin_function(self, t)
             || (namespace && builtins::realm_reads_store(self, t, key)))
             && !own_index
+            && !plain_ns
         {
             self.with_b(|m| builtins::tok_store(m, t, key, src));
         }
+    }
+}
+
+impl Model {
+    /// A store site of `defineProperty` (`Gen::define_property`,
+    /// `define_by_data`, `define_any_on`): its value is defined with
+    /// [[DefineOwnProperty]], which runs no [[Set]] and so no setter.
+    pub(super) fn define_site(&self, site: SiteId) -> bool {
+        self.stores
+            .get(site as usize)
+            .is_some_and(|s| s.desc.starts_with("defineProperty"))
     }
 }

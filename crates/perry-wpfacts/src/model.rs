@@ -142,6 +142,14 @@ pub mod guard {
     /// `null` is not strictly equal to `null` (ECMA-262 7.2.16 step 1, the
     /// Null type has one value); `undefined` and every object pass.
     pub const NOT_NULL: u8 = 21;
+    /// Rule T7: the value of `Object` where `x !== Object.prototype` narrows
+    /// (`Cons::NotObjectProto`): any value but the intrinsic constructor (a
+    /// program store, ⊤, a primitive) lets every value of `x` through.
+    pub const NOT_OBJECT_CTOR: u8 = 22;
+    /// A value that is no Object (ECMA-262 10.2.2 [[Construct]] step 10):
+    /// a constructor body result that makes a base `new` yield its `this`.
+    /// Every primitive; no object or function token.
+    pub const NOT_OBJECT: u8 = 23;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -172,6 +180,8 @@ pub mod guard {
             IS_NUM => p::NUM,
             IS_NULL => p::NULL,
             NOT_NULL => p::ALL & !p::NULL,
+            NOT_OBJECT_CTOR => p::ALL,
+            NOT_OBJECT => p::ALL,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::FALSE | p::BIGINT | p::NULL | p::UNDEF,
         }
@@ -790,6 +800,8 @@ pub struct DefineAny {
     pub site: SiteId,
     pub reason: u32,
     pub accessor: bool,
+    /// The descriptor node of a value call (`NO_NODE`: the direct call).
+    pub desc: NodeId,
 }
 
 impl DefineAny {
@@ -991,16 +1003,34 @@ pub enum NativeMiss {
     Store(NodeId, SiteId),
 }
 
+/// The lookups filed on one token (`Model::own_stopped`), in filing order,
+/// and the same entries as a set for the filing's duplicate check.
+#[derive(Default, Clone)]
+pub struct OwnStopped {
+    pub list: Vec<(Tok, Atom, ChainAct)>,
+    pub seen: crate::pts::FxHashSet<(Tok, Atom, ChainAct)>,
+}
+
+impl OwnStopped {
+    pub fn push(&mut self, e: (Tok, Atom, ChainAct)) {
+        self.seen.insert(e);
+        self.list.push(e);
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ChainAct {
     /// Return the installed accessor function, without invoking its body.
-    Lookup {
-        dst: NodeId,
-        setter: bool,
-    },
-    Load(NodeId),
+    Lookup { dst: NodeId, setter: bool },
+    /// Load into the first node. The second is the throw region the access
+    /// runs in (ECMA-262 10.1.8.1 step 7: a getter runs inside the [[Get]]):
+    /// what a getter it runs throws reaches it.
+    Load(NodeId, NodeId),
+    /// A call runs in its call site's region (`CallSite::region`).
     Call(CallId),
-    Store(NodeId),
+    /// Store the first node; the second is the access's throw region
+    /// (10.1.9.2 step 7: a setter runs inside the [[Set]]).
+    Store(NodeId, NodeId),
 }
 
 /// HARD escape families (design section 4).
@@ -1896,6 +1926,10 @@ pub struct Model {
     /// through such a read is a store through the local's name
     /// (`named_lengths`).
     pub name_of: FxHashMap<NodeId, NodeId>,
+    /// DEADARM (`Gen::arm_live`): the `live` node of each `if` arm. Its
+    /// guards are control, not data: summary slices never take it in, and
+    /// a guard it holds or fills adds only `from -> dst` to a slice.
+    pub arm_live: crate::pts::FxHashSet<NodeId>,
     /// Receiver nodes of the index stores' `Cons::LenIndex` rules.
     pub len_index_stores: crate::pts::FxHashSet<NodeId>,
     /// Receiver node of a `pop` or a generic permutation (`Cons::LenIndex`
@@ -2228,12 +2262,17 @@ pub struct Model {
     pub chain_done: crate::pts::FxHashSet<(NodeId, Tok, Key, ChainAct)>,
     /// (value node, `ProtoNode`) pairs a `ProtoGiven` watches.
     pub given_proto: crate::pts::FxHashSet<(NodeId, NodeId)>,
-    pub implicit_done: crate::pts::FxHashSet<(Tok, Protocol)>,
+    pub implicit_done: crate::pts::FxHashMap<(Tok, Protocol), NodeId>,
     /// The one argument node of the `@@hasInstance` touch on a token: every
     /// `instanceof` whose right-hand side holds the token adds its
     /// left-hand side (`Solver::has_instance`).
     pub has_instance_arg: crate::pts::FxHashMap<Tok, NodeId>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
+    /// (`new` call, summarized constructor) -> the node its runs' body
+    /// result reaches instead of the call's result: the `new` result takes
+    /// only its objects, and the this-object while it holds a non-object
+    /// (`Model::ctor_this_result`, ECMA-262 10.2.2 steps 10-12).
+    pub ctor_body: crate::pts::FxHashMap<(CallId, FnIdx), NodeId>,
     /// (key or prototype node, object, dst or call, rule): `IdxLoad` /
     /// `IdxKey` use 0-18; the `IDX_*` rules of DECISIONS 217 the rest.
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u16)>,
@@ -2258,7 +2297,7 @@ pub struct Model {
     pub builtin_callee: crate::pts::FxHashSet<NodeId>,
     /// Shared accessor walks: (receiver, start, key, load/store/call) → the
     /// node the walk's accessors feed (load/call) or read from (store).
-    pub walk_nodes: FxHashMap<(Tok, Tok, Key, u8), NodeId>,
+    pub walk_nodes: FxHashMap<(Tok, Tok, Key, u8), (NodeId, NodeId)>,
     /// Store walks that have found no setter (and no unknown prototype) yet:
     /// the sites' source nodes wait here instead of flowing into the walk
     /// node, which nothing reads until then.
@@ -2382,7 +2421,7 @@ pub struct Model {
     /// receiver, answered by its own field alone. Filed with
     /// `note_shadowed`, so every event that revokes the key re-checks them
     /// (`flush_own_stopped`): the lookup then runs again, chain included.
-    pub own_stopped: FxHashMap<Tok, Vec<(Tok, Atom, ChainAct)>>,
+    pub own_stopped: FxHashMap<Tok, OwnStopped>,
     /// Rule C1: by typed array, the node its `length` loads read beside the
     /// %TypedArray%.prototype getter's Number while `Model::ta_length_getter`
     /// holds, and whether it has taken the own `length` field
@@ -2613,6 +2652,23 @@ pub struct Model {
     /// intrinsic object and every intrinsic function, whether or not the
     /// program hands it one (`Model::hold_realm`).
     pub realm_held: bool,
+    /// The whole-program solve (`compute_act`): its first hold stops it
+    /// (`hold_restart`), and it runs again with the realm held from its
+    /// seed. The hold is a fact of the whole program (unknown code exists),
+    /// not of a moment of the solve: what the rules made under
+    /// `!realm_held` before a flip midway would stay in the result.
+    pub restart_on_hold: bool,
+    /// The solve met its first hold under `restart_on_hold` and stopped.
+    pub hold_restart: bool,
+    /// The unknown code of that first hold, when its site names it
+    /// (`unknown_method_at`, e.g. E14 dynamic code): the seeded analysis
+    /// holds the realm for that reason, so a value the held realm makes
+    /// unknown names the code that holds it (`ledger::route`).
+    pub hold_why: Option<String>,
+    /// The reason the realm is held (`hold_realm`): an intrinsic the held
+    /// realm reaches later (`realm_hold_tok`, a lazily made built-in) is
+    /// unknown for that reason, so it names the code that holds the realm.
+    pub(crate) hold_reason: Option<u32>,
     /// `PERRY_FACTS_LEDGER` only (`hold_ledger`): the realm is never held
     /// and each hold's effects carry their root. `None` otherwise.
     pub(crate) ledger: Option<Box<crate::hold_ledger::HoldLedger>>,
@@ -2735,6 +2791,13 @@ pub struct Model {
     /// can hold a string, a symbol or an object once the solve is done
     /// ([`Model::array_iteration_writes`]); a number key is an element.
     pub array_keyed_stores: Vec<(SiteId, u32)>,
+    /// #13645: writes (token, computed-store site, reason)
+    /// [`Model::note_array_member_write`] holds back because the token's
+    /// class had an `extends` value with no Array parent in it then
+    /// (`tmpl_may_be_array_now`). Each counts once that value may be one
+    /// (and, with a site, once its key may name a member), when
+    /// [`Model::array_iteration_writes`] asks.
+    pub array_member_unsure: Vec<(Tok, Option<SiteId>, u32)>,
     /// Native parent prototypes (`EventEmitter.prototype`, `Error.prototype`
     /// …) are runtime-owned, like `Object.prototype`: sealed static layouts
     /// whose keys the analysis knows ([`crate::builtins::native_proto_keys`]),
@@ -2808,6 +2871,11 @@ pub struct Model {
     /// `settle_for_in`; the set dedups.
     pub own_keys_on: Vec<(Tok, NodeId)>,
     pub own_keys_seen: crate::pts::FxHashSet<(Tok, NodeId)>,
+    /// Rule PK: (class prototype, key node) of each `Cons::OwnNames` that
+    /// gave the prototype's known names (`own_names_of`), checked again in
+    /// `settle_for_in`; the set dedups.
+    pub own_names_on: Vec<(Tok, NodeId)>,
+    pub own_names_seen: crate::pts::FxHashSet<(Tok, NodeId)>,
     /// FORIN1: (key node, stored value, constant) of a for-in keyed store
     /// made per String constant of its key (`Cons::StoreKeyed`).
     pub keyed_named: crate::pts::FxHashSet<(NodeId, NodeId, Atom)>,
@@ -2876,6 +2944,8 @@ pub struct Model {
     pub define_on: crate::pts::FxHashSet<(NodeId, Atom, bool)>,
     /// The node a `Cons::Store` runs on, while it runs.
     pub store_at: Option<NodeId>,
+    /// The throw region of that `Cons::Store` (`Cons::Store::region`).
+    pub store_region: Option<NodeId>,
     /// A call's constant first argument as a property-key spelling. Value
     /// callees record strings only (`BuiltinNs::Require`). Compiler data.
     pub call_lit: FxHashMap<CallId, Atom>,
@@ -3258,6 +3328,9 @@ pub struct Model {
     /// (`Model::filter_check`).
     pub ft_check: Option<FxHashMap<NodeId, Vec<NodeId>>>,
     pub ft_violations: u32,
+    /// Rule G2/G1 (`Cons::FieldTruthy`): per (token, key), the token's
+    /// node and its read of `key`, shared by every test of that read.
+    pub ft_reads: FxHashMap<(Tok, Key), (NodeId, NodeId)>,
     /// Decision 19: the reason a closed function is published to the
     /// module's other units (`Gen::unit_boundary`). Published that way its
     /// token does not escape: its parameters hold the closed contract's
@@ -3514,6 +3587,13 @@ pub struct AccGroup {
     pub ar: NodeId,
     pub st: NodeId,
     pub sp: NodeId,
+    /// What the group's getters throw: it reaches the region of every
+    /// read or call that runs them (`group_hit`); [[Get]] runs only the
+    /// getter (ECMA-262 10.1.8.1).
+    pub rg: NodeId,
+    /// What the group's setters throw: it reaches the region of every
+    /// store that runs them; [[Set]] runs only the setter (10.1.9.2).
+    pub rs: NodeId,
     pub has_setter: bool,
     /// Store sources waiting for a first setter.
     pub pending: Vec<NodeId>,

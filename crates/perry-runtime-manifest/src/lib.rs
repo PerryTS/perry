@@ -357,3 +357,4 @@ pub mod realm_layouts;
 mod realm_owners;
 pub mod realm_source;
 mod realm_storage;
+pub mod worker_shape;

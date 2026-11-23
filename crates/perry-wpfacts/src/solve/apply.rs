@@ -96,6 +96,15 @@ impl Model {
                     self.own_keys_of(t, dst);
                 }
             }
+            Cons::OwnNames { dst } => {
+                // A String's own names: its indices and `length`.
+                if prim & prim::STR != 0 {
+                    self.add_prim(dst, prim::STR);
+                }
+                for &t in toks {
+                    self.own_names_of(t, dst);
+                }
+            }
             Cons::OwnDescValues { dst } => {
                 // A String's own properties: its characters and `length`.
                 if prim & prim::STR != 0 {
@@ -133,13 +142,20 @@ impl Model {
                     }
                 }
             }
-            Cons::Store { key, src, site } => {
+            Cons::Store {
+                key,
+                src,
+                site,
+                region,
+            } => {
                 self.store_at = Some(n);
+                self.store_region = Some(region);
                 for &t in toks {
                     self.prov_tok(pv, t);
                     self.store_into(t, key, src, site);
                 }
                 self.store_at = None;
+                self.store_region = None;
             }
             Cons::Call { call } => {
                 for &t in toks {
@@ -485,6 +501,7 @@ impl Model {
                     guard::NOT_SHARED_BUFFER_CTOR => {
                         Some(self.tok(TokKind::Builtin(BuiltinNs::SharedArrayBuffer)))
                     }
+                    guard::NOT_OBJECT_CTOR => Some(self.tok(TokKind::Builtin(BuiltinNs::Object))),
                     _ => None,
                 };
                 // A marker beside its values is no value (DECISIONS 74):
@@ -602,6 +619,20 @@ impl Model {
                     self.cur_range = saved;
                 }
             }
+            // Rule T7: every value but `%Object.prototype%`.
+            Cons::NotObjectProto { dst } => {
+                for &t in toks {
+                    if !matches!(self.toks[t as usize], TokKind::ObjectProto) {
+                        self.add_tok(dst, t);
+                    }
+                }
+                if prim != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim, strs);
+                    self.cur_range = saved;
+                }
+            }
             Cons::NotRegExp { dst } => {
                 for &t in toks {
                     if !self.is_regexp_tok(t) {
@@ -657,9 +688,20 @@ impl Model {
                     // `test` (`guard::TRUTHY`: an object, function, marker,
                     // ⊤, or any primitive kind but `undefined`/`null`/`false`;
                     // `IS_FALSE`: the `false` kind, a marker or ⊤; ...).
-                    let one = self.node_l("field-truthy-token");
-                    self.add_tok(one, t);
-                    let read = self.node_l("field-truthy-read");
+                    // The read depends on (token, key) alone: one pair per
+                    // (token, key) for every test and output
+                    // (`Model::ft_reads`); each test adds its own guard,
+                    // which `cons` replays on what the read already holds.
+                    let (one, read, fresh) = match self.ft_reads.get(&(t, key)) {
+                        Some(&(one, read)) => (one, read, false),
+                        None => {
+                            let one = self.node_l("field-truthy-token");
+                            self.add_tok(one, t);
+                            let read = self.node_l("field-truthy-read");
+                            self.ft_reads.insert((t, key), (one, read));
+                            (one, read, true)
+                        }
+                    };
                     self.cons(
                         read,
                         Cons::Guard {
@@ -668,9 +710,11 @@ impl Model {
                             dst,
                         },
                     );
-                    // A rule, not a one-off lookup: a later store on the
-                    // chain (an `Object.prototype` member) re-runs it.
-                    self.cons(one, Cons::Load { key, dst: read });
+                    if fresh {
+                        // A rule, not a one-off lookup: a later store on the
+                        // chain (an `Object.prototype` member) re-runs it.
+                        self.cons(one, Cons::Load { key, dst: read });
+                    }
                 }
             }
             Cons::Objects { dst } => {
@@ -1054,7 +1098,11 @@ impl Model {
                     }
                 }
             }
-            Cons::Implicit { reason, proto } => {
+            Cons::Implicit {
+                reason,
+                proto,
+                region,
+            } => {
                 for &t in toks {
                     // The uncaught report of a native Error (perry-runtime
                     // exception.rs `print_uncaught`: `ptr_is_native_error`,
@@ -1087,13 +1135,13 @@ impl Model {
                         TokKind::Bound(b) if proto == Protocol::Any => {
                             let target = self.bound[b as usize].0;
                             self.bound_call(target, t, reason);
-                            self.implicit(t, reason, proto);
+                            self.implicit(t, reason, proto, region);
                         }
                         // `instanceof` a bound function runs its target's.
                         TokKind::Bound(_) if proto == Protocol::HasInstance => {
                             self.escape(t, reason)
                         }
-                        _ => self.implicit(t, reason, proto),
+                        _ => self.implicit(t, reason, proto, region),
                     }
                 }
             }
@@ -1123,7 +1171,7 @@ impl Model {
                     .walk_nodes
                     .contains_key(&(target, target, Key::any(), 1));
                 if !walked && (!toks.is_empty() || prim != 0) {
-                    self.accessor_walk(target, target, Key::any(), ChainAct::Store(n));
+                    self.accessor_walk(target, target, Key::any(), ChainAct::Store(n, self.thrown));
                     self.note_unnamed_set(target);
                 }
             }
@@ -1466,6 +1514,7 @@ impl Model {
                                 key: k,
                                 src: fa,
                                 site,
+                                region: self.thrown,
                             },
                         );
                         let reason = self.reason("accessor of unknown function value");
@@ -1654,11 +1703,11 @@ impl Model {
                 for &q in toks {
                     match self.toks[q as usize] {
                         TokKind::Top => match act {
-                            ChainAct::Load(dst) | ChainAct::Lookup { dst, .. } => {
+                            ChainAct::Load(dst, _) | ChainAct::Lookup { dst, .. } => {
                                 self.add_tok(dst, TOP)
                             }
                             ChainAct::Call(call) => self.call_tok(call, TOP, Some(origin)),
-                            ChainAct::Store(_) => {}
+                            ChainAct::Store(_, _) => {}
                         },
                         TokKind::ObjectProto
                         | TokKind::NativeProto(..)
@@ -1669,9 +1718,9 @@ impl Model {
                         _ => {
                             let f = self.num_fields(q);
                             match act {
-                                ChainAct::Load(dst) => self.edge(f, dst),
+                                ChainAct::Load(dst, _) => self.edge(f, dst),
                                 ChainAct::Call(call) => self.bind_via(f, call, origin),
-                                ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
+                                ChainAct::Store(_, _) | ChainAct::Lookup { .. } => {}
                             }
                         }
                     }
@@ -1827,7 +1876,7 @@ impl Model {
                         .idx_done
                         .insert((n, q, dst, crate::model::IDX_ENUM_CHAIN))
                     {
-                        self.accessor_walk(of, q, key, ChainAct::Load(dst));
+                        self.accessor_walk(of, q, key, ChainAct::Load(dst, self.thrown));
                         let up = self.proto_node(q);
                         let link = Cons::EnumChain {
                             key,
@@ -2040,7 +2089,7 @@ impl Model {
                         .insert((n, obj, dst, crate::model::IDX_NUM_EXACT))
                     {
                         let key = self.elem_key();
-                        self.builtin_field_use(obj, key, ChainAct::Load(dst));
+                        self.builtin_field_use(obj, key, ChainAct::Load(dst, self.thrown));
                         self.edge(slot, dst);
                     }
                 } else if !self.is_marker(obj)
@@ -2050,7 +2099,7 @@ impl Model {
                         .insert((n, obj, dst, crate::model::IDX_NUM_OWN))
                 {
                     let key = self.elem_key();
-                    self.builtin_field_use(obj, key, ChainAct::Load(dst));
+                    self.builtin_field_use(obj, key, ChainAct::Load(dst, self.thrown));
                     if self.typed_array_number_key(obj, prim, named) {
                         // Rule TYPED-ELEM (`typed_array_number_key`): the
                         // element, a Number (BigInt) or `undefined`. Under
@@ -2208,6 +2257,7 @@ impl Model {
                 site,
                 reason,
                 accessor,
+                desc,
             } => {
                 let d = crate::model::DefineAny {
                     o,
@@ -2218,6 +2268,7 @@ impl Model {
                     site,
                     reason,
                     accessor,
+                    desc,
                 };
                 self.define_computed_key(d);
             }
@@ -2248,7 +2299,13 @@ impl Model {
                     }
                 }
             }
-            Cons::StoreKeyed { o, src, site, subj } => {
+            Cons::StoreKeyed {
+                o,
+                src,
+                site,
+                subj,
+                region,
+            } => {
                 // FORIN1: a key that holds String constants only (a shared
                 // for-in run over the keys `for_in_keys` lists,
                 // `for_in_named_run`) is one of them: a named store per
@@ -2268,6 +2325,7 @@ impl Model {
                                     key: Key::Named(a),
                                     src,
                                     site,
+                                    region,
                                 },
                             );
                         }
@@ -2285,6 +2343,7 @@ impl Model {
                                 key: Key::Named(a),
                                 src,
                                 site,
+                                region,
                             },
                         ),
                         None if subj != NO_NODE => self.cons(
@@ -2316,6 +2375,7 @@ impl Model {
                 src,
                 site,
                 shape,
+                region,
             } => {
                 // DECISIONS 217(c) for stores: a Number key (ToPropertyKey:
                 // its ToString, a numeric name, `numeric_key`) writes an
@@ -2394,7 +2454,15 @@ impl Model {
                         Some(i) => Key::Named(self.atom(&format!("[[Index{i}]]"))),
                         None => self.elem_key(),
                     };
-                    self.cons(o, Cons::Store { key: ek, src, site });
+                    self.cons(
+                        o,
+                        Cons::Store {
+                            key: ek,
+                            src,
+                            site,
+                            region,
+                        },
+                    );
                 }
                 if index {
                     // `a[i] = v` may write past the end; `push` appends. At
@@ -2445,7 +2513,12 @@ impl Model {
                     for &t in toks {
                         let ret = match t != TOP && !self.is_marker(t) {
                             true => {
-                                self.implicit(t, r, crate::model::Protocol::ToPrimitive);
+                                self.implicit(
+                                    t,
+                                    r,
+                                    crate::model::Protocol::ToPrimitive,
+                                    self.thrown,
+                                );
                                 self.to_prim_ret.get(&t).copied()
                             }
                             false => None,
@@ -2460,6 +2533,7 @@ impl Model {
                                             src,
                                             site,
                                             shape,
+                                            region,
                                         },
                                     );
                                 }
@@ -2496,6 +2570,7 @@ impl Model {
                                 key: Key::Any(s),
                                 src,
                                 site,
+                                region,
                             },
                         );
                     }
@@ -2508,6 +2583,7 @@ impl Model {
                                 key: Key::Named(a),
                                 src,
                                 site,
+                                region,
                             },
                         );
                     }
@@ -2519,7 +2595,15 @@ impl Model {
                 if digits {
                     if self.index_store_done.insert((n, o, src, site, 5)) {
                         let key = self.digits_key();
-                        self.cons(o, Cons::Store { key, src, site });
+                        self.cons(
+                            o,
+                            Cons::Store {
+                                key,
+                                src,
+                                site,
+                                region,
+                            },
+                        );
                     }
                 } else if any && self.index_store_done.insert((n, o, src, site, kind)) {
                     // Diagnostic (off: one flag read): why a store keeps the any key.
@@ -2542,6 +2626,7 @@ impl Model {
                             key: Key::Any(shape),
                             src,
                             site,
+                            region,
                         },
                     );
                 }
@@ -2706,7 +2791,11 @@ impl Model {
             // Rule K7: the case map of the receiver keeps its infix entries.
             // Rule CONSOLE-PCT: a first argument that may hold `%` lets the
             // specifiers consume the later arguments.
-            Cons::ConsoleFormat { reason, agg } => {
+            Cons::ConsoleFormat {
+                reason,
+                agg,
+                region,
+            } => {
                 let fired = self.nodes[agg as usize].cons.iter().any(|c| {
                     matches!(
                         c,
@@ -2727,6 +2816,7 @@ impl Model {
                         Cons::Implicit {
                             reason,
                             proto: Protocol::Inspect,
+                            region,
                         },
                     );
                 }
@@ -2969,7 +3059,15 @@ impl Model {
                     let v = self.node_l("spread-string-chars");
                     self.add_prim(v, prim::STR);
                     let key = self.elem_key();
-                    self.cons(into, Cons::Store { key, src: v, site });
+                    self.cons(
+                        into,
+                        Cons::Store {
+                            key,
+                            src: v,
+                            site,
+                            region: self.thrown,
+                        },
+                    );
                 }
                 for &s in toks {
                     self.cons(
@@ -3062,6 +3160,15 @@ impl Model {
                     self.accessor_hit(origin, h, key, act);
                 }
             }
+            // Rule PXCALL: a value of Proxy `p`'s target that may be
+            // callable (not an ordinary object without [[Call]],
+            // `no_call_tok`; a marker, ⊤ or a builtin may be one) gives `p`
+            // its [[Call]]. A Proxy here reaches `proxy_apply` instead.
+            Cons::ProxyCallee { p } => {
+                if toks.iter().any(|&t| !self.no_call_tok(t)) {
+                    self.proxy_callable(p);
+                }
+            }
             Cons::BuiltinCallee => {
                 for &t in toks {
                     if self.per_receiver_callee(t) {
@@ -3079,15 +3186,46 @@ impl Model {
                 reason,
             } => {
                 let mut other = prim & prim::NULL != 0;
+                let mut class_parent = false;
                 for &t in toks {
-                    if t != expected {
-                        self.escape(t, reason);
-                        other = true;
+                    if t == expected {
+                        continue;
+                    }
+                    match self.toks[t as usize] {
+                        // A program class (`g[k] = P` lets the global name
+                        // `Error` read `P`) is modeled code, not unknown
+                        // code: `super()` follows the live edge and runs its
+                        // constructor, the class object's [[Prototype]]
+                        // receives it (`feed_parent`), and the instances'
+                        // chain continues at its prototype object
+                        // (ClassDefinitionEvaluation: protoParent is the
+                        // value's `prototype`, which a class keeps
+                        // non-writable). As for a name-linked program parent
+                        // whose evaluated value is not one class
+                        // (`settle_parent_values`), the instance is hard E11
+                        // and its parent unsettled; nothing escapes. A class
+                        // with `tm` on its own chain does not exist yet when
+                        // the `extends` of `tm` is evaluated: never its value.
+                        TokKind::ClassObj(p) => {
+                            class_parent = true;
+                            if !self.has_ancestor(p, tm) {
+                                let own = self.tok(TokKind::Proto(self.constructor_origin(tm)));
+                                let pn = self.proto_node(own);
+                                let pp = self.tok(TokKind::Proto(self.constructor_origin(p)));
+                                self.add_tok(pn, pp);
+                            }
+                        }
+                        _ => {
+                            self.escape(t, reason);
+                            other = true;
+                        }
                     }
                 }
-                if other {
+                if other || class_parent {
                     let inst = self.tok(TokKind::Obj(tm, NO_CTX));
-                    self.escape(inst, reason);
+                    if other {
+                        self.escape(inst, reason);
+                    }
                     self.mark_hard(inst, Hard::E11ReflectConstruct, reason);
                 }
             }

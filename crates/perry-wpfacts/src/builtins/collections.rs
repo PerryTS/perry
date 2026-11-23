@@ -110,7 +110,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread: c.spread.clone(),
                     ret: c.ret,
                     site: c.site,
-                    region: m.thrown,
+                    region: m.calls[call as usize].region,
                 },
             ) {
                 m.call_tok(call2, t, None);
@@ -136,7 +136,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread,
                     ret: c.ret,
                     site: c.site,
-                    region: m.thrown,
+                    region: m.calls[call as usize].region,
                 },
             ) {
                 m.call_tok(call2, t, None);
@@ -242,7 +242,7 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     spread: vec![],
                     ret: raw,
                     site: c.site,
-                    region: m.thrown,
+                    region: m.calls[call as usize].region,
                 },
             );
             m.call_tok(call2, t, Some(t));
@@ -330,8 +330,11 @@ pub(super) fn cb_call(
     this: ThisArg,
     args: Vec<NodeId>,
 ) -> NodeId {
-    let thrown = m.thrown;
-    cb_call_in(m, by, cb, this, args, thrown)
+    // CALLREGION (ECMA-262 7.3.14 Call, 14.15): the builtin calls `cb`
+    // synchronously, so an abrupt completion of `cb` is the builtin's
+    // own, thrown into the region of the call `by` made it for.
+    let region = m.calls[by as usize].region;
+    cb_call_in(m, by, cb, this, args, region)
 }
 
 /// `cb_call` whose callback throws into `region` (a job's own promise, or
@@ -409,7 +412,7 @@ fn recv_call(
             spread: vec![],
             ret,
             site,
-            region: m.thrown,
+            region: m.calls[by as usize].region,
         },
         callee,
     )
@@ -466,20 +469,26 @@ pub(crate) fn to_prim(m: &mut Model, v: NodeId, why: &str) {
         Cons::Implicit {
             reason: r,
             proto: Protocol::ToPrimitive,
+            region: m.thrown,
         },
     );
 }
 
 /// `@@split` and `@@matchAll` (22.2.6.14, 22.2.6.11) build their splitter or
-/// matcher with SpeciesConstructor(rx, %RegExp%): `constructor` (and its
-/// `@@species`) is read from the regexp and the result constructed from
-/// `(rx, flags)`, so a constructor the program stored runs with any arguments.
+/// matcher with SpeciesConstructor(rx, %RegExp%) (7.3.22): `C` = the
+/// regexp's `constructor`, `S` = `C[@@species]`, then Construct(S, [rx,
+/// flags]) with flags = ToString(Get(rx, "flags")). Each read is keyed: a
+/// realm constructor's `@@species` is the constructor itself, and a realm
+/// constructor builds the realm's own regexp (`Cons::NewProgram` makes
+/// nothing for it). A constructor the program stored runs with `(rx,
+/// flags)`, and what it makes the builtin then uses as its regexp (Set of
+/// `lastIndex`, RegExpExec's `exec` call, 22.2.7.1): any protocol on it.
 pub(super) fn regexp_species(name: &str) -> bool {
     name.strip_prefix(WK_PREFIX)
         .is_some_and(|s| matches!(s, "split" | "matchAll"))
 }
 
-fn regexp_species_constructor(m: &mut Model, t: Tok) {
+fn regexp_species_constructor(m: &mut Model, t: Tok, call: CallId) {
     let recv = m.node_l("regexp");
     m.add_tok(recv, t);
     let k = m.atom("constructor");
@@ -491,12 +500,53 @@ fn regexp_species_constructor(m: &mut Model, t: Tok) {
             dst: cn,
         },
     );
-    let r = m.reason("argument of builtin species constructor of the RegExp");
+    let sa = m.atom("@@__perry_wk_species");
+    let sp = m.node_l("species");
     m.cons(
         cn,
+        Cons::Load {
+            key: Key::Named(sa),
+            dst: sp,
+        },
+    );
+    let fk = m.atom("flags");
+    let flags = m.node_l("regexp-flags");
+    m.cons(
+        recv,
+        Cons::Load {
+            key: Key::Named(fk),
+            dst: flags,
+        },
+    );
+    to_prim(
+        m,
+        flags,
+        "ToString of the RegExp flags for its species constructor",
+    );
+    let fstr = m.node_l("regexp-flags-string");
+    m.add_prim(fstr, prim::STR);
+    let made = m.node_l("species-regexp");
+    let c = m.calls[call as usize].clone();
+    let mc = m.solver_call(
+        call,
+        CallSite {
+            first_arg_fixed: false,
+            this: ThisArg::Undef,
+            args: vec![recv, fstr],
+            spread: vec![],
+            ret: made,
+            site: c.site,
+            region: m.calls[call as usize].region,
+        },
+    );
+    m.cons(sp, Cons::NewProgram { call: mc });
+    let r = m.reason("regexp a program species constructor made for a RegExp builtin");
+    m.cons(
+        made,
         Cons::Implicit {
             reason: r,
             proto: Protocol::Any,
+            region: m.thrown,
         },
     );
 }
@@ -614,8 +664,8 @@ fn capability_executor(m: &mut Model, by: CallId, settled: NodeId, unknown: bool
         settled
     };
     let thrown = m.thrown;
-    let _ = cb_call(m, by, res, ThisArg::Undef, vec![value]);
-    let _ = cb_call(m, by, rej, ThisArg::Undef, vec![thrown]);
+    let _ = cb_call_in(m, by, res, ThisArg::Undef, vec![value], thrown);
+    let _ = cb_call_in(m, by, rej, ThisArg::Undef, vec![thrown], thrown);
     tok
 }
 
@@ -642,7 +692,7 @@ pub(crate) fn method_call(
             spread: vec![],
             ret,
             site,
-            region: m.thrown,
+            region: m.calls[call as usize].region,
         },
     );
     m.cons(
@@ -678,7 +728,7 @@ pub(super) fn iterate(m: &mut Model, call: CallId, v: NodeId) -> NodeId {
                 spread: vec![],
                 ret,
                 site,
-                region: m.thrown,
+                region: m.calls[call as usize].region,
             },
         ) else {
             return ret;
@@ -880,6 +930,7 @@ pub(crate) fn construct_into(
             key: ek,
             src: elems,
             site,
+            region: m.thrown,
         },
     );
     let la = m.atom("length");
@@ -891,6 +942,7 @@ pub(crate) fn construct_into(
             key: Key::Named(la),
             src: len,
             site,
+            region: m.thrown,
         },
     );
     m.edge(made, ret);
@@ -916,7 +968,7 @@ fn species_construct(m: &mut Model, out: Tok, sc: NodeId, call: CallId, args: Op
             spread: vec![],
             ret: made,
             site: c.site,
-            region: m.thrown,
+            region: m.calls[call as usize].region,
         },
     );
     construct_into(m, sc, Some(mc), out, made, c.ret);
@@ -1103,7 +1155,7 @@ fn array_like_model(m: &mut Model, t: Tok, name: &str) -> NodeId {
     let own = m.num_fields(t);
     let elems = m.field_any(t);
     m.edge(own, elems);
-    m.plain_key(t, ChainAct::Load(elems));
+    m.plain_key(t, ChainAct::Load(elems, m.thrown));
     let recv = m.node_l("array-like-this");
     m.add_tok(recv, t);
     let length = Key::Named(m.atom("length"));
@@ -1126,6 +1178,7 @@ fn array_like_model(m: &mut Model, t: Tok, name: &str) -> NodeId {
                 key: length,
                 src: num,
                 site,
+                region: m.thrown,
             },
         );
     }
@@ -1429,6 +1482,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                     Cons::Implicit {
                         reason: why,
                         proto: Protocol::ToPrimitive,
+                        region: m.thrown,
                     },
                 );
             }
@@ -1514,6 +1568,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                         Cons::Implicit {
                             reason: why,
                             proto: Protocol::ToPrimitive,
+                            region: m.thrown,
                         },
                     );
                 },
@@ -1531,6 +1586,7 @@ pub(super) fn array_method(m: &mut Model, t: Tok, name: Option<&str>, call: Call
                 Cons::Implicit {
                     reason: why,
                     proto: Protocol::ToPrimitive,
+                    region: m.thrown,
                 },
             );
             implicit_args(m, call, "join separator", Protocol::ToPrimitive);
@@ -1612,6 +1668,13 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         // W-HOST (LADDER18): the host Worker's own methods
         // (`worker_method`).
         ("Worker", Some(n)) if worker_method(m, t, n, call) => {}
+        // A member neither the Worker nor `Worker.prototype` owns is its
+        // declared chain's (`EventEmitter.prototype`, `Object.prototype`) or
+        // absent: `then`, read by a resolve function (27.2.1.3.2), is absent.
+        ("Worker", Some(n)) if members::worker_inherited(n).is_some() => {
+            let p = members::worker_inherited(n).expect("inherited");
+            realm_born_method(m, t, p, n, call, &format!("argument of Worker.{n}"))
+        }
         // An object a realm declaration made (`fresh(P)`) has `P` as its
         // [[Prototype]]: the method is the member of `P`'s declared chain,
         // or absent (`realm_born_method`).
@@ -1851,7 +1914,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     spread: vec![],
                     ret: c.ret,
                     site: nested,
-                    region: m.thrown,
+                    region: m.calls[call as usize].region,
                 },
                 move |m, tg, nested| {
                     m.cons(
@@ -1978,6 +2041,12 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
             let p = members::regexp_inherited(n).expect("inherited");
             realm_born_method(m, t, p, n, call, &format!("argument of RegExp.{n}"))
         }
+        // The same for a Date (21.4.4): `then`, read by a resolve function
+        // (27.2.1.3.2), is `Object.prototype`'s or absent.
+        ("Date", Some(n)) if members::date_inherited(n).is_some() => {
+            let p = members::date_inherited(n).expect("inherited");
+            realm_born_method(m, t, p, n, call, &format!("argument of Date.{n}"))
+        }
         (
             "Date" | "RegExp" | "URL" | "URLSearchParams" | "TextCodec" | "builtin" | "Timer",
             Some(n),
@@ -1992,7 +2061,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                 method_call(m, call, recv, "toISOString", vec![]);
             }
             if what == "RegExp" && regexp_species(n) {
-                regexp_species_constructor(m, t);
+                regexp_species_constructor(m, t, call);
             }
             ret_prim(m, call, prim::ALL);
             let pb = site_tmpl(m, call, "primbox");
@@ -2063,6 +2132,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: m.thrown,
                     },
                 );
             }
@@ -2150,6 +2220,63 @@ fn dataview_access(n: &str) -> Option<(bool, bool)> {
     }
 }
 
+/// `postMessage(v, transfer)` of a Worker (`worker_method`) and of the
+/// Worker global (WGPOST, builtins.rs: perry-stdlib worker_surface.rs
+/// `web_worker_post_message` ignores `this` and calls the same
+/// `js_worker_threads_post_message`): StructuredSerialize of `v`, the
+/// transfer list's items detached, `undefined` returned. A call with a
+/// spread argument is not this (the callers keep the generic path).
+pub(super) fn worker_post_message(m: &mut Model, call: CallId) {
+    let c = m.calls[call as usize].clone();
+    if let Some(&v) = c.arg(0) {
+        let r = m.reason("Worker postMessage value cloned");
+        m.cons(
+            v,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::Clone,
+                region: m.thrown,
+            },
+        );
+    }
+    if let Some(&tl) = c.arg(1) {
+        let rb = m.reason("B3 transfer list");
+        let inner = m.node_l("worker-transfer");
+        m.cons(
+            tl,
+            Cons::Load {
+                key: Key::any(),
+                dst: inner,
+            },
+        );
+        let ta = m.atom("transfer");
+        m.cons(
+            tl,
+            Cons::Load {
+                key: Key::Named(ta),
+                dst: inner,
+            },
+        );
+        let items = m.node_l("worker-transfer-item");
+        m.edge(inner, items);
+        m.cons(
+            inner,
+            Cons::Load {
+                key: Key::any(),
+                dst: items,
+            },
+        );
+        m.cons(
+            items,
+            Cons::Hard {
+                kind: Hard::B3Transfer,
+                reason: rb,
+            },
+        );
+    }
+    ret_prim(m, call, prim::UNDEF);
+}
+
 /// W-HOST (LADDER18): a method of the host Worker `t` (perry-stdlib
 /// worker_threads/worker_surface.rs, worker_pump.rs; Node worker_threads,
 /// HTML Workers). `false`: a member this does not describe (generic).
@@ -2173,54 +2300,7 @@ fn worker_method(m: &mut Model, t: Tok, n: &str, call: CallId) -> bool {
         return false;
     }
     match n {
-        "postMessage" => {
-            if let Some(&v) = c.arg(0) {
-                let r = m.reason("Worker postMessage value cloned");
-                m.cons(
-                    v,
-                    Cons::Implicit {
-                        reason: r,
-                        proto: Protocol::Clone,
-                    },
-                );
-            }
-            if let Some(&tl) = c.arg(1) {
-                let rb = m.reason("B3 transfer list");
-                let inner = m.node_l("worker-transfer");
-                m.cons(
-                    tl,
-                    Cons::Load {
-                        key: Key::any(),
-                        dst: inner,
-                    },
-                );
-                let ta = m.atom("transfer");
-                m.cons(
-                    tl,
-                    Cons::Load {
-                        key: Key::Named(ta),
-                        dst: inner,
-                    },
-                );
-                let items = m.node_l("worker-transfer-item");
-                m.edge(inner, items);
-                m.cons(
-                    inner,
-                    Cons::Load {
-                        key: Key::any(),
-                        dst: items,
-                    },
-                );
-                m.cons(
-                    items,
-                    Cons::Hard {
-                        kind: Hard::B3Transfer,
-                        reason: rb,
-                    },
-                );
-            }
-            ret_prim(m, call, prim::UNDEF);
-        }
+        "postMessage" => worker_post_message(m, call),
         "addEventListener"
         | "on"
         | "once"

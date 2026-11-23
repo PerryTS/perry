@@ -44,6 +44,12 @@ pub struct ProxyRec {
     /// first use made (its trap call, its forward to the target), which
     /// every later use of the class joins.
     pub ops: crate::pts::FxHashMap<ProxyOp, NodeId>,
+    /// Rule PXCALL: the target may be callable, so the Proxy has a
+    /// [[Call]] (`Model::proxy_callable`).
+    pub callable: bool,
+    /// Rule PXCALL: the calls of the Proxy (callee node, rule) made while
+    /// its target held no callable value; they run when it gets one.
+    pub calls: Vec<(NodeId, Cons)>,
 }
 
 /// An operation class of one Proxy. Each is made once: its trap call and
@@ -57,6 +63,9 @@ pub enum ProxyOp {
     Get(Key, NodeId),
     /// The `set` trap call for `key`: the node of the values it is passed.
     SetTrap(Key),
+    /// The throw region of the `set` trap call for `key`: what the trap
+    /// throws, which reaches the region of every store that ran it.
+    SetThrow(Key),
     /// The forward of one store (`key`, value node, site) to the target.
     SetFwd(Key, NodeId, SiteId),
     /// [[HasProperty]] of `key` (with its key node): trap and forward.
@@ -72,6 +81,9 @@ pub enum ProxyOp {
     OwnKeys,
     /// [[GetPrototypeOf]]: the `getPrototypeOf` trap (a for-in walk).
     ProtoTrap,
+    /// Rule PXCALL: the `ProxyCallee` rule of the called Proxy (the id) on
+    /// this Proxy's target: a Proxy is callable when its target is.
+    Callee(u32),
 }
 
 impl Model {
@@ -96,6 +108,8 @@ impl Model {
                     handler,
                     degraded: false,
                     ops: Default::default(),
+                    callable: false,
+                    calls: Vec::new(),
                 });
                 self.proxy_index.insert(key, p);
                 p
@@ -169,8 +183,24 @@ impl Model {
     }
 
     /// Call the trap `name` of Proxy `p` with `this = handler` and `args`,
-    /// its result into `ret`.
-    fn proxy_trap(&mut self, p: u32, name: &str, args: Vec<NodeId>, ret: NodeId) {
+    /// its result into `ret`, what it throws into the shared thrown cell.
+    /// `key`: the access's key when 10.5.x passes the trap P (rule PXGET:
+    /// the trap runs per key shape), `None` for a trap without one.
+    fn proxy_trap(&mut self, p: u32, name: &str, key: Option<Key>, args: Vec<NodeId>, ret: NodeId) {
+        let thrown = self.thrown;
+        self.proxy_trap_in(p, name, key, args, ret, thrown);
+    }
+
+    /// `proxy_trap` with what the trap throws into `region`.
+    fn proxy_trap_in(
+        &mut self,
+        p: u32,
+        name: &str,
+        key: Option<Key>,
+        args: Vec<NodeId>,
+        ret: NodeId,
+        region: NodeId,
+    ) {
         let h = self.proxies[p as usize].handler;
         let trap = self.node_l("proxy-trap");
         let a = self.atom(name);
@@ -189,8 +219,15 @@ impl Model {
             spread: vec![],
             ret,
             site: 0,
-            region: self.thrown,
+            region,
         });
+        if let Some(k) = key {
+            let sh = match k {
+                Key::Named(a) => a,
+                Key::Any(_) => crate::summary::TRAP_ANY,
+            };
+            self.sum.trap_shape.insert(call, sh);
+        }
         self.why_mint(call, None, u32::MAX);
         self.cons(trap, Cons::Call { call });
     }
@@ -223,7 +260,7 @@ impl Model {
         let t = self.proxies[p as usize].target;
         let k = self.proxy_key_arg(key, idx);
         let recv = self.proxy_recv(p);
-        self.proxy_trap(p, "get", vec![t, k, recv], g);
+        self.proxy_trap(p, "get", Some(key), vec![t, k, recv], g);
         if idx == NO_NODE {
             self.cons(t, Cons::Load { key, dst: g });
         } else {
@@ -259,11 +296,11 @@ impl Model {
     /// return goes back to the runtime (an object result: TypeError, 7.1.1
     /// step 1.b.vi, 7.1.1.1 step 6), as for any object (`implicit`). A
     /// superset of the one order each hint takes. Once per Proxy.
-    pub(crate) fn proxy_to_primitive(&mut self, p: u32, reason: u32) {
+    pub(crate) fn proxy_to_primitive(&mut self, p: u32, reason: u32, region: NodeId) {
         let t = self.tok(TokKind::Proxy(p));
-        if !self.implicit_done.insert((t, Protocol::ToPrimitive)) {
+        let Some(throw) = self.implicit_throw(t, Protocol::ToPrimitive, region) else {
             return;
-        }
+        };
         let ret = self.node_l("implicit-ret");
         self.to_prim_ret.insert(t, ret);
         self.to_prim_ret_nodes.insert(ret);
@@ -278,7 +315,7 @@ impl Model {
             spread: vec![],
             ret,
             site: 0,
-            region: self.thrown,
+            region: throw,
         });
         self.protocol_calls.insert(call);
         self.why_mint(call, Some(t), reason);
@@ -305,11 +342,11 @@ impl Model {
     /// the target (`Implicit OwnKeys` on it: nothing on an ordinary object, a
     /// Proxy target's own rule). Each member is a [[Get]] of the Proxy (any
     /// key: the get trap and the forward), serialized in turn. Once per Proxy.
-    pub(crate) fn proxy_json(&mut self, p: u32, reason: u32) {
+    pub(crate) fn proxy_json(&mut self, p: u32, reason: u32, region: NodeId) {
         let t = self.tok(TokKind::Proxy(p));
-        if !self.implicit_done.insert((t, Protocol::Json)) {
+        let Some(throw) = self.implicit_throw(t, Protocol::Json, region) else {
             return;
-        }
+        };
         // toJSON( key ) with this = the Proxy.
         let ret = self.node_l("implicit-ret");
         self.nodes[ret as usize].sink = true;
@@ -323,7 +360,7 @@ impl Model {
             spread: vec![],
             ret,
             site: 0,
-            region: self.thrown,
+            region: throw,
         });
         self.protocol_calls.insert(call);
         self.why_mint(call, Some(t), reason);
@@ -335,6 +372,7 @@ impl Model {
             Cons::Implicit {
                 reason,
                 proto: Protocol::Json,
+                region: throw,
             },
         );
         // An array's `length`, ToNumber'd.
@@ -345,6 +383,7 @@ impl Model {
             Cons::Implicit {
                 reason,
                 proto: Protocol::ToPrimitive,
+                region: throw,
             },
         );
         self.proxy_own_props(p, reason);
@@ -355,6 +394,7 @@ impl Model {
             Cons::Implicit {
                 reason,
                 proto: Protocol::Json,
+                region: throw,
             },
         );
     }
@@ -373,12 +413,18 @@ impl Model {
         let target = self.proxies[p as usize].target;
         // [[OwnPropertyKeys]]: the trap, the list read off its result.
         let keys = self.node_l("proxy-ownkeys-ret");
-        self.proxy_trap(p, "ownKeys", vec![target], keys);
+        self.proxy_trap(p, "ownKeys", None, vec![target], keys);
         self.proxy_result_reads(keys, &["length"], true, reason);
         // [[GetOwnProperty]] of each key: the trap, the descriptor read.
         let k = self.proxy_key_arg(Key::any(), NO_NODE);
         let desc = self.node_l("proxy-gopd-ret");
-        self.proxy_trap(p, "getOwnPropertyDescriptor", vec![target, k], desc);
+        self.proxy_trap(
+            p,
+            "getOwnPropertyDescriptor",
+            Some(Key::any()),
+            vec![target, k],
+            desc,
+        );
         self.proxy_result_reads(
             desc,
             &[
@@ -398,6 +444,7 @@ impl Model {
             Cons::Implicit {
                 reason,
                 proto: Protocol::OwnKeys,
+                region: self.thrown,
             },
         );
     }
@@ -417,12 +464,13 @@ impl Model {
         }
         let target = self.proxies[p as usize].target;
         let proto = self.node_l("proxy-getprototypeof-ret");
-        self.proxy_trap(p, "getPrototypeOf", vec![target], proto);
+        self.proxy_trap(p, "getPrototypeOf", None, vec![target], proto);
         self.cons(
             proto,
             Cons::Implicit {
                 reason,
                 proto: Protocol::OwnKeys,
+                region: self.thrown,
             },
         );
     }
@@ -455,6 +503,7 @@ impl Model {
                     Cons::Implicit {
                         reason,
                         proto: Protocol::ToPrimitive,
+                        region: self.thrown,
                     },
                 );
             }
@@ -476,10 +525,10 @@ impl Model {
     /// `%j` serializes it (`proxy_json`), `%s` / `%d` / `%i` / `%f` run
     /// ToPrimitive (`proxy_to_primitive`), and the value is shown unwrapped
     /// (`proxy_inspect_shown`).
-    pub(crate) fn proxy_inspect(&mut self, p: u32, reason: u32) {
-        self.proxy_json(p, reason);
-        self.proxy_to_primitive(p, reason);
-        self.proxy_inspect_shown(p, reason);
+    pub(crate) fn proxy_inspect(&mut self, p: u32, reason: u32, region: NodeId) {
+        self.proxy_json(p, reason, region);
+        self.proxy_to_primitive(p, reason, region);
+        self.proxy_inspect_shown(p, reason, region);
     }
 
     /// The runtime's formatter showing Proxy `p` (`InspectShown`: a console
@@ -491,11 +540,11 @@ impl Model {
     /// primitive arguments; what it returns is shown in turn. Without one the
     /// target's own values are shown (`Protocol::InspectTarget`). Once per
     /// Proxy.
-    pub(crate) fn proxy_inspect_shown(&mut self, p: u32, reason: u32) {
+    pub(crate) fn proxy_inspect_shown(&mut self, p: u32, reason: u32, region: NodeId) {
         let t = self.tok(TokKind::Proxy(p));
-        if !self.implicit_done.insert((t, Protocol::InspectShown)) {
+        let Some(throw) = self.implicit_throw(t, Protocol::InspectShown, region) else {
             return;
-        }
+        };
         let target = self.proxies[p as usize].target;
         let ret = self.node_l("implicit-ret");
         self.nodes[ret as usize].sink = true;
@@ -509,7 +558,7 @@ impl Model {
             spread: vec![],
             ret,
             site: 0,
-            region: self.thrown,
+            region: throw,
         });
         self.protocol_calls.insert(call);
         self.why_mint(call, Some(t), reason);
@@ -528,6 +577,7 @@ impl Model {
             Cons::Implicit {
                 reason,
                 proto: Protocol::InspectShown,
+                region: throw,
             },
         );
         self.cons(
@@ -535,8 +585,62 @@ impl Model {
             Cons::Implicit {
                 reason,
                 proto: Protocol::InspectTarget,
+                region: throw,
             },
         );
+    }
+
+    /// Rule PXCALL: the callee node `n` of a call or `new` (rule `c`, or
+    /// one of the relays of a method call through a receiver, rule
+    /// PXCALLR: `ThisTo`, `CallArgs`, `BuiltinCallee`) holds Proxy `p`.
+    /// ProxyCreate (10.5.14 step 7) gives `p` a [[Call]] and [[Construct]]
+    /// only when its target is callable (a constructor); otherwise the
+    /// call is that of an ordinary object without [[Call]] (7.3.14 Call
+    /// step 2, a TypeError): no trap runs, nothing flows. The decision is
+    /// the target node's rule (`Cons::ProxyCallee`), re-made as its tokens
+    /// grow; until a callable value reaches it, the call waits.
+    fn proxy_call(&mut self, n: NodeId, c: Cons, p: u32) {
+        if self.proxies[p as usize].callable {
+            self.proxy_degrade(p, "call");
+            return self.apply_inner(n, &c, Tokens::Slice(&[TOP]), 0);
+        }
+        // Array.prototype.toString (23.1.3.36 step 3) on a non-callable
+        // `join`: the String of Object.prototype.toString, as for any
+        // object without [[Call]] (`call_tok`).
+        if let Cons::Call { call } | Cons::CallThis { call, .. } = c {
+            if self.tostring_join_calls.contains(&call) {
+                let ret = self.calls[call as usize].ret;
+                self.add_prim(ret, prim::STR);
+            }
+        }
+        self.proxies[p as usize].calls.push((n, c));
+        self.proxy_callee_rule(p, p);
+    }
+
+    /// Rule PXCALL: the `ProxyCallee` rule of called Proxy `of` on the
+    /// target of Proxy `p` (`of` itself, or a Proxy its target holds: a
+    /// Proxy is callable when its target is). Once per pair.
+    fn proxy_callee_rule(&mut self, of: u32, p: u32) {
+        if !self.proxy_made(p, ProxyOp::Callee(of)) {
+            let t = self.proxies[p as usize].target;
+            self.cons(t, Cons::ProxyCallee { p: of });
+        }
+    }
+
+    /// Rule PXCALL: Proxy `p`'s target may be callable. The Proxy's
+    /// [[Call]] is the `apply` trap or the forward (10.5.12), its
+    /// [[Construct]] the `construct` trap or the forward (10.5.13): not
+    /// modeled, today's path (the degrade, and each waiting call of ⊤).
+    pub(crate) fn proxy_callable(&mut self, p: u32) {
+        if self.proxies[p as usize].callable {
+            return;
+        }
+        self.proxies[p as usize].callable = true;
+        self.proxy_degrade(p, "call");
+        let calls = std::mem::take(&mut self.proxies[p as usize].calls);
+        for (n, c) in calls {
+            self.apply_inner(n, &c, Tokens::Slice(&[TOP]), 0);
+        }
     }
 
     /// The one rule that sees a Proxy token: operation `c` on Proxy `p`.
@@ -557,24 +661,37 @@ impl Model {
             }
             // [[Set]] (10.5.9): trap `set( t, key, V, receiver )`.
             // One trap call per key, passed every stored value; the forward
-            // once per store.
-            Cons::Store { key, src, site } => {
+            // once per store. Step 7 is `? Call( trap, ... )`: what the trap
+            // throws completes this [[Set]], so it reaches the store's own
+            // region (the trap call's region node feeds every store's),
+            // never the program-wide thrown cell.
+            Cons::Store {
+                key,
+                src,
+                site,
+                region,
+            } => {
                 let t = self.proxies[p as usize].target;
-                let v = match self.proxies[p as usize].ops.get(&ProxyOp::SetTrap(key)) {
-                    Some(&v) => v,
+                let ops = &self.proxies[p as usize].ops;
+                let made = ops.get(&ProxyOp::SetTrap(key)).zip(ops.get(&ProxyOp::SetThrow(key)));
+                let (v, throw) = match made.map(|(&v, &throw)| (v, throw)) {
+                    Some(made) => made,
                     None => {
                         let v = self.node_l("proxy-set-value");
+                        let throw = self.node_l("proxy-set-throw");
                         self.proxies[p as usize].ops.insert(ProxyOp::SetTrap(key), v);
+                        self.proxies[p as usize].ops.insert(ProxyOp::SetThrow(key), throw);
                         let k = self.proxy_key_arg(key, NO_NODE);
                         let recv = self.proxy_recv(p);
                         let ret = self.node_l("proxy-set-ret");
-                        self.proxy_trap(p, "set", vec![t, k, v, recv], ret);
-                        v
+                        self.proxy_trap_in(p, "set", Some(key), vec![t, k, v, recv], ret, throw);
+                        (v, throw)
                     }
                 };
                 self.edge(src, v);
+                self.edge(throw, region);
                 if !self.proxy_made(p, ProxyOp::SetFwd(key, src, site)) {
-                    self.cons(t, Cons::Store { key, src, site });
+                    self.cons(t, Cons::Store { key, src, site, region });
                 }
             }
             // [[HasProperty]] (10.5.7): trap `has( t, key )`.
@@ -585,7 +702,7 @@ impl Model {
                 let t = self.proxies[p as usize].target;
                 let k = self.proxy_key_arg(key, idx);
                 let ret = self.node_l("proxy-has-ret");
-                self.proxy_trap(p, "has", vec![t, k], ret);
+                self.proxy_trap(p, "has", Some(key), vec![t, k], ret);
                 self.cons(t, Cons::HasProp { key, idx });
             }
             // [[GetOwnProperty]] (10.5.5): trap `getOwnPropertyDescriptor( t,
@@ -601,7 +718,7 @@ impl Model {
                 let ret = self.node_l("proxy-gopd-ret");
                 let r = self.reason("Proxy getOwnPropertyDescriptor trap result");
                 self.sink_node(ret, r);
-                self.proxy_trap(p, "getOwnPropertyDescriptor", vec![t, k], ret);
+                self.proxy_trap(p, "getOwnPropertyDescriptor", Some(key), vec![t, k], ret);
                 self.cons(t, Cons::OwnProp { key, idx });
             }
             // [[Delete]] (10.5.10): trap `deleteProperty( t, key )`.
@@ -610,7 +727,7 @@ impl Model {
                 if !self.proxy_made(p, ProxyOp::DelTrap(key)) {
                     let k = self.proxy_key_arg(Key::Named(key), NO_NODE);
                     let ret = self.node_l("proxy-delete-ret");
-                    self.proxy_trap(p, "deleteProperty", vec![t, k], ret);
+                    self.proxy_trap(p, "deleteProperty", Some(Key::Named(key)), vec![t, k], ret);
                 }
                 if !self.proxy_made(p, ProxyOp::DelFwd(key, reason)) {
                     self.cons(t, Cons::DeleteKey { key, reason });
@@ -619,6 +736,23 @@ impl Model {
             // An observation; a throw region: the trap calls run in the
             // shared cell every catch reads (`proxy_trap`).
             Cons::Identity { .. } | Cons::Raise { .. } => {}
+            // Rule PXCALL: a call or `new` of the Proxy (`proxy_call`).
+            Cons::Call { .. }
+            | Cons::CallThis { .. }
+            | Cons::New { .. }
+            // Rule PXCALLR: the relays of a method call that found the
+            // Proxy through a receiver (`bind_via`): the `this` it binds
+            // (`ThisTo`, the thisArg of the [[Call]]), its arguments and
+            // result (`CallArgs`, the call's relay node) and its run per
+            // (call, receiver) for a builtin namespace value
+            // (`BuiltinCallee`). Each is a part of the Proxy's [[Call]]:
+            // the same decision as the call (`proxy_call`).
+            | Cons::ThisTo { .. }
+            | Cons::CallArgs { .. }
+            | Cons::BuiltinCallee => self.proxy_call(n, *c, p),
+            // Rule PXCALL: Proxy `p` in the target of called Proxy `of`:
+            // `of` is callable when `p` is, so the rule moves to `p`'s target.
+            Cons::ProxyCallee { p: of } => self.proxy_callee_rule(of, p),
             // A test of the value itself: `=== null`, `=== lit`, `!== null`
             // (IsStrictlyEqual 7.2.16, no internal method), ToBoolean (7.1.2:
             // an object is truthy), the `??` and `&&` operands, typeof
@@ -655,6 +789,14 @@ impl Model {
             // first argument (`may_hold_percent` reads the node's strings);
             // a Proxy is an object, never one, and runs no trap there.
             | Cons::ConsoleFormat { .. }
+            // Rule PXCASE (K7 on a Proxy): `name.toLowerCase()` on a node that
+            // holds Strings and the Proxy. The case map is the result rule of
+            // the String receivers (22.1.3.28 / .29); for the Proxy the call
+            // is p.[[Get]]("toLowerCase") (the Load arm: the get trap) and a
+            // call of what it returns. The rule runs no internal method of
+            // the Proxy, and an object receiver gives any String in the
+            // ordinary rule (`case_map_strs`), as for any other object.
+            | Cons::CaseMap { .. }
             // The KEY of a computed store `o[proxy] = v` (the rule sits on
             // the key node): ToPropertyKey (7.1.19) is ToPrimitive with hint
             // String, its own rule (`Cons::Implicit` on every computed key,
@@ -662,7 +804,67 @@ impl Model {
             // `valueOf`, `toString`). The store then uses that primitive; the
             // ordinary rule reads no internal method of an object key (the
             // any-key store, or the ToPrimitive result key: `implicit`).
-            | Cons::StoreIndexed { .. } => {
+            | Cons::StoreIndexed { .. }
+            // Rule PXKEY: the rules a computed read puts on its KEY node
+            // (`o[proxy]`, `o[proxy](...)`): the past-the-end `undefined`
+            // (`ElemUndef`, also on the length node, which holds Numbers
+            // only), the read under the key's names (`IdxKey`,
+            // `IdxKeyCall`) and the own read (`IdxOwnKey`). Each reads the
+            // key's value only: ToPropertyKey is ToPrimitive, the key's own
+            // rule (`Cons::Implicit`, `proxy_to_primitive`), and the
+            // receiver's [[Get]] runs no internal method of the key. The
+            // ordinary rule treats an object key as one that may spell any
+            // name and is no index, exactly as for any other object.
+            | Cons::ElemUndef { .. }
+            | Cons::IdxKey { .. }
+            | Cons::IdxKeyCall { .. }
+            | Cons::IdxOwnKey { .. } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
+            }
+            // Rule PXVAL: rules that read the Proxy as a value and run no
+            // internal method of it. `LenIndex`, `LenPermuted`, `IndexHole`,
+            // `IndexHoleIn` and `IndexKept` are rules of an Array exotic
+            // object (10.4.2), which a Proxy is not (`is_arr`): the index
+            // store into it is its [[Set]] (10.5.9), the Store arm.
+            // `ArrayLenArg`: `Array(p)` holds the Proxy as its one element
+            // (23.1.1.1 step 4: an argument that is no Number).
+            // `NotObjectProto` (7.2.16 IsStrictlyEqual), `ObjTagProbe` (a
+            // value a [[Get]] returned: an object there widens ToString, as
+            // any object does), `TopIfAny`, `TopIfTop` and `ForInMeet` test
+            // the value only. `ThisInst`: the run binds `this` = the Proxy;
+            // the body's reads of `this` reach the Load arm (the get trap).
+            Cons::LenIndex { .. }
+            | Cons::LenPermuted { .. }
+            | Cons::IndexHole
+            | Cons::IndexHoleIn { .. }
+            | Cons::IndexKept
+            | Cons::ArrayLenArg { .. }
+            | Cons::NotObjectProto { .. }
+            | Cons::ObjTagProbe { .. }
+            | Cons::TopIfAny { .. }
+            | Cons::TopIfTop { .. }
+            | Cons::ForInMeet { .. }
+            | Cons::ThisInst { .. } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
+            }
+            // Rule PXSTR: the constant folds of String and RegExp methods
+            // (`StrIndex` KEY2a, `StrSubstring` KEY2b, `StrReplace` M6,
+            // `ClassReplace` M9, `Captures` RT) read the operand's String
+            // constants only; an object operand gives any Number or String,
+            // as every object does. The operand's ToString and
+            // ToIntegerOrInfinity (7.1.17, 7.1.5: ToPrimitive 7.1.1) are its
+            // own rule (`coerce_operands` / `to_prim`: `Cons::Implicit`
+            // ToPrimitive, `proxy_to_primitive`), and so are replace's
+            // GetMethod(searchValue, @@replace) (22.1.3.19 step 2,
+            // `sym_call`: the Load arm, the get trap) and a callable
+            // replaceValue (step 6, `replace_value`).
+            Cons::StrIndex { .. }
+            | Cons::StrSubstring { .. }
+            | Cons::StrReplace { .. }
+            | Cons::ClassReplace { .. }
+            | Cons::Captures { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
@@ -670,26 +872,31 @@ impl Model {
             Cons::Implicit {
                 reason,
                 proto: Protocol::ToPrimitive,
-            } => self.proxy_to_primitive(p, reason),
+                region,
+            } => self.proxy_to_primitive(p, reason, region),
             // The formatter showing the Proxy (`proxy_inspect_shown`).
             Cons::Implicit {
                 reason,
                 proto: Protocol::InspectShown,
-            } => self.proxy_inspect_shown(p, reason),
+                region,
+            } => self.proxy_inspect_shown(p, reason, region),
             // SerializeJSONProperty (`proxy_json`) and the formatter on a
             // console argument (`proxy_inspect`).
             Cons::Implicit {
                 reason,
                 proto: Protocol::Json,
-            } => self.proxy_json(p, reason),
+                region,
+            } => self.proxy_json(p, reason, region),
             Cons::Implicit {
                 reason,
                 proto: Protocol::Inspect,
-            } => self.proxy_inspect(p, reason),
+                region,
+            } => self.proxy_inspect(p, reason, region),
             // The own keys (`proxy_own_keys`).
             Cons::Implicit {
                 reason,
                 proto: Protocol::OwnKeys,
+                ..
             } => self.proxy_own_keys(p, reason),
             // A for-in body over the Proxy (14.7.5.9
             // EnumerateObjectProperties): its keys are whatever the traps
@@ -697,9 +904,17 @@ impl Model {
             // (`for_in_every_key`); its `p[k]` reads are [[Get]]s (the Load
             // arm), the enumeration itself `proxy_own_keys`.
             Cons::ForInKeys { ft, call } => self.for_in_every_key(call, ft),
+            // Rule PK on a Proxy (Object.getOwnPropertyNames): its own
+            // keys are what its ownKeys trap (or the target's own) returns
+            // (10.5.11 [[OwnPropertyKeys]]), kept to Strings (20.1.2.10):
+            // any String. The traps run in the operand's own
+            // `Implicit OwnKeys` (`proxy_own_keys`).
+            Cons::OwnNames { dst } => {
+                self.add_prim(dst, prim::STR);
+            }
             // Another protocol touch: its hold names the protocol and the
             // touch's own reason.
-            Cons::Implicit { reason, proto } => {
+            Cons::Implicit { reason, proto, .. } => {
                 let cause = format!("implicit {proto:?}: {}", self.reasons[reason as usize]);
                 self.proxy_degrade(p, &cause);
                 self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);

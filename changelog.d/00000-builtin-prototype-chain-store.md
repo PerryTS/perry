@@ -1,0 +1,1 @@
+A program store onto a built-in prototype (`Uint8Array.prototype.extras = fn`) is now seen by method lookups on every receiver whose prototype chain contains it, a `Buffer` included: the call runs the stored method with its arguments, instead of the lookup asking only the receiver's own prototype and proving the method absent.

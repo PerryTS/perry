@@ -13,7 +13,7 @@ use super::*;
 /// as the driver resolves them (a literal names its module). Returns the
 /// unknown values' reasons, whether the realm is held, per-module worker
 /// side, and the pts sizes of function `f`'s parameters.
-fn solve(
+pub(super) fn solve(
     mods: &[(&str, &str)],
     roots: &[&str],
     worker_paths: &[&str],

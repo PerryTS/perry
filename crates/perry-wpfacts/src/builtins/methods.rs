@@ -15,7 +15,7 @@ pub fn plain_key(m: &mut Model, origin: Tok, act: ChainAct) {
         return;
     }
     match act {
-        ChainAct::Load(dst) => {
+        ChainAct::Load(dst, _) => {
             if !intrinsic_miss(m, num, NativeMiss::Load(dst)) {
                 opaque_member(m, dst);
             }
@@ -27,7 +27,7 @@ pub fn plain_key(m: &mut Model, origin: Tok, act: ChainAct) {
                 m.cur_this = prev;
             }
         }
-        ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
+        ChainAct::Store(_, _) | ChainAct::Lookup { .. } => {}
     }
 }
 
@@ -684,6 +684,7 @@ fn object_proto_method_nullish(m: &mut Model, call: CallId) {
             Cons::Implicit {
                 reason,
                 proto: Protocol::ToPrimitive,
+                region: m.thrown,
             },
         );
     }
@@ -733,6 +734,7 @@ pub(super) fn object_proto_own_call(m: &mut Model, own: crate::model::ProtoOwn, 
                 Cons::Implicit {
                     reason: r,
                     proto: Protocol::ToPrimitive,
+                    region: m.thrown,
                 },
             );
         }
@@ -830,7 +832,7 @@ pub(super) fn proto_method_inner(m: &mut Model, p: Tok, origin: Tok, key: Key, c
             // run, never less).
             "toLocaleString" => {
                 let r = m.reason("ToPrimitive of a toLocaleString receiver");
-                m.implicit(origin, r, Protocol::ToPrimitive);
+                m.implicit(origin, r, Protocol::ToPrimitive, m.thrown);
                 ret_prim(m, call, prim::STR);
             }
             "valueOf" => ret_tok(m, call, origin),
@@ -866,6 +868,7 @@ pub(crate) fn annexb_define(m: &mut Model, origin: Tok, call: CallId, setter: bo
             Cons::Implicit {
                 reason,
                 proto: Protocol::ToPrimitive,
+                region: m.thrown,
             },
         );
     }

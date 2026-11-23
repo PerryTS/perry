@@ -300,11 +300,18 @@ fn namespace_symbol_iterator_program_added_is_called() {
     }
 }
 
-/// Control: a namespace whose own keys are undescribed (the statics of
-/// the `RegExp` constructor) keeps the any-key path.
+/// The `RegExp` constructor owns its realm declaration only (`length`,
+/// `name`, `prototype`, `escape`, `@@species`), then `Function.prototype`'s
+/// chain: no `@@iterator`, so GetIterator throws (7.4.3) and nothing runs.
+/// A program store of `@@iterator` on it is called as it is.
 #[test]
-fn undescribed_namespace_symbol_iterator_stays_open() {
-    sym_iter("", "RegExp", false);
+fn regexp_namespace_symbol_iterator_absent_runs_nothing() {
+    sym_iter("", "RegExp", true);
+    sym_iter(
+        "(RegExp as any)[Symbol.iterator] = function* () { yield unknown(); };",
+        "RegExp",
+        false,
+    );
 }
 
 /// The callees of the iteration call of `for (const v of N)`, as the solve
@@ -351,17 +358,17 @@ fn iteration_callees(iterated: &str) -> Vec<String> {
 }
 
 /// Fact level: the iteration call of a described namespace has no callee
-/// (GetIterator throws: no unknown callee, no opaque summary); an
-/// undescribed namespace's (`RegExp`'s statics) keeps the any-key callee.
+/// (GetIterator throws: no unknown callee, no opaque summary). `RegExp`'s
+/// statics are its realm declaration, which holds no `@@iterator`.
 #[test]
 fn namespace_iteration_call_callee_set() {
-    for ns in ["Object", "Function", "Object.prototype.hasOwnProperty"] {
+    for ns in [
+        "Object",
+        "Function",
+        "Object.prototype.hasOwnProperty",
+        "RegExp",
+    ] {
         let c = iteration_callees(ns);
         assert!(c.is_empty(), "{ns}: {c:?}");
     }
-    let c = iteration_callees("RegExp");
-    assert!(
-        c.iter().any(|c| c.contains("builtin RegExp[computed]")),
-        "RegExp: {c:?}"
-    );
 }

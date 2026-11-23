@@ -132,7 +132,14 @@ impl<'a> Gen<'a> {
         let r = self.m.reason(why);
         for o in operands {
             let v = self.expr(fx, o);
-            self.m.cons(v, Cons::Implicit { reason: r, proto });
+            self.m.cons(
+                v,
+                Cons::Implicit {
+                    reason: r,
+                    proto,
+                    region: self.m.thrown,
+                },
+            );
         }
         let out = self.tmp("primop");
         self.m.add_prim(out, result);
@@ -208,6 +215,56 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn region_read(&mut self, fx: &Fx, n: NodeId) -> NodeId {
+        let n = self.presence_read(fx, n);
+        let g = self.live_gate(fx, n);
+        if g != n {
+            // The gated read is a read of the same name (`Model::name_of`).
+            let name = self.m.name_of.get(&n).copied().unwrap_or(n);
+            self.m.name_of.insert(g, name);
+        }
+        g
+    }
+
+    /// DEADARM (ECMA-262 14.6.2): `n` as seen inside the innermost `if`
+    /// arm, which runs only once its test can select it: its values pass
+    /// once the arm's `live` node holds one (`Fx::live`). The gate opens
+    /// once and stays open (values only grow). `PERRY_FACTS_DEADARM=0`
+    /// turns it off.
+    pub(crate) fn live_gate(&mut self, fx: &Fx, n: NodeId) -> NodeId {
+        let Some(l) = fx.live else {
+            return n;
+        };
+        let g = self.tmp("live-read");
+        self.zs_carrier(g);
+        self.m.cons(
+            l,
+            Cons::Guard {
+                test: crate::model::guard::NOT_UNDEF,
+                from: n,
+                dst: g,
+            },
+        );
+        g
+    }
+
+    /// DEADARM: the `live` node of an `if` arm whose test node is `t` and
+    /// selecting test `test`, inside the arm `fx` (outer `live`, or none:
+    /// a body's own statements always run once the body does).
+    pub(crate) fn arm_live(&mut self, fx: &Fx, t: NodeId, test: u8) -> Option<NodeId> {
+        if !dead_arm_on() {
+            return fx.live;
+        }
+        let from = match fx.live {
+            Some(l) => l,
+            None => self.prim_node(crate::model::prim::TRUE),
+        };
+        let l = self.tmp("arm-live");
+        self.m.arm_live.insert(l);
+        self.m.cons(t, Cons::Guard { test, from, dst: l });
+        Some(l)
+    }
+
+    fn presence_read(&mut self, fx: &Fx, n: NodeId) -> NodeId {
         use crate::model::guard::*;
         let Some((t, test)) = fx.guard else {
             return n;
@@ -294,7 +351,15 @@ impl<'a> Gen<'a> {
         birth: bool,
     ) -> SiteId {
         let site = self.store_site(fx.module, fx.f, desc, owner, birth);
-        self.m.cons(recv, Cons::Store { key, src, site });
+        self.m.cons(
+            recv,
+            Cons::Store {
+                key,
+                src,
+                site,
+                region: self.region(),
+            },
+        );
         site
     }
 
@@ -322,7 +387,15 @@ impl<'a> Gen<'a> {
         self.m.stores[site as usize].key_value = key_value;
         self.mark_fn_phase(fx, e, object, site);
         self.mark_rooted(e, site);
-        self.m.cons(recv, Cons::Store { key, src, site });
+        self.m.cons(
+            recv,
+            Cons::Store {
+                key,
+                src,
+                site,
+                region: self.region(),
+            },
+        );
         site
     }
 
@@ -350,7 +423,15 @@ impl<'a> Gen<'a> {
         self.m.stores[site as usize].key_value = Some(key_value);
         self.mark_rooted(e, site);
         match key {
-            Key::Named(_) => self.m.cons(recv, Cons::Store { key, src, site }),
+            Key::Named(_) => self.m.cons(
+                recv,
+                Cons::Store {
+                    key,
+                    src,
+                    site,
+                    region: self.region(),
+                },
+            ),
             // The key's values decide: an index or any key (`StoreIndexed`).
             Key::Any(shape) => self.m.cons(
                 key_value,
@@ -359,6 +440,7 @@ impl<'a> Gen<'a> {
                     src,
                     site,
                     shape,
+                    region: self.region(),
                 },
             ),
         }
@@ -818,6 +900,7 @@ impl<'a> Gen<'a> {
                 }
                 let vn = self.expr_zs(fx, v);
                 self.direct_arr = None;
+                let vn = self.live_gate(fx, vn);
                 let l = self.local_write(mi, *id);
                 match fx.guard {
                     Some((t, test)) => self.m.cons(
@@ -930,6 +1013,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let out = self.tmp("update");
@@ -984,6 +1068,7 @@ impl<'a> Gen<'a> {
                         Cons::Implicit {
                             reason: r,
                             proto: Protocol::ToPrimitive,
+                            region: self.m.thrown,
                         },
                     );
                 }
@@ -1056,6 +1141,7 @@ impl<'a> Gen<'a> {
                         Cons::Implicit {
                             reason: r,
                             proto: Protocol::ToPrimitive,
+                            region: self.m.thrown,
                         },
                     );
                     let out = self.tmp("unary");
@@ -1445,6 +1531,7 @@ impl<'a> Gen<'a> {
                                     key,
                                     src: nm,
                                     site: ps,
+                                    region: self.region(),
                                 },
                             );
                         }
@@ -1456,6 +1543,7 @@ impl<'a> Gen<'a> {
                                 src: v,
                                 site,
                                 subj,
+                                region: self.region(),
                             },
                         );
                     }
@@ -1492,7 +1580,15 @@ impl<'a> Gen<'a> {
                         self.m.stores[site as usize].key_value = Some(k);
                         self.in_bounds_site(fx, e, o, key, site);
                         match key {
-                            Key::Named(_) => self.m.cons(o, Cons::Store { key, src: v, site }),
+                            Key::Named(_) => self.m.cons(
+                                o,
+                                Cons::Store {
+                                    key,
+                                    src: v,
+                                    site,
+                                    region: self.region(),
+                                },
+                            ),
                             // The key's values decide: an index or any key.
                             Key::Any(shape) => self.m.cons(
                                 k,
@@ -1501,6 +1597,7 @@ impl<'a> Gen<'a> {
                                     src: v,
                                     site,
                                     shape,
+                                    region: self.region(),
                                 },
                             ),
                         }
@@ -1538,6 +1635,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let nv2 = self.tmp("update-val");
@@ -1717,6 +1815,7 @@ impl<'a> Gen<'a> {
                                 key,
                                 src: nm,
                                 site: ps,
+                                region: self.region(),
                             },
                         );
                     }
@@ -1728,6 +1827,7 @@ impl<'a> Gen<'a> {
                             src: v,
                             site,
                             subj,
+                            region: self.region(),
                         },
                     );
                 } else if let Some(ks) = self.const_key_set(fx.module, index) {
@@ -1771,6 +1871,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: r2,
                         proto: Protocol::ToPrimitive,
+                        region: self.m.thrown,
                     },
                 );
                 let nv = self.tmp("update-val");
@@ -2621,7 +2722,12 @@ impl<'a> Gen<'a> {
                 let dst = self.tmp("super.get");
                 let a = self.m.atom(property);
                 let homes = self.super_homes(fx);
-                self.super_access(homes, fx.this, Key::Named(a), ChainAct::Load(dst));
+                self.super_access(
+                    homes,
+                    fx.this,
+                    Key::Named(a),
+                    ChainAct::Load(dst, self.region()),
+                );
                 dst
             }
             Expr::SuperPropertySet { key, value, .. } => {
@@ -2629,7 +2735,7 @@ impl<'a> Gen<'a> {
                 let v = self.expr(fx, value);
                 self.store(fx, fx.this, k, v, "super.x=".into(), None, false);
                 let homes = self.super_homes(fx);
-                self.super_access(homes, fx.this, k, ChainAct::Store(v));
+                self.super_access(homes, fx.this, k, ChainAct::Store(v, self.region()));
                 v
             }
 
@@ -2653,6 +2759,11 @@ impl<'a> Gen<'a> {
 }
 
 /// `PERRY_FACTS_GUARD_REGIONS=0`: branch reads are not gated (rule R2 off).
+fn dead_arm_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PERRY_FACTS_DEADARM").as_deref() != Ok("0"))
+}
+
 fn guard_regions_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("PERRY_FACTS_GUARD_REGIONS").as_deref() != Ok("0"))

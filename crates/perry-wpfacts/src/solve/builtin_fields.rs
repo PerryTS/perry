@@ -42,7 +42,7 @@ impl Model {
             return;
         }
         match act {
-            ChainAct::Load(dst) => {
+            ChainAct::Load(dst, _) => {
                 let n = if self.is_elem_key(key) {
                     self.num_fields(holder)
                 } else {
@@ -64,11 +64,11 @@ impl Model {
                 };
                 self.bind_via(n, call, origin);
             }
-            ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
+            ChainAct::Store(_, _) | ChainAct::Lookup { .. } => {}
         }
         if holder != origin && !self.is_elem_key(key) {
             match act {
-                ChainAct::Load(dst) => {
+                ChainAct::Load(dst, _) => {
                     self.with_b(|m| builtins::native_own_load(m, origin, holder, key, dst));
                 }
                 ChainAct::Call(call) => {
@@ -76,7 +76,7 @@ impl Model {
                     self.with_b(|m| builtins::native_own_load(m, origin, holder, key, value));
                     self.bind_via(value, call, origin);
                 }
-                ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
+                ChainAct::Store(_, _) | ChainAct::Lookup { .. } => {}
             }
         }
         // A function value's inherited fields are observations of the same
@@ -88,15 +88,15 @@ impl Model {
         let owned = matches!(key, Key::Named(a) if builtins::namespace_owns(self, origin, a));
         if !self.unit_mode && holder != origin && !self.is_elem_key(key) && !owned {
             if self.is_proto_key(key) {
-                if let ChainAct::Load(dst) = act {
+                if let ChainAct::Load(dst, _) = act {
                     self.proto_value_at(holder, dst);
                 }
             }
             let cv = self.cv(holder, key);
             match act {
-                ChainAct::Load(dst) => self.edge(cv, dst),
+                ChainAct::Load(dst, _) => self.edge(cv, dst),
                 ChainAct::Call(call) => self.bind_via(cv, call, origin),
-                ChainAct::Store(_) | ChainAct::Lookup { .. } => {}
+                ChainAct::Store(_, _) | ChainAct::Lookup { .. } => {}
             }
         }
         self.accessor_walk(origin, holder, key, act);
@@ -129,11 +129,14 @@ impl Model {
             self.native_field_at(origin, t, key, act);
         }
         if self.realm_held {
-            let reason = self.reason(if self.interp_runs {
-                "built-in function object interpreted code may read"
-            } else {
-                "an intrinsic of the realm: unknown code holds the realm"
-            });
+            let reason = match self.hold_reason {
+                Some(r) if !self.interp_runs => r,
+                _ => self.reason(if self.interp_runs {
+                    "built-in function object interpreted code may read"
+                } else {
+                    "an intrinsic of the realm: unknown code holds the realm"
+                }),
+            };
             self.escape(t, reason);
         }
     }
@@ -226,7 +229,13 @@ impl Model {
             self.why_hold("hold_realm", u32::MAX, None);
             self.why_realm("hold_realm");
         }
+        if self.restart_on_hold {
+            self.hold_restart = true;
+            self.aborted = true;
+            return;
+        }
         self.realm_held = true;
+        self.hold_reason = Some(reason);
         self.realm_widen_strs();
         let mut hs: Vec<Tok> = self.r1_holders.iter().copied().collect();
         hs.extend((0..self.toks.len() as Tok).filter(|&t| {
@@ -260,7 +269,7 @@ impl Model {
         if t == TOP {
             return;
         }
-        let r = match reason {
+        let r = match reason.or(self.hold_reason) {
             Some(r) => r,
             None => self.reason("an intrinsic of the realm: unknown code holds the realm"),
         };

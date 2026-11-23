@@ -14,6 +14,7 @@ impl Model {
             }
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
             Cons::OwnKeys { dst } => format!("ownkeys {n} {dst}"),
+            Cons::OwnNames { dst } => format!("ownnames {n} {dst}"),
             Cons::OwnDescValues { dst } => format!("owndescvalues {n} {dst}"),
             Cons::IndexHole => format!("indexhole {n}"),
             Cons::IndexHoleIn { key } => format!("indexholein {n} {key}"),
@@ -21,7 +22,7 @@ impl Model {
             Cons::LenIndex { lo, hi } => format!("lenindex {n} {lo} {hi}"),
             Cons::LenPermuted { t } => format!("lenpermuted {n} {t}"),
             Cons::CjsPublish { dst } => format!("cjspublish {n} {dst}"),
-            Cons::Store { key, src, site } => {
+            Cons::Store { key, src, site, .. } => {
                 format!("store {n} {} {src} {site}", self.key_name(*key))
             }
             Cons::Call { call } => format!("call {n} {call}"),
@@ -89,6 +90,7 @@ impl Model {
             Cons::TypeIs { mask, dst } => format!("typeis {n} {mask:#x} {dst}"),
             Cons::NotBuffer { shared, dst } => format!("notbuffer {n} {dst} shared={shared}"),
             Cons::NotRegExp { dst } => format!("notregexp {n} {dst}"),
+            Cons::NotObjectProto { dst } => format!("notobjectproto {n} {dst}"),
             Cons::ProtoObjects { dst } => format!("protoobjects {n} {dst}"),
             Cons::Objects { dst } => format!("objects {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
@@ -129,8 +131,12 @@ impl Model {
                 "definedesc {n} {o} {} {site} {reason}",
                 self.key_name(Key::Named(*key))
             ),
-            Cons::Implicit { reason, proto } => {
-                format!("implicit {n} {reason} {}", proto.name())
+            Cons::Implicit {
+                reason,
+                proto,
+                region,
+            } => {
+                format!("implicit {n} {reason} {} {region}", proto.name())
             }
             Cons::HasInstance { reason, arg } => format!("hasinstance {n} {reason} {arg}"),
             Cons::CreateProto { reason } => format!("createproto {n} {reason}"),
@@ -224,7 +230,11 @@ impl Model {
             Cons::Plus { str, num, .. } => format!("plus {n} {str} {num}"),
             Cons::ArrayLenArg { dst } => format!("arraylenarg {n} {dst}"),
             Cons::CaseMap { dst, upper } => format!("casemap {n} {dst} {upper}"),
-            Cons::ConsoleFormat { reason, agg } => format!("consolefmt {n} {reason} {agg}"),
+            Cons::ConsoleFormat {
+                reason,
+                agg,
+                region,
+            } => format!("consolefmt {n} {reason} {agg} {region}"),
             Cons::IdxLoad { idx, dst, .. } => format!("idxload {n} {idx} {dst}"),
             Cons::EnumChain { dst, of, .. } => format!("enumchain {n} {of} {dst}"),
             Cons::EnumLoad { dst, .. } => format!("enumload {n} {dst}"),
@@ -250,7 +260,9 @@ impl Model {
                 reason,
                 accessor,
             } => format!("definekeyed {n} {o} {reason} {}", *accessor as u8),
-            Cons::StoreKeyed { o, src, site, subj } => {
+            Cons::StoreKeyed {
+                o, src, site, subj, ..
+            } => {
                 format!("storekeyed {n} {o} {src} {site} {subj}")
             }
             Cons::EnumKeyStore { o, src, from, .. } => {
@@ -267,8 +279,9 @@ impl Model {
                 site,
                 reason,
                 accessor,
+                desc,
             } => format!(
-                "defineanykey {n} {o} {key} {value} {get} {set} {site} {reason} {}",
+                "defineanykey {n} {o} {key} {value} {get} {set} {site} {reason} {} {desc}",
                 *accessor as u8
             ),
             Cons::AccessorKeyed { holder, f, setter } => {
@@ -287,6 +300,7 @@ impl Model {
             Cons::ThisInst { call, ft } => format!("thisinst {n} {call} {ft}"),
             Cons::NativeThis { call, f } => format!("nativethis {n} {call} {f}"),
             Cons::BuiltinCallee => format!("builtincallee {n}"),
+            Cons::ProxyCallee { p } => format!("proxycallee {n} {p}"),
             Cons::HolderStep { key, pass, stop } => {
                 format!("holderstep {n} {} {pass} {stop}", self.key_name(*key))
             }

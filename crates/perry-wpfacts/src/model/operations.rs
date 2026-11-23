@@ -36,6 +36,68 @@ impl Model {
         true
     }
 
+    /// `tmpl_may_be_array` with each `extends` value read as the solve has
+    /// it now: a value that holds only program classes is an Array exotic
+    /// object's parent only if one of those classes may be (a class a
+    /// mixin function returns is not); any other token (`Array`, another
+    /// builtin, ⊤) may be. A primitive parent other than null throws at
+    /// class definition (no instance); null is no Array. The answer only
+    /// grows with the solve, so a write it holds back now is asked again
+    /// when the solve is done (`array_member_unsure`).
+    pub fn tmpl_may_be_array_now(&self, tm: TmplId) -> bool {
+        let mut stack = vec![tm];
+        let mut seen = crate::pts::FxHashSet::default();
+        while let Some(mut tm) = stack.pop() {
+            while seen.insert(tm) {
+                let tpl = &self.tmpls[tm as usize];
+                match &tpl.kind {
+                    TmplKind::Arr { .. } => return true,
+                    TmplKind::Class { .. } => {}
+                    _ => break,
+                }
+                if let Some((pv, _)) = tpl.parent_value {
+                    for t in self.nodes[pv as usize].pts.to_sorted() {
+                        match self.toks[t as usize] {
+                            TokKind::ClassObj(p) => stack.push(p),
+                            _ => return true,
+                        }
+                    }
+                    break;
+                }
+                if let Some((_, n)) = &tpl.native_parent {
+                    if n == "Array" {
+                        return true;
+                    }
+                    break;
+                }
+                match tpl.parent {
+                    Some(p) => tm = p,
+                    None => break,
+                }
+            }
+        }
+        false
+    }
+
+    /// `tok_on_array_chain` by `tmpl_may_be_array_now`.
+    fn tok_on_array_chain_now(&self, t: Tok) -> bool {
+        match self.toks[t as usize] {
+            TokKind::Top => true,
+            TokKind::Obj(tm, _) | TokKind::Proto(tm) => self.tmpl_may_be_array_now(tm),
+            _ => false,
+        }
+    }
+
+    /// Can the key of computed store `s` name `@@iterator` or `__proto__`
+    /// (a string, a symbol or an object; a number names an element)?
+    fn keyed_store_may_name_member(&self, s: SiteId) -> bool {
+        let Some(k) = self.stores[s as usize].key_value else {
+            return true;
+        };
+        let n = &self.nodes[k as usize];
+        n.dropped || !n.pts.is_empty() || n.prim & (prim::STR | prim::SYMBOL) != 0
+    }
+
     /// Record a write under `key` (`None`: a definition or prototype change
     /// whose key the model does not keep) onto `t` that may change which
     /// `@@iterator` an array finds ([`Model::array_member_write`]). The
@@ -49,6 +111,32 @@ impl Model {
         what: &str,
     ) {
         if self.array_member_write.is_some() || t == TOP || !self.tok_on_array_chain(t) {
+            return;
+        }
+        // On a class whose `extends` value holds no Array parent yet: asked
+        // again when the solve is done (`array_member_unsure`).
+        if !self.tok_on_array_chain_now(t) {
+            let site = match key {
+                Some(Key::Any(_)) => site,
+                _ => None,
+            };
+            let hit = match key {
+                None | Some(Key::Any(_)) => true,
+                Some(Key::Named(a)) => matches!(
+                    self.atoms[a as usize].as_str(),
+                    crate::builtins::WK_ITERATOR | "__proto__" | crate::STAR_KEY
+                ),
+            };
+            if hit
+                && !self
+                    .array_member_unsure
+                    .iter()
+                    .any(|&(x, s, _)| x == t && s == site)
+            {
+                let on = self.tok_name(t);
+                let r = self.reason(&format!("{what} on {on}"));
+                self.array_member_unsure.push((t, site, r));
+            }
             return;
         }
         let hits = match key {
@@ -106,17 +194,19 @@ impl Model {
                 first(&mut member, r);
             }
         }
-        let keyed = self.array_keyed_stores.iter().find_map(|&(s, r)| {
-            let Some(k) = self.stores[s as usize].key_value else {
-                return Some(r);
-            };
-            let n = &self.nodes[k as usize];
-            (n.dropped || !n.pts.is_empty() || n.prim & (prim::STR | prim::SYMBOL) != 0)
-                .then_some(r)
+        let keyed = self
+            .array_keyed_stores
+            .iter()
+            .find_map(|&(s, r)| self.keyed_store_may_name_member(s).then_some(r));
+        let unsure = self.array_member_unsure.iter().find_map(|&(t, s, r)| {
+            (self.tok_on_array_chain_now(t)
+                && s.is_none_or(|s| self.keyed_store_may_name_member(s)))
+            .then_some(r)
         });
         let mut member = member
             .or(self.array_member_write)
             .or(keyed)
+            .or(unsure)
             .map(|r| self.reasons[r as usize].clone());
         if member.is_none() {
             let wk = self.atom_index.get(crate::builtins::WK_ITERATOR).copied();
@@ -128,7 +218,7 @@ impl Model {
                             || wk.is_some_and(|a| {
                                 tpl.proto_members.contains(&a) || tpl.accessor_keys.contains(&a)
                             }))
-                        && self.tmpl_may_be_array(tm)
+                        && self.tmpl_may_be_array_now(tm)
                 })
                 .map(|tm| {
                     format!(

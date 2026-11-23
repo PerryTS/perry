@@ -863,9 +863,40 @@ pub(super) fn realm_born(what: &str) -> Option<&'static RealmEntry> {
 pub(super) fn regexp_inherited(
     name: &str,
 ) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
-    let p = realm_entry("RegExp.prototype").filter(|e| e.kind == RealmKind::Prototype)?;
+    proto_inherited("RegExp.prototype", name)
+}
+
+/// `Date.prototype`'s realm declaration when a Date's member `name` is not
+/// one of its own (21.4.4), as `regexp_inherited`.
+pub(super) fn date_inherited(name: &str) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    proto_inherited("Date.prototype", name)
+}
+
+/// The realm prototype `proto` when `name` is not one of its own members.
+fn proto_inherited(
+    proto: &str,
+    name: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let p = realm_entry(proto).filter(|e| e.kind == RealmKind::Prototype)?;
     let own = name.starts_with(super::WK_PREFIX) || p.own.iter().any(|o| realm_key_is(o, name));
     (!own).then_some(p)
+}
+
+/// `Worker.prototype`'s realm declaration when a Worker's member `name` is
+/// neither one of the Worker's own keys nor `Worker.prototype`'s (the
+/// runtime's declaration, perry-runtime-manifest `worker_shape`): the
+/// runtime Worker (`worker_object_with_id`) has the worker_threads
+/// constructor's prototype as its [[Prototype]], whose declared chain is
+/// `EventEmitter.prototype`, then `Object.prototype`.
+pub(super) fn worker_inherited(name: &str) -> Option<&'static RealmEntry> {
+    use perry_runtime_manifest::worker_shape::{WORKER_OWN_KEYS, WORKER_PROTOTYPE_ACCESSORS};
+    let own = name.starts_with(super::WK_PREFIX)
+        || WORKER_OWN_KEYS.contains(&name)
+        || WORKER_PROTOTYPE_ACCESSORS.contains(&name);
+    if own {
+        return None;
+    }
+    realm_entry("node:worker_threads.Worker.prototype").filter(|e| e.kind == RealmKind::Prototype)
 }
 
 /// The lookup of `name` (spelled as atoms are) on the chain of `born`
@@ -1137,9 +1168,10 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
             NsProto::Constructor(BuiltinNs::Error),
             Some(&[("prototype", Mem::Proto)]),
         ),
-        // Undescribed: node's RegExp owns the legacy accessors (`$1`,
-        // `lastMatch`, `input` ...), which the realm does not declare.
-        BuiltinNs::RegExp => (NsProto::Function, None),
+        // Perry's RegExp owns exactly its realm declaration (`length`,
+        // `name`, `prototype`, `escape`, `@@species`): it has none of node's
+        // legacy accessors (`$1`, `lastMatch`, `input` ...).
+        BuiltinNs::RegExp => return realm_statics(ns, NsProto::Function),
         // Their own statics are the realm's declaration of them (node:
         // `length`, `name`, `prototype`, `Date.now`/`parse`/`UTC`,
         // `ArrayBuffer.isView`, `%TypedArray%.from`/`of`, `@@species`, ...): a
@@ -1354,7 +1386,7 @@ pub(super) fn realm_read_statics(ns: BuiltinNs) -> &'static [&'static str] {
 pub(super) fn global_runtime_reads(name: &str) -> bool {
     matches!(
         name,
-        "Temporal" | "onmessage" | "onmessageerror" | "onerror"
+        "Temporal" | "WebAssembly" | "onmessage" | "onmessageerror" | "onerror"
     )
 }
 
@@ -1675,9 +1707,13 @@ fn realm_described_statics_are_the_realm_declaration() {
         ns_member(BuiltinNs::ArrayBuffer, "@@__perry_wk_species"),
         Some(Some(Mem::Ctor))
     );
-    // node's RegExp owns legacy accessors the realm does not declare.
-    assert!(ns_statics(BuiltinNs::RegExp).members.is_none());
-    assert_eq!(ns_member(BuiltinNs::RegExp, "replace"), None);
+    // Perry's RegExp owns its realm declaration, no legacy accessors.
+    assert!(ns_statics(BuiltinNs::RegExp).members.is_some());
+    assert!(matches!(
+        ns_member(BuiltinNs::RegExp, "escape"),
+        Some(Some(_))
+    ));
+    assert_eq!(ns_member(BuiltinNs::RegExp, "$1"), Some(None));
 }
 
 #[test]

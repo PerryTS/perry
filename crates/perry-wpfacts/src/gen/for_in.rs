@@ -359,6 +359,7 @@ impl<'a> Gen<'a> {
         }
         let bfx = Fx {
             guard: None,
+            live: None,
             f: g,
             this,
             ret,

@@ -125,6 +125,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::Fulfil { dst }
         | Cons::Falsy { dst }
         | Cons::NotBuffer { dst, .. }
+        | Cons::NotObjectProto { dst }
         | Cons::NotRegExp { dst }
         | Cons::ProtoObjects { dst }
         | Cons::NotNull { dst }
@@ -194,6 +195,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::NewNamed { .. }
         | Cons::CallArgs { .. }
         | Cons::BuiltinCallee
+        | Cons::ProxyCallee { .. }
         | Cons::ThisTo { .. }
         | Cons::DeleteKey { .. }
         | Cons::DefineKey { .. }
@@ -237,6 +239,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::EnumKeyAny { .. }
         // A key list reads no Number (rule EK).
         | Cons::OwnKeys { .. }
+        | Cons::OwnNames { .. }
         | Cons::CjsPublish { .. } => Use::Absorb,
         // A property read or a method call on a Number runs its prototype's
         // code with the Number as `this` (`(-0).toLocaleString()` is "-0");

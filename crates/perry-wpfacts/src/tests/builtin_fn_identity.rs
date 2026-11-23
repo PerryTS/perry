@@ -829,7 +829,7 @@ fn cxid3_a_wildcard_native_read_charges_every_holder_it_inspects() {
     let key = m.atom(crate::model::ELEM);
     let before = m.work.get();
     m.max_work = before + 128;
-    m.builtin_field_use(f, Key::Named(key), ChainAct::Load(dst));
+    m.builtin_field_use(f, Key::Named(key), ChainAct::Load(dst, m.thrown));
     let charged = m.work.get() - before;
     assert!(
         charged >= 1000,

@@ -84,6 +84,9 @@ fn e20g_named_global_store_is_the_programs() {
         "(globalThis as any).web3d = n;",
         "(globalThis as any).__THREE__ = n;",
         "const g = globalThis as Record<string, unknown>; g[\"window\"] = n;",
+        "const g = globalThis as any; g[\"performance\"] = { now: () => 0, o: n };",
+        "(globalThis as any).performance = { now: () => 0, o: n };",
+        "(globalThis as any).Reflect = { o: n };",
     ] {
         if !v_proven(&plain(store)) {
             bad.push(format!("{store}: n.v not proven"));
@@ -115,10 +118,66 @@ fn e20g_runtime_read_globals_still_sink() {
         "(globalThis as any).Temporal = n;",
         "(globalThis as any).Array = n;",
         "(globalThis as any).Promise = n;",
+        "(globalThis as any).WebAssembly = n;",
+        "(globalThis as any).console = n;",
+        "(globalThis as any).process = n;",
         "(Promise.prototype as any).then = n;",
     ] {
         if v_proven(&program(store)) {
             bad.push(format!("{store}: n.v proven, the runtime may read n"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// Is the first store site of `key` after `/*S*/` proven?
+fn store_proven(src: &str, key: &str) -> bool {
+    let pf = facts(src);
+    let at = src.find("/*S*/").expect("marker") as u32;
+    let s = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && !s.is_call && s.access.is_store() && s.byte_offset >= at)
+        .min_by_key(|s| s.byte_offset)
+        .unwrap_or_else(|| panic!("store .{key} after /*S*/ in\n{}", pf.dump_text()));
+    !matches!(s.verdict, Verdict::No(_))
+}
+
+/// RED (owner decision 2026-11-19): a program store onto a declared
+/// writable data global the runtime cannot call is a proven store site;
+/// callable globals, `console` and `WebAssembly` stay unproven.
+#[test]
+fn e20g_declared_data_global_store_site() {
+    let mut bad = Vec::new();
+    for (key, store, proven) in [
+        (
+            "performance",
+            "const g = globalThis as any; /*S*/ g.performance = { now: () => 0 };",
+            true,
+        ),
+        (
+            "performance",
+            "const g = globalThis as any; /*S*/ g[\"performance\"] = { now: () => 0 };",
+            true,
+        ),
+        (
+            "Array",
+            "const g = globalThis as any; /*S*/ g.Array = { o: 1 };",
+            false,
+        ),
+        (
+            "console",
+            "const g = globalThis as any; /*S*/ g.console = { o: 1 };",
+            false,
+        ),
+        (
+            "WebAssembly",
+            "const g = globalThis as any; /*S*/ g.WebAssembly = { o: 1 };",
+            false,
+        ),
+    ] {
+        if store_proven(&plain(store), key) != proven {
+            bad.push(format!("{store}: store site proven != {proven}"));
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));

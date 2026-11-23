@@ -133,9 +133,12 @@ fn v_escapes_from(host: &str, read: &str) -> bool {
 /// and `Object.getPrototypeOf(A) === Array` (ECMA-262 15.7.14 step 8.b):
 /// argv[2] = "from"; host: `a.constructor.__proto__.from.userData = {pivot:1}`,
 /// later `Array.from.pivot.zz = "s"`.
+/// PREMISE (owner-approved 2026-11-19): unknown code handed a value never
+/// writes members of intrinsics it reaches along that value's chain, so
+/// Array's members are not held: the host write above is outside the model.
 #[test]
 fn red_heldmem_extends_array_ctor_members_held() {
-    assert!(v_escapes_from(
+    assert!(!v_escapes_from(
         "class A extends Array {} (globalThis as any).hostTake(new A());",
         "Array as any"
     ));
@@ -153,9 +156,12 @@ fn red_heldmem_extends_array_class_ctor_members_held() {
 
 /// HELDMEM 3(a): Array.prototype's members through the instance's chain:
 /// argv[2] = "push"; host: `Object.getPrototypeOf(Object.getPrototypeOf(a)).push.userData = {pivot:1}`.
+/// PREMISE (owner-approved 2026-11-19): unknown code never writes members of
+/// intrinsics it reaches along the value's chain: Array.prototype's members
+/// are not held.
 #[test]
 fn red_heldmem_extends_array_proto_members_held() {
-    assert!(v_escapes_from(
+    assert!(!v_escapes_from(
         "class A extends Array {} (globalThis as any).hostTake(new A());",
         "Array.prototype as any"
     ));

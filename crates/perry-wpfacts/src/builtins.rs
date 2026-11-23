@@ -28,8 +28,8 @@ mod undeclared;
 pub use native_protocol::sentinel_user_global;
 pub(crate) use native_protocol::{census_native_op_writes, census_native_written};
 pub use undeclared::{
-    builtin_function, global_object, global_store_escapes, global_self_key, native_may_be, realm_reads_store,
-    undeclared,
+    builtin_function, declared_data_global, global_object, global_self_key, global_store_escapes,
+    native_may_be, plain_namespace_own_store, realm_reads_store, undeclared,
 };
 pub(crate) mod regex_tail;
 pub(crate) mod string_methods;
@@ -296,6 +296,7 @@ pub(crate) fn function_ctor_runs_code(
             Cons::Implicit {
                 reason: r,
                 proto: Protocol::ToPrimitive,
+                region: m.thrown,
             },
         );
     }
@@ -368,6 +369,9 @@ fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize
                 None,
             );
         }
+        if m.restart_on_hold && !m.hold_restart {
+            m.hold_why = Some(why.to_string());
+        }
         m.hold_realm(r);
     }
     if m.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
@@ -431,7 +435,14 @@ fn implicit_args(m: &mut Model, call: CallId, why: &str, proto: Protocol) {
     let r = m.reason(why);
     for &a in c.args.iter().chain(c.spread.iter()) {
         m.why_implicit(a, r, call);
-        m.cons(a, Cons::Implicit { reason: r, proto });
+        m.cons(
+            a,
+            Cons::Implicit {
+                reason: r,
+                proto,
+                region: m.thrown,
+            },
+        );
     }
 }
 
@@ -1258,10 +1269,11 @@ fn intrinsic_unwritten(
 
 /// [`intrinsic_miss`] for a lookup that passes the own prototype of builtin
 /// kind `holder` (`TmplKind::BObj::what`, `Array` for an array) before
-/// `Object.prototype`: that prototype is asked under its own identity
-/// (`TokKind::NativeProto`), so a write onto it, or unknown code holding
-/// the realm where the lock admits the store (`realm_replaced`), reaches
-/// this lookup, and `Object.prototype` stays under its lock.
+/// `Object.prototype`: that prototype and every native prototype past it
+/// ([`native_chain`]) are asked under their own identity
+/// (`TokKind::NativeProto`), so a write onto any of them, or unknown code
+/// holding the realm where the lock admits the store (`realm_replaced`),
+/// reaches this lookup, and `Object.prototype` stays under its lock.
 pub(crate) fn intrinsic_miss_on(
     m: &mut Model,
     holder: Option<&str>,
@@ -1269,20 +1281,48 @@ pub(crate) fn intrinsic_miss_on(
     miss: NativeMiss,
 ) -> bool {
     if let Some(what) = holder {
-        let np = m.tok(TokKind::native_proto(what));
-        let written = match miss {
-            NativeMiss::Lookup(_, _) => native_accessor_written(m, np, a),
-            _ => native_written(m, np, a),
-        };
-        if written {
-            if !native_protocol::answer_stored(m, np, a, miss.clone()) {
-                return false;
+        for name in native_chain(what) {
+            let np = m.tok(TokKind::native_proto(&name));
+            let written = match miss {
+                NativeMiss::Lookup(_, _) => native_accessor_written(m, np, a),
+                _ => native_written(m, np, a),
+            };
+            if written {
+                if !native_protocol::answer_stored(m, np, a, miss.clone()) {
+                    return false;
+                }
+            } else {
+                m.native_missing.push((np, a, miss.clone()));
             }
-        } else {
-            m.native_missing.push((np, a, miss.clone()));
         }
     }
     intrinsic_miss(m, a, miss)
+}
+
+/// The native prototypes a lookup that passes the own prototype of builtin
+/// kind `holder` passes before `Object.prototype`, each under its own
+/// identity: `holder` itself, then every [[Prototype]] the realm declares
+/// past it (a Buffer's: `Uint8Array.prototype`, `%TypedArray%.prototype`;
+/// OrdinaryGet, ECMA-262 10.1.8.1, walks them all). A program store onto
+/// any of them is a write this lookup sees, with or without the realm held.
+fn native_chain(holder: &str) -> Vec<String> {
+    let mut out = vec![holder.to_string()];
+    let own = loads::view_chain(Some(holder)).or_else(|| match holder.ends_with(".prototype") {
+        true => members::realm_entry(holder),
+        false => members::realm_entry(&format!("{holder}.prototype")),
+    });
+    let mut at = own.and_then(|e| e.proto).and_then(members::realm_entry);
+    while let Some(e) = at {
+        if e.name == "Object.prototype" {
+            break;
+        }
+        let name = e.name.strip_suffix(".prototype").unwrap_or(e.name);
+        if !out.iter().any(|n| n == name) {
+            out.push(name.to_string());
+        }
+        at = e.proto.and_then(members::realm_entry);
+    }
+    out
 }
 
 /// The own prototype a lookup on builtin receiver `t` passes before
@@ -1996,6 +2036,7 @@ pub(crate) fn error_to_string(m: &mut Model, r: Tok, call: CallId) {
             Cons::Implicit {
                 reason,
                 proto: Protocol::ToPrimitive,
+                region: m.thrown,
             },
         );
     }
@@ -2419,11 +2460,20 @@ pub(crate) fn builtin_proto_value(m: &mut Model, ns: Option<BuiltinNs>, dst: Nod
     // arm); every other operation on it is also the collapsed
     // builtin-prototype operation (`Model::native_proto_alias`), so a
     // write through the value stays a write of `ObjectProto`, as before.
+    // `ObjectProto` alone is the exact `Object.prototype`; a prototype the
+    // model does not describe is that and a native prototype of its own
+    // (`loads::family_proto_value`), so its reads stay apart from
+    // `Object.prototype`'s.
     match ns.and_then(|ns| builtin_proto_tok(m, ns)) {
         Some(p) => m.add_tok(dst, p),
         None => {
             let op = m.tok(TokKind::ObjectProto);
             m.add_tok(dst, op);
+            if let Some(ns) = ns.filter(|ns| *ns != BuiltinNs::Object) {
+                let name = format!("{ns:?}.prototype");
+                let p = native_proto(m, &name);
+                m.add_tok(dst, p);
+            }
         }
     }
 }
@@ -3174,7 +3224,14 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
             } else {
                 Protocol::Inspect
             };
-            m.cons(a, Cons::Implicit { reason: r, proto });
+            m.cons(
+                a,
+                Cons::Implicit {
+                    reason: r,
+                    proto,
+                    region: c.region,
+                },
+            );
         }
         for &d in &elems {
             m.cons(
@@ -3182,6 +3239,7 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
                 Cons::Implicit {
                     reason: r,
                     proto: Protocol::Inspect,
+                    region: c.region,
                 },
             );
         }
@@ -3229,6 +3287,7 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
             Cons::Implicit {
                 reason: r,
                 proto: Protocol::InspectShown,
+                region: c.region,
             },
         );
     }
@@ -3238,7 +3297,14 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
             m.edge(a, agg);
         }
         for &f in &firsts {
-            m.cons(f, Cons::ConsoleFormat { reason: r, agg });
+            m.cons(
+                f,
+                Cons::ConsoleFormat {
+                    reason: r,
+                    agg,
+                    region: c.region,
+                },
+            );
         }
     }
     ret_prim(m, call, prim::UNDEF);
@@ -3512,6 +3578,46 @@ fn ns_method_inner(
             let e = effects::declared_member(&format!("process.{n}")).expect("the guard found it");
             effects::run_function(m, e, call);
         }
+        // WGPOST: `postMessage(v, t)`, a bare call on the global sentinel.
+        // S8 (gen_call.rs) keeps it a member call only in a module a Worker
+        // may run (`Model::worker_side`); on the main realm the name is
+        // [[Get]](globalThis, "postMessage"), absent: a ReferenceError that
+        // calls nothing. In the Worker it is the Worker global's own
+        // `postMessage` (perry-stdlib worker_surface.rs
+        // `install_web_worker_globals`, `web_worker_post_message`), which
+        // ignores `this` and is Worker.postMessage's structured clone: its
+        // model (`worker_post_message`). A write under the name by code the
+        // model does not see (now, or later in the solve: the replay) is the
+        // unknown call again. A program store under the name (named, or
+        // under a key that may spell it: R-GLOBAL, program stores are
+        // exact) replaces the native's property: [[Get]](globalThis,
+        // "postMessage") reads it (`loads::tok_load`, the global's field of
+        // a program-owned key), and the call calls it with `this` undefined
+        // (ECMA-262 13.3.6.1 EvaluateCall, 9.1.1.4.6 GetBindingValue), as
+        // the bare call of a module no Worker runs does (gen_call.rs S8).
+        (BuiltinNs::Other, "postMessage")
+            if !m.unit_mode
+                && native_protocol::sentinel_user_global(m, "postMessage")
+                && m.calls[call as usize].spread.is_empty() =>
+        {
+            let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+            let a = m.atom("postMessage");
+            if opaque_written(m, g, a, NativeMiss::Call(g, call)) {
+                let prev = m.cur_this.replace(g);
+                unknown_method(m, call, "argument of builtin Other.postMessage");
+                m.cur_this = prev;
+            } else {
+                collections::worker_post_message(m, call);
+            }
+            let c = m.calls[call as usize].clone();
+            let stored = m.node_l("worker-global-stored");
+            loads::tok_load(m, g, Key::Named(a), stored);
+            let r = {
+                let thrown = m.thrown;
+                collections::cb_call_in(m, call, stored, ThisArg::Undef, c.args, thrown)
+            };
+            m.edge(r, c.ret);
+        }
         // A global function the realm declares (`fetch`), while the global
         // holds it: what its declaration says. A write under the name (now,
         // or later in the solve: the replay) is the unknown call again.
@@ -3555,11 +3661,12 @@ fn ns_method_inner(
         (BuiltinNs::Object, "keys" | "getOwnPropertyNames" | "getOwnPropertySymbols") => {
             let pb = site_tmpl(m, call, "keys");
             let fa = m.field_any(pb);
-            let p = match name {
-                "getOwnPropertySymbols" => prim::SYMBOL,
-                _ => prim::STR,
-            };
-            m.add_prim(fa, p);
+            match (name, arg(m, call, 0)) {
+                // Rule PK: the own names of the argument.
+                ("getOwnPropertyNames", Some(o)) => m.cons(o, Cons::OwnNames { dst: fa }),
+                ("getOwnPropertySymbols", _) => m.add_prim(fa, prim::SYMBOL),
+                _ => m.add_prim(fa, prim::STR),
+            }
             ret_tok(m, call, pb);
         }
         (BuiltinNs::Object, "values" | "entries") => {
@@ -3697,7 +3804,7 @@ fn ns_method_inner(
                         spread: vec![],
                         ret,
                         site: call2,
-                        region: m.thrown,
+                        region: m.calls[call as usize].region,
                     },
                 )
                 .is_some()
@@ -3735,7 +3842,7 @@ fn ns_method_inner(
                         spread: vec![],
                         ret: made,
                         site: c.site,
-                        region: m.thrown,
+                        region: m.calls[call as usize].region,
                     },
                 );
                 construct_into(m, this, mc, arr, made, c.ret);
@@ -3752,7 +3859,14 @@ fn ns_method_inner(
                 } else {
                     (rr, Protocol::Any)
                 };
-                m.cons(a, Cons::Implicit { reason, proto });
+                m.cons(
+                    a,
+                    Cons::Implicit {
+                        reason,
+                        proto,
+                        region: m.thrown,
+                    },
+                );
             }
             for &a in &c.spread {
                 m.cons(
@@ -3760,6 +3874,7 @@ fn ns_method_inner(
                     Cons::Implicit {
                         reason: rr,
                         proto: Protocol::Any,
+                        region: m.thrown,
                     },
                 );
             }
@@ -3798,7 +3913,7 @@ fn ns_method_inner(
                             spread: vec![],
                             ret,
                             site: call2,
-                            region: m.thrown,
+                            region: m.calls[call as usize].region,
                         },
                         move |m, tg, call2| m.cons(tg, Cons::Call { call: call2 }),
                     );
@@ -3998,6 +4113,7 @@ fn ns_method_inner(
                         key: Key::Named(a),
                         src: s,
                         site,
+                        region: m.thrown,
                     },
                 );
             }

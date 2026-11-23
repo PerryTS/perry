@@ -174,6 +174,7 @@ pub(crate) fn group_by(m: &mut Model, k: NodeId, group: NodeId, t: Tok) {
         Cons::Implicit {
             reason: why,
             proto: Protocol::ToPrimitive,
+            region: m.thrown,
         },
     );
     let fa = m.field_any(t);
@@ -264,6 +265,7 @@ fn define_computed(m: &mut Model, call: CallId, o: NodeId, desc: NodeId, r: u32)
             key: Key::any(),
             src: v,
             site,
+            region: m.thrown,
         },
     );
     for (f, setter) in [(dget, false), (dset, true)] {
@@ -275,6 +277,33 @@ fn define_computed(m: &mut Model, call: CallId, o: NodeId, desc: NodeId, r: u32)
                 setter,
             },
         );
+    }
+}
+
+/// `defineProperty(o, k, desc)` called as a value (lowering keeps a dynamic
+/// call where `Object` may have been replaced; this call is the intrinsic
+/// one): the direct call's steps (ECMA-262 20.1.2.4), decided as the key
+/// grows (`Cons::DefineAnyKey` with `desc`, `Model::define_computed_key`).
+/// A key of finitely many String constants defines each of them by name,
+/// as `Expr::ObjectDefineProperty` with a constant key does
+/// (`Cons::DefineDesc`); any other key takes the computed-key path
+/// (`define_any_old`), as `define_computed` did.
+fn define_value_call(m: &mut Model, call: CallId, o: NodeId, k: NodeId, desc: NodeId, r: u32) {
+    let [value, get, set] = descriptor_reads(m, desc, |m| node(m, call, "b-desc"));
+    let site = m.anon_post_site("defineProperty (value call)");
+    let c = Cons::DefineAnyKey {
+        o,
+        key: k,
+        value,
+        get,
+        set,
+        site,
+        reason: r,
+        accessor: false,
+        desc,
+    };
+    for n in [o, k, set] {
+        m.cons(n, c);
     }
 }
 
@@ -335,9 +364,10 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
                 Cons::Implicit {
                     reason: r,
                     proto: Protocol::ToPrimitive,
+                    region: m.thrown,
                 },
             );
-            define_computed(m, call, o, d, r);
+            define_value_call(m, call, o, k, d, r);
             m.edge(o, ret);
         }
         (BuiltinNs::Object, "defineProperties") => {
@@ -362,6 +392,7 @@ pub(super) fn value_call(m: &mut Model, ns: BuiltinNs, name: &str, call: CallId)
                 Cons::Implicit {
                     reason: r,
                     proto: Protocol::ToPrimitive,
+                    region: m.thrown,
                 },
             );
             let t = site_tmpl(m, call, "descriptor");

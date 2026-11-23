@@ -476,13 +476,15 @@ fn px10_proxy_as_a_computed_store_key() {
     assert!(!held, "realm not held: {tops:?}");
 }
 
-// KEEP: a called Proxy still takes the old path (E9), also when it is a
-// store key.
+// Rule PXCALL (was a KEEP of the old path, RED on PXCASE): a call of the
+// store-key Proxy, whose target (an object literal) is not callable: a
+// TypeError, no trap runs (10.5.14 step 7, 7.3.14 Call step 2).
 #[test]
-fn px10_keep_called_proxy_key_stays_e9() {
+fn px10_called_proxy_key_runs_no_trap() {
     let src = KEY.replace("g[p] = 7;", "g[p] = 7;\ntry { p(); } catch (e) {}");
-    let (tops, _) = solve(&src);
-    assert!(e9(&tops), "{tops:?}");
+    let (tops, held) = solve(&src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
 }
 
 // PXSO1 R1: a Proxy whose target may be itself (one birth site in a loop):
@@ -571,16 +573,17 @@ console.log(JSON.stringify([p, { q: p }]), N);
     assert!(!held, "realm not held: {tops:?}");
 }
 
-// KEEP: an operation the rule does not model (a call of the Proxy) still
-// takes the old path: its target is E9.
+// Rule PXCALL (was a KEEP of the old path, RED on PXCASE): a call of the
+// style Proxy over an object literal throws a TypeError and runs no trap.
 #[test]
-fn proxy11_keep_called_proxy_stays_e9() {
+fn proxy11_called_proxy_runs_no_trap() {
     let src = JSONP.replace(
         "console.log(e);",
         "console.log(e);\ntry { (e.style as any)(); } catch (x) {}",
     );
-    let (tops, _) = solve(&src);
-    assert!(e9(&tops), "{tops:?}");
+    let (tops, held) = solve(&src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
 }
 
 // PROXY12 (RED on 8742219af8: "E9 Proxy target (fieldtruthy)", the cube
@@ -610,15 +613,17 @@ fn proxy12_field_truthy_of_a_proxy() {
     assert!(!held, "realm not held: {tops:?}");
 }
 
-// KEEP: the same program with a call of the Proxy still takes the old path.
+// Rule PXCALL (was a KEEP of the old path, RED on PXCASE): the same program
+// with a call of the Proxy (an object-literal target): no trap runs.
 #[test]
-fn proxy12_keep_called_proxy_stays_e9() {
+fn proxy12_called_proxy_runs_no_trap() {
     let src = TRUTHY.replace(
         "const e = new El();",
         "const e = new El();\ntry { (e.style as any)(); } catch (x) {}",
     );
-    let (tops, _) = solve(&src);
-    assert!(e9(&tops), "{tops:?}");
+    let (tops, held) = solve(&src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
 }
 
 // PROXY12 R-PXKEYS (RED on the FieldTruthy head: "E9 Proxy target (implicit
@@ -642,6 +647,262 @@ for (const k in q) out.push(k);
 console.log(out.join(","), Object.keys(p).length, Object.getOwnPropertyNames(q).length, Reflect.ownKeys(p).length);
 "#;
     let (tops, held) = solve(src);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// PERFNOW49 rule PXKEY: a Proxy used as a computed KEY (`arr[p]`, `rec[p]`)
+// runs no internal method of the Proxy in the receiver's [[Get]]: its
+// ToPropertyKey (7.1.19) is ToPrimitive (7.1.1), the key's own rule
+// (`proxy_to_primitive`: the target's `toString` runs with `this` = the
+// Proxy). The rules on the key node (`ElemUndef`, `IdxKey`) read the key's
+// value only. RED on base: they degraded the Proxy (web tokens.ts
+// `item: (i) => read()[i]`, "E9 Proxy target (elemundef)").
+const PROXY_KEY: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const t = { n: 1, toString(): string { return "1" + this.n; } };
+  return new Proxy(t, { get(o: any, k: any) { return o[k]; } });
+}
+const p = mk();
+const arr: string[] = ["a" + N, "b"];
+const rec: Record<string, string> = { a: N };
+const item = (i: any): string => arr[i] ?? "";
+const pick = (k: any): string => rec[k] ?? "";
+console.log(item(p), item(1), pick(p), pick("a"));
+"#;
+
+#[test]
+fn pxkey_proxy_as_computed_key() {
+    let (tops, held) = solve(PROXY_KEY);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+    let v = verdicts(PROXY_KEY, "n");
+    assert!(
+        !v.is_empty() && v.iter().all(|s| s.contains("Proxy")),
+        "ToPropertyKey runs `toString` with `this` = the Proxy: {v:?}"
+    );
+}
+
+// PERFNOW50 rule PXCASE: a node holding a String and a Proxy is the receiver
+// of `toLowerCase` (web tokens.ts getPropertyValue `name.toLowerCase()` with
+// `name` = the style Proxy). The case-map rule (K7) is the String receivers';
+// for the Proxy the call is its get trap's result. RED on base: the rule
+// degraded the Proxy ("E9 Proxy target (casemap)"). The receiver is the
+// `string` parameter of an object literal's arrow, as the app's is
+// (tokens.ts:154): with `any`, or a `string` parameter of a plain arrow,
+// the rule is not reached (pn51 d3: no E9 there on 779be4fa25).
+const PROXY_CASE: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const t = { n: 1 };
+  return new Proxy(t, { get(o: any, k: any) { return k === "toLowerCase" ? (() => "px" + o.n) : o[k]; } });
+}
+const p = mk();
+const api = { gv: (name: string): string => name.toLowerCase() };
+console.log(api.gv("AB" + N), api.gv(p as any));
+"#;
+
+#[test]
+fn pxcase_proxy_case_map_receiver() {
+    let (tops, held) = solve(PROXY_CASE);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// PERFNOW51 rule PXCALL: a Proxy has a [[Call]] / [[Construct]] only when its
+// target is callable (ProxyCreate 10.5.14 step 7). Over an object literal, a
+// plain call and `new` each throw a TypeError (7.3.14 Call step 2, 7.3.15
+// Construct) and run no trap. RED on PXCASE: proxy_apply had no call arm.
+const PROXY_CALL: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const api: Record<string, unknown> = { n: N };
+  const px: any = new Proxy(api, { get(t: any, k: any) { return k === "self" ? px : t[k]; } });
+  return px;
+}
+const p = mk();
+try { p(); } catch (e) { console.log(e instanceof TypeError); }
+try { new p(); } catch (e) { console.log(e instanceof TypeError); }
+console.log(p.n, typeof p);
+"#;
+
+#[test]
+fn pxcall_non_callable_target_has_no_call() {
+    let (tops, held) = solve(PROXY_CALL);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// KEEP: a callable target gives the Proxy a [[Call]] (the `apply` trap or
+// the forward, 10.5.12), not modeled: the old path (an "E9 Proxy target"
+// degrade). Also when the target node holds an object literal first and a
+// function stored after the call (one birth site in a loop: the rule is
+// the target node's, re-made as its tokens grow), and through a Proxy of a
+// Proxy (callable when its target is). The Proxies are made in functions:
+// a call of a `new Proxy` binding is its own HIR form (`ProxyApply`).
+#[test]
+fn pxcall_keep_callable_target_stays_e9() {
+    let wraps = "function wrap1(t: any): any { return new Proxy(t, {}); }\nfunction wrap2(t: any): any { return new Proxy(t, {}); }\n";
+    let late = PROXY_CALL.replace(
+        "const p = mk();",
+        &format!("{wraps}const p = mk();\nconst box: any = {{ f: {{ a: 1 }} }};\nfor (let i = 0; i < 2; i++) {{ const q: any = wrap1(box.f); try {{ q(); }} catch (e) {{}} box.f = (): string => N; }}"),
+    );
+    let nested = PROXY_CALL.replace(
+        "const p = mk();",
+        &format!("{wraps}const p = mk();\nconst q: any = wrap1(wrap2(function (): string {{ return N; }}));\ntry {{ q(); }} catch (e) {{}}"),
+    );
+    for src in [late, nested] {
+        let (tops, _) = solve(&src);
+        assert!(
+            tops.iter().any(|t| t.starts_with("E9 Proxy target")),
+            "callable target: {tops:?}"
+        );
+    }
+    // A Proxy of a Proxy over an object literal: no [[Call]] either.
+    let plain = PROXY_CALL.replace(
+        "const p = mk();",
+        &format!("{wraps}const p = mk();\nconst q: any = wrap1(wrap2({{ a: 1 }}));\ntry {{ q(); }} catch (e) {{}}"),
+    );
+    let (tops, held) = solve(&plain);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// PERFNOW55 rule PXCALLR: a method call that finds the Proxy through a
+// receiver (`o.m()` whose `m` the get trap answers with the Proxy itself, web
+// tokens.ts: `valueOf` returns `this`; a computed-key method call) binds it
+// by relays: the `this` (ThisTo), the arguments and result (CallArgs) and the
+// per-receiver builtin run (BuiltinCallee). Each is part of the Proxy's
+// [[Call]]: over an object literal there is none (7.3.14 Call step 2, a
+// TypeError) and no trap runs. RED on PXCALL without the relay arms: "E9
+// Proxy target (thisto)", "(callargs)", "(builtincallee)".
+const PROXY_CALLR: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const api: Record<string, unknown> = { n: N };
+  const px: any = new Proxy(api, { get(t: any, k: any) { return k === "self" ? px : t[k]; } });
+  return px;
+}
+const p = mk();
+const o: any = { m: p.self };
+try { o.m(N); } catch (e) { console.log(e instanceof TypeError); }
+const r: Record<string, any> = { k: p };
+try { r["k" + (N.length > 9 ? "x" : "")](1); } catch (e) { console.log(e instanceof TypeError); }
+console.log(p.n);
+"#;
+
+#[test]
+fn pxcallr_method_of_non_callable_proxy_has_no_call() {
+    let (tops, held) = solve(PROXY_CALLR);
+    assert!(!e9(&tops), "no E9 unknown: {tops:?}");
+    assert!(!held, "realm not held: {tops:?}");
+}
+
+// KEEP: a Proxy over a function found as a method has a [[Call]] (10.5.12),
+// not modeled: the old path ("E9 Proxy target"), as for a plain call.
+#[test]
+fn pxcallr_keep_callable_method_stays_e9() {
+    let src = PROXY_CALLR.replace(
+        "console.log(p.n);",
+        "function wrap1(t: any): any { return new Proxy(t, {}); }\nconst f: any = { m: wrap1((): string => N) };\nconsole.log(f.m(), p.n);",
+    );
+    let (tops, _) = solve(&src);
+    assert!(
+        tops.iter().any(|t| t.starts_with("E9 Proxy target")),
+        "callable target: {tops:?}"
+    );
+}
+
+// PERFNOW53 rule PXVAL: the Array-only and value-only rules on a Proxy (c09:
+// three.js setupRenderTarget, an index store whose receiver may be a Proxy).
+// RED on 1ef1a09bb2: "E9 Proxy target (lenindex)" / "(thisinst)".
+const PXVAL_PRE: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const t: any = { n: 1 };
+  return new Proxy(t, { get(o: any, k: any) { return o[k]; } });
+}
+const p = mk();
+"#;
+const PXVAL: &[(&str, &str)] = &[
+    (
+        "lenindex",
+        r#"const api = { put: (a: any, i: number) => { a[i] = 1; return a; } };
+console.log(api.put([0, 0], N.length).length, api.put(p, 1).n);"#,
+    ),
+    (
+        "thisinst",
+        r#"const o = { f(this: any) { return this.n; } }; console.log(o.f.call(N), o.f.call(p));"#,
+    ),
+];
+
+#[test]
+fn pxval_value_only_rules() {
+    let mut bad = Vec::new();
+    for (name, body) in PXVAL {
+        let (tops, held) = solve(&format!("{PXVAL_PRE}{body}\n"));
+        let holds: Vec<&String> = tops.iter().filter(|t| t.contains("E9")).collect();
+        if e9(&tops) || held {
+            bad.push(format!("{name} held={held} e9={holds:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "no E9 unknown, realm not held: {bad:#?}");
+}
+
+// PERFNOW53 rule PXSTR: a Proxy as an operand of the String constant folds
+// (indexOf, substring, replace's receiver and search value). RED on
+// 1ef1a09bb2: "E9 Proxy target (strindex)" / "(strsubstring)" /
+// "(strreplace)".
+const PXSTR_PRE: &str = r#"const N = String(process.argv[2]);
+function mk(): any {
+  const t: any = { n: 1 };
+  return new Proxy(t, { get(o: any, k: any) { return o[k]; } });
+}
+const p = mk();
+"#;
+const PXSTR: &[(&str, &str)] = &[
+    (
+        "strindex",
+        r#"const api = { ix: (s: string): number => ("ab" + N).indexOf(s) }; console.log(api.ix(N), api.ix(p as any));"#,
+    ),
+    (
+        "strreplace_search",
+        r#"const api = { r: (s: string): string => ("ab" + N).replace(s, "x") }; console.log(api.r(N), api.r(p as any));"#,
+    ),
+    (
+        "strreplace_recv",
+        r#"const api = { r: (s: string): string => s.replace("a", "x") }; console.log(api.r(N), api.r(p as any));"#,
+    ),
+    (
+        "strsubstring",
+        r#"const api = { s: (k: number): string => ("abcdef" + N).substring(k) }; console.log(api.s(1), api.s(p as any));"#,
+    ),
+];
+
+#[test]
+fn pxstr_string_fold_operands() {
+    let mut bad = Vec::new();
+    for (name, body) in PXSTR {
+        let (tops, held) = solve(&format!("{PXSTR_PRE}{body}\n"));
+        let holds: Vec<&String> = tops.iter().filter(|t| t.contains("E9")).collect();
+        if e9(&tops) || held {
+            bad.push(format!("{name} held={held} e9={holds:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "no E9 unknown, realm not held: {bad:#?}");
+}
+
+// PERFNOW64: the Proxy as the method a builtin receiver's member read finds
+// (c08-B1 second chain, pn63 DIAG52N: `kind=thisto label="builtin-member-read"
+// c=ThisTo{origin}`: web Canvas2D::solidRect `data.copyWithin(...)`, `data`
+// a builtin whose any-key copy stored the style Proxy). The member is a
+// program value on a builtin (`builtin-member-read`, lookup.rs), bound by the
+// relays of PXCALLR: over an object literal the Proxy has no [[Call]] (7.3.14
+// Call step 2, a TypeError) and no trap runs. RED on 1ef1a09bb2 (before
+// PXCALLR): "E9 Proxy target (thisto)".
+#[test]
+fn pxthis_builtin_member_read_of_proxy_has_no_call() {
+    let src = PROXY_CALLR.replace(
+        "console.log(p.n);",
+        "const m: any = Math;\nm.zz = p.self;\ntry { m.zz(N); } catch (e) { console.log(e instanceof TypeError); }\nconsole.log(p.n);",
+    );
+    let (tops, held) = solve(&src);
     assert!(!e9(&tops), "no E9 unknown: {tops:?}");
     assert!(!held, "realm not held: {tops:?}");
 }

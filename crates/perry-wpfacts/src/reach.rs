@@ -186,6 +186,7 @@ impl Model {
             Cons::Implicit {
                 reason,
                 proto: Protocol::Json,
+                region: self.thrown,
             },
         );
     }
@@ -313,6 +314,7 @@ impl Gen<'_> {
             Cons::Implicit {
                 reason: r,
                 proto: Protocol::Json,
+                region: self.m.thrown,
             },
         );
         if identity {
@@ -327,6 +329,7 @@ impl Gen<'_> {
                 Cons::Implicit {
                     reason: rr,
                     proto: Protocol::Any,
+                    region: self.m.thrown,
                 },
             );
             rest.push(v);

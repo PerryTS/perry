@@ -65,18 +65,18 @@ fn store_onto_navigator_then_match_keeps_sites_proven() {
     );
 }
 
-/// Control: `Object.defineProperty` replaces the accessor (a native write
-/// under the key): the load reads ⊤, and the store, replayed on the ordinary
-/// path, reaches it as before.
+/// `Object.defineProperty` replaces the accessor with the program's data
+/// property, which the runtime never reads by name: the load reads the
+/// defined value (and the stored one), nothing unknown.
 #[test]
-fn navigator_redefined_then_stored_reads_top() {
+fn navigator_redefined_then_stored_reads_the_values() {
     let k = stored(
         &format!(
             "Object.defineProperty(globalThis, \"navigator\", {{ value: {{ userAgent: 1 }} }});\n{SKINBENCH}"
         ),
         "navigator.userAgent",
     );
-    assert!(k.top, "{k:?}");
+    assert!(!k.top && k.prims & crate::model::prim::NUM != 0, "{k:?}");
 }
 
 /// The predicate is the realm's: a getter and no setter (`navigator`,

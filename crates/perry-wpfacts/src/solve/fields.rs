@@ -382,7 +382,7 @@ impl Model {
                 self.top_tok_node
             } else if builtins::builtin_function(self, s) {
                 let read = self.node_l("spread-native-fields");
-                self.builtin_field_use(s, Key::any(), ChainAct::Load(read));
+                self.builtin_field_use(s, Key::any(), ChainAct::Load(read, self.thrown));
                 read
             } else {
                 self.all_fields(s)
@@ -399,7 +399,7 @@ impl Model {
         if !opaque && self.may_wrap_string(s) {
             self.add_prim(fa_d, prim::STR);
         }
-        self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d));
+        self.builtin_field_use(s, Key::any(), ChainAct::Load(fa_d, self.thrown));
         // A typed array's integer indices are own enumerable keys whose
         // values are its elements (ECMA-262 10.4.5.7, 10.4.5.15): the copy
         // stores them under index keys of the target (7.3.25).
@@ -474,7 +474,7 @@ impl Model {
         // It is a write of the target under some key as well: onto a
         // builtin prototype, every key of it (`note_native_write`).
         if opaque {
-            self.accessor_walk(d, d, Key::any(), ChainAct::Store(fa_s));
+            self.accessor_walk(d, d, Key::any(), ChainAct::Store(fa_s, self.thrown));
             self.note_unnamed_set(d);
         } else {
             self.cons(fa_s, Cons::UnnamedSet { target: d });
@@ -485,7 +485,7 @@ impl Model {
         self.edge(numeric_s, numeric_d);
         // Getters of `s` (own and on the chain) run; their results have no
         // known key here.
-        let act = ChainAct::Load(fa_d);
+        let act = ChainAct::Load(fa_d, self.thrown);
         self.any_walk_holders.entry(s).or_default().push((s, act));
         self.accessor_hit(s, s, Key::any(), act);
     }
@@ -792,10 +792,10 @@ impl Model {
             let p = self.typed_array_elem_prim(t);
             self.add_prim(dst, p);
         }
-        self.builtin_field_use(t, Key::any(), ChainAct::Load(dst));
+        self.builtin_field_use(t, Key::any(), ChainAct::Load(dst, self.thrown));
         let fields = self.all_fields(t);
         self.edge(fields, dst);
-        let act = ChainAct::Load(dst);
+        let act = ChainAct::Load(dst, self.thrown);
         // Any-key lookups subscribe through the holder relation;
         // named-key replay in `visits` does not cover them.
         self.any_walk_holders.entry(t).or_default().push((t, act));

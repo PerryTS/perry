@@ -16,8 +16,8 @@ pub(super) fn act_map(
             dst: n(dst),
             setter,
         },
-        ChainAct::Load(x) => ChainAct::Load(n(x)),
-        ChainAct::Store(x) => ChainAct::Store(n(x)),
+        ChainAct::Load(x, r) => ChainAct::Load(n(x), n(r)),
+        ChainAct::Store(x, r) => ChainAct::Store(n(x), n(r)),
         ChainAct::Call(c) => ChainAct::Call(k(c)),
     }
 }
@@ -34,6 +34,7 @@ pub fn map_cons(
         ProtoKey { key, dst } => ProtoKey { key, dst: n(dst) },
         OwnValues { dst } => OwnValues { dst: n(dst) },
         OwnKeys { dst } => OwnKeys { dst: n(dst) },
+        OwnNames { dst } => OwnNames { dst: n(dst) },
         OwnDescValues { dst } => OwnDescValues { dst: n(dst) },
         IndexHole => IndexHole,
         IndexHoleIn { key } => IndexHoleIn { key: n(key) },
@@ -50,10 +51,16 @@ pub fn map_cons(
         LenIndex { lo, hi } => LenIndex { lo, hi },
         LenPermuted { t } => LenPermuted { t },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
-        Store { key, src, site } => Store {
+        Store {
+            key,
+            src,
+            site,
+            region,
+        } => Store {
             key,
             src: n(src),
             site,
+            region: n(region),
         },
         Call { call } => Call { call: k(call) },
         CallThis { call, this } => CallThis {
@@ -145,6 +152,7 @@ pub fn map_cons(
             shared,
             dst: n(dst),
         },
+        NotObjectProto { dst } => NotObjectProto { dst: n(dst) },
         Objects { dst } => Objects { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
@@ -185,7 +193,15 @@ pub fn map_cons(
             site,
             reason,
         },
-        Implicit { reason, proto } => Implicit { reason, proto },
+        Implicit {
+            reason,
+            proto,
+            region,
+        } => Implicit {
+            reason,
+            proto,
+            region: n(region),
+        },
         HasInstance { reason, arg } => HasInstance {
             reason,
             arg: n(arg),
@@ -400,7 +416,14 @@ pub fn map_cons(
             reason,
             accessor,
         },
-        StoreKeyed { o, src, site, subj } => StoreKeyed {
+        StoreKeyed {
+            o,
+            src,
+            site,
+            subj,
+            region,
+        } => StoreKeyed {
+            region: n(region),
             o: n(o),
             src: n(src),
             site,
@@ -422,7 +445,9 @@ pub fn map_cons(
             src,
             site,
             shape,
+            region,
         } => StoreIndexed {
+            region: n(region),
             o: n(o),
             src: n(src),
             site,
@@ -442,6 +467,7 @@ pub fn map_cons(
             site,
             reason,
             accessor,
+            desc,
         } => DefineAnyKey {
             o: n(o),
             key: n(key),
@@ -451,6 +477,7 @@ pub fn map_cons(
             site,
             reason,
             accessor,
+            desc: if desc == NO_NODE { NO_NODE } else { n(desc) },
         },
         Arith { dst, other } => Arith {
             dst: n(dst),
@@ -480,9 +507,14 @@ pub fn map_cons(
         },
         ArrayLenArg { dst } => ArrayLenArg { dst: n(dst) },
         CaseMap { dst, upper } => CaseMap { dst: n(dst), upper },
-        ConsoleFormat { reason, agg } => ConsoleFormat {
+        ConsoleFormat {
+            reason,
+            agg,
+            region,
+        } => ConsoleFormat {
             reason,
             agg: n(agg),
+            region: n(region),
         },
         ShareBuffer { ta } => ShareBuffer { ta },
         Captures { rec, pat } => Captures { rec, pat },
@@ -557,6 +589,7 @@ pub fn map_cons(
         ThisInst { call, ft } => ThisInst { call: k(call), ft },
         NativeThis { call, f } => NativeThis { call: k(call), f },
         BuiltinCallee => BuiltinCallee,
+        ProxyCallee { p } => ProxyCallee { p },
         HolderStep { key, pass, stop } => HolderStep {
             key,
             pass: n(pass),
@@ -628,6 +661,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | ProtoKey { .. }
             | OwnValues { .. }
             | OwnKeys { .. }
+            | OwnNames { .. }
             | OwnDescValues { .. }
             | CjsPublish { .. }
             | Spread { .. }
@@ -655,6 +689,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Fulfil { .. }
             | Falsy { .. }
             | NotBuffer { .. }
+            | NotObjectProto { .. }
             | NotRegExp { .. }
             | ProtoObjects { .. }
             | NotNull { .. }
@@ -729,6 +764,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | ProtoKey { dst, .. }
         | OwnValues { dst }
         | OwnKeys { dst }
+        | OwnNames { dst }
         | OwnDescValues { dst }
         | CjsPublish { dst }
         | IdxLoad { dst, .. }

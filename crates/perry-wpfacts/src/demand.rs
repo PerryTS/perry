@@ -140,6 +140,7 @@ pub(crate) fn solve(m: &mut Model) {
                     | Cons::Fulfil { dst }
                     | Cons::Defined { dst }
                     | Cons::NotBuffer { dst, .. }
+                    | Cons::NotObjectProto { dst }
                     | Cons::NotRegExp { dst }
                     | Cons::NotNull { dst }
                     | Cons::RecordEntry { dst }

@@ -619,6 +619,12 @@ pub(crate) struct Fx {
     /// only when the test can select the branch (`Cons::Guard`); every
     /// other effect of the branch stays unconditional.
     pub guard: Option<(NodeId, u8)>,
+    /// DEADARM (ECMA-262 14.6.2): the node that holds a value once the
+    /// innermost enclosing `if` arm can run (its test can select it and
+    /// its own enclosing arm can run); `None` outside every arm. A read of
+    /// a local or of `this`, a local write and a `return` in the arm pass
+    /// only once it holds one (`Gen::live_gate`).
+    pub live: Option<NodeId>,
 }
 
 #[path = "gen/import_values.rs"]

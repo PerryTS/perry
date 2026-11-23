@@ -223,6 +223,9 @@ pub struct Inst {
 /// No value keys the run (`Inst::val`, the fourth key component).
 pub const NO_VAL: u32 = u32::MAX;
 
+/// Rule PXGET: the key shape of a trap call for an access under any key.
+pub const TRAP_ANY: u32 = u32::MAX;
+
 /// Rule M1: the run of every primitive value of the switched argument
 /// that is no String (`VAL_PRIM | kinds`, the `prim` bits): strictly equal
 /// to no string-literal case (ECMA-262 7.2.16: another type), it enters
@@ -252,6 +255,7 @@ pub struct SumState {
     /// born), 6 a for-in body's run for one key (the key's atom, FVA 4.3b),
     /// 7 a closure maker's run for one call site (rule C, `closure_maker`:
     /// the call's template, so one run per site of the program text).
+    /// 8 a Proxy trap's run for one key shape (rule PXGET: `trap_ctx`).
     /// The fourth component is the function value a run's called
     /// parameter is bound to (`Summary::called`), else `NO_VAL`.
     /// Nothing in a key is another instance: the count is (sites +
@@ -277,6 +281,15 @@ pub struct SumState {
     /// (call, function token) whose receiver node binds per token
     /// (`Cons::ThisInst`).
     pub this_inst: FxHashSet<(CallId, Tok)>,
+    /// Rule PXGET: a Proxy trap call that ECMA-262 10.5.x makes with the
+    /// key P of one access (get 10.5.8, set 10.5.9, has 10.5.7,
+    /// deleteProperty 10.5.10, getOwnPropertyDescriptor 10.5.5) -> that
+    /// access's key shape: the atom of a named key, `TRAP_ANY` for any key.
+    pub trap_shape: FxHashMap<CallId, u32>,
+    /// Kind-8 run contexts: id -> (the receiver context kind 1 would use,
+    /// key shape), interned (`Model::trap_ctx`).
+    pub trap_ctx: Vec<(u32, u32)>,
+    pub trap_ctx_of: FxHashMap<(u32, u32), u32>,
     /// A call an instance made -> the instance's lexical context
     /// (`Inst::lay`): what the call births is per (site, context).
     pub call_lay: FxHashMap<CallId, (u32, u32)>,
@@ -370,6 +383,7 @@ impl Model {
                 | Cons::Fulfil { dst }
                 | Cons::Falsy { dst }
                 | Cons::NotBuffer { dst, .. }
+                | Cons::NotObjectProto { dst }
                 | Cons::NotRegExp { dst }
                 | Cons::NotNull { dst }
  | Cons::RecordEntry { dst }
@@ -438,11 +452,26 @@ impl Model {
         self.sum.templates.contains(&call)
     }
 
+    /// Is `call` a call of the program text: one the generator made
+    /// (`Gen::new_call`: its own site, placed in its function), not a copy
+    /// an instance or the solver made. The generator makes them before the
+    /// summaries (`n_prog`) and, in the activation pass, also after: a body
+    /// is walked once it is reached (`Gen::walk_activated`), so its calls
+    /// count past `n_prog` and are program sites all the same.
+    pub(crate) fn prog_call(&self, call: CallId) -> bool {
+        (call as usize) < self.sum.n_prog
+            || (self
+                .calls
+                .get(call as usize)
+                .is_some_and(|c| c.site == call)
+                && self.call_place.contains_key(&call))
+    }
+
     /// The program site behind `call`: itself for a call of the program,
     /// the template a call an instance made renames, or the site a call the
     /// solver made was made for.
     pub(crate) fn origin_of(&self, call: CallId) -> Option<CallId> {
-        if (call as usize) < self.sum.n_prog {
+        if self.prog_call(call) {
             return Some(call);
         }
         self.sum
@@ -558,6 +587,7 @@ impl Model {
                     .map(|_| fresh(self, "native-call-spread"))
                     .collect::<Vec<_>>();
                 let ret = fresh(self, "native-call-ret");
+                let raise = fresh(self, "native-call-raise");
                 let tg = fresh(self, "native-call-target");
                 let id = self.calls.len() as CallId;
                 let site = if cs.site == id { id } else { cs.site };
@@ -570,7 +600,7 @@ impl Model {
                         spread,
                         ret,
                         site,
-                        region: cs.region,
+                        region: raise,
                     },
                 );
                 self.chain_calls.insert(k, (id, tg));
@@ -597,6 +627,11 @@ impl Model {
         }
         if sc.ret != cs.ret {
             self.edge(sc.ret, cs.ret);
+        }
+        // The shared call's own throw node reaches every joining maker's
+        // region, as its result reaches every joining maker's result.
+        if sc.region != cs.region {
+            self.edge(sc.region, cs.region);
         }
         if target != tg {
             self.edge(target, tg);
@@ -658,7 +693,7 @@ impl Model {
                 module: u32::MAX,
                 site,
                 ..
-            } => site as usize == 0 || site as usize >= self.sum.n_prog,
+            } => site as usize == 0 || !self.prog_call(site),
             _ => false,
         }
     }
@@ -733,6 +768,9 @@ impl Model {
             if mc.ret != cs.ret {
                 self.edge(mc.ret, cs.ret);
             }
+            if mc.region != cs.region {
+                self.edge(mc.region, cs.region);
+            }
             if let (Some(a), Some(b)) = (target, tgt) {
                 if a != b {
                     self.edge(a, b);
@@ -740,7 +778,18 @@ impl Model {
             }
             return None;
         }
-        let id = self.solver_call_raw(by, cs);
+        // The one call is joined by every maker under the root: its own
+        // throw node reaches each maker's region (one edge per maker).
+        let region = cs.region;
+        let raise = self.node_l("solver-call-raise");
+        self.edge(raise, region);
+        let id = self.solver_call_raw(
+            by,
+            CallSite {
+                region: raise,
+                ..cs
+            },
+        );
         self.solver_keyed.insert(k, (id, target));
         Some(id)
     }
@@ -1073,6 +1122,7 @@ impl Model {
             0 | 7 => LAY_SITE | key.1,
             5 => LAY_BIRTH | key.1,
             1 if this != NO_NODE => key.1,
+            8 if this != NO_NODE => self.sum.trap_ctx[key.1 as usize].0,
             2 if this != NO_NODE => self.layout_of(TOP),
             _ if ctx == NO_CTX => LAY_NONE,
             _ => self.sum.ctx_lay[ctx as usize],
@@ -1106,7 +1156,7 @@ impl Model {
             val,
         });
         self.sum.inst_key.insert(vkey, inst);
-        if matches!(key.0, 0 | 5 | 6 | 7) || (key.0 == 1 && key.1 != LAY_NONE) {
+        if matches!(key.0, 0 | 5 | 6 | 7 | 8) || (key.0 == 1 && key.1 != LAY_NONE) {
             self.sum.site_run.insert(inst);
         }
         self.sum.pending.push((inst, base));
@@ -1123,6 +1173,18 @@ impl Model {
         self.sum.vctx.push(k);
         self.sum.vctx_of.insert(k, v);
         v
+    }
+
+    /// Rule PXGET: the kind-8 context of receiver context `lay` and key
+    /// shape `sh`, made on first use.
+    fn trap_ctx(&mut self, lay: u32, sh: u32) -> u32 {
+        if let Some(&c) = self.sum.trap_ctx_of.get(&(lay, sh)) {
+            return c;
+        }
+        let c = self.sum.trap_ctx.len() as u32;
+        self.sum.trap_ctx.push((lay, sh));
+        self.sum.trap_ctx_of.insert((lay, sh), c);
+        c
     }
 
     /// A call an instance made at a call its summary expanded `f` into:
@@ -1177,6 +1239,10 @@ impl Model {
             _ if let Some(site) = self.site_of_call(call) => (0, site, ft),
             _ if let Some(site) = self.nested_site(call, ft) => (0, site, ft),
             Some(t) if self.constructs(f, t) => (5, t, ft),
+            // Rule PXGET: a trap call passed the key of one access runs
+            // the run of its key shape (10.5.8 step 8: the trap gets that
+            // access's P, never another access's).
+            _ if let Some(&sh) = self.sum.trap_shape.get(&call) => (8, self.trap_ctx(lay, sh), ft),
             _ => (1, lay, ft),
         };
         // Widened (`past_work_bound`): no new calling context. The call
@@ -1185,7 +1251,7 @@ impl Model {
         // callers. A birth's run (5) stays per object: its key is what
         // it births.
         let key = match key.0 {
-            0 | 1 | 7
+            0 | 1 | 7 | 8
                 if self.widened
                     && !self
                         .sum
@@ -1277,11 +1343,15 @@ impl Model {
     /// (`site_run`) is a site of that run: its key is the copy itself, one
     /// per (template site, caller run), and the caller run's key is its own
     /// site, so a run is keyed by the chain of sites from a program site.
-    /// A callee already on that chain (recursion, mutual recursion) folds
-    /// onto the run of its occurrence there: that run's executions are a
-    /// superset, and the chain holds each function token at most once, so
-    /// the runs are at most the acyclic call paths. A call in the shared
-    /// run (no site, no object) keeps the shared run.
+    /// A callee whose function is already on that chain (recursion, mutual
+    /// recursion), through any closure of it, folds onto the site of its
+    /// occurrence there: the callee's run at that site has a superset of
+    /// executions. The chain holds each function at most once, so the runs
+    /// are at most the acyclic call paths, times the closures of the
+    /// callee at a site. (Folding by token alone let a recursion that
+    /// reaches every closure of one function run each permutation of them:
+    /// three.js `WebGLShadowMap` `renderObject`, 16 closures.) A call in the
+    /// shared run (no site, no object) keeps the shared run.
     fn nested_site(&self, call: CallId, ft: Tok) -> Option<CallId> {
         if call == NO_NODE || (call as usize) < self.sum.n_prog {
             return None;
@@ -1294,13 +1364,14 @@ impl Model {
         if !self.sum.site_run.contains(&cur) {
             return None;
         }
+        let f = self.tok_fn(ft);
         loop {
             let it = &self.sum.insts[cur as usize];
             let site = it.lay & LAY_MASK;
             if it.lay & !LAY_MASK != LAY_SITE {
                 break;
             }
-            if it.tok == ft {
+            if it.f == f {
                 return Some(site);
             }
             if (site as usize) < self.sum.n_prog {
@@ -1912,7 +1983,7 @@ impl Model {
         if r == NO_NODE {
             return;
         }
-        let cret = self.calls[c].ret;
+        let cret = self.call_result_dst(call, f);
         if self.ret_param_into(call, f) {
             return;
         }
@@ -1967,7 +2038,7 @@ impl Model {
             return false;
         }
         let r = self.run_ret(run);
-        let cret = self.calls[c].ret;
+        let cret = self.call_result_dst(call, self.run_fn(run));
         self.rel(|| format!("copy {r} {cret}"));
         self.cons(r, Cons::RetInto { call, run });
         for i in rel {
@@ -2005,7 +2076,7 @@ impl Model {
     /// this call: for each marker `m` of the call's argument i, the same
     /// token of `m` (`Model::lift`). Every other token arrives as itself.
     pub(crate) fn ret_into(&mut self, call: CallId, run: u32, toks: Tokens<'_>, prim: u16) {
-        let cret = self.calls[call as usize].ret;
+        let cret = self.call_result_dst(call, self.run_fn(run));
         let mut raw: Vec<Tok> = Vec::new();
         let mut lifted: Vec<Tok> = Vec::new();
         let mut args: Vec<Option<Vec<Tok>>> = Vec::new();
@@ -2071,8 +2142,26 @@ impl Model {
                 out.push(self.lift(m, b, t));
             }
         }
-        let cret = self.calls[call as usize].ret;
+        let cret = self.call_result_dst(call, self.run_fn(run));
         self.add(cret, &out, 0);
+    }
+
+    /// Where a run of `f` bound at `call` returns: the call's result, or
+    /// for a `new` of summarized `f` its body-result node (`Model::ctor_body`:
+    /// the [[Call]] result is not the `new` result, ECMA-262 10.2.2).
+    fn call_result_dst(&self, call: CallId, f: FnIdx) -> NodeId {
+        match self.ctor_body.get(&(call, f)) {
+            Some(&b) => b,
+            None => self.calls[call as usize].ret,
+        }
+    }
+
+    /// The function of run `run`.
+    fn run_fn(&self, run: u32) -> FnIdx {
+        match run & FN_RUN {
+            0 => self.sum.insts[(run - 1) as usize].f,
+            _ => run & !FN_RUN,
+        }
     }
 
     /// The parameter of run `run` whose argument marker is `b`.

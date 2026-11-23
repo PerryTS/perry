@@ -16,7 +16,7 @@
 //!   it, own or on the chain, runs with the slot's object as `this`. A bare
 //!   slot or its elements: the solver's ordinary chain reach of the
 //!   receiver, as the hand models had it.
-//! - `coerce(slot, P)`: `Cons::Implicit { proto: P }` on the slot's node.
+//! - `coerce(slot, P)`: `Cons::Implicit { proto: P, region: self.thrown }` on the slot's node.
 //! - `calls(callee, this, args)`: `cb_call` with the operands; its result
 //!   node is `returned(N)` for the N-th declared call. A callee argument the
 //!   call does not pass is no function: no call, nothing returned.
@@ -50,7 +50,7 @@
 //! declaration runs only on a call of the value (never by name, never as a
 //! construct), and such a native is a value only as a fresh object's field.
 
-use super::collections::cb_call;
+use super::collections::cb_call_in;
 use super::*;
 use crate::pts::FxHashMap;
 use perry_hir::realm_manifest::{
@@ -323,7 +323,15 @@ pub(super) fn setter_store(m: &mut Model, e: &'static RealmEntry, t: Tok, src: N
         }
         let key = step_key(m, last);
         let site = m.anon_store_site();
-        m.cons(at, Cons::Store { key, src, site });
+        m.cons(
+            at,
+            Cons::Store {
+                key,
+                src,
+                site,
+                region: m.thrown,
+            },
+        );
     }
 }
 
@@ -1150,7 +1158,14 @@ fn run(
                 let reason = m.reason(&format!("{} coerces its {}", entry.name, slot_text(slot)));
                 let proto = protocol(*p);
                 for n in v.nodes {
-                    m.cons(n, Cons::Implicit { reason, proto });
+                    m.cons(
+                        n,
+                        Cons::Implicit {
+                            reason,
+                            proto,
+                            region: m.thrown,
+                        },
+                    );
                 }
                 if !v.spread.is_empty() {
                     let n = m.node_l("native-elems");
@@ -1162,7 +1177,14 @@ fn run(
                         },
                         n,
                     );
-                    m.cons(n, Cons::Implicit { reason, proto });
+                    m.cons(
+                        n,
+                        Cons::Implicit {
+                            reason,
+                            proto,
+                            region: m.thrown,
+                        },
+                    );
                 }
             }
             RealmEffect::Calls { callee, this, args } => {
@@ -1170,7 +1192,12 @@ fn run(
                     Some(cb) => {
                         let this = run.this_arg(m, this);
                         let args: Vec<NodeId> = args.iter().map(|a| run.operand(m, a)).collect();
-                        cb_call(m, call, cb, this, args)
+                        {
+                            // A declared effect says nothing of when the
+                            // callback runs: its throws stay program-wide.
+                            let thrown = m.thrown;
+                            cb_call_in(m, call, cb, this, args, thrown)
+                        }
                     }
                     None => m.node_l("cb-ret"),
                 };
@@ -1245,6 +1272,7 @@ fn run(
                             key,
                             src: value,
                             site,
+                            region: m.thrown,
                         },
                     );
                 }
@@ -1309,7 +1337,14 @@ pub(crate) fn strkey_set(
             if slot.root == arg && slot.steps.is_empty() {
                 let reason = m.reason(&format!("{} coerces its {}", entry.name, slot_text(slot)));
                 let proto = protocol(*p);
-                m.cons(src, Cons::Implicit { reason, proto });
+                m.cons(
+                    src,
+                    Cons::Implicit {
+                        reason,
+                        proto,
+                        region: m.thrown,
+                    },
+                );
             }
         }
     }

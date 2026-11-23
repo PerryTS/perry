@@ -104,6 +104,7 @@ pub(crate) fn to_prim(m: &mut Model, v: NodeId, why: &str) {
         Cons::Implicit {
             reason: r,
             proto: Protocol::ToPrimitive,
+            region: m.thrown,
         },
     );
 }
@@ -187,7 +188,7 @@ fn method_call(m: &mut Model, by: CallId, recv: NodeId, key: &str, args: Vec<Nod
             spread: vec![],
             ret,
             site: call,
-            region: m.thrown,
+            region: m.calls[by as usize].region,
         },
         move |m, tg, call| {
             m.cons(
@@ -821,6 +822,7 @@ fn split(m: &mut Model, call: CallId, recv: NodeId) {
             key: Key::Named(li),
             src: q,
             site,
+            region: m.thrown,
         },
     );
     let z = method_call(m, call, splitter, "exec", vec![s]);
@@ -863,7 +865,7 @@ fn construct(m: &mut Model, by: CallId, ctor: NodeId, args: Vec<NodeId>) -> Node
             spread: vec![],
             ret,
             site: call,
-            region: m.thrown,
+            region: m.calls[by as usize].region,
         },
         move |m, tg, call| m.cons(tg, Cons::New { call }),
     );

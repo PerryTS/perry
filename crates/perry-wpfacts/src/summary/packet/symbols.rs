@@ -40,6 +40,7 @@ impl Model {
             Cons::Load { key, dst } => format!("Load key={:?} dst={:?}", self.packet_key(key), dst),
             Cons::OwnValues { dst } => format!("OwnValues dst={:?}", dst),
             Cons::OwnKeys { dst } => format!("OwnKeys dst={:?}", dst),
+            Cons::OwnNames { dst } => format!("OwnNames dst={:?}", dst),
             Cons::OwnDescValues { dst } => format!("OwnDescValues dst={:?}", dst),
             Cons::IndexHole => format!("IndexHole"),
             Cons::IndexHoleIn { key } => format!("IndexHoleIn {key}"),
@@ -54,7 +55,7 @@ impl Model {
             Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
             Cons::LenPermuted { t } => format!("LenPermuted {t}"),
             Cons::CjsPublish { dst } => format!("CjsPublish dst={:?}", dst),
-            Cons::Store { key, src, site } => format!(
+            Cons::Store { key, src, site, .. } => format!(
                 "Store key={:?} src={:?} site={:?}",
                 self.packet_key(key),
                 src,
@@ -162,6 +163,7 @@ impl Model {
             Cons::TypeIs { mask, dst } => format!("TypeIs mask={mask:#x} dst={:?}", dst),
             Cons::ProtoObjects { dst } => format!("ProtoObjects dst={:?}", dst),
             Cons::NotRegExp { dst } => format!("NotRegExp dst={:?}", dst),
+            Cons::NotObjectProto { dst } => format!("NotObjectProto dst={:?}", dst),
             Cons::NotBuffer { shared, dst } => {
                 format!("NotBuffer shared={shared} dst={:?}", dst)
             }
@@ -214,7 +216,7 @@ impl Model {
                 self.reasons.get(reason as usize)
             ),
             Cons::AddsKeys => format!("AddsKeys"),
-            Cons::Implicit { reason, proto } => format!(
+            Cons::Implicit { reason, proto, .. } => format!(
                 "Implicit reason={:?} proto={:?}",
                 self.reasons.get(reason as usize),
                 proto
@@ -469,6 +471,7 @@ impl Model {
                 src,
                 site,
                 shape,
+                ..
             } => format!(
                 "StoreIndexed o={:?} src={:?} site={:?} shape={:?}",
                 o,
@@ -499,7 +502,7 @@ impl Model {
             Cons::Plus { str, num, .. } => format!("Plus str={:?} num={:?}", str, num),
             Cons::ArrayLenArg { dst } => format!("ArrayLenArg dst={:?}", dst),
             Cons::CaseMap { dst, upper } => format!("CaseMap dst={:?} upper={upper}", dst),
-            Cons::ConsoleFormat { reason, agg } => {
+            Cons::ConsoleFormat { reason, agg, .. } => {
                 format!("ConsoleFormat reason={reason} agg={:?}", agg)
             }
             Cons::BoundCall { reason, bound } => format!(
@@ -588,6 +591,7 @@ impl Model {
                 self.packet_token(f, packet)
             ),
             Cons::BuiltinCallee => format!("BuiltinCallee"),
+            Cons::ProxyCallee { p } => format!("ProxyCallee p={p}"),
             Cons::HolderStep { key, pass, stop } => format!(
                 "HolderStep key={:?} pass={:?} stop={:?}",
                 self.packet_key(key),

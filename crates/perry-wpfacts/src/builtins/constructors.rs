@@ -4,6 +4,21 @@ use super::*;
 pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
     crate::family_reach::namespace(m, ns, None);
     m.diagnostic_builtin(call, |_| format!("new {ns:?}"));
+    // The global object, Math, JSON, Reflect, console and process
+    // are ordinary objects without [[Construct]]: `new` throws a TypeError at
+    // IsConstructor (ECMA-262 13.3.5.1.1 step 7; 19, 21.3, 25.5, 28.1). It
+    // builds no object and runs no code; nothing flows (as `call_throws`).
+    if matches!(
+        ns,
+        BuiltinNs::GlobalThis
+            | BuiltinNs::Math
+            | BuiltinNs::Json
+            | BuiltinNs::Reflect
+            | BuiltinNs::Console
+            | BuiltinNs::Process
+    ) {
+        return;
+    }
     // A spread shifts argument positions, so a summary that reads fixed
     // positions cannot be trusted. Every fixed and spread value may land in
     // each position such a summary consumes (at most three), so rematch the
@@ -19,7 +34,7 @@ pub fn new_builtin_ns(m: &mut Model, ns: BuiltinNs, call: CallId) {
             spread: vec![],
             ret: c.ret,
             site: c.site,
-            region: m.thrown,
+            region: c.region,
         });
         m.why_mint(c2, None, u32::MAX);
         return new_builtin_ns(m, ns, c2);

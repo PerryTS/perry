@@ -71,6 +71,7 @@ impl<'a> Gen<'a> {
                 Cons::Implicit {
                     reason: r,
                     proto: Protocol::ToPrimitive,
+                    region: self.m.thrown,
                 },
             );
             self.m.identity(v, route);

@@ -248,12 +248,13 @@ impl<'a> Gen<'a> {
         true
     }
 
-    /// Walking the update (`true`) or the body (`false`) of the innermost
-    /// narrowing.
-    pub(crate) fn narrow_in_update(&mut self, on: bool) {
-        if let Some(n) = self.narrow.last_mut() {
-            n.in_update = on;
-            n.written = on;
+    /// Walking the update (`true`) or the body (`false`) of the `n`
+    /// innermost narrowings (the ones a `for` loop pushed).
+    pub(crate) fn narrow_in_update(&mut self, n: usize, on: bool) {
+        let len = self.narrow.len();
+        for x in &mut self.narrow[len - n..] {
+            x.in_update = on;
+            x.written = on;
         }
     }
 
@@ -808,6 +809,10 @@ pub(crate) enum Presence {
     /// the bare global name (`Cons::NotBuffer`): no built-in buffer object
     /// of that kind, while the global holds the intrinsic constructor.
     NotBuffer(bool),
+    /// Rule T7: `local !== Object.prototype` true, the bare global name
+    /// (`Cons::NotObjectProto`): not `%Object.prototype%`, while the global
+    /// holds the intrinsic constructor.
+    NotObjectProto,
 }
 
 /// What condition `c` implies when it is `positive`ly true (false): a clip
@@ -956,6 +961,25 @@ fn implied<'p>(
             };
             if let (Some(shared), Some(Bound::Local(id))) = (shared, bound_of(expr, subst)) {
                 out.push(Implied::Present(id, Presence::NotBuffer(shared)));
+            }
+        }
+        // Rule T7: `local !== Object.prototype` true (`===` false; `!=`
+        // true, `==` false), the right-hand side the `prototype` read of the
+        // bare global `Object`: the local is not `%Object.prototype%`. The
+        // intrinsic constructor's `prototype` is non-writable and
+        // non-configurable (ECMA-262 20.1.2.21); an object equals an object
+        // only when it is that object (7.2.15 step 1, 7.2.16 step 2). The
+        // global's other values let every value through
+        // (`guard::NOT_OBJECT_CTOR`).
+        Expr::Compare { op, left, right } if object_prototype(left) || object_prototype(right) => {
+            let x = if object_prototype(right) { left } else { right };
+            let holds = matches!(
+                (op, positive),
+                (CompareOp::Ne | CompareOp::LooseNe, true)
+                    | (CompareOp::Eq | CompareOp::LooseEq, false)
+            );
+            if let (true, Some(Bound::Local(id))) = (holds, bound_of(x, subst)) {
+                out.push(Implied::Present(id, Presence::NotObjectProto));
             }
         }
         // A truthy local is neither `null` nor `undefined`.
@@ -1210,6 +1234,21 @@ pub(crate) const GLOBAL_LOCAL: u32 = u32::MAX - 2;
 /// `this` is a narrowing host of rule G1 only (`this.f === b`), not of
 /// rule G2 (`if (this.f)`); `PERRY_WPF_THIS_HOST=all` makes it a host of
 /// both.
+/// Rule T7: `Object.prototype`, `Object` the bare global name (HIR:
+/// `PropertyGet { PropertyGet { GlobalGet(0), "Object" }, "prototype" }`).
+fn object_prototype(e: &Expr) -> bool {
+    match e {
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "prototype" => matches!(
+            object.as_ref(),
+            Expr::PropertyGet { object, property, .. }
+                if property == "Object" && matches!(object.as_ref(), Expr::GlobalGet(0))
+        ),
+        _ => false,
+    }
+}
+
 fn this_host_bool() -> bool {
     !std::env::var("PERRY_WPF_THIS_HOST").is_ok_and(|v| v == "all")
 }
@@ -1460,6 +1499,18 @@ impl<'a> Gen<'a> {
     /// (false) for the code walked next (module docs, "Guards"); how many
     /// narrowings to pop after it (`narrow_pop`).
     pub(crate) fn narrow_guard(&mut self, fx: &Fx, cond: &Expr, positive: bool) -> usize {
+        self.narrow_guard_skip(fx, cond, positive, None)
+    }
+
+    /// `narrow_guard` without the facts of local `skip` (a `for` counter
+    /// `narrow_for` narrows).
+    pub(crate) fn narrow_guard_skip(
+        &mut self,
+        fx: &Fx,
+        cond: &Expr,
+        positive: bool,
+        skip: Option<u32>,
+    ) -> usize {
         if !self.guard_ranges && !self.guard_presence {
             return 0;
         }
@@ -1490,6 +1541,7 @@ impl<'a> Gen<'a> {
         // only (a unit does not see the other units' stores into it).
         let unit_mode = self.m.unit_mode;
         facts.retain(|x| match x {
+            Implied::Clip(id, ..) | Implied::Present(id, _) if Some(*id) == skip => false,
             Implied::Clip(..) => self.guard_ranges && local_scope,
             Implied::Present(GLOBAL_LOCAL, _) => self.guard_presence && !unit_mode,
             Implied::Present(..) => self.guard_presence && local_scope,
@@ -1588,6 +1640,24 @@ impl<'a> Gen<'a> {
                         ctor,
                         Cons::Guard {
                             test,
+                            from: src,
+                            dst: start,
+                        },
+                    );
+                }
+                Implied::Present(_, Presence::NotObjectProto) => {
+                    self.m.cons(src, Cons::NotObjectProto { dst: start });
+                    // The global's value (`globalThis.Object`, the read the
+                    // right-hand side makes): any value but the intrinsic
+                    // constructor lets every value through.
+                    let global = self.expr(fx, &Expr::GlobalGet(0));
+                    let ctor = self.tmp("object-ctor");
+                    let key = Key::Named(self.m.atom("Object"));
+                    self.m.cons(global, Cons::Load { key, dst: ctor });
+                    self.m.cons(
+                        ctor,
+                        Cons::Guard {
+                            test: crate::model::guard::NOT_OBJECT_CTOR,
                             from: src,
                             dst: start,
                         },

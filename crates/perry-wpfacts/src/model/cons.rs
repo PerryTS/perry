@@ -111,6 +111,14 @@ pub enum Cons {
     /// once the worklist is empty (`settle_for_in`), so a key written later,
     /// an escape or a write under a key no name lists widens dst.
     OwnKeys { dst: NodeId },
+    /// Rule PK: the String keys of own properties, enumerable or not
+    /// (ECMA-262 20.1.2.10 Object.getOwnPropertyNames, 10.1.11.1
+    /// OrdinaryOwnPropertyKeys). Of a class prototype of this unit whose
+    /// keys are known (`Model::proto_names`): the keys the class defines on
+    /// it (methods, accessors, `constructor`) and those the program wrote
+    /// on it, each a String constant; of any other value, any String.
+    /// Looked at again in `settle_for_in`, as rule EK.
+    OwnNames { dst: NodeId },
     /// The `value` field of an own-property descriptor of each t (20.1.2.8,
     /// 10.1.5.1 OrdinaryGetOwnProperty): `OwnValues`, plus the own data
     /// properties the realm makes, which `OwnValues` (EnumerableOwnProperties
@@ -140,7 +148,13 @@ pub enum Cons {
     /// the published value itself for a raw publication.
     CjsPublish { dst: NodeId },
     /// write(t, key) ⊇ src for every t in the node.
-    Store { key: Key, src: NodeId, site: SiteId },
+    Store {
+        key: Key,
+        src: NodeId,
+        site: SiteId,
+        /// The throw region the store runs in: a setter it runs throws there.
+        region: NodeId,
+    },
     /// The node is a callee.
     Call { call: CallId },
     /// The node is a callee whose `this` is fixed to one receiver token
@@ -327,6 +341,12 @@ pub enum Cons {
     /// primitive pass. The binding's other values pass all (a `Guard`,
     /// `guard::NOT_BUFFER_CTOR`, on the read of the global).
     NotBuffer { shared: bool, dst: NodeId },
+    /// Rule T7: `x !== Object.prototype` true of the intrinsic binding: the
+    /// values but `ObjectProto` (the exact `%Object.prototype%`,
+    /// `builtins::builtin_proto_value`) flow into `dst`; ⊤ and every
+    /// primitive pass. The binding's other values pass all (a `Guard`,
+    /// `guard::NOT_OBJECT_CTOR`, on the read of the global).
+    NotObjectProto { dst: NodeId },
     /// The pattern operand of the RegExp constructor as ECMA-262 22.2.4.1
     /// steps 4-6 convert it: an object with a [[RegExpMatcher]] slot gives
     /// its [[OriginalSource]] and [[OriginalFlags]] (no `source`/`flags`
@@ -400,8 +420,14 @@ pub enum Cons {
     },
     /// Every token gains keys after birth (computed store …).
     AddsKeys,
-    /// Builtin protocol touch: what `proto` reads on every token.
-    Implicit { reason: u32, proto: Protocol },
+    /// Builtin protocol touch: what `proto` reads on every token. What the
+    /// program code it runs throws completes the operation that asked for
+    /// the touch, so it reaches that operation's `region`.
+    Implicit {
+        reason: u32,
+        proto: Protocol,
+        region: NodeId,
+    },
     /// InstanceofOperator (13.10.2) with the node as its right-hand side:
     /// `GetMethod(C, @@hasInstance)` on every token, called with `arg`, the
     /// left-hand side value (`Call(instOfHandler, C, « V »)`).
@@ -524,7 +550,9 @@ pub enum Cons {
     /// other than `expected`, the global object's declared constructor
     /// (⊤, a program-written global, `null`), runs as the parent
     /// constructor with `this` = the instance: it escapes, and the instance
-    /// escapes with hard E11.
+    /// escapes with hard E11. A program class among the values is modeled
+    /// code: the instance is hard E11 and its chain takes that class's
+    /// prototype object, and neither escapes.
     NativeParent {
         tm: TmplId,
         expected: Tok,
@@ -684,6 +712,9 @@ pub enum Cons {
     /// global object returns join the global's any-key field. Any other
     /// receiver or key: E5 HARD, a store of `value` under any key and the
     /// computed-key accessors, as before.
+    /// `desc`: the descriptor node of a call of `Object.defineProperty` as a
+    /// value (`NO_NODE`: the direct call): a key of String constants defines
+    /// each by name as the direct call does (`Cons::DefineDesc`).
     DefineAnyKey {
         o: NodeId,
         key: NodeId,
@@ -693,6 +724,7 @@ pub enum Cons {
         site: SiteId,
         reason: u32,
         accessor: bool,
+        desc: NodeId,
     },
     /// The node is the key of a store into `o` in a for-in body: a run's one
     /// key stores under that key; any other under the keys the loop's
@@ -703,6 +735,8 @@ pub enum Cons {
         src: NodeId,
         site: SiteId,
         subj: NodeId,
+        /// The throw region of the store (`Cons::Store::region`).
+        region: NodeId,
     },
     /// ENUM3: on the subject `s` of `for (k in s)` (`from: None`) or on the
     /// prototype node of its chain link `from`: `o[k] = src` stores under
@@ -734,6 +768,8 @@ pub enum Cons {
         src: NodeId,
         site: SiteId,
         shape: KeyShapeId,
+        /// The throw region of the store (`Cons::Store::region`).
+        region: NodeId,
     },
     /// The node is the key of a definition whose descriptor's get (set) is
     /// `f`, on the objects of `holder`: a run's one key installs it under
@@ -789,7 +825,11 @@ pub enum Cons {
     /// `%`: once the node may hold a String with `%`
     /// (`Model::may_hold_percent`), `agg`, which holds every argument a
     /// specifier may consume, takes `Protocol::Inspect` with `reason`.
-    ConsoleFormat { reason: u32, agg: NodeId },
+    ConsoleFormat {
+        reason: u32,
+        agg: NodeId,
+        region: NodeId,
+    },
     /// Rule RT: the node is the input of an `exec` of the regex literal of
     /// tail `pat` (`Model::regexp_tails`): `rec`'s index slots of the
     /// derived groups hold the captures (`Model::capture_strs`).
@@ -917,6 +957,14 @@ pub enum Cons {
     /// The node is a method node some call sites bound through: a builtin
     /// namespace value in it runs per (call, receiver) (`callee_sites`).
     BuiltinCallee,
+    /// Rule PXCALL: the node is the target of Proxy `p`, which a program
+    /// call or `new` has as its callee. ProxyCreate (10.5.14 step 7) gives
+    /// `p` a [[Call]] (and [[Construct]]) only when its target is callable:
+    /// a value here that may be callable gives `p` its [[Call]]
+    /// (`Model::proxy_callable`); a non-callable one adds nothing (the
+    /// call throws a TypeError, 7.3.14 Call step 2: no trap runs). Re-made
+    /// as the node's tokens grow, never decided once.
+    ProxyCallee { p: u32 },
     /// The node holds prototypes on a named-key accessor lookup's chain:
     /// `pass` ⊇ the holders the lookup passes through (and continues
     /// above), `stop` ⊇ the prototypes where a declared member ends it.
@@ -966,6 +1014,7 @@ impl Cons {
                 | Cons::FieldTruthy { .. }
                 | Cons::Fulfil { .. }
                 | Cons::NotBuffer { .. }
+                | Cons::NotObjectProto { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
@@ -993,6 +1042,7 @@ impl Cons {
                 | Cons::FieldTruthy { .. }
                 | Cons::Fulfil { .. }
                 | Cons::NotBuffer { .. }
+                | Cons::NotObjectProto { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
@@ -1010,6 +1060,7 @@ impl Cons {
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",
             Cons::OwnKeys { .. } => "ownkeys",
+            Cons::OwnNames { .. } => "ownnames",
             Cons::OwnDescValues { .. } => "owndescvalues",
             Cons::IndexHole => "indexhole",
             Cons::IndexHoleIn { .. } => "indexholein",
@@ -1048,6 +1099,7 @@ impl Cons {
             Cons::RecordEntry { .. } => "recordentry",
             Cons::TypeIs { .. } => "typeis",
             Cons::NotBuffer { .. } => "notbuffer",
+            Cons::NotObjectProto { .. } => "notobjectproto",
             Cons::NotRegExp { .. } => "notregexp",
             Cons::ProtoObjects { .. } => "protoobjects",
             Cons::Objects { .. } => "objects",
@@ -1140,6 +1192,7 @@ impl Cons {
             Cons::ThisInst { .. } => "thisinst",
             Cons::NativeThis { .. } => "nativethis",
             Cons::BuiltinCallee => "builtincallee",
+            Cons::ProxyCallee { .. } => "proxycallee",
             Cons::HolderStep { .. } => "holderstep",
             Cons::VisitHolders { .. } => "visitholders",
             Cons::VisitStop { .. } => "visitstop",

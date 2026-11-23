@@ -452,6 +452,7 @@ impl<'a> Gen<'a> {
         self.m.add_prim(this, prim::UNDEF);
         let fx = Fx {
             guard: None,
+            live: None,
             module: mi,
             f: init_fn,
             this,
@@ -1180,6 +1181,7 @@ impl<'a> Gen<'a> {
         let fn_ctor = class.is_none() && ctor_of.is_none();
         let mut fx = Fx {
             guard: None,
+            live: None,
             module: mi,
             f: fxi,
             this: info.this,
@@ -1219,6 +1221,11 @@ impl<'a> Gen<'a> {
                 .cloned()
                 .collect();
             self.stmts(&fx, &body);
+            // Its normal completion returns `undefined`, which `new` turns
+            // into the this binding (ECMA-262 10.2.2 step 12).
+            if narrow::may_complete(&body) {
+                self.m.add_prim(fx.ret, prim::UNDEF);
+            }
             return;
         }
         let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
@@ -1229,10 +1236,10 @@ impl<'a> Gen<'a> {
         let clause = self.m.clause.take();
         self.stmts(&fx, &f.body);
         self.m.clause = clause;
-        if ctor_of.is_none() && narrow::may_complete(&f.body) {
-            // The body's normal completion returns `undefined` (a class
-            // constructor's completion is never its result: `new` and
-            // `super()` yield `this`).
+        if narrow::may_complete(&f.body) {
+            // The body's normal completion returns `undefined`; for a
+            // constructor `new` turns it into `this` (ECMA-262 10.2.2 steps
+            // 10-12, `Model::ctor_this_result`).
             self.m.add_prim(fx.ret, prim::UNDEF);
         }
         self.narrow_exit_body(scope);
@@ -1361,6 +1368,7 @@ impl<'a> Gen<'a> {
         let fthis = self.m.funcs[fi as usize].this;
         let ffx = Fx {
             guard: None,
+            live: None,
             module: mi,
             f: fi,
             this: fthis,
@@ -1445,6 +1453,7 @@ impl<'a> Gen<'a> {
                             key: Key::any(),
                             src: v,
                             site,
+                            region: self.region(),
                         },
                     );
                 }
@@ -1466,6 +1475,7 @@ impl<'a> Gen<'a> {
                             key: Key::Named(a),
                             src: v,
                             site,
+                            region: self.region(),
                         },
                     );
                 }
@@ -1484,6 +1494,7 @@ impl<'a> Gen<'a> {
         let packet_read_start = self.read_sites.len();
         let sfx = Fx {
             guard: None,
+            live: None,
             module: mi,
             f: si,
             this: self.m.funcs[si as usize].this,
@@ -1839,6 +1850,7 @@ impl<'a> Gen<'a> {
             Stmt::Return(e) => {
                 if let Some(e) = e {
                     let v = self.expr_zs(fx, e);
+                    let v = self.live_gate(fx, v);
                     self.m.edge(v, fx.ret);
                 } else {
                     self.m.add_prim(fx.ret, prim::UNDEF);
@@ -1852,8 +1864,18 @@ impl<'a> Gen<'a> {
                 let plan = self.own_guard_plan(condition, Region::Stmts(then_branch));
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
                 let own = self.own_guard_arm(plan, t);
+                // `if (__step_is_error)` / `if (IterResultGetDone)`: plain-async
+                // step arms keep the enclosing arm's `live` (not gated).
+                let special = matches!(condition, Expr::IterResultGetDone)
+                    || matches!(condition, Expr::LocalGet(id) if self.step.by_flag.contains_key(&(fx.module, *id)));
+                let then_live = if special {
+                    fx.live
+                } else {
+                    self.arm_live(fx, t, then_test)
+                };
                 let then_fx = Fx {
                     guard: Some((t, then_test)),
+                    live: then_live,
                     ..fx.clone()
                 };
                 // A branch that always leaves: its writes reach only where
@@ -1883,8 +1905,14 @@ impl<'a> Gen<'a> {
                 self.narrow_leave(then_branch, pre);
                 self.own_guard_done(own);
                 if let Some(e) = else_branch {
+                    let else_live = if special {
+                        fx.live
+                    } else {
+                        self.arm_live(fx, t, else_test)
+                    };
                     let else_fx = Fx {
                         guard: Some((t, else_test)),
+                        live: else_live,
                         ..fx.clone()
                     };
                     let pre = self.narrow_snapshot();
@@ -1937,15 +1965,23 @@ impl<'a> Gen<'a> {
                     update.as_ref(),
                     body,
                 );
-                if narrowed {
-                    self.narrow_in_update(true);
-                }
+                // `for (init; c; u) B` is `init; while (c) { B; u }`: B and
+                // u see `c` true, as a `while` body does. The counter
+                // `narrow_for` narrows keeps its ranges alone.
+                let counter = match (narrowed, init.as_deref()) {
+                    (true, Some(Stmt::Let { id, .. })) => Some(*id),
+                    _ => None,
+                };
+                let k = match condition {
+                    Some(c) => self.narrow_guard_skip(fx, c, true, counter),
+                    None => 0,
+                };
+                let pushed = k + usize::from(narrowed);
+                self.narrow_in_update(pushed, true);
                 if let Some(u) = update {
                     let _ = self.expr_zs(fx, u);
                 }
-                if narrowed {
-                    self.narrow_in_update(false);
-                }
+                self.narrow_in_update(pushed, false);
                 let scope = self.enum_scope(fx, body);
                 let scoped = scope.is_some();
                 if let Some(s) = scope {
@@ -1958,6 +1994,7 @@ impl<'a> Gen<'a> {
                 if scoped {
                     self.for_in_reads.pop();
                 }
+                self.narrow_pop(k);
                 if narrowed {
                     self.narrow_end();
                 }

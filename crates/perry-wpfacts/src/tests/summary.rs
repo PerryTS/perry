@@ -275,6 +275,7 @@ fn body_encoding_is_inert_and_does_not_snapshot_incoming_values() {
     let foreign = m.tok(TokKind::ModNs(102));
     let object = m.tok(TokKind::ModNs(103));
     let atom = m.atom("stored");
+    let thrown = m.thrown;
     let key = Key::Named(atom);
     let field = m.field(object, atom);
     m.add_tok(param, foreign);
@@ -298,8 +299,12 @@ fn body_encoding_is_inert_and_does_not_snapshot_incoming_values() {
                     key,
                     src: constant,
                     site: 0,
+                    region: thrown,
                 },
                 |n| {
+                    if n == thrown {
+                        return Operand::Absolute(thrown);
+                    }
                     assert_eq!(n, constant);
                     Operand::Slot(1)
                 },

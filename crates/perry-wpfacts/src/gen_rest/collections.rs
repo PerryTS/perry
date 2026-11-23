@@ -113,6 +113,7 @@ impl<'a> Gen<'a> {
                     Cons::Implicit {
                         reason: why,
                         proto: Protocol::Any,
+                        region: self.m.thrown,
                     },
                 );
                 let el = self.load(r, Key::any());

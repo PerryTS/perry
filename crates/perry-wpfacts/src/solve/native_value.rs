@@ -219,7 +219,7 @@ impl Model {
                 );
             }
             let why = self.reason("ToString(this) of a String.prototype method");
-            self.implicit(r, why, Protocol::ToPrimitive);
+            self.implicit(r, why, Protocol::ToPrimitive, self.thrown);
             self.with_native(call, |m, call| {
                 builtins::prim_method(m, prim::STR, Key::Named(key), call)
             });

@@ -80,7 +80,14 @@ impl<'a> Gen<'a> {
         let r = self.m.reason(why);
         for o in operands {
             let v = self.expr_zs(fx, o);
-            self.m.cons(v, Cons::Implicit { reason: r, proto });
+            self.m.cons(
+                v,
+                Cons::Implicit {
+                    reason: r,
+                    proto,
+                    region: self.m.thrown,
+                },
+            );
         }
         let out = self.tmp("primop");
         self.m.add_prim(out, result);

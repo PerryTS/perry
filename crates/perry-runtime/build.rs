@@ -614,6 +614,19 @@ fn write_family_bits(out: &Path) {
     std::fs::write(out.join("family_bits.rs"), text).expect("emit family bits");
 }
 
+/// The Worker's shape (`messaging/worker_metadata.rs`): its own keys, in
+/// the order perry-stdlib's `worker_object` sets them, and the metadata
+/// getters on `Worker.prototype`, both from the one declaration the compiler
+/// reads (`perry_runtime_manifest::worker_shape`).
+fn write_worker_shape(out: &Path) {
+    use perry_runtime_manifest::worker_shape::{WORKER_OWN_KEYS, WORKER_PROTOTYPE_ACCESSORS};
+    let text = format!(
+        "pub const WORKER_OWN_KEYS: &[&str] = &{WORKER_OWN_KEYS:?};\n\
+         const WORKER_PROTOTYPE_ACCESSORS: &[&str] = &{WORKER_PROTOTYPE_ACCESSORS:?};\n"
+    );
+    std::fs::write(out.join("worker_shape.rs"), text).expect("emit worker shape");
+}
+
 fn main() {
     static_exports_build::emit(Path::new(&std::env::var("OUT_DIR").unwrap()));
     let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
@@ -622,6 +635,7 @@ fn main() {
     realm_info_exports::write(&realm, &out).expect("emit realm info export link test");
     write_family_table(&out);
     write_family_bits(&out);
+    write_worker_shape(&out);
 
     println!("cargo:rerun-if-env-changed=PERRY_CHECK_CONTRACTS");
     println!("cargo:rustc-check-cfg=cfg(wasm_discard)");
