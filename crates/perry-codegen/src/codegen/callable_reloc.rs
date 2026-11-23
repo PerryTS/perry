@@ -180,7 +180,10 @@ mod tests {
         assert_eq!(text, "@module_.str.10.handle @module_.str.11.handle c\"@module_.str.1.handle __perry_callable_site_3\" i64 123, !alias.scope !208, !noalias !308 ; λ");
         let mut inline = r#", !alias.scope !{!{!"owner.1", !{!"d"}}}, !noalias !{}"#.to_string();
         r.text(&mut inline);
-        assert_eq!(inline, r#", !alias.scope !{!{!"owner.1", !{!"d"}}}, !noalias !{}"#);
+        assert_eq!(
+            inline,
+            r#", !alias.scope !{!{!"owner.1", !{!"d"}}}, !noalias !{}"#
+        );
         let mut site = "__perry_callable_site_3".into();
         r.text(&mut site);
         assert_eq!(site, (r.site_hash | 103).to_string());
