@@ -550,10 +550,6 @@ jobs:
           cc_llvm_prefix="$(brew --prefix llvm@22 2>/dev/null || brew --prefix llvm)"
           "$cc_llvm_prefix/bin/llvm-config" --version | awk -F. '$1 == 22 && ($2 > 1 || ($2 == 1 && $3+0 >= 5)) { ok=1 } END { exit !ok }'
           echo "LLVM_SYS_221_PREFIX=$cc_llvm_prefix" >> "$GITHUB_ENV"
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: cc-parity-wasm-host
-          save: ${{ github.event_name == 'workflow_dispatch' }}
       - name: Build compiler, then all runtime archives together
         run: python3 scripts/cc_parity_gate.py build --work-dir "$CC_PARITY_WORK"
       - name: Compile the pinned bundle natively
@@ -672,10 +668,6 @@ jobs:
         uses: ./.github/actions/perry/actions/setup-node
         with:
           node-version-file: .node-version
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: eh-transport
-          save: "true"
       - name: Build compiler + runtime archives
         run: |
           cargo build-perry --profile perry-dev
@@ -867,11 +859,6 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - if: steps.scope.outputs.pkgs != ''
         uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry-rust-cache
-        if: steps.scope.outputs.pkgs != ''
-        with:
-          key: ext-link
-          save: "true"
       - name: Link the ext crates
         if: steps.scope.outputs.pkgs != ''
         env:
@@ -1056,10 +1043,6 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: node-compat-matrix
-          save: "true"
       - name: Setup Node.js (executes the runner; oracle is the pinned dist)
         uses: ./.github/actions/perry/actions/setup-node
         with:
@@ -1167,10 +1150,6 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: node-core-subset
-          save: "true"
       - name: Resolve Node version from the pinned test-corpus ref
         id: node_core_version
         run: |
@@ -1400,10 +1379,6 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: feature-matrix
-          save: "true"
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node
         with:
@@ -1507,10 +1482,6 @@ jobs:
           fi
       - name: Install Rust toolchain with the WASI target
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: wasi-check
-          save: "true"
       - name: Install the WASI C compiler and sysroot
         shell: bash
         run: |
@@ -1572,10 +1543,6 @@ jobs:
       - name: Install Rust toolchain with the WASI target
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --target wasm32-wasip2
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: wasi-check-codegen
-          save: "true"
       - name: Install pinned Node oracle for WASI compatibility tests
         uses: ./.github/actions/perry/actions/setup-node
         with:
@@ -1714,10 +1681,6 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: npm-package-sweep
-          save: "true"
       - name: Setup Node.js
         uses: ./.github/actions/perry/actions/setup-node
         with:
@@ -2404,10 +2367,6 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: next-app-route
-          save: "true"
       - uses: ./.github/actions/perry/actions/setup-node
         with:
           node-version-file: .node-version
@@ -3458,11 +3417,6 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
         if: steps.relevance.outputs.run == 'true'
-      - uses: ./.github/actions/perry-rust-cache
-        if: steps.relevance.outputs.run == 'true'
-        with:
-          key: tls-budget
-          save: "true"
       - name: Build perry and the runtime archives
         if: steps.relevance.outputs.run == 'true'
         run: |

@@ -273,6 +273,19 @@ class CategoryRoutingTests(unittest.TestCase):
                                          f"{name}/{job_id}: matrix legs build differently but share family {key}")
         self.assertEqual({k: [j for j, _ in v] for k, v in savers.items() if len(v) > 1}, {})
         self.assertIn("gap-suite-build", savers)
+        # Only families a PR restores may save: in the shared 10 GB budget, a
+        # family saved by a cron or sweep job is newer than the PR families and
+        # evicts them first (LRU by last access).
+        from ci_plan import JOBS
+        plan_entry = {**{job: "wasi_execution" for job in WASI_JOBS},
+                      "gap-suite-build": "gap_suite", "gap-suite-build-instr": "gap_suite",
+                      "security-audit__security-audit": "security_audit"}
+        for key, members in savers.items():
+            for member, _ in members:
+                workflow_name, job_id = member.split("/", 1)
+                entry = plan_entry.get(job_id, job_id.replace("-", "_"))
+                self.assertEqual(workflow_name, "test.yml", f"{member} saves {key} outside the PR workflow")
+                self.assertIn("pr", JOBS.get(entry, ()), f"{member} saves {key} but does not run on pull requests")
         for key, job, signature in restorers:
             self.assertIn(key, savers, f"{job} restores {key}, which no job saves")
             self.assertEqual(signature, savers[key][0][1], f"{job} cannot hit {key} saved by {savers[key][0][0]}")
