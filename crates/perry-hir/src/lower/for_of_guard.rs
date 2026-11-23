@@ -152,7 +152,7 @@ pub(crate) fn admitted_typed_array_holder(
         init: Some(source),
     });
     Expr::Conditional {
-        condition: Box::new(Expr::Compare {
+        condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Eq,
             left: Box::new(runtime("typedArrayForOfAdmits", vec![Expr::LocalGet(id)])),
             right: Box::new(Expr::Bool(true)),
@@ -344,7 +344,7 @@ fn source_for_of(
                 mutable: true,
                 init: Some(Expr::Integer(0)),
             })),
-            condition: Some(Expr::Compare {
+            condition: Some(Expr::Compare { byte_offset: stmt.span.lo.0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(counter)),
                 right: Box::new(Expr::PropertyGet {
@@ -396,7 +396,7 @@ fn source_for_of(
             entry_args.push(Expr::Bool(true));
         }
         let plain = if typed {
-            Expr::Compare {
+            Expr::Compare { byte_offset: stmt.span.lo.0,
                 op: CompareOp::Eq,
                 left: Box::new(runtime(
                     "typedArrayForOfAdmits",
@@ -405,7 +405,7 @@ fn source_for_of(
                 right: Box::new(Expr::Bool(true)),
             }
         } else {
-            Expr::Compare {
+            Expr::Compare { byte_offset: stmt.span.lo.0,
                 op: CompareOp::Eq,
                 left: Box::new(runtime("arrayRecordNeedsIterator", entry_args)),
                 right: Box::new(Expr::Bool(false)),
@@ -571,7 +571,7 @@ fn literal_for_of(
         let mut select = Expr::LocalGet(temps[n - 1].0);
         for (i, (id, _)) in temps.iter().enumerate().take(n - 1).rev() {
             select = Expr::Conditional {
-                condition: Box::new(Expr::Compare {
+                condition: Box::new(Expr::Compare { byte_offset: stmt.span.lo.0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(counter)),
                     right: Box::new(Expr::Integer(i as i64)),
@@ -596,7 +596,7 @@ fn literal_for_of(
                 mutable: true,
                 init: Some(Expr::Integer(0)),
             })),
-            condition: Some(Expr::Compare {
+            condition: Some(Expr::Compare { byte_offset: stmt.span.lo.0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(counter)),
                 right: Box::new(Expr::Integer(n as i64)),

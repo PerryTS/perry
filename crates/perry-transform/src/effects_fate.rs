@@ -932,7 +932,7 @@ impl<'e> Walk<'_, 'e> {
                     }
                 }
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare { op, left, right, .. } => {
                 let address = match op {
                     CompareOp::Eq | CompareOp::Ne => true,
                     CompareOp::LooseEq | CompareOp::LooseNe => nullish(left) || nullish(right),

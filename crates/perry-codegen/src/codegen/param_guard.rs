@@ -874,7 +874,7 @@ pub(crate) fn guarded_undefined_method_candidate(
                 Expr::Compare {
                     op: CompareOp::Eq,
                     left,
-                    right,
+                    right, ..
                 },
             then_branch,
             else_branch: None,
@@ -1055,7 +1055,7 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
                 Expr::Compare {
                     op: CompareOp::Eq,
                     left,
-                    right,
+                    right, ..
                 },
             then_branch,
             else_branch: None,

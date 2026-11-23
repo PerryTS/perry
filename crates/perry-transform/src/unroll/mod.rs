@@ -454,7 +454,7 @@ fn try_unroll_for(
 
     // 2. Condition must be `LocalGet(iv_id) {<,<=} INTEGER`.
     let (cmp_op, hi) = match condition.as_ref()? {
-        Expr::Compare { op, left, right } => {
+        Expr::Compare { op, left, right, .. } => {
             let left_id = match left.as_ref() {
                 Expr::LocalGet(id) if *id == iv_id => *id,
                 _ => return None,

@@ -135,7 +135,7 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right,
+        right, ..
     } = expr
     {
         if !add_tree_evaluates_before_it_converts(ctx, expr) {
@@ -505,7 +505,7 @@ fn is_strict_null_defaulted_local(expr: &Expr) -> bool {
     let Expr::Compare {
         op: CompareOp::Eq,
         left,
-        right,
+        right, ..
     } = condition.as_ref()
     else {
         return false;
@@ -523,7 +523,7 @@ fn add_tree_leaves<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right,
+        right, ..
     } = expr
     {
         add_tree_leaves(left, out);
@@ -614,7 +614,7 @@ fn add_tree_evaluates_before_it_converts(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right,
+        right, ..
     } = expr
     else {
         return true;
@@ -704,7 +704,7 @@ fn rebuild_numeric_add_tree(
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right,
+        right, ..
     } = expr
     {
         let l = rebuild_numeric_add_tree(ctx, left, values, next_leaf);
@@ -730,7 +730,7 @@ fn rebuild_rooted_dynamic_add_tree(
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right,
+        right, ..
     } = expr
     {
         let right_collects = matches!(
@@ -771,7 +771,7 @@ fn dynamic_add_leaf_windows(
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right,
+        right, ..
     } = expr
     {
         let l = dynamic_add_leaf_windows(left, called, protect);
@@ -1353,7 +1353,7 @@ fn try_lower_small_bigint_literal_binary(
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             // A proven-u31 index turns the canonical 32-bit ECS bitset test
             // into one guarded Uint32Array load. Match before the erased
             // receiver makes the ordinary BitAnd arm choose its fully dynamic

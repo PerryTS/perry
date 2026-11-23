@@ -370,7 +370,7 @@ impl WasmModuleEmitter {
                 )
             }
             Expr::GlobalSet(_, val) => self.emit_js_expr(val, locals),
-            Expr::Binary { op, left, right } => {
+            Expr::Binary { op, left, right, .. } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
                 // The operator runs on the decoded JS values, which applies ToNumber (or
@@ -401,7 +401,7 @@ impl WasmModuleEmitter {
                     "((__p, __o) => __memDispatch.object_has_property(toJsValue(__o), toJsValue(__p)) ? u64ToF64(TAG_TRUE) : u64ToF64(TAG_FALSE))({p}, {o})"
                 )
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare { op, left, right, .. } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
                 let js_op = match op {

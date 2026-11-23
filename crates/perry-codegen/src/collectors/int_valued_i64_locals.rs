@@ -386,7 +386,7 @@ fn write_delta(id: u32, rhs: &Expr) -> Option<i64> {
     match rhs {
         // Literal reset.
         Expr::Integer(v) if v.unsigned_abs() <= MAX_LITERAL as u64 => Some(0),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             let d = match (op, left.as_ref(), right.as_ref()) {
                 // L = L + d   /   L = L - d
                 (BinaryOp::Add | BinaryOp::Sub, Expr::LocalGet(l), Expr::Integer(d))

@@ -186,7 +186,7 @@ fn expr_is_number_under(
             matches!(object.as_ref(), Expr::LocalGet(id) if eligible.contains(id))
                 && crate::collectors::static_index_window(index).is_some()
         }
-        Expr::Binary { op, left, right } => match op {
+        Expr::Binary { op, left, right, .. } => match op {
             // ToUint32 has no BigInt form — `1n >>> 0n` throws — so the
             // result, when the statement completes, is always a Number.
             BinaryOp::UShr => true,

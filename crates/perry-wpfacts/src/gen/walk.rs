@@ -2251,7 +2251,7 @@ fn for_of_walk(s: &Stmt) -> Option<(u32, u32)> {
     let bounded = matches!(condition, Expr::Compare {
         op: perry_hir::CompareOp::Lt,
         left,
-        right,
+        right, ..
     } if matches!(left.as_ref(), Expr::LocalGet(l) if *l == k)
         && matches!(right.as_ref(), Expr::PropertyGet { object, property, .. }
             if property == "length" && matches!(object.as_ref(), Expr::LocalGet(o) if *o == a)));
@@ -2279,7 +2279,7 @@ fn guarded_for_of_walk(s: &Stmt) -> Option<(u32, u32)> {
             Expr::Compare {
                 op: perry_hir::CompareOp::Eq,
                 left,
-                right,
+                right, ..
             },
         then_branch,
         ..

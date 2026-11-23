@@ -654,7 +654,7 @@ pub(crate) fn nonnegative_index_fast_array_params(
         Expr::Compare {
             op: CompareOp::Eq | CompareOp::LooseEq,
             left,
-            right,
+            right, ..
         } if matches!(
             (left.as_ref(), right.as_ref()),
             (Expr::LocalGet(id), Expr::Undefined) | (Expr::Undefined, Expr::LocalGet(id))
@@ -666,7 +666,7 @@ pub(crate) fn nonnegative_index_fast_array_params(
         Expr::Compare {
             op: CompareOp::Eq | CompareOp::LooseEq,
             left,
-            right,
+            right, ..
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == *value_id)
             || matches!(right.as_ref(), Expr::LocalGet(id) if *id == *value_id)
     );
@@ -1495,7 +1495,7 @@ fn receiver_expr_is_typed_f64_safe(
                 Err(TypedCloneRejectionReason::ReturnExprNotTypedF64Safe)
             }
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             if !matches!(
                 op,
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
@@ -1661,7 +1661,7 @@ fn expr_is_typed_f64_safe(expr: &Expr, locals: &HashMap<u32, TypedParamRep>) -> 
         Expr::Unary { op, operand } => {
             matches!(op, UnaryOp::Pos | UnaryOp::Neg) && expr_is_typed_f64_safe(operand, locals)
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             matches!(
                 op,
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
@@ -1680,7 +1680,7 @@ fn expr_is_typed_i32_safe(expr: &Expr, locals: &HashMap<u32, TypedParamRep>) -> 
             op: UnaryOp::BitNot,
             operand,
         } => expr_is_typed_i32_safe(operand, locals),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             matches!(
                 op,
                 BinaryOp::BitAnd
@@ -1708,7 +1708,7 @@ fn expr_is_typed_i1_safe(expr: &Expr, locals: &HashMap<u32, TypedParamRep>) -> b
                 && expr_is_typed_i1_safe(left, locals)
                 && expr_is_typed_i1_safe(right, locals)
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare { op, left, right, .. } => {
             let bool_compare = matches!(
                 op,
                 CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe

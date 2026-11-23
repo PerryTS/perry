@@ -115,7 +115,7 @@ fn byte_read_number_key(ctx: &FnCtx<'_>, index: &Expr) -> bool {
                 contains_void(ty)
             }) && crate::type_analysis::is_numeric_expr(ctx, index)
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             use perry_hir::BinaryOp;
             matches!(
                 op,

@@ -66,7 +66,7 @@ pub(crate) fn plan(body: &[Stmt]) -> HashSet<u32> {
     fn in_expr(e: &Expr, uses: &mut HashMap<u32, u32>) {
         match e {
             Expr::Closure { .. } => return,
-            Expr::Binary { op, left, right } if bitwise(*op) => {
+            Expr::Binary { op, left, right, .. } if bitwise(*op) => {
                 for side in [left, right] {
                     if let Expr::LocalGet(id) = side.as_ref() {
                         *uses.entry(*id).or_default() += 1;

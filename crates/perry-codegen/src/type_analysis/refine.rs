@@ -230,7 +230,7 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             }
             _ => None,
         },
-        Expr::Binary { op, left, right }
+        Expr::Binary { op, left, right, .. }
             if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) =>
         {
             matches!(
@@ -276,7 +276,7 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } if [left, right]
             .iter()
             .any(|side| matches!(side.as_ref(), Expr::String(_) | Expr::WtfString(_))) =>
@@ -446,7 +446,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. } => Some(HirType::Number),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             if is_bigint_expr(ctx, init)
                 && matches!(
                     op,

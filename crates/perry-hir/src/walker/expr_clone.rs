@@ -258,7 +258,7 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             op: op.clone(),
             prefix: prefix.clone(),
         },
-        Expr::Binary { op, left, right } => Expr::Binary {
+        Expr::Binary { op, left, right, byte_offset } => Expr::Binary { byte_offset: *byte_offset,
             op: op.clone(),
             left: Shallow::shallow(left, n),
             right: Shallow::shallow(right, n),
@@ -267,7 +267,7 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             op: op.clone(),
             operand: Shallow::shallow(operand, n),
         },
-        Expr::Compare { op, left, right } => Expr::Compare {
+        Expr::Compare { op, left, right, byte_offset } => Expr::Compare { byte_offset: *byte_offset,
             op: op.clone(),
             left: Shallow::shallow(left, n),
             right: Shallow::shallow(right, n),

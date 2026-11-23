@@ -21,7 +21,7 @@ fn get(e: &Expr, id: u32) -> bool {
     matches!(e,Expr::LocalGet(other) if *other==id)
 }
 fn mode(e: &Expr, id: u32) -> bool {
-    matches!(e,Expr::Compare {op:CompareOp::Eq,left,right} if get(left,id) && matches!(right.as_ref(),Expr::Bool(true)))
+    matches!(e,Expr::Compare {op:CompareOp::Eq,left,right, ..} if get(left,id) && matches!(right.as_ref(),Expr::Bool(true)))
 }
 fn payload_shape(e: &Expr, record: u32, flag: u32) -> Option<u32> {
     let a = rt(e, "arrayRecordPayload")?;
@@ -167,7 +167,7 @@ pub(super) fn normalize(stmts: &[Stmt], child: u32) -> Vec<Stmt> {
             if let Expr::Compare {
                 op: CompareOp::Eq,
                 left,
-                right,
+                right, ..
             } = e
             {
                 if let (Expr::Bool(a), Expr::Bool(b)) = (left.as_ref(), right.as_ref()) {

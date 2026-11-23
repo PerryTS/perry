@@ -188,7 +188,7 @@ fn build_dispatch_while_body(
             continue;
         }
         while_body.push(Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(num as f64)),
@@ -1445,7 +1445,7 @@ pub fn transform_generator_function_with_extra_captures(
             );
             let step_inner = vec![
                 Stmt::If {
-                    condition: Expr::Compare {
+                    condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(is_error_param_id)),
                         right: Box::new(Expr::Number(2.0)),
@@ -1630,7 +1630,7 @@ pub fn transform_generator_function_with_extra_captures(
             } else {
                 vec![
                     Stmt::If {
-                        condition: Expr::Compare {
+                        condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
                             op: CompareOp::Eq,
                             left: Box::new(Expr::LocalGet(op_id)),
                             right: Box::new(Expr::Number(1.0)),
@@ -1639,7 +1639,7 @@ pub fn transform_generator_function_with_extra_captures(
                         else_branch: None,
                     },
                     Stmt::If {
-                        condition: Expr::Compare {
+                        condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
                             op: CompareOp::Eq,
                             left: Box::new(Expr::LocalGet(op_id)),
                             right: Box::new(Expr::Number(2.0)),

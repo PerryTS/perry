@@ -583,7 +583,7 @@ fn rewrite_expr(expr: &Expr, recv: Recv, property: &str, hoist_id: u32) -> Expr 
             object: rec(object),
             index: rec(index),
         },
-        Expr::Binary { op, left, right } => Expr::Binary {
+        Expr::Binary { op, left, right, byte_offset } => Expr::Binary { byte_offset: *byte_offset,
             op: *op,
             left: rec(left),
             right: rec(right),
@@ -593,7 +593,7 @@ fn rewrite_expr(expr: &Expr, recv: Recv, property: &str, hoist_id: u32) -> Expr 
             left: rec(left),
             right: rec(right),
         },
-        Expr::Compare { op, left, right } => Expr::Compare {
+        Expr::Compare { op, left, right, byte_offset } => Expr::Compare { byte_offset: *byte_offset,
             op: *op,
             left: rec(left),
             right: rec(right),
@@ -1059,9 +1059,9 @@ fn map_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
                 element_offset: *element_offset,
             }
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, byte_offset } => {
             let left = r(left, f);
-            Expr::Binary {
+            Expr::Binary { byte_offset: *byte_offset,
                 op: *op,
                 left,
                 right: r(right, f),
@@ -1075,9 +1075,9 @@ fn map_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
                 right: r(right, f),
             }
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare { op, left, right, byte_offset } => {
             let left = r(left, f);
-            Expr::Compare {
+            Expr::Compare { byte_offset: *byte_offset,
                 op: *op,
                 left,
                 right: r(right, f),

@@ -14,7 +14,7 @@ pub(super) fn lower(
     let Some(Expr::Compare {
         op: CompareOp::Lt,
         left,
-        right,
+        right, ..
     }) = condition
     else {
         return Ok(false);
@@ -102,7 +102,7 @@ pub(super) fn lower(
         mutable: true,
         init: Some(Expr::Integer(0)),
     };
-    let candidate_condition = Expr::Compare {
+    let candidate_condition = Expr::Compare { byte_offset: 0 /*HPOS*/,
         op: CompareOp::Lt,
         left: Box::new(Expr::LocalGet(*counter)),
         right: Box::new(Expr::PropertyGet {
@@ -304,7 +304,7 @@ fn lower_array_arm(
         let condition = if previous.is_some() {
             arm.condition.clone()
         } else {
-            Expr::Compare {
+            Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(arm.counter)),
                 right: Box::new(arm.length.clone()),
@@ -404,7 +404,7 @@ fn mode_local(expr: &Expr) -> Option<u32> {
         Expr::Compare {
             op: CompareOp::Eq,
             left,
-            right,
+            right, ..
         } if matches!(right.as_ref(), Expr::Bool(true)) => match left.as_ref() {
             Expr::LocalGet(id) => Some(*id),
             _ => None,

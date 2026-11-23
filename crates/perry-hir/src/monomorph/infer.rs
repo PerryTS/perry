@@ -70,7 +70,7 @@ fn infer_expr_type(expr: &Expr, module: &Module, idx: &ModuleIndex) -> Option<Ty
         Expr::Conditional { then_expr, .. } => infer_expr_type(then_expr, module, idx),
 
         // Binary operations
-        Expr::Binary { op, left, right } => match op {
+        Expr::Binary { op, left, right, .. } => match op {
             BinaryOp::Add
             | BinaryOp::Sub
             | BinaryOp::Mul

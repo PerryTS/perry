@@ -422,7 +422,7 @@ fn emit_for_of_pattern_binding_indexed(
                         let init = if let Some(default_expr) = &assign.value {
                             let default_val = lower_expr(ctx, default_expr)?;
                             Expr::Conditional {
-                                condition: Box::new(Expr::Compare {
+                                condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                                     op: CompareOp::Ne,
                                     left: Box::new(prop_access.clone()),
                                     right: Box::new(Expr::Undefined),

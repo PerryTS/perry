@@ -1749,7 +1749,7 @@ fn flatten_concat<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right,
+        right, ..
     } = expr
     {
         flatten_concat(left, out);

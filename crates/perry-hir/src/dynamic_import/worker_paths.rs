@@ -217,7 +217,7 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
             Expr::Binary {
                 op: BinaryOp::Add,
                 left,
-                right,
+                right, ..
             } => {
                 let left = self.strings(left, depth + 1)?;
                 let right = self.strings(right, depth + 1)?;

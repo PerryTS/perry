@@ -931,7 +931,7 @@ fn expr_numeric_by_construction_with_region(
             perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot => rec(operand),
             _ => false,
         },
-        Expr::Binary { op, left, right } => match op {
+        Expr::Binary { op, left, right, .. } => match op {
             // `+` concatenates strings; both sides must be numbers.
             BinaryOp::Add => {
                 (rec(left) || numeric_view_value_or_undefined(left))

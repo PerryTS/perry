@@ -684,7 +684,7 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
         Expr::Binary {
             op: perry_hir::BinaryOp::Add,
             left,
-            right,
+            right, ..
         }
         | Expr::Logical { left, right, .. } => {
             numeric_proof_is_declared_only(ctx, left) || numeric_proof_is_declared_only(ctx, right)

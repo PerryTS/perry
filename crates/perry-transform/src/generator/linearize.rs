@@ -179,19 +179,19 @@ fn delegate_result_object_check(result_id: LocalId) -> Vec<Stmt> {
     //                  || (typeof result !== "object" && typeof result !== "function")
     let not_object = Expr::Logical {
         op: LogicalOp::Or,
-        left: Box::new(Expr::Compare {
+        left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(result_id)),
             right: Box::new(Expr::Null),
         }),
         right: Box::new(Expr::Logical {
             op: LogicalOp::And,
-            left: Box::new(Expr::Compare {
+            left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(result_id)))),
                 right: Box::new(Expr::String("object".to_string())),
             }),
-            right: Box::new(Expr::Compare {
+            right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(result_id)))),
                 right: Box::new(Expr::String("function".to_string())),
@@ -269,7 +269,7 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
         }
     };
     Expr::Conditional {
-        condition: Box::new(Expr::Compare {
+        condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
             op: CompareOp::Eq,
             left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(del_next_id)))),
             right: Box::new(Expr::String("function".to_string())),
@@ -311,7 +311,7 @@ fn delegate_kind_set(kind_id: LocalId, del_next_id: LocalId, del_iter_id: LocalI
 }
 
 fn kind_is(kind_id: LocalId, kind: f64) -> Expr {
-    Expr::Compare {
+    Expr::Compare { byte_offset: 0 /*HPOS*/,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(kind_id)),
         right: Box::new(Expr::Number(kind)),

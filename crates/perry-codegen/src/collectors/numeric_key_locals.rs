@@ -93,7 +93,7 @@ fn expr_is_number_or_bigint(e: &Expr, leaves: &KeyLeaves<'_>) -> bool {
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } => expr_is_numeric_key(left, leaves) && expr_is_numeric_key(right, leaves),
         // Every other binary operator applies ToNumeric to both sides.
         Expr::Binary { .. } => true,

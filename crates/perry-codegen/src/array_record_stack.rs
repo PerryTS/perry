@@ -40,7 +40,7 @@ fn mode(e: &Expr) -> Option<u32> {
         Expr::Compare {
             op: CompareOp::Eq,
             left,
-            right,
+            right, ..
         } if matches!(right.as_ref(), Expr::Bool(true)) => {
             if let Expr::LocalGet(id) = left.as_ref() {
                 Some(*id)

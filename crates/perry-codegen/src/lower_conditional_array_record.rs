@@ -13,12 +13,12 @@ fn pure(expr: &Expr) -> bool {
         Expr::Compare {
             op: CompareOp::Eq,
             left,
-            right,
+            right, ..
         } => pure(left) && matches!(right.as_ref(), Expr::Bool(_)),
         Expr::Binary {
             op: perry_hir::BinaryOp::Add,
             left,
-            right,
+            right, ..
         } => pure(left) && pure(right),
         _ => false,
     }
@@ -32,12 +32,12 @@ fn same(a: &Expr, b: &Expr) -> bool {
             Expr::Compare {
                 op: CompareOp::Eq,
                 left: al,
-                right: ar,
+                right: ar, ..
             },
             Expr::Compare {
                 op: CompareOp::Eq,
                 left: bl,
-                right: br,
+                right: br, ..
             },
         ) => same(al, bl) && same(ar, br),
         _ => false,
@@ -56,7 +56,7 @@ fn runtime<'a>(expr: &'a Expr, name: &str) -> Option<&'a [Expr]> {
     }
 }
 fn mode(expr: &Expr) -> bool {
-    matches!(expr, Expr::Compare { op: CompareOp::Eq, left, right }
+    matches!(expr, Expr::Compare { op: CompareOp::Eq, left, right, .. }
         if matches!(left.as_ref(), Expr::LocalGet(_)) && matches!(right.as_ref(), Expr::Bool(true)))
 }
 pub(crate) fn finish_args(
@@ -124,7 +124,7 @@ fn state_test(expr: &Expr, op: CompareOp, value: f64) -> Option<u32> {
     let Expr::Compare {
         op: actual,
         left,
-        right,
+        right, ..
     } = expr
     else {
         return None;
@@ -147,7 +147,7 @@ fn exit_flag(expr: &Expr) -> Option<u32> {
         Expr::Compare {
             op: CompareOp::Eq,
             left,
-            right,
+            right, ..
         } if matches!(right.as_ref(), Expr::Bool(true)) => {
             if let Expr::LocalGet(id) = left.as_ref() {
                 Some(*id)

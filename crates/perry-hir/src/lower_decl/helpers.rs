@@ -164,7 +164,7 @@ pub fn build_default_param_stmts(params: &[Param]) -> Vec<Stmt> {
                 )
         );
         out.push(Stmt::If {
-            condition: Expr::Compare {
+            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(param.id)),
                 right: Box::new(Expr::Undefined),

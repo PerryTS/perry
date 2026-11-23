@@ -365,7 +365,7 @@ fn param_store(stmt: &perry_hir::Stmt) -> Option<(&str, u32, Option<f64>)> {
             Expr::Binary {
                 op: BinaryOp::Add,
                 left,
-                right,
+                right, ..
             } => {
                 let Expr::LocalGet(id) = left.as_ref() else {
                     return None;

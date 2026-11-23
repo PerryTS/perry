@@ -205,7 +205,7 @@ fn expr_alloc_free(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool) -> bool {
         Expr::Compare {
             op: CompareOp::Eq | CompareOp::Ne,
             left,
-            right,
+            right, ..
         }
         | Expr::Logical { left, right, .. } => {
             expr_alloc_free(left, is_inert) && expr_alloc_free(right, is_inert)

@@ -102,7 +102,7 @@ fn affine_over_carried(expr: &Expr, carried_id: u32) -> Option<(i64, i64, i64)> 
             let k = *n as i64;
             Some((0, k, k.checked_abs()?))
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             let (la, lb, lmax) = affine_over_carried(left, carried_id)?;
             let (ra, rb, rmax) = affine_over_carried(right, carried_id)?;
             let (a, b) = match op {
@@ -180,7 +180,7 @@ pub(super) fn match_carried_update(
     let Expr::Binary {
         op: BinaryOp::Mod,
         left,
-        right,
+        right, ..
     } = value.as_ref()
     else {
         return None;

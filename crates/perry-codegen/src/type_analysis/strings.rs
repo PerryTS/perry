@@ -432,7 +432,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } => is_definitely_string_expr(ctx, left) || is_definitely_string_expr(ctx, right),
         // Ternary `cond ? a : b` is definitely a string when BOTH
         // branches are definitely strings. Without this, code like
@@ -638,7 +638,7 @@ pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> b
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } => {
             string_value_is_runtime_guaranteed(ctx, left)
                 || string_value_is_runtime_guaranteed(ctx, right)
@@ -727,7 +727,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 Some(perry_hir::EnumValue::String(_))
             )
         }
-        Expr::Binary { op: BinaryOp::Add, left, right } => {
+        Expr::Binary { op: BinaryOp::Add, left, right, .. } => {
             is_string_expr(ctx, left) || is_string_expr(ctx, right)
         }
         Expr::PathToNamespacedPath(path) => is_definitely_string_expr(ctx, path),

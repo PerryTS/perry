@@ -139,7 +139,7 @@ fn arithmetic(e: &Expr) -> bool {
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right,
+            right, ..
         } => arithmetic(left) && arithmetic(right),
         Expr::Binary { .. } => true,
         _ => false,
@@ -148,7 +148,7 @@ fn arithmetic(e: &Expr) -> bool {
 
 /// `j = j - c` with `c >= 0`.
 fn decrement(id: u32, v: &Expr) -> bool {
-    matches!(v, Expr::Binary { op: BinaryOp::Sub, left, right }
+    matches!(v, Expr::Binary { op: BinaryOp::Sub, left, right, .. }
         if matches!(left.as_ref(), Expr::LocalGet(l) if *l == id) && nonneg_lit(right).is_some())
 }
 
@@ -378,7 +378,7 @@ impl<'a> Gen<'a> {
             Some(Expr::Binary {
                 op: BinaryOp::Sub,
                 left,
-                right,
+                right, ..
             }) => match (left.as_ref(), nonneg_lit(right)) {
                 (Expr::LocalGet(i), Some(c)) => (*i, c),
                 _ => return,
@@ -411,7 +411,7 @@ impl<'a> Gen<'a> {
         // `x + c`: the local and the constant added to it.
         let (x, c) = match key {
             Expr::LocalGet(x) => (*x, 0),
-            Expr::Binary { op, left, right } => match (op, left.as_ref(), nonneg_lit(right)) {
+            Expr::Binary { op, left, right, .. } => match (op, left.as_ref(), nonneg_lit(right)) {
                 (BinaryOp::Add, Expr::LocalGet(x), Some(c)) => (*x, c),
                 (BinaryOp::Sub, Expr::LocalGet(x), Some(c)) => (*x, -c),
                 _ => return None,

@@ -218,11 +218,11 @@ fn collect_counter_ceilings(
                         Expr::Compare {
                             op: op @ (CompareOp::Lt | CompareOp::Le),
                             left,
-                            right,
+                            right, ..
                         },
                     ) = (floors.get(id).is_some_and(|f| *f >= 0), cond)
                     {
-                        let squared = matches!(left.as_ref(), Expr::Binary { op: BinaryOp::Mul, left: l, right: r }
+                        let squared = matches!(left.as_ref(), Expr::Binary { op: BinaryOp::Mul, left: l, right: r, .. }
                             if matches!((l.as_ref(), r.as_ref()), (Expr::LocalGet(a), Expr::LocalGet(b)) if a == id && b == id));
                         let bound = match right.as_ref() {
                             Expr::Integer(n) => Some(*n),
@@ -329,7 +329,7 @@ pub(crate) fn exact_range(
     }
     match e {
         Expr::LocalGet(id) => local(*id),
-        Expr::Binary { op, left, right }
+        Expr::Binary { op, left, right, .. }
             if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
         {
             let l = exact_range(left, local, leaf)?;
@@ -354,7 +354,7 @@ pub(crate) fn exact_range(
 /// bounded for any operand: `x >>> k` for a literal `k` in `1..32` and
 /// `x & m` for a non-negative literal mask. `None` for every other shape.
 pub(crate) fn wrapped_operator_range(e: &Expr) -> Option<Range> {
-    let Expr::Binary { op, left, right } = e else {
+    let Expr::Binary { op, left, right, .. } = e else {
         return None;
     };
     match op {
@@ -401,7 +401,7 @@ fn for_step(update: &Expr) -> Option<(u32, Step<'_>)> {
             Expr::Binary {
                 op: BinaryOp::Add,
                 left,
-                right,
+                right, ..
             } => match (left.as_ref(), right.as_ref()) {
                 (Expr::LocalGet(l), s) if l == id => Some((*id, Step::Up(StepBy::Expr(s)))),
                 (s, Expr::LocalGet(r)) if r == id => Some((*id, Step::Up(StepBy::Expr(s)))),
@@ -410,7 +410,7 @@ fn for_step(update: &Expr) -> Option<(u32, Step<'_>)> {
             Expr::Binary {
                 op: BinaryOp::Sub,
                 left,
-                right,
+                right, ..
             } => match left.as_ref() {
                 Expr::LocalGet(l) if l == id => Some((*id, Step::Down(StepBy::Expr(right)))),
                 _ => None,
@@ -433,7 +433,7 @@ fn guard_conjuncts(cond: &Expr, counter: u32, out: &mut Vec<(CompareOp, Expr)>) 
             guard_conjuncts(left, counter, out);
             guard_conjuncts(right, counter, out);
         }
-        Expr::Compare { op, left, right } => match (left.as_ref(), right.as_ref()) {
+        Expr::Compare { op, left, right, .. } => match (left.as_ref(), right.as_ref()) {
             (Expr::LocalGet(id), bound) if *id == counter => out.push((*op, bound.clone())),
             (bound, Expr::LocalGet(id)) if *id == counter => {
                 let flipped = match op {
@@ -592,7 +592,7 @@ fn squared_guard_fits(
         StepBy::Expr(Expr::Integer(n)) if (0..=I32_MAX).contains(n) => *n,
         StepBy::Expr(_) => return None,
     };
-    let Expr::Compare { op, left, right } = cond else {
+    let Expr::Compare { op, left, right, .. } = cond else {
         return None;
     };
     if !matches!(op, CompareOp::Lt | CompareOp::Le) {
@@ -601,7 +601,7 @@ fn squared_guard_fits(
     let Expr::Binary {
         op: BinaryOp::Mul,
         left: l,
-        right: r,
+        right: r, ..
     } = left.as_ref()
     else {
         return None;
@@ -651,7 +651,7 @@ pub(crate) fn is_nonneg_exit_init(
     let Expr::Binary {
         op: BinaryOp::Add | BinaryOp::Mul,
         left,
-        right,
+        right, ..
     } = e
     else {
         return false;

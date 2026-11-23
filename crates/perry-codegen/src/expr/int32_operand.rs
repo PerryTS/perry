@@ -100,7 +100,7 @@ fn proven(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     int32_literal(e)
         || at_rest_or_read(ctx, e)
         || super::int32_shadow::is_shadowed(ctx, e)
-        || matches!(e, Expr::Binary { op, left, right } if admitted(ctx, *op, left, right))
+        || matches!(e, Expr::Binary { op, left, right, .. } if admitted(ctx, *op, left, right))
         || super::is_known_i32_range(ctx, e)
 }
 
@@ -108,7 +108,7 @@ fn proven(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 fn word(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     at_rest_or_read(ctx, e)
         || super::int32_shadow::is_shadowed(ctx, e)
-        || matches!(e, Expr::Binary { op, left, right } if admitted(ctx, *op, left, right))
+        || matches!(e, Expr::Binary { op, left, right, .. } if admitted(ctx, *op, left, right))
 }
 
 /// `left <op> right` is lowered here: a bitwise `op`, both operands
@@ -171,7 +171,7 @@ fn lower(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String> {
     if let Some(word) = super::int32_shadow::load(ctx, e) {
         return Ok(word);
     }
-    if let Expr::Binary { op, left, right } = e {
+    if let Expr::Binary { op, left, right, .. } = e {
         if admitted(ctx, *op, left, right) {
             return lower_bitwise(ctx, *op, left, right);
         }

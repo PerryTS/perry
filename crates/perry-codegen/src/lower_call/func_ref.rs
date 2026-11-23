@@ -341,7 +341,7 @@ fn spec_i32_derived_window(ctx: &FnCtx<'_>, expr: &Expr, depth: usize) -> Option
     let (lo, hi) = match expr {
         Expr::Integer(n) => (*n, *n),
         Expr::LocalGet(id) if ctx.spec_i32_params.contains(id) => (I32_MIN_I64, I32_MAX_I64),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             let (llo, lhi) = spec_i32_derived_window(ctx, left, depth + 1)?;
             let (rlo, rhi) = spec_i32_derived_window(ctx, right, depth + 1)?;
             match op {
@@ -599,7 +599,7 @@ pub(crate) fn guarded_discriminant_branch_proofs(
 )> {
     use perry_hir::CompareOp;
 
-    let Expr::Compare { op, left, right } = condition else {
+    let Expr::Compare { op, left, right, .. } = condition else {
         return None;
     };
     if !matches!(op, CompareOp::Eq | CompareOp::Ne) {

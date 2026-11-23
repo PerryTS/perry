@@ -377,7 +377,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::AddAssign => {
             // a += b becomes a = a + b
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
                 op: BinaryOp::Add,
                 left,
                 right: Box::new(rhs),
@@ -385,7 +385,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::SubAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
                 op: BinaryOp::Sub,
                 left,
                 right: Box::new(rhs),
@@ -393,7 +393,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::MulAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
                 op: BinaryOp::Mul,
                 left,
                 right: Box::new(rhs),
@@ -401,7 +401,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::DivAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
                 op: BinaryOp::Div,
                 left,
                 right: Box::new(rhs),
@@ -409,7 +409,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::ModAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
                 op: BinaryOp::Mod,
                 left,
                 right: Box::new(rhs),
@@ -417,7 +417,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::BitAndAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
                 op: BinaryOp::BitAnd,
                 left,
                 right: Box::new(rhs),
@@ -425,7 +425,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::BitOrAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
                 op: BinaryOp::BitOr,
                 left,
                 right: Box::new(rhs),
@@ -433,7 +433,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::BitXorAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
                 op: BinaryOp::BitXor,
                 left,
                 right: Box::new(rhs),
@@ -441,7 +441,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::LShiftAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
                 op: BinaryOp::Shl,
                 left,
                 right: Box::new(rhs),
@@ -449,7 +449,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::RShiftAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
                 op: BinaryOp::Shr,
                 left,
                 right: Box::new(rhs),
@@ -457,7 +457,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::ZeroFillRShiftAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
                 op: BinaryOp::UShr,
                 left,
                 right: Box::new(rhs),
@@ -466,7 +466,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::ExpAssign => {
             // a **= b becomes a = a ** b
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary {
+            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
                 op: BinaryOp::Pow,
                 left,
                 right: Box::new(rhs),
@@ -1387,7 +1387,7 @@ fn compound_member_assign_once(
     // branch that needs it (`read OP (target = rhs)`).
     let rhs = lower_expr(ctx, &assign.right)?;
     let mut body = match bin_op {
-        Some(op) => write_of(Expr::Binary {
+        Some(op) => write_of(Expr::Binary { byte_offset: assign.span.lo.0,
             op,
             left: Box::new(read),
             right: Box::new(rhs),
@@ -1622,7 +1622,7 @@ pub(crate) fn hoist_compound_member_assign(
     // semantics are preserved (`a[k] ||= v` doesn't write when `a[k]` is truthy).
     let rhs = lower_expr(ctx, &assign.right)?;
     let final_expr = if let Some(op) = bin_op {
-        write_of(Expr::Binary {
+        write_of(Expr::Binary { byte_offset: assign.span.lo.0,
             op,
             left: Box::new(read),
             right: Box::new(rhs),

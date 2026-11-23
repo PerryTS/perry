@@ -56,9 +56,9 @@ impl SH for Expr {
             Expr::GlobalGet(id) => { tag(h, 11); id.hash(h); }
             Expr::GlobalSet(id, e) => { tag(h, 12); id.hash(h); e.as_ref().hash(h); }
             Expr::Update { id, op, prefix } => { tag(h, 13); id.hash(h); op.hash(h); prefix.hash(h); }
-            Expr::Binary { op, left, right } => { tag(h, 14); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
+            Expr::Binary { op, left, right, .. } => { tag(h, 14); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
             Expr::Unary { op, operand } => { tag(h, 15); op.hash(h); operand.as_ref().hash(h); }
-            Expr::Compare { op, left, right } => { tag(h, 16); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
+            Expr::Compare { op, left, right, .. } => { tag(h, 16); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
             Expr::Logical { op, left, right } => { tag(h, 17); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
             // #5247: `byte_offset` is diagnostic-only (source-location metadata
             // for runtime TypeErrors); deliberately excluded from the stable hash

@@ -220,7 +220,7 @@ fn boolean_scalar_method_expr_is_safe(
     numeric_params: &HashSet<u32>,
 ) -> bool {
     match expr {
-        Expr::Compare { op, left, right } => {
+        Expr::Compare { op, left, right, .. } => {
             matches!(
                 op,
                 CompareOp::Eq
@@ -249,7 +249,7 @@ fn numeric_scalar_method_expr_is_safe(
             matches!(op, UnaryOp::Pos | UnaryOp::Neg)
                 && numeric_scalar_method_expr_is_safe(classes, class_name, operand, numeric_params)
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             matches!(
                 op,
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
@@ -274,7 +274,7 @@ fn int32_scalar_method_expr_is_safe(
     match expr {
         Expr::Integer(value) => i32::try_from(*value).is_ok(),
         Expr::LocalGet(id) => numeric_params.contains(id),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             matches!(
                 op,
                 BinaryOp::BitAnd

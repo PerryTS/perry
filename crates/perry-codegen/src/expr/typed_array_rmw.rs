@@ -104,7 +104,7 @@ fn match_shape<'a>(
     let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right,
+        right, ..
     } = value
     else {
         return None;
