@@ -1045,6 +1045,11 @@ pub enum Hard {
     E6SetPrototypeOf,
     E7Delete,
     E8Freeze,
+    /// `Object.seal` (SetIntegrityLevel sealed, 7.3.15).
+    E8Seal,
+    /// `Object.preventExtensions` / `Reflect.preventExtensions`
+    /// ([[PreventExtensions]] alone).
+    E8PreventExtensions,
     E9Proxy,
     E10ObjectCreate,
     E11ReflectConstruct,
@@ -1062,7 +1067,7 @@ impl Hard {
             Hard::E5DefineProperty => "E5",
             Hard::E6SetPrototypeOf => "E6",
             Hard::E7Delete => "E7",
-            Hard::E8Freeze => "E8",
+            Hard::E8Freeze | Hard::E8Seal | Hard::E8PreventExtensions => "E8",
             Hard::E9Proxy => "E9",
             Hard::E10ObjectCreate => "E10",
             Hard::E11ReflectConstruct => "E11",

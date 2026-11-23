@@ -183,3 +183,52 @@ fn proxy_new_primitive_prototype_gives_the_realm_default() {
     let h = "get(t: any, k: any) { return 1; }";
     site(t, h, &format!("{f}const o: any = new px(); o.f();"), false).unwrap();
 }
+
+/// Rule PXPROTO: `Object.setPrototypeOf( p, V )` runs the `setPrototypeOf`
+/// trap with V (10.5.2) and forwards to the target: a [[Get]] forwarded
+/// to the target then finds V's members.
+#[test]
+fn proxy_set_prototype_of_runs_the_trap_and_forwards() {
+    let h = "setPrototypeOf(t: any, v: any) { external(v.q); return true; }";
+    site("{}", h, "Object.setPrototypeOf(px, { q: payload });", false).unwrap();
+    site("{}", h, "Object.setPrototypeOf(px, { q: 1 });", true).unwrap();
+    let op = "Object.setPrototypeOf(px, { m() { external(payload); } }); px.m();";
+    site("{}", "", op, false).unwrap();
+    let op = "Object.setPrototypeOf(px, { m() { return 1; } }); px.m();";
+    site("{}", "", op, true).unwrap();
+}
+
+/// Rule PXDEL: `delete p[k]` under a computed key runs the
+/// `deleteProperty` trap (10.5.10) and forwards to the target.
+#[test]
+fn proxy_delete_computed_key_runs_the_trap() {
+    let op = "delete px[String(Math.random())];";
+    let h = "deleteProperty(t: any, k: any) { external(payload); return true; }";
+    site("{}", h, op, false).unwrap();
+    site("{}", "deleteProperty(t: any, k: any) { return true; }", op, true).unwrap();
+    site("{}", "", op, true).unwrap();
+}
+
+const PE_TRAP: &str = "preventExtensions(t: any) { external(payload); return true; }";
+const KEYS_TRAP: &str = "ownKeys(t: any) { external(payload); return []; }";
+const GOPD_TRAP: &str = "getOwnPropertyDescriptor(t: any, k: any) { external(payload); return undefined; }";
+const DEF_TRAP: &str = "defineProperty(t: any, k: any, d: any) { external(payload); return true; }";
+
+/// Rule PXINT: each integrity level runs exactly its traps (10.5.4,
+/// 7.3.15): preventExtensions the `preventExtensions` trap; seal also
+/// `ownKeys` and `defineProperty`; freeze also `getOwnPropertyDescriptor`.
+#[test]
+fn proxy_integrity_levels_run_their_traps() {
+    let t = "{ a: 1 }";
+    for (op, pe, keys, gopd, def) in [
+        ("Object.preventExtensions(px);", true, false, false, false),
+        ("Reflect.preventExtensions(px);", true, false, false, false),
+        ("Object.seal(px);", true, true, false, true),
+        ("Object.freeze(px);", true, true, true, true),
+    ] {
+        for (h, runs) in [(PE_TRAP, pe), (KEYS_TRAP, keys), (GOPD_TRAP, gopd), (DEF_TRAP, def)] {
+            site(t, h, op, !runs).unwrap_or_else(|e| panic!("{op} {h}: {e}"));
+        }
+    }
+    site(t, "", "Object.freeze(px);", true).unwrap();
+}

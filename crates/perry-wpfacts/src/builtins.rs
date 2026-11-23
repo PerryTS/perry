@@ -3710,13 +3710,12 @@ fn ns_method_inner(
         (BuiltinNs::Object, "freeze" | "seal" | "preventExtensions") => {
             if let Some(o) = arg(m, call, 0) {
                 let r = m.reason("E8 Object.freeze (as a value call)");
-                m.cons(
-                    o,
-                    Cons::Hard {
-                        kind: Hard::E8Freeze,
-                        reason: r,
-                    },
-                );
+                let kind = match name {
+                    "freeze" => Hard::E8Freeze,
+                    "seal" => Hard::E8Seal,
+                    _ => Hard::E8PreventExtensions,
+                };
+                m.cons(o, Cons::Hard { kind, reason: r });
                 let ret = m.calls[call as usize].ret;
                 m.edge(o, ret);
             }

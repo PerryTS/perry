@@ -250,13 +250,12 @@ impl<'a> Gen<'a> {
             Expr::ObjectFreeze(o) | Expr::ObjectSeal(o) | Expr::ObjectPreventExtensions(o) => {
                 let on = self.expr(fx, o);
                 let r = self.m.reason("E8 freeze/seal/preventExtensions");
-                self.m.cons(
-                    on,
-                    Cons::Hard {
-                        kind: Hard::E8Freeze,
-                        reason: r,
-                    },
-                );
+                let kind = match e {
+                    Expr::ObjectFreeze(_) => Hard::E8Freeze,
+                    Expr::ObjectSeal(_) => Hard::E8Seal,
+                    _ => Hard::E8PreventExtensions,
+                };
+                self.m.cons(on, Cons::Hard { kind, reason: r });
                 on
             }
             Expr::ReflectPreventExtensions(o) => {
@@ -265,7 +264,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(
                     on,
                     Cons::Hard {
-                        kind: Hard::E8Freeze,
+                        kind: Hard::E8PreventExtensions,
                         reason: r,
                     },
                 );

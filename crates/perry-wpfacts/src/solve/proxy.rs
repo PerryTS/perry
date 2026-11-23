@@ -102,6 +102,13 @@ pub enum ProxyOp {
     OwnProp(Key, NodeId),
     /// The `deleteProperty` trap call for `key`.
     DelTrap(Atom),
+    /// Rule PXDEL: the `deleteProperty` trap call under a computed key.
+    DelAny,
+    /// Rule PXPROTO: the `setPrototypeOf` trap call and the forward of one
+    /// prototype value node.
+    SetProto(NodeId),
+    /// [[OwnPropertyKeys]] alone: the `ownKeys` trap and the target's own.
+    KeysTrap,
     /// The forward of one delete (`key`, its reason) to the target.
     DelFwd(Atom, u32),
     /// [[OwnPropertyKeys]] and [[GetOwnProperty]] of every key: the
@@ -659,10 +666,7 @@ impl Model {
             return;
         }
         let target = self.proxies[p as usize].target;
-        // [[OwnPropertyKeys]]: the trap, the list read off its result.
-        let keys = self.node_l("proxy-ownkeys-ret");
-        self.proxy_trap(p, "ownKeys", None, vec![target], keys);
-        self.proxy_result_reads(keys, &["length"], true, reason);
+        self.proxy_keys_trap(p, reason);
         // [[GetOwnProperty]] of each key: the trap, the descriptor read.
         let k = self.proxy_key_arg(Key::any(), NO_NODE);
         let desc = self.node_l("proxy-gopd-ret");
@@ -686,7 +690,21 @@ impl Model {
             false,
             reason,
         );
-        // Without a trap, and for the invariant checks: the target's own.
+    }
+
+    /// [[OwnPropertyKeys]] (10.5.11) of Proxy `p`: the `ownKeys` trap with
+    /// the list read off its result (CreateListFromArrayLike 7.3.18), and,
+    /// without a trap and for the invariant checks (steps 9-ff:
+    /// target.[[OwnPropertyKeys]], target.[[GetOwnProperty]] of each key),
+    /// the target's own (`Implicit OwnKeys` on it). Once per Proxy.
+    fn proxy_keys_trap(&mut self, p: u32, reason: u32) {
+        if self.proxy_made(p, ProxyOp::KeysTrap) {
+            return;
+        }
+        let target = self.proxies[p as usize].target;
+        let keys = self.node_l("proxy-ownkeys-ret");
+        self.proxy_trap(p, "ownKeys", None, vec![target], keys);
+        self.proxy_result_reads(keys, &["length"], true, reason);
         self.cons(
             target,
             Cons::Implicit {
@@ -695,6 +713,44 @@ impl Model {
                 region: self.thrown,
             },
         );
+    }
+
+    /// Rule PXINT: [[PreventExtensions]] and SetIntegrityLevel (7.3.15) of
+    /// Proxy `p` at level `kind` (`Object.preventExtensions`,
+    /// `Reflect.preventExtensions`, `Object.seal`, `Object.freeze`):
+    /// O.[[PreventExtensions]]() (10.5.4), trap `preventExtensions( t )`;
+    /// for seal and freeze then O.[[OwnPropertyKeys]]() (10.5.11,
+    /// `proxy_keys_trap`), for freeze O.[[GetOwnProperty]](k) of each key
+    /// (10.5.5, `proxy_own_props`), and DefinePropertyOrThrow(O, k, desc)
+    /// of each key (10.5.6): trap `defineProperty( t, k, desc )`, desc =
+    /// FromPropertyDescriptor (6.2.6.4) of `{ [[Configurable]]: false }`
+    /// (freeze: and `[[Writable]]: false` for a data property), a new
+    /// object without `value`, `get` or `set`. Without a trap each step
+    /// forwards to the target: the same level on it (`Cons::Hard` `kind`),
+    /// its own rule. Once per (Proxy, level).
+    fn proxy_integrity(&mut self, p: u32, kind: Hard, reason: u32) {
+        if self.proxy_made(p, ProxyOp::HardFwd(kind)) {
+            return;
+        }
+        let t = self.proxies[p as usize].target;
+        let ret = self.node_l("proxy-preventextensions-ret");
+        self.proxy_trap(p, "preventExtensions", None, vec![t], ret);
+        if kind != Hard::E8PreventExtensions {
+            match kind == Hard::E8Freeze {
+                true => self.proxy_own_props(p, reason),
+                false => self.proxy_keys_trap(p, reason),
+            }
+            let k = self.proxy_key_arg(Key::any(), NO_NODE);
+            let d = self.node_l("proxy-integrity-desc");
+            let dret = self.node_l("proxy-integrity-define-ret");
+            self.proxy_trap(p, "defineProperty", Some(Key::any()), vec![t, k, d], dret);
+            let call = (self.calls.len() - 1) as CallId;
+            let v = self.node_l("proxy-integrity-desc-value");
+            self.add_prim(v, prim::UNDEF);
+            let dt = builtins::trap_descriptor(self, call, v);
+            self.add_tok(d, dt);
+        }
+        self.cons(t, Cons::Hard { kind, reason });
     }
 
     /// The own keys of Proxy `p` (`Protocol::OwnKeys`: Object.keys,
@@ -1391,6 +1447,64 @@ impl Model {
                     );
                 }
             }
+            // Rule PXPROTO: [[SetPrototypeOf]] (10.5.2) with V = what `src`
+            // holds (`Object.setPrototypeOf`, `Reflect.setPrototypeOf`,
+            // the `__proto__` setter): trap `setPrototypeOf( t, V )`; the
+            // forward t.[[SetPrototypeOf]](V), the same rule on the target.
+            // The operation's E6 mark forwards with it (below).
+            Cons::ProtoFrom { src } => {
+                if !self.proxy_made(p, ProxyOp::SetProto(src)) {
+                    let t = self.proxies[p as usize].target;
+                    let ret = self.node_l("proxy-setprototypeof-ret");
+                    self.proxy_trap(p, "setPrototypeOf", None, vec![t, src], ret);
+                    self.cons(t, Cons::ProtoFrom { src });
+                }
+            }
+            Cons::Hard {
+                kind: Hard::E6SetPrototypeOf,
+                reason,
+            } => {
+                if !self.proxy_made(p, ProxyOp::HardFwd(Hard::E6SetPrototypeOf)) {
+                    let t = self.proxies[p as usize].target;
+                    self.cons(
+                        t,
+                        Cons::Hard {
+                            kind: Hard::E6SetPrototypeOf,
+                            reason,
+                        },
+                    );
+                }
+            }
+            // Rule PXDEL: a delete under a computed key (E7 on an ordinary
+            // object): [[Delete]] (10.5.10), trap `deleteProperty( t, key )`
+            // under any key (the key a String or a Symbol), and the
+            // forward, the target's E7.
+            Cons::Hard {
+                kind: Hard::E7Delete,
+                reason,
+            } => {
+                if !self.proxy_made(p, ProxyOp::DelAny) {
+                    let t = self.proxies[p as usize].target;
+                    let k = self.proxy_key_arg(Key::any(), NO_NODE);
+                    let ret = self.node_l("proxy-delete-ret");
+                    self.proxy_trap(p, "deleteProperty", Some(Key::any()), vec![t, k], ret);
+                }
+                if !self.proxy_made(p, ProxyOp::HardFwd(Hard::E7Delete)) {
+                    let t = self.proxies[p as usize].target;
+                    self.cons(
+                        t,
+                        Cons::Hard {
+                            kind: Hard::E7Delete,
+                            reason,
+                        },
+                    );
+                }
+            }
+            // Rule PXINT: an integrity level (`proxy_integrity`).
+            Cons::Hard {
+                kind: kind @ (Hard::E8Freeze | Hard::E8Seal | Hard::E8PreventExtensions),
+                reason,
+            } => self.proxy_integrity(p, kind, reason),
             // [[Set]] (10.5.9) with the Proxy as the Receiver (`proxy_set`).
             Cons::Store {
                 key,
