@@ -402,12 +402,14 @@ impl Model {
         v
     }
 
+    #[track_caller]
     pub fn node(&mut self, name: impl FnOnce() -> String) -> NodeId {
         self.node_named("other", name)
     }
 
     /// A node with a static label (diagnostics: the biggest points-to sets
     /// are reported by label).
+    #[track_caller]
     pub fn node_named(&mut self, label: &'static str, name: impl FnOnce() -> String) -> NodeId {
         let id = self.nodes.len() as NodeId;
         if self.max_nodes != 0 && self.nodes.len() > self.max_nodes {
@@ -422,8 +424,16 @@ impl Model {
         self.node_fn.push(NO_FN);
         self.labels.push(label);
         if let Some(s) = self.stop_top.as_mut() {
+            // The program position of the expression the node stands for:
+            // generation's, else that of the expression that attached the
+            // rule being applied (`StopTop::cur_pos`).
+            let p = s.cur_pos();
             s.node_pos.resize(id as usize + 1, crate::topstop::NOPOS);
-            s.node_pos[id as usize] = s.gen_pos;
+            s.node_pos[id as usize] = p;
+            let at = std::panic::Location::caller();
+            if p == crate::topstop::NOPOS {
+                *s.nopos.entry(at).or_default() += 1;
+            }
             // Made outside a program expression: the node whose rule runs
             // (else the escape's node, else the sender) made it.
             let from = match (s.rule, s.esc.last()) {
@@ -434,6 +444,7 @@ impl Model {
             s.node_from.resize(id as usize + 1, (NO_NODE, None));
             if s.gen_pos == crate::topstop::NOPOS {
                 s.node_from[id as usize] = from;
+                s.node_at.insert(id, at);
             }
         }
         if self.relations.is_some() {
@@ -447,6 +458,7 @@ impl Model {
         self.node_fn[n as usize] = self.cur_fn;
     }
 
+    #[track_caller]
     pub fn node_l(&mut self, label: &'static str) -> NodeId {
         self.node_named(label, || label.to_string())
     }

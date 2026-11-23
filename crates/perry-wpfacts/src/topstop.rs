@@ -17,10 +17,14 @@
 //!   token is marked escaped so that beside ⊤ it is that ⊤
 //!   (`escaped_beside_top`, `mark_escaped`).
 //!
-//! Every block names a program line: a node the solver made outside
-//! generation is traced to the node of the rule that made it
-//! (`StopTop::node_from`), step by step, until a node generation made at a
-//! program expression.
+//! Every block names a program line: every node carries, from its
+//! creation, the program position of the expression it stands for
+//! (`StopTop::node_pos`). Generation records the expression it walks; a rule
+//! records the position of the expression that attached it
+//! (`StopTop::cons_pos`), and a node the solver makes while it applies the
+//! rule carries that position. The rule applications that made a node are
+//! listed as `via:` steps (`StopTop::node_from`). A node made with no
+//! position is a bug of its creation site: the block names that site.
 //!
 //! `PERRY_FACTS_STOP_ON_TOP_SKIP=<n>`: pass the first n creations, stop at
 //! creation n+1. `PERRY_FACTS_STOP_ON_TOP_CLASS=<letters of S, A, M>`
@@ -57,6 +61,16 @@ pub struct StopTop {
     pub(crate) topvals: FxHashMap<NodeId, (String, &'static Location<'static>, (u32, u32))>,
     /// The rule being applied (`Model::apply_tokens` loops): its node.
     pub(crate) rule: Option<(NodeId, Cons)>,
+    /// The program position of the rule being applied (`cons_pos`).
+    pub(crate) rule_pos: (u32, u32),
+    /// The program position of each attached rule, by (node, index in its
+    /// `cons`): the expression generation walks when it attaches it, else
+    /// the position of the rule whose application attached it.
+    pub(crate) cons_pos: FxHashMap<(NodeId, u32), (u32, u32)>,
+    /// A node made outside a program expression: the solver line that made it.
+    pub(crate) node_at: FxHashMap<NodeId, &'static Location<'static>>,
+    /// Nodes made with no program position, by solver line (a bug each).
+    pub(crate) nopos: FxHashMap<&'static Location<'static>, u64>,
     /// Escapes in progress: (token, reason id, node the rule ran on).
     pub(crate) esc: Vec<(Tok, u32, NodeId)>,
     /// The origin `Model::add_top` names while it adds ⊤.
@@ -112,8 +126,28 @@ impl StopTop {
             capture,
             paths,
             gen_pos: NOPOS,
+            rule_pos: NOPOS,
             ..Default::default()
         }))
+    }
+
+    /// Rule `c` (index `ci` of node `n`'s rules) starts to apply: the rule
+    /// and its position before it, to restore after.
+    pub(crate) fn enter_rule(&mut self, n: NodeId, c: Cons, ci: u32) -> (Option<(NodeId, Cons)>, (u32, u32)) {
+        let p = self.cons_pos.get(&(n, ci)).copied().unwrap_or(NOPOS);
+        (self.rule.replace((n, c)), std::mem::replace(&mut self.rule_pos, p))
+    }
+
+    /// The program position of what runs now: the expression generation
+    /// walks, else the expression that attached the rule being applied.
+    pub(crate) fn cur_pos(&self) -> (u32, u32) {
+        if self.gen_pos != NOPOS {
+            self.gen_pos
+        } else if self.rule.is_some() {
+            self.rule_pos
+        } else {
+            NOPOS
+        }
     }
 }
 
@@ -279,6 +313,13 @@ impl Model {
             }
             return;
         }
+        if let Some(s) = self.stop_top.as_ref() {
+            let mut v: Vec<_> = s.nopos.iter().map(|(l, &k)| (k, l.file(), l.line())).collect();
+            v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)).then(a.2.cmp(&b.2)));
+            for (k, f, l) in v {
+                eprintln!("TOPSTOP nopos {f}:{l} {k}");
+            }
+        }
         eprint!("{b}");
         std::process::exit(86);
     }
@@ -296,6 +337,9 @@ impl Model {
         let Some(s) = self.stop_top.as_ref() else {
             return NOPOS;
         };
+        if s.node_at.contains_key(&n) {
+            return s.node_pos.get(n as usize).copied().unwrap_or(NOPOS);
+        }
         let f = self.node_fn.get(n as usize).copied().unwrap_or(crate::model::NO_FN);
         if f != crate::model::NO_FN {
             let fi = &self.funcs[f as usize];
@@ -334,68 +378,43 @@ impl Model {
         }
     }
 
-    /// The program position of `n`: its own; for a node the solver made,
-    /// that of the node whose rule made it, step by step (each step named);
-    /// for a solver-made call's result or throw region without a maker, the
-    /// program call the solver call was made for (`made_root`); last, the
-    /// first program position of its function (named as nearest).
+    /// The program position of `n`, recorded when it was made, and the rule
+    /// applications that made it (`via:`), back to a node of generation.
     pub(crate) fn program_origin(&self, n: NodeId) -> ((u32, u32), Vec<String>) {
         let mut steps = Vec::new();
         let Some(s) = self.stop_top.as_ref() else {
             return (NOPOS, steps);
         };
+        let p = self.node_program_pos(n);
         let mut cur = n;
         for _ in 0..256 {
-            let p = self.node_program_pos(cur);
-            if p != NOPOS {
-                return (p, steps);
+            let Some(&(from, c)) = s.node_from.get(cur as usize) else {
+                break;
+            };
+            if from == NO_NODE || from == cur || from as usize >= self.nodes.len() {
+                break;
             }
-            if let Some(&(from, c)) = s.node_from.get(cur as usize) {
-                if from != NO_NODE && from != cur {
-                    let r = match c {
-                        Some(c) => format!("rule {}", c.kind_name()),
-                        None => "the sender".into(),
-                    };
-                    steps.push(format!(
-                        "node {cur} `{}` was made by the solver applying {r} on node {from} `{}`",
-                        self.labels[cur as usize], self.labels[from as usize]
-                    ));
-                    cur = from;
-                    continue;
-                }
-            }
-            let call = self
-                .calls
-                .iter()
-                .position(|c| c.ret == cur || c.region == cur)
-                .map(|c| c as u32);
-            if let Some(r) = call.and_then(|c| self.made_root.get(&c).copied().filter(|&r| r != c)) {
-                let rn = self.calls[r as usize].ret;
-                steps.push(format!(
-                    "node {cur} belongs to solver call #{} made for program call #{r}",
-                    call.unwrap()
-                ));
-                cur = rn;
-                continue;
-            }
-            break;
+            let r = match c {
+                Some(c) => format!("rule {}", c.kind_name()),
+                None => "the sender".into(),
+            };
+            steps.push(format!(
+                "node {cur} `{}` was made by the solver applying {r} on node {from} `{}`",
+                self.labels[cur as usize], self.labels[from as usize]
+            ));
+            cur = from;
         }
-        let f = self.node_fn.get(cur as usize).copied().unwrap_or(crate::model::NO_FN);
-        if f != crate::model::NO_FN {
-            if let Some(&p) = s.fn_pos.get(&(f as u32)) {
-                steps.push(format!(
-                    "node {cur} `{}` has no own program position: nearest is the first one in its function `{}`",
-                    self.labels[cur as usize],
-                    self.funcs[f as usize].name
-                ));
-                return (p, steps);
-            }
+        if p == NOPOS {
+            let at = s
+                .node_at
+                .get(&n)
+                .map_or_else(|| "?".to_string(), |l| format!("{}:{}", l.file(), l.line()));
+            steps.push(format!(
+                "BUG: node {n} `{}` was made with no program position (at {at}): its creation site must record one",
+                self.labels[n as usize]
+            ));
         }
-        steps.push(format!(
-            "node {cur} `{}`: no maker recorded and no function (a solver-global node)",
-            self.labels[cur as usize]
-        ));
-        (NOPOS, steps)
+        (p, steps)
     }
 
     /// An input node: what it is, its program origin, what it holds.
@@ -415,7 +434,7 @@ impl Model {
             "node {n} `{label}` ({}), from {}{}; holds [{}]{}",
             self.node_words_short(n),
             self.pos_text(p),
-            if steps.is_empty() { String::new() } else { format!(" (traced over {} solver steps)", steps.len()) },
+            if steps.is_empty() { String::new() } else { format!(" (made by the solver, {} steps from a program node)", steps.len()) },
             held.join("; "),
             if prim != 0 { format!(" + primitives {prim:#x}") } else { String::new() }
         )
@@ -507,6 +526,14 @@ impl Model {
         if inputs.is_empty() && self.cur_src != NO_NODE && (self.cur_src as usize) < self.nodes.len() {
             inputs.push(self.cur_src);
         }
+        let rule_pos = self.stop_top.as_ref().unwrap().rule_pos;
+        if !placed && rule.is_some() && rule_pos != NOPOS {
+            b.push_str(&format!("  where:   {} (the expression that attached the running rule)\n", self.pos_text(rule_pos)));
+            if let Some(l) = self.source_line(rule_pos) {
+                b.push_str(&format!("  source:  {l}\n"));
+            }
+            placed = true;
+        }
         if !placed {
             match inputs.first() {
                 Some(&i) => {
@@ -530,7 +557,7 @@ impl Model {
             return "?".into();
         };
         if p == NOPOS {
-            return "(no program position: made by the solver outside generation)".into();
+            return "(no program position recorded)".into();
         }
         let path = s.paths.get(p.0 as usize).cloned().unwrap_or_else(|| format!("module#{}", p.0));
         match std::fs::read(&path) {

@@ -1892,9 +1892,9 @@ impl Model {
                         } else {
                             self.chain_active = true;
                             self.cons(up, link);
-                            while let Some((n2, c2)) = self.chain_q.pop() {
+                            while let Some((n2, c2, i2)) = self.chain_q.pop() {
                                 if !self.aborted {
-                                    self.replay_cons(n2, c2);
+                                    self.replay_cons(n2, c2, i2);
                                 }
                             }
                             self.chain_active = false;
