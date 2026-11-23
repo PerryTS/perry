@@ -396,6 +396,7 @@ impl Model {
         }
     }
 
+    #[track_caller]
     pub(super) fn mark_escaped(&mut self, t: Tok, reason: u32) {
         // A few hard/contract paths mark directly rather than entering escape.
         // Retain those actual events too; this data never feeds the solver.
@@ -434,6 +435,16 @@ impl Model {
         }
         let fresh = self.esc_bits[w] & (1 << (t & 63)) == 0;
         self.esc_bits[w] |= 1 << (t & 63);
+        if fresh
+            && self.stop_top.is_some()
+            && super::escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+        {
+            let why = format!(
+                "a value is marked escaped ({}): beside ⊤ it is that ⊤ (escaped_beside_top)",
+                self.reasons.get(reason as usize).map_or("?", |s| s.as_str()).replace(['\n', '\r'], " ")
+            );
+            self.top_marker_created(t, &why, std::panic::Location::caller());
+        }
         if fresh {
             self.late_esc.push(t);
             self.enum_escaped(t);
