@@ -244,13 +244,18 @@ PRs. Every Rust job goes through `.github/actions/perry-rust-cache`, which wraps
   hits under throttling. rust-cache stores dependencies only; workspace crates
   rebuild in every job.
 
-The release workflows (`release-packages.yml`, `release-wasi.yml`) keep their own
-`release-*` keys. GitHub evicts least-recently-used entries first, and the PR
-families are restored by every PR run, so cold families are the ones that go.
-`gh api repos/PerryTS/perry/actions/cache/usage` and
+Only jobs that run on pull requests save, and only from `test.yml`; sweep,
+nightly and cron jobs restore a PR family when their build matches one, and
+start cold otherwise. GitHub evicts by last access, and a family saved by a
+later cron run is newer than the PR families, so it evicts them first: one
+morning, `gc-native-roots`' four platform entries (~3.8 GB) and two macOS
+families pushed `wasi-components` and four other PR families out.
+`test_actions_plan.py` checks the saver against `scripts/ci_plan.py`'s tiers.
+The release workflows (`release-packages.yml`, `release-wasi.yml`) keep their
+own `release-*` keys. `gh api repos/PerryTS/perry/actions/cache/usage` and
 `gh api repos/PerryTS/perry/actions/caches` show the total and each family's
-size; if the families PRs restore stop fitting in 10 GB together, PR jobs go
-cold again.
+size; if the PR families stop fitting in 10 GB together, PR jobs go cold
+again.
 
 ## Budgets
 

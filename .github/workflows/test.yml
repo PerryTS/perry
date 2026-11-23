@@ -2262,11 +2262,6 @@ jobs:
         with:
           node-version-file: .node-version
 
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: windows-build
-          save: "true"
-
       # dev (see Cargo.toml [profile.dev]) trades peak optimization
       # for build speed. The package set covers the compiler binary (link
       # gate), the runtime/stdlib pair (the usual source of cfg(windows)
@@ -2413,11 +2408,6 @@ jobs:
             throw "MSVC linker missing: $linker"
           }
           "CARGO_TARGET_AARCH64_PC_WINDOWS_MSVC_LINKER=$linker" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
-
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: windows-arm64-build
-          save: "true"
 
       - name: Build ARM64 compiler and static libraries (dev)
         shell: bash
@@ -2750,11 +2740,6 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: compiler-output-regression
-          save: "true"
-
       - name: Install clang
         run: |
           # Third-party sources we never install from can fail `apt-get update`,
@@ -2996,11 +2981,6 @@ jobs:
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
 
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: repsel-census
-          save: "true"
-
       # Verdict logic first, cheaply: if the census can't tell a regression
       # from a pass, the compile-based run below is not worth the minutes.
       - name: Census verdict self-test
@@ -3158,11 +3138,6 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: native-abi-evidence-packet
-          save: "true"
 
       - name: Install clang
         run: |
@@ -4943,11 +4918,6 @@ jobs:
         if: matrix.os == 'macos-15' || matrix.os == 'ubuntu-24.04'
         run: rustup target add aarch64-linux-android
 
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: doc-tests
-          save: "true"
-
       - name: Build compiler + UI backend + harness
         # The database/mail examples route through async wrapper staticlibs.
         # Build them in this SAME Cargo graph as perry-stdlib: otherwise each
@@ -5066,11 +5036,6 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: binary-size
-          save: "true"
 
       - name: Install linker retention diagnostics (ELF)
         if: runner.os == 'Linux'
@@ -5637,10 +5602,6 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal --component llvm-tools-preview
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: coverage
-          save: "true"
       - name: Install cargo-llvm-cov
         uses: ./.github/actions/perry/taiki-e/install-action
         with:
@@ -6516,13 +6477,6 @@ jobs:
       - uses: ./.github/actions/perry/actions/setup-node
         with:
           node-version-file: .node-version
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: wasi-hosts-${{ matrix.target }}
-          save: "true"
-          workspaces: |
-            . -> target
-            . -> target-instr
       - name: Build matching native host artifacts
         run: |
           set -euo pipefail
