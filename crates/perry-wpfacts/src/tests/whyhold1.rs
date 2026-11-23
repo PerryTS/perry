@@ -5,11 +5,14 @@ use super::*;
 
 const SRC: &str = "declare function sink(x: any): void;\nfunction make() {\n  return sink;\n}\nconst f = make();\nf(1);\n";
 
+/// K8 (owner 2026-11-23, f0d8455cfb): a call of an unknown value holds the
+/// realm only where code beside the program may name it (`realm_nameable`),
+/// so this control runs beside an unseen module (`import "unseen-host"`).
 #[test]
 fn chain_from_hold_reaches_the_seed() {
     std::env::set_var("PERRY_FACTS_WHY", "1");
     let path = "t.ts".to_string();
-    let module = perry_parser::parse_typescript(SRC, &path).expect("parses");
+    let module = perry_parser::parse_typescript(&unseen(SRC), &path).expect("parses");
     let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
     let _ = crate::provenance::take_chain();
     let _ = crate::compute(&[(path, &hir)], &FactsConfig::default());
@@ -103,9 +106,12 @@ fn stop_wide_by_parameter_name() {
 
 /// WHYHOLD2: a load's hop names the receiver token that the load read the
 /// value from (recorded at delivery, not the source's latest arrival).
+/// K8 (owner 2026-11-23, f0d8455cfb): a call of an unknown value holds the
+/// realm only where code beside the program may name it (`realm_nameable`),
+/// so this control runs beside an unseen module (`import "unseen-host"`).
 #[test]
 fn load_hop_records_the_receiver() {
-    const L: &str = "declare function sink(x: any): void;\nfunction rd(o: any) {\n  return o.f;\n}\nconst g = rd({ f: sink });\ng(1);\n";
+    const L: &str = "import \"unseen-host\";\ndeclare function sink(x: any): void;\nfunction rd(o: any) {\n  return o.f;\n}\nconst g = rd({ f: sink });\ng(1);\n";
     let c = chain_with(L, &[("PERRY_FACTS_WHY", "1")]);
     let v: Vec<(&str, &str)> = c
         .iter()

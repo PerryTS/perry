@@ -316,10 +316,13 @@ fn a_length_of_a_number_or_boolean_is_absent() {
     assert!(all(&at(&pf, "length", false), "OwnDataOrAbsent"));
 }
 
+/// K8 (owner 2026-11-23, f0d8455cfb): a call of an unknown value holds the
+/// realm only where code beside the program may name it (`realm_nameable`),
+/// so this control runs beside an unseen module (`import "unseen-host"`).
 #[test]
 fn control_absent_key_held_realm() {
     let pf = one(&format!(
-        "{C}{HOLD}const s: any = c ? \"a\" : \"b\";\nconsole.log(s.isStackTrace);\n"
+        "import \"unseen-host\";\n{C}{HOLD}const s: any = c ? \"a\" : \"b\";\nconsole.log(s.isStackTrace);\n"
     ));
     assert!(none(&at(&pf, "isStackTrace", false), "OwnDataOrAbsent"));
 }
