@@ -43,6 +43,8 @@ const vm = require('node:vm');
 const { resolveObjectURL } = require('node:buffer');
 const decode = atob;
 globalThis.atob = s => { globalThis.__perryWasmB64 ??= s; return decode(s); };
+Object.defineProperty(navigator, 'hardwareConcurrency', { value: 4 });
+globalThis.workerMaps = 0;
 globalThis.Worker = class {
   constructor(url) {
     this.listeners = [];
@@ -51,7 +53,7 @@ globalThis.Worker = class {
   }
   addEventListener(_, fn) { this.listeners.push(fn); }
   removeEventListener(_, fn) { this.listeners = this.listeners.filter(l => l !== fn); }
-  postMessage(data) { this.scope.then(self => self.onmessage({ data: structuredClone(data) })); }
+  postMessage(data) { if (data.type === 'map') workerMaps++; this.scope.then(self => self.onmessage({ data: structuredClone(data) })); }
 };
 "#;
 
@@ -67,8 +69,8 @@ for (let i = 0; i < 1024; i++) xs.push(i);
 Promise.resolve(parallelMap(xs, (...r: number[]) => r)).then((out: any) => console.log(out.length + ":" + out[5].length + ":" + out[5][0]));
 "#,
             &source,
-            "await new Promise(resolve => setTimeout(resolve, 200));"
+            "await new Promise(resolve => setTimeout(resolve, 200)); console.log(workerMaps > 0);"
         ),
-        "1024:1:5"
+        "1024:1:5\ntrue"
     );
 }
