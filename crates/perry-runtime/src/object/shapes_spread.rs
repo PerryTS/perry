@@ -40,8 +40,9 @@ impl ShapeRecordRef {
     }
 
     /// E4 same-layout spread source: an ordinary default-prototype record
-    /// with no holes, no attribute summary, no symbols and no runtime-internal
-    /// key name (the birth facts cover exactly the record's logical keys,
+    /// with no holes, no attribute summary, no symbols, no integrity level (a
+    /// fresh copy is extensible) and no runtime-internal key name (the birth
+    /// facts cover exactly the record's logical keys,
     /// the keys the copy carries on this layout word), so a result born on
     /// this very layout word owns exactly the keys the source's enumeration
     /// lists.
@@ -53,6 +54,7 @@ impl ShapeRecordRef {
             && r.summary() == 0
             && r.proves_no_symbols()
             && r.proto_id == super::PROTO_ID_DEFAULT
+            && r.integrity_flags() == 0
             && self.enum_bits() & crate::object::key_attrs::ENUM_INTERNAL_KEY == 0
     }
 

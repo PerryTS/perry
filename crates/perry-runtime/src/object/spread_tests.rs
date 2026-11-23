@@ -331,3 +331,18 @@ fn table_copy_carries_the_hash_index() {
         }
     }
 }
+
+#[test]
+fn spread_of_a_non_extensible_source_is_extensible() {
+    let _lock = crate::gc::global_side_table_test_lock();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    unsafe {
+        let source = object(&[("x", 7.0)]);
+        js_object_prevent_extensions(source);
+        let result = js_object_spread_fresh_leading(empty_prefix(), source, 0);
+        let truthy = |v: f64| crate::value::js_is_truthy(v) != 0;
+        assert!(!truthy(js_object_is_extensible(source)));
+        assert!(truthy(js_object_is_extensible(result)));
+        assert_eq!(get(result, "x"), 7.0);
+    }
+}
