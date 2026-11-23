@@ -332,6 +332,7 @@ impl WasmModuleEmitter {
             Expr::GlobalGet(id) if !self.global_map.contains_key(id) => {
                 "globalThisValue()".to_string()
             }
+            Expr::GlobalThisExpr => "globalThisValue()".to_string(),
             // A declared global lives in its WASM global, which the module exports by
             // index; no JS binding `__g{id}` exists.
             Expr::GlobalGet(id) => format!(

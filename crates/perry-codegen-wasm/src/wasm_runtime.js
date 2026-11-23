@@ -4,6 +4,12 @@
 
 // NaN-boxing constants (matching perry-runtime/src/value.rs)
 const __hostGlobal = globalThis;
+// The program shares the host Math and JSON and may replace their members (#15104).
+// The glue's own arithmetic and formatting call the originals, captured before any
+// program code runs. The math_* / json_* bridges keep reading the live members: a call
+// bound to the intrinsic still reaches a replacement the compiler cannot see (eval).
+const __Math = Object.fromEntries(Object.getOwnPropertyNames(Math).map((k) => [k, Math[k]]));
+const __JSON = { parse: JSON.parse, stringify: JSON.stringify };
 
 const TAG_UNDEFINED = 0x7FFC_0000_0000_0001n;
 const TAG_NULL      = 0x7FFC_0000_0000_0002n;
@@ -32,11 +38,11 @@ function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
 function __padBigintArgs(fn, prefix, bigintArgs) {
   const rest = wasmInstance?.exports['__wasm_rest_' + fn.name];
   if (rest) {
-    const at = Math.max(0, rest.value - (prefix | 0));
+    const at = __Math.max(0, rest.value - (prefix | 0));
     while (bigintArgs.length < at) bigintArgs.push(TAG_UNDEFINED);
     bigintArgs.push(__jsValueToBits(bigintArgs.splice(at).map(__bitsToJsValue)));
   }
-  const need = Math.max(0, (fn.length | 0) - (prefix | 0));
+  const need = __Math.max(0, (fn.length | 0) - (prefix | 0));
   while (bigintArgs.length < need) bigintArgs.push(TAG_UNDEFINED);
   return bigintArgs;
 }
@@ -372,7 +378,7 @@ function buildImports() {
         const arr = getHandle(handle);
         if (!arr) return nanboxString(allocHandle(''));
         const sep = getString(separator);
-        const result = arr.map(v => typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)).join(sep);
+        const result = arr.map(v => typeof v === 'object' && v !== null ? __JSON.stringify(v) : String(v)).join(sep);
         stringTable.push(result);
         return nanboxString(stringTable.length - 1);
       },
@@ -1424,7 +1430,7 @@ function buildImports() {
         const name = stringTable[nameId | 0];
         const argc = argCount | 0;
         const base = baseAddr | 0;
-        const u64View = new BigUint64Array(wasmMemory.buffer, base, Math.max(argc, 1));
+        const u64View = new BigUint64Array(wasmMemory.buffer, base, __Math.max(argc, 1));
         const args = [];
         for (let i = 0; i < argc; i++) args.push(__bitsToJsValue(u64View[i]));
         let result;
@@ -1453,7 +1459,7 @@ function buildImports() {
         const name = stringTable[nameId | 0];
         const argc = argCount | 0;
         const base = baseAddr | 0;
-        const u64View = new BigUint64Array(wasmMemory.buffer, base, Math.max(argc, 1));
+        const u64View = new BigUint64Array(wasmMemory.buffer, base, __Math.max(argc, 1));
         const args = [];
         for (let i = 0; i < argc; i++) args.push(__bitsToJsValue(u64View[i]));
         const fn = __memDispatch[name];
@@ -1554,7 +1560,7 @@ function wrapForI64(fn, coerceNumberToBigInt = true) {
       // payloads) via bit-reinterpret. Skipped for non-i64-return imports
       // (#1049 instances 2/3) — those declare i32/f64 returns and would
       // reject a BigInt with the inverse error.
-      if (coerceNumberToBigInt && Number.isInteger(result) && Math.abs(result) < 2147483648) {
+      if (coerceNumberToBigInt && Number.isInteger(result) && __Math.abs(result) < 2147483648) {
         return BigInt(result);
       }
       if (!coerceNumberToBigInt) return result;
@@ -3657,12 +3663,12 @@ self.onmessage = async function(e) {
         return mapSequential(array, closure);
       }
 
-      const numChunks = Math.min(concurrency, array.length);
+      const numChunks = __Math.min(concurrency, array.length);
       const ws = ensureWorkers(numChunks);
       if (!ws) return mapSequential(array, closure);
 
       const { funcIdx, captures } = serializeClosure(closure);
-      const chunkSize = Math.ceil(array.length / numChunks);
+      const chunkSize = __Math.ceil(array.length / numChunks);
       const promises = [];
       for (let i = 0; i < numChunks; i++) {
         const chunk = array.slice(i * chunkSize, (i + 1) * chunkSize);
@@ -3686,12 +3692,12 @@ self.onmessage = async function(e) {
         return filterSequential(array, closure);
       }
 
-      const numChunks = Math.min(concurrency, array.length);
+      const numChunks = __Math.min(concurrency, array.length);
       const ws = ensureWorkers(numChunks);
       if (!ws) return filterSequential(array, closure);
 
       const { funcIdx, captures } = serializeClosure(closure);
-      const chunkSize = Math.ceil(array.length / numChunks);
+      const chunkSize = __Math.ceil(array.length / numChunks);
       const promises = [];
       for (let i = 0; i < numChunks; i++) {
         const chunk = array.slice(i * chunkSize, (i + 1) * chunkSize);
@@ -4154,7 +4160,7 @@ function perry_ui_set_font_weight(h, weight) { const el = uiGet(h); if (el) el.s
 function perry_ui_text_set_font_weight(h, size, weight) {
   const el = uiGet(h); if (!el) return;
   el.style.fontSize = size + "px";
-  el.style.fontWeight = String(Math.round(1 + 8 * Math.min(Math.max(weight, 0), 1)) * 100);
+  el.style.fontWeight = String(__Math.round(1 + 8 * __Math.min(__Math.max(weight, 0), 1)) * 100);
 }
 function perry_ui_set_font_family(h, family) { const el = uiGet(h); if (el) el.style.fontFamily = family; }
 function perry_ui_set_padding(h, top, left, bottom, right) {
@@ -5153,7 +5159,7 @@ function _perry_media_wire_session() {
       const e = _perry_media_get(h);
       if (!e) return;
       const skip = (details && details.seekOffset) || 10;
-      perry_media_seek(h, Math.max(0, (e.audio.currentTime || 0) - skip));
+      perry_media_seek(h, __Math.max(0, (e.audio.currentTime || 0) - skip));
     });
   } catch (err) { /* setActionHandler can throw on unsupported actions — ignore */ }
 }
@@ -5424,7 +5430,7 @@ function _perry_audio_resolve_url(path) {
 
 function _perry_audio_set_gain(gainParam, target, fadeMs) {
   if (!PERRY_AUDIO_CTX) return;
-  const t = Math.max(0, Number(target) || 0);
+  const t = __Math.max(0, Number(target) || 0);
   const ms = Number(fadeMs) || 0;
   const now = PERRY_AUDIO_CTX.currentTime;
   try {
@@ -5454,9 +5460,9 @@ function _perry_audio_start_voice(entry) {
 
   const voiceGain = PERRY_AUDIO_CTX.createGain();
   let tail = voiceGain;
-  if (Math.abs(entry.pan) > 1e-6 && typeof PERRY_AUDIO_CTX.createStereoPanner === "function") {
+  if (__Math.abs(entry.pan) > 1e-6 && typeof PERRY_AUDIO_CTX.createStereoPanner === "function") {
     const panner = PERRY_AUDIO_CTX.createStereoPanner();
-    try { panner.pan.value = Math.max(-1, Math.min(1, entry.pan)); } catch (_) {}
+    try { panner.pan.value = __Math.max(-1, __Math.min(1, entry.pan)); } catch (_) {}
     voiceGain.connect(panner);
     tail = panner;
     entry.pannerNode = panner;
@@ -5594,7 +5600,7 @@ function perry_audio_play(soundHandle, volume, loop_, rate, pan, fadeInMs) {
     loop: Number(loop_) >= 0.5,
     rate: (Number(rate) > 0) ? Number(rate) : 1.0,
     pan: Number(pan) || 0,
-    fadeInMs: Math.max(0, Number(fadeInMs) || 0),
+    fadeInMs: __Math.max(0, Number(fadeInMs) || 0),
     source: null,
     gain: null,
     pannerNode: null,
@@ -5621,7 +5627,7 @@ function perry_audio_play(soundHandle, volume, loop_, rate, pan, fadeInMs) {
 function perry_audio_stop(handle, fadeOutMs) {
   const ctx = _perry_audio_ctx();
   if (!ctx) return;
-  const ms = Math.max(0, Number(fadeOutMs) || 0);
+  const ms = __Math.max(0, Number(fadeOutMs) || 0);
   const stopOne = (v) => {
     if (!v || v.stopped) return;
     if (ms > 0 && v.gain) {
@@ -5660,7 +5666,7 @@ function perry_audio_pause(playbackHandle) {
   const elapsed = ctx.currentTime - v.startedAt;
   let offset = elapsed;
   if (v.sound && v.sound.audioBuffer && !v.loop) {
-    offset = Math.min(elapsed, v.sound.audioBuffer.duration);
+    offset = __Math.min(elapsed, v.sound.audioBuffer.duration);
   } else if (v.sound && v.sound.audioBuffer && v.loop) {
     offset = elapsed % v.sound.audioBuffer.duration;
   }
@@ -5686,7 +5692,7 @@ function perry_audio_resume(playbackHandle) {
 
 function perry_audio_set_volume(handle, volume, fadeMs) {
   if (!PERRY_AUDIO_CTX) return;
-  const v = Math.max(0, Number(volume) || 0);
+  const v = __Math.max(0, Number(volume) || 0);
   const kind = _perry_audio_handle_kind(handle);
   if (kind === "playback") {
     const p = _perry_audio_get_playback(handle);
@@ -5724,7 +5730,7 @@ function perry_audio_set_pan(playbackHandle, pan) {
   if (!ctx) return;
   const v = _perry_audio_get_playback(playbackHandle);
   if (!v) return;
-  const p = Math.max(-1, Math.min(1, Number(pan) || 0));
+  const p = __Math.max(-1, __Math.min(1, Number(pan) || 0));
   v.pan = p;
   if (v.pannerNode) {
     try { v.pannerNode.pan.value = p; } catch (_) {}
@@ -5755,7 +5761,7 @@ function perry_audio_fade_out(playbackHandle, durationMs) {
 }
 
 function perry_audio_crossfade(fromHandle, toHandle, durationMs) {
-  const ms = Math.max(0, Number(durationMs) || 0);
+  const ms = __Math.max(0, Number(durationMs) || 0);
   const from = _perry_audio_get_playback(fromHandle);
   const to = _perry_audio_get_playback(toHandle);
   if (from && from.gain) _perry_audio_set_gain(from.gain.gain, 0, ms);
@@ -5819,7 +5825,7 @@ function perry_audio_solo_bus(busHandle, soloed) {
 
 function perry_audio_set_master_volume(volume, fadeMs) {
   if (!_perry_audio_ctx()) return;
-  const v = Math.max(0, Number(volume) || 0);
+  const v = __Math.max(0, Number(volume) || 0);
   PERRY_AUDIO_MASTER_BUS.stored_volume = v;
   _perry_audio_set_gain(PERRY_AUDIO_MASTER_GAIN.gain, v, fadeMs);
 }
@@ -5875,7 +5881,7 @@ function perry_audio_get_position(playbackHandle) {
   if (v.sound && v.sound.audioBuffer) {
     const d = v.sound.audioBuffer.duration;
     if (v.loop && d > 0) return elapsed % d;
-    return Math.min(elapsed, d);
+    return __Math.min(elapsed, d);
   }
   return elapsed;
 }

@@ -1270,6 +1270,9 @@ mod math_minmax;
 #[path = "async_operator_tests.rs"]
 mod async_operator;
 
+#[path = "patched_builtin_tests.rs"]
+mod patched_builtin;
+
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {
     assert_eq!(
