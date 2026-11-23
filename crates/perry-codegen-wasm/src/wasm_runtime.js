@@ -2395,6 +2395,8 @@ const __memDispatch = {
     return (key in obj) ? 1 : 0;
   },
   object_coerce: (v) => Object(v),
+  // `key in Object(v)` without handing the temporary wrapper back as a handle.
+  object_coerce_has_property: (obj, key) => (key in Object(obj)) ? 1 : 0,
   object_assign: (target, source) => {
     if (target == null) throw new TypeError('Cannot convert undefined or null to object');
     const t = Object(target);
