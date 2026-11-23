@@ -2403,6 +2403,9 @@ pub struct Model {
     /// The escaped tokens such code holds (`escaped_beside_top`): unknown
     /// code may write any key of them, so beside ⊤ they are that ⊤.
     pub esc_writer_bits: Vec<u64>,
+    /// The reason each token of `esc_writer_bits` was first held with:
+    /// what derive names where such code may change the layout.
+    pub esc_writer_why: crate::pts::FxHashMap<Tok, u32>,
     /// The return nodes of escaped functions no summary instances
     /// (`Model::sink_own_return`): the function and the escape reason. An
     /// edge into one is judged as it is made (`edge_impl`).

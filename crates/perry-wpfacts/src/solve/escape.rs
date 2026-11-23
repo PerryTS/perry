@@ -487,6 +487,7 @@ impl Model {
             self.top_marker_created(t, &why, std::panic::Location::caller());
         }
         if fresh {
+            self.esc_writer_why.insert(t, reason);
             self.late_esc.push(t);
         }
     }

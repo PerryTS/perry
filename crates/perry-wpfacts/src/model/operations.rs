@@ -396,6 +396,14 @@ impl Model {
             .is_some_and(|w| w & (1 << (t & 63)) != 0)
     }
 
+    /// Why `t` is held by code that may write it under any key
+    /// (`is_escaped_writer`), if it is. A value handed only by a builtin
+    /// contract has none: that code writes it only as the contract states
+    /// (Phase B, owner 2026-11-23), and the solve models those writes.
+    pub fn writer_escape_why(&self, t: Tok) -> Option<String> {
+        self.esc_writer_why.get(&t).map(|&r| self.reasons[r as usize].clone())
+    }
+
     pub fn reason(&mut self, s: &str) -> u32 {
         if let Some(&r) = self.reason_index.get(s) {
             return r;

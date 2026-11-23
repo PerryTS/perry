@@ -89,8 +89,6 @@ fn k8_unknown_call_holds_no_realm() {
 /// K2: `o` handed to a host contract (the stream keeps the chunk): the
 /// host writes no key of it, so its
 /// field `n` holds only the program's number and `x.toFixed` is proven.
-/// (The sites on `o` itself stay open: derive still reads any escape as a
-/// layout change.)
 #[test]
 fn k2_contract_escape_writes_no_key() {
     for h in ["process.stdout.write(o as any);"] {
@@ -135,4 +133,57 @@ fn k2_keep_store_through_top_beside_contract_escape() {
         "{DECL}{OBJ}process.stdout.write(o as any);\nconst x: any = Math.random() > 0.5 ? o : get();\nx.m = () => 2;\nconst r = /*A*/ o.m();\nconsole.log(r);\n"
     );
     assert!(!mono(&m_after(&src, "/*A*/")), "the store through x missed o.m");
+}
+
+/// The verdict of the first site of `key` (a call when `call`) after `marker`.
+fn site_after(src: &str, marker: &str, key: &str, call: bool) -> String {
+    let pf = one(src);
+    let at = src.find(marker).expect("marker") as u32;
+    let s = pf
+        .sites
+        .iter()
+        .filter(|s| s.key == key && s.is_call == call && s.byte_offset >= at)
+        .min_by_key(|s| s.byte_offset)
+        .unwrap_or_else(|| panic!("no {key} site after {marker:?}"));
+    let v = format!("{:?}", s.verdict);
+    eprintln!("AMP-LOOP2 {src:?}: {key}: {v}");
+    v
+}
+
+const STREAM: &str = "process.stdout.write(o as any);\n";
+
+/// K2 derive (template escape): a literal handed by contract keeps its
+/// layout, so its own method call is proven.
+#[test]
+fn k2d_contract_escape_keeps_the_layout() {
+    let src = format!("{OBJ}{STREAM}const r = /*A*/ o.m();\nconsole.log(r);\n");
+    let v = m_after(&src, "/*A*/");
+    assert!(mono(&v), "a contract hand-off changed o's layout: {v}");
+}
+
+/// K2 derive (prototype escape): an instance handed by contract takes its
+/// prototype with it; the prototype keeps its methods.
+#[test]
+fn k2d_contract_escape_keeps_the_prototype() {
+    let src = "class C { m() { return 1; } }\nconst o = new C();\nprocess.stdout.write(o as any);\nconst r = /*A*/ o.m();\nconsole.log(r);\n";
+    let v = m_after(src, "/*A*/");
+    assert!(mono(&v), "a contract hand-off changed C.prototype: {v}");
+}
+
+/// K2 derive (own data or absent): a read of the handed literal's own
+/// field finds the program's data property.
+#[test]
+fn k2d_contract_escape_keeps_own_data() {
+    let src = format!("const o = {{ m() {{ return 1; }}, n: 5 }};\n{STREAM}const x = /*A*/ o.n;\nconsole.log(x);\n");
+    let v = site_after(&src, "/*A*/", "n", false);
+    assert!(!v.starts_with("No("), "a contract hand-off made o.n unknown: {v}");
+}
+
+/// K2 derive keep: handed to a ⊤ callee, the layout is open (the reason
+/// names that code).
+#[test]
+fn k2d_keep_top_callee_changes_the_layout() {
+    let src = format!("{DECL}{OBJ}const f = get();\nf(o);\nconst x = /*A*/ o.m;\nconsole.log(x);\n");
+    let v = site_after(&src, "/*A*/", "m", false);
+    assert!(v.starts_with("No("), "a ⊤ callee's argument kept o's layout: {v}");
 }
