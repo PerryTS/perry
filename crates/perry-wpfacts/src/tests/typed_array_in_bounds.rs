@@ -51,7 +51,7 @@ fn a_negative_key_reads_undefined() {
 #[test]
 fn an_exposed_buffer_may_be_detached() {
     let e = elem(
-        "const ta = new Float32Array([1, 2, 3, 4]); (globalThis as any).hostKeep(ta.buffer); fill(a, ta, 0);",
+        "const ta = new Float32Array([1, 2, 3, 4]); external(ta.buffer); fill(a, ta, 0);",
     );
     assert_eq!(e, ElemRep::Boxed);
 }

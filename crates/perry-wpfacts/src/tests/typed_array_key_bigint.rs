@@ -14,7 +14,8 @@ use super::*;
 fn verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
-        class Svc {{ size = 3; leak() {{ (globalThis as any).hostTake(this); }} }}
+        declare function external(x?: unknown): any;
+        class Svc {{ size = 3; leak() {{ external(this); }} }}
         function g(a: any) {{ return a.size; }}
         const k = Math.floor(Math.random() * 2);
         const w: any = k > 0 ? 3n : 2;
@@ -41,30 +42,30 @@ macro_rules! case {
 case!(
     number_times_maybe_bigint_is_a_number,
     false,
-    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[1 * w + k] = o; (globalThis as any).hostTake(ta[k]); console.log(g(o));"
+    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[1 * w + k] = o; external(ta[k]); console.log(g(o));"
 );
 case!(
     maybe_bigint_plus_number_is_a_number,
     false,
-    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[w + k] = o; (globalThis as any).hostTake(ta[k]); console.log(g(o));"
+    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[w + k] = o; external(ta[k]); console.log(g(o));"
 );
 case!(
     field_times_field_index_is_a_number,
     false,
-    "class M { valueSize: any; buffer: any; _addIndex = 4; constructor(vs: any) { this.valueSize = vs; this.buffer = new Float64Array(16); } put(o: any) { const t = this._addIndex * this.valueSize; for (let i = 0; i < 2; i++) { this.buffer[t + i] = o; } } } const m = new M(w); const o: any = new Svc(); m.put(o); (globalThis as any).hostTake(m.buffer[k]); console.log(g(o));"
+    "class M { valueSize: any; buffer: any; _addIndex = 4; constructor(vs: any) { this.valueSize = vs; this.buffer = new Float64Array(16); } put(o: any) { const t = this._addIndex * this.valueSize; for (let i = 0; i < 2; i++) { this.buffer[t + i] = o; } } } const m = new M(w); const o: any = new Svc(); m.put(o); external(m.buffer[k]); console.log(g(o));"
 );
 case!(
     maybe_bigint_times_maybe_bigint_keeps_the_bigint,
     true,
-    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[w * w] = o; (globalThis as any).hostTake(ta[w * w]); console.log(g(o));"
+    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[w * w] = o; external(ta[w * w]); console.log(g(o));"
 );
 case!(
     maybe_bigint_plus_maybe_bigint_keeps_the_bigint,
     true,
-    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[w + w] = o; (globalThis as any).hostTake(ta[w + w]); console.log(g(o));"
+    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[w + w] = o; external(ta[w + w]); console.log(g(o));"
 );
 case!(
     negated_maybe_bigint_keeps_the_bigint,
     true,
-    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[-w] = o; (globalThis as any).hostTake(ta[-w]); console.log(g(o));"
+    "const ta: any = new Float64Array(8); const o: any = new Svc(); ta[-w] = o; external(ta[-w]); console.log(g(o));"
 );
