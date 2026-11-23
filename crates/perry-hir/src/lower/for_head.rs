@@ -228,33 +228,44 @@ pub(crate) fn for_head_binding_stmts(
 /// (spilled to a temp by the caller so it can be re-read each iteration),
 /// `keys_id`/`idx_id` the snapshot array and cursor.
 ///
-/// A primitive string is the only primitive whose for-in snapshot is non-empty
-/// (its indices); its keys cannot be deleted, and the `in` operator *throws* on
-/// a primitive receiver — so strings bypass the recheck and are always visited.
 /// Objects/functions go through `key in obj`, which is `false` for a deleted
-/// key and skips it. Nullish receivers never reach here (empty snapshot).
+/// key and skips it. The `in` operator *throws* on a primitive receiver, so a
+/// primitive (whose snapshot holds its own indices and the enumerable keys of
+/// its prototype chain) is rechecked through `key in Object(obj)`. Nullish
+/// receivers never reach here (empty snapshot).
 pub(crate) fn guard_for_in_body(
     obj_id: LocalId,
     keys_id: LocalId,
     idx_id: LocalId,
     body: Vec<Stmt>,
 ) -> Vec<Stmt> {
+    let key = || {
+        Box::new(Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
+            object: Box::new(Expr::LocalGet(keys_id)),
+            index: Box::new(Expr::LocalGet(idx_id)),
+        })
+    };
+    let type_is = |name: &str| Expr::Compare {
+        op: CompareOp::Eq,
+        left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(obj_id)))),
+        right: Box::new(Expr::String(name.to_string())),
+    };
     let guard = Expr::Conditional {
-        condition: Box::new(Expr::Compare {
-            op: CompareOp::Eq,
-            left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(obj_id)))),
-            right: Box::new(Expr::String("string".to_string())),
+        condition: Box::new(Expr::Logical {
+            op: LogicalOp::Or,
+            left: Box::new(type_is("object")),
+            right: Box::new(type_is("function")),
         }),
-        then_expr: Box::new(Expr::Bool(true)),
-        else_expr: Box::new(Expr::In {
-            property: Box::new(Expr::IndexGet {
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(keys_id)),
-                index: Box::new(Expr::LocalGet(idx_id)),
-            }),
+        then_expr: Box::new(Expr::In {
+            property: key(),
             object: Box::new(Expr::LocalGet(obj_id)),
+        }),
+        else_expr: Box::new(Expr::In {
+            property: key(),
+            object: Box::new(Expr::ObjectCoerce(Box::new(Expr::LocalGet(obj_id)))),
         }),
     };
     vec![Stmt::If {

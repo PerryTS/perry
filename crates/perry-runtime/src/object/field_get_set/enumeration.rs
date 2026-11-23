@@ -408,22 +408,13 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
     let scope = crate::gc::RuntimeHandleScope::new();
     let current = scope.root_nanbox_f64(value);
     let out = scope.root_raw_mut_ptr(crate::array::js_array_alloc(8));
-    // Non-pointer primitives (number/boolean, boxed string) have only their own
-    // enumerable keys; every prototype property they inherit is non-enumerable.
+    // EnumerateObjectProperties runs on ToObject(value): a non-pointer primitive
+    // walks its wrapper, whose prototype can carry user enumerable keys.
     if !jv.is_reference() {
         if diag {
             crate::hot_diag::enum_with(|d| d.for_in_primitive += 1);
         }
-        let own = scope.root_raw_const_ptr(js_object_keys_value(current.get_nanbox_f64()));
-        let n = own.with_const_ptr(|array| crate::array::js_array_length(array));
-        for i in 0..n {
-            let kv = own.with_const_ptr(|own| crate::array::js_array_get(own, i));
-            let updated = out.with_mut_ptr(|out| {
-                crate::array::js_array_push_f64(out, f64::from_bits(kv.bits()))
-            });
-            out.set_raw_mut_ptr(updated);
-        }
-        return out.with_mut_ptr(|out: *mut ArrayHeader| out);
+        current.set_nanbox_f64(crate::object::js_object_coerce(current.get_nanbox_f64()));
     }
     let key_string = |kv: JSValue, scratch: &mut [u8; crate::value::SHORT_STRING_MAX_LEN]| {
         let made = unsafe { crate::string::js_string_key_bytes(kv, scratch) }
