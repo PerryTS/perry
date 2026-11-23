@@ -1,0 +1,1 @@
+Follow-up to #15170: its changelog fragments now carry the PR number instead of the 0000 placeholder, and a bcrypt test no longer holds a raw string pointer across allocating calls (unrooted-local ratchet back to its recorded count).
