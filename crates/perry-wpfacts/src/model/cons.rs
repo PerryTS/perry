@@ -24,7 +24,7 @@ pub enum OwnGateAt {
 }
 
 /// Where a program observes the identity of what a node holds
-/// (`Cons::Identity`; DESIGN-p4l4 §2.2).
+/// (`Cons::Identity`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum IdentityRoute {
     /// `===` / `!==` between two values neither of which is a primitive
@@ -47,7 +47,7 @@ pub enum IdentityRoute {
     Native,
     /// `JSON.stringify` with a replacer that is no literal `null`,
     /// `undefined` or array: the replacer receives every value serialized,
-    /// unseen by the model (DESIGN-p4l4 finding 14).
+    /// unseen by the model.
     JsonReplacer,
 }
 
@@ -72,7 +72,7 @@ impl IdentityRoute {
 pub enum Cons {
     /// The program observes the identity of every object the node holds
     /// (`route`). No flow and no effect on the solve: a fact the value-record
-    /// derive reads (DESIGN-p4l4 R4). Generated only under
+    /// derive reads (R4). Generated only under
     /// `PERRY_FACTS_VALUE_RECORDS=1` (`Model::value_records`).
     Identity { route: IdentityRoute },
     /// The node is the value a contract function `f` stores under `key`

@@ -1722,7 +1722,7 @@ pub struct Model {
     /// The extern calls the native-extern assumption modeled: (module,
     /// byte offset), reported as `ProgramFacts::native_extern_sites`.
     pub native_extern_fired: Vec<(u32, u32)>,
-    /// −0 tolerance (RFC §10.3 as amended, PR D; `zero_sign`): the interval
+    /// −0 tolerance (`internals/representation.md` §3, PR D; `zero_sign`): the interval
     /// rules give `0 * negative`, `-x` and `%` their integer hull with the
     /// `-0` bit, and a node may keep an integer interval while it may hold
     /// `-0` when no use observes the sign. `PERRY_FACTS_ZERO_SIGN=0`: the
@@ -1816,12 +1816,12 @@ pub struct Model {
     /// Immutable Arrays and constant contents (`const_arrays`;
     /// `PERRY_FACTS_CONST_ARRAYS=0` turns them off).
     pub const_arrays: bool,
-    /// Value records (DESIGN-p4l4; `PERRY_FACTS_VALUE_RECORDS=1`): identity
+    /// Value records (`PERRY_FACTS_VALUE_RECORDS=1`): identity
     /// observations are recorded (`Cons::Identity`). Off, the model is the
     /// one without the lever.
     pub value_records: bool,
     /// A record crosses a program call in a `Record` signature slot
-    /// (DESIGN-p4l4 §5.2, VR-3b; `PERRY_FACTS_RECORD_SIGNATURES=0` turns it
+    /// (VR-3b; `PERRY_FACTS_RECORD_SIGNATURES=0` turns it
     /// off: such a call slot then rejects the template, as in VR-3a).
     pub record_signatures: bool,
     /// The admitted value-record templates (`TemplateFacts::record` is
@@ -1832,7 +1832,7 @@ pub struct Model {
     /// plain program Array (`bindings::arr_rep`), it is a
     /// `GC_TYPE_RECORD_ARRAY` only the record-array intrinsics touch.
     pub record_arrays: FxHashMap<TmplId, TmplId>,
-    /// S0 negative control `vrarrjoin` (DESIGN-p4l4 §10.3): a holder of a
+    /// S0 negative control `vrarrjoin`: a holder of a
     /// record array and of other Arrays is typed a record array (R6's join
     /// ignored), a wrong claim the receiver witness must catch.
     pub record_array_join_sabotage: bool,
@@ -1952,7 +1952,7 @@ pub struct Model {
     pub arr_used: crate::pts::FxHashSet<Tok>,
     /// The fused fill births `new Array(k).fill(v)` (`Gen::call_with`).
     pub(crate) rest_fills: Vec<crate::rest_elems::RestFill>,
-    /// DESIGN-p4l4 VR-4b: an array literal that is the whole value of a
+    /// VR-4b: an array literal that is the whole value of a
     /// `let`, of a local assignment, of a named store or of a class field
     /// initializer: the holder codegen births it for
     /// (`records::ArrBirth`).
@@ -3705,8 +3705,8 @@ impl Model {
         self.work.set(self.work.get() + amount);
     }
 
-    /// The program observes the identity of what `n` holds (DESIGN-p4l4
-    /// §2.2). Recorded only with value records on, so the model without the
+    /// The program observes the identity of what `n` holds.
+    /// Recorded only with value records on, so the model without the
     /// lever is unchanged.
     pub(crate) fn identity(&mut self, n: NodeId, route: IdentityRoute) {
         if self.value_records && n != NO_NODE {

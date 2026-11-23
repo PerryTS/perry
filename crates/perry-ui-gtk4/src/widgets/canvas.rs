@@ -37,6 +37,12 @@ enum DrawCommand {
         a2: f64,
         direction: f64,
     },
+    ClearRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
     DrawImage {
         image: i64,
         sx: f64,
@@ -57,6 +63,7 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
             DrawCommand::Stroke { .. }
                 | DrawCommand::FillGradient { .. }
                 | DrawCommand::DrawImage { .. }
+                | DrawCommand::ClearRect { .. }
         )
     })
 }
@@ -242,6 +249,13 @@ pub fn create(width: f64, height: f64) -> i64 {
                             cr.restore().ok();
                         }
                     }
+                    DrawCommand::ClearRect { x, y, w, h } => {
+                        cr.save().ok();
+                        cr.set_operator(gtk4::cairo::Operator::Clear);
+                        cr.rectangle(*x, *y, *w, *h);
+                        cr.fill().ok();
+                        cr.restore().ok();
+                    }
                     DrawCommand::DrawImage {
                         image,
                         sx,
@@ -362,6 +376,20 @@ pub fn clear(handle: i64) {
         }
     });
     // Trigger redraw
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(area) = widget.downcast_ref::<DrawingArea>() {
+            area.queue_draw();
+        }
+    }
+}
+
+/// Clear a rectangle to transparent, keeping what earlier commands drew outside it.
+pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    CANVAS_COMMANDS.with(|cmds| {
+        if let Some(commands) = cmds.borrow_mut().get_mut(&handle) {
+            commands.push(DrawCommand::ClearRect { x, y, w, h });
+        }
+    });
     if let Some(widget) = super::get_widget(handle) {
         if let Some(area) = widget.downcast_ref::<DrawingArea>() {
             area.queue_draw();

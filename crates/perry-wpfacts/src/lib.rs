@@ -131,11 +131,11 @@ pub struct FactsConfig {
     /// No immutable Arrays and no constant contents
     /// (`PERRY_FACTS_CONST_ARRAYS=0`, `const_arrays`).
     pub no_const_arrays: bool,
-    /// Value records (DESIGN-p4l4, `PERRY_FACTS_VALUE_RECORDS=1`; off unless
+    /// Value records (`PERRY_FACTS_VALUE_RECORDS=1`; off unless
     /// set until VR-6): identity observations become `Cons::Identity`.
     pub value_records: bool,
     /// No record signature slots (`PERRY_FACTS_RECORD_SIGNATURES=0`,
-    /// DESIGN-p4l4 VR-3b): a record in a typed call's argument or result
+    /// VR-3b): a record in a typed call's argument or result
     /// rejects its template.
     pub no_record_signatures: bool,
     /// MATHB1: the namespace pairs are the knob's (`PERRY_NS_PAIRS=1`, perry-hir
@@ -370,7 +370,7 @@ pub struct ProgramFacts {
     pub member_ops: Vec<MemberOpFacts>,
     pub module_paths: Vec<String>,
     pub templates: Vec<TemplateFacts>,
-    /// The Arr templates linked to a record template (DESIGN-p4l4 R6), for
+    /// The Arr templates linked to a record template (R6), for
     /// the `records` ledger.
     pub record_arrays: Vec<records::RecordArray>,
     pub sites: Vec<SiteFacts>,
@@ -1084,7 +1084,7 @@ fn compute_act<'a>(
     } else {
         derive::derive(&mut g)
     };
-    // Value records (DESIGN-p4l4 §2): a verdict per literal template, after
+    // Value records: a verdict per literal template, after
     // the templates and sites, before any representation reads them.
     g.m.record_array_join_sabotage = cfg.sabotage.as_deref() == Some("vrarrjoin");
     let record_arrays = records::derive(

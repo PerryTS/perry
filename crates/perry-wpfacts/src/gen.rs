@@ -371,7 +371,7 @@ pub struct Gen<'a> {
     pub(crate) list_pushes: Vec<crate::list_caps::Push>,
     pub(crate) list_body: u32,
     pub(crate) list_bodies: u32,
-    /// P2 (DESIGN-p2 §2): every call site with a source offset: its HIR
+    /// P2: every call site with a source offset: its HIR
     /// identity (the callee expression's address), whether it spreads, and
     /// for a direct call its callee node (`signatures::typed_calls`).
     pub(crate) call_sites_at: Vec<crate::signatures::CallSiteRec>,

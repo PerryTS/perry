@@ -1,4 +1,4 @@
-//! I32 at rest, PR C (RFC §10.7): which class fields are I32 lanes
+//! I32 at rest, PR C (`internals/representation.md` §7): which class fields are I32 lanes
 //! (`rest_fields`), as the dump's `# rest lane` probe lines and
 //! `FieldFacts::rest` report them.
 

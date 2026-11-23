@@ -110,6 +110,22 @@ pub const PERRY_UI_INSTANCE_TABLE: &[MethodRow] = &[
         ret: ReturnKind::Void,
     },
     MethodRow {
+        method: "fillGradient",
+        runtime: "perry_ui_canvas_fill_gradient",
+        args: &[
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+            ArgKind::F64,
+        ],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
         method: "beginPath",
         runtime: "perry_ui_canvas_begin_path",
         args: &[],

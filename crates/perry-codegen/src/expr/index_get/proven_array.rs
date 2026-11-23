@@ -1,4 +1,4 @@
-//! Element reads whose receiver wpfacts proves (representation RFC §10.7,
+//! Element reads whose receiver wpfacts proves (`internals/representation.md` §7,
 //! phase P4).
 //!
 //! **The rep-keyed tier** (DESIGN-p4l1 §4.2, PR-C2 and PR-C3; `RepRead`).

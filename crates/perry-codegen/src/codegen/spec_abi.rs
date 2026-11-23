@@ -148,7 +148,7 @@ pub(crate) struct SpecFnPlan {
     /// successful descriptor guard is what licenses the matching HIR proof in
     /// the clone; `None` keeps that parameter fully generic.
     pub guards: Vec<Option<SpecParamGuard>>,
-    /// P2 (DESIGN-p2 §3): the function is typed. Its entry is `{public}$sig`,
+    /// P2: the function is typed. Its entry is `{public}$sig`,
     /// whose parameter registers and return take the signature's
     /// representations; `reps` then only says how the body binds them. The
     /// public symbol is the boxed entry (`emit_boxed_entry`).
@@ -160,7 +160,7 @@ pub(crate) struct SpecFnPlan {
     /// P2 (CWN 11-09): the public symbol main emitted for this function; a
     /// typed function's boxed entry takes that symbol's inline attributes.
     pub sig_public: MainPublic,
-    /// DESIGN-p4l4 VR-3b: a slot of the function is a value record
+    /// VR-3b: a slot of the function is a value record
     /// (`record_sig`); `signature`, `reps`, `guards` and `sig_defaults` are
     /// then per lane.
     pub record: Option<super::record_sig::RecordPlan>,

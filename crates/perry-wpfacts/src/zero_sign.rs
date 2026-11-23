@@ -1,4 +1,4 @@
-//! −0 tolerance (representation RFC §10.3 as amended, PR D; owner decision
+//! −0 tolerance (`internals/representation.md` §3, PR D; owner decision
 //! 2026-11-10).
 //!
 //! A Number node may be I32 when every value it holds is an integer in the

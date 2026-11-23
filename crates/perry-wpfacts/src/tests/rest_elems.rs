@@ -1,4 +1,4 @@
-//! I32 at rest, PR B (RFC §10.7): which fused fill Arrays are stored at rest
+//! I32 at rest, PR B (`internals/representation.md` §7): which fused fill Arrays are stored at rest
 //! (`rest_elems`), as the dump's `# rest arr` probe lines and the exported
 //! element sites report them.
 

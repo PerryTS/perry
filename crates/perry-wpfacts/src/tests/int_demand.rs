@@ -1,5 +1,5 @@
 //! Int demand and the representation a binding gets (`demand`,
-//! `bindings::Rep`, representation RFC §10.3).
+//! `bindings::Rep`, `internals/representation.md` §3).
 
 use std::collections::HashMap;
 

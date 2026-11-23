@@ -29,6 +29,7 @@ type CGFloat = f64;
 extern "C" {
     fn UIGraphicsGetCurrentContext() -> CGContextRef;
     fn CGContextSaveGState(c: CGContextRef);
+    fn CGContextClearRect(c: CGContextRef, rect: CGRect);
     fn CGContextRestoreGState(c: CGContextRef);
     fn CGContextBeginPath(c: CGContextRef);
     fn CGContextMoveToPoint(c: CGContextRef, x: CGFloat, y: CGFloat);
@@ -94,6 +95,12 @@ enum DrawCommand {
         a2: f64,
         direction: f64,
     },
+    ClearRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
     DrawImage {
         image: i64,
         sx: f64,
@@ -118,7 +125,9 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
     commands.iter().any(|cmd| {
         matches!(
             cmd,
-            DrawCommand::Stroke { .. } | DrawCommand::FillGradient { .. }
+            DrawCommand::Stroke { .. }
+                | DrawCommand::FillGradient { .. }
+                | DrawCommand::ClearRect { .. }
         )
     })
 }
@@ -310,6 +319,9 @@ define_class!(
                                 }
                                 in_path = false;
                             }
+                            DrawCommand::ClearRect { x, y, w, h } => unsafe {
+                                CGContextClearRect(ctx, CGRect::new(CGPoint::new(*x, *y), CGSize::new(*w, *h)));
+                            },
                             DrawCommand::DrawImage {
                                 image,
                                 sx,
@@ -549,6 +561,12 @@ pub fn fill_gradient(
             }
         }
     }
+}
+
+/// Clear a rectangle to transparent, keeping what earlier commands drew outside it.
+pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCommand::ClearRect { x, y, w, h });
+    redraw(handle);
 }
 
 fn push_cmd(handle: i64, cmd: DrawCommand) {

@@ -796,7 +796,7 @@ pub(super) fn compile_function(
     let sig_return = spec_entry
         .and_then(|plan| plan.signature.as_ref())
         .map(|sig| sig.ret);
-    // DESIGN-p4l4 VR-3b: a record result is written to the caller's result
+    // VR-3b: a record result is written to the caller's result
     // words (`record_sig::RESULT_PARAM`); the value returned is its presence.
     let sig_record_return = spec_entry
         .and_then(|plan| plan.record.as_ref())
