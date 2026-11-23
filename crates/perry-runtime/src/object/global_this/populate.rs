@@ -902,9 +902,10 @@ impl FamilyBirthState {
 }
 
 /// (child, parent, the constructor also inherits) for the interface families.
-const INTERFACE_PARENTS: [(&str, &str, bool); 6] = [
+const INTERFACE_PARENTS: [(&str, &str, bool); 7] = [
     ("AbortSignal", "EventTarget", true),
     ("BroadcastChannel", "EventTarget", true),
+    ("WebSocket", "EventTarget", true),
     ("CustomEvent", "Event", true),
     ("MessageEvent", "Event", true),
     ("DOMException", "Error", false),
