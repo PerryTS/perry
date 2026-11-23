@@ -156,7 +156,7 @@ pub(super) fn try_buffer_uint8array_statics(
                         byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: call.span.lo.0,
                             object: Box::new(a),
                             property: "compare".to_string(),
                         }),

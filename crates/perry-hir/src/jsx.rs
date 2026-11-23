@@ -183,7 +183,7 @@ pub(crate) fn lower_jsx_fragment(
     if let Some(react_local) = ctx.react_default_import_local.clone() {
         let fragment_type = Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: jsx.span.lo.0,
             object: Box::new(if let Some(id) = ctx.lookup_local(&react_local) {
                 Expr::LocalGet(id)
             } else {

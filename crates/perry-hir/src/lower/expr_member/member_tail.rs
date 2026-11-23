@@ -83,7 +83,7 @@ pub(crate) fn lower_member_tail(
                 {
                     object_expr = Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: member.span.lo.0,
                         object: Box::new(Expr::GlobalGet(0)),
                         property: obj_name.to_string(),
                     };
@@ -549,7 +549,7 @@ pub(crate) fn lower_member_tail(
             {
                 object_expr = Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset: member.span.lo.0,
                     object: Box::new(Expr::GlobalGet(0)),
                     property: name.to_string(),
                 };

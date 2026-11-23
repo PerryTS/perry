@@ -70,7 +70,7 @@ pub fn build_async_step_driver_direct(
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: fn_offset,
             object: Box::new(promise_global()),
             property: "resolve".to_string(),
         }),
@@ -82,7 +82,7 @@ pub fn build_async_step_driver_direct(
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: fn_offset,
             object: Box::new(promise_global()),
             property: "reject".to_string(),
         }),

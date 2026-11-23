@@ -676,7 +676,7 @@ pub(super) fn try_module_static_methods(
                         {
                             let math = Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: call.span.lo.0,
                                 object: Box::new(Expr::GlobalThisExpr),
                                 property: "Math".to_string(),
                             };
@@ -1141,7 +1141,7 @@ pub(super) fn try_module_static_methods(
                                 byte_end: 0,
                                 callee: Box::new(Expr::PropertyGet {
                                     byte_end: 0,
-                                    byte_offset: 0,
+                                    byte_offset: call.span.lo.0,
                                     object: Box::new(a),
                                     property: "compare".to_string(),
                                 }),
