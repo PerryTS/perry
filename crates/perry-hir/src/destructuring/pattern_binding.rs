@@ -92,8 +92,8 @@ fn runtime_iterator_call(method: &str, args: Vec<Expr>) -> Expr {
 /// `value === undefined` — the spec check that gates a destructuring default
 /// (`[a = d]`, `{a = d}`). Distinct from `IsUndefinedOrBareNan`: a genuine NaN
 /// element/property must NOT trigger the default (`let [a = 1] = [NaN]` → NaN).
-pub(super) fn is_strictly_undefined(value: Expr) -> Expr {
-    Expr::Compare { byte_offset: 0 /*HPOS*/,
+pub(super) fn is_strictly_undefined(value: Expr, byte_offset: u32) -> Expr {
+    Expr::Compare { byte_offset,
         op: CompareOp::Eq,
         left: Box::new(value),
         right: Box::new(Expr::Undefined),
@@ -112,6 +112,7 @@ fn iterator_next_value_stmts(
     value_id: LocalId,
     track_step_failure: bool,
     read_value: bool,
+    byte_offset: u32,
 ) -> Vec<Stmt> {
     let (step_id, step_name) = fresh_destruct_local(ctx, Type::Boolean);
     let mut pull_next = vec![
@@ -140,7 +141,7 @@ fn iterator_next_value_stmts(
             )),
         },
         Stmt::If {
-            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
+            condition: Expr::Compare { byte_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(step_id)),
                 right: Box::new(Expr::Bool(true)),
@@ -174,7 +175,7 @@ fn iterator_next_value_stmts(
     }
 
     vec![Stmt::If {
-        condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
+        condition: Expr::Compare { byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(done_id)),
             right: Box::new(Expr::Bool(true)),
@@ -250,6 +251,7 @@ pub(crate) fn lower_array_pattern_binding(
                     value_id,
                     track_step_failure,
                     false,
+                    arr_pat.span.lo.0,
                 );
                 body.extend(source.pull(idx, value_id, pull));
             }
@@ -272,7 +274,15 @@ pub(crate) fn lower_array_pattern_binding(
                     )));
                     rest_done_id = saved_done_id;
                 }
-                body.extend(source.rest(ctx, rest_id, rest_name, iter_id, next_id, rest_done_id));
+                body.extend(source.rest(
+                    ctx,
+                    rest_id,
+                    rest_name,
+                    iter_id,
+                    next_id,
+                    rest_done_id,
+                    arr_pat.span.lo.0,
+                ));
                 // Draining exhausts the iterator, so it is now done.
                 body.push(Stmt::Expr(Expr::LocalSet(
                     done_id,
@@ -305,6 +315,7 @@ pub(crate) fn lower_array_pattern_binding(
                     value_id,
                     track_step_failure,
                     true,
+                    arr_pat.span.lo.0,
                 );
                 body.extend(source.pull(idx, value_id, pull));
 
@@ -317,7 +328,7 @@ pub(crate) fn lower_array_pattern_binding(
                         single_name_target(&assign_pat.left).as_deref(),
                     )?;
                     let with_default = Expr::Conditional {
-                        condition: Box::new(is_strictly_undefined(Expr::LocalGet(value_id))),
+                        condition: Box::new(is_strictly_undefined(Expr::LocalGet(value_id), assign_pat.span.lo.0)),
                         then_expr: Box::new(default_val),
                         else_expr: Box::new(Expr::LocalGet(value_id)),
                     };
@@ -349,7 +360,7 @@ pub(crate) fn lower_array_pattern_binding(
     // Every write to this private bit constructs a Boolean. Reify that
     // predicate at the completion boundary, rather than asking codegen to
     // infer a stable initializer type for a deliberately mutable local.
-    let completion_done = Expr::Compare { byte_offset: 0 /*HPOS*/,
+    let completion_done = Expr::Compare { byte_offset: arr_pat.span.lo.0,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(done_id)),
         right: Box::new(Expr::Bool(true)),
@@ -602,7 +613,7 @@ pub(crate) fn lower_pattern_binding_into(
             // A destructuring default applies only when the source is strictly
             // `undefined` (not a genuine NaN value — `let [a = 1] = [NaN]` → NaN).
             let with_default = Expr::Conditional {
-                condition: Box::new(is_strictly_undefined(Expr::LocalGet(tmp_id))),
+                condition: Box::new(is_strictly_undefined(Expr::LocalGet(tmp_id), assign_pat.span.lo.0)),
                 then_expr: Box::new(default_val),
                 else_expr: Box::new(Expr::LocalGet(tmp_id)),
             };
@@ -619,7 +630,7 @@ pub(crate) fn lower_pattern_binding_into(
             // Array binding patterns use the iterator protocol (GetIterator /
             // IteratorStep / IteratorValue / IteratorClose), per spec — not raw
             // index reads. See `lower_array_pattern_binding`.
-            let plan = array_fast::FastPlan::new(ctx, source, result);
+            let plan = array_fast::FastPlan::new(ctx, source, result, arr_pat.span.lo.0);
             lower_array_pattern_binding(
                 ctx,
                 arr_pat,
@@ -862,9 +873,10 @@ pub(crate) fn lower_pattern_binding_into(
                             let default_val =
                                 lower_default_named(ctx, default_expr, Some(name.as_str()))?;
                             Expr::Conditional {
-                                condition: Box::new(is_strictly_undefined(Expr::LocalGet(
-                                    val_tmp_id,
-                                ))),
+                                condition: Box::new(is_strictly_undefined(
+                                    Expr::LocalGet(val_tmp_id),
+                                    assign.span.lo.0,
+                                )),
                                 then_expr: Box::new(default_val),
                                 else_expr: Box::new(Expr::LocalGet(val_tmp_id)),
                             }
@@ -1086,7 +1098,7 @@ mod record_control_tests {
     #[test]
     fn iterator_step_control_uses_its_constructed_boolean_and_single_publication() {
         let mut ctx = LoweringContext::new("record_control");
-        let stmts = iterator_next_value_stmts(&mut ctx, 1, 2, 3, 4, false, true);
+        let stmts = iterator_next_value_stmts(&mut ctx, 1, 2, 3, 4, false, true, 0);
         let Stmt::If {
             condition,
             else_branch: Some(pull),

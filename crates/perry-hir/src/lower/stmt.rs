@@ -316,7 +316,7 @@ fn emit_for_of_pattern_protocol(
     *var_idx += spans.len();
     let bound = match pat {
         ast::Pat::Array(arr_pat) => {
-            let plan = crate::destructuring::plan_for_unproven_source(ctx, source, out);
+            let plan = crate::destructuring::plan_for_unproven_source(ctx, source, out, arr_pat.span.lo.0);
             crate::destructuring::lower_array_pattern_binding_guarded(
                 ctx, arr_pat, plan, false, false, out,
             )
@@ -422,7 +422,7 @@ fn emit_for_of_pattern_binding_indexed(
                         let init = if let Some(default_expr) = &assign.value {
                             let default_val = lower_expr(ctx, default_expr)?;
                             Expr::Conditional {
-                                condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                                condition: Box::new(Expr::Compare { byte_offset: assign.span.lo.0,
                                     op: CompareOp::Ne,
                                     left: Box::new(prop_access.clone()),
                                     right: Box::new(Expr::Undefined),

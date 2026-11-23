@@ -488,6 +488,7 @@ mod tests {
             args: vec![call.clone()],
             is_factory: true,
             is_reflect_metadata: false,
+            byte_offset: 0,
         };
         let c = &mut hir.classes[0];
         c.decorators.push(decorator.clone());

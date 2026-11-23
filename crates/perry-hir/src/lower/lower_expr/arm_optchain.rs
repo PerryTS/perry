@@ -556,7 +556,7 @@ pub(crate) fn lower_opt_chain_expr(
                         // receiver never short-circuits even though
                         // `string.method` reads as undefined.
                         let guard_cond = match &opt_call_member_receiver {
-                            Some(recv) => opt_call_func_nullish_guard(recv, fixed_callee),
+                            Some(recv) => opt_call_func_nullish_guard(recv, fixed_callee, opt_chain.span.lo.0),
                             None => Expr::Compare { byte_offset: opt_chain.span.lo.0,
                                 op: CompareOp::LooseEq,
                                 left: Box::new(fixed_callee),
@@ -684,7 +684,7 @@ pub(crate) fn lower_opt_chain_expr(
                     // receiver is a primitive string whose builtin method
                     // reads back as `undefined` (`type?.split?.(...)`).
                     let guard_cond = match &opt_call_member_receiver {
-                        Some(recv) => opt_call_func_nullish_guard(recv, func_value),
+                        Some(recv) => opt_call_func_nullish_guard(recv, func_value, opt_chain.span.lo.0),
                         None => Expr::Compare { byte_offset: opt_chain.span.lo.0,
                             op: CompareOp::LooseEq,
                             left: Box::new(func_value),
@@ -718,7 +718,7 @@ pub(crate) fn lower_opt_chain_expr(
             // plain nullish check is correct.
             let condition = if !callee_from_chain && opt_call_member_receiver.is_some() {
                 let recv = opt_call_member_receiver.unwrap();
-                opt_call_func_nullish_guard(&recv, check_expr)
+                opt_call_func_nullish_guard(&recv, check_expr, opt_chain.span.lo.0)
             } else {
                 Expr::Compare { byte_offset: opt_chain.span.lo.0,
                     op: CompareOp::LooseEq,
