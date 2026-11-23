@@ -813,10 +813,43 @@ mod tests {
             .unwrap_or_else(|| panic!("no split: {ir}"));
         assert!(!entry.contains("icmp sge i32"), "{entry}");
         // The miss arm's exit: a negative key to the runtime-key arm, the
-        // rest to the tier's cold read.
+        // rest to the tier's cold read. Both arms call the runtime, so the
+        // body's stack check may sit in front of each
+        // (`stack_guard::move_check_to_call_sites`): follow it to the arm.
+        let arm_of = |label: &str| -> String {
+            let mut label = label.to_string();
+            for _ in 0..8 {
+                if !label.starts_with("stack_guard.") {
+                    break;
+                }
+                let start = format!("{label}:");
+                let next = ir
+                    .lines()
+                    .skip_while(|l| *l != start)
+                    .skip(1)
+                    .take_while(|l| !l.ends_with(':'))
+                    .flat_map(|l| l.split("label %").skip(1))
+                    .map(|t| t.split([',', ' ']).next().unwrap().to_string())
+                    .find(|t| !t.starts_with("stack_guard.overflow"));
+                match next {
+                    Some(n) => label = n,
+                    None => break,
+                }
+            }
+            label
+        };
         let exit = ir
             .lines()
-            .find(|l| l.contains("label %aidx.runtime_key.") && l.contains("label %ubound.cold."))
+            .find(|l| {
+                let targets: Vec<String> = l
+                    .split("label %")
+                    .skip(1)
+                    .map(|t| arm_of(t.split([',', ' ']).next().unwrap()))
+                    .collect();
+                l.trim_start().starts_with("br i1 ")
+                    && targets.iter().any(|t| t.starts_with("aidx.runtime_key."))
+                    && targets.iter().any(|t| t.starts_with("ubound.cold."))
+            })
             .unwrap_or_else(|| panic!("no negative exit: {ir}"));
         let cond = exit
             .split_whitespace()
