@@ -2405,6 +2405,7 @@ const __memDispatch = {
   },
   object_define_property: (obj, key, desc) => Object.defineProperty(obj, key, __hostDescriptor(desc)),
   object_define_properties: (obj, props) => Object.defineProperties(obj, __hostDescriptors(props)),
+  object_get_own_property_descriptor: (obj, key) => Object.getOwnPropertyDescriptor(obj, key),
   object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
   // `{ a, ...rest } = obj`: a new object with obj's own enumerable keys, symbols
   // included, except the statically named ones (CopyDataProperties). Defined, not

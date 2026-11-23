@@ -75,6 +75,12 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 1, props);
                 self.emit_memcall(func, "object_define_properties", 2);
             }
+            Expr::ObjectGetOwnPropertyDescriptor(obj, key) => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_store_arg(func, 1, key);
+                self.emit_memcall(func, "object_get_own_property_descriptor", 2);
+            }
             Expr::ObjectSetPrototypeOf(obj, proto) => {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, obj);
