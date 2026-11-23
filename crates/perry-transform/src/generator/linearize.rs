@@ -171,7 +171,7 @@ fn delegate_await(call: Expr, byte_offset: u32) -> Expr {
 /// Returns the guard statement (empty for sync generators, where
 /// `IteratorComplete`/`IteratorValue` read `.done`/`.value` off a primitive via
 /// `GetV` and never throw). `result_id` holds the just-awaited iter-result.
-fn delegate_result_object_check(result_id: LocalId) -> Vec<Stmt> {
+fn delegate_result_object_check(result_id: LocalId, byte_offset: u32) -> Vec<Stmt> {
     if !linearize_async_generator() {
         return Vec::new();
     }
@@ -179,19 +179,19 @@ fn delegate_result_object_check(result_id: LocalId) -> Vec<Stmt> {
     //                  || (typeof result !== "object" && typeof result !== "function")
     let not_object = Expr::Logical {
         op: LogicalOp::Or,
-        left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+        left: Box::new(Expr::Compare { byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(result_id)),
             right: Box::new(Expr::Null),
         }),
         right: Box::new(Expr::Logical {
             op: LogicalOp::And,
-            left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+            left: Box::new(Expr::Compare { byte_offset,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(result_id)))),
                 right: Box::new(Expr::String("object".to_string())),
             }),
-            right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+            right: Box::new(Expr::Compare { byte_offset,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(result_id)))),
                 right: Box::new(Expr::String("function".to_string())),
@@ -226,7 +226,12 @@ fn delegate_result_object_check(result_id: LocalId) -> Vec<Stmt> {
 /// builtin iterators that expose no *readable* `next` property (string and
 /// typed-array iterators dispatch `.next()` through the class-id method tower);
 /// for those, re-reading is harmless because there is no observable getter.
-fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> Expr {
+fn delegate_next_call(
+    del_next_id: LocalId,
+    del_iter_id: LocalId,
+    arg: Expr,
+    byte_offset: u32,
+) -> Expr {
     // Spec passes `received.[[Value]]` to every inner `next()` — including the
     // first pull, where `received` is `NormalCompletion(undefined)`. So the
     // delegated `next` is ALWAYS called with exactly one argument (the first
@@ -243,13 +248,13 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
             byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset,
                 object: Box::new(Expr::LocalGet(del_next_id)),
                 property: "call".to_string(),
             }),
             args: call_args,
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset,
         }
     } else {
         Expr::Call {
@@ -265,11 +270,11 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
                 arg,
             ],
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset,
         }
     };
     Expr::Conditional {
-        condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+        condition: Box::new(Expr::Compare { byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(del_next_id)))),
             right: Box::new(Expr::String("function".to_string())),
@@ -279,13 +284,13 @@ fn delegate_next_call(del_next_id: LocalId, del_iter_id: LocalId, arg: Expr) -> 
             byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset,
                 object: Box::new(Expr::LocalGet(del_iter_id)),
                 property: "next".to_string(),
             }),
             args: method_args,
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset,
         }),
     }
 }
@@ -310,8 +315,9 @@ fn delegate_kind_set(kind_id: LocalId, del_next_id: LocalId, del_iter_id: LocalI
     ))
 }
 
-fn kind_is(kind_id: LocalId, kind: f64) -> Expr {
-    Expr::Compare { byte_offset: 0 /*HPOS*/,
+fn kind_is(kind_id: LocalId, kind: f64, byte_offset: u32) -> Expr {
+    Expr::Compare {
+        byte_offset,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(kind_id)),
         right: Box::new(Expr::Number(kind)),
@@ -374,6 +380,7 @@ fn emit_yield_star_loop(
                 del_next_id,
                 del_iter_id,
                 Expr::Undefined,
+                byte_offset,
             ), byte_offset)),
         ))],
         states,
@@ -388,7 +395,7 @@ fn emit_yield_star_loop(
     current.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id)));
     // Async `yield *`: the awaited iter-result must be an Object or `next()`
     // throws a TypeError (test262 yield-star-next-non-object-ignores-then).
-    current.extend(delegate_result_object_check(del_result_id));
+    current.extend(delegate_result_object_check(del_result_id, byte_offset));
 
     // #1832: in-loop pull forwards the outer resume value (`outer.next(v)` →
     // `sent_id`) into the delegated iterator's `next(v)`.
@@ -420,12 +427,13 @@ fn emit_yield_star_loop(
                 del_next_id,
                 del_iter_id,
                 Expr::LocalGet(sent_id),
+                byte_offset,
             ), byte_offset)),
         )),
     ];
     while_body.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id)));
     // Same Object-check on the in-loop pull (async generators only).
-    while_body.extend(delegate_result_object_check(del_result_id));
+    while_body.extend(delegate_result_object_check(del_result_id, byte_offset));
     let not_done = Expr::Unary {
         op: UnaryOp::Not,
         operand: Box::new(Expr::PropertyGet {
@@ -441,9 +449,9 @@ fn emit_yield_star_loop(
         condition: match del_kind_id {
             None => not_done,
             Some(kind) => Expr::Conditional {
-                condition: Box::new(kind_is(kind, 2.0)),
+                condition: Box::new(kind_is(kind, 2.0, byte_offset)),
                 then_expr: Box::new(not_done),
-                else_expr: Box::new(kind_is(kind, 0.0)),
+                else_expr: Box::new(kind_is(kind, 0.0, byte_offset)),
             },
         },
         body: while_body,
@@ -503,7 +511,7 @@ fn emit_yield_star_loop(
             None => inner_value,
             // A raw completion value is the delegate's return value itself.
             Some(kind) => Expr::Conditional {
-                condition: Box::new(kind_is(kind, 2.0)),
+                condition: Box::new(kind_is(kind, 2.0, byte_offset)),
                 then_expr: Box::new(inner_value),
                 else_expr: Box::new(Expr::LocalGet(del_result_id)),
             },
