@@ -147,16 +147,30 @@ mod tests {
     }
 
     #[test]
-    fn closed_request_handles_are_removed() {
+    fn a_finished_exchange_keeps_its_request_readable_and_removes_its_response() {
         use super::super::in_flight::finalize_request_handles_deferred;
+        use crate::server::request::IncomingMessage;
         use crate::server::response::ServerResponse;
-        let request = perry_ffi::register_handle(123_u32);
+        let mut message = IncomingMessage::new(
+            "POST".into(),
+            "/".into(),
+            Default::default(),
+            Vec::new(),
+            b"{}".to_vec(),
+            String::new(),
+            0,
+        );
+        message.listeners.insert("data".into(), vec![1]);
+        let request = perry_ffi::register_handle(message);
         let response = perry_ffi::register_handle(ServerResponse::new());
-        assert!(perry_ffi::handle_exists(request));
-        assert!(perry_ffi::handle_exists(response));
         finalize_request_handles_deferred(request, response, None);
-        assert!(!perry_ffi::handle_exists(request));
+        let message = perry_ffi::get_handle::<IncomingMessage>(request)
+            .expect("the collector, not the exchange, releases the request");
+        assert_eq!(message.method, "POST");
+        assert!(message.close_emitted && message.destroyed && message.complete);
+        assert!(message.listeners.is_empty() && message.body_bytes.is_empty());
         assert!(!perry_ffi::handle_exists(response));
+        assert!(perry_ffi::drop_handle(request));
     }
 }
 

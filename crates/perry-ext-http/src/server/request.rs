@@ -89,6 +89,9 @@ pub struct IncomingMessage {
     pub signal: f64,
     /// True once `'close'` has fired.
     pub close_emitted: bool,
+    /// The exchange is over and the collector owns the payload: it stores no
+    /// new JS edge, since a listener naming `req` would keep it reachable.
+    pub(crate) retired: bool,
     /// #4904: true for `new http.IncomingMessage(socket)` instances —
     /// standalone messages not attached to any live connection.
     pub standalone: bool,
@@ -142,6 +145,7 @@ impl IncomingMessage {
             signal_controller: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             signal: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             close_emitted: false,
+            retired: false,
             standalone: false,
             socket_value: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             socket_overridden: false,
@@ -744,6 +748,11 @@ pub unsafe extern "C" fn js_node_http_im_on(
                 );
             }
         };
+        if im.retired {
+            return f64::from_bits(
+                perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits(),
+            );
+        }
         im.listeners
             .entry(event.clone())
             .or_default()
@@ -1159,6 +1168,68 @@ pub(crate) fn close_incoming_message(handle: i64) {
         return;
     }
     emit_no_arg_to_listeners(&close_listeners);
+}
+
+/// The server-attached request `req` names, closed and retired. A standalone
+/// `new IncomingMessage()` belongs to no exchange and is left alone.
+pub(crate) fn end_server_request(req: f64) {
+    let handle = (req.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+    if !get_handle::<IncomingMessage>(handle).is_some_and(|im| !im.standalone) {
+        return;
+    }
+    close_incoming_message(handle);
+    retire_incoming_message(handle);
+}
+
+/// End the request's exchange: it reads as ended and destroyed, drops its
+/// listeners and buffered body, and is parked: a full trace marks its edges
+/// only through a word naming it and drops it once none does (Node keeps
+/// `req` usable for as long as it is held).
+pub(crate) fn retire_incoming_message(handle: i64) {
+    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+        if std::mem::replace(&mut im.retired, true) {
+            return;
+        }
+        im.destroyed = true;
+        if !im.aborted {
+            im.complete = true;
+            im.end_emitted = true;
+        }
+        im.listeners = HashMap::new();
+        im.body_bytes = Vec::new();
+    } else {
+        perry_ffi::drop_handle(handle);
+        return;
+    }
+    perry_ffi::park_reclaimable_ffi(handle, &SERVER_REQUEST_PAYLOADS);
+}
+
+/// The ffi payload map as the owner of retired server requests.
+struct ServerRequestPayloads;
+
+static SERVER_REQUEST_PAYLOADS: ServerRequestPayloads = ServerRequestPayloads;
+
+impl perry_ffi::handle_lifecycle::ParkedPayloadOwner for ServerRequestPayloads {
+    fn release(&self, identity: perry_ffi::NativeRegistrationIdentity) {
+        // Strings, vectors and closure addresses: dropping runs no JS.
+        drop(perry_ffi::release_reclaimed_payload(identity));
+    }
+
+    /// The slots `scan_http_server_roots` visits for a live request.
+    fn edges(&self, id: perry_ffi::Handle, out: &mut Vec<u64>) {
+        out.extend(perry_ffi::native_handle_props(id));
+        let _ = perry_ffi::with_handle::<IncomingMessage, _, _>(id, |im| {
+            out.extend([im.signal_controller.to_bits(), im.signal.to_bits()]);
+            if im.owner_agent == perry_ffi::agent_post::current_agent() {
+                out.push(im.socket_value.to_bits());
+            }
+            for &cb in im.listeners.values().flatten() {
+                if cb > 0 {
+                    out.push(JsValue::from_object_ptr(cb as usize as *mut u8).bits());
+                }
+            }
+        });
+    }
 }
 
 // ============================================================================
