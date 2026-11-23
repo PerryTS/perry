@@ -439,6 +439,7 @@ fn transform_generator_closures_in_stmts(
                     enclosing_class,
                     is_strict,
                     is_async,
+                    byte_offset,
                     ..
                 } = expr
                 {
@@ -458,7 +459,7 @@ fn transform_generator_closures_in_stmts(
                         // transforms (the synthetic body fn); lowering recorded
                         // it under the original closure func_id. Alias it across.
                         alias_prologue_len(*func_id, synth_id);
-                        let mut synth = Function { byte_offset: 0 /*HPOS*/,
+                        let mut synth = Function { byte_offset: *byte_offset,
                             id: synth_id,
                             name: "__gen_closure_body".to_string(),
                             type_params: Vec::new(),
@@ -525,6 +526,7 @@ pub fn transform_plain_async_closure_body(
     is_strict: bool,
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
+    closure_offset: u32,
 ) -> Vec<Stmt> {
     // Construct a temporary Function so we can reuse the existing
     // `transform_generator_function_with_extra_captures` plumbing
@@ -534,7 +536,7 @@ pub fn transform_plain_async_closure_body(
         *next_func_id += 1;
         id
     };
-    let mut synth = Function { byte_offset: 0 /*HPOS*/,
+    let mut synth = Function { byte_offset: closure_offset,
         id: synth_func_id,
         name: "__async_closure_body".to_string(),
         type_params: Vec::new(),

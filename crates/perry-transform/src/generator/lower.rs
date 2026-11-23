@@ -592,6 +592,7 @@ pub fn transform_generator_function_with_extra_captures(
             state_id,
             &finallys,
             &hoisted_ids,
+            fn_offset,
         );
         for route in &finallys {
             if let Some(cc) = route.completion_check_state {
@@ -1157,6 +1158,7 @@ pub fn transform_generator_function_with_extra_captures(
             enclosing_class.clone(),
             func.is_strict,
             &release_ids,
+            fn_offset,
         );
         for s in wrapper_stmts {
             new_body.push(s);
@@ -1324,6 +1326,7 @@ pub fn transform_generator_function_with_extra_captures(
                 done_id,
                 return_catch_id,
                 is_async_generator,
+                fn_offset,
             )
         };
         let return_closure = Expr::Closure { byte_offset: fn_offset,
@@ -1457,7 +1460,7 @@ pub fn transform_generator_function_with_extra_captures(
                 },
             ];
             let mut step_body =
-                wrap_async_gen_step_body(step_inner, executing_id, done_id, agstep_catch_id);
+                wrap_async_gen_step_body(step_inner, executing_id, done_id, agstep_catch_id, fn_offset);
             // Turn every `{value, done}` return into an `AsyncStepDone` that
             // settles the activation's result Promise; `AsyncStepChain` (await)
             // returns are left as-is.
@@ -1514,6 +1517,7 @@ pub fn transform_generator_function_with_extra_captures(
                     done_id,
                     throw_catch_id,
                     is_async_generator,
+                    fn_offset,
                 )
             };
             let throw_closure = Expr::Closure { byte_offset: fn_offset,
@@ -1557,6 +1561,7 @@ pub fn transform_generator_function_with_extra_captures(
                     done_id,
                     next_catch_id,
                     is_async_generator,
+                    fn_offset,
                 )
             };
             let next_closure = Expr::Closure { byte_offset: fn_offset,

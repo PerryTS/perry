@@ -9,6 +9,7 @@ pub(crate) fn wrap_generator_resume_body(
     done_id: LocalId,
     catch_id: LocalId,
     is_async_generator: bool,
+    fn_offset: u32,
 ) -> Vec<Stmt> {
     prepend_executing_clear_before_returns(&mut body, executing_id);
     if is_async_generator {
@@ -16,7 +17,7 @@ pub(crate) fn wrap_generator_resume_body(
     }
 
     vec![
-        generator_executing_guard(executing_id, is_async_generator),
+        generator_executing_guard(executing_id, is_async_generator, fn_offset),
         Stmt::Try {
             body,
             catch: Some(CatchClause {
@@ -24,7 +25,7 @@ pub(crate) fn wrap_generator_resume_body(
                 body: vec![
                     Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
                     Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(false)))),
-                    generator_resume_rethrow(Expr::LocalGet(catch_id), is_async_generator),
+                    generator_resume_rethrow(Expr::LocalGet(catch_id), is_async_generator, fn_offset),
                 ],
             }),
             finally: None,
@@ -47,10 +48,11 @@ pub(crate) fn wrap_async_gen_step_body(
     executing_id: LocalId,
     done_id: LocalId,
     catch_id: LocalId,
+    fn_offset: u32,
 ) -> Vec<Stmt> {
     prepend_executing_clear_before_returns(&mut body, executing_id);
     vec![
-        generator_executing_guard(executing_id, true),
+        generator_executing_guard(executing_id, true, fn_offset),
         Stmt::Try {
             body,
             catch: Some(CatchClause {
@@ -58,7 +60,7 @@ pub(crate) fn wrap_async_gen_step_body(
                 body: vec![
                     Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
                     Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(false)))),
-                    generator_resume_rethrow(Expr::LocalGet(catch_id), true),
+                    generator_resume_rethrow(Expr::LocalGet(catch_id), true, fn_offset),
                 ],
             }),
             finally: None,
@@ -93,20 +95,25 @@ pub(crate) fn wrap_fixed_state_completion(
     }]
 }
 
-pub(crate) fn generator_executing_guard(executing_id: LocalId, is_async_generator: bool) -> Stmt {
+pub(crate) fn generator_executing_guard(
+    executing_id: LocalId,
+    is_async_generator: bool,
+    fn_offset: u32,
+) -> Stmt {
     Stmt::If {
         condition: Expr::LocalGet(executing_id),
         then_branch: vec![generator_resume_rethrow(
             generator_executing_type_error(),
             is_async_generator,
+            fn_offset,
         )],
         else_branch: None,
     }
 }
 
-pub(crate) fn generator_resume_rethrow(value: Expr, is_async_generator: bool) -> Stmt {
+pub(crate) fn generator_resume_rethrow(value: Expr, is_async_generator: bool, fn_offset: u32) -> Stmt {
     if is_async_generator {
-        Stmt::Return(Some(promise_reject(value)), 0 /*HPOS*/)
+        Stmt::Return(Some(promise_reject(value)), fn_offset)
     } else {
         Stmt::Throw(value)
     }
