@@ -982,6 +982,14 @@ fn realm_global_object(m: &Model, n: &str) -> bool {
     n == "navigator" && !m.unit_mode
 }
 
+/// REALMVAL: `n` is an own member of the global object's realm declaration
+/// (`%Global%`, the generated table: fetch_globals.rs `realm_decl!`); any
+/// other name is a program key or inherited from `Object.prototype`.
+fn global_own_declared(n: &str) -> bool {
+    members::realm_entry("%Global%")
+        .is_some_and(|e| e.own.iter().any(|p| !p.symbol && p.key == n))
+}
+
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
     crate::family_reach::tok(m, t, key);
     // G2: a node module's export equal to a global a native reads by name
@@ -1038,7 +1046,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     m.load_from(g, g, key, dst);
                 } else if matches!(n, "undefined" | "NaN" | "Infinity") {
                     m.add_prim(dst, prim::NUM | prim::UNDEF);
-                } else if !m.unit_mode && super::native_protocol::sentinel_user_global(m, n) {
+                } else if !m.unit_mode {
                     // S8: a name the realm declares neither on the global
                     // object nor on its chain: the read is [[Get]](globalThis,
                     // n) (ECMA-262 9.1.1.4.6 GetBindingValue of the global
@@ -1046,13 +1054,21 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     // ReferenceError, 9.1.1.2.6), as the unresolved name's is
                     // (rule G). In a module a Worker may run, generation adds
                     // the Worker global's native (`gen_expr`, PropertyGet).
+                    // REALMVAL: any other name too (a realm member the arms
+                    // above do not route, a Console method name): the global
+                    // object's [[Get]] reads its declared value.
                     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     tok_load(m, g, key, dst);
                 } else {
-                    pn151_note("other-top-arm", n);
                     m.add_top(dst, |_| format!("global {n}"));
                     m.add_prim(dst, prim::ALL);
                 }
+            }
+            // REALMVAL: a computed name on the sentinel is [[Get]] of the
+            // global object under it (`global_shaped_read`).
+            None if !m.unit_mode => {
+                let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                tok_load(m, g, key, dst);
             }
             None => {
                 m.add_top(dst, |_| "global[computed]".into());
@@ -1061,7 +1077,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         },
         TokKind::Builtin(BuiltinNs::GlobalThis) => {
             match name.as_deref() {
-                Some(n) if global_user_key(m, n) => {
+                Some(n) if global_user_key(m, n) || (!m.unit_mode && !global_own_declared(n)) => {
                     let Key::Named(a) = key else { unreachable!() };
                     if super::native_protocol::global_any_names(m, n) {
                         super::native_protocol::global_any_read(m, n, dst);
@@ -1125,11 +1141,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     }
                     ns_load(m, t, BuiltinNs::GlobalThis, a, dst);
                 }
-                // BLASTA what-if (A/B only): an unconstrained computed key
-                // reads the same closed-world union as a shaped one.
-                None if matches!(key, Key::Any(s) if s != 0 || blasta_any_global())
-                    && !m.unit_mode =>
-                {
+                // REALMVAL: a computed key, shaped or not, reads the union of
+                // the declared members and program keys it may spell.
+                None if !m.unit_mode => {
                     global_shaped_read(m, t, key, dst);
                 }
                 // PN151 what-if (env PERRY_PN151_GLOBVAL=1): the global
@@ -1139,18 +1153,22 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 // global_this/populate.rs:827), so no store changes them.
                 // globalThis/global name the global object itself, plus what
                 // was stored there (declared_global_load).
-                Some("NaN" | "Infinity") if pn151_globval() && !m.unit_mode => {
+                Some("NaN" | "Infinity") if !m.unit_mode => {
                     m.add_prim(dst, prim::NUM)
                 }
-                Some("undefined") if pn151_globval() && !m.unit_mode => {
+                Some("undefined") if !m.unit_mode => {
                     m.add_prim(dst, prim::UNDEF)
                 }
-                Some(n @ ("globalThis" | "global")) if pn151_globval() && !m.unit_mode => {
+                Some(n @ ("globalThis" | "global")) if !m.unit_mode => {
                     declared_global_load(m, t, t, n, dst)
                 }
                 Some(n) if hostval_global(m, t, key, n, dst) => {}
+                // REALMVAL: every member %Global% owns has a value side
+                // (RealmManifest::validate) that an arm above reads.
+                Some(n) if !m.unit_mode => unreachable!(
+                    "REALMVAL: %Global% member `{n}` has no modelled value"
+                ),
                 _ => {
-                    pn151_note("globalThis-top-arm", name.as_deref().unwrap_or("[computed]"));
                     // A host global, or under a computed key any global: the
                     // Function constructor only under a key that may be
                     // "Function" (E14, DECISIONS 235). The program stores
@@ -1182,6 +1200,8 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.edge(u, dst);
                 m.add_prim(dst, prim::UNDEF | prim::NULL);
             }
+            _ if hostval_load(m, t, "require", key, name.as_deref(), dst) => {}
+            _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
             _ => {
                 let bf = builtin_fn(m, "require.<x>");
                 m.add_tok(dst, bf);
@@ -1241,7 +1261,6 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 _ if hostval_load(m, t, "process", key, name.as_deref(), dst) => {}
                 _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
                 _ => {
-                    pn151_note("process-top-arm", name.as_deref().unwrap_or("[computed]"));
                     m.add_top(dst, |_| {
                         format!("process.{}", name.as_deref().unwrap_or("[computed]"))
                     });
@@ -1286,7 +1305,6 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             _ if hostval_load(m, t, module, key, name.as_deref(), dst) => {}
             _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
             _ => {
-                pn151_note(&format!("module-top-arm {module}"), name.as_deref().unwrap_or("[computed]"));
                 m.add_top(dst, |_| {
                     format!(
                         "native module ref {module}.{}",
@@ -1866,21 +1884,9 @@ pub fn declared_setter_store(m: &mut Model, t: Tok, key: Key, src: NodeId) {
     }
 }
 
-/// BLASTA A/B switch: `PERRY_BLASTA_ANYGLOBAL=1` sends a computed read of the
-/// global object under an unconstrained key to `global_shaped_read`.
-fn blasta_any_global() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PERRY_BLASTA_ANYGLOBAL").is_some_and(|v| v == "1"))
-}
-
 fn pn150_inspect() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("PERRY_PN150_INSPECT").is_some_and(|v| v == "1"))
-}
-
-fn pn151_globval() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PERRY_PN151_GLOBVAL").is_some_and(|v| v == "1"))
 }
 
 pub(crate) fn pn151_diag() -> bool {
@@ -1901,11 +1907,6 @@ pub(crate) fn pn151_note(arm: &str, n: &str) {
     }
 }
 
-fn pn151_ruleb() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PERRY_PN151_RULEB").is_some_and(|v| v == "1"))
-}
-
 /// PN151 what-if Rule B (env PERRY_PN151_RULEB=1): a node module object or
 /// `process` is described by its realm declaration (realm-v1.json, dumped
 /// from the runtime; its shape lists own and inherited keys). A named key
@@ -1914,7 +1915,7 @@ fn pn151_ruleb() -> bool {
 /// spell by name, plus any written key (`STAR_KEY`), plus `undefined`. A key
 /// the declaration has but no arm models stays today's ⊤ (returns false).
 fn pn151_ruleb_load(m: &mut Model, t: Tok, key: Key, name: Option<&str>, dst: NodeId) -> bool {
-    if !pn151_ruleb() || m.unit_mode || m.native_shape(t).is_none() {
+    if m.unit_mode || m.native_shape(t).is_none() {
         return false;
     }
     match key {
@@ -1956,11 +1957,6 @@ fn pn151_ruleb_load(m: &mut Model, t: Tok, key: Key, name: Option<&str>, dst: No
 }
 
 
-fn hostval() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PERRY_HOSTVAL").is_some_and(|v| v == "1"))
-}
-
 /// HOSTVAL what-if (env PERRY_HOSTVAL=1): a member of a host object the
 /// runtime makes reads the value the runtime's realm declaration gives it
 /// (realm-v1.json, generated from the `realm_decl!` sites of the runtime
@@ -1980,7 +1976,7 @@ fn hostval_load(
     name: Option<&str>,
     dst: NodeId,
 ) -> bool {
-    if !hostval() || m.unit_mode {
+    if m.unit_mode {
         return false;
     }
     let Some(e) = members::realm_entry(owner) else {
@@ -2068,7 +2064,7 @@ fn hostval_member(
 /// global object reads its [[Prototype]]: `Object.prototype` (realm dump
 /// `$global.prototype`, realm-dumps/full.jsonl), unless written.
 fn hostval_global(m: &mut Model, t: Tok, key: Key, n: &str, dst: NodeId) -> bool {
-    if !hostval() || m.unit_mode {
+    if m.unit_mode {
         return false;
     }
     let Key::Named(a) = key else { return false };

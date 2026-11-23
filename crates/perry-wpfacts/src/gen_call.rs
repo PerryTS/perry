@@ -481,14 +481,18 @@ impl<'a> Gen<'a> {
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
         }
-        if !self.m.unit_mode && crate::builtins::global_function(&self.m, name) {
+        // REALMVAL: no binding of the program: [[Get]] of the global object
+        // under the name (ECMA-262 9.1.1.4.6), which reads the realm's
+        // declared member or the program's store (`loads::tok_load`). A
+        // runtime extern (`js_*`) is no global: its value is EXTERN's.
+        if !self.m.unit_mode && !name.starts_with("js_") {
             let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
             let dst = self.m.node_l("global-function-value");
             let key = Key::Named(self.m.atom(name));
             self.m.load_from(t, t, key, dst);
             return dst;
         }
-        self.m.top_val(&format!("extern value {name}"))
+        self.m.top_val(&format!("runtime extern value {name}"))
     }
 
     /// A closure expression: register, walk its body, return its token.
@@ -838,16 +842,12 @@ impl<'a> Gen<'a> {
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
         }
-        // No binding of the program: the global object's property, when
-        // the realm has one under the name (`AbortSignal`): a load of it,
-        // which reads the realm value while the program writes no value
-        // under the key (`native_written`) and what it wrote once it does.
-        if !self.m.unit_mode
-            && self
-                .m
-                .namespace_property(BuiltinNs::GlobalThis, name)
-                .is_some_and(|p| p.native.is_some())
-        {
+        // No binding of the program: [[Get]] of the global object under the
+        // name (ECMA-262 9.1.1.4.6; `AbortSignal`): the realm's declared
+        // member while the program writes no value under the key
+        // (`native_written`), what it wrote once it does, and `undefined`
+        // (the runtime's ReferenceError) for a name nobody declares.
+        if !self.m.unit_mode {
             let g = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
             let gn = self.tok_node(g);
             let a = self.m.atom(name);

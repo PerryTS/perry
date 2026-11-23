@@ -1672,6 +1672,7 @@ mod native_dispatch_builtin;
 mod navigator_decl;
 mod navigator_store;
 mod hostval3;
+mod realmval;
 mod cliffd;
 mod performance_store;
 mod global_self_store;
