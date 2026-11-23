@@ -4135,6 +4135,27 @@ fn ns_method_inner(
         // runs, nothing is handed on, the realm is not held.
         (BuiltinNs::TypedArray | BuiltinNs::TypedArrayKind(_), "from" | "of")
             if this_no_constructor(m, call) => {}
+        // A host object no namespace model describes (`ns_statics` lists no
+        // members: the global object, `process`, `require`, a host namespace
+        // or node module object such as `Atomics`, `Intl`, `node:fs`), under
+        // a key no arm above models: a method call on it (a program call, a
+        // protocol's lookup such as SerializeJSONProperty's `toJSON`,
+        // ECMA-262 25.5.2.2 step 2) is EvaluateCall's GetV then Call
+        // (13.3.6.1, 7.3.20): it calls what [[Get]] of the key reads, which
+        // the realm declaration answers for every key in whole-program mode
+        // (`loads::tok_load`, REALMVAL: a key it lacks reads `undefined`, or
+        // what a write stored). A call of the member's own value
+        // (`identified`) is that value's call, not a lookup.
+        (_, n)
+            if !identified
+                && !m.unit_mode
+                && ns != BuiltinNs::Other
+                && members::ns_statics(ns).members.is_none() =>
+        {
+            let t = m.tok(TokKind::Builtin(ns));
+            let a = m.atom(n);
+            m.call_read_member(t, Key::Named(a), call)
+        }
         (_, n) => {
             let recv = if statics_ignore_this(ns) && members::ns_own_fn(ns, n) {
                 Recv::Ignored

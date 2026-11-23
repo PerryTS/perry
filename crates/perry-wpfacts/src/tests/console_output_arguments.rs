@@ -19,7 +19,7 @@ fn facts_of(body: &str) -> ProgramFacts {
         // A store into ⊤ under any key, as three.js `toArray` called back.
         // (`unknown` is a value, not a method of the global object: a call
         // `globalThis.hostTake(f)` hands it the global object as `this`.)
-        const unknown: any = (globalThis as any)[process.argv[2]];
+        declare const unknown: any;
         unknown.take(function (arr: any, k: any) {{ arr[k] = 1; }});
         {body}
         "#

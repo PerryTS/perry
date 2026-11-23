@@ -789,6 +789,15 @@ impl Model {
         self.flush_shadowed_classes(&[tm]);
     }
 
+    /// EvaluateCall's GetV then Call (ECMA-262 13.3.6.1, 7.3.20) of the
+    /// method call `call` on object `t` under `key`: it calls what [[Get]]
+    /// of the key on `t` reads, with `t` as `this`.
+    pub(crate) fn call_read_member(&mut self, t: Tok, key: Key, call: CallId) {
+        let callee = self.node_l("builtin-function-read");
+        self.load_from(t, t, key, callee);
+        self.bind_via(callee, call, t);
+    }
+
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
     pub fn load_from(&mut self, origin: Tok, t: Tok, key: Key, dst: NodeId) {
         #[cfg(test)]

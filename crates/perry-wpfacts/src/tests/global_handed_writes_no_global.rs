@@ -15,7 +15,7 @@ use super::*;
 const PRE: &str = r#"
     class A { zz = 1; }
     class B { zz = "b"; yy = 2; }
-    const unknown: any = (globalThis as any)[process.argv[2]];
+    declare const unknown: any;
     (globalThis as any).g = new A();
 "#;
 

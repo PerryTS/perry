@@ -120,9 +120,42 @@ fn stop3_host_namespace_call_calls_the_read_value() {
         "(Atomics as any).foo(1)",
         "(Intl as any).toJSON()",
         "(Atomics as any).toString()",
+        "(process as any).toJSON()",
+        "(globalThis as any).toJSON()",
     ]
     .iter()
     .map(|s| s.to_string())
     .collect();
     assert_eq!(top_reads("", reads), Vec::<String>::new());
+}
+
+/// STOP5 (c09 rule-wide): a named-key call on the global object or
+/// `process` calls what [[Get]] reads: the callee a program stored there
+/// runs (its result is the argument, a number), and a key neither the realm
+/// declares nor the program stores has no callee (no result).
+#[test]
+fn stop5_host_object_call_runs_the_stored_callee() {
+    let prelude = "(globalThis as any).idg = (x: any) => x;\n\
+                   (process as any).idp = (x: any) => x;\n";
+    let ks = kinds(
+        prelude,
+        &[
+            "(globalThis as any).idg(7)".to_string(),
+            "(process as any).idp(7)".to_string(),
+        ],
+    );
+    for k in &ks {
+        assert!(!k.top, "{k:?}");
+        assert_eq!(k.prims & prim::NUM, prim::NUM, "{k:?}");
+    }
+    assert_eq!(
+        top_reads(
+            "",
+            vec![
+                "(process as any).someAbsentKey(1)".to_string(),
+                "(globalThis as any).someAbsentKey(1)".to_string(),
+            ]
+        ),
+        Vec::<String>::new()
+    );
 }

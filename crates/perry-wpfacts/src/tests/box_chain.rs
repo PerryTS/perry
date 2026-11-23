@@ -25,7 +25,7 @@ fn proven(pf: &ProgramFacts, key: &str) -> bool {
 fn held(body: &str) -> String {
     format!(
         "class A {{ a = 1; }}
-         const unknown: any = (globalThis as any)[process.argv[2]];
+         declare const unknown: any;
          const t: any = unknown.reach(0);
          const kk: string = process.argv[3];
          t[kk] = 1;
@@ -113,7 +113,7 @@ fn a_json_object_keeps_constructor_and_a_given_prototype() {
 #[test]
 fn a_json_parse_through_the_namespace_makes_arrays_too() {
     let src = "class A { a = 1; }
-        const unknown: any = (globalThis as any)[process.argv[2]];
+        declare const unknown: any;
         const a = new A();
         const J: any = JSON;
         const arr: any = J.parse(process.argv[4] ?? '[1]');

@@ -124,7 +124,9 @@ fn declared_and_undescribed_namespace_keep_their_models() {
         "Object.assign(o, { get field() { g(o); return 2; } });",
         false,
     );
-    check("const P: any = process; P.zap(o);", false);
+    // REALMVAL: `process` declares no `zap` and the program stores none:
+    // the call has no callee (TypeError), `o` reaches no one.
+    check("const P: any = process; P.zap(o);", true);
 }
 
 fn natives(body: &str, proven: bool) {

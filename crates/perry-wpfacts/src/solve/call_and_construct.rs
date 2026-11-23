@@ -1503,18 +1503,11 @@ impl Model {
         }
         // A described namespace method is the ordinary member value,
         // called with its receiver. Its aliases use the very same model.
-        // A host namespace object (`BuiltinNs::Module`: `Atomics`, `Intl`,
-        // a node module object) has no namespace model of its own: a
-        // named-key call on it (a program call, a protocol's lookup such as
-        // SerializeJSONProperty's `toJSON`, ECMA-262 25.5.2.2 step 2) is
-        // EvaluateCall's GetV then Call (13.3.6.1, 7.3.20): it calls what
-        // [[Get]] of the key reads, which its realm declaration describes
-        // for every key (`loads::hostval_load`, `pn151_ruleb_load`: a key
-        // it lacks reads `undefined`, or what a write stored).
+        // (A host object's key no rule describes: `builtins::ns_method`'s
+        // last arm, `call_read_member`.)
         if !self.unit_mode {
             if let (TokKind::Builtin(ns), Key::Named(a)) = (&self.toks[t as usize], key) {
-                if matches!(ns, BuiltinNs::Module(_))
-                    || builtins::namespace_native(self, t, *ns, &self.atoms[a as usize]).is_some()
+                if builtins::namespace_native(self, t, *ns, &self.atoms[a as usize]).is_some()
                     || builtins::namespace_receiver_getter(self, t, &self.atoms[a as usize])
                 {
                     let callee = self.node_l("builtin-function-read");

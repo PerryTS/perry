@@ -176,7 +176,7 @@ fn a_store_into_top_writes_the_intrinsics_under_its_key() {
     let body = |hand: &str, w: &str, other: &str| {
         format!(
             "{CLASSES}{M}
-            const unknown: any = (globalThis as any)[process.argv[2]];
+            declare const unknown: any;
             class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
             const t: any = unknown.reach({hand});
             {w}
@@ -352,7 +352,7 @@ fn a_key_written_onto_a_namespace_is_a_member() {
     let body = |before: &str, after: &str| {
         format!(
             "{CLASSES}{M}
-            const unknown: any = (globalThis as any)[process.argv[2]];
+            declare const unknown: any;
             class N {{ inner: any; constructor() {{ this.inner = new M(); }} }}
             {before}
             const v: any = k > 1 ? new N() : Object;
@@ -448,7 +448,7 @@ fn a_store_into_top_replaces_a_described_member_under_its_key() {
     let body = |hand: &str, w: &str| {
         format!(
             "{CLASSES}
-            const unknown: any = (globalThis as any)[process.argv[2]];
+            declare const unknown: any;
             class Q {{ x = 5; b = 1; }}
             const t: any = unknown.reach({hand});
             {w}

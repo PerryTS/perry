@@ -95,7 +95,7 @@ fn object_proto_method_controls_run_program_code() {
 /// A callee that really is unknown (⊤) still escapes its argument.
 #[test]
 fn object_proto_method_control_unknown_callee() {
-    let src = "const u: any = (globalThis as any)[process.argv[2]];\nconst o = { n: 1 };\nu.m(o);\nconsole.log(o.n);";
+    let src = "declare const u: any;\nconst o = { n: 1 };\nu.m(o);\nconsole.log(o.n);";
     let pf = facts(src);
     let (t, ro) = field_n(&pf);
     assert!(

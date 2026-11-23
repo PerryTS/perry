@@ -15,7 +15,7 @@ const PRE: &str = r#"
     class A { zz = 1; }
     class M { m(o: any) { return o.zz; } }
     class N { inner: any = new M(); }
-    const unknown: any = (globalThis as any)[process.argv[2]];
+    declare const unknown: any;
     unknown.take(function (arr: any, kk: any) { arr[kk] = 1; });
 "#;
 
