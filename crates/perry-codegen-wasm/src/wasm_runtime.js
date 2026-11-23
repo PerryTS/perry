@@ -6141,13 +6141,26 @@ const hostCallbacks = new WeakMap();
 // A descriptor whose accessors the host can call. A Perry closure is not callable by
 // the host, so its accessor runs it with the receiver as `this`. The descriptor is
 // copied, reading its fields once in ToPropertyDescriptor's order, so the caller's
-// descriptor stays as it is.
+// descriptor stays as it is. A class instance's compiled accessors live in the class
+// table, not on the host object, so its fields are read as Perry reads them.
 function __hostDescriptor(desc) {
   if (!__holdsProperties(desc)) return desc;
+  const cls = __classOf(desc);
+  const hasAccessor = (field) => {
+    for (let c = cls; c; c = classParentTable[c] || null) {
+      const methods = classMethodTable[c];
+      if (methods && (('__get_' + field) in methods || ('__set_' + field) in methods)) return true;
+    }
+    return false;
+  };
   const copy = Object.create(null);
   for (const field of ['enumerable', 'configurable', 'value', 'writable', 'get', 'set']) {
-    if (!(field in desc)) continue;
-    const v = desc[field];
+    if (!(field in desc) && !hasAccessor(field)) continue;
+    let v = desc[field];
+    if (cls) {
+      v = __memDispatch.class_get_field(desc, field);
+      __memDispatch.propagate_exception(true);
+    }
     copy[field] = (field === 'get' || field === 'set') ? __hostAccessor(v) : v;
   }
   return copy;
