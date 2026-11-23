@@ -10,6 +10,8 @@ pub(crate) struct IteratorRecordPlan {
     array: LocalId,
     index: LocalId,
     scalars: Option<Vec<LocalId>>,
+    /// The destructuring pattern or for-of statement this record serves.
+    byte_offset: u32,
 }
 
 fn runtime(method: &str, args: Vec<Expr>) -> Expr {
@@ -23,8 +25,13 @@ fn runtime(method: &str, args: Vec<Expr>) -> Expr {
 }
 
 impl IteratorRecordPlan {
-    pub(crate) fn new(ctx: &mut LoweringContext, source: Expr, out: &mut Vec<Stmt>) -> Self {
-        Self::new_typed(ctx, source, Type::Any, out)
+    pub(crate) fn new(
+        ctx: &mut LoweringContext,
+        source: Expr,
+        out: &mut Vec<Stmt>,
+        byte_offset: u32,
+    ) -> Self {
+        Self::new_typed(ctx, source, Type::Any, out, byte_offset)
     }
 
     pub(crate) fn new_typed(
@@ -32,6 +39,7 @@ impl IteratorRecordPlan {
         source: Expr,
         hint: Type,
         out: &mut Vec<Stmt>,
+        byte_offset: u32,
     ) -> Self {
         fn local(
             ctx: &mut LoweringContext,
@@ -96,6 +104,7 @@ impl IteratorRecordPlan {
             array,
             index,
             scalars: None,
+            byte_offset,
         }
     }
 
@@ -106,6 +115,7 @@ impl IteratorRecordPlan {
         ctx: &mut LoweringContext,
         values: Vec<Expr>,
         out: &mut Vec<Stmt>,
+        byte_offset: u32,
     ) -> Self {
         let mut scalars = Vec::with_capacity(values.len());
         for value in values {
@@ -140,7 +150,7 @@ impl IteratorRecordPlan {
             ty: Type::Any,
             mutable: true,
             init: Some(Expr::Conditional {
-                condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                condition: Box::new(Expr::Compare { byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(use_iter)),
                     right: Box::new(Expr::Bool(true)),
@@ -168,6 +178,7 @@ impl IteratorRecordPlan {
             array: source,
             index,
             scalars: Some(scalars),
+            byte_offset,
         }
     }
 
@@ -187,7 +198,7 @@ impl IteratorRecordPlan {
             return init.iter().enumerate().rev().fold(
                 Expr::LocalGet(*last),
                 |otherwise, (i, id)| Expr::Conditional {
-                    condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                    condition: Box::new(Expr::Compare { byte_offset: self.byte_offset,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(self.index)),
                         right: Box::new(Expr::Integer(i as i64)),
@@ -199,7 +210,7 @@ impl IteratorRecordPlan {
         }
         Expr::IndexGet {
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset: self.byte_offset,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(self.array)),
             index: Box::new(runtime(
@@ -243,7 +254,7 @@ impl IteratorRecordPlan {
     fn iterator_mode(&self) -> Expr {
         // A constructed predicate carries Boolean evidence without asking the
         // generic bare-binding truthiness path to trust a declaration.
-        Expr::Compare { byte_offset: 0 /*HPOS*/,
+        Expr::Compare { byte_offset: self.byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(self.use_iter)),
             right: Box::new(Expr::Bool(true)),
@@ -339,7 +350,7 @@ impl IteratorRecordPlan {
             condition: Box::new(self.iterator_mode()),
             then_expr: Box::new(protocol),
             else_expr: Box::new(Expr::Conditional {
-                condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                condition: Box::new(Expr::Compare { byte_offset: self.byte_offset,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(self.index)),
                     right: Box::new(self.length()),
@@ -431,8 +442,10 @@ impl IteratorRecordPlan {
         for stmt in &mut body {
             self.rewrite(stmt, Some(iter_id), false);
             walk_stmt(stmt, &mut |expr| {
-                fn cursor_after_get(expr: &mut Expr) {
-                    crate::walker::walk_expr_children_mut(expr, &mut cursor_after_get);
+                fn cursor_after_get(expr: &mut Expr, byte_offset: u32) {
+                    crate::walker::walk_expr_children_mut(expr, &mut |e| {
+                        cursor_after_get(e, byte_offset)
+                    });
                     if let Expr::NativeMethodCall {
                         module,
                         method,
@@ -441,7 +454,7 @@ impl IteratorRecordPlan {
                     } = expr
                     {
                         if module == "__perry_runtime" && method == "arrayRecordClose" {
-                            args[1] = Expr::Binary { byte_offset: 0 /*HPOS*/,
+                            args[1] = Expr::Binary { byte_offset,
                                 op: BinaryOp::Add,
                                 left: Box::new(args[1].clone()),
                                 right: Box::new(Expr::Integer(1)),
@@ -449,7 +462,7 @@ impl IteratorRecordPlan {
                         }
                     }
                 }
-                cursor_after_get(expr);
+                cursor_after_get(expr, self.byte_offset);
             });
         }
         let next = ctx.fresh_local();
@@ -502,7 +515,7 @@ impl IteratorRecordPlan {
         ];
         stepped_body.extend(body);
         finally.get_or_insert_with(Vec::new).push(Stmt::If {
-            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
+            condition: Expr::Compare { byte_offset: self.byte_offset,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::LocalGet(state)),
                 right: Box::new(Expr::Number(0.0)),
@@ -535,7 +548,7 @@ impl IteratorRecordPlan {
                         mutable: true,
                         init: Some(runtime("arrayRecordIndex", vec![Expr::Integer(0)])),
                     })),
-                    condition: Some(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                    condition: Some(Expr::Compare { byte_offset: self.byte_offset,
                         op: CompareOp::Lt,
                         left: Box::new(Expr::LocalGet(self.index)),
                         right: Box::new(bound),

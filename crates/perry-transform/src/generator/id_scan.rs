@@ -876,6 +876,7 @@ mod tests {
             }],
             is_factory: true,
             is_reflect_metadata: false,
+            byte_offset: 0,
         };
         let mut module = Module::new("test");
         module.functions.push(Function {

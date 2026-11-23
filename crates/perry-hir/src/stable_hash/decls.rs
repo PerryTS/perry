@@ -241,6 +241,7 @@ impl SH for Decorator {
             args,
             is_factory,
             is_reflect_metadata,
+            byte_offset: _,
         } = self;
         name.hash(h);
         args.hash(h);

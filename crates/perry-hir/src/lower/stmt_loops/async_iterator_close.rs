@@ -77,7 +77,7 @@ pub(crate) fn emit_driver(
             }),
         },
         Stmt::If {
-            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
+            condition: Expr::Compare { byte_offset,
                 op: CompareOp::LooseNe,
                 left: Box::new(Expr::LocalGet(method)),
                 right: Box::new(Expr::Null),

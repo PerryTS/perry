@@ -1383,7 +1383,12 @@ pub(super) fn lower_stmt_for_of_inner(
         // Iterate a real typed array LIVE, so element writes made by the
         // loop body are observed (test262 *-mutate.js); any other value is
         // drained by its iterator (`for_of_guard::admitted_typed_array_holder`).
-        crate::lower::for_of_guard::admitted_typed_array_holder(ctx, arr_expr, &mut module.init)
+        crate::lower::for_of_guard::admitted_typed_array_holder(
+            ctx,
+            arr_expr,
+            &mut module.init,
+            for_of_stmt.span.lo.0,
+        )
     } else if use_lazy_iter {
         // GetIterator(obj): obj[Symbol.iterator](). Drives the lazy loop below.
         arr_expr
@@ -1476,6 +1481,7 @@ pub(super) fn lower_stmt_for_of_inner(
                     ctx,
                     values.clone(),
                     &mut module.init,
+                    for_of_stmt.span.lo.0,
                 );
             }
         }
@@ -1488,6 +1494,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 Type::Any
             },
             &mut module.init,
+            for_of_stmt.span.lo.0,
         )
     });
     let arr_expr = record
@@ -1828,7 +1835,7 @@ pub(super) fn lower_stmt_for_of_inner(
     // Array/String/iterator paths keep the plain `idx < length` bound.
     let condition = if map_kv_fastpath || set_fastpath {
         let (init_lets, cond, prefix) =
-            map_set_delete_safe_for_of(ctx, arr_id, idx_id, set_fastpath);
+            map_set_delete_safe_for_of(ctx, arr_id, idx_id, set_fastpath, for_of_stmt.span.lo.0);
         for s in init_lets {
             module.init.push(s);
         }
@@ -1968,7 +1975,7 @@ pub(crate) fn lower_stmt_for_in(
     }
 
     // Skip keys deleted from the receiver before they are visited.
-    let loop_body = guard_for_in_body(obj_id, keys_id, idx_id, loop_body);
+    let loop_body = guard_for_in_body(obj_id, keys_id, idx_id, loop_body, for_in_stmt.span.lo.0);
 
     // Create the for loop:
     // for (let __i = 0; __i < __keys.length; __i++) { ... }

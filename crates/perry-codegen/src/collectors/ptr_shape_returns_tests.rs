@@ -565,6 +565,7 @@ fn decorated_method_class_carries_no_return_shape_fact() {
         args: Vec::new(),
         is_factory: false,
         is_reflect_metadata: false,
+        byte_offset: 0,
     });
     let (facts, _) = facts_for_classes(vec![maker], Vec::new());
     assert_eq!(
@@ -1838,6 +1839,7 @@ fn named_accessor_locals_reuse_containment_and_vet_accessor_this_flow() {
         args: vec![Expr::ClassRef("C".into())],
         is_factory: true,
         is_reflect_metadata: false,
+        byte_offset: 0,
     };
     let mut decorated = module.clone();
     let mut unrelated = class_c();

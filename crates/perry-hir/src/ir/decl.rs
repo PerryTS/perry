@@ -635,6 +635,8 @@ pub struct Decorator {
     pub is_factory: bool,
     /// True for `@Reflect.metadata(key, value)`, which Perry lowers directly.
     pub is_reflect_metadata: bool,
+    /// Source byte offset (`span.lo.0`) of the `@decorator` construct.
+    pub byte_offset: u32,
 }
 
 /// A function definition

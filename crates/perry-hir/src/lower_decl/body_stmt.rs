@@ -1855,7 +1855,12 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 // A real typed array LIVE (body writes like `ta[1] = 64` are
                 // observed mid-loop), any other value drained by its iterator.
                 // Mirrors the module-init path in stmt_loops.rs.
-                crate::lower::for_of_guard::admitted_typed_array_holder(ctx, arr_expr, &mut result)
+                crate::lower::for_of_guard::admitted_typed_array_holder(
+                    ctx,
+                    arr_expr,
+                    &mut result,
+                    for_of_stmt.span.lo.0,
+                )
             } else if use_lazy_iter {
                 arr_expr
             } else if is_string_iter {
@@ -1969,6 +1974,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         Type::Any
                     },
                     &mut result,
+                    for_of_stmt.span.lo.0,
                 )
             });
             let arr_expr = record
@@ -2305,14 +2311,20 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // (#6075). Array/String/iterator paths keep `idx < length`.
             let condition = if map_kv_fastpath || set_fastpath {
                 let (init_lets, cond, prefix) =
-                    crate::lower::map_set_delete_safe_for_of(ctx, arr_id, idx_id, set_fastpath);
+                    crate::lower::map_set_delete_safe_for_of(
+                        ctx,
+                        arr_id,
+                        idx_id,
+                        set_fastpath,
+                        for_of_stmt.span.lo.0,
+                    );
                 result.extend(init_lets);
                 let mut body = prefix;
                 body.append(&mut loop_body);
                 loop_body = body;
                 cond
             } else {
-                Expr::Compare { byte_offset: 0 /*HPOS*/,
+                Expr::Compare { byte_offset: for_of_stmt.span.lo.0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::PropertyGet {
@@ -2418,7 +2430,13 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             }
 
             // Skip keys deleted from the receiver before they are visited.
-            let loop_body = crate::lower::guard_for_in_body(obj_id, keys_id, idx_id, loop_body);
+            let loop_body = crate::lower::guard_for_in_body(
+                obj_id,
+                keys_id,
+                idx_id,
+                loop_body,
+                for_in_stmt.span.lo.0,
+            );
 
             // Create the for loop
             result.push(Stmt::For {
@@ -2429,7 +2447,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                condition: Some(Expr::Compare { byte_offset: for_in_stmt.span.lo.0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::LocalGet(len_id)),

@@ -57,6 +57,7 @@ impl ArraySource {
         iter: LocalId,
         next: LocalId,
         done: LocalId,
+        byte_offset: u32,
     ) -> Vec<Stmt> {
         if let Self::Iterator(_) = self {
             return vec![Stmt::Let {
@@ -105,7 +106,7 @@ impl ArraySource {
                 init: Some(Expr::Undefined),
             },
             Stmt::If {
-                condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
+                condition: Expr::Compare { byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(done)),
                     right: Box::new(Expr::Bool(true)),
@@ -157,28 +158,31 @@ pub(crate) fn plan_for_literal(
     ctx: &mut LoweringContext,
     elems: &[&ast::Expr],
     out: &mut Vec<Stmt>,
+    byte_offset: u32,
 ) -> Result<FastPlan> {
     let values = elems
         .iter()
         .map(|e| lower_expr(ctx, e))
         .collect::<Result<Vec<_>>>()?;
-    Ok(FastPlan::literal(ctx, values, out))
+    Ok(FastPlan::literal(ctx, values, out, byte_offset))
 }
 
 pub(crate) fn plan_for_proven_array(
     ctx: &mut LoweringContext,
     source: Expr,
     out: &mut Vec<Stmt>,
+    byte_offset: u32,
 ) -> FastPlan {
-    FastPlan::new(ctx, source, out)
+    FastPlan::new(ctx, source, out, byte_offset)
 }
 
 pub(crate) fn plan_for_unproven_source(
     ctx: &mut LoweringContext,
     source: Expr,
     out: &mut Vec<Stmt>,
+    byte_offset: u32,
 ) -> FastPlan {
-    FastPlan::new(ctx, source, out)
+    FastPlan::new(ctx, source, out, byte_offset)
 }
 
 /// A spread-free array literal's element expressions, or `None` for anything
@@ -262,20 +266,21 @@ pub(crate) fn plan_for_source(
     ctx: &mut LoweringContext,
     _elems: &[Option<ast::Pat>],
     source: &ast::Expr,
+    byte_offset: u32,
 ) -> Result<Option<(Vec<Stmt>, FastPlan)>> {
     let mut setup = Vec::new();
     if let Some(literal) = spread_free_array_literal(source) {
-        let plan = plan_for_literal(ctx, &literal, &mut setup)?;
+        let plan = plan_for_literal(ctx, &literal, &mut setup, byte_offset)?;
         return Ok(Some((setup, plan)));
     }
     if proven_array(ctx, source) {
         let lowered = lower_expr(ctx, source)?;
-        let plan = plan_for_proven_array(ctx, lowered, &mut setup);
+        let plan = plan_for_proven_array(ctx, lowered, &mut setup, byte_offset);
         return Ok(Some((setup, plan)));
     }
     if may_be_array_at_runtime(ctx, source) {
         let lowered = lower_expr(ctx, source)?;
-        let plan = plan_for_unproven_source(ctx, lowered, &mut setup);
+        let plan = plan_for_unproven_source(ctx, lowered, &mut setup, byte_offset);
         return Ok(Some((setup, plan)));
     }
     Ok(None)
