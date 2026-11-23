@@ -218,7 +218,7 @@ pub(crate) fn install_buffer_prototype_members(proto: *mut ObjectHeader) {
         install_buffer_prototype_getter(
             proto,
             "parent",
-            crate::fn_info!(#[realm("Buffer.prototype.parent.<get>", constructible = true, effects = { returns(fresh(ArrayBuffer.prototype) | fresh(SharedArrayBuffer.prototype) | prim(undefined)) })] export crate::object::native_module::callable_exports::buffer_prototype_parent_getter_thunk, 0; with_name("get parent"), with_declared(0)),
+            crate::fn_info!(#[realm("Buffer.prototype.parent.<get>", constructible = true, effects = { returns(islot(this, ViewedArrayBuffer) | prim(undefined)) })] export crate::object::native_module::callable_exports::buffer_prototype_parent_getter_thunk, 0; with_name("get parent"), with_declared(0)),
         );
         install_buffer_prototype_getter(
             proto,

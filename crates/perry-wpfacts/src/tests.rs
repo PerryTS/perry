@@ -1652,6 +1652,7 @@ mod ev1;
 mod fn_number_key;
 mod forin1;
 mod getter_result_decls;
+mod getter_producer_slots;
 mod given_proto_census;
 mod given_proto_members;
 mod gs1;

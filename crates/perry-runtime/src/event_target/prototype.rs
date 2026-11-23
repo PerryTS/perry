@@ -386,7 +386,7 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             );
             method(
                 "dispatchEvent",
-                crate::fn_info!(#[realm(EventTarget.prototype.dispatchEvent)] export crate::event_target::event_target_dispatch_event_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(EventTarget.prototype.dispatchEvent, effects = { stores(this -> islot(arg(0), target)); escapes(arg(0)); escapes(this); returns(prim(bool)) })] export crate::event_target::event_target_dispatch_event_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
                 1,
                 1,
                 true,
@@ -498,7 +498,7 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             );
             method(
                 "abort",
-                crate::fn_info!(#[realm(AbortController.prototype.abort, effects = { stores(arg(0) -> islot(islot(this, signal), reason)); calls(islot(islot(this, signal), onabort), this = islot(this, signal), args = [fresh(Event.prototype)]); stores(fresh); returns(prim(undefined)) }, spec = {length = 0}, emit = metadata(realm_abortcontroller_prototype_abort_metadata))] export crate::event_target::prototype::abort, 1; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(AbortController.prototype.abort, effects = { stores(arg(0) -> islot(islot(this, signal), reason)); calls(islot(islot(this, signal), onabort), this = islot(this, signal), args = [fresh(Event.prototype, slots = {target: islot(this, signal)})]); stores(fresh); returns(prim(undefined)) }, spec = {length = 0}, emit = metadata(realm_abortcontroller_prototype_abort_metadata))] export crate::event_target::prototype::abort, 1; with_flags(crate::closure::FN_BUILTIN)),
                 1,
                 realm_abortcontroller_prototype_abort_metadata!(length),
                 true,
