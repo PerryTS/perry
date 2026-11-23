@@ -700,10 +700,22 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 });
             }
 
-            if matches!(
-                ctx.lookup_native_module(&class_name),
-                Some(("v8", Some("GCProfiler")))
-            ) {
+            // Named v8 class imports take the namespace member form, whose
+            // codegen arms build the native instances.
+            let v8_class = match ctx.lookup_native_module(&class_name) {
+                Some((
+                    "v8",
+                    Some(
+                        export @ ("GCProfiler"
+                        | "Serializer"
+                        | "DefaultSerializer"
+                        | "Deserializer"
+                        | "DefaultDeserializer"),
+                    ),
+                )) => Some(export.to_string()),
+                _ => None,
+            };
+            if let Some(export) = v8_class {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
                     byte_end: 0,
@@ -711,7 +723,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::NativeModuleRef("v8".to_string())),
-                        property: "GCProfiler".to_string(),
+                        property: export,
                     }),
                     args,
                     byte_offset: new_byte_offset,
