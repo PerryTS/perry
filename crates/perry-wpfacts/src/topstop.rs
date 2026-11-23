@@ -82,6 +82,11 @@ pub struct StopTop {
     pub(crate) throw_pos: FxHashMap<NodeId, (u32, u32)>,
     /// The origin `Model::add_top` names while it adds ⊤.
     pub(crate) why: Option<String>,
+    /// `PERRY_TOPSTOP_TOPFROM=1`: the ⊤ chain of an input that holds ⊤.
+    topfrom: bool,
+    /// Under `topfrom`: the first arrival of ⊤ in each node: its sender
+    /// (`cur_src`), the reason named, the rule running, the solver line.
+    top_from: FxHashMap<NodeId, (NodeId, u32, Option<(NodeId, Cons)>, &'static Location<'static>)>,
 }
 
 static CAPTURE: Mutex<Option<Vec<String>>> = Mutex::new(None);
@@ -135,6 +140,7 @@ impl StopTop {
             gen_pos: NOPOS,
             rule_pos: NOPOS,
             req_pos: NOPOS,
+            topfrom: std::env::var_os("PERRY_TOPSTOP_TOPFROM").is_some(),
             ..Default::default()
         }))
     }
@@ -190,6 +196,13 @@ impl Model {
         if s.done || n == self.top_tok_node || self.labels[n as usize] == "TOPVAL" || s.topvals.contains_key(&n) {
             return;
         }
+        if s.topfrom {
+            let (src, why) = (self.cur_src, self.cur_why);
+            let s = self.stop_top.as_mut().unwrap();
+            let rule = s.rule;
+            s.top_from.entry(n).or_insert((src, why, rule, at));
+        }
+        let s = self.stop_top.as_ref().unwrap();
         let src = self.cur_src;
         let why = self.cur_why;
         let src_ok = src != NO_NODE && (src as usize) < self.nodes.len();
@@ -446,8 +459,9 @@ impl Model {
             held.push(format!("{} more", toks.len() - 6));
         }
         let prim = self.nodes[n as usize].prim;
+        let chain = self.top_chain(n);
         format!(
-            "node {n} `{label}` ({}), from {}{}; holds [{}]{}",
+            "node {n} `{label}` ({}), from {}{}; holds [{}]{}{chain}",
             self.node_words_short(n),
             self.pos_text(p),
             if steps.is_empty() { String::new() } else { format!(" (made by the solver, {} steps from a program node)", steps.len()) },
@@ -474,6 +488,43 @@ impl Model {
                 }
             }
         }
+    }
+
+    /// `PERRY_TOPSTOP_TOPFROM=1`: where the ⊤ node `n` holds came from, one
+    /// line per first arrival back to the node it entered without a ⊤
+    /// sender (the seed: its rule, reason and solver line).
+    fn top_chain(&self, n: NodeId) -> String {
+        let Some(s) = self.stop_top.as_ref().filter(|s| s.topfrom) else {
+            return String::new();
+        };
+        let mut out = String::new();
+        let mut cur = n;
+        let mut seen = std::collections::HashSet::new();
+        while seen.insert(cur) && seen.len() < 400 {
+            let Some(&(src, why, rule, at)) = s.top_from.get(&cur) else {
+                out += &format!("\n    top-from: node {cur}: no recorded arrival");
+                break;
+            };
+            let p = self.node_program_pos(cur);
+            let w = if why != u32::MAX { self.reason_text(why) } else { String::new() };
+            let r = rule.map_or(String::new(), |(rn, c)| format!(" rule {} on {rn}", c.kind_name()));
+            out += &format!(
+                "\n    top-from: node {cur} `{}` at {} <- {}{r} [{w}] ({}:{})",
+                self.labels[cur as usize],
+                self.pos_text(p),
+                if src == NO_NODE { "NO_NODE".to_string() } else { format!("{src} `{}`", self.labels.get(src as usize).copied().unwrap_or("?")) },
+                at.file(),
+                at.line()
+            );
+            let src_top = src != NO_NODE
+                && (src as usize) < self.nodes.len()
+                && self.nodes[src as usize].pts.contains_tok(TOP);
+            if !src_top {
+                break;
+            }
+            cur = src;
+        }
+        out
     }
 
     fn node_words_short(&self, n: NodeId) -> String {
