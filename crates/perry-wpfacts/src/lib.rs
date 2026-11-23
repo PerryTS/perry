@@ -17,6 +17,7 @@
 //! `secret-tests/scratchpad/wpfacts-design-20261012.md`.
 
 pub mod bindings;
+pub mod topstop;
 mod booleans;
 mod born_with;
 mod builtins;

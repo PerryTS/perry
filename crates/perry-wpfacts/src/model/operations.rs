@@ -422,6 +422,10 @@ impl Model {
         }
         self.node_fn.push(NO_FN);
         self.labels.push(label);
+        if let Some(s) = self.stop_top.as_mut() {
+            s.node_pos.resize(id as usize + 1, crate::topstop::NOPOS);
+            s.node_pos[id as usize] = s.gen_pos;
+        }
         if self.relations.is_some() {
             self.node_names.push(name());
         }

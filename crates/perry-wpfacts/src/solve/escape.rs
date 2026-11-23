@@ -105,12 +105,20 @@ impl Model {
                 self.activate(f, "escape");
             }
         }
-        if self.diagnostic.is_none() {
-            return self.escape_body(t, reason);
+        if self.stop_top.is_some() {
+            let src = self.cur_src;
+            self.stop_top.as_mut().unwrap().esc.push((t, reason, src));
         }
-        let first = self.diagnostic_escape_begin(t, reason);
-        self.escape_body(t, reason);
-        self.diagnostic_escape_end(t, first);
+        if self.diagnostic.is_none() {
+            self.escape_body(t, reason);
+        } else {
+            let first = self.diagnostic_escape_begin(t, reason);
+            self.escape_body(t, reason);
+            self.diagnostic_escape_end(t, first);
+        }
+        if let Some(s) = self.stop_top.as_mut() {
+            s.esc.pop();
+        }
     }
 
     fn escape_body(&mut self, t: Tok, reason: u32) {

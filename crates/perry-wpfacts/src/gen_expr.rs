@@ -819,7 +819,21 @@ impl<'a> Gen<'a> {
         let seq = self.expr_seq;
         self.expr_seq += 1;
         let member_ops = self.member_ops.len();
+        let pos0 = match self.m.stop_top.as_mut() {
+            Some(s) => {
+                let p0 = s.gen_pos;
+                if let Some(o) = crate::topstop::expr_offset(e) {
+                    s.gen_pos = (fx.module, o);
+                    s.fn_pos.entry(fx.f as u32).or_insert((fx.module, o));
+                }
+                Some(p0)
+            }
+            None => None,
+        };
         let n = self.expr_inner(fx, e);
+        if let (Some(p0), Some(s)) = (pos0, self.m.stop_top.as_mut()) {
+            s.gen_pos = p0;
+        }
         self.member_op_class(fx.module, e, member_ops);
         // A namespace pair's argument (`namespace_pair`): the pair is built
         // from one argument list (perry-hir `try_patched_builtin_call`), so

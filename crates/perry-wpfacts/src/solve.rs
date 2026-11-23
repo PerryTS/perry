@@ -295,6 +295,9 @@ impl Model {
                 l.top_seed(n, self.cur_why, std::panic::Location::caller());
             }
         }
+        if top_new && self.stop_top.is_some() {
+            self.top_created(n, std::panic::Location::caller());
+        }
         if self.pts_entries & 0xfffff == 0 && self.pts_entries != 0 {
             if self
                 .budget
@@ -409,6 +412,7 @@ impl Model {
     /// Unknown code may run in `region` (a ⊤ or opaque callee, an operation
     /// on ⊤, a native handing a value to unknown code): it may throw anything
     /// it holds there.
+    #[track_caller]
     pub fn raise_top(&mut self, region: NodeId, from: NodeId, why: &'static str) {
         if region == u32::MAX || self.nodes[region as usize].pts.contains_tok(TOP) {
             return;
@@ -727,6 +731,7 @@ impl Model {
         }
     }
 
+    #[track_caller]
     pub fn add_tok(&mut self, n: NodeId, t: Tok) {
         self.add_tok_arm(n, t, "")
     }
@@ -802,6 +807,15 @@ impl Model {
     /// unmodeled thing; only interned in explain mode (diagnostics).
     #[track_caller]
     pub fn add_top(&mut self, n: NodeId, why: impl FnOnce(&Self) -> String) {
+        if self.stop_top.is_some() && !self.explain && self.diagnostic.is_none() {
+            // `add_top_inner` without diagnostics, the origin's name kept
+            // for `top_created`.
+            let w = why(self);
+            let old = self.stop_top.as_mut().unwrap().why.replace(w);
+            self.add_tok(n, TOP);
+            self.stop_top.as_mut().unwrap().why = old;
+            return;
+        }
         if self.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
             let w = why(self);
             let at = std::panic::Location::caller();
@@ -869,6 +883,16 @@ impl Model {
         }
     }
 
+    /// The shared ⊤ holder (`top_tok_node`); under `PERRY_FACTS_STOP_ON_TOP`
+    /// a named one (`top_val`), so the creation is reported with its origin.
+    #[track_caller]
+    pub fn top_src(&mut self, why: &str) -> NodeId {
+        if self.stop_top.is_some() {
+            return self.top_val(why);
+        }
+        self.top_tok_node
+    }
+
     /// A node holding only ⊤ (all kinds) for one named unmodeled origin.
     #[track_caller]
     pub fn top_val(&mut self, why: &str) -> NodeId {
@@ -876,6 +900,16 @@ impl Model {
             crate::unksrc::note("topval", why, u32::MAX, self.cur_fn as u32);
         }
         // Explain and the dump name each origin: its own node.
+        if let Some(s) = self.stop_top.as_ref() {
+            // One holder per creation point, named (`topstop`).
+            let p = s.gen_pos;
+            let n = self.node_l("TOPVAL");
+            let at = std::panic::Location::caller();
+            self.stop_top.as_mut().unwrap().topvals.insert(n, (why.to_string(), at, p));
+            self.add_tok(n, TOP);
+            self.add_prim(n, prim::ALL);
+            return n;
+        }
         if !self.explain && self.diagnostic.is_none() {
             return self.top_tok_node;
         }
@@ -1052,7 +1086,11 @@ impl Model {
         } else {
             0
         };
+        let rule0 = self.stop_top.as_mut().map(|s| s.rule.replace((n, c)));
         self.with_s(|m| m.apply(n, &c, &toks, prim));
+        if let (Some(r0), Some(s)) = (rule0, self.stop_top.as_mut()) {
+            s.rule = r0;
+        }
         (self.prov_mode, self.prov_rule) = pv;
         if on {
             self.prov_in_set(pin);
@@ -1316,7 +1354,11 @@ impl Model {
                     (self.prov_mode, self.prov_rule) = (crate::provenance::PM_RULE, Some((n, c)));
                     self.prov_in_set(0);
                 }
+                let rule0 = self.stop_top.as_mut().map(|s| s.rule.replace((n, c)));
                 self.apply_tokens(n, &c, Tokens::Pending(&delta), p);
+                if let (Some(r0), Some(s)) = (rule0, self.stop_top.as_mut()) {
+                    s.rule = r0;
+                }
             }
             delta.clear();
         }
