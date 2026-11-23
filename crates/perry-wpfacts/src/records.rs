@@ -202,7 +202,7 @@ fn sanctioned(p: Protocol) -> bool {
     matches!(
         p,
         Protocol::ToPrimitive
-            | Protocol::Inspect
+            | Protocol::Inspect(_)
             | Protocol::ShallowInspect
             | Protocol::Json
             | Protocol::OwnKeys

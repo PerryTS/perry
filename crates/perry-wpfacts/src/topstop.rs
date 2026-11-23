@@ -73,6 +73,13 @@ pub struct StopTop {
     pub(crate) nopos: FxHashMap<&'static Location<'static>, u64>,
     /// Escapes in progress: (token, reason id, node the rule ran on).
     pub(crate) esc: Vec<(Tok, u32, NodeId)>,
+    /// The program position of the protocol request `Model::implicit` runs
+    /// (the console.* call that asked for the inspection): what a node or
+    /// rule made inside it carries when no rule position is known.
+    pub(crate) req_pos: (u32, u32),
+    /// The request position of each `implicit-throw` node (the first
+    /// request of a shared touch), which the touches it runs inherit.
+    pub(crate) throw_pos: FxHashMap<NodeId, (u32, u32)>,
     /// The origin `Model::add_top` names while it adds ⊤.
     pub(crate) why: Option<String>,
 }
@@ -127,6 +134,7 @@ impl StopTop {
             paths,
             gen_pos: NOPOS,
             rule_pos: NOPOS,
+            req_pos: NOPOS,
             ..Default::default()
         }))
     }
@@ -143,10 +151,10 @@ impl StopTop {
     pub(crate) fn cur_pos(&self) -> (u32, u32) {
         if self.gen_pos != NOPOS {
             self.gen_pos
-        } else if self.rule.is_some() {
+        } else if self.rule.is_some() && self.rule_pos != NOPOS {
             self.rule_pos
         } else {
-            NOPOS
+            self.req_pos
         }
     }
 }

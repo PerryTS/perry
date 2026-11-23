@@ -519,10 +519,10 @@ impl Model {
     /// `%j` serializes it (`proxy_json`), `%s` / `%d` / `%i` / `%f` run
     /// ToPrimitive (`proxy_to_primitive`), and the value is shown unwrapped
     /// (`proxy_inspect_shown`).
-    pub(crate) fn proxy_inspect(&mut self, p: u32, reason: u32, region: NodeId) {
+    pub(crate) fn proxy_inspect(&mut self, p: u32, at: InspectAt, reason: u32, region: NodeId) {
         self.proxy_json(p, reason, region);
         self.proxy_to_primitive(p, reason, region);
-        self.proxy_inspect_shown(p, reason, region);
+        self.proxy_inspect_shown(p, at, reason, region);
     }
 
     /// The runtime's formatter showing Proxy `p` (`InspectShown`: a console
@@ -534,9 +534,14 @@ impl Model {
     /// primitive arguments; what it returns is shown in turn. Without one the
     /// target's own values are shown (`Protocol::InspectTarget`). Once per
     /// Proxy.
-    pub(crate) fn proxy_inspect_shown(&mut self, p: u32, reason: u32, region: NodeId) {
+    /// Rule R2 (format_proxy_value, formatting.rs:940): no limit check; the
+    /// hook and the target are at the Proxy's own depth `at`.
+    pub(crate) fn proxy_inspect_shown(&mut self, p: u32, at: InspectAt, reason: u32, region: NodeId) {
+        if at.depth > INSPECT_HARD_CAP {
+            return;
+        }
         let t = self.tok(TokKind::Proxy(p));
-        let Some(throw) = self.implicit_throw(t, Protocol::InspectShown, region) else {
+        let Some(throw) = self.implicit_throw(t, Protocol::InspectShown(at), region) else {
             return;
         };
         let target = self.proxies[p as usize].target;
@@ -570,7 +575,7 @@ impl Model {
             ret,
             Cons::Implicit {
                 reason,
-                proto: Protocol::InspectShown,
+                proto: Protocol::InspectShown(at),
                 region: throw,
             },
         );
@@ -578,7 +583,7 @@ impl Model {
             target,
             Cons::Implicit {
                 reason,
-                proto: Protocol::InspectTarget,
+                proto: Protocol::InspectTarget(at),
                 region: throw,
             },
         );
@@ -872,9 +877,9 @@ impl Model {
             // The formatter showing the Proxy (`proxy_inspect_shown`).
             Cons::Implicit {
                 reason,
-                proto: Protocol::InspectShown,
+                proto: Protocol::InspectShown(at),
                 region,
-            } => self.proxy_inspect_shown(p, reason, region),
+            } => self.proxy_inspect_shown(p, at, reason, region),
             // SerializeJSONProperty (`proxy_json`) and the formatter on a
             // console argument (`proxy_inspect`).
             Cons::Implicit {
@@ -884,9 +889,9 @@ impl Model {
             } => self.proxy_json(p, reason, region),
             Cons::Implicit {
                 reason,
-                proto: Protocol::Inspect,
+                proto: Protocol::Inspect(at),
                 region,
-            } => self.proxy_inspect(p, reason, region),
+            } => self.proxy_inspect(p, at, reason, region),
             // The own keys (`proxy_own_keys`).
             Cons::Implicit {
                 reason,

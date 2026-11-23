@@ -2022,6 +2022,10 @@ impl Model {
             return None;
         }
         let throw = self.node_l("implicit-throw");
+        if let Some(s) = self.stop_top.as_mut() {
+            let p = s.cur_pos();
+            s.throw_pos.insert(throw, p);
+        }
         self.implicit_done.insert((t, proto), throw);
         self.edge(throw, region);
         Some(throw)
@@ -2038,25 +2042,174 @@ impl Model {
     /// `(t, proto)` is the region of the touch's calls and of the touches it
     /// runs in turn, and feeds the region of every request.
     pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol, region: NodeId) {
+        // The touch runs at its request's program position: the rule's,
+        // else that of the touch whose region it feeds (`throw_pos`), else
+        // the region's own (the console.* call's throw region).
+        let saved = self.stop_top.as_mut().map(|s| {
+            let mut p = s.cur_pos();
+            if p == crate::topstop::NOPOS {
+                p = s
+                    .throw_pos
+                    .get(&region)
+                    .copied()
+                    .or_else(|| s.node_pos.get(region as usize).copied())
+                    .unwrap_or(crate::topstop::NOPOS);
+            }
+            std::mem::replace(&mut s.req_pos, p)
+        });
+        self.implicit_in(t, reason, proto, region);
+        if let (Some(p), Some(s)) = (saved, self.stop_top.as_mut()) {
+            s.req_pos = p;
+        }
+    }
+
+    /// Rule R2 (perry-runtime builtins/formatting.rs): how the formatter
+    /// treats the depth of value `t`.
+    fn inspect_shape(&self, t: Tok) -> InspectShape {
+        match &self.toks[t as usize] {
+            // GC_TYPE_CLOSURE (formatting.rs:820, format_function_for_console
+            // / format_class_for_console): no limit check, own properties at
+            // depth 1. `Object.prototype` stands for every builtin prototype,
+            // `Function.prototype` among them; a builtin namespace whose chain
+            // is not `Object.prototype` is a constructor or function.
+            TokKind::Func(..)
+            | TokKind::ClassObj(_)
+            | TokKind::Bound(_)
+            | TokKind::BuiltinFn(_)
+            | TokKind::ObjectProto => InspectShape::Function,
+            TokKind::Builtin(ns) if !builtins::ns_is_ordinary(*ns) => InspectShape::Function,
+            TokKind::NativeProto(name, _) if name == "Function" => InspectShape::Function,
+            // GC_TYPE_ERROR (formatting.rs:720, errors.rs:90), a Promise
+            // (:821) and a weak collection (`format_weak_wrapper`, :803):
+            // members at depth + 1 with no limit check.
+            TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
+                TmplKind::BObj {
+                    what: "Error" | "Promise" | "WeakMap" | "WeakSet",
+                    ..
+                } => InspectShape::Unchecked,
+                _ => InspectShape::Ordinary,
+            },
+            _ => InspectShape::Ordinary,
+        }
+    }
+
+    /// The protocols run on what touch `proto` reads, an inspection's at
+    /// `shown` (rule R2).
+    fn touches_at(proto: Protocol, shown: Option<InspectAt>) -> Vec<Protocol> {
+        proto
+            .read_touches()
+            .iter()
+            .map(|&p| match (p, shown) {
+                (Protocol::InspectShown(_), Some(at)) => Protocol::InspectShown(at),
+                _ => p,
+            })
+            .collect()
+    }
+
+    /// A console call's formatter request on node `n` (rule R2): shown
+    /// (`InspectShown`) or consumable by a specifier (`Inspect`), at depth 0
+    /// under the call's own limit `floor`. An `ambient` call sets no limit
+    /// of its own: it runs under the limit of the extent it runs in, at
+    /// least `floor` (`inspect_raised`).
+    pub(crate) fn console_inspect(
+        &mut self,
+        n: NodeId,
+        reason: u32,
+        shown: bool,
+        region: NodeId,
+        floor: u8,
+        ambient: bool,
+    ) {
+        let mut limit = floor;
+        if ambient {
+            self.inspect_reqs.push((n, reason, shown, region, floor));
+            limit = limit.max(self.inspect_raised);
+        }
+        self.console_inspect_at(n, reason, shown, region, limit);
+    }
+
+    fn console_inspect_at(&mut self, n: NodeId, reason: u32, shown: bool, region: NodeId, limit: u8) {
+        let at = InspectAt::arg(limit.max(INSPECT_DEFAULT_LIMIT));
+        let proto = if shown {
+            Protocol::InspectShown(at)
+        } else {
+            Protocol::Inspect(at)
+        };
+        self.cons(
+            n,
+            Cons::Implicit {
+                reason,
+                proto,
+                region,
+            },
+        );
+    }
+
+    /// A touch under raised limit `limit` may run program code (a hook, a
+    /// getter): a console call that code makes formats under `limit`
+    /// (`InspectDepthLimitGuard` holds for the dynamic extent). Every
+    /// ambient console request is re-issued under it (monotone).
+    fn raise_inspect_limit(&mut self, limit: u8) {
+        let limit = limit.min(INSPECT_HARD_CAP);
+        if limit <= self.inspect_raised.max(INSPECT_DEFAULT_LIMIT) {
+            return;
+        }
+        self.inspect_raised = limit;
+        let reqs = self.inspect_reqs.clone();
+        for (n, reason, shown, region, floor) in reqs {
+            if floor < limit {
+                self.console_inspect_at(n, reason, shown, region, limit);
+            }
+        }
+    }
+
+    fn implicit_in(&mut self, t: Tok, reason: u32, proto: Protocol, region: NodeId) {
         // A Proxy's ToPrimitive runs its [[Get]]s (`proxy_to_primitive`),
         // the formatter shows it running no trap (`proxy_inspect_shown`),
         // JSON serializes it through its internal methods (`proxy_json`).
         if let TokKind::Proxy(p) = self.toks[t as usize] {
             match proto {
                 Protocol::ToPrimitive => return self.proxy_to_primitive(p, reason, region),
-                Protocol::InspectShown => return self.proxy_inspect_shown(p, reason, region),
+                Protocol::InspectShown(at) => return self.proxy_inspect_shown(p, at, reason, region),
                 Protocol::Json => return self.proxy_json(p, reason, region),
-                Protocol::Inspect => return self.proxy_inspect(p, reason, region),
+                Protocol::Inspect(at) => return self.proxy_inspect(p, at, reason, region),
                 _ => {}
             }
         }
+        // Rule R2: the formatter reads a value only down to the inspect
+        // depth limit (`InspectAt`): past the hard cap nothing; an ordinary
+        // object past the limit prints `[Object]` with no read and no hook
+        // lookup; a function's own values are at depth 1; an Error's, a
+        // Promise's and a weak collection's are read with no limit check.
+        let shown = match proto.inspect_at() {
+            None => None,
+            Some(at) => {
+                if at.depth > INSPECT_HARD_CAP {
+                    return;
+                }
+                let next = if t == TOP || self.is_marker(t) {
+                    at.member()
+                } else {
+                    match self.inspect_shape(t) {
+                        InspectShape::Function => at.fn_member(),
+                        InspectShape::Unchecked => at.member(),
+                        InspectShape::Ordinary if at.depth > at.limit => return,
+                        InspectShape::Ordinary => at.member(),
+                    }
+                };
+                if at.limit > INSPECT_DEFAULT_LIMIT && t != TOP {
+                    self.raise_inspect_limit(at.limit);
+                }
+                Some(next)
+            }
+        };
         // I32 at rest (PR B): a protocol touch reads elements undecoded.
         self.rest_used(t);
         // The formatter's `%j` serializes the ARGUMENT (JSON.stringify,
         // 25.5.2.1): its own values are serialized by that touch's own
         // reads, never a value only the formatter shows (a chain member,
         // a class's `prototype`).
-        if proto == Protocol::Inspect {
+        if matches!(proto, Protocol::Inspect(_)) {
             self.implicit(t, reason, Protocol::Json, region);
         }
         // The touch looks up and calls the protocol's keys and reads its
@@ -2152,7 +2305,7 @@ impl Model {
             self.nodes[dst as usize].frame = home;
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::Load { key, dst });
-            for &proto in proto.read_touches() {
+            for proto in Self::touches_at(proto, shown) {
                 self.cons(
                     dst,
                     Cons::Implicit {
@@ -2171,7 +2324,7 @@ impl Model {
             self.nodes[dst as usize].frame = home;
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::OwnValues { dst });
-            for &proto in proto.read_touches() {
+            for proto in Self::touches_at(proto, shown) {
                 self.cons(
                     dst,
                     Cons::Implicit {
@@ -2181,6 +2334,31 @@ impl Model {
                     },
                 );
             }
+            self.add_tok(recv, t);
+        }
+        // An Error's `errors` elements (errors.rs:77 format_error_array) are
+        // shown one level below the array, with no limit check either.
+        if let (Some(at), true) = (shown, self.native_error_tok(t)) {
+            let key = Key::Named(self.atom("errors"));
+            let ek = self.elem_key();
+            let recv = self.node_l("implicit-recv");
+            let arr = self.node_l("implicit-read");
+            let dst = self.node_l("implicit-read");
+            for n in [recv, arr, dst] {
+                self.nodes[n as usize].frame = home;
+            }
+            self.nodes[arr as usize].sink = true;
+            self.nodes[dst as usize].sink = true;
+            self.cons(recv, Cons::Load { key, dst: arr });
+            self.cons(arr, Cons::Load { key: ek, dst });
+            self.cons(
+                dst,
+                Cons::Implicit {
+                    reason,
+                    proto: Protocol::InspectShown(at.member()),
+                    region: throw,
+                },
+            );
             self.add_tok(recv, t);
         }
         // `t instanceof C` for the constructors on its chain: `C`'s
@@ -2426,4 +2604,16 @@ pub(crate) fn grow_rule_range(node: &mut Node, iv: Iv) -> bool {
     };
     node.drange = true;
     true
+}
+
+/// How the runtime's formatter treats a value's depth (rule R2,
+/// `Model::inspect_shape`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InspectShape {
+    /// Read only at a depth within the limit; members one level deeper.
+    Ordinary,
+    /// Read at any depth within the hard cap; own values at depth 1.
+    Function,
+    /// Read at any depth within the hard cap; members one level deeper.
+    Unchecked,
 }

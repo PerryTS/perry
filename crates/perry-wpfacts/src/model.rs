@@ -1080,6 +1080,58 @@ impl Hard {
 /// looks up (getters included) and calls with the value as `this`, and the
 /// values it reads. The site that issues the touch knows its protocol (the
 /// operator, the syntax or the runtime helper); ECMA-262 fixes each key set.
+/// Where the runtime's formatter shows a value (perry-runtime
+/// builtins/formatting.rs): its nesting `depth` (a console argument is 0)
+/// and the inspect depth `limit` in effect (`INSPECT_DEPTH_LIMIT`, default
+/// 2; `%o` 4, `console.dir(x, opts)` the options' depth). An ordinary object
+/// past the limit prints as `[Object]` with no read and no hook lookup;
+/// nothing is read past `INSPECT_HARD_CAP` (rule R2, `Model::implicit`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct InspectAt {
+    pub depth: u8,
+    pub limit: u8,
+}
+
+/// formatting.rs:592 / :1502 / :1169: `depth > 10` prints `[...]`.
+pub const INSPECT_HARD_CAP: u8 = 10;
+/// formatting.rs:226: Node's `util.inspect` default depth.
+pub const INSPECT_DEFAULT_LIMIT: u8 = 2;
+/// util_format.rs:415: `%o` formats with depth 4.
+pub const INSPECT_PCT_O_LIMIT: u8 = 4;
+
+impl InspectAt {
+    /// A console argument under the default limit.
+    pub const DEFAULT_ARG: InspectAt = InspectAt {
+        depth: 0,
+        limit: INSPECT_DEFAULT_LIMIT,
+    };
+
+    /// A console argument under `limit` (capped: a limit past the hard cap
+    /// reads what the cap allows).
+    pub const fn arg(limit: u8) -> InspectAt {
+        InspectAt {
+            depth: 0,
+            limit: if limit > INSPECT_HARD_CAP { INSPECT_HARD_CAP } else { limit },
+        }
+    }
+
+    /// The members of a value shown here.
+    pub fn member(self) -> InspectAt {
+        InspectAt {
+            depth: self.depth + 1,
+            limit: self.limit,
+        }
+    }
+
+    /// A function's own properties (formatting.rs:338 `format_jsvalue(v, 1)`).
+    pub fn fn_member(self) -> InspectAt {
+        InspectAt {
+            depth: 1,
+            limit: self.limit,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Protocol {
     /// ToPrimitive (ECMA-262 7.1.1), and through it ToString, ToNumber,
@@ -1135,7 +1187,7 @@ pub enum Protocol {
     /// formatted as `InspectShown`; what a hook or
     /// `toJSON` returns is formatted in turn. Getters run only under
     /// `console.dir(x, {getters})`; the reads here run them always.
-    Inspect,
+    Inspect(InspectAt),
     /// The runtime's value formatter on a value it shows (`format_jsvalue`,
     /// perry-runtime builtins/formatting.rs; Node lib/internal/util/
     /// inspect.js `formatValue`): the `[util.inspect.custom]` hook only;
@@ -1143,13 +1195,13 @@ pub enum Protocol {
     /// coercions belong to the format specifiers, which consume only
     /// arguments). Every value it shows and what a hook returns is
     /// formatted the same way.
-    InspectShown,
+    InspectShown(InspectAt),
     /// The formatter showing a Proxy's TARGET (`format_proxy_value`; Node
     /// `formatValue` after `getProxyDetails`): its own values, each
     /// `InspectShown`. No hook is looked up on it here: the Proxy's
     /// `[util.inspect.custom]` is read off the target and called with
     /// `this` = the Proxy (`Model::proxy_inspect_shown`).
-    InspectTarget,
+    InspectTarget(InspectAt),
     /// Node's `util.inspect(v, { depth: -1 })`, what an argument-type
     /// error's message runs on an object without a named constructor
     /// (lib/internal/errors.js `determineSpecificType`; node 26
@@ -1185,9 +1237,9 @@ impl Protocol {
         Protocol::Json,
         Protocol::HasInstance,
         Protocol::OwnKeys,
-        Protocol::Inspect,
-        Protocol::InspectShown,
-        Protocol::InspectTarget,
+        Protocol::Inspect(InspectAt::DEFAULT_ARG),
+        Protocol::InspectShown(InspectAt::DEFAULT_ARG),
+        Protocol::InspectTarget(InspectAt::DEFAULT_ARG),
         Protocol::ShallowInspect,
         Protocol::Clone,
         Protocol::Any,
@@ -1222,18 +1274,18 @@ impl Protocol {
             Protocol::BufferFrom => &["valueOf", WK_TO_PRIMITIVE],
             Protocol::Json => &["toJSON"],
             Protocol::HasInstance => &[WK_HAS_INSTANCE],
-            Protocol::Inspect => &[
+            Protocol::Inspect(_) => &[
                 INSPECT_CUSTOM_METHOD,
                 WK_TO_PRIMITIVE,
                 "valueOf",
                 "toString",
                 "toJSON",
             ],
-            Protocol::ShallowInspect | Protocol::InspectShown => &[INSPECT_CUSTOM_METHOD],
+            Protocol::ShallowInspect | Protocol::InspectShown(_) => &[INSPECT_CUSTOM_METHOD],
             Protocol::IterResult
             | Protocol::AsyncIterResult
             | Protocol::OwnKeys
-            | Protocol::InspectTarget
+            | Protocol::InspectTarget(_)
             | Protocol::Clone => &[],
             Protocol::Any => return None,
         })
@@ -1275,8 +1327,8 @@ impl Protocol {
     pub fn read_touches(self) -> &'static [Protocol] {
         match self {
             Protocol::Json => &[Protocol::Json],
-            Protocol::Inspect => &[Protocol::InspectShown],
-            Protocol::InspectShown | Protocol::InspectTarget => &[Protocol::InspectShown],
+            Protocol::Inspect(_) => &[Protocol::InspectShown(InspectAt::DEFAULT_ARG)],
+            Protocol::InspectShown(_) | Protocol::InspectTarget(_) => &[Protocol::InspectShown(InspectAt::DEFAULT_ARG)],
             Protocol::Clone => &[Protocol::Clone],
             Protocol::AsyncIterResult => &[Protocol::BufferFrom],
             Protocol::BufferFrom => &[Protocol::ToPrimitive],
@@ -1291,9 +1343,9 @@ impl Protocol {
         matches!(
             self,
             Protocol::Json
-                | Protocol::Inspect
-                | Protocol::InspectShown
-                | Protocol::InspectTarget
+                | Protocol::Inspect(_)
+                | Protocol::InspectShown(_)
+                | Protocol::InspectTarget(_)
                 | Protocol::Clone
                 | Protocol::BufferFrom
         )
@@ -1308,9 +1360,9 @@ impl Protocol {
             Protocol::IterResult => MARK_TOUCH_ITER_RESULT,
             Protocol::HasInstance => MARK_TOUCH_HAS_INSTANCE,
             Protocol::Json
-            | Protocol::Inspect
-            | Protocol::InspectShown
-            | Protocol::InspectTarget
+            | Protocol::Inspect(_)
+            | Protocol::InspectShown(_)
+            | Protocol::InspectTarget(_)
             | Protocol::ShallowInspect
             | Protocol::Clone
             | Protocol::OwnKeys
@@ -1345,8 +1397,8 @@ impl Protocol {
             Protocol::AsyncIterNext => Some(Protocol::AsyncIterResult),
             Protocol::BufferFrom => Some(Protocol::BufferFrom),
             Protocol::Json => Some(Protocol::Json),
-            Protocol::Inspect => Some(Protocol::Inspect),
-            Protocol::InspectShown => Some(Protocol::InspectShown),
+            Protocol::Inspect(at) => Some(Protocol::Inspect(at)),
+            Protocol::InspectShown(at) => Some(Protocol::InspectShown(at)),
             Protocol::ShallowInspect => Some(Protocol::ShallowInspect),
             Protocol::Any => Some(Protocol::Any),
             Protocol::ToPrimitive
@@ -1354,7 +1406,7 @@ impl Protocol {
             | Protocol::AsyncIterResult
             | Protocol::HasInstance
             | Protocol::OwnKeys
-            | Protocol::InspectTarget
+            | Protocol::InspectTarget(_)
             | Protocol::Clone => None,
         }
     }
@@ -1363,6 +1415,14 @@ impl Protocol {
     /// on it (`builtins::adopt`).
     pub fn awaits_result(self) -> bool {
         matches!(self, Protocol::AsyncIterNext)
+    }
+
+    /// Where an inspection protocol shows the value (`None`: another protocol).
+    pub fn inspect_at(self) -> Option<InspectAt> {
+        match self {
+            Protocol::Inspect(at) | Protocol::InspectShown(at) | Protocol::InspectTarget(at) => Some(at),
+            _ => None,
+        }
     }
 
     pub fn name(self) -> &'static str {
@@ -1378,9 +1438,9 @@ impl Protocol {
             Protocol::Json => "json",
             Protocol::HasInstance => "hasinstance",
             Protocol::OwnKeys => "ownkeys",
-            Protocol::Inspect => "inspect",
-            Protocol::InspectShown => "inspectshown",
-            Protocol::InspectTarget => "inspecttarget",
+            Protocol::Inspect(_) => "inspect",
+            Protocol::InspectShown(_) => "inspectshown",
+            Protocol::InspectTarget(_) => "inspecttarget",
             Protocol::ShallowInspect => "shallowinspect",
             Protocol::Clone => "clone",
             Protocol::Any => "any",
@@ -2268,6 +2328,16 @@ pub struct Model {
     /// (value node, `ProtoNode`) pairs a `ProtoGiven` watches.
     pub given_proto: crate::pts::FxHashSet<(NodeId, NodeId)>,
     pub implicit_done: crate::pts::FxHashMap<(Tok, Protocol), NodeId>,
+    /// Rule R2: the inspect depth limit a console call with default options
+    /// may run under (0: the default, 2). The runtime's limit holds for the
+    /// dynamic extent of the call that set it (`InspectDepthLimitGuard`), so
+    /// a console call run by a hook or getter inside `console.dir(x, opts)`
+    /// or `%o` formats under that limit: the join of the raised limits
+    /// whose touches may run program code (`Model::raise_inspect_limit`).
+    pub inspect_raised: u8,
+    /// Every console request (node, reason, shown, region, own floor),
+    /// re-issued when `inspect_raised` rises (`Model::console_inspect`).
+    pub inspect_reqs: Vec<(NodeId, u32, bool, NodeId, u8)>,
     /// The one argument node of the `@@hasInstance` touch on a token: every
     /// `instanceof` whose right-hand side holds the token adds its
     /// left-hand side (`Solver::has_instance`).

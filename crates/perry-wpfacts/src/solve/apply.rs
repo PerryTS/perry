@@ -2826,29 +2826,33 @@ impl Model {
                 agg,
                 region,
             } => {
-                let fired = self.nodes[agg as usize].cons.iter().any(|c| {
-                    matches!(
-                        c,
+                // Rule R2: `%o` formats its argument with depth 4
+                // (util_format.rs:415), every other specifier under the
+                // call's limit.
+                let floor = if self.may_hold_pct_o(n) {
+                    INSPECT_PCT_O_LIMIT
+                } else {
+                    INSPECT_DEFAULT_LIMIT
+                };
+                let fired = self.nodes[agg as usize]
+                    .cons
+                    .iter()
+                    .filter_map(|c| match c {
                         Cons::Implicit {
-                            proto: Protocol::Inspect,
+                            proto: Protocol::Inspect(at),
                             ..
-                        }
-                    )
-                });
+                        } => Some(at.limit),
+                        _ => None,
+                    })
+                    .max()
+                    .is_some_and(|l| l >= floor.max(self.inspect_raised));
                 if !fired && self.may_hold_percent(n) {
                     // `PERRY_WPF_IMPLSRC=1`: the first argument that lets
                     // the specifiers consume (its tokens and String entries).
                     if crate::solve::implsrc_on() {
                         self.console_pct_why(n);
                     }
-                    self.cons(
-                        agg,
-                        Cons::Implicit {
-                            reason,
-                            proto: Protocol::Inspect,
-                            region,
-                        },
-                    );
+                    self.console_inspect(agg, reason, false, region, floor, true);
                 }
             }
             Cons::ObjTagProbe { t, key } => {

@@ -479,6 +479,24 @@ impl Model {
     /// text, an exclusion entry (also of a prefix-and-free one) unless `%`
     /// is excluded and its known texts hold none, every other entry (a
     /// prefix, infix or suffix: its unknown part is any text) may.
+    /// Rule R2: a String node `n` holds may hold `%o` (`may_hold_percent`
+    /// with a known String checked for `%o` itself).
+    pub(crate) fn may_hold_pct_o(&self, n: NodeId) -> bool {
+        let node = &self.nodes[n as usize];
+        if !self.may_hold_percent(n) {
+            return false;
+        }
+        if node.prim & prim::STR == 0 || node.strs < STRS_SET0 {
+            return true;
+        }
+        self.str_atoms(node.strs).iter().any(|&a| {
+            if self.atom_is_mark(a) {
+                return true;
+            }
+            self.atoms[a as usize].contains("%o")
+        })
+    }
+
     pub(crate) fn may_hold_percent(&self, n: NodeId) -> bool {
         let node = &self.nodes[n as usize];
         if node

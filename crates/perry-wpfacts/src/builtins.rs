@@ -3207,6 +3207,13 @@ fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
 /// `args[0]` when no spread precedes it (`CallSite::first_arg_fixed`); else
 /// a spread's elements may be the first as well as later ones. Every other
 /// method keeps `Protocol::Inspect` on each argument but a lone first one.
+/// Rule R2: builtin namespace `ns` is an ordinary object (its chain ends
+/// at `Object.prototype`), which the formatter shows only within the inspect
+/// depth limit; any other is a function or of unknown kind.
+pub(crate) fn ns_is_ordinary(ns: BuiltinNs) -> bool {
+    members::ns_chain(ns) == Family::Object
+}
+
 fn console_args(m: &mut Model, call: CallId, name: &str) {
     let c = m.calls[call as usize].clone();
     let r = m.reason("console argument (formatted by the runtime)");
@@ -3218,31 +3225,22 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
         elems.push(dst);
     }
     if !matches!(name, "log" | "info" | "debug" | "error" | "warn" | "trace") {
+        // Rule R2: `console.dir(x, opts)` formats under the options' depth
+        // (console.rs:1738 `decode_dir_depth_option`): any value up to
+        // Infinity, which the solver keeps no constant of, so the hard cap.
+        // Every other method sets no limit of its own (ambient).
+        let dir_opts = name == "dir" && (c.args.len() >= 2 || !c.spread.is_empty());
+        let (floor, ambient) = if dir_opts {
+            (INSPECT_HARD_CAP, false)
+        } else {
+            (INSPECT_DEFAULT_LIMIT, true)
+        };
         for (i, &a) in c.args.iter().enumerate() {
             let first = i == 0 && c.spread.is_empty();
-            let proto = if first {
-                Protocol::InspectShown
-            } else {
-                Protocol::Inspect
-            };
-            m.cons(
-                a,
-                Cons::Implicit {
-                    reason: r,
-                    proto,
-                    region: c.region,
-                },
-            );
+            m.console_inspect(a, r, first, c.region, floor, ambient);
         }
         for &d in &elems {
-            m.cons(
-                d,
-                Cons::Implicit {
-                    reason: r,
-                    proto: Protocol::Inspect,
-                    region: c.region,
-                },
-            );
+            m.console_inspect(d, r, false, c.region, floor, ambient);
         }
         ret_prim(m, call, prim::UNDEF);
         return;
@@ -3283,14 +3281,7 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
         later.push(d);
     }
     for &a in c.args.iter().chain(&elems) {
-        m.cons(
-            a,
-            Cons::Implicit {
-                reason: r,
-                proto: Protocol::InspectShown,
-                region: c.region,
-            },
-        );
+        m.console_inspect(a, r, true, c.region, INSPECT_DEFAULT_LIMIT, true);
     }
     if !later.is_empty() {
         let agg = m.node_l("console-consumable");
