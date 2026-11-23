@@ -435,6 +435,9 @@
         }
         // The module fails in `compile_module` once lowering has listed
         // every unknown call; the placeholder value is never emitted.
+        // Arguments still lower so unknown calls nested in them are listed too.
+        let (_, arg_group) = super::lower_call_args_rooted(ctx, args)?;
+        arg_group.release(ctx);
         crate::unknown_ui_calls::record(method, args.len());
         return Ok(double_literal(f64::from_bits(crate::nanbox::TAG_UNDEFINED)));
     }

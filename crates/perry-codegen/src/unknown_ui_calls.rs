@@ -24,6 +24,17 @@ pub(crate) fn record(method: &str, args: usize) {
     });
 }
 
+/// A callable worker's calls, handed to the module's thread by `merge_callable`.
+pub(crate) fn take_callable() -> Vec<(String, usize)> {
+    UNKNOWN.with(|u| std::mem::take(&mut *u.borrow_mut()))
+}
+
+pub(crate) fn merge_callable(calls: Vec<(String, usize)>) {
+    for (method, args) in calls {
+        record(&method, args);
+    }
+}
+
 pub(crate) fn finish_module() -> anyhow::Result<()> {
     let unknown = UNKNOWN.with(|u| std::mem::take(&mut *u.borrow_mut()));
     if unknown.is_empty() {
@@ -94,6 +105,23 @@ mod tests {
         assert!(
             finish_module().is_ok(),
             "finish_module drains the module's calls"
+        );
+    }
+
+    #[test]
+    fn calls_recorded_on_a_worker_thread_reach_the_module() {
+        begin_module();
+        let calls = std::thread::spawn(|| {
+            record("canvasStroke", 6);
+            take_callable()
+        })
+        .join()
+        .unwrap();
+        merge_callable(calls);
+        let msg = finish_module().unwrap_err().to_string();
+        assert!(
+            msg.contains("'canvasStroke' (args: 6) was removed"),
+            "{msg}"
         );
     }
 

@@ -62,6 +62,7 @@ struct Effects {
     creates: std::collections::BTreeMap<String, crate::layout_desc::create_families::Site>,
     ffi: Vec<&'static str>,
     requests: std::collections::BTreeSet<u32>,
+    unknown_ui: Vec<(String, usize)>,
 }
 impl Effects {
     fn take() -> Self {
@@ -71,6 +72,7 @@ impl Effects {
             creates: crate::layout_desc::create_families::take_callable_effects(),
             ffi: crate::ext_registry::take_module_capture(),
             requests: crate::layout_ordinals::take_callable_requests(),
+            unknown_ui: crate::unknown_ui_calls::take_callable(),
         }
     }
     fn merge(self) {
@@ -79,6 +81,7 @@ impl Effects {
         self.layouts.merge();
         crate::layout_desc::create_families::merge_callable_effects(self.creates);
         crate::ext_registry::merge_callable_capture(self.ffi);
+        crate::unknown_ui_calls::merge_callable(self.unknown_ui);
     }
 }
 
