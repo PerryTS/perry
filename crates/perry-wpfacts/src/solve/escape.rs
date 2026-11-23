@@ -143,9 +143,7 @@ impl Model {
         // that value's chain (`Array.from.k = v` through
         // `a.constructor.__proto__`).
         let holds = !self.realm_held
-            && (self.unit_mode
-                || self.unseen_module_runs
-                || self.interp_runs
+            && (self.realm_nameable()
                 || self
                     .reasons
                     .get(reason as usize)

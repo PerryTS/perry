@@ -75,3 +75,13 @@ fn k10_keep_program_store_onto_the_intrinsic() {
     );
     assert!(!mono(&m_after(&src, "/*A*/")), "the program's own performance.now was lost");
 }
+
+/// K8: a call and a `new` of an unknown value hold nothing, whole program.
+#[test]
+fn k8_unknown_call_holds_no_realm() {
+    assert!(!held(&format!("{DECL}const r = get();\nconsole.log(r);\n")), "⊤ call held the realm");
+    assert!(
+        !held(&format!("{DECL}const C: any = get();\nconst r = new C(1);\nconsole.log(r);\n")),
+        "⊤ new held the realm"
+    );
+}

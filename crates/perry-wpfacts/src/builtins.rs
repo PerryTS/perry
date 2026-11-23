@@ -357,8 +357,9 @@ fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize
             crate::unksrc::held("method", why, call, f);
         }
     }
-    // Unknown code runs, handed values or not: it holds the realm.
-    if !m.realm_held {
+    // Unknown code runs, handed values or not: it holds the realm where code
+    // beside the program may name it (`Model::realm_nameable`).
+    if !m.realm_held && m.realm_nameable() {
         let r = m.reason("an intrinsic of the realm: unknown code holds the realm");
         if m.keysnap.is_some() {
             m.keysnap_at(

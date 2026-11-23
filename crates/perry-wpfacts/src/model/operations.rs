@@ -360,6 +360,16 @@ impl Model {
         self.unit_mode || self.unseen_module_runs || self.interp_linked
     }
 
+    /// Code other than the program and the runtime may name the realm: per
+    /// unit, beside an unseen module, or once interpreted code runs. Only
+    /// then does unknown code hold the realm (`hold_realm`). Whole program
+    /// under the closed world (owner 2026-11-14) and R-GLOBAL (2026-11-18),
+    /// unknown code is the runtime, which names intrinsics only through its
+    /// declared reads: a call or `new` of an unknown value holds nothing.
+    pub(crate) fn realm_nameable(&self) -> bool {
+        self.unit_mode || self.unseen_module_runs || self.interp_runs
+    }
+
     pub fn reason(&mut self, s: &str) -> u32 {
         if let Some(&r) = self.reason_index.get(s) {
             return r;
