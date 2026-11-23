@@ -520,9 +520,9 @@ impl Model {
     /// ToPrimitive (`proxy_to_primitive`), and the value is shown unwrapped
     /// (`proxy_inspect_shown`).
     pub(crate) fn proxy_inspect(&mut self, p: u32, reason: u32, region: NodeId) {
-        self.proxy_json(p, reason, region);
-        self.proxy_to_primitive(p, reason, region);
-        self.proxy_inspect_shown(p, reason, region);
+        self.shared_scope(|m| m.proxy_json(p, reason, region));
+        self.shared_scope(|m| m.proxy_to_primitive(p, reason, region));
+        self.shared_scope(|m| m.proxy_inspect_shown(p, reason, region));
     }
 
     /// The runtime's formatter showing Proxy `p` (`InspectShown`: a console
@@ -867,25 +867,25 @@ impl Model {
                 reason,
                 proto: Protocol::ToPrimitive,
                 region,
-            } => self.proxy_to_primitive(p, reason, region),
+            } => self.shared_scope(|m| m.proxy_to_primitive(p, reason, region)),
             // The formatter showing the Proxy (`proxy_inspect_shown`).
             Cons::Implicit {
                 reason,
                 proto: Protocol::InspectShown,
                 region,
-            } => self.proxy_inspect_shown(p, reason, region),
+            } => self.shared_scope(|m| m.proxy_inspect_shown(p, reason, region)),
             // SerializeJSONProperty (`proxy_json`) and the formatter on a
             // console argument (`proxy_inspect`).
             Cons::Implicit {
                 reason,
                 proto: Protocol::Json,
                 region,
-            } => self.proxy_json(p, reason, region),
+            } => self.shared_scope(|m| m.proxy_json(p, reason, region)),
             Cons::Implicit {
                 reason,
                 proto: Protocol::Inspect,
                 region,
-            } => self.proxy_inspect(p, reason, region),
+            } => self.shared_scope(|m| m.proxy_inspect(p, reason, region)),
             // The own keys (`proxy_own_keys`).
             Cons::Implicit {
                 reason,

@@ -38,6 +38,11 @@ use std::panic::Location;
 use std::sync::Mutex;
 
 pub const NOPOS: (u32, u32) = (u32::MAX, u32::MAX);
+/// Module tag of a shared operation's position: `(SHARED, id)` names
+/// `StopTop::shared[id]`, an operation made once for every caller (an
+/// implicit-protocol touch per (value, protocol)); its callers carry the
+/// program positions.
+pub const SHARED: u32 = u32::MAX - 1;
 
 #[derive(Default)]
 pub struct StopTop {
@@ -69,8 +74,30 @@ pub struct StopTop {
     pub(crate) cons_pos: FxHashMap<(NodeId, u32), (u32, u32)>,
     /// A node made outside a program expression: the solver line that made it.
     pub(crate) node_at: FxHashMap<NodeId, &'static Location<'static>>,
-    /// Nodes made with no program position, by solver line (a bug each).
-    pub(crate) nopos: FxHashMap<&'static Location<'static>, u64>,
+    /// Operations attached with no program position, by (solver line, kind
+    /// of operation, solver context): each one a bug of that line.
+    pub(crate) nopos: FxHashMap<(&'static Location<'static>, &'static str, &'static str), u64>,
+    /// The solver line that attached a rule with no position, by (node, index).
+    pub(crate) cons_at: FxHashMap<(NodeId, u32), &'static Location<'static>>,
+    /// The program position of each copy edge, keyed `a << 32 | b`.
+    pub(crate) edge_pos: FxHashMap<u64, (u32, u32)>,
+    /// Shared operations: what each is, and its callers' positions (program
+    /// positions or `(SHARED, id)` of the shared operation that asked).
+    pub(crate) shared: Vec<(String, Vec<(u32, u32)>)>,
+    pub(crate) shared_key: FxHashMap<(Tok, crate::model::Protocol), u32>,
+    /// The shared operation being built (`Model::implicit`), else NOPOS.
+    pub(crate) shared_pos: (u32, u32),
+    /// The rule's index in its node's rules.
+    pub(crate) rule_ci: u32,
+    /// `add_top` / `top_val` count their own operation.
+    pub(crate) quiet_top: bool,
+    /// The HIR expression variant generation walks (`variant`).
+    pub(crate) gen_kind: &'static str,
+    /// Generation operations without a position, by HIR expression variant
+    /// (the variant that carries no source offset).
+    pub(crate) gen_gap: FxHashMap<&'static str, u64>,
+    /// The solver phase running (`Model::prof_mark`).
+    pub(crate) phase: &'static str,
     /// Escapes in progress: (token, reason id, node the rule ran on).
     pub(crate) esc: Vec<(Tok, u32, NodeId)>,
     /// The origin `Model::add_top` names while it adds ⊤.
@@ -91,6 +118,8 @@ pub fn take_captured() -> Vec<String> {
         .take()
         .unwrap_or_default()
 }
+
+pub(crate) type RuleSaved = (Option<(NodeId, Cons)>, (u32, u32), (u32, u32), u32);
 
 impl StopTop {
     pub(crate) fn from_env(paths: Vec<String>) -> Option<Box<StopTop>> {
@@ -127,28 +156,90 @@ impl StopTop {
             paths,
             gen_pos: NOPOS,
             rule_pos: NOPOS,
+            shared_pos: NOPOS,
             ..Default::default()
         }))
     }
 
-    /// Rule `c` (index `ci` of node `n`'s rules) starts to apply: the rule
-    /// and its position before it, to restore after.
-    pub(crate) fn enter_rule(&mut self, n: NodeId, c: Cons, ci: u32) -> (Option<(NodeId, Cons)>, (u32, u32)) {
+    /// Rule `c` (index `ci` of node `n`'s rules) starts to apply: the rule,
+    /// its position and the shared operation before it, to restore after
+    /// (`leave_rule`).
+    pub(crate) fn enter_rule(&mut self, n: NodeId, c: Cons, ci: u32) -> RuleSaved {
         let p = self.cons_pos.get(&(n, ci)).copied().unwrap_or(NOPOS);
-        (self.rule.replace((n, c)), std::mem::replace(&mut self.rule_pos, p))
+        (
+            self.rule.replace((n, c)),
+            std::mem::replace(&mut self.rule_pos, p),
+            std::mem::replace(&mut self.shared_pos, NOPOS),
+            std::mem::replace(&mut self.rule_ci, ci),
+        )
     }
 
-    /// The program position of what runs now: the expression generation
-    /// walks, else the expression that attached the rule being applied.
+    pub(crate) fn leave_rule(&mut self, r: RuleSaved) {
+        (self.rule, self.rule_pos, self.shared_pos, self.rule_ci) = r;
+    }
+
+    /// The program position of what runs now: the shared operation being
+    /// built, else the expression that attached the rule being applied
+    /// (also when generation replays it), else the expression generation
+    /// walks.
     pub(crate) fn cur_pos(&self) -> (u32, u32) {
-        if self.gen_pos != NOPOS {
-            self.gen_pos
+        if self.shared_pos != NOPOS {
+            self.shared_pos
         } else if self.rule.is_some() {
             self.rule_pos
         } else {
-            NOPOS
+            self.gen_pos
         }
     }
+
+    /// The shared operation of `key` (made at its first request), with the
+    /// caller `p` added.
+    pub(crate) fn shared_call(&mut self, key: (Tok, crate::model::Protocol), what: impl FnOnce() -> String, p: (u32, u32)) -> u32 {
+        let id = match self.shared_key.get(&key) {
+            Some(&id) => id,
+            None => {
+                let id = self.shared.len() as u32;
+                self.shared.push((what(), Vec::new()));
+                self.shared_key.insert(key, id);
+                id
+            }
+        };
+        let cs = &mut self.shared[id as usize].1;
+        if !cs.contains(&p) {
+            cs.push(p);
+        }
+        id
+    }
+}
+
+/// The variant name of an HIR expression (its Debug text up to the first
+/// non-identifier byte), interned.
+pub(crate) fn variant(e: &impl std::fmt::Debug, pre: &str) -> &'static str {
+    use std::fmt::Write;
+    struct W([u8; 40], usize);
+    impl Write for W {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            for &c in s.as_bytes() {
+                if !(c.is_ascii_alphanumeric() || c == b'_') || self.1 == self.0.len() {
+                    return Err(std::fmt::Error);
+                }
+                self.0[self.1] = c;
+                self.1 += 1;
+            }
+            Ok(())
+        }
+    }
+    let mut w = W([0; 40], 0);
+    let _ = write!(w, "{e:?}");
+    let name = format!("{pre}{}", std::str::from_utf8(&w.0[..w.1]).unwrap_or("?"));
+    static NAMES: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
+    let mut v = NAMES.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(&n) = v.iter().find(|&&n| n == name) {
+        return n;
+    }
+    let n: &'static str = Box::leak(name.into_boxed_str());
+    v.push(n);
+    n
 }
 
 /// The byte offset an expression carries (perry-hir records one on calls,
@@ -171,6 +262,149 @@ pub(crate) fn expr_offset(e: &perry_hir::Expr) -> Option<u32> {
 }
 
 impl Model {
+    /// The solver context running now (census of position-less operations).
+    pub(crate) fn pos_ctx(&self) -> &'static str {
+        let Some(s) = self.stop_top.as_ref() else { return "" };
+        if self.rel_phase == b'G' && s.rule.is_none() {
+            "generation"
+        } else if s.rule.is_some() {
+            "rule"
+        } else if !s.esc.is_empty() {
+            "escape"
+        } else if self.cur_src != NO_NODE {
+            "sender"
+        } else if s.phase.is_empty() {
+            "worklist"
+        } else {
+            s.phase
+        }
+    }
+
+    /// Run `f`; the shared operation it opens (`implicit_throw`) ends with it.
+    pub(crate) fn shared_scope<R>(&mut self, f: impl FnOnce(&mut Self) -> R) -> R {
+        let sp = self.stop_top.as_ref().map(|s| s.shared_pos);
+        let r = f(self);
+        if let (Some(p), Some(s)) = (sp, self.stop_top.as_mut()) {
+            s.shared_pos = p;
+        }
+        r
+    }
+
+    /// An operation of `kind` made at `at` with no program position.
+    /// Inside a rule that itself has no position the operation inherits
+    /// that rule's bug (`-inherited`), counted apart from the roots.
+    pub(crate) fn note_nopos(&mut self, at: &'static Location<'static>, kind: &'static str) {
+        let ctx = self.pos_ctx();
+        if let Some(s) = self.stop_top.as_mut() {
+            let kind = if s.rule.is_some() && s.shared_pos == NOPOS {
+                match kind {
+                    "cons" => "cons-inherited",
+                    "edge" => "edge-inherited",
+                    "top" => "top-inherited",
+                    "topval" => "topval-inherited",
+                    _ => "other-inherited",
+                }
+            } else {
+                if s.rule.is_none() && s.gen_pos == NOPOS && !s.gen_kind.is_empty() && !kind.starts_with("edge") {
+                    *s.gen_gap.entry(s.gen_kind).or_default() += 1;
+                }
+                kind
+            };
+            *s.nopos.entry((at, kind, ctx)).or_default() += 1;
+        }
+    }
+
+    /// The program positions a shared operation's callers reach (through
+    /// the shared operations that asked for it), deduplicated, in order.
+    fn shared_program_callers(&self, id: u32) -> Vec<(u32, u32)> {
+        let s = self.stop_top.as_ref().unwrap();
+        let mut out = Vec::new();
+        let mut seen = vec![false; s.shared.len()];
+        let mut q = std::collections::VecDeque::from([id]);
+        seen[id as usize] = true;
+        while let Some(i) = q.pop_front() {
+            for &p in &s.shared[i as usize].1 {
+                if p.0 == SHARED {
+                    if !seen[p.1 as usize] {
+                        seen[p.1 as usize] = true;
+                        q.push_back(p.1);
+                    }
+                } else if !out.contains(&p) {
+                    out.push(p);
+                }
+            }
+        }
+        out
+    }
+
+    /// `where:` / `source:` of the operation running at the stop: its
+    /// program position; a shared operation's callers; a position-less one
+    /// is a bug named by the line that attached it.
+    fn push_op_where(&self, b: &mut String, p: (u32, u32), what: &str) {
+        let s = self.stop_top.as_ref().unwrap();
+        if p == NOPOS {
+            let at = s
+                .rule
+                .and_then(|(rn, _)| s.cons_at.get(&(rn, s.rule_ci)))
+                .map_or_else(|| "?".to_string(), |l| format!("{}:{}", l.file(), l.line()));
+            b.push_str(&format!(
+                "  where:   BUG: {what} has no program position (attached at {at}): its creation site must record one\n"
+            ));
+            return;
+        }
+        if p.0 == SHARED {
+            let (w, own) = &s.shared[p.1 as usize];
+            let cs = self.shared_program_callers(p.1);
+            b.push_str(&format!(
+                "  where:   shared operation: {w} (made once; {} direct requests, {} program callers)\n",
+                own.len(),
+                cs.len()
+            ));
+            for (i, &c) in cs.iter().enumerate() {
+                if i == 5 {
+                    b.push_str(&format!("  caller:  ... {} more\n", cs.len() - 5));
+                    break;
+                }
+                b.push_str(&format!(
+                    "  caller:  {}  {}\n",
+                    self.pos_text(c),
+                    self.source_line(c).unwrap_or_default()
+                ));
+            }
+            return;
+        }
+        b.push_str(&format!("  where:   {}\n", self.pos_text(p)));
+        if let Some(l) = self.source_line(p) {
+            b.push_str(&format!("  source:  {l}\n"));
+        }
+    }
+
+    /// The copy edges into `n`, with their program positions.
+    fn push_fed_by(&self, b: &mut String, n: NodeId) {
+        let s = self.stop_top.as_ref().unwrap();
+        let mut ps: Vec<(u32, u32)> = Vec::new();
+        let mut k = 0usize;
+        for (a, nd) in self.nodes.iter().enumerate() {
+            if nd.succ.contains(&n) {
+                k += 1;
+                let p = s.edge_pos.get(&((a as u64) << 32 | n as u64)).copied().unwrap_or(NOPOS);
+                if !ps.contains(&p) {
+                    ps.push(p);
+                }
+            }
+        }
+        if k == 0 {
+            return;
+        }
+        b.push_str(&format!("  fed by:  {k} copy edges into node {n}, {} positions\n", ps.len()));
+        for &p in ps.iter().take(5) {
+            b.push_str(&format!("  edge:    {}  {}\n", self.pos_text(p), self.source_line(p).unwrap_or_default()));
+        }
+        if ps.len() > 5 {
+            b.push_str(&format!("  edge:    ... {} more\n", ps.len() - 5));
+        }
+    }
+
     /// ⊤ just arrived in `n` (`cur_src`/`cur_why`: what sent it; `at`: the
     /// solver line). Decides propagation / S / A; stops at a counted
     /// creation.
@@ -275,7 +509,19 @@ impl Model {
             at.line()
         ));
         b.push_str(&format!("  value:   {}\n", self.node_words(n)));
-        self.push_where(&mut b, n);
+        // The operation that made the value: a named unknown value's own
+        // position, else the running rule's, else what runs (generation).
+        let st = self.stop_top.as_ref().unwrap();
+        let op_pos = match st.topvals.get(&src).filter(|_| src_ok) {
+            Some(&(_, _, p)) => p,
+            None => st.cur_pos(),
+        };
+        let what = match rule_any {
+            Some((rn, c)) => format!("rule {} on node {rn}", c.kind_name()),
+            None => "the operation".into(),
+        };
+        self.push_op_where(&mut b, op_pos, &what);
+        self.push_via(&mut b, n);
         if let Some(t) = trigger {
             b.push_str(&format!("  cause:   {t}\n"));
         }
@@ -297,8 +543,12 @@ impl Model {
         if inputs.is_empty() {
             b.push_str("  input:   none (the rule adds ⊤ directly, no node is read)\n");
         }
+        let first = inputs.first().copied();
         for i in inputs {
             b.push_str(&format!("  input:   {}\n", self.input_words(i)));
+        }
+        if let Some(i) = first {
+            self.push_fed_by(&mut b, i);
         }
         if let Some((rn, c)) = rule_any {
             b.push_str(&format!("  context: constraint {:?} on node {rn}\n", c));
@@ -314,11 +564,31 @@ impl Model {
             return;
         }
         if let Some(s) = self.stop_top.as_ref() {
-            let mut v: Vec<_> = s.nopos.iter().map(|(l, &k)| (k, l.file(), l.line())).collect();
-            v.sort_by(|a, b| b.0.cmp(&a.0).then(a.1.cmp(b.1)).then(a.2.cmp(&b.2)));
-            for (k, f, l) in v {
-                eprintln!("TOPSTOP nopos {f}:{l} {k}");
+            let mut v: Vec<_> = s.nopos.iter().map(|(&(l, kd, c), &k)| (kd == "edge", k, l.file(), l.line(), kd, c)).collect();
+            v.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)).then(a.2.cmp(b.2)).then(a.3.cmp(&b.3)).then(a.5.cmp(b.5)));
+            let (mut ops, mut edges, mut inh) = (0u64, 0u64, 0u64);
+            for (e, k, f, l, kd, c) in v {
+                if kd.ends_with("-inherited") {
+                    inh += k;
+                    eprintln!("TOPSTOP nopos-inh {kd} {f}:{l} {c} {k}");
+                } else if e {
+                    edges += k;
+                    eprintln!("TOPSTOP nopos-edge {f}:{l} {c} {k}");
+                } else {
+                    ops += k;
+                    eprintln!("TOPSTOP nopos-op {kd} {f}:{l} {c} {k}");
+                }
             }
+            let mut g: Vec<_> = s.gen_gap.iter().map(|(&k, &n)| (n, k)).collect();
+            g.sort_by(|a, b| b.cmp(a));
+            for (n, k) in g {
+                eprintln!("TOPSTOP nopos-hir {k} {n}");
+            }
+            eprintln!(
+                "TOPSTOP nopos-ops total {ops} (root operations that can stop); inherited {inh} (inside a rule without a position); nopos-edges total {edges}; edges with a position {}; shared operations {}",
+                s.edge_pos.len(),
+                s.shared.len()
+            );
         }
         eprint!("{b}");
         std::process::exit(86);
@@ -337,13 +607,10 @@ impl Model {
         let Some(s) = self.stop_top.as_ref() else {
             return NOPOS;
         };
-        if s.node_at.contains_key(&n) {
-            return s.node_pos.get(n as usize).copied().unwrap_or(NOPOS);
-        }
         let f = self.node_fn.get(n as usize).copied().unwrap_or(crate::model::NO_FN);
         if f != crate::model::NO_FN {
             let fi = &self.funcs[f as usize];
-            if fi.params.contains(&n) || fi.this == n || fi.ret == n {
+            if fi.this == n || fi.ret == n {
                 if let Some(&p) = s.fn_pos.get(&(f as u32)) {
                     return p;
                 }
@@ -359,14 +626,9 @@ impl Model {
         s.node_pos.get(n as usize).copied().unwrap_or(NOPOS)
     }
 
-    /// `where:` and `source:` of node `n` (its program origin), and the
-    /// steps that led there (`via:`) when the solver made it.
-    fn push_where(&self, b: &mut String, n: NodeId) {
-        let (p, steps) = self.program_origin(n);
-        b.push_str(&format!("  where:   {}\n", self.pos_text(p)));
-        if let Some(l) = self.source_line(p) {
-            b.push_str(&format!("  source:  {l}\n"));
-        }
+    /// The rule applications that made node `n` (`via:`).
+    fn push_via(&self, b: &mut String, n: NodeId) {
+        let (_, steps) = self.program_origin(n);
         let k = steps.len();
         for (i, st) in steps.into_iter().enumerate() {
             if i == 3 && k > 4 {
@@ -403,16 +665,6 @@ impl Model {
                 self.labels[cur as usize], self.labels[from as usize]
             ));
             cur = from;
-        }
-        if p == NOPOS {
-            let at = s
-                .node_at
-                .get(&n)
-                .map_or_else(|| "?".to_string(), |l| format!("{}:{}", l.file(), l.line()));
-            steps.push(format!(
-                "BUG: node {n} `{}` was made with no program position (at {at}): its creation site must record one",
-                self.labels[n as usize]
-            ));
         }
         (p, steps)
     }
@@ -499,15 +751,10 @@ impl Model {
         );
         // Where: a parameter marker's function; else the node the running
         // rule (or the escape in progress) works on.
-        let mut placed = false;
-        if let Some(&(f, _)) = self.param_marker.get(&t) {
-            if let Some(&p) = self.stop_top.as_ref().unwrap().fn_pos.get(&(f as u32)) {
-                b.push_str(&format!("  where:   {} (first program position of the parameter's function)\n", self.pos_text(p)));
-                if let Some(l) = self.source_line(p) {
-                    b.push_str(&format!("  source:  {l}\n"));
-                }
-                placed = true;
-            }
+        if let Some(&(f, i)) = self.param_marker.get(&t) {
+            let pn = self.funcs[f as usize].params.get(i as usize).copied().unwrap_or(NO_NODE);
+            let p = self.stop_top.as_ref().unwrap().node_pos.get(pn as usize).copied().unwrap_or(NOPOS);
+            b.push_str(&format!("  param:   {} (the parameter's declaration)\n", self.pos_text(p)));
         }
         let mut inputs: Vec<NodeId> = Vec::new();
         if let Some((rn, _)) = rule {
@@ -526,23 +773,12 @@ impl Model {
         if inputs.is_empty() && self.cur_src != NO_NODE && (self.cur_src as usize) < self.nodes.len() {
             inputs.push(self.cur_src);
         }
-        let rule_pos = self.stop_top.as_ref().unwrap().rule_pos;
-        if !placed && rule.is_some() && rule_pos != NOPOS {
-            b.push_str(&format!("  where:   {} (the expression that attached the running rule)\n", self.pos_text(rule_pos)));
-            if let Some(l) = self.source_line(rule_pos) {
-                b.push_str(&format!("  source:  {l}\n"));
-            }
-            placed = true;
-        }
-        if !placed {
-            match inputs.first() {
-                Some(&i) => {
-                    b.push_str("  (where: the node the rule works on, the construct that made the solver mark it)\n");
-                    self.push_where(&mut b, i);
-                }
-                None => b.push_str("  where:   (no program position: no rule, escape or sender is active)\n"),
-            }
-        }
+        let op_pos = self.stop_top.as_ref().unwrap().cur_pos();
+        let what = match rule {
+            Some((rn, c)) => format!("rule {} on node {rn}", c.kind_name()),
+            None => "the operation".into(),
+        };
+        self.push_op_where(&mut b, op_pos, &what);
         for i in inputs {
             b.push_str(&format!("  input:   {}\n", self.input_words(i)));
         }
@@ -559,6 +795,9 @@ impl Model {
         if p == NOPOS {
             return "(no program position recorded)".into();
         }
+        if p.0 == SHARED {
+            return format!("shared operation #{}: {}", p.1, s.shared[p.1 as usize].0);
+        }
         let path = s.paths.get(p.0 as usize).cloned().unwrap_or_else(|| format!("module#{}", p.0));
         match std::fs::read(&path) {
             Ok(src) => {
@@ -573,7 +812,7 @@ impl Model {
 
     fn source_line(&self, p: (u32, u32)) -> Option<String> {
         let s = self.stop_top.as_ref()?;
-        if p == NOPOS {
+        if p == NOPOS || p.0 == SHARED {
             return None;
         }
         let src = std::fs::read(s.paths.get(p.0 as usize)?).ok()?;
