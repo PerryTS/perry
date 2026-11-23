@@ -1,0 +1,1 @@
+- wasm/web: `Symbol()`, `Symbol.keyFor` and a symbol's `description` evaluate instead of reading `undefined` (#15285).
