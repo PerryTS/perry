@@ -150,6 +150,11 @@ pub mod guard {
     /// a constructor body result that makes a base `new` yield its `this`.
     /// Every primitive; no object or function token.
     pub const NOT_OBJECT: u8 = 23;
+    /// Rule NOT-ERROR: the value of `Error` where a failed `x instanceof
+    /// Error` narrows (`Cons::NotError`): any value but the intrinsic
+    /// constructor (a program store, ⊤) lets every value of `x` through; a
+    /// primitive throws and lets none.
+    pub const NOT_ERROR_CTOR: u8 = 24;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -169,7 +174,7 @@ pub mod guard {
             NOT_CALLABLE => p::ALL,
             // A primitive right-hand side throws (InstanceofOperator step
             // 1): it selects no false side.
-            NOT_BUFFER_CTOR | NOT_SHARED_BUFFER_CTOR => 0,
+            NOT_BUFFER_CTOR | NOT_SHARED_BUFFER_CTOR | NOT_ERROR_CTOR => 0,
             // ECMA-262 7.2.16 IsStrictlyEqual with a Boolean constant: only
             // that Boolean is (`IS_*`); every other value is not (`NOT_*`).
             IS_FALSE => p::FALSE,
@@ -2464,6 +2469,11 @@ pub struct Model {
     /// token back (`record_entry_holds`), looked at again in
     /// `settle_record_entry`.
     pub record_entry_held: Vec<(Tok, NodeId)>,
+    /// Rule NOT-ERROR: (token, hook, dst) of each `Cons::NotError` that
+    /// dropped the token (`not_error_drops`), looked at again in
+    /// `settle_not_error`; the set keeps each triple once.
+    pub not_error_held: Vec<(Tok, NodeId, NodeId)>,
+    pub not_error_seen: crate::pts::FxHashSet<(Tok, NodeId, NodeId)>,
     /// The ordinary dispatch behind a name-keyed fold
     /// (`Gen::name_fold_call`), with the builtin kind the fold's helper
     /// serves itself: `method_on` makes it on every other receiver.

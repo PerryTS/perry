@@ -164,6 +164,7 @@ impl Model {
             Cons::ProtoObjects { dst } => format!("ProtoObjects dst={:?}", dst),
             Cons::NotRegExp { dst } => format!("NotRegExp dst={:?}", dst),
             Cons::NotObjectProto { dst } => format!("NotObjectProto dst={:?}", dst),
+            Cons::NotError { hook, dst } => format!("NotError hook={:?} dst={:?}", hook, dst),
             Cons::NotBuffer { shared, dst } => {
                 format!("NotBuffer shared={shared} dst={:?}", dst)
             }

@@ -813,6 +813,11 @@ pub(crate) enum Presence {
     /// (`Cons::NotObjectProto`): not `%Object.prototype%`, while the global
     /// holds the intrinsic constructor.
     NotObjectProto,
+    /// Rule NOT-ERROR: `local instanceof Error` failed, the bare global
+    /// name (`Cons::NotError`): no value whose prototype chain surely
+    /// reaches `%Error.prototype%`, while the global holds the intrinsic
+    /// constructor.
+    NotError,
 }
 
 /// What condition `c` implies when it is `positive`ly true (false): a clip
@@ -949,18 +954,22 @@ fn implied<'p>(
             ty_expr: Some(rhs),
             ..
         } if !positive => {
-            let shared = match rhs.as_ref() {
+            // Rule NOT-ERROR: `Error` the same way; the runtime answers a
+            // native Error by its brand and any other object by its chain
+            // (`Cons::NotError`).
+            let presence = match rhs.as_ref() {
                 Expr::PropertyGet {
                     object, property, ..
                 } if matches!(object.as_ref(), Expr::GlobalGet(0)) => match property.as_str() {
-                    "ArrayBuffer" => Some(false),
-                    "SharedArrayBuffer" => Some(true),
+                    "ArrayBuffer" => Some(Presence::NotBuffer(false)),
+                    "SharedArrayBuffer" => Some(Presence::NotBuffer(true)),
+                    "Error" => Some(Presence::NotError),
                     _ => None,
                 },
                 _ => None,
             };
-            if let (Some(shared), Some(Bound::Local(id))) = (shared, bound_of(expr, subst)) {
-                out.push(Implied::Present(id, Presence::NotBuffer(shared)));
+            if let (Some(presence), Some(Bound::Local(id))) = (presence, bound_of(expr, subst)) {
+                out.push(Implied::Present(id, presence));
             }
         }
         // Rule T7: `local !== Object.prototype` true (`===` false; `!=`
@@ -1658,6 +1667,30 @@ impl<'a> Gen<'a> {
                         ctor,
                         Cons::Guard {
                             test: crate::model::guard::NOT_OBJECT_CTOR,
+                            from: src,
+                            dst: start,
+                        },
+                    );
+                }
+                Implied::Present(_, Presence::NotError) => {
+                    // The global's value (`globalThis.Error`, the read the
+                    // right-hand side makes): any value but the intrinsic
+                    // constructor lets every value through. `hook`: what
+                    // `GetMethod(Error, @@hasInstance)` may find (13.10.2
+                    // step 2); a program-installed one lets every value
+                    // through as well (`Model::not_error_drops`).
+                    let global = self.expr(fx, &Expr::GlobalGet(0));
+                    let ctor = self.tmp("instanceof-ctor");
+                    let key = Key::Named(self.m.atom("Error"));
+                    self.m.cons(global, Cons::Load { key, dst: ctor });
+                    let hook = self.tmp("instanceof-hook");
+                    let hk = Key::Named(self.m.atom(crate::model::WK_HAS_INSTANCE));
+                    self.m.cons(ctor, Cons::Load { key: hk, dst: hook });
+                    self.m.cons(src, Cons::NotError { hook, dst: start });
+                    self.m.cons(
+                        ctor,
+                        Cons::Guard {
+                            test: crate::model::guard::NOT_ERROR_CTOR,
                             from: src,
                             dst: start,
                         },

@@ -269,6 +269,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::NotNullish { .. }
         | Cons::NotBuffer { .. }
         | Cons::NotObjectProto { .. }
+        | Cons::NotError { .. }
         | Cons::NotRegExp { .. }
         | Cons::NotNull { .. }
  | Cons::RecordEntry { .. }
@@ -420,6 +421,7 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         | Cons::NotNullish { .. }
         | Cons::NotBuffer { .. }
         | Cons::NotObjectProto { .. }
+        | Cons::NotError { .. }
         | Cons::NotRegExp { .. }
         | Cons::NotNull { .. }
         | Cons::RecordEntry { .. }
@@ -1356,6 +1358,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     | Cons::NotNullish { .. }
                                     | Cons::NotBuffer { .. }
                                     | Cons::NotObjectProto { .. }
+                                    | Cons::NotError { .. }
                                     | Cons::NotRegExp { .. }
                                     | Cons::NotNull { .. }
                                     | Cons::RecordEntry { .. }
@@ -1924,6 +1927,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::NotNullish { .. }
                 | Cons::NotBuffer { .. }
                 | Cons::NotObjectProto { .. }
+                | Cons::NotError { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::NotNull { .. }
                 | Cons::RecordEntry { .. }

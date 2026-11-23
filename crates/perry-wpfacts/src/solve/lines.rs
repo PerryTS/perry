@@ -91,6 +91,7 @@ impl Model {
             Cons::NotBuffer { shared, dst } => format!("notbuffer {n} {dst} shared={shared}"),
             Cons::NotRegExp { dst } => format!("notregexp {n} {dst}"),
             Cons::NotObjectProto { dst } => format!("notobjectproto {n} {dst}"),
+            Cons::NotError { hook, dst } => format!("noterror {n} {hook} {dst}"),
             Cons::ProtoObjects { dst } => format!("protoobjects {n} {dst}"),
             Cons::Objects { dst } => format!("objects {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(

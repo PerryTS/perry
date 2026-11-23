@@ -153,6 +153,10 @@ pub fn map_cons(
             dst: n(dst),
         },
         NotObjectProto { dst } => NotObjectProto { dst: n(dst) },
+        NotError { hook, dst } => NotError {
+            hook: n(hook),
+            dst: n(dst),
+        },
         Objects { dst } => Objects { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
@@ -690,6 +694,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Falsy { .. }
             | NotBuffer { .. }
             | NotObjectProto { .. }
+            | NotError { .. }
             | NotRegExp { .. }
             | ProtoObjects { .. }
             | NotNull { .. }

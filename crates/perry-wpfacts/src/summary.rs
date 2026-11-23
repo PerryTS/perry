@@ -384,6 +384,7 @@ impl Model {
                 | Cons::Falsy { dst }
                 | Cons::NotBuffer { dst, .. }
                 | Cons::NotObjectProto { dst }
+                | Cons::NotError { dst, .. }
                 | Cons::NotRegExp { dst }
                 | Cons::NotNull { dst }
  | Cons::RecordEntry { dst }

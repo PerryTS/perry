@@ -219,6 +219,7 @@ mod new_namespace_object;
 mod null_proto_box_key;
 mod num_key;
 mod numeric_key_names;
+mod not_error;
 mod object_proto_test;
 mod objproto_protocol;
 mod opaque_models;

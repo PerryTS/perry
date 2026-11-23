@@ -502,6 +502,7 @@ impl Model {
                         Some(self.tok(TokKind::Builtin(BuiltinNs::SharedArrayBuffer)))
                     }
                     guard::NOT_OBJECT_CTOR => Some(self.tok(TokKind::Builtin(BuiltinNs::Object))),
+                    guard::NOT_ERROR_CTOR => Some(self.tok(TokKind::Builtin(BuiltinNs::Error))),
                     _ => None,
                 };
                 // A marker beside its values is no value (DECISIONS 74):
@@ -623,6 +624,26 @@ impl Model {
             Cons::NotObjectProto { dst } => {
                 for &t in toks {
                     if !matches!(self.toks[t as usize], TokKind::ObjectProto) {
+                        self.add_tok(dst, t);
+                    }
+                }
+                if prim != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim, strs);
+                    self.cur_range = saved;
+                }
+            }
+            // Rule NOT-ERROR (`solve/not_error.rs`): every value but the
+            // ones whose chain surely reaches `%Error.prototype%`; a dropped
+            // token is held for `settle_not_error`.
+            Cons::NotError { hook, dst } => {
+                for &t in toks {
+                    if self.not_error_drops(t, hook) {
+                        if self.not_error_seen.insert((t, hook, dst)) {
+                            self.not_error_held.push((t, hook, dst));
+                        }
+                    } else {
                         self.add_tok(dst, t);
                     }
                 }

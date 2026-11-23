@@ -126,6 +126,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::Falsy { dst }
         | Cons::NotBuffer { dst, .. }
         | Cons::NotObjectProto { dst }
+        | Cons::NotError { dst, .. }
         | Cons::NotRegExp { dst }
         | Cons::ProtoObjects { dst }
         | Cons::NotNull { dst }

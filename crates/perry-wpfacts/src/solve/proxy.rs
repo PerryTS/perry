@@ -835,6 +835,7 @@ impl Model {
             | Cons::IndexKept
             | Cons::ArrayLenArg { .. }
             | Cons::NotObjectProto { .. }
+            | Cons::NotError { .. }
             | Cons::ObjTagProbe { .. }
             | Cons::TopIfAny { .. }
             | Cons::TopIfTop { .. }

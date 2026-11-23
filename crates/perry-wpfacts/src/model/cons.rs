@@ -347,6 +347,18 @@ pub enum Cons {
     /// primitive pass. The binding's other values pass all (a `Guard`,
     /// `guard::NOT_OBJECT_CTOR`, on the read of the global).
     NotObjectProto { dst: NodeId },
+    /// Rule NOT-ERROR: `x instanceof Error` false of the intrinsic binding:
+    /// the values but the ones whose prototype chain surely reaches
+    /// `%Error.prototype%` (a native Error, an instance of a program class
+    /// whose `extends` chain ends at the built-in `Error` or a NativeError;
+    /// `Model::not_error_drops`) flow into `dst`; ⊤, a Proxy, a marker and
+    /// every primitive pass. The compiled program answers the bare name by
+    /// the native Error brand and by the class chain (perry-runtime
+    /// `instanceof/static_dispatch.rs`), OrdinaryHasInstance (ECMA-262
+    /// 7.3.22). `hook` holds what `Error[@@hasInstance]` may find: a value
+    /// there lets every value through. The binding's other values pass all
+    /// (a `Guard`, `guard::NOT_ERROR_CTOR`, on the read of the global).
+    NotError { hook: NodeId, dst: NodeId },
     /// The pattern operand of the RegExp constructor as ECMA-262 22.2.4.1
     /// steps 4-6 convert it: an object with a [[RegExpMatcher]] slot gives
     /// its [[OriginalSource]] and [[OriginalFlags]] (no `source`/`flags`
@@ -1015,6 +1027,7 @@ impl Cons {
                 | Cons::Fulfil { .. }
                 | Cons::NotBuffer { .. }
                 | Cons::NotObjectProto { .. }
+                | Cons::NotError { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
@@ -1043,6 +1056,7 @@ impl Cons {
                 | Cons::Fulfil { .. }
                 | Cons::NotBuffer { .. }
                 | Cons::NotObjectProto { .. }
+                | Cons::NotError { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
@@ -1100,6 +1114,7 @@ impl Cons {
             Cons::TypeIs { .. } => "typeis",
             Cons::NotBuffer { .. } => "notbuffer",
             Cons::NotObjectProto { .. } => "notobjectproto",
+            Cons::NotError { .. } => "noterror",
             Cons::NotRegExp { .. } => "notregexp",
             Cons::ProtoObjects { .. } => "protoobjects",
             Cons::Objects { .. } => "objects",
