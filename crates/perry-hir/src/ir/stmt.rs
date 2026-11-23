@@ -63,6 +63,9 @@ pub enum Stmt {
         /// leaves the loop from a yield sets it to 1 before running that
         /// `finally` (ECMA-262 14.7.5.7 IteratorClose with a return completion).
         forof_completion: Option<LocalId>,
+        /// Source byte offset (`span.lo.0`) of the `try` statement, or of the
+        /// construct a synthesized try desugars.
+        byte_offset: u32,
     },
     /// Switch statement
     Switch {
@@ -122,6 +125,7 @@ impl Stmt {
     pub fn byte_offset(&self) -> Option<u32> {
         match self {
             Stmt::Return(_, o) => Some(*o),
+            Stmt::Try { byte_offset, .. } => Some(*byte_offset),
             _ => None,
         }
     }

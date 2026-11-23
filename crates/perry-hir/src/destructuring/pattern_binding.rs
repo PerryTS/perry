@@ -385,6 +385,7 @@ pub(crate) fn lower_array_pattern_binding(
     }
     let (exc_id, exc_name) = fresh_destruct_local(ctx, Type::Any);
     result.push(Stmt::Try {
+        byte_offset: arr_pat.span.lo.0,
         body,
         catch: Some(CatchClause {
             param: Some((exc_id, exc_name)),

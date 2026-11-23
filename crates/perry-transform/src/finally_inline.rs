@@ -338,6 +338,7 @@ fn process_stmts(
                 mut catch,
                 mut finally,
                 forof_completion,
+                byte_offset,
             } => {
                 // Inlined outer finallies still sit inside inner try EH
                 // regions. Guard their preserved copies and catches so a
@@ -436,6 +437,7 @@ fn process_stmts(
                     f
                 });
                 out.push(Stmt::Try {
+                    byte_offset,
                     body,
                     catch,
                     finally: new_finally,

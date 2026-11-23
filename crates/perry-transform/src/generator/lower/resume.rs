@@ -19,6 +19,7 @@ pub(crate) fn wrap_generator_resume_body(
     vec![
         generator_executing_guard(executing_id, is_async_generator, fn_offset),
         Stmt::Try {
+            byte_offset: fn_offset,
             body,
             catch: Some(CatchClause {
                 param: Some((catch_id, "__gen_exec_e".to_string())),
@@ -54,6 +55,7 @@ pub(crate) fn wrap_async_gen_step_body(
     vec![
         generator_executing_guard(executing_id, true, fn_offset),
         Stmt::Try {
+            byte_offset: fn_offset,
             body,
             catch: Some(CatchClause {
                 param: Some((catch_id, "__gen_exec_e".to_string())),
@@ -79,8 +81,10 @@ pub(crate) fn wrap_fixed_state_completion(
     executing_id: LocalId,
     done_id: LocalId,
     catch_id: LocalId,
+    fn_offset: u32,
 ) -> Vec<Stmt> {
     vec![Stmt::Try {
+        byte_offset: fn_offset,
         body,
         catch: Some(CatchClause {
             param: Some((catch_id, "__gen_exec_e".to_string())),

@@ -1168,6 +1168,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             };
 
             result.push(Stmt::Try {
+                byte_offset: try_stmt.span.lo.0,
                 body,
                 catch,
                 finally,

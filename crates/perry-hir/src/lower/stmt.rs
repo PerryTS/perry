@@ -1754,6 +1754,7 @@ fn lower_stmt_inner(
             };
 
             module.init.push(Stmt::Try {
+                byte_offset: try_stmt.span.lo.0,
                 body,
                 catch,
                 finally,

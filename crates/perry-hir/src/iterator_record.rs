@@ -475,7 +475,7 @@ impl IteratorRecordPlan {
             body: mut user,
             catch,
             mut finally,
-            forof_completion,
+            forof_completion, ..
         }) = body.pop()
         else {
             unreachable!("record loop requires its completion handler");
@@ -540,6 +540,7 @@ impl IteratorRecordPlan {
             },
             state_init,
             Stmt::Try {
+                byte_offset: self.byte_offset,
                 body: vec![Stmt::For {
                     init: Some(Box::new(Stmt::Let {
                         id: self.index,

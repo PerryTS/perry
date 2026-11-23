@@ -169,9 +169,11 @@ fn wrap_closures(expr: &mut Expr, this_usable: bool, cx: &mut Cx, captures_out: 
         is_arrow,
         is_async,
         is_generator,
+        byte_offset,
         ..
     } = expr
     {
+        let closure_offset = *byte_offset;
         let inner_this = !*is_arrow || *captures_this;
         process_body(body, inner_this, cx);
         if *is_arrow
@@ -206,6 +208,7 @@ fn wrap_closures(expr: &mut Expr, this_usable: bool, cx: &mut Cx, captures_out: 
                 brand_id,
             )))),
             Stmt::Try {
+                byte_offset: closure_offset,
                 body: original,
                 catch: None,
                 finally: Some(vec![Stmt::Expr(Expr::PrivateLexicalBrandPop)]),
@@ -226,7 +229,14 @@ pub(super) fn restore_in_continuations(
     next_local_id: &mut u32,
 ) {
     visit_body(body, &mut |expr| {
-        if let Expr::Closure { captures, body, .. } = expr {
+        if let Expr::Closure {
+            captures,
+            body,
+            byte_offset,
+            ..
+        } = expr
+        {
+            let closure_offset = *byte_offset;
             if captures.contains(&brand_id) {
                 // Generator lowering runs after the source finally/return
                 // normalization pass. Explicitly clean up normal returns too;
@@ -240,6 +250,7 @@ pub(super) fn restore_in_continuations(
                         brand_id,
                     )))),
                     Stmt::Try {
+                        byte_offset: closure_offset,
                         body: resume,
                         catch: None,
                         finally: Some(vec![Stmt::Expr(Expr::PrivateLexicalBrandPop)]),
