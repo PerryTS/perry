@@ -1182,8 +1182,9 @@ pub(crate) fn end_server_request(req: f64) {
 }
 
 /// End the request's exchange: it reads as ended and destroyed, drops its
-/// listeners and buffered body, and the collector releases the payload once
-/// no JS value names it (Node keeps `req` usable for as long as it is held).
+/// listeners and buffered body, and is parked: a full trace marks its edges
+/// only through a word naming it and drops it once none does (Node keeps
+/// `req` usable for as long as it is held).
 pub(crate) fn retire_incoming_message(handle: i64) {
     if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
         if std::mem::replace(&mut im.retired, true) {
@@ -1200,7 +1201,35 @@ pub(crate) fn retire_incoming_message(handle: i64) {
         perry_ffi::drop_handle(handle);
         return;
     }
-    perry_ffi::release_handle_when_unreachable(handle);
+    perry_ffi::park_reclaimable_ffi(handle, &SERVER_REQUEST_PAYLOADS);
+}
+
+/// The ffi payload map as the owner of retired server requests.
+struct ServerRequestPayloads;
+
+static SERVER_REQUEST_PAYLOADS: ServerRequestPayloads = ServerRequestPayloads;
+
+impl perry_ffi::handle_lifecycle::ParkedPayloadOwner for ServerRequestPayloads {
+    fn release(&self, identity: perry_ffi::NativeRegistrationIdentity) {
+        // Strings, vectors and closure addresses: dropping runs no JS.
+        drop(perry_ffi::release_reclaimed_payload(identity));
+    }
+
+    /// The slots `scan_http_server_roots` visits for a live request.
+    fn edges(&self, id: perry_ffi::Handle, out: &mut Vec<u64>) {
+        out.extend(perry_ffi::native_handle_props(id));
+        let _ = perry_ffi::with_handle::<IncomingMessage, _, _>(id, |im| {
+            out.extend([im.signal_controller.to_bits(), im.signal.to_bits()]);
+            if im.owner_agent == perry_ffi::agent_post::current_agent() {
+                out.push(im.socket_value.to_bits());
+            }
+            for &cb in im.listeners.values().flatten() {
+                if cb > 0 {
+                    out.push(JsValue::from_object_ptr(cb as usize as *mut u8).bits());
+                }
+            }
+        });
+    }
 }
 
 // ============================================================================

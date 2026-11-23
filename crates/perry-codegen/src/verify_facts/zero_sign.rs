@@ -1,4 +1,4 @@
-//! Check mode, −0 tolerance (wpfacts PR D, RFC §10.3 as amended).
+//! Check mode, −0 tolerance (wpfacts PR D, `internals/representation.md` §3).
 //!
 //! A local the facts make I32 by tolerance (`ElisionFacts::zero_tolerant_locals`)
 //! may hold a `-0` that its i32 slot keeps as `0`. The facts claim that no

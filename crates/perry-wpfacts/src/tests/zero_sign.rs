@@ -1,4 +1,4 @@
-//! −0 tolerance (RFC §10.3 as amended, PR D): a Number node keeps its
+//! −0 tolerance (`internals/representation.md` §3, PR D): a Number node keeps its
 //! integer interval although it may hold `-0` exactly when no use can
 //! observe the sign of a zero (`zero_sign`), and int demand flows through
 //! value filters (`?? 0`).

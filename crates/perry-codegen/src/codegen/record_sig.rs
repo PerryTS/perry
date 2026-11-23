@@ -1,4 +1,4 @@
-//! Value records across typed calls (DESIGN-p4l4 §5.2, VR-3b): the record
+//! Value records across typed calls (VR-3b): the record
 //! `$sig` ABI.
 //!
 //! A signature slot the facts give `Record` carries the record as its lanes:

@@ -16,6 +16,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::{register_widget_with_layout, WidgetKind};
+use perry_ui::canvas_font::{parse_canvas_font, CanvasFont};
 
 /// Drawing commands accumulated and replayed in WM_PAINT.
 #[derive(Clone, Debug)]
@@ -29,6 +30,10 @@ pub enum DrawCmd {
     DrawImage(i64, f64, f64, f64, f64, f64, f64, f64, f64),
     // image, sx, sy, sw, sh, dx, dy, dw, dh
     Clear,
+    ClearRect(f64, f64, f64, f64), // x, y, w, h
+    SetFillColor(u8, u8, u8, u8),
+    SetFont(CanvasFont),
+    FillText(String, f64, f64),
 }
 
 fn command_batch_renders(commands: &[DrawCmd]) -> bool {
@@ -39,13 +44,32 @@ fn command_batch_renders(commands: &[DrawCmd]) -> bool {
                 | DrawCmd::Stroke(..)
                 | DrawCmd::FillGradient(..)
                 | DrawCmd::DrawImage(..)
+                | DrawCmd::ClearRect(..)
+                | DrawCmd::FillText(..)
         )
     })
+}
+
+/// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
+/// replays alone and the state lasts until its next setter, as in HTML canvas. Records the
+/// setters in `commands` into `state` for the next batch.
+fn carry_state(state: &mut Vec<DrawCmd>, commands: Vec<DrawCmd>) -> Vec<DrawCmd> {
+    let mut batch = state.clone();
+    for cmd in &commands {
+        if matches!(cmd, DrawCmd::SetFillColor(..) | DrawCmd::SetFont(_)) {
+            state.retain(|kept| std::mem::discriminant(kept) != std::mem::discriminant(cmd));
+            state.push(cmd.clone());
+        }
+    }
+    batch.extend(commands);
+    batch
 }
 
 thread_local! {
     static CANVAS_CMDS: RefCell<HashMap<i64, Vec<DrawCmd>>> = RefCell::new(HashMap::new());
     static CANVAS_LAST_FRAME: RefCell<HashMap<i64, Vec<DrawCmd>>> = RefCell::new(HashMap::new());
+    /// Drawing state in effect after the last taken batch; see `carry_state`.
+    static CANVAS_STATE: RefCell<HashMap<i64, Vec<DrawCmd>>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGE_PATHS: RefCell<HashMap<i64, String>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGE_CACHE: RefCell<HashMap<String, i64>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGE_SIZES: RefCell<HashMap<i64, (f64, f64)>> = RefCell::new(HashMap::new());
@@ -154,7 +178,12 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                     if pending.is_empty() || !command_batch_renders(pending) {
                         None
                     } else {
-                        let commands = std::mem::take(pending);
+                        let commands = CANVAS_STATE.with(|s| {
+                            carry_state(
+                                s.borrow_mut().entry(handle).or_default(),
+                                std::mem::take(pending),
+                            )
+                        });
                         CANVAS_LAST_FRAME.with(|last| {
                             last.borrow_mut().insert(handle, commands.clone());
                         });
@@ -167,6 +196,8 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
         if let Some(cmd_list) = cmd_list {
             let mut current_pen = HPEN::default();
             let mut path_points: Vec<(i32, i32)> = Vec::new();
+            let mut cur_fill = (0u8, 0u8, 0u8);
+            let mut cur_font = CanvasFont::default();
 
             for cmd in cmd_list {
                 match cmd {
@@ -176,8 +207,41 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                         let brush = GetStockObject(WHITE_BRUSH);
                         let _ = FillRect(hdc, &rect, HBRUSH(brush.0));
                     }
+                    DrawCmd::ClearRect(x, y, w, h) => {
+                        // A negative width or height extends the rectangle the other way;
+                        // Win32 needs ordered endpoints.
+                        let rect = RECT {
+                            left: x.min(x + w) as i32,
+                            top: y.min(y + h) as i32,
+                            right: x.max(x + w) as i32,
+                            bottom: y.max(y + h) as i32,
+                        };
+                        let brush = GetStockObject(WHITE_BRUSH);
+                        let _ = FillRect(hdc, &rect, HBRUSH(brush.0));
+                    }
                     DrawCmd::BeginPath => {
                         path_points.clear();
+                    }
+                    DrawCmd::SetFillColor(r, g, b, _a) => {
+                        cur_fill = (r, g, b);
+                    }
+                    DrawCmd::SetFont(font) => {
+                        cur_font = font;
+                    }
+                    DrawCmd::FillText(text, x, y) => {
+                        let hfont = create_canvas_font(hdc, &cur_font);
+                        let old_font = SelectObject(hdc, hfont.into());
+                        let (r, g, b) = cur_fill;
+                        SetTextColor(
+                            hdc,
+                            COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16)),
+                        );
+                        SetBkMode(hdc, TRANSPARENT);
+                        SetTextAlign(hdc, TA_BASELINE | TA_LEFT);
+                        let wide: Vec<u16> = text.encode_utf16().collect();
+                        let _ = TextOutW(hdc, x as i32, y as i32, &wide);
+                        SelectObject(hdc, old_font);
+                        let _ = DeleteObject(hfont.into());
                     }
                     DrawCmd::MoveTo(x, y) => {
                         MoveToEx(hdc, x as i32, y as i32, None);
@@ -209,8 +273,24 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                         current_pen = pen;
                     }
                     DrawCmd::FillGradient(r1, g1, b1, _a1, r2, g2, b2, _a2, direction) => {
+                        if path_points.len() < 2 {
+                            continue;
+                        }
                         let mut rect = RECT::default();
                         let _ = GetClientRect(hwnd, &mut rect);
+                        // Clipped to the area between the path and the bottom edge, as an area chart.
+                        let mut area: Vec<POINT> =
+                            path_points.iter().map(|&(x, y)| POINT { x, y }).collect();
+                        area.push(POINT {
+                            x: path_points[path_points.len() - 1].0,
+                            y: rect.bottom,
+                        });
+                        area.push(POINT {
+                            x: path_points[0].0,
+                            y: rect.bottom,
+                        });
+                        let clip = CreatePolygonRgn(&area, WINDING);
+                        SelectClipRgn(hdc, Some(clip));
                         let vertical = direction < 0.5;
 
                         let steps = if vertical {
@@ -244,6 +324,8 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                             let _ = FillRect(hdc, &band, brush);
                             let _ = DeleteObject(brush.into());
                         }
+                        SelectClipRgn(hdc, None);
+                        let _ = DeleteObject(clip.into());
                     }
                     DrawCmd::DrawImage(image, sx, sy, sw, sh, dx, dy, dw, dh) => {
                         use windows::Win32::Graphics::GdiPlus::*;
@@ -315,6 +397,54 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
 
         let _ = EndPaint(hwnd, &ps);
     }
+}
+
+/// The first family GDI has, generics mapped to Windows faces, else Segoe UI.
+#[cfg(target_os = "windows")]
+unsafe fn create_canvas_font(hdc: HDC, font: &CanvasFont) -> HFONT {
+    let weight = (if font.bold { FW_BOLD } else { FW_NORMAL }).0 as i32;
+    let create = |face: &str| {
+        let wide = to_wide(face);
+        CreateFontW(
+            -(font.size.round() as i32), // negative: character height, the CSS font size
+            0,
+            0,
+            0,
+            weight,
+            font.italic as u32,
+            0,
+            0,
+            FONT_CHARSET(0),
+            FONT_OUTPUT_PRECISION(0),
+            FONT_CLIP_PRECISION(0),
+            FONT_QUALITY(0),
+            0,
+            windows::core::PCWSTR(wide.as_ptr()),
+        )
+    };
+    for family in &font.families {
+        let (face, generic) = match family.to_ascii_lowercase().as_str() {
+            "sans-serif" | "system-ui" => ("Segoe UI", true),
+            "serif" => ("Times New Roman", true),
+            "monospace" => ("Consolas", true),
+            _ => (family.as_str(), false),
+        };
+        let hfont = create(face);
+        if generic {
+            return hfont;
+        }
+        // GDI substitutes a missing face; the selected face names the one it used.
+        let old = SelectObject(hdc, hfont.into());
+        let mut name = [0u16; 32];
+        GetTextFaceW(hdc, Some(&mut name));
+        SelectObject(hdc, old);
+        let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+        if String::from_utf16_lossy(&name[..len]).eq_ignore_ascii_case(face) {
+            return hfont;
+        }
+        let _ = DeleteObject(hfont.into());
+    }
+    create("Segoe UI")
 }
 
 /// Create a Canvas with given width and height. Returns widget handle.
@@ -398,7 +528,12 @@ pub fn clear(handle: i64) {
     CANVAS_CMDS.with(|cmds| {
         let mut cmds = cmds.borrow_mut();
         if let Some(list) = cmds.get_mut(&handle) {
-            list.clear();
+            CANVAS_STATE.with(|s| {
+                carry_state(
+                    s.borrow_mut().entry(handle).or_default(),
+                    std::mem::take(list),
+                )
+            });
             list.push(DrawCmd::Clear);
         }
     });
@@ -407,6 +542,41 @@ pub fn clear(handle: i64) {
             list.clear();
         }
     });
+    invalidate(handle);
+}
+
+/// Clear a rectangle to the background, keeping what earlier commands drew outside it.
+pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCmd::ClearRect(x, y, w, h));
+    invalidate(handle);
+}
+
+pub fn set_fill_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    push_cmd(
+        handle,
+        DrawCmd::SetFillColor(
+            (r * 255.0) as u8,
+            (g * 255.0) as u8,
+            (b * 255.0) as u8,
+            (a * 255.0) as u8,
+        ),
+    );
+}
+
+/// An invalid font spec keeps the previous font, as HTML canvas does.
+pub fn set_font(handle: i64, spec_ptr: *const u8) {
+    let spec = unsafe { crate::widgets::image::str_from_header(spec_ptr) };
+    if let Some(font) = parse_canvas_font(&spec) {
+        push_cmd(handle, DrawCmd::SetFont(font));
+    }
+}
+
+pub fn fill_text(handle: i64, text_ptr: *const u8, x: f64, y: f64) {
+    if !(x.is_finite() && y.is_finite()) {
+        return;
+    }
+    let text = unsafe { crate::widgets::image::str_from_header(text_ptr) };
+    push_cmd(handle, DrawCmd::FillText(text, x, y));
     invalidate(handle);
 }
 

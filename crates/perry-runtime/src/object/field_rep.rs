@@ -102,7 +102,7 @@ pub(crate) fn special_lane_slots(rep: u64) -> u32 {
     slots
 }
 
-/// I32 at rest (representation RFC §10.7, PR C): the `11` lanes the shape's
+/// I32 at rest (`internals/representation.md` §7, PR C): the `11` lanes the shape's
 /// ConstFn mask does not name, one bit per slot. Each such slot holds an I32
 /// word `INTERNAL_WORD_TAG | (u32)v` for every object carrying the shape: never a
 /// pointer (the `0x7FFE` band), so the collector skips it like any

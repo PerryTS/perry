@@ -16,6 +16,7 @@ use anyhow::Result;
 /// hash to AFTER codegen.
 pub fn compile_module(hir: &HirModule, mut opts: CompileOptions) -> Result<Vec<u8>> {
     ensure_layout_plan(hir, &mut opts)?;
+    crate::unknown_ui_calls::begin_module();
     crate::facts_consumed::begin_module(&hir.name);
     crate::verify_facts::begin_module(
         &hir.name,
@@ -29,7 +30,9 @@ pub fn compile_module(hir: &HirModule, mut opts: CompileOptions) -> Result<Vec<u
         opts.debug_source_line_offset,
         opts.program_facts.fallback.clone(),
     );
-    match lower_module(hir, opts, None)? {
+    let lowered = lower_module(hir, opts, None);
+    crate::unknown_ui_calls::finish_module()?;
+    match lowered? {
         Some(lowered) => emit_lowered_module(lowered),
         None => unreachable!("normal lowering produces a module"),
     }
@@ -39,6 +42,7 @@ pub fn compile_module(hir: &HirModule, mut opts: CompileOptions) -> Result<Vec<u
 /// Lowering only borrows the input, preserving its object-cache identity.
 pub fn compile_module_owned(hir: HirModule, mut opts: CompileOptions) -> Result<Vec<u8>> {
     ensure_layout_plan(&hir, &mut opts)?;
+    crate::unknown_ui_calls::begin_module();
     crate::facts_consumed::begin_module(&hir.name);
     crate::verify_facts::begin_module(
         &hir.name,
@@ -52,7 +56,9 @@ pub fn compile_module_owned(hir: HirModule, mut opts: CompileOptions) -> Result<
         opts.debug_source_line_offset,
         opts.program_facts.fallback.clone(),
     );
-    let lowered = lower_module(&hir, opts, None)?;
+    let lowered = lower_module(&hir, opts, None);
+    crate::unknown_ui_calls::finish_module()?;
+    let lowered = lowered?;
     drop(hir);
     emit_lowered_module(lowered.expect("normal lowering produces a module"))
 }
@@ -71,6 +77,9 @@ pub fn module_birth_shapes(hir: &HirModule, opts: CompileOptions) -> Result<Vec<
         crate::verify_facts::bodies(&opts.program_facts);
     }
     let mut births = Vec::new();
-    lower_module(hir, opts, Some(&mut births))?;
+    crate::unknown_ui_calls::begin_module();
+    let lowered = lower_module(hir, opts, Some(&mut births));
+    crate::unknown_ui_calls::finish_module()?;
+    lowered?;
     Ok(births)
 }

@@ -1027,7 +1027,7 @@ pub fn try_lower_func_ref_call(
     // SITE; Tier B keeps the guarded-diamond shape. Any mismatch falls
     // through to the existing typed/generic chain — the public boxed entry is
     // the permanent fallback ABI.
-    // P2 (DESIGN-p2 §2): a typed call site enters `F$sig`.
+    // P2: a typed call site enters `F$sig`.
     let typed_result = if !callee_reads_this && !has_rest {
         crate::codegen::signature_entry::try_emit_typed_call(ctx, *fid, &fname, args, &lowered)
     } else {

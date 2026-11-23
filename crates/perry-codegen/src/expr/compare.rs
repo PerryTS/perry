@@ -1198,7 +1198,7 @@ fn lower_string_strict_eq_inline(
 /// A compare operand that is statically a number (not a BigInt, not a value
 /// that may come back boxed from a raw-f64 fallback): two of them take the
 /// bare `fcmp`.
-/// P3 B1, C1 (DESIGN-p3 rev 3.1 §2.3): a compare whose operands are both
+/// P3 B1, C1: a compare whose operands are both
 /// proven plain Numbers, or Number-or-undefined, at least one of them by the
 /// facts (`facts_canonical`). There is no INT32 prefix and no runtime helper:
 ///
@@ -1405,7 +1405,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 if left_literal.is_none() && right_literal.is_none() {
                     super::snap_compare_site::emit(ctx, *op, left, right, &l, &r);
                 }
-                // Value records' check mode (DESIGN-p4l4 L4).
+                // Value records' check mode (L4).
                 crate::expr::record_witness::compare(ctx, op, left, right, &l, &r);
                 // BigInt comparison fast path: NaN-tagged BIGINT_TAG values
                 // are unordered under fcmp (NaN), so `a > b` on two bigints

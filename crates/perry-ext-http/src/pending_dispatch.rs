@@ -25,6 +25,16 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
         };
         count += 1;
         let request_handle = pending_request_handle(&ev);
+        // Out of the queue, the event's ids live only in this frame: root
+        // them as handle words so a trace inside a listener cannot release a
+        // parked payload the handler still reads.
+        let _request = scope.root_nanbox(client_payloads::handle_capture(request_handle));
+        let _incoming = match &ev {
+            PendingHttpEvent::IncomingDrain { incoming, .. } => {
+                Some(scope.root_nanbox(client_payloads::handle_capture(*incoming)))
+            }
+            _ => None,
+        };
         let terminal = terminal_http_event(&ev);
         // A deferred Readable edge runs after the exchange's async resource
         // was destroyed by its terminal event, so it has no hook scope.
@@ -133,6 +143,9 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 client_events::fire_request_close_once(request_handle);
                 finish_agent_request(request_handle, false);
             }
+            PendingHttpEvent::ResponseDestroyed { request_handle } => {
+                client_events::handle_response_destroyed_event(request_handle);
+            }
             PendingHttpEvent::Flushed { request_handle } => {
                 client_events::handle_flushed_event(request_handle);
             }
@@ -149,6 +162,8 @@ pub unsafe extern "C" fn js_http_process_pending() -> i32 {
                 js_async_hooks_provider_destroy(async_id);
             }
         }
+        // Last native step of a terminal path: the exchange is finished.
+        client_payloads::park_client_exchange(request_handle);
     }
     count
 }

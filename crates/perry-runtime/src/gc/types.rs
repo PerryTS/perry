@@ -1801,7 +1801,7 @@ pub const OBJ_FLAG_PLAIN_ORDINARY: u16 = perry_abi::OBJ_FLAG_PLAIN_ORDINARY;
 /// Bit 12 is disjoint from object initialization state (14..15). Array
 /// numeric-hole layout uses bit 12 only after its array kind guard.
 pub(crate) const OBJ_FLAG_ARGUMENTS: u16 = 0x1000;
-/// Check mode only (`PERRY_VERIFY_FACTS=1` with value records, DESIGN-p4l4
+/// Check mode only (`PERRY_VERIFY_FACTS=1` with value records,
 /// B7): this OBJECT is an instance of a template the whole-program facts
 /// admit as a value record. Every identity route aborts on it
 /// (`wpfacts_check::records`). Bit 6 of OBJECT, free (see the bit map); a

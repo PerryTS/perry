@@ -1,6 +1,6 @@
 //! A proven int32 local's store (`facts_int32_locals::store_from_double`):
-//! the value is a proven Number, a canonical double (representation RFC
-//! §10.5, phase P3), so it enters the i32 slot with a bare `fptosi` and no
+//! the value is a proven Number, a canonical double (`internals/representation.md`
+//! §5, phase P3), so it enters the i32 slot with a bare `fptosi` and no
 //! INT32 tag test. Without the fact the store keeps its NaN-safe ToInt32.
 
 use std::sync::Arc;

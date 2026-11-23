@@ -146,7 +146,7 @@ pub(super) fn extend_body_symbol_display_names(
         .defined_function_names()
         .filter(|symbol| !by_base.contains_key(symbol))
         .filter_map(|symbol| {
-            // P2: a typed body (`F$sig`, `M$sig`, DESIGN-p2 §3) is the ABI
+            // P2: a typed body (`F$sig`, `M$sig`) is the ABI
             // clone of its public body that every typed site and the boxed
             // entry enter, so it is that function's frame. It replaces the
             // spec clone or public body main registered here, and takes

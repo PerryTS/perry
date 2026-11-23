@@ -16,6 +16,9 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::register_widget;
+use objc2::runtime::AnyClass;
+use objc2_foundation::NSString;
+use perry_ui::canvas_font::{parse_canvas_font, CanvasFont};
 
 // Core Graphics C API
 type CGContextRef = *mut c_void;
@@ -29,6 +32,7 @@ type CGFloat = f64;
 extern "C" {
     fn UIGraphicsGetCurrentContext() -> CGContextRef;
     fn CGContextSaveGState(c: CGContextRef);
+    fn CGContextClearRect(c: CGContextRef, rect: CGRect);
     fn CGContextRestoreGState(c: CGContextRef);
     fn CGContextBeginPath(c: CGContextRef);
     fn CGContextMoveToPoint(c: CGContextRef, x: CGFloat, y: CGFloat);
@@ -94,6 +98,24 @@ enum DrawCommand {
         a2: f64,
         direction: f64,
     },
+    SetFillColor {
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    },
+    ClearRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
+    SetFont(CanvasFont),
+    FillText {
+        text: String,
+        x: f64,
+        y: f64,
+    },
     DrawImage {
         image: i64,
         sx: f64,
@@ -118,9 +140,30 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
     commands.iter().any(|cmd| {
         matches!(
             cmd,
-            DrawCommand::Stroke { .. } | DrawCommand::FillGradient { .. }
+            DrawCommand::Stroke { .. }
+                | DrawCommand::FillGradient { .. }
+                | DrawCommand::ClearRect { .. }
+                | DrawCommand::FillText { .. }
         )
     })
+}
+
+/// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
+/// replays alone and the state lasts until its next setter, as in HTML canvas. Records the
+/// setters in `commands` into `state` for the next batch.
+fn carry_state(state: &mut Vec<DrawCommand>, commands: Vec<DrawCommand>) -> Vec<DrawCommand> {
+    let mut batch = state.clone();
+    for cmd in &commands {
+        if matches!(
+            cmd,
+            DrawCommand::SetFillColor { .. } | DrawCommand::SetFont(_)
+        ) {
+            state.retain(|kept| std::mem::discriminant(kept) != std::mem::discriminant(cmd));
+            state.push(cmd.clone());
+        }
+    }
+    batch.extend(commands);
+    batch
 }
 
 thread_local! {
@@ -128,6 +171,8 @@ thread_local! {
     static CANVAS_COMMANDS: RefCell<HashMap<usize, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Last rendered command batch, used for native repaints that arrive before new commands.
     static CANVAS_LAST_FRAME: RefCell<HashMap<usize, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
+    /// Drawing state in effect after the last taken batch; see `carry_state`.
+    static CANVAS_STATE: RefCell<HashMap<usize, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Canvas sizes (width, height), keyed by view address
     static CANVAS_SIZES: RefCell<HashMap<usize, (f64, f64)>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGES: RefCell<HashMap<i64, CanvasImage>> = RefCell::new(HashMap::new());
@@ -214,7 +259,7 @@ define_class!(
                         if pending.is_empty() || !command_batch_renders(pending) {
                             None
                         } else {
-                            let commands = std::mem::take(pending);
+                            let commands = CANVAS_STATE.with(|s| carry_state(s.borrow_mut().entry(key).or_default(), std::mem::take(pending)));
                             CANVAS_LAST_FRAME.with(|last| {
                                 last.borrow_mut().insert(key, commands.clone());
                             });
@@ -228,6 +273,8 @@ define_class!(
                     // Track current path points for gradient fill
                     let mut path_points: Vec<(f64, f64)> = Vec::new();
                     let mut in_path = false;
+                    let mut cur_fill = (0.0f64, 0.0f64, 0.0f64, 1.0f64);
+                    let mut cur_font = CanvasFont::default();
 
                     for cmd in commands.iter() {
                         match cmd {
@@ -310,6 +357,18 @@ define_class!(
                                 }
                                 in_path = false;
                             }
+                            DrawCommand::SetFont(font) => {
+                                cur_font = font.clone();
+                            }
+                            DrawCommand::FillText { text, x, y } => unsafe {
+                                draw_text(text, &cur_font, cur_fill, *x, *y);
+                            },
+                            DrawCommand::SetFillColor { r, g, b, a } => {
+                                cur_fill = (*r, *g, *b, *a);
+                            }
+                            DrawCommand::ClearRect { x, y, w, h } => unsafe {
+                                CGContextClearRect(ctx, CGRect::new(CGPoint::new(*x, *y), CGSize::new(*w, *h)));
+                            },
                             DrawCommand::DrawImage {
                                 image,
                                 sx,
@@ -440,7 +499,12 @@ pub fn clear(handle: i64) {
     if let Some(key) = get_canvas_key(handle) {
         CANVAS_COMMANDS.with(|cmds| {
             if let Some(commands) = cmds.borrow_mut().get_mut(&key) {
-                commands.clear();
+                CANVAS_STATE.with(|s| {
+                    carry_state(
+                        s.borrow_mut().entry(key).or_default(),
+                        std::mem::take(commands),
+                    )
+                });
             }
         });
         CANVAS_LAST_FRAME.with(|last| {
@@ -551,6 +615,16 @@ pub fn fill_gradient(
     }
 }
 
+/// Clear a rectangle to transparent, keeping what earlier commands drew outside it.
+pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCommand::ClearRect { x, y, w, h });
+    redraw(handle);
+}
+
+pub fn set_fill_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    push_cmd(handle, DrawCommand::SetFillColor { r, g, b, a });
+}
+
 fn push_cmd(handle: i64, cmd: DrawCommand) {
     if let Some(key) = get_canvas_key(handle) {
         CANVAS_COMMANDS.with(|cmds| {
@@ -570,6 +644,94 @@ fn redraw(handle: i64) {
 }
 
 use perry_ffi::copy_string_from_raw as str_from_header;
+
+/// An invalid font spec keeps the previous font, as HTML canvas does.
+pub fn set_font(handle: i64, spec_ptr: *const u8) {
+    let spec = unsafe { str_from_header(spec_ptr) };
+    if let Some(font) = parse_canvas_font(&spec) {
+        push_cmd(handle, DrawCommand::SetFont(font));
+    }
+}
+
+pub fn fill_text(handle: i64, text_ptr: *const u8, x: f64, y: f64) {
+    if !(x.is_finite() && y.is_finite()) {
+        return;
+    }
+    let text = unsafe { str_from_header(text_ptr) };
+    push_cmd(handle, DrawCommand::FillText { text, x, y });
+    redraw(handle);
+}
+
+/// The first available family, generics mapped to system faces, with the bold
+/// and italic traits applied where the family has them.
+unsafe fn ui_font(font: &CanvasFont) -> Retained<AnyObject> {
+    let cls = AnyClass::get(c"UIFont").unwrap();
+    let size = font.size as CGFloat;
+    let system = || -> Retained<AnyObject> { msg_send![cls, systemFontOfSize: size] };
+    let base = font
+        .families
+        .iter()
+        .find_map(|family| {
+            let name = match family.to_ascii_lowercase().as_str() {
+                "sans-serif" | "system-ui" => return Some(system()),
+                "serif" => "Times New Roman".to_string(),
+                "monospace" => "Menlo".to_string(),
+                _ => family.clone(),
+            };
+            let name = NSString::from_str(&name);
+            let named: Option<Retained<AnyObject>> =
+                msg_send![cls, fontWithName: &*name, size: size];
+            named.or_else(|| {
+                let faces: Retained<AnyObject> = msg_send![cls, fontNamesForFamilyName: &*name];
+                let face: Option<Retained<AnyObject>> = msg_send![&*faces, firstObject];
+                face.and_then(|face| msg_send![cls, fontWithName: &*face, size: size])
+            })
+        })
+        .unwrap_or_else(system);
+    // UIFontDescriptorTraitItalic = 1 << 0, UIFontDescriptorTraitBold = 1 << 1.
+    let traits = (font.bold as u32) << 1 | font.italic as u32;
+    if traits == 0 {
+        return base;
+    }
+    let descriptor: Retained<AnyObject> = msg_send![&*base, fontDescriptor];
+    let current: u32 = msg_send![&*descriptor, symbolicTraits];
+    let styled: Option<Retained<AnyObject>> =
+        msg_send![&*descriptor, fontDescriptorWithSymbolicTraits: current | traits];
+    styled
+        .and_then(|styled| msg_send![cls, fontWithDescriptor: &*styled, size: size])
+        .unwrap_or(base)
+}
+
+/// Draws `text` into the current UIKit context with its alphabetic baseline
+/// starting at (x, baseline).
+unsafe fn draw_text(
+    text: &str,
+    font: &CanvasFont,
+    fill: (f64, f64, f64, f64),
+    x: f64,
+    baseline: f64,
+) {
+    let attrs: Retained<AnyObject> = msg_send![AnyClass::get(c"NSMutableDictionary").unwrap(), new];
+    let ui_font = ui_font(font);
+    let color: Retained<AnyObject> = msg_send![
+        AnyClass::get(c"UIColor").unwrap(),
+        colorWithRed: fill.0 as CGFloat,
+        green: fill.1 as CGFloat,
+        blue: fill.2 as CGFloat,
+        alpha: fill.3 as CGFloat
+    ];
+    let _: () = msg_send![&*attrs, setObject: &*ui_font, forKey: &*NSString::from_str("NSFont")];
+    let _: () = msg_send![&*attrs, setObject: &*color, forKey: &*NSString::from_str("NSColor")];
+    // Without NSStringDrawingUsesLineFragmentOrigin the rect's origin is the baseline.
+    let rect = CGRect::new(CGPoint::new(x, baseline), CGSize::new(0.0, 0.0));
+    let _: () = msg_send![
+        &*NSString::from_str(text),
+        drawWithRect: rect,
+        options: 0isize,
+        attributes: &*attrs,
+        context: std::ptr::null_mut::<AnyObject>()
+    ];
+}
 
 fn resolve_asset_path(path: &str) -> String {
     if std::path::Path::new(path).is_absolute() {

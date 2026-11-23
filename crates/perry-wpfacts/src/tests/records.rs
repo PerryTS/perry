@@ -1,4 +1,4 @@
-//! VR-1 (DESIGN-p4l4 §2): the value-record verdicts, one rule at a time,
+//! VR-1: the value-record verdicts, one rule at a time,
 //! each with its negative control. Most sources birth their record in the
 //! body that uses it; the record signature slots (VR-3b) have their own
 //! tests.

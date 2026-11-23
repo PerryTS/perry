@@ -176,6 +176,25 @@ unsafe fn handle_incoming_transport_abort(request_handle: Handle, incoming: Hand
     fire_request_close_once(request_handle);
 }
 
+/// Drain handler for `PendingHttpEvent::ResponseDestroyed`, in Node's order:
+/// the response's `'aborted'`, the request's `'close'`, then the response's
+/// ECONNRESET `'error'` and `'close'`. The request gets no `'error'`.
+///
+/// # Safety
+///
+/// Same listener-liveness contract as [`fire_request_event_listeners`].
+pub(crate) unsafe fn handle_response_destroyed_event(request_handle: Handle) {
+    let incoming =
+        with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| req.incoming_handle)
+            .unwrap_or(0);
+    fire_incoming_event(incoming, "aborted", None);
+    fire_request_close_once(request_handle);
+    let error =
+        perry_ffi::error_value_with_code("aborted", "ECONNRESET", perry_ffi::ErrorKind::Error);
+    fire_incoming_event(incoming, "error", Some(f64::from_bits(error.bits())));
+    fire_incoming_event(incoming, "close", None);
+}
+
 /// Fire a client request's `'error'` listeners with `arg`.
 ///
 /// # Safety
@@ -308,6 +327,9 @@ pub(crate) unsafe fn handle_response_event(
     let (response_callback, response_listeners) =
         get_handle_mut::<ClientRequestHandle>(request_handle)
             .map(|request| {
+                // The pair names each other on every path (`res.req`, and
+                // the request's edge to its response once both are parked).
+                request.incoming_handle = incoming;
                 let callback = std::mem::take(&mut request.response_callback);
                 request.response_raw_wrapper = 0;
                 (callback, take_request_event_listeners(request, "response"))
@@ -398,6 +420,7 @@ pub(crate) unsafe fn handle_upgrade_event(
     });
 
     let upgrade_listeners = with_handle_mut::<ClientRequestHandle, _, _>(request_handle, |req| {
+        req.incoming_handle = incoming;
         take_request_event_listeners(req, "upgrade")
     })
     .unwrap_or_default();

@@ -1,0 +1,1 @@
+A module that calls unknown `perry/ui` functions now fails once with every unknown name instead of only the first, and names removed in v0.5.0 (`canvasClear`, `canvasStroke`, `widgetSetCornerRadius`, `setEdgeInsets`, `appOnTerminate`, `Alert`, …) name their replacement.

@@ -124,7 +124,7 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
                 out.push_str(&format!("# indexed_owner module={mi} local={id} kind={} min_len={} exact_len={:?} allocations={:?}\n", o.kind, o.min_len, o.exact_len, o.allocations));
             }
             // DESIGN-p4l1 §5.6: each binding the facts give `Arr`;
-            // DESIGN-p4l4: each one they give `Record`.
+            // Value records: each one they give `Record`.
             if matches!(b.rep, crate::bindings::Rep::Arr(_)) {
                 out.push_str(&format!(
                     "# arr_rep module={mi} local={id} rep={}\n",
@@ -246,7 +246,7 @@ pub fn dump_text(pf: &ProgramFacts) -> String {
         "# indexed_metadata_pristine {}\n",
         pf.indexed_metadata_pristine()
     ));
-    // DESIGN-p4l4 §7: the value-record ledger (empty with the switch off).
+    // The value-record ledger (empty with the switch off).
     for l in crate::records::ledger_lines(&pf.templates, &pf.record_arrays) {
         out.push_str(&l);
         out.push('\n');

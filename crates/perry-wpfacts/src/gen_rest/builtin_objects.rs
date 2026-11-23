@@ -79,7 +79,7 @@ impl<'a> Gen<'a> {
             } => {
                 let r = self.expr(fx, registry);
                 // The registry keeps the target and the token by identity
-                // (DESIGN-p4l4 §2.2, the weak collections' route).
+                // (the weak collections' route).
                 let t = self.expr(fx, target);
                 self.m.identity(t, IdentityRoute::Collection);
                 let h = self.expr(fx, held);
@@ -345,7 +345,7 @@ impl<'a> Gen<'a> {
                     _ => None,
                 };
                 // A replacer function sees every value serialized, unseen
-                // by the model (DESIGN-p4l4 §4.1, finding 14): with value
+                // by the model (finding 14): with value
                 // records on, the value's identity is observed.
                 let replaced = self.m.value_records
                     && replacer.is_some_and(|r| {

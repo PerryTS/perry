@@ -1591,10 +1591,10 @@ pub(crate) struct FnCtx<'a> {
     /// body, in module init, in methods and in every closure.
     pub spec_bool_params: std::collections::HashSet<u32>,
     /// P2: the signature's `ret` when this body is a typed entry (`F$sig`):
-    /// an I32 `return` hands back the raw i32 (DESIGN-p2 §3.1), and check
+    /// an I32 `return` hands back the raw i32, and check
     /// mode witnesses every returned value against it (§5).
     pub sig_return: Option<crate::codegen::FactsRep>,
-    /// DESIGN-p4l4 VR-3b: the value record this typed entry returns as its
+    /// VR-3b: the value record this typed entry returns as its
     /// lanes (`codegen::record_sig::lower_return`).
     pub sig_record_return: Option<crate::codegen::FactsRecRep>,
     /// P2: the module's typed methods (`CrossModuleCtx::typed_methods`).

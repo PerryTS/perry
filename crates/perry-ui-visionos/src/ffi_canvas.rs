@@ -98,7 +98,9 @@ pub extern "C" fn perry_ui_canvas_fill_gradient(
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_set_fill_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+pub extern "C" fn perry_ui_canvas_set_fill_color(h: i64, r: f64, g: f64, b: f64, a: f64) {
+    widgets::canvas::set_fill_color(h, r, g, b, a);
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_set_stroke_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
 #[no_mangle]
@@ -108,8 +110,12 @@ pub extern "C" fn perry_ui_canvas_fill_rect(_h: i64, _x: f64, _y: f64, _w: f64, 
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_stroke_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {
-    widgets::canvas::clear(h);
+pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, x: f64, y: f64, w: f64, ht: f64) {
+    // HTML canvas ignores a clearRect with any non-finite argument.
+    if !(x.is_finite() && y.is_finite() && w.is_finite() && ht.is_finite()) {
+        return;
+    }
+    widgets::canvas::clear_rect(h, x, y, w, ht);
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_arc(_h: i64, _x: f64, _y: f64, _r: f64, _sa: f64, _ea: f64) {}
@@ -120,9 +126,13 @@ pub extern "C" fn perry_ui_canvas_fill(_h: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_stroke_path(_h: i64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_fill_text(_h: i64, _ptr: i64, _x: f64, _y: f64) {}
+pub extern "C" fn perry_ui_canvas_fill_text(h: i64, ptr: i64, x: f64, y: f64) {
+    widgets::canvas::fill_text(h, ptr as *const u8, x, y);
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
+pub extern "C" fn perry_ui_canvas_set_font(h: i64, ptr: i64) {
+    widgets::canvas::set_font(h, ptr as *const u8);
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_draw_image(
     h: i64,

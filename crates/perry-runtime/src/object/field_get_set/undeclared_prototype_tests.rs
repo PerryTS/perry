@@ -1,4 +1,4 @@
-//! P3 B2 (DESIGN-p3 rev 3.1 §3, REVIEW-p3 D3): the `prototype` read of a
+//! P3 B2 (REVIEW-p3 D3): the `prototype` read of a
 //! registered class id is the declaration path's answer, decided at the read.
 //!
 //! The one id with no prototype object is an anonymous-shape id: registered

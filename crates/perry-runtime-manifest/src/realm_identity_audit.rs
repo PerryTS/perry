@@ -1,4 +1,4 @@
-//! The identity audit (DESIGN-p4l4 §2.2, VR-0): a realm-declared body whose
+//! The identity audit (VR-0): a realm-declared body whose
 //! source compares values by identity must say so (`identity(slot)`).
 //!
 //! A **precision test**, not the soundness argument. It reads the runtime's

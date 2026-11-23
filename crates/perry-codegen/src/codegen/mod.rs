@@ -565,7 +565,7 @@ fn lower_module(
     crate::layout_desc::create_families::clear();
     let (live_cjs_hir, cjs_property_exports) = cjs_exports::prepare(hir);
     let hir = live_cjs_hir.as_ref();
-    // DESIGN-p4l4 VR-3a: the facts' record bindings are their fields by
+    // VR-3a: the facts' record bindings are their fields by
     // value (`value_records`); every lowering below sees the rewritten body.
     let mut opts = opts;
     let records_hir = crate::value_records::rewrite_module(hir, &mut opts.program_facts.elision);
@@ -4047,7 +4047,7 @@ fn lower_module(
             &cross_module.spec_abi_functions,
             &cross_module.type_aliases,
         );
-        // P2 (DESIGN-p2 §3.2, T2/T3): every selector above ran exactly as on
+        // P2 (T2/T3): every selector above ran exactly as on
         // main; the typed set is decided once, here, before any body or site
         // is lowered.
         signature_entry::select(
