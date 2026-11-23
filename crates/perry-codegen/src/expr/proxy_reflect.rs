@@ -952,6 +952,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             element_offset,
             ..
         } => {
+            if let Expr::String(k) = key.as_ref() {
+                if same_put_value_receiver_expr(target, receiver)
+                    && super::property_set::attributed_class_key(ctx, target, k)
+                {
+                    return super::property_set::lower_runtime_property_set_by_name(
+                        ctx, target, k, value, *strict,
+                    );
+                }
+            }
             // Value records' check mode: a store into a copy.
             super::record_witness::store_into_copy(ctx, target)?;
             // Check mode: a store the facts took to be in bounds.
