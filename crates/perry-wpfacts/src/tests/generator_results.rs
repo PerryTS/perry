@@ -8,6 +8,7 @@ use super::*;
 fn facts_of(outer: &str) -> ProgramFacts {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         function* inner() {{ yield new Svc(); }}
@@ -92,6 +93,6 @@ fn a_yielded_value_joins_the_receivers() {
 /// node (`hostIter = [{ size: 'x' }]`): prints `x`.
 #[test]
 fn a_delegate_from_unmodeled_code_yields_top() {
-    let v = verdict("function* outer() { yield* (globalThis as any).hostIter; }");
+    let v = verdict("function* outer() { yield* external(); }");
     assert!(!proven(&v), "{v:?}");
 }

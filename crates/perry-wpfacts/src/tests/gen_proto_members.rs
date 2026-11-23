@@ -9,6 +9,7 @@ use super::*;
 fn facts_of(src: &str) -> ProgramFacts {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         class Alt {{ other = 1; size = 4; }}
         function g(a: any) {{ return a.size; }}
@@ -82,7 +83,7 @@ fn for_of_calls_an_iterator_method_written_on_the_prototype() {
 #[test]
 fn an_escaped_generator_function_leaves_the_site_unproven() {
     let (r, v) = receivers(
-        "(globalThis as any).hook(gen);
+        "external(gen);
          for (const s of gen()) { console.log(g(s)); break; }",
     );
     assert!(!proven(&v), "{r:?} {v:?}");

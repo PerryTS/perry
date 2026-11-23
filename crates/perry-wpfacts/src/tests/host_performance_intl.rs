@@ -165,8 +165,9 @@ fn mark_detail_still_escapes() {
 fn a_written_global_reads_what_was_written() {
     let pf = facts(
         r#"
+        declare function external(x?: unknown): any;
         class O { x = 1; }
-        (globalThis as any).performance = { mark(v: any) { (globalThis as any).zzz(v); } };
+        (globalThis as any).performance = { mark(v: any) { external(v); } };
         const o = new O();
         performance.mark(o as any);
         console.log(o.x);
