@@ -13,7 +13,6 @@ use super::generic::{
 use super::*;
 use crate::closure::ClosureHeader;
 use crate::value::TAG_UNDEFINED;
-use std::ptr;
 
 // ---------------------------------------------------------------------------
 // Generic array-like MUTATORS over a plain-object receiver (#4742 follow-up).
@@ -218,42 +217,54 @@ pub(super) fn arg_at(args_ptr: *const f64, args_len: usize, i: usize) -> f64 {
 
 /// `Array.prototype.pop` over an array-like object receiver.
 pub(crate) fn object_pop(recv: f64) -> f64 {
-    let len = al_length(recv);
+    // Accessors and traps on `recv` may collect: re-read it from the root.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_handle = scope.root_nanbox_f64(recv);
+    let recv = || recv_handle.get_nanbox_f64();
+    let len = al_length(recv());
     if len <= 0 {
-        al_set_length(recv, 0);
+        al_set_length(recv(), 0);
         return undef();
     }
     let new_len = len - 1;
-    let element = al_get(recv, new_len);
-    al_delete(recv, new_len);
-    al_set_length(recv, new_len);
+    let element = al_get(recv(), new_len);
+    al_delete(recv(), new_len);
+    al_set_length(recv(), new_len);
     element
 }
 
 /// `Array.prototype.shift` over an array-like object receiver.
 pub(crate) fn object_shift(recv: f64) -> f64 {
-    let len = al_length(recv);
+    // Accessors and traps on `recv` may collect: re-read it from the root.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_handle = scope.root_nanbox_f64(recv);
+    let recv = || recv_handle.get_nanbox_f64();
+    let len = al_length(recv());
     if len <= 0 {
-        al_set_length(recv, 0);
+        al_set_length(recv(), 0);
         return undef();
     }
-    let first = al_get(recv, 0);
+    let first = al_get(recv(), 0);
     for k in 1..len {
-        if al_has(recv, k) {
-            al_set(recv, k - 1, al_get(recv, k));
+        if al_has(recv(), k) {
+            al_set(recv(), k - 1, al_get(recv(), k));
         } else {
-            al_delete(recv, k - 1);
+            al_delete(recv(), k - 1);
         }
     }
-    al_delete(recv, len - 1);
-    al_set_length(recv, len - 1);
+    al_delete(recv(), len - 1);
+    al_set_length(recv(), len - 1);
     first
 }
 
 /// `Array.prototype.push` over an array-like object receiver. Returns the new
 /// length.
 pub(super) fn object_push(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
-    let len = al_length(recv);
+    // Accessors and traps on `recv` may collect: re-read it from the root.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_handle = scope.root_nanbox_f64(recv);
+    let recv = || recv_handle.get_nanbox_f64();
+    let len = al_length(recv());
     const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
     if len > MAX_SAFE_INTEGER - args_len.min(MAX_SAFE_INTEGER as usize) as i64 {
         crate::collection_iter::throw_type_error(
@@ -261,17 +272,21 @@ pub(super) fn object_push(recv: f64, args_ptr: *const f64, args_len: usize) -> f
         );
     }
     for i in 0..args_len {
-        al_set(recv, len + i as i64, arg_at(args_ptr, args_len, i));
+        al_set(recv(), len + i as i64, arg_at(args_ptr, args_len, i));
     }
     let new_len = len + args_len as i64;
-    al_set_length(recv, new_len);
+    al_set_length(recv(), new_len);
     new_len as f64
 }
 
 /// `Array.prototype.unshift` over an array-like object receiver. Returns the
 /// new length.
 pub(super) fn object_unshift(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
-    let len = al_length(recv);
+    // Accessors and traps on `recv` may collect: re-read it from the root.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_handle = scope.root_nanbox_f64(recv);
+    let recv = || recv_handle.get_nanbox_f64();
+    let len = al_length(recv());
     let count = args_len as i64;
     const MAX_SAFE_INTEGER: i64 = 9_007_199_254_740_991;
     if len > MAX_SAFE_INTEGER - count {
@@ -286,58 +301,66 @@ pub(super) fn object_unshift(recv: f64, args_ptr: *const f64, args_len: usize) -
         while k > 0 {
             let from = k - 1;
             let to = from + count;
-            if al_has(recv, from) {
-                al_set(recv, to, al_get(recv, from));
+            if al_has(recv(), from) {
+                al_set(recv(), to, al_get(recv(), from));
             } else {
-                al_delete(recv, to);
+                al_delete(recv(), to);
             }
             k -= 1;
         }
         for j in 0..count {
-            al_set(recv, j, arg_at(args_ptr, args_len, j as usize));
+            al_set(recv(), j, arg_at(args_ptr, args_len, j as usize));
         }
     }
     let new_len = len + count;
-    al_set_length(recv, new_len);
+    al_set_length(recv(), new_len);
     new_len as f64
 }
 
 /// `Array.prototype.reverse` over an array-like object receiver. Returns the
 /// receiver.
 pub(crate) fn object_reverse(recv: f64) -> f64 {
-    let len = al_length(recv);
+    // Accessors and traps on `recv` may collect: re-read it from the root.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_handle = scope.root_nanbox_f64(recv);
+    let recv = || recv_handle.get_nanbox_f64();
+    let len = al_length(recv());
     let middle = len / 2;
     let mut lower = 0;
     while lower < middle {
         let upper = len - 1 - lower;
-        let lower_exists = al_has(recv, lower);
-        let upper_exists = al_has(recv, upper);
-        let lower_val = al_get(recv, lower);
-        let upper_val = al_get(recv, upper);
+        let lower_exists = al_has(recv(), lower);
+        let upper_exists = al_has(recv(), upper);
+        let lower_val = al_get(recv(), lower);
+        let upper_val = al_get(recv(), upper);
         match (lower_exists, upper_exists) {
             (true, true) => {
-                al_set(recv, lower, upper_val);
-                al_set(recv, upper, lower_val);
+                al_set(recv(), lower, upper_val);
+                al_set(recv(), upper, lower_val);
             }
             (false, true) => {
-                al_set(recv, lower, upper_val);
-                al_delete(recv, upper);
+                al_set(recv(), lower, upper_val);
+                al_delete(recv(), upper);
             }
             (true, false) => {
-                al_delete(recv, lower);
-                al_set(recv, upper, lower_val);
+                al_delete(recv(), lower);
+                al_set(recv(), upper, lower_val);
             }
             (false, false) => {}
         }
         lower += 1;
     }
-    recv
+    recv()
 }
 
 /// `Array.prototype.splice` over an array-like object receiver. Returns a fresh
 /// plain array of the removed elements (holes preserved).
 pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) -> f64 {
-    let len = al_length(recv);
+    // Accessors and traps on `recv` may collect: re-read it from the root.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let recv_handle = scope.root_nanbox_f64(recv);
+    let recv = || recv_handle.get_nanbox_f64();
+    let len = al_length(recv());
     let actual_start = relative_index(arg_at(args_ptr, args_len, 0), len);
     let delete_count = if args_len == 0 {
         0
@@ -352,18 +375,15 @@ pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) ->
     if delete_count > u32::MAX as i64 {
         crate::array::array_length_range_error();
     }
-    let removed = js_array_alloc_with_length(delete_count.max(0) as u32);
-    let removed_elems =
-        unsafe { crate::array::array_elements_ptr(removed as *const ArrayHeader) as *mut f64 };
+    let removed = super::sort::RootedArrayElems::new(
+        &scope,
+        js_array_alloc_with_length(delete_count.max(0) as u32),
+    );
     for k in 0..delete_count {
         let from = actual_start + k;
-        if al_has(recv, from) {
-            let v = al_get(recv, from);
-            unsafe {
-                // GC_STORE_AUDIT(BARRIERED): note_array_slot below re-stores this slot with the barrier.
-                ptr::write(removed_elems.add(k as usize), v);
-                note_array_slot(removed, k as usize, v.to_bits());
-            }
+        if al_has(recv(), from) {
+            let v = al_get(recv(), from);
+            unsafe { removed.set(k as usize, v) };
         }
     }
     let item_count = args_len.saturating_sub(2) as i64;
@@ -373,17 +393,17 @@ pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) ->
         while k < len - delete_count {
             let from = k + delete_count;
             let to = k + item_count;
-            if al_has(recv, from) {
-                al_set(recv, to, al_get(recv, from));
+            if al_has(recv(), from) {
+                al_set(recv(), to, al_get(recv(), from));
             } else {
-                al_delete(recv, to);
+                al_delete(recv(), to);
             }
             k += 1;
         }
         // Delete the now-vacated trailing slots.
         let mut k = len;
         while k > len - delete_count + item_count {
-            al_delete(recv, k - 1);
+            al_delete(recv(), k - 1);
             k -= 1;
         }
     } else if item_count > delete_count {
@@ -392,10 +412,10 @@ pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) ->
         while k > actual_start {
             let from = k + delete_count - 1;
             let to = k + item_count - 1;
-            if al_has(recv, from) {
-                al_set(recv, to, al_get(recv, from));
+            if al_has(recv(), from) {
+                al_set(recv(), to, al_get(recv(), from));
             } else {
-                al_delete(recv, to);
+                al_delete(recv(), to);
             }
             k -= 1;
         }
@@ -403,13 +423,13 @@ pub(crate) fn object_splice(recv: f64, args_ptr: *const f64, args_len: usize) ->
     // Write the inserted items.
     for j in 0..item_count {
         al_set(
-            recv,
+            recv(),
             actual_start + j,
             arg_at(args_ptr, args_len, 2 + j as usize),
         );
     }
-    al_set_length(recv, len - delete_count + item_count);
-    nanbox_arr(removed)
+    al_set_length(recv(), len - delete_count + item_count);
+    nanbox_arr(removed.arr())
 }
 
 /// `Array.prototype.sort` over an array-like (non-real-array) receiver:
