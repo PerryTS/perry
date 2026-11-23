@@ -96,3 +96,23 @@ console.log([o.x, threw].join(","));
         "7,TypeError"
     );
 }
+
+// A class instance is a descriptor whose fields its accessors give; a setter alone
+// still makes its field present. Expected output is Node's.
+#[test]
+fn define_property_reads_a_class_instance_descriptor_through_its_getters() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Desc { get value() { return 1; } get enumerable() { return true; } }
+const o: any = {};
+Object.defineProperty(o, "x", new Desc() as any);
+class Mixed { get value() { return 2; } set get(f: any) {} }
+let threw = "no";
+try { Object.defineProperty(o, "y", new Mixed() as any); } catch (e: any) { threw = e.name; }
+console.log([o.x, Object.keys(o).join(""), "y" in o, threw].join(","));
+"#
+        ),
+        "1,x,false,TypeError"
+    );
+}
