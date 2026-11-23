@@ -2592,6 +2592,12 @@ pub(super) fn family_any(
         Some(_) => {
             let n = chain_any_node(m, fam, what, key);
             m.edge(n, dst);
+            // An accessor's getter runs on the value read (`of`), as its
+            // named read does: its result depends on the receiver, so it
+            // is no part of the shared chain node.
+            for a in chain_accessors(m, fam, what, key) {
+                loads::family_member(m, of, fam, what, a, dst);
+            }
         }
         None => {
             family_ctor(m, fam, dst);
@@ -2645,6 +2651,9 @@ fn chain_any_node(m: &mut Model, fam: Family, what: Option<&'static str>, key: K
             object_method = true;
             continue;
         }
+        if matches!(members::member(fam, name), Some(Mem::Fn)) && realm_accessor(m, fam, what, name) {
+            continue;
+        }
         let a = m.atom(name);
         loads::family_member(m, None, fam, what, a, n);
     }
@@ -2653,6 +2662,27 @@ fn chain_any_node(m: &mut Model, fam: Family, what: Option<&'static str>, key: K
         m.add_tok(n, f);
     }
     n
+}
+
+/// The accessors of family `fam`'s intrinsic chain (of a value of kind
+/// `what`) whose names computed key `key` may spell: their getters run per
+/// receiver (`family_any`), never in the shared `chain_any_node`.
+fn chain_accessors(m: &mut Model, fam: Family, what: Option<&'static str>, key: Key) -> Vec<Atom> {
+    let mut out = vec![];
+    for name in members::chain_names(fam).into_iter().flatten() {
+        if Model::proto_link(name) || !m.key_may_name_str(key, name) {
+            continue;
+        }
+        if members::own(fam, name).is_none()
+            && matches!(members::member(Family::Object, name), Some(Mem::Fn))
+        {
+            continue;
+        }
+        if matches!(members::member(fam, name), Some(Mem::Fn)) && realm_accessor(m, fam, what, name) {
+            out.push(m.atom(name));
+        }
+    }
+    out
 }
 
 /// The OPTIMISTIC JSON-key read (`Model::json_key_optimistic`) of the
