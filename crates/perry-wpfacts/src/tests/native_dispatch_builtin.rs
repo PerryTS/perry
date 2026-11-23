@@ -61,7 +61,7 @@ fn native_dispatch_console_protocols_and_replacement_remain_open() {
         "console.log = function(x: any) {}; console.log('hello');",
         "console.log({ toString() { return 'custom'; } });",
         "console.log('%s', { toString() { return 'custom'; } });",
-        "console.log((globalThis as any).unknown);",
+        "console.log(external());",
         "import { performance } from 'node:perf_hooks'; performance.now(); console.log('hello');",
         "import * as dc from 'node:diagnostics_channel'; dc.subscribe('console.log', (m: any) => { m.arguments[0] = {}; }); console.log('hello');",
     ] {
@@ -96,7 +96,7 @@ fn native_dispatch_namespace_mutation_and_coercion_remain_open() {
             "console.log(Math.abs({valueOf() { return -3; }} as any));",
             "abs",
         ),
-        ("console.log(Math.abs((globalThis as any).unknown));", "abs"),
+        ("console.log(Math.abs(external()));", "abs"),
         ("const f = Math.abs; console.log(f.call(Math, -3));", "call"),
         (
             "const f = Math.abs; console.log(f.apply(Math, [-3]));",

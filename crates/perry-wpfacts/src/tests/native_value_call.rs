@@ -59,9 +59,10 @@ fn call_of_a_native_value_runs_its_model() {
 #[test]
 fn a_shadowed_member_stays_unknown() {
     let v = sv(r#"
+        declare function external(x?: unknown): any;
         const a2: any = [];
         a2.slice = function (this: any) {
-            (globalThis as any).hook(this);
+            external(this);
             return [];
         };
         const fs: any[] = [a2.slice];
@@ -94,8 +95,9 @@ fn a_native_under_a_computed_key_runs_the_named_members() {
 #[test]
 fn a_function_from_unknown_code_stays_unknown() {
     let v = sv(r#"
+        declare function external(x?: unknown): any;
         import "unseen-host";
-        const fs: any[] = [(globalThis as any).unseenFn];
+        const fs: any[] = [external()];
         const arr = [new Sym(1)];
         try { fs[0].call(arr); } catch (e) {}
         console.log(g(arr[0]));
