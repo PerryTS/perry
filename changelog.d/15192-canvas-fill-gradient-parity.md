@@ -1,0 +1,1 @@
+`canvas.fillGradient` fills the area between the current path and the bottom edge on every backend; Android, Windows, web and WASM used to fill the closed path, the current path or the whole canvas. The web and WASM fill no longer leaves the gradient as the fill style.
