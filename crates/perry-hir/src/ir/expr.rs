@@ -244,8 +244,8 @@ pub enum Expr {
         object: Box<Expr>,
         property: String,
         value: Box<Expr>,
-        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
-        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        /// Source coordinates (SWC 1-based, end exclusive): the offset always, the
+        /// end only with `PERRY_FACTS_DUMP` (otherwise 0); ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
     },
@@ -256,8 +256,8 @@ pub enum Expr {
         op: BinaryOp, // Add for ++, Sub for --
         prefix: bool, // true for ++x, false for x++
         strict: bool,
-        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
-        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        /// Source coordinates (SWC 1-based, end exclusive): the offset always, the
+        /// end only with `PERRY_FACTS_DUMP` (otherwise 0); ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
     },
@@ -277,8 +277,8 @@ pub enum Expr {
         object: Box<Expr>,
         index: Box<Expr>,
         value: Box<Expr>,
-        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
-        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        /// Source coordinates (SWC 1-based, end exclusive): the offset always, the
+        /// end only with `PERRY_FACTS_DUMP` (otherwise 0); ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
         /// Element-fact source identity (SWC span.lo), independent of verdict sites.
@@ -292,8 +292,8 @@ pub enum Expr {
         op: BinaryOp, // Add for ++, Sub for --
         prefix: bool, // true for ++x, false for x++
         strict: bool,
-        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
-        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        /// Source coordinates (SWC 1-based, end exclusive): the offset always, the
+        /// end only with `PERRY_FACTS_DUMP` (otherwise 0); ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
         /// Element-fact source identity (SWC span.lo), independent of verdict sites.
@@ -2862,8 +2862,8 @@ pub enum Expr {
         value: Box<Expr>,
         receiver: Box<Expr>,
         strict: bool,
-        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
-        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        /// Source coordinates (SWC 1-based, end exclusive): the offset always, the
+        /// end only with `PERRY_FACTS_DUMP` (otherwise 0); ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
         /// Element-fact source identity (SWC span.lo), independent of verdict sites.

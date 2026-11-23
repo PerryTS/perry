@@ -127,74 +127,76 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
             _ => {}
         }
     }
-    if std::env::var_os("PERRY_FACTS_DUMP").is_some() {
-        if let Ok(value) = &mut result {
-            let span = expr.span();
-            match (expr, value) {
-                (
-                    ast::Expr::Call(_),
-                    Expr::CallSpread {
-                        byte_offset,
-                        byte_end,
-                        ..
-                    },
-                ) => {
-                    *byte_offset = span.lo.0;
+    // Every expression stands at its own construct: an assignment's store,
+    // an update and a member read carry the source offset; the end only with
+    // `PERRY_FACTS_DUMP` (diagnostics).
+    let dump = std::env::var_os("PERRY_FACTS_DUMP").is_some();
+    if let Ok(value) = &mut result {
+        let span = expr.span();
+        match (expr, value) {
+            (
+                ast::Expr::Call(_),
+                Expr::CallSpread {
+                    byte_offset,
+                    byte_end,
+                    ..
+                },
+            )
+            | (
+                ast::Expr::Member(_),
+                Expr::IndexGet {
+                    byte_offset,
+                    byte_end,
+                    ..
+                },
+            )
+            | (
+                ast::Expr::Assign(_),
+                Expr::PropertySet {
+                    byte_offset,
+                    byte_end,
+                    ..
+                }
+                | Expr::IndexSet {
+                    byte_offset,
+                    byte_end,
+                    ..
+                }
+                | Expr::PutValueSet {
+                    byte_offset,
+                    byte_end,
+                    ..
+                },
+            )
+            | (
+                ast::Expr::Update(_),
+                Expr::PropertyUpdate {
+                    byte_offset,
+                    byte_end,
+                    ..
+                }
+                | Expr::IndexUpdate {
+                    byte_offset,
+                    byte_end,
+                    ..
+                },
+            ) => {
+                *byte_offset = span.lo.0;
+                if dump {
                     *byte_end = span.hi.0;
                 }
-                (
-                    ast::Expr::Member(_),
-                    Expr::IndexGet {
-                        byte_offset,
-                        byte_end,
-                        ..
-                    },
-                ) => {
-                    *byte_offset = span.lo.0;
-                    *byte_end = span.hi.0;
-                }
-                (
-                    ast::Expr::Assign(_),
-                    Expr::PropertySet {
-                        byte_offset,
-                        byte_end,
-                        ..
-                    }
-                    | Expr::IndexSet {
-                        byte_offset,
-                        byte_end,
-                        ..
-                    }
-                    | Expr::PutValueSet {
-                        byte_offset,
-                        byte_end,
-                        ..
-                    },
-                )
-                | (
-                    ast::Expr::Update(_),
-                    Expr::PropertyUpdate {
-                        byte_offset,
-                        byte_end,
-                        ..
-                    }
-                    | Expr::IndexUpdate {
-                        byte_offset,
-                        byte_end,
-                        ..
-                    },
-                ) => {
-                    *byte_offset = span.lo.0;
-                    *byte_end = span.hi.0;
-                }
-                (ast::Expr::New(_), Expr::New { byte_end, .. })
-                | (ast::Expr::New(_), Expr::NewDynamic { byte_end, .. })
-                | (ast::Expr::New(_), Expr::NewDynamicSpread { byte_end, .. }) => {
-                    *byte_end = span.hi.0
-                }
-                _ => {}
             }
+            (ast::Expr::New(_), Expr::New { byte_end, .. })
+            | (ast::Expr::New(_), Expr::NewDynamic { byte_end, .. })
+            | (ast::Expr::New(_), Expr::NewDynamicSpread { byte_end, .. })
+                if dump =>
+            {
+                *byte_end = span.hi.0
+            }
+            _ => {}
         }
+    }
+    if dump {
         site_census::record(ctx, expr, &result);
     }
     result
