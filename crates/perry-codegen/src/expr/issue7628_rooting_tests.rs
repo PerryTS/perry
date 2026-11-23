@@ -236,10 +236,12 @@ fn property_update_rereads_the_receiver_below_the_collection_window() {
         })),
     );
     require_call_line(&ir, "js_to_numeric");
+    // The static-key store site's out-of-line path takes the receiver as its
+    // second operand and runs the `[[Set]]` itself.
     assert_operand_reread_below(
         &ir,
-        "js_put_value_set",
-        0,
+        "perry_store_or_put",
+        1,
         "js_to_numeric",
         "the PropertyUpdate receiver",
     );

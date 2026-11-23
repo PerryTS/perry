@@ -295,16 +295,18 @@ fn assert_special_owner_misses(text: &str) {
         })
         .expect("special owners must guard admission");
     // The runtime arm can re-enter JS, so the body's stack check may sit in
-    // front of it (`stack_guard::move_check_to_call_sites`): follow the
-    // check's own blocks to the arm.
+    // front of it (`stack_guard::move_check_to_call_sites`), and a refused
+    // owner first meets the other-kind dispatch, whose arms are both runtime
+    // calls: follow those blocks to an arm.
     let reaches_slow = |label: &str| {
         let mut work = vec![label.to_string()];
         let mut seen = std::collections::HashSet::new();
         while let Some(l) = work.pop() {
-            if l.starts_with("ta.read.slow") {
+            if l.starts_with("ta.read.slow") || l.starts_with("ta.read.any_kind") {
                 return true;
             }
-            if !l.starts_with("stack_guard.") || !seen.insert(l.clone()) {
+            let routing = ["stack_guard.", "ta.read.other_kind", "bytes.any."];
+            if !routing.iter().any(|p| l.starts_with(p)) || !seen.insert(l.clone()) {
                 continue;
             }
             let start = format!("{l}:");
