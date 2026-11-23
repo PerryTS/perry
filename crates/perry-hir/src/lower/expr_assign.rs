@@ -495,6 +495,7 @@ pub(crate) fn lower_ident_assignment(
     ctx: &mut LoweringContext,
     name: String,
     value: Box<Expr>,
+    byte_offset: u32,
 ) -> Result<Expr> {
     let with_envs = ctx.active_with_envs_for_ident(&name);
     if !with_envs.is_empty()
@@ -532,7 +533,7 @@ pub(crate) fn lower_ident_assignment(
             object: Box::new(target),
             property: name,
             value,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
         });
     }
@@ -660,13 +661,13 @@ pub(crate) fn lower_ident_assignment(
         Ok(Expr::PropertySet {
             object: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: "globalThis".to_string(),
             }),
             property: name,
             value,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
         })
     }
@@ -693,7 +694,7 @@ fn lower_assignment_target(
 ) -> Result<Expr> {
     match target {
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
-            lower_ident_assignment(ctx, ident.id.sym.to_string(), value)
+            lower_ident_assignment(ctx, ident.id.sym.to_string(), value, byte_offset)
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) => {
             // Proxy set: `proxy.foo = v` / `proxy[k] = v`
@@ -1126,7 +1127,7 @@ fn lower_assignment_target(
                             object,
                             property,
                             value,
-                            byte_offset: 0,
+                            byte_offset,
                             byte_end: 0,
                         },
                     ))
