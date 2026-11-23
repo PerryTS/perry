@@ -507,21 +507,27 @@ fn console_make_named_function(
 ) -> f64 {
     let closure = crate::closure::js_closure_alloc(info, 0);
     let closure_handle = scope.root_raw_mut_ptr(closure);
-    crate::object::set_bound_native_closure_name(
-        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
-        name,
-    );
-    crate::object::set_builtin_closure_length(
-        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-        exposed_length,
-    );
-    let closure = closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>();
-    crate::value::js_nanbox_pointer(closure as i64)
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::object::set_bound_native_closure_name(closure, name)
+    });
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::object::set_builtin_closure_length(closure as usize, exposed_length)
+    });
+    closure_handle
+        .with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| crate::value::js_nanbox_pointer(closure as i64))
 }
 
-fn console_set_field(obj: *mut crate::object::ObjectHeader, name: &str, value: f64) {
+/// The key is allocated before `obj` and `value` are read, so neither copy
+/// can name an object the allocation moved.
+fn console_set_field(
+    obj: &crate::gc::RuntimeHandle<'_>,
+    name: &str,
+    value: &crate::gc::RuntimeHandle<'_>,
+) {
     let key = js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    crate::object::js_object_set_field_by_name(obj, key, value);
+    obj.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        crate::object::js_object_set_field_by_name(obj, key, value.get_nanbox_f64())
+    });
 }
 
 extern "C" fn console_context_method_noop(
@@ -596,16 +602,10 @@ pub extern "C" fn js_console_context(name: f64) -> f64 {
             1,
         );
         let func_handle = scope.root_nanbox_f64(func);
-        console_set_field(
-            obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-            method,
-            func_handle.get_nanbox_f64(),
-        );
+        console_set_field(&obj_handle, method, &func_handle);
     }
 
-    crate::value::js_nanbox_pointer(
-        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
-    )
+    obj_handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64))
 }
 
 /// `console.createTask(name)` is V8 inspector async-stack tagging. The
@@ -628,14 +628,8 @@ pub extern "C" fn js_console_create_task(name: f64) -> f64 {
         0,
     );
     let run_handle = scope.root_nanbox_f64(run);
-    console_set_field(
-        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>(),
-        "run",
-        run_handle.get_nanbox_f64(),
-    );
-    crate::value::js_nanbox_pointer(
-        obj_handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as i64
-    )
+    console_set_field(&obj_handle, "run", &run_handle);
+    obj_handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64))
 }
 
 /// Debug trace for module initialization order.
@@ -850,7 +844,9 @@ fn object_property(value: f64, name: &[u8]) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj = scope.root_raw_const_ptr(obj);
     let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-    f64::from_bits(crate::object::js_object_get_field_by_name(obj.get_raw_const_ptr(), key).bits())
+    obj.with_const_ptr(|obj| {
+        f64::from_bits(crate::object::js_object_get_field_by_name(obj, key).bits())
+    })
 }
 
 fn value_gc_type(value: f64) -> Option<u8> {
@@ -1079,10 +1075,10 @@ fn format_console_instance_args(args: &[f64]) -> String {
         .collect();
     let arr = scope.root_raw_mut_ptr(crate::array::js_array_alloc(args.len() as u32));
     for arg in args {
-        let next = crate::array::js_array_push_f64(arr.get_raw_mut_ptr(), arg.get_nanbox_f64());
+        let next = arr.with_mut_ptr(|a| crate::array::js_array_push_f64(a, arg.get_nanbox_f64()));
         arr.set_raw_mut_ptr(next);
     }
-    jsvalue_string_content(js_util_format(arr.get_raw_const_ptr())).unwrap_or_default()
+    jsvalue_string_content(arr.with_const_ptr(|a| js_util_format(a))).unwrap_or_default()
 }
 
 fn console_instance_label(args: &[f64]) -> String {
@@ -1146,18 +1142,14 @@ pub(crate) unsafe fn try_console_instance_method_dispatch(
     };
     let action = {
         let state = scope.root_raw_mut_ptr(console_instance_state(obj)?);
-        let stdout =
-            f64::from_bits(crate::array::js_array_get(state.get_raw_const_ptr(), 0).bits());
-        let stderr =
-            f64::from_bits(crate::array::js_array_get(state.get_raw_const_ptr(), 1).bits());
-        let counters = (crate::array::js_array_get(state.get_raw_const_ptr(), 2).bits()
-            & crate::value::POINTER_MASK)
-            as *mut crate::object::ObjectHeader;
+        let slot = |index| state.with_const_ptr(|s| crate::array::js_array_get(s, index).bits());
+        let stdout = f64::from_bits(slot(0));
+        let stderr = f64::from_bits(slot(1));
+        let counters = (slot(2) & crate::value::POINTER_MASK) as *mut crate::object::ObjectHeader;
         let stdout = scope.root_nanbox_f64(stdout);
         let stderr = scope.root_nanbox_f64(stderr);
         let counters = scope.root_raw_mut_ptr(counters);
-        let depth = f64::from_bits(crate::array::js_array_get(state.get_raw_const_ptr(), 3).bits())
-            as usize;
+        let depth = f64::from_bits(slot(3)) as usize;
         let indent = "  ".repeat(depth);
         match method_name {
             "log" | "info" | "debug" | "dir" | "dirxml" => Some(ConsoleInstanceAction::Write {
@@ -1176,20 +1168,17 @@ pub(crate) unsafe fn try_console_instance_method_dispatch(
                     label.as_ptr(),
                     label.len() as u32,
                 ));
-                let previous = crate::object::js_object_get_field_by_name(
-                    counters.get_raw_const_ptr(),
-                    key.get_raw_const_ptr(),
-                );
+                let previous = counters.with_const_ptr(|c| {
+                    key.with_const_ptr(|k| crate::object::js_object_get_field_by_name(c, k))
+                });
                 let count = if previous.is_undefined() {
                     1.0
                 } else {
                     f64::from_bits(previous.bits()) + 1.0
                 };
-                crate::object::js_object_set_field_by_name(
-                    counters.get_raw_mut_ptr(),
-                    key.get_raw_const_ptr(),
-                    count,
-                );
+                counters.with_mut_ptr(|c| {
+                    key.with_const_ptr(|k| crate::object::js_object_set_field_by_name(c, k, count))
+                });
                 Some(ConsoleInstanceAction::Write {
                     stream: stdout,
                     line: format!("{indent}{label}: {count}"),
@@ -1202,15 +1191,14 @@ pub(crate) unsafe fn try_console_instance_method_dispatch(
                     label.as_ptr(),
                     label.len() as u32,
                 ));
-                let missing = crate::object::js_object_get_field_by_name(
-                    counters.get_raw_const_ptr(),
-                    key.get_raw_const_ptr(),
-                )
-                .is_undefined();
-                crate::object::js_object_delete_field(
-                    counters.get_raw_mut_ptr(),
-                    key.get_raw_const_ptr(),
-                );
+                let missing = counters
+                    .with_const_ptr(|c| {
+                        key.with_const_ptr(|k| crate::object::js_object_get_field_by_name(c, k))
+                    })
+                    .is_undefined();
+                counters.with_mut_ptr(|c| {
+                    key.with_const_ptr(|k| crate::object::js_object_delete_field(c, k))
+                });
                 if missing {
                     Some(ConsoleInstanceAction::Write {
                         stream: stderr,
@@ -1230,7 +1218,7 @@ pub(crate) unsafe fn try_console_instance_method_dispatch(
                         format_console_instance_args(&current_args())
                     ))
                 };
-                crate::array::js_array_set_f64(state.get_raw_mut_ptr(), 3, (depth + 1) as f64);
+                state.with_mut_ptr(|s| crate::array::js_array_set_f64(s, 3, (depth + 1) as f64));
                 line.map(|line| ConsoleInstanceAction::Write {
                     stream: stdout,
                     line,
@@ -1239,11 +1227,9 @@ pub(crate) unsafe fn try_console_instance_method_dispatch(
                 .or(Some(ConsoleInstanceAction::Noop))
             }
             "groupEnd" => {
-                crate::array::js_array_set_f64(
-                    state.get_raw_mut_ptr(),
-                    3,
-                    depth.saturating_sub(1) as f64,
-                );
+                state.with_mut_ptr(|s| {
+                    crate::array::js_array_set_f64(s, 3, depth.saturating_sub(1) as f64)
+                });
                 Some(ConsoleInstanceAction::Noop)
             }
             "clear" | "profile" | "profileEnd" | "timeStamp" => Some(ConsoleInstanceAction::Noop),
