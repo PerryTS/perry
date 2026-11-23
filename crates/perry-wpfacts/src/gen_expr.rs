@@ -2626,7 +2626,8 @@ impl<'a> Gen<'a> {
                 let p = self.expr(fx, proto);
                 let a = self.m.atom("prototype");
                 self.store(fx, f, Key::Named(a), p, "fn.prototype=".into(), None, false);
-                f
+                // An assignment evaluates to its right-hand side.
+                p
             }
             Expr::RegisterPrototypeMethod {
                 class_name,
