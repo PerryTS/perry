@@ -1191,6 +1191,47 @@ impl WasmModuleEmitter {
                     "u64ToF64(TAG_UNDEFINED)".to_string()
                 }
             }
+            // The same `closure_new` / `closure_set_capture` sequence as the WASM arm in
+            // `emit/expr/classes.rs`. The body is a module function, so a captured `this`
+            // is undefined.
+            Expr::Closure {
+                func_id,
+                body,
+                captures,
+                mutable_captures,
+                captures_this,
+                is_arrow,
+                ..
+            } => {
+                let Some(&func_idx) = self.func_map.get(func_id) else {
+                    return "u64ToF64(TAG_UNDEFINED)".to_string();
+                };
+                let table_idx = self
+                    .func_to_table_idx
+                    .get(&func_idx)
+                    .copied()
+                    .unwrap_or(func_idx);
+                let this = closure_this(*captures_this, *is_arrow, body);
+                let mut closure = format!(
+                    "__memDispatch.closure_new({}, {}, {}, {})",
+                    table_idx,
+                    captures.len(),
+                    u8::from(this == ClosureThis::Receiver),
+                    self.fn_proto_code(func_idx)
+                );
+                let mut values: Vec<String> = captures
+                    .iter()
+                    .chain(mutable_captures.iter())
+                    .map(|id| format!("toJsValue({})", self.emit_js_expr(&Expr::LocalGet(*id), locals)))
+                    .collect();
+                if this == ClosureThis::Captured {
+                    values.push("undefined".to_string());
+                }
+                for (i, value) in values.iter().enumerate() {
+                    closure = format!("__memDispatch.closure_set_capture({closure}, {i}, {value})");
+                }
+                format!("fromJsValue({closure})")
+            }
             Expr::FuncRef(id) => {
                 if let Some(&func_idx) = self.func_map.get(id) {
                     format!("fromJsValue(wasmInstance.exports.__wasm_func_{})", func_idx)

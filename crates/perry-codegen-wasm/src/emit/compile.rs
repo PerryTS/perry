@@ -993,19 +993,6 @@ impl WasmModuleEmitter {
             }
         }
 
-        // Async function JS generation (Phase 2): now that per-module func_maps are complete,
-        // generate the JS code for async functions with correct FuncRef resolution.
-        for (mod_idx, (_, module)) in modules.iter().enumerate() {
-            self.func_map = self.module_func_maps[mod_idx].clone();
-            self.current_mod_idx = mod_idx;
-            for func in &module.functions {
-                if func.is_async {
-                    let js_code = self.emit_js_async_function(func);
-                    self.async_js_code.push(js_code);
-                }
-            }
-        }
-
         // _start function (entry point). #854: the trailing
         // `user_func_idx += 1` was dead — nothing later in this function
         // reads the counter.
@@ -1343,6 +1330,19 @@ impl WasmModuleEmitter {
         // Build reverse map: wasm func index → table position
         for (table_idx, &func_idx) in all_func_indices.iter().enumerate() {
             self.func_to_table_idx.insert(func_idx, table_idx as u32);
+        }
+
+        // Async function JS generation: after the per-module func_maps and the table
+        // positions are complete, since a closure in an async body names its table slot.
+        for (mod_idx, (_, module)) in modules.iter().enumerate() {
+            self.func_map = self.module_func_maps[mod_idx].clone();
+            self.current_mod_idx = mod_idx;
+            for func in &module.functions {
+                if func.is_async {
+                    let js_code = self.emit_js_async_function(func);
+                    self.async_js_code.push(js_code);
+                }
+            }
         }
 
         let table_size = all_func_indices.len() as u32;

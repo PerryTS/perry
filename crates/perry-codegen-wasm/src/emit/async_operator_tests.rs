@@ -96,3 +96,24 @@ f().then((v) => console.log(v), (e) => console.log("threw " + e.message));
         "3,1,\"\""
     );
 }
+
+// A closure created in an async body is a function that reads its captures, as one
+// created in a synchronous body is. Expected output is Node's.
+#[test]
+fn async_body_closure_is_a_function_over_its_captures() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(n: number): Promise<string> {
+  const k = 3;
+  const g = () => 4;
+  const add = (x: number) => x + n + k;
+  return [typeof g, g(), add(1), apply(add, 2)].join(",");
+}
+function apply(fn: (x: number) => number, x: number): number { return fn(x); }
+f(10).then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "function,4,14,15"
+    );
+}
