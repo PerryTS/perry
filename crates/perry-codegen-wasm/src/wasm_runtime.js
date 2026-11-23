@@ -2394,6 +2394,7 @@ const __memDispatch = {
     if (!__holdsProperties(obj)) return 0;
     return (key in obj) ? 1 : 0;
   },
+  object_coerce: (v) => Object(v),
   object_assign: (target, source) => {
     if (target == null) throw new TypeError('Cannot convert undefined or null to object');
     const t = Object(target);

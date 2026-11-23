@@ -67,6 +67,7 @@ impl WasmModuleEmitter {
             "object_rest",
             "object_has_property",
             "object_assign",
+            "object_coerce",
             "array_new",
             "array_constructor_single",
             "array_push",
