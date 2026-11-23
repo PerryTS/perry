@@ -16,6 +16,7 @@ use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
 use super::{register_widget_with_layout, WidgetKind};
+use perry_ui::canvas_font::{parse_canvas_font, CanvasFont};
 
 /// Drawing commands accumulated and replayed in WM_PAINT.
 #[derive(Clone, Debug)]
@@ -29,6 +30,18 @@ pub enum DrawCmd {
     DrawImage(i64, f64, f64, f64, f64, f64, f64, f64, f64),
     // image, sx, sy, sw, sh, dx, dy, dw, dh
     Clear,
+    ClearRect(f64, f64, f64, f64), // x, y, w, h
+    SetFillColor(u8, u8, u8, u8),
+    SetFont(CanvasFont),
+    FillText(String, f64, f64),
+    SetStrokeColor(u8, u8, u8, u8),
+    SetLineWidth(f64),
+    FillRect(f64, f64, f64, f64),   // x, y, w, h
+    StrokeRect(f64, f64, f64, f64), // x, y, w, h
+    Arc(f64, f64, f64, f64, f64),   // x, y, r, start, end
+    ClosePath,
+    FillPath,
+    StrokePath,
 }
 
 fn command_batch_renders(commands: &[DrawCmd]) -> bool {
@@ -39,13 +52,52 @@ fn command_batch_renders(commands: &[DrawCmd]) -> bool {
                 | DrawCmd::Stroke(..)
                 | DrawCmd::FillGradient(..)
                 | DrawCmd::DrawImage(..)
+                | DrawCmd::ClearRect(..)
+                | DrawCmd::FillText(..)
+                | DrawCmd::FillRect(..)
+                | DrawCmd::StrokeRect(..)
+                | DrawCmd::FillPath
+                | DrawCmd::StrokePath
         )
     })
+}
+
+/// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
+/// replays alone and the state lasts as in HTML canvas: a setter until the next one, the
+/// current path until the next BeginPath. Records the state `commands` leave into `state`.
+fn carry_state(state: &mut Vec<DrawCmd>, commands: Vec<DrawCmd>) -> Vec<DrawCmd> {
+    let mut batch = state.clone();
+    let is_path = |cmd: &DrawCmd| {
+        matches!(
+            cmd,
+            DrawCmd::MoveTo(..) | DrawCmd::LineTo(..) | DrawCmd::Arc(..) | DrawCmd::ClosePath
+        )
+    };
+    for cmd in &commands {
+        if matches!(cmd, DrawCmd::BeginPath) {
+            state.retain(|kept| !is_path(kept));
+        } else if is_path(cmd) {
+            state.push(cmd.clone());
+        } else if matches!(
+            cmd,
+            DrawCmd::SetFillColor(..)
+                | DrawCmd::SetStrokeColor(..)
+                | DrawCmd::SetLineWidth(_)
+                | DrawCmd::SetFont(_)
+        ) {
+            state.retain(|kept| std::mem::discriminant(kept) != std::mem::discriminant(cmd));
+            state.push(cmd.clone());
+        }
+    }
+    batch.extend(commands);
+    batch
 }
 
 thread_local! {
     static CANVAS_CMDS: RefCell<HashMap<i64, Vec<DrawCmd>>> = RefCell::new(HashMap::new());
     static CANVAS_LAST_FRAME: RefCell<HashMap<i64, Vec<DrawCmd>>> = RefCell::new(HashMap::new());
+    /// Drawing state in effect after the last taken batch; see `carry_state`.
+    static CANVAS_STATE: RefCell<HashMap<i64, Vec<DrawCmd>>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGE_PATHS: RefCell<HashMap<i64, String>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGE_CACHE: RefCell<HashMap<String, i64>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGE_SIZES: RefCell<HashMap<i64, (f64, f64)>> = RefCell::new(HashMap::new());
@@ -154,7 +206,12 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                     if pending.is_empty() || !command_batch_renders(pending) {
                         None
                     } else {
-                        let commands = std::mem::take(pending);
+                        let commands = CANVAS_STATE.with(|s| {
+                            carry_state(
+                                s.borrow_mut().entry(handle).or_default(),
+                                std::mem::take(pending),
+                            )
+                        });
                         CANVAS_LAST_FRAME.with(|last| {
                             last.borrow_mut().insert(handle, commands.clone());
                         });
@@ -167,6 +224,12 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
         if let Some(cmd_list) = cmd_list {
             let mut current_pen = HPEN::default();
             let mut path_points: Vec<(i32, i32)> = Vec::new();
+            let mut cur_fill = (0u8, 0u8, 0u8);
+            let mut cur_stroke = (0u8, 0u8, 0u8);
+            let mut cur_width = 1.0;
+            let mut cur_font = CanvasFont::default();
+            // The path the stateful fill()/stroke() render: its MoveTo, LineTo, Arc and ClosePath.
+            let mut path: Vec<DrawCmd> = Vec::new();
 
             for cmd in cmd_list {
                 match cmd {
@@ -176,16 +239,87 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                         let brush = GetStockObject(WHITE_BRUSH);
                         let _ = FillRect(hdc, &rect, HBRUSH(brush.0));
                     }
+                    DrawCmd::ClearRect(x, y, w, h) => {
+                        // A negative width or height extends the rectangle the other way;
+                        // Win32 needs ordered endpoints.
+                        let rect = RECT {
+                            left: x.min(x + w) as i32,
+                            top: y.min(y + h) as i32,
+                            right: x.max(x + w) as i32,
+                            bottom: y.max(y + h) as i32,
+                        };
+                        let brush = GetStockObject(WHITE_BRUSH);
+                        let _ = FillRect(hdc, &rect, HBRUSH(brush.0));
+                    }
                     DrawCmd::BeginPath => {
                         path_points.clear();
+                        path.clear();
                     }
+                    DrawCmd::SetFillColor(r, g, b, _a) => {
+                        cur_fill = (r, g, b);
+                    }
+                    DrawCmd::SetFont(font) => {
+                        cur_font = font;
+                    }
+                    DrawCmd::FillText(text, x, y) => {
+                        let hfont = create_canvas_font(hdc, &cur_font);
+                        let old_font = SelectObject(hdc, hfont.into());
+                        let (r, g, b) = cur_fill;
+                        SetTextColor(
+                            hdc,
+                            COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16)),
+                        );
+                        SetBkMode(hdc, TRANSPARENT);
+                        SetTextAlign(hdc, TA_BASELINE | TA_LEFT);
+                        let wide: Vec<u16> = text.encode_utf16().collect();
+                        let _ = TextOutW(hdc, x as i32, y as i32, &wide);
+                        SelectObject(hdc, old_font);
+                        let _ = DeleteObject(hfont.into());
+                    }
+                    // Path commands draw nothing until a stroke or fill renders them.
                     DrawCmd::MoveTo(x, y) => {
-                        MoveToEx(hdc, x as i32, y as i32, None);
                         path_points.push((x as i32, y as i32));
+                        path.push(DrawCmd::MoveTo(x, y));
                     }
                     DrawCmd::LineTo(x, y) => {
-                        LineTo(hdc, x as i32, y as i32);
                         path_points.push((x as i32, y as i32));
+                        path.push(DrawCmd::LineTo(x, y));
+                    }
+                    DrawCmd::Arc(x, y, r, start, end) => {
+                        path_points.extend(
+                            arc_chords(x, y, r, start, end)
+                                .into_iter()
+                                .map(|(x, y)| (x as i32, y as i32)),
+                        );
+                        path.push(DrawCmd::Arc(x, y, r, start, end));
+                    }
+                    DrawCmd::ClosePath => path.push(DrawCmd::ClosePath),
+                    DrawCmd::SetStrokeColor(r, g, b, _a) => {
+                        cur_stroke = (r, g, b);
+                    }
+                    DrawCmd::SetLineWidth(w) => {
+                        cur_width = w;
+                    }
+                    DrawCmd::FillRect(x, y, w, h) => {
+                        let rect = RECT {
+                            left: x.min(x + w).round() as i32,
+                            top: y.min(y + h).round() as i32,
+                            right: x.max(x + w).round() as i32,
+                            bottom: y.max(y + h).round() as i32,
+                        };
+                        let brush = CreateSolidBrush(colorref(cur_fill));
+                        let _ = FillRect(hdc, &rect, brush);
+                        let _ = DeleteObject(brush.into());
+                    }
+                    DrawCmd::StrokeRect(x, y, w, h) => {
+                        let corners = vec![(x, y), (x + w, y), (x + w, y + h), (x, y + h)];
+                        stroke_subpaths(hdc, &[(corners, true)], colorref(cur_stroke), cur_width);
+                    }
+                    DrawCmd::FillPath => {
+                        fill_subpaths(hdc, &flatten_path(&path), colorref(cur_fill));
+                    }
+                    DrawCmd::StrokePath => {
+                        stroke_subpaths(hdc, &flatten_path(&path), colorref(cur_stroke), cur_width);
                     }
                     DrawCmd::Stroke(r, g, b, _a, width) => {
                         let color = COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16));
@@ -209,8 +343,24 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                         current_pen = pen;
                     }
                     DrawCmd::FillGradient(r1, g1, b1, _a1, r2, g2, b2, _a2, direction) => {
+                        if path_points.len() < 2 {
+                            continue;
+                        }
                         let mut rect = RECT::default();
                         let _ = GetClientRect(hwnd, &mut rect);
+                        // Clipped to the area between the path and the bottom edge, as an area chart.
+                        let mut area: Vec<POINT> =
+                            path_points.iter().map(|&(x, y)| POINT { x, y }).collect();
+                        area.push(POINT {
+                            x: path_points[path_points.len() - 1].0,
+                            y: rect.bottom,
+                        });
+                        area.push(POINT {
+                            x: path_points[0].0,
+                            y: rect.bottom,
+                        });
+                        let clip = CreatePolygonRgn(&area, WINDING);
+                        SelectClipRgn(hdc, Some(clip));
                         let vertical = direction < 0.5;
 
                         let steps = if vertical {
@@ -244,6 +394,8 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                             let _ = FillRect(hdc, &band, brush);
                             let _ = DeleteObject(brush.into());
                         }
+                        SelectClipRgn(hdc, None);
+                        let _ = DeleteObject(clip.into());
                     }
                     DrawCmd::DrawImage(image, sx, sy, sw, sh, dx, dy, dw, dh) => {
                         use windows::Win32::Graphics::GdiPlus::*;
@@ -315,6 +467,176 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
 
         let _ = EndPaint(hwnd, &ps);
     }
+}
+
+#[cfg(target_os = "windows")]
+fn colorref((r, g, b): (u8, u8, u8)) -> COLORREF {
+    COLORREF((r as u32) | ((g as u32) << 8) | ((b as u32) << 16))
+}
+
+#[cfg(target_os = "windows")]
+fn gdi_point((x, y): (f64, f64)) -> POINT {
+    POINT {
+        x: x.round() as i32,
+        y: y.round() as i32,
+    }
+}
+
+/// Fills the subpaths as one nonzero-winding region, without an outline.
+#[cfg(target_os = "windows")]
+unsafe fn fill_subpaths(hdc: HDC, subpaths: &[(Vec<(f64, f64)>, bool)], color: COLORREF) {
+    let polygons: Vec<&Vec<(f64, f64)>> = subpaths
+        .iter()
+        .map(|(points, _)| points)
+        .filter(|points| points.len() >= 2)
+        .collect();
+    if polygons.is_empty() {
+        return;
+    }
+    let points: Vec<POINT> = polygons
+        .iter()
+        .flat_map(|points| points.iter().copied().map(gdi_point))
+        .collect();
+    let counts: Vec<i32> = polygons.iter().map(|points| points.len() as i32).collect();
+    let brush = CreateSolidBrush(color);
+    let old_brush = SelectObject(hdc, brush.into());
+    let old_pen = SelectObject(hdc, GetStockObject(NULL_PEN));
+    SetPolyFillMode(hdc, WINDING);
+    let _ = PolyPolygon(hdc, points.as_ptr(), &counts);
+    SelectObject(hdc, old_pen);
+    SelectObject(hdc, old_brush);
+    let _ = DeleteObject(brush.into());
+}
+
+#[cfg(target_os = "windows")]
+unsafe fn stroke_subpaths(
+    hdc: HDC,
+    subpaths: &[(Vec<(f64, f64)>, bool)],
+    color: COLORREF,
+    width: f64,
+) {
+    let pen = CreatePen(PS_SOLID, width.round() as i32, color);
+    let old_pen = SelectObject(hdc, pen.into());
+    for (points, closed) in subpaths {
+        if points.len() < 2 {
+            continue;
+        }
+        let mut line: Vec<POINT> = points.iter().copied().map(gdi_point).collect();
+        if *closed {
+            line.push(line[0]);
+        }
+        let _ = Polyline(hdc, &line);
+    }
+    SelectObject(hdc, old_pen);
+    let _ = DeleteObject(pen.into());
+}
+
+/// The end angle HTML canvas `arc` reaches from `start` going clockwise: a span of 2π or
+/// more is the whole circle, any other span is taken modulo 2π.
+#[cfg(any(target_os = "windows", test))]
+fn clockwise_end(start: f64, end: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    if end - start >= tau {
+        start + tau
+    } else {
+        start + (end - start).rem_euclid(tau)
+    }
+}
+
+/// The points of an HTML canvas `arc`, as chords of about two units, at least 8 per full turn,
+/// for the point list the colored stroke() and fillGradient read.
+#[cfg(any(target_os = "windows", test))]
+fn arc_chords(x: f64, y: f64, r: f64, start: f64, end: f64) -> Vec<(f64, f64)> {
+    let sweep = clockwise_end(start, end) - start;
+    let min_steps = (8.0 * sweep / std::f64::consts::TAU).ceil().max(1.0) as usize;
+    let steps = ((sweep * r / 2.0).ceil() as usize).clamp(min_steps, 1024);
+    (0..=steps)
+        .map(move |i| {
+            let angle = start + sweep * i as f64 / steps as f64;
+            (x + r * angle.cos(), y + r * angle.sin())
+        })
+        .collect()
+}
+
+/// The path's subpaths as point lists, each with whether it is closed, since GDI draws
+/// polylines rather than canvas paths. As on HTML canvas, a LineTo with no current point starts
+/// a subpath, an arc runs clockwise (y down) and joins the current point to its start, and
+/// closing a subpath starts the next one at its first point.
+#[cfg(any(target_os = "windows", test))]
+fn flatten_path(path: &[DrawCmd]) -> Vec<(Vec<(f64, f64)>, bool)> {
+    fn extend(subpaths: &mut Vec<(Vec<(f64, f64)>, bool)>, points: Vec<(f64, f64)>) {
+        match subpaths.last_mut() {
+            Some((current, _)) => current.extend(points),
+            None => subpaths.push((points, false)),
+        }
+    }
+    let mut subpaths: Vec<(Vec<(f64, f64)>, bool)> = Vec::new();
+    for cmd in path {
+        match *cmd {
+            DrawCmd::MoveTo(x, y) => subpaths.push((vec![(x, y)], false)),
+            DrawCmd::LineTo(x, y) => extend(&mut subpaths, vec![(x, y)]),
+            DrawCmd::Arc(x, y, r, start, end) => {
+                extend(&mut subpaths, arc_chords(x, y, r, start, end))
+            }
+            DrawCmd::ClosePath => {
+                if let Some((points, closed)) = subpaths.last_mut() {
+                    *closed = true;
+                    let first = points[0];
+                    subpaths.push((vec![first], false));
+                }
+            }
+            _ => {}
+        }
+    }
+    subpaths
+}
+
+/// The first family GDI has, generics mapped to Windows faces, else Segoe UI.
+#[cfg(target_os = "windows")]
+unsafe fn create_canvas_font(hdc: HDC, font: &CanvasFont) -> HFONT {
+    let weight = (if font.bold { FW_BOLD } else { FW_NORMAL }).0 as i32;
+    let create = |face: &str| {
+        let wide = to_wide(face);
+        CreateFontW(
+            -(font.size.round() as i32), // negative: character height, the CSS font size
+            0,
+            0,
+            0,
+            weight,
+            font.italic as u32,
+            0,
+            0,
+            FONT_CHARSET(0),
+            FONT_OUTPUT_PRECISION(0),
+            FONT_CLIP_PRECISION(0),
+            FONT_QUALITY(0),
+            0,
+            windows::core::PCWSTR(wide.as_ptr()),
+        )
+    };
+    for family in &font.families {
+        let (face, generic) = match family.to_ascii_lowercase().as_str() {
+            "sans-serif" | "system-ui" => ("Segoe UI", true),
+            "serif" => ("Times New Roman", true),
+            "monospace" => ("Consolas", true),
+            _ => (family.as_str(), false),
+        };
+        let hfont = create(face);
+        if generic {
+            return hfont;
+        }
+        // GDI substitutes a missing face; the selected face names the one it used.
+        let old = SelectObject(hdc, hfont.into());
+        let mut name = [0u16; 32];
+        GetTextFaceW(hdc, Some(&mut name));
+        SelectObject(hdc, old);
+        let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+        if String::from_utf16_lossy(&name[..len]).eq_ignore_ascii_case(face) {
+            return hfont;
+        }
+        let _ = DeleteObject(hfont.into());
+    }
+    create("Segoe UI")
 }
 
 /// Create a Canvas with given width and height. Returns widget handle.
@@ -398,7 +720,12 @@ pub fn clear(handle: i64) {
     CANVAS_CMDS.with(|cmds| {
         let mut cmds = cmds.borrow_mut();
         if let Some(list) = cmds.get_mut(&handle) {
-            list.clear();
+            CANVAS_STATE.with(|s| {
+                carry_state(
+                    s.borrow_mut().entry(handle).or_default(),
+                    std::mem::take(list),
+                )
+            });
             list.push(DrawCmd::Clear);
         }
     });
@@ -407,6 +734,89 @@ pub fn clear(handle: i64) {
             list.clear();
         }
     });
+    invalidate(handle);
+}
+
+/// Clear a rectangle to the background, keeping what earlier commands drew outside it.
+pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCmd::ClearRect(x, y, w, h));
+    invalidate(handle);
+}
+
+pub fn set_fill_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    push_cmd(
+        handle,
+        DrawCmd::SetFillColor(
+            (r * 255.0) as u8,
+            (g * 255.0) as u8,
+            (b * 255.0) as u8,
+            (a * 255.0) as u8,
+        ),
+    );
+}
+
+/// An invalid font spec keeps the previous font, as HTML canvas does.
+pub fn set_font(handle: i64, spec_ptr: *const u8) {
+    let spec = unsafe { crate::widgets::image::str_from_header(spec_ptr) };
+    if let Some(font) = parse_canvas_font(&spec) {
+        push_cmd(handle, DrawCmd::SetFont(font));
+    }
+}
+
+pub fn fill_text(handle: i64, text_ptr: *const u8, x: f64, y: f64) {
+    if !(x.is_finite() && y.is_finite()) {
+        return;
+    }
+    let text = unsafe { crate::widgets::image::str_from_header(text_ptr) };
+    push_cmd(handle, DrawCmd::FillText(text, x, y));
+    invalidate(handle);
+}
+
+pub fn set_stroke_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    push_cmd(
+        handle,
+        DrawCmd::SetStrokeColor(
+            (r * 255.0) as u8,
+            (g * 255.0) as u8,
+            (b * 255.0) as u8,
+            (a * 255.0) as u8,
+        ),
+    );
+}
+
+pub fn set_line_width(handle: i64, w: f64) {
+    push_cmd(handle, DrawCmd::SetLineWidth(w));
+}
+
+pub fn fill_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCmd::FillRect(x, y, w, h));
+    invalidate(handle);
+}
+
+pub fn stroke_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCmd::StrokeRect(x, y, w, h));
+    invalidate(handle);
+}
+
+/// A non-finite argument or a negative radius records nothing; HTML canvas ignores the first
+/// and throws on the second.
+pub fn arc(handle: i64, x: f64, y: f64, r: f64, start: f64, end: f64) {
+    if [x, y, r, start, end].iter().all(|v| v.is_finite()) && r >= 0.0 {
+        push_cmd(handle, DrawCmd::Arc(x, y, r, start, end));
+    }
+}
+
+pub fn close_path(handle: i64) {
+    push_cmd(handle, DrawCmd::ClosePath);
+}
+
+pub fn fill(handle: i64) {
+    push_cmd(handle, DrawCmd::FillPath);
+    invalidate(handle);
+}
+
+pub fn stroke_path(handle: i64) {
+    push_cmd(handle, DrawCmd::StrokePath);
     invalidate(handle);
 }
 
@@ -528,4 +938,59 @@ pub fn draw_image(
         DrawCmd::DrawImage(image, sx, sy, sw, sh, dx, dy, dw, dh),
     );
     invalidate(handle);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::f64::consts::{FRAC_PI_2, PI, TAU};
+
+    fn close(a: (f64, f64), b: (f64, f64)) -> bool {
+        (a.0 - b.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9
+    }
+
+    #[test]
+    fn arcs_sweep_clockwise_as_html_canvas_does() {
+        assert_eq!(clockwise_end(0.0, FRAC_PI_2), FRAC_PI_2);
+        assert!((clockwise_end(FRAC_PI_2, 0.0) - TAU).abs() < 1e-9);
+        assert!((clockwise_end(0.0, -FRAC_PI_2) - 3.0 * FRAC_PI_2).abs() < 1e-9);
+        assert_eq!(clockwise_end(0.0, TAU), TAU);
+        assert_eq!(clockwise_end(PI, 4.0 * PI), PI + TAU);
+    }
+
+    #[test]
+    fn flattened_path_joins_arcs_and_restarts_after_close() {
+        let subpaths = flatten_path(&[
+            DrawCmd::MoveTo(0.0, 0.0),
+            DrawCmd::LineTo(10.0, 0.0),
+            DrawCmd::Arc(10.0, 10.0, 10.0, -FRAC_PI_2, 0.0),
+            DrawCmd::ClosePath,
+            DrawCmd::LineTo(0.0, 30.0),
+        ]);
+        assert_eq!(subpaths.len(), 2);
+        let (first, closed) = &subpaths[0];
+        assert!(*closed);
+        assert!(close(first[0], (0.0, 0.0)));
+        assert!(close(first[1], (10.0, 0.0)));
+        assert!(
+            close(first[2], (10.0, 0.0)),
+            "the arc starts at its start angle"
+        );
+        assert!(close(*first.last().unwrap(), (20.0, 10.0)));
+        assert!(first.iter().all(|&(x, _)| x >= 0.0 && x <= 20.0 + 1e-9));
+        assert_eq!(subpaths[1], (vec![(0.0, 0.0), (0.0, 30.0)], false));
+    }
+
+    #[test]
+    fn a_small_full_circle_keeps_its_area() {
+        let subpaths = flatten_path(&[DrawCmd::Arc(0.0, 0.0, 0.6, 0.0, TAU)]);
+        assert_eq!(subpaths.len(), 1);
+        assert!(subpaths[0].0.len() >= 9, "at least 8 chords per full turn");
+    }
+
+    #[test]
+    fn line_to_without_a_current_point_starts_a_subpath() {
+        let subpaths = flatten_path(&[DrawCmd::LineTo(5.0, 5.0), DrawCmd::LineTo(9.0, 5.0)]);
+        assert_eq!(subpaths, vec![(vec![(5.0, 5.0), (9.0, 5.0)], false)]);
+    }
 }

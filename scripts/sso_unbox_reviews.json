@@ -385,7 +385,7 @@
     "crates/perry-runtime/src/object/property_ops/put_value.rs": "ff25dbdcced834a1a9704b95b70b1baf7bd018b793d18c789efc1cd328318269",
     "crates/perry-runtime/src/array/join.rs": "c292af7990171f08b140aad3a2c88dd775dd47d098ad5e2f6f1a1e37a5785041",
     "crates/perry-runtime/src/dgram/listeners.rs": "8e447c1cbf5278a055f8770b5415db63d937ff7b4a70705d65253240f071d7dd",
-    "crates/perry-codegen/src/expr/rest_fields.rs": "212b950e2689a8bc86e00e8bef85d6d10cfddf46478697da006da7abe014cdc8",
+    "crates/perry-codegen/src/expr/rest_fields.rs": "0abb789418c1fc86124833220846588ed33120c0a66bde5662db41255e608b8d",
     "crates/perry-runtime/src/object/layout_probe/computed.rs": "661f84bc6bcd4b228c57b611cba3fe1548fb49415142d920036045f34ac89cf0"
   }
 }

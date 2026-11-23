@@ -16,6 +16,9 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::register_widget;
+use objc2::runtime::AnyClass;
+use objc2_foundation::NSString;
+use perry_ui::canvas_font::{parse_canvas_font, CanvasFont};
 
 // Core Graphics C API
 type CGContextRef = *mut c_void;
@@ -35,6 +38,15 @@ extern "C" {
     fn CGContextAddLineToPoint(c: CGContextRef, x: CGFloat, y: CGFloat);
     fn CGContextStrokePath(c: CGContextRef);
     fn CGContextClosePath(c: CGContextRef);
+    fn CGContextAddArc(
+        c: CGContextRef,
+        x: CGFloat,
+        y: CGFloat,
+        radius: CGFloat,
+        start_angle: CGFloat,
+        end_angle: CGFloat,
+        clockwise: i32,
+    );
     fn CGContextClip(c: CGContextRef);
     fn CGContextSetLineWidth(c: CGContextRef, width: CGFloat);
     fn CGContextSetLineCap(c: CGContextRef, cap: i32);
@@ -43,6 +55,7 @@ extern "C" {
     fn CGContextSetRGBFillColor(c: CGContextRef, r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat);
     fn CGContextFillPath(c: CGContextRef);
     fn CGContextFillRect(c: CGContextRef, rect: CGRect);
+    fn CGContextClearRect(c: CGContextRef, rect: CGRect);
     fn CGContextStrokeRect(c: CGContextRef, rect: CGRect);
     fn CGContextDrawImage(c: CGContextRef, rect: CGRect, image: CGImageRef);
     fn CFDataCreate(allocator: *const c_void, bytes: *const u8, length: isize) -> CFDataRef;
@@ -98,6 +111,12 @@ enum DrawCommand {
         a2: f64,
         direction: f64,
     },
+    SetFont(CanvasFont),
+    FillText {
+        text: String,
+        x: f64,
+        y: f64,
+    },
     DrawImage {
         image: i64,
         sx: f64,
@@ -125,6 +144,13 @@ enum DrawCommand {
     },
     SetLineWidth(f64),
     ClosePath,
+    Arc {
+        x: f64,
+        y: f64,
+        r: f64,
+        start: f64,
+        end: f64,
+    },
     StrokePath,
     FillPath,
     FillRect {
@@ -134,6 +160,12 @@ enum DrawCommand {
         h: f64,
     },
     StrokeRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
+    ClearRect {
         x: f64,
         y: f64,
         w: f64,
@@ -159,8 +191,44 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
                 | DrawCommand::FillPath
                 | DrawCommand::FillRect { .. }
                 | DrawCommand::StrokeRect { .. }
+                | DrawCommand::ClearRect { .. }
+                | DrawCommand::FillText { .. }
         )
     })
+}
+
+/// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
+/// replays alone and the state lasts as in HTML canvas: a setter until the next one, the
+/// current path until the next BeginPath. Records the state `commands` leave into `state`.
+fn carry_state(state: &mut Vec<DrawCommand>, commands: Vec<DrawCommand>) -> Vec<DrawCommand> {
+    let mut batch = state.clone();
+    let is_path = |cmd: &DrawCommand| {
+        matches!(
+            cmd,
+            DrawCommand::MoveTo(..)
+                | DrawCommand::LineTo(..)
+                | DrawCommand::Arc { .. }
+                | DrawCommand::ClosePath
+        )
+    };
+    for cmd in &commands {
+        if matches!(cmd, DrawCommand::BeginPath) {
+            state.retain(|kept| !is_path(kept));
+        } else if is_path(cmd) {
+            state.push(cmd.clone());
+        } else if matches!(
+            cmd,
+            DrawCommand::SetFillColor { .. }
+                | DrawCommand::SetStrokeColor { .. }
+                | DrawCommand::SetLineWidth(_)
+                | DrawCommand::SetFont(_)
+        ) {
+            state.retain(|kept| std::mem::discriminant(kept) != std::mem::discriminant(cmd));
+            state.push(cmd.clone());
+        }
+    }
+    batch.extend(commands);
+    batch
 }
 
 thread_local! {
@@ -168,6 +236,8 @@ thread_local! {
     static CANVAS_COMMANDS: RefCell<HashMap<usize, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Last rendered command batch, used for native repaints that arrive before new commands.
     static CANVAS_LAST_FRAME: RefCell<HashMap<usize, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
+    /// Drawing state in effect after the last taken batch; see `carry_state`.
+    static CANVAS_STATE: RefCell<HashMap<usize, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Canvas sizes (width, height), keyed by view address
     static CANVAS_SIZES: RefCell<HashMap<usize, (f64, f64)>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGES: RefCell<HashMap<i64, CanvasImage>> = RefCell::new(HashMap::new());
@@ -254,7 +324,7 @@ define_class!(
                         if pending.is_empty() || !command_batch_renders(pending) {
                             None
                         } else {
-                            let commands = std::mem::take(pending);
+                            let commands = CANVAS_STATE.with(|s| carry_state(s.borrow_mut().entry(key).or_default(), std::mem::take(pending)));
                             CANVAS_LAST_FRAME.with(|last| {
                                 last.borrow_mut().insert(key, commands.clone());
                             });
@@ -272,21 +342,25 @@ define_class!(
                     let mut cur_stroke = (0.0f64, 0.0f64, 0.0f64, 1.0f64);
                     let mut cur_fill = (0.0f64, 0.0f64, 0.0f64, 1.0f64);
                     let mut cur_width = 1.0f64;
-                    let mut path_closed = false;
+                    let mut cur_font = CanvasFont::default();
+                    // The path the stateful fill()/stroke() render: its MoveTo, LineTo, Arc and ClosePath.
+                    let mut path: Vec<&DrawCommand> = Vec::new();
 
                     for cmd in commands.iter() {
                         match cmd {
                             DrawCommand::BeginPath => {
                                 path_points.clear();
-                                path_closed = false;
+                                path.clear();
                                 in_path = true;
                             }
                             DrawCommand::MoveTo(x, y) => {
                                 // No Y-flipping on iOS (origin is top-left)
                                 path_points.push((*x, *y));
+                                path.push(cmd);
                             }
                             DrawCommand::LineTo(x, y) => {
                                 path_points.push((*x, *y));
+                                path.push(cmd);
                             }
                             DrawCommand::Stroke { r, g, b, a, line_width } => {
                                 if path_points.len() >= 2 {
@@ -420,25 +494,20 @@ define_class!(
                             DrawCommand::SetLineWidth(w) => {
                                 cur_width = *w;
                             }
-                            DrawCommand::ClosePath => {
-                                path_closed = true;
+                            DrawCommand::Arc { x, y, r, start, end } => {
+                                path_points.extend(arc_chords(*x, *y, *r, *start, *end));
+                                path.push(cmd);
                             }
+                            DrawCommand::ClosePath => path.push(cmd),
                             DrawCommand::StrokePath => {
-                                if path_points.len() >= 2 {
+                                if !path.is_empty() {
                                     unsafe {
                                         CGContextSaveGState(ctx);
                                         CGContextSetRGBStrokeColor(ctx, cur_stroke.0, cur_stroke.1, cur_stroke.2, cur_stroke.3);
                                         CGContextSetLineWidth(ctx, cur_width);
                                         CGContextSetLineCap(ctx, 1);
                                         CGContextSetLineJoin(ctx, 1);
-                                        CGContextBeginPath(ctx);
-                                        CGContextMoveToPoint(ctx, path_points[0].0, path_points[0].1);
-                                        for pt in &path_points[1..] {
-                                            CGContextAddLineToPoint(ctx, pt.0, pt.1);
-                                        }
-                                        if path_closed {
-                                            CGContextClosePath(ctx);
-                                        }
+                                        add_path(ctx, &path);
                                         CGContextStrokePath(ctx);
                                         CGContextRestoreGState(ctx);
                                     }
@@ -446,16 +515,11 @@ define_class!(
                                 in_path = false;
                             }
                             DrawCommand::FillPath => {
-                                if path_points.len() >= 2 {
+                                if !path.is_empty() {
                                     unsafe {
                                         CGContextSaveGState(ctx);
                                         CGContextSetRGBFillColor(ctx, cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
-                                        CGContextBeginPath(ctx);
-                                        CGContextMoveToPoint(ctx, path_points[0].0, path_points[0].1);
-                                        for pt in &path_points[1..] {
-                                            CGContextAddLineToPoint(ctx, pt.0, pt.1);
-                                        }
-                                        CGContextClosePath(ctx);
+                                        add_path(ctx, &path);
                                         CGContextFillPath(ctx);
                                         CGContextRestoreGState(ctx);
                                     }
@@ -470,6 +534,15 @@ define_class!(
                                     CGContextRestoreGState(ctx);
                                 }
                             }
+                            DrawCommand::SetFont(font) => {
+                                cur_font = font.clone();
+                            }
+                            DrawCommand::FillText { text, x, y } => unsafe {
+                                draw_text(text, &cur_font, cur_fill, *x, *y);
+                            },
+                            DrawCommand::ClearRect { x, y, w, h } => unsafe {
+                                CGContextClearRect(ctx, CGRect::new(CGPoint::new(*x, *y), CGSize::new(*w, *h)));
+                            },
                             DrawCommand::StrokeRect { x, y, w, h } => {
                                 unsafe {
                                     CGContextSaveGState(ctx);
@@ -554,7 +627,12 @@ pub fn clear(handle: i64) {
     if let Some(key) = get_canvas_key(handle) {
         CANVAS_COMMANDS.with(|cmds| {
             if let Some(commands) = cmds.borrow_mut().get_mut(&key) {
-                commands.clear();
+                CANVAS_STATE.with(|s| {
+                    carry_state(
+                        s.borrow_mut().entry(key).or_default(),
+                        std::mem::take(commands),
+                    )
+                });
             }
         });
         CANVAS_LAST_FRAME.with(|last| {
@@ -702,6 +780,71 @@ pub fn close_path(handle: i64) {
     push_cmd(handle, DrawCommand::ClosePath);
 }
 
+/// A non-finite argument or a negative radius records nothing; HTML canvas ignores the first
+/// and throws on the second.
+pub fn arc(handle: i64, x: f64, y: f64, r: f64, start: f64, end: f64) {
+    if [x, y, r, start, end].iter().all(|v| v.is_finite()) && r >= 0.0 {
+        push_cmd(
+            handle,
+            DrawCommand::Arc {
+                x,
+                y,
+                r,
+                start,
+                end,
+            },
+        );
+    }
+}
+
+/// The end angle HTML canvas `arc` reaches from `start` going clockwise: a span of 2π or
+/// more is the whole circle, any other span is taken modulo 2π.
+fn clockwise_end(start: f64, end: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    if end - start >= tau {
+        start + tau
+    } else {
+        start + (end - start).rem_euclid(tau)
+    }
+}
+
+/// The points of an HTML canvas `arc`, as chords of about two units, at least 8 per full turn,
+/// for the point list the colored stroke() and fillGradient read.
+fn arc_chords(x: f64, y: f64, r: f64, start: f64, end: f64) -> impl Iterator<Item = (f64, f64)> {
+    let sweep = clockwise_end(start, end) - start;
+    let min_steps = (8.0 * sweep / std::f64::consts::TAU).ceil().max(1.0) as usize;
+    let steps = ((sweep * r / 2.0).ceil() as usize).clamp(min_steps, 4096);
+    (0..=steps).map(move |i| {
+        let angle = start + sweep * i as f64 / steps as f64;
+        (x + r * angle.cos(), y + r * angle.sin())
+    })
+}
+
+/// Makes `path` the context's current path. A LineTo with no current point starts a subpath,
+/// and an Arc joins the current point to its start, as on HTML canvas.
+unsafe fn add_path(ctx: CGContextRef, path: &[&DrawCommand]) {
+    CGContextBeginPath(ctx);
+    let mut has_point = false;
+    for cmd in path {
+        match **cmd {
+            DrawCommand::MoveTo(x, y) => CGContextMoveToPoint(ctx, x, y),
+            DrawCommand::LineTo(x, y) if has_point => CGContextAddLineToPoint(ctx, x, y),
+            DrawCommand::LineTo(x, y) => CGContextMoveToPoint(ctx, x, y),
+            // UIKit's context is flipped, so CG's counterclockwise (0) runs clockwise on screen.
+            DrawCommand::Arc {
+                x,
+                y,
+                r,
+                start,
+                end,
+            } => CGContextAddArc(ctx, x, y, r, start, clockwise_end(start, end), 0),
+            DrawCommand::ClosePath if has_point => CGContextClosePath(ctx),
+            _ => continue,
+        }
+        has_point = true;
+    }
+}
+
 pub fn stroke_path(handle: i64) {
     push_cmd(handle, DrawCommand::StrokePath);
     redraw(handle);
@@ -717,12 +860,106 @@ pub fn fill_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
     redraw(handle);
 }
 
+/// Clear a rectangle to transparent, keeping what earlier commands drew outside it.
+pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCommand::ClearRect { x, y, w, h });
+    redraw(handle);
+}
+
 pub fn stroke_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
     push_cmd(handle, DrawCommand::StrokeRect { x, y, w, h });
     redraw(handle);
 }
 
 use perry_ffi::copy_string_from_raw as str_from_header;
+
+/// An invalid font spec keeps the previous font, as HTML canvas does.
+pub fn set_font(handle: i64, spec_ptr: *const u8) {
+    let spec = unsafe { str_from_header(spec_ptr) };
+    if let Some(font) = parse_canvas_font(&spec) {
+        push_cmd(handle, DrawCommand::SetFont(font));
+    }
+}
+
+pub fn fill_text(handle: i64, text_ptr: *const u8, x: f64, y: f64) {
+    if !(x.is_finite() && y.is_finite()) {
+        return;
+    }
+    let text = unsafe { str_from_header(text_ptr) };
+    push_cmd(handle, DrawCommand::FillText { text, x, y });
+    redraw(handle);
+}
+
+/// The first available family, generics mapped to system faces, with the bold
+/// and italic traits applied where the family has them.
+unsafe fn ui_font(font: &CanvasFont) -> Retained<AnyObject> {
+    let cls = AnyClass::get(c"UIFont").unwrap();
+    let size = font.size as CGFloat;
+    let system = || -> Retained<AnyObject> { msg_send![cls, systemFontOfSize: size] };
+    let base = font
+        .families
+        .iter()
+        .find_map(|family| {
+            let name = match family.to_ascii_lowercase().as_str() {
+                "sans-serif" | "system-ui" => return Some(system()),
+                "serif" => "Times New Roman".to_string(),
+                "monospace" => "Menlo".to_string(),
+                _ => family.clone(),
+            };
+            let name = NSString::from_str(&name);
+            let named: Option<Retained<AnyObject>> =
+                msg_send![cls, fontWithName: &*name, size: size];
+            named.or_else(|| {
+                let faces: Retained<AnyObject> = msg_send![cls, fontNamesForFamilyName: &*name];
+                let face: Option<Retained<AnyObject>> = msg_send![&*faces, firstObject];
+                face.and_then(|face| msg_send![cls, fontWithName: &*face, size: size])
+            })
+        })
+        .unwrap_or_else(system);
+    // UIFontDescriptorTraitItalic = 1 << 0, UIFontDescriptorTraitBold = 1 << 1.
+    let traits = (font.bold as u32) << 1 | font.italic as u32;
+    if traits == 0 {
+        return base;
+    }
+    let descriptor: Retained<AnyObject> = msg_send![&*base, fontDescriptor];
+    let current: u32 = msg_send![&*descriptor, symbolicTraits];
+    let styled: Option<Retained<AnyObject>> =
+        msg_send![&*descriptor, fontDescriptorWithSymbolicTraits: current | traits];
+    styled
+        .and_then(|styled| msg_send![cls, fontWithDescriptor: &*styled, size: size])
+        .unwrap_or(base)
+}
+
+/// Draws `text` into the current UIKit context with its alphabetic baseline
+/// starting at (x, baseline).
+unsafe fn draw_text(
+    text: &str,
+    font: &CanvasFont,
+    fill: (f64, f64, f64, f64),
+    x: f64,
+    baseline: f64,
+) {
+    let attrs: Retained<AnyObject> = msg_send![AnyClass::get(c"NSMutableDictionary").unwrap(), new];
+    let ui_font = ui_font(font);
+    let color: Retained<AnyObject> = msg_send![
+        AnyClass::get(c"UIColor").unwrap(),
+        colorWithRed: fill.0 as CGFloat,
+        green: fill.1 as CGFloat,
+        blue: fill.2 as CGFloat,
+        alpha: fill.3 as CGFloat
+    ];
+    let _: () = msg_send![&*attrs, setObject: &*ui_font, forKey: &*NSString::from_str("NSFont")];
+    let _: () = msg_send![&*attrs, setObject: &*color, forKey: &*NSString::from_str("NSColor")];
+    // Without NSStringDrawingUsesLineFragmentOrigin the rect's origin is the baseline.
+    let rect = CGRect::new(CGPoint::new(x, baseline), CGSize::new(0.0, 0.0));
+    let _: () = msg_send![
+        &*NSString::from_str(text),
+        drawWithRect: rect,
+        options: 0isize,
+        attributes: &*attrs,
+        context: std::ptr::null_mut::<AnyObject>()
+    ];
+}
 
 fn resolve_asset_path(path: &str) -> String {
     if std::path::Path::new(path).is_absolute() {

@@ -214,7 +214,13 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
         visitor.visit_i64_slot(&mut s.handler);
         scan_base_server_roots(&mut s.base, visitor);
     });
-    iter_handles_of_mut::<IncomingMessage, _>(|im| {
+    // A full mark reaches a retired request's edges only through a word
+    // naming it (`request::ServerRequestPayloads::edges`).
+    let full_mark = visitor.is_full_mark();
+    perry_ffi::iter_handle_entries_of_mut::<IncomingMessage, _>(|id, im| {
+        if full_mark && !perry_ffi::handle_lifecycle::payload_edges_are_rooted(id) {
+            return;
+        }
         scan_listener_roots(&mut im.listeners, visitor);
         visitor.visit_nanbox_f64_slot(&mut im.signal_controller);
         visitor.visit_nanbox_f64_slot(&mut im.signal);

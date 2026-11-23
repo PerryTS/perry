@@ -68,7 +68,7 @@ fn copy(lo: usize, hi: usize) -> (usize, Vec<u8>) {
 /// Size of the executable's static TLS block (x86-64 variant II: the block
 /// ends at the thread pointer). Only the Linux x86-64 capture calls it, and the
 /// `dl_iterate_phdr` family it uses is missing from `libc` on tvOS and watchOS.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 fn executable_tls_size() -> (usize, usize) {
     unsafe extern "C" fn each(
         info: *mut libc::dl_phdr_info,
@@ -90,7 +90,7 @@ fn executable_tls_size() -> (usize, usize) {
     size
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 #[no_mangle]
 pub extern "C" fn js_snap_image_begin(
     _tls_data_lo: usize,
@@ -122,7 +122,7 @@ pub extern "C" fn js_snap_image_begin(
     BASELINE.store(Box::into_raw(b), Relaxed);
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 #[unsafe(naked)]
 #[no_mangle]
 pub extern "C" fn js_snap_image_cut() {
@@ -130,7 +130,7 @@ pub extern "C" fn js_snap_image_cut() {
 }
 
 /// The cut entry offers its caller's frame to the root walk, as `gc()` does.
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 extern "C" fn js_snap_image_cut_from(pc: usize, sp: usize, fp: usize) {
     // First, before the offer below writes the walk origin and before any
     // other code of the capture: the words as the program left them.
@@ -144,7 +144,7 @@ extern "C" fn js_snap_image_cut_from(pc: usize, sp: usize, fp: usize) {
     cut_body();
 }
 
-#[cfg(all(target_os = "linux", target_arch = "x86_64"))]
+#[cfg(all(target_os = "linux", target_arch = "x86_64", target_env = "gnu"))]
 fn cut_body() {
     let p = BASELINE.load(Relaxed);
     if p.is_null() {
@@ -1196,7 +1196,7 @@ fn registry_record(w: &Where, stops: &mut Vec<Stop>) -> Vec<format::RegRec> {
 /// The executable's own TLS block: variant II places it at
 /// `[fs - roundup(memsz, align), + memsz)`; the gap above it up to `fs` holds
 /// the C library's blocks (errno among them), so it is not part of the window.
-#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64")))]
+#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
 fn tls_window(fs: usize, memsz: usize, align: usize) -> (usize, usize) {
     let lo = fs.saturating_sub(memsz.div_ceil(align.max(1)) * align.max(1));
     (lo, memsz.min(fs - lo))

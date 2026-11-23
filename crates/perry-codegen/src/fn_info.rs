@@ -153,9 +153,8 @@ pub(crate) enum RestKind {
 impl FnInfoFacts {
     /// A direct, immutable layout operand rather than a tail-format walk.
     pub(crate) fn set_call_entry(&mut self, entry: String, ilp32: bool) {
-        // The wasm32 C layout aligns the final i64 mask to eight bytes.
         let mut offset = if ilp32 {
-            56
+            crate::runtime_abi::JS_FUNCTION_INFO_SIZE_ILP32
         } else {
             crate::runtime_abi::JS_FUNCTION_INFO_SIZE
         };
@@ -592,13 +591,13 @@ mod tests {
         facts.set_call_entry("entry".into(), false);
         assert_eq!(facts.call_entry_offset_words, 14);
         facts.set_call_entry("entry".into(), true);
-        assert_eq!(facts.call_entry_offset_words, 11);
+        assert_eq!(facts.call_entry_offset_words, 12);
         // Framed source widens the tail by one more 8-byte unit.
         facts.source.as_mut().unwrap().decoded_offset = Some(7);
         facts.set_call_entry("entry".into(), false);
         assert_eq!(facts.call_entry_offset_words, 15);
         facts.set_call_entry("entry".into(), true);
-        assert_eq!(facts.call_entry_offset_words, 12);
+        assert_eq!(facts.call_entry_offset_words, 13);
     }
 
     fn defined(params: usize, linkage: &str) -> Option<DefinedBody> {

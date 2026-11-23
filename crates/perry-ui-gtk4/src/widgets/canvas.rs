@@ -12,6 +12,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::register_widget;
+use perry_ui::canvas_font::{parse_canvas_font, CanvasFont};
 
 /// Drawing commands stored in command buffer.
 #[derive(Clone)]
@@ -37,6 +38,53 @@ enum DrawCommand {
         a2: f64,
         direction: f64,
     },
+    ClearRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
+    SetFillColor {
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    },
+    SetStrokeColor {
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    },
+    SetLineWidth(f64),
+    FillRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
+    StrokeRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
+    Arc {
+        x: f64,
+        y: f64,
+        r: f64,
+        start: f64,
+        end: f64,
+    },
+    ClosePath,
+    FillPath,
+    StrokePath,
+    SetFont(CanvasFont),
+    FillText {
+        text: String,
+        x: f64,
+        y: f64,
+    },
     DrawImage {
         image: i64,
         sx: f64,
@@ -57,8 +105,48 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
             DrawCommand::Stroke { .. }
                 | DrawCommand::FillGradient { .. }
                 | DrawCommand::DrawImage { .. }
+                | DrawCommand::ClearRect { .. }
+                | DrawCommand::FillText { .. }
+                | DrawCommand::FillRect { .. }
+                | DrawCommand::StrokeRect { .. }
+                | DrawCommand::FillPath
+                | DrawCommand::StrokePath
         )
     })
+}
+
+/// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
+/// replays alone and the state lasts as in HTML canvas: a setter until the next one, the
+/// current path until the next BeginPath. Records the state `commands` leave into `state`.
+fn carry_state(state: &mut Vec<DrawCommand>, commands: Vec<DrawCommand>) -> Vec<DrawCommand> {
+    let mut batch = state.clone();
+    let is_path = |cmd: &DrawCommand| {
+        matches!(
+            cmd,
+            DrawCommand::MoveTo(..)
+                | DrawCommand::LineTo(..)
+                | DrawCommand::Arc { .. }
+                | DrawCommand::ClosePath
+        )
+    };
+    for cmd in &commands {
+        if matches!(cmd, DrawCommand::BeginPath) {
+            state.retain(|kept| !is_path(kept));
+        } else if is_path(cmd) {
+            state.push(cmd.clone());
+        } else if matches!(
+            cmd,
+            DrawCommand::SetFillColor { .. }
+                | DrawCommand::SetStrokeColor { .. }
+                | DrawCommand::SetLineWidth(_)
+                | DrawCommand::SetFont(_)
+        ) {
+            state.retain(|kept| std::mem::discriminant(kept) != std::mem::discriminant(cmd));
+            state.push(cmd.clone());
+        }
+    }
+    batch.extend(commands);
+    batch
 }
 
 thread_local! {
@@ -66,6 +154,8 @@ thread_local! {
     static CANVAS_COMMANDS: RefCell<HashMap<i64, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Last rendered command batch, used for native repaints that arrive before new commands.
     static CANVAS_LAST_FRAME: RefCell<HashMap<i64, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
+    /// Drawing state in effect after the last taken batch; see `carry_state`.
+    static CANVAS_STATE: RefCell<HashMap<i64, Vec<DrawCommand>>> = RefCell::new(HashMap::new());
     /// Canvas sizes (width, height), keyed by widget handle
     static CANVAS_SIZES: RefCell<HashMap<i64, (f64, f64)>> = RefCell::new(HashMap::new());
     static CANVAS_IMAGES: RefCell<HashMap<i64, gtk4::gdk_pixbuf::Pixbuf>> = RefCell::new(HashMap::new());
@@ -149,7 +239,12 @@ pub fn create(width: f64, height: f64) -> i64 {
                     if pending.is_empty() || !command_batch_renders(pending) {
                         None
                     } else {
-                        let commands = std::mem::take(pending);
+                        let commands = CANVAS_STATE.with(|s| {
+                            carry_state(
+                                s.borrow_mut().entry(handle).or_default(),
+                                std::mem::take(pending),
+                            )
+                        });
                         CANVAS_LAST_FRAME.with(|last| {
                             last.borrow_mut().insert(handle, commands.clone());
                         });
@@ -162,19 +257,73 @@ pub fn create(width: f64, height: f64) -> i64 {
         if let Some(commands) = commands {
             // Track current path points for gradient fill
             let mut path_points: Vec<(f64, f64)> = Vec::new();
+            let mut cur_fill = (0.0, 0.0, 0.0, 1.0);
+            let mut cur_stroke = (0.0, 0.0, 0.0, 1.0);
+            let mut cur_width = 1.0;
+            let mut cur_font = CanvasFont::default();
+            // The path the stateful fill()/stroke() render: its MoveTo, LineTo, Arc and ClosePath.
+            let mut path: Vec<&DrawCommand> = Vec::new();
 
             for cmd in commands.iter() {
                 match cmd {
                     DrawCommand::BeginPath => {
                         path_points.clear();
+                        path.clear();
                     }
                     DrawCommand::MoveTo(x, y) => {
                         // GTK4/Cairo origin is top-left — same as TypeScript expects.
                         // No Y-flip needed (unlike macOS which is bottom-left).
                         path_points.push((*x, *y));
+                        path.push(cmd);
                     }
                     DrawCommand::LineTo(x, y) => {
                         path_points.push((*x, *y));
+                        path.push(cmd);
+                    }
+                    DrawCommand::Arc {
+                        x,
+                        y,
+                        r,
+                        start,
+                        end,
+                    } => {
+                        path_points.extend(arc_chords(*x, *y, *r, *start, *end));
+                        path.push(cmd);
+                    }
+                    DrawCommand::ClosePath => path.push(cmd),
+                    DrawCommand::SetStrokeColor { r, g, b, a } => {
+                        cur_stroke = (*r, *g, *b, *a);
+                    }
+                    DrawCommand::SetLineWidth(w) => cur_width = *w,
+                    DrawCommand::FillRect { x, y, w, h } => {
+                        cr.save().ok();
+                        cr.set_source_rgba(cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
+                        cr.rectangle(*x, *y, *w, *h);
+                        cr.fill().ok();
+                        cr.restore().ok();
+                    }
+                    DrawCommand::StrokeRect { x, y, w, h } => {
+                        cr.save().ok();
+                        cr.set_source_rgba(cur_stroke.0, cur_stroke.1, cur_stroke.2, cur_stroke.3);
+                        cr.set_line_width(cur_width);
+                        cr.rectangle(*x, *y, *w, *h);
+                        cr.stroke().ok();
+                        cr.restore().ok();
+                    }
+                    DrawCommand::FillPath => {
+                        cr.save().ok();
+                        cr.set_source_rgba(cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
+                        add_path(cr, &path);
+                        cr.fill().ok();
+                        cr.restore().ok();
+                    }
+                    DrawCommand::StrokePath => {
+                        cr.save().ok();
+                        cr.set_source_rgba(cur_stroke.0, cur_stroke.1, cur_stroke.2, cur_stroke.3);
+                        cr.set_line_width(cur_width);
+                        add_path(cr, &path);
+                        cr.stroke().ok();
+                        cr.restore().ok();
                     }
                     DrawCommand::Stroke {
                         r,
@@ -242,6 +391,46 @@ pub fn create(width: f64, height: f64) -> i64 {
                             cr.restore().ok();
                         }
                     }
+                    DrawCommand::SetFillColor { r, g, b, a } => {
+                        cur_fill = (*r, *g, *b, *a);
+                    }
+                    DrawCommand::SetFont(font) => {
+                        cur_font = font.clone();
+                    }
+                    DrawCommand::FillText { text, x, y } => {
+                        cr.save().ok();
+                        cr.set_source_rgba(cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
+                        // Cairo's toy API takes one family; fontconfig substitutes a missing one.
+                        let family = match cur_font.families[0].to_ascii_lowercase().as_str() {
+                            "system-ui" => "sans-serif".to_string(),
+                            _ => cur_font.families[0].clone(),
+                        };
+                        cr.select_font_face(
+                            &family,
+                            if cur_font.italic {
+                                gtk4::cairo::FontSlant::Italic
+                            } else {
+                                gtk4::cairo::FontSlant::Normal
+                            },
+                            if cur_font.bold {
+                                gtk4::cairo::FontWeight::Bold
+                            } else {
+                                gtk4::cairo::FontWeight::Normal
+                            },
+                        );
+                        cr.set_font_size(cur_font.size);
+                        // show_text starts at the current point, on the alphabetic baseline.
+                        cr.move_to(*x, *y);
+                        cr.show_text(text).ok();
+                        cr.restore().ok();
+                    }
+                    DrawCommand::ClearRect { x, y, w, h } => {
+                        cr.save().ok();
+                        cr.set_operator(gtk4::cairo::Operator::Clear);
+                        cr.rectangle(*x, *y, *w, *h);
+                        cr.fill().ok();
+                        cr.restore().ok();
+                    }
                     DrawCommand::DrawImage {
                         image,
                         sx,
@@ -301,6 +490,51 @@ pub fn create(width: f64, height: f64) -> i64 {
     handle
 }
 
+/// The end angle HTML canvas `arc` reaches from `start` going clockwise: a span of 2π or
+/// more is the whole circle, any other span is taken modulo 2π.
+fn clockwise_end(start: f64, end: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    if end - start >= tau {
+        start + tau
+    } else {
+        start + (end - start).rem_euclid(tau)
+    }
+}
+
+/// The points of an HTML canvas `arc`, as chords of about two units, at least 8 per full turn,
+/// for the point list the colored stroke() and fillGradient read.
+fn arc_chords(x: f64, y: f64, r: f64, start: f64, end: f64) -> impl Iterator<Item = (f64, f64)> {
+    let sweep = clockwise_end(start, end) - start;
+    let min_steps = (8.0 * sweep / std::f64::consts::TAU).ceil().max(1.0) as usize;
+    let steps = ((sweep * r / 2.0).ceil() as usize).clamp(min_steps, 4096);
+    (0..=steps).map(move |i| {
+        let angle = start + sweep * i as f64 / steps as f64;
+        (x + r * angle.cos(), y + r * angle.sin())
+    })
+}
+
+/// Makes `path` cairo's current path. Cairo already treats a line_to with no current point as
+/// a move_to and joins the current point to an arc's start, as HTML canvas does; its
+/// increasing angles run clockwise in the top-left-origin space.
+fn add_path(cr: &gtk4::cairo::Context, path: &[&DrawCommand]) {
+    cr.new_path();
+    for cmd in path {
+        match **cmd {
+            DrawCommand::MoveTo(x, y) => cr.move_to(x, y),
+            DrawCommand::LineTo(x, y) => cr.line_to(x, y),
+            DrawCommand::Arc {
+                x,
+                y,
+                r,
+                start,
+                end,
+            } => cr.arc(x, y, r, start, clockwise_end(start, end)),
+            DrawCommand::ClosePath => cr.close_path(),
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use gtk4::prelude::*;
@@ -353,7 +587,12 @@ mod tests {
 pub fn clear(handle: i64) {
     CANVAS_COMMANDS.with(|cmds| {
         if let Some(commands) = cmds.borrow_mut().get_mut(&handle) {
-            commands.clear();
+            CANVAS_STATE.with(|s| {
+                carry_state(
+                    s.borrow_mut().entry(handle).or_default(),
+                    std::mem::take(commands),
+                )
+            });
         }
     });
     CANVAS_LAST_FRAME.with(|last| {
@@ -362,6 +601,111 @@ pub fn clear(handle: i64) {
         }
     });
     // Trigger redraw
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(area) = widget.downcast_ref::<DrawingArea>() {
+            area.queue_draw();
+        }
+    }
+}
+
+/// Clear a rectangle to transparent, keeping what earlier commands drew outside it.
+pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    CANVAS_COMMANDS.with(|cmds| {
+        if let Some(commands) = cmds.borrow_mut().get_mut(&handle) {
+            commands.push(DrawCommand::ClearRect { x, y, w, h });
+        }
+    });
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(area) = widget.downcast_ref::<DrawingArea>() {
+            area.queue_draw();
+        }
+    }
+}
+
+fn push_cmd(handle: i64, cmd: DrawCommand) {
+    CANVAS_COMMANDS.with(|cmds| {
+        if let Some(commands) = cmds.borrow_mut().get_mut(&handle) {
+            commands.push(cmd);
+        }
+    });
+}
+
+fn redraw(handle: i64) {
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(area) = widget.downcast_ref::<DrawingArea>() {
+            area.queue_draw();
+        }
+    }
+}
+
+pub fn set_fill_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    push_cmd(handle, DrawCommand::SetFillColor { r, g, b, a });
+}
+
+pub fn set_stroke_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    push_cmd(handle, DrawCommand::SetStrokeColor { r, g, b, a });
+}
+
+pub fn set_line_width(handle: i64, w: f64) {
+    push_cmd(handle, DrawCommand::SetLineWidth(w));
+}
+
+pub fn fill_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCommand::FillRect { x, y, w, h });
+    redraw(handle);
+}
+
+pub fn stroke_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCommand::StrokeRect { x, y, w, h });
+    redraw(handle);
+}
+
+/// A non-finite argument or a negative radius records nothing; HTML canvas ignores the first
+/// and throws on the second.
+pub fn arc(handle: i64, x: f64, y: f64, r: f64, start: f64, end: f64) {
+    if [x, y, r, start, end].iter().all(|v| v.is_finite()) && r >= 0.0 {
+        push_cmd(
+            handle,
+            DrawCommand::Arc {
+                x,
+                y,
+                r,
+                start,
+                end,
+            },
+        );
+    }
+}
+
+pub fn close_path(handle: i64) {
+    push_cmd(handle, DrawCommand::ClosePath);
+}
+
+pub fn fill(handle: i64) {
+    push_cmd(handle, DrawCommand::FillPath);
+    redraw(handle);
+}
+
+pub fn stroke_path(handle: i64) {
+    push_cmd(handle, DrawCommand::StrokePath);
+    redraw(handle);
+}
+
+/// An invalid font spec keeps the previous font, as HTML canvas does.
+pub fn set_font(handle: i64, spec_ptr: *const u8) {
+    let spec = unsafe { crate::widgets::image::str_from_header(spec_ptr) };
+    if let Some(font) = parse_canvas_font(&spec) {
+        push_cmd(handle, DrawCommand::SetFont(font));
+    }
+}
+
+pub fn fill_text(handle: i64, text_ptr: *const u8, x: f64, y: f64) {
+    if !(x.is_finite() && y.is_finite()) {
+        return;
+    }
+    // cairo's show_text panics on an interior NUL.
+    let text = unsafe { crate::widgets::image::str_from_header(text_ptr) }.replace('\0', "");
+    push_cmd(handle, DrawCommand::FillText { text, x, y });
     if let Some(widget) = super::get_widget(handle) {
         if let Some(area) = widget.downcast_ref::<DrawingArea>() {
             area.queue_draw();

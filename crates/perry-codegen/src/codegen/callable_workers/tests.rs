@@ -249,6 +249,41 @@ fn callable_lowering_uses_multiple_owned_workers() {
     assert!(ir.contains("define double @f71"));
 }
 
+#[test]
+fn a_failed_worker_still_hands_over_its_unknown_ui_calls() {
+    crate::unknown_ui_calls::begin_module();
+    let mut module = LlModule::new("x86_64-unknown-linux-gnu");
+    let mut strings = StringPool::new();
+    let items: Vec<u32> = (0..72).collect();
+    let err = with_jobs(4, || {
+        lower(
+            &mut module,
+            &mut strings,
+            &items,
+            true,
+            |_, _, id| match id {
+                0 => {
+                    crate::unknown_ui_calls::record("failedWorkerCall", 0);
+                    anyhow::bail!("argument failed")
+                }
+                71 => {
+                    crate::unknown_ui_calls::record("lastWorkerCall", 0);
+                    Ok(())
+                }
+                _ => Ok(()),
+            },
+            |_| {},
+        )
+    })
+    .unwrap_err();
+    assert_eq!(err.to_string(), "argument failed");
+    let msg = crate::unknown_ui_calls::finish_module()
+        .unwrap_err()
+        .to_string();
+    assert!(msg.contains("'failedWorkerCall'"), "{msg}");
+    assert!(msg.contains("'lastWorkerCall'"), "{msg}");
+}
+
 fn assert_same(expected: &[u8], actual: &[u8]) {
     if expected == actual {
         return;

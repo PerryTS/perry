@@ -388,12 +388,23 @@ impl<'a> EndTail<'a> {
 
     fn emit_close(&self) {
         self.emit("close", &self.close);
+        let owner = self.owner.get();
+        if owner != 0 && super::response_payload::is_response(owner) {
+            // Node ends and destroys the request once its response closed.
+            if let Some(req) = super::response_payload::field(owner, b"req") {
+                crate::server::request::end_server_request(req);
+            }
+        }
     }
 
     fn emit(&self, event: &str, listeners: &[perry_ffi::TransientRootedAddr]) {
         let owner = self.owner.get();
         if owner != 0 && super::response_payload::is_response(owner) {
-            super::response_payload::emit(owner, event);
+            if event == "close" {
+                super::response_payload::emit_close(owner);
+            } else {
+                super::response_payload::emit(owner, event);
+            }
         } else {
             emit_no_arg_to_listeners(&Self::current(listeners));
         }

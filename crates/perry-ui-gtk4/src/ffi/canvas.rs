@@ -59,33 +59,67 @@ pub extern "C" fn perry_ui_canvas_fill_gradient(
     widgets::canvas::fill_gradient(handle, r1, g1, b1, a1, r2, g2, b2, a2, direction);
 }
 
-// Stateful 2D-context API stubs (full implementation tracked in perry-ui-test as `U`).
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_set_fill_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
-#[no_mangle]
-pub extern "C" fn perry_ui_canvas_set_stroke_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
-#[no_mangle]
-pub extern "C" fn perry_ui_canvas_set_line_width(_h: i64, _w: f64) {}
-#[no_mangle]
-pub extern "C" fn perry_ui_canvas_fill_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
-#[no_mangle]
-pub extern "C" fn perry_ui_canvas_stroke_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
-#[no_mangle]
-pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {
-    widgets::canvas::clear(h);
+pub extern "C" fn perry_ui_canvas_set_fill_color(h: i64, r: f64, g: f64, b: f64, a: f64) {
+    widgets::canvas::set_fill_color(h, r, g, b, a);
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_arc(_h: i64, _x: f64, _y: f64, _r: f64, _sa: f64, _ea: f64) {}
+pub extern "C" fn perry_ui_canvas_set_stroke_color(h: i64, r: f64, g: f64, b: f64, a: f64) {
+    widgets::canvas::set_stroke_color(h, r, g, b, a);
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_close_path(_h: i64) {}
+pub extern "C" fn perry_ui_canvas_set_line_width(h: i64, w: f64) {
+    // HTML canvas keeps the previous width when the new one is not finite and positive.
+    if w.is_finite() && w > 0.0 {
+        widgets::canvas::set_line_width(h, w);
+    }
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_fill(_h: i64) {}
+pub extern "C" fn perry_ui_canvas_fill_rect(h: i64, x: f64, y: f64, w: f64, ht: f64) {
+    // HTML canvas ignores a fillRect with any non-finite argument.
+    if [x, y, w, ht].iter().all(|v| v.is_finite()) {
+        widgets::canvas::fill_rect(h, x, y, w, ht);
+    }
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_stroke_path(_h: i64) {}
+pub extern "C" fn perry_ui_canvas_stroke_rect(h: i64, x: f64, y: f64, w: f64, ht: f64) {
+    // HTML canvas ignores a strokeRect with any non-finite argument.
+    if [x, y, w, ht].iter().all(|v| v.is_finite()) {
+        widgets::canvas::stroke_rect(h, x, y, w, ht);
+    }
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_fill_text(_h: i64, _ptr: i64, _x: f64, _y: f64) {}
+pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, x: f64, y: f64, w: f64, ht: f64) {
+    // HTML canvas ignores a clearRect with any non-finite argument.
+    if !(x.is_finite() && y.is_finite() && w.is_finite() && ht.is_finite()) {
+        return;
+    }
+    widgets::canvas::clear_rect(h, x, y, w, ht);
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
+pub extern "C" fn perry_ui_canvas_arc(h: i64, x: f64, y: f64, r: f64, sa: f64, ea: f64) {
+    widgets::canvas::arc(h, x, y, r, sa, ea);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_close_path(h: i64) {
+    widgets::canvas::close_path(h);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill(h: i64) {
+    widgets::canvas::fill(h);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_stroke_path(h: i64) {
+    widgets::canvas::stroke_path(h);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill_text(h: i64, ptr: i64, x: f64, y: f64) {
+    widgets::canvas::fill_text(h, ptr as *const u8, x, y);
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_font(h: i64, ptr: i64) {
+    widgets::canvas::set_font(h, ptr as *const u8);
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_draw_image(
     h: i64,

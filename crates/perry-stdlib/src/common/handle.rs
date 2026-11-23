@@ -118,8 +118,8 @@ impl perry_ffi::handle_lifecycle::ParkedPayloadOwner for CommonPayloads {
         drop(payload);
     }
 
-    fn property_bag(&self, id: Handle) -> Option<u64> {
-        native_property_bag(id)
+    fn edges(&self, id: Handle, out: &mut Vec<u64>) {
+        out.extend(native_property_bag(id));
     }
 }
 
@@ -442,6 +442,7 @@ pub(crate) fn native_property_bag(handle: Handle) -> Option<u64> {
     HANDLES.get(&handle).and_then(|entry| entry.props())
 }
 pub(crate) fn set_native_property_bag(handle: Handle, bits: u64) -> bool {
+    perry_ffi::handle_lifecycle::note_mutable_access(handle);
     let stored = HANDLES
         .get_mut(&handle)
         .is_some_and(|mut entry| entry.set_props(bits));
@@ -461,7 +462,7 @@ fn scan_native_payload_roots(visitor: &mut perry_ffi::GcRootVisitor<'_>) {
     // Minors and relocation scans rewrite every bag owned by this mutator.
     for mut entry in HANDLES.iter_mut() {
         if visitor.is_full_mark()
-            && !perry_ffi::handle_lifecycle::payload_bag_is_rooted(*entry.key())
+            && !perry_ffi::handle_lifecycle::payload_edges_are_rooted(*entry.key())
         {
             continue;
         }

@@ -1,0 +1,1 @@
+Performance: objects pushed into a local array and read back through `for (const x of array)` keep their shape-proven field access. The for-of index walk's `arrayRecordNeedsIterator` guard is no longer an escape of the array for the element-shape proof.

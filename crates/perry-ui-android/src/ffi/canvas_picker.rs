@@ -66,19 +66,32 @@ pub extern "C" fn perry_ui_canvas_set_stroke_color(h: i64, r: f64, g: f64, b: f6
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_set_line_width(h: i64, w: f64) {
-    widgets::canvas::set_line_width(h, w);
+    // HTML canvas keeps the previous width when the new one is not finite and positive.
+    if w.is_finite() && w > 0.0 {
+        widgets::canvas::set_line_width(h, w);
+    }
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_fill_rect(h: i64, x: f64, y: f64, w: f64, ht: f64) {
-    widgets::canvas::fill_rect(h, x, y, w, ht);
+    // HTML canvas ignores a fillRect with any non-finite argument.
+    if [x, y, w, ht].iter().all(|v| v.is_finite()) {
+        widgets::canvas::fill_rect(h, x, y, w, ht);
+    }
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_stroke_rect(h: i64, x: f64, y: f64, w: f64, ht: f64) {
-    widgets::canvas::stroke_rect(h, x, y, w, ht);
+    // HTML canvas ignores a strokeRect with any non-finite argument.
+    if [x, y, w, ht].iter().all(|v| v.is_finite()) {
+        widgets::canvas::stroke_rect(h, x, y, w, ht);
+    }
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {
-    widgets::canvas::clear(h);
+pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, x: f64, y: f64, w: f64, ht: f64) {
+    // HTML canvas ignores a clearRect with any non-finite argument.
+    if !(x.is_finite() && y.is_finite() && w.is_finite() && ht.is_finite()) {
+        return;
+    }
+    widgets::canvas::clear_rect(h, x, y, w, ht);
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_arc(h: i64, x: f64, y: f64, r: f64, sa: f64, ea: f64) {
@@ -97,9 +110,13 @@ pub extern "C" fn perry_ui_canvas_stroke_path(h: i64) {
     widgets::canvas::stroke_path(h);
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_fill_text(_h: i64, _ptr: i64, _x: f64, _y: f64) {}
+pub extern "C" fn perry_ui_canvas_fill_text(h: i64, ptr: i64, x: f64, y: f64) {
+    widgets::canvas::fill_text(h, ptr as *const u8, x, y);
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
+pub extern "C" fn perry_ui_canvas_set_font(h: i64, ptr: i64) {
+    widgets::canvas::set_font(h, ptr as *const u8);
+}
 
 // =============================================================================
 // Picker

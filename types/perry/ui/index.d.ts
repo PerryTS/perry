@@ -50,6 +50,17 @@ export interface CanvasMethods {
     fillRect(x: number, y: number, width: number, height: number): void;
     strokeRect(x: number, y: number, width: number, height: number): void;
     clearRect(x: number, y: number, width: number, height: number): void;
+    /**
+     * Fill the area between the current path (`moveTo`/`lineTo`) and the
+     * bottom edge with a linear gradient spanning the canvas, as in an area
+     * chart. `direction` 0 runs top to bottom, 1 runs left to right. A path
+     * with fewer than two points fills nothing.
+     */
+    fillGradient(
+        r1: number, g1: number, b1: number, a1: number,
+        r2: number, g2: number, b2: number, a2: number,
+        direction: number,
+    ): void;
     beginPath(): void;
     moveTo(x: number, y: number): void;
     lineTo(x: number, y: number): void;

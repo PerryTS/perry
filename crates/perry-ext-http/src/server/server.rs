@@ -1135,13 +1135,15 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
     // reaper observes their ServerResponse handles.
     count += crate::server::bun_server::process_pending_promises();
 
+    // P5: a connection that died before its response completed raises Node's
+    // `'aborted'` on the request; the sink queued it because it may not run JS.
+    // It runs before the reaper, which closes that exchange's response and
+    // retires its request: `'aborted'` comes first in Node.
+    count += turnloop_listen::drain_aborted_requests();
+
     // #4728 — finalize any async-handler requests that have flushed their
     // response since the last tick (or timed out) before draining new ones.
     reap_in_flight_requests();
-
-    // P5: a connection that died before its response completed raises Node's
-    // `'aborted'` on the request; the sink queued it because it may not run JS.
-    count += turnloop_listen::drain_aborted_requests();
 
     // Snapshot handle ids first so we can mutate handle state
     // (drain channels, free per-request handles) without the
