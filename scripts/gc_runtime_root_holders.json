@@ -3082,6 +3082,42 @@
       "name": "NON_FILL_VSTACKS",
       "verdict": "not_a_gc_pointer",
       "why": "Set of Android vertical-stack widget handles (i64 ids) whose alignment is not fill; ids, never GC addresses."
+    },
+    {
+      "file": "crates/perry-ui-gtk4/src/widgets/canvas.rs",
+      "name": "CANVAS_STATE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas draw-command lists: coordinates, colours, line widths, Strings, font descriptors and an image key. The key is only looked up in the backend's canvas image table and never dereferenced; an image object without __perryImageHandle keeps its address as a key that matches no entry, so a moved object leaves a no-op draw."
+    },
+    {
+      "file": "crates/perry-ui-ios/src/widgets/canvas.rs",
+      "name": "CANVAS_STATE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas draw-command lists: coordinates, colours, line widths, Strings, font descriptors and an image key. The key is only looked up in the backend's canvas image table and never dereferenced; an image object without __perryImageHandle keeps its address as a key that matches no entry, so a moved object leaves a no-op draw."
+    },
+    {
+      "file": "crates/perry-ui-macos/src/widgets/canvas.rs",
+      "name": "CANVAS_STATE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas draw-command lists: coordinates, colours, line widths, Strings, font descriptors and an image key. The key is only looked up in the backend's canvas image table and never dereferenced; an image object without __perryImageHandle keeps its address as a key that matches no entry, so a moved object leaves a no-op draw."
+    },
+    {
+      "file": "crates/perry-ui-tvos/src/widgets/canvas.rs",
+      "name": "CANVAS_STATE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas draw-command lists: coordinates, colours, line widths, Strings, font descriptors and an image key. The key is only looked up in the backend's canvas image table and never dereferenced; an image object without __perryImageHandle keeps its address as a key that matches no entry, so a moved object leaves a no-op draw."
+    },
+    {
+      "file": "crates/perry-ui-visionos/src/widgets/canvas.rs",
+      "name": "CANVAS_STATE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas draw-command lists: coordinates, colours, line widths, Strings, font descriptors and an image key. The key is only looked up in the backend's canvas image table and never dereferenced; an image object without __perryImageHandle keeps its address as a key that matches no entry, so a moved object leaves a no-op draw."
+    },
+    {
+      "file": "crates/perry-ui-windows/src/widgets/canvas.rs",
+      "name": "CANVAS_STATE",
+      "verdict": "not_a_gc_pointer",
+      "why": "Canvas draw-command lists: coordinates, colours, line widths, Strings, font descriptors and an image key. The key is only looked up in the backend's canvas image table and never dereferenced; an image object without __perryImageHandle keeps its address as a key that matches no entry, so a moved object leaves a no-op draw."
     }
   ],
   "_FRONTIER_README": "Identity-pinned debt ratchet over new perry-ui* candidates and otherwise-unclassified core raw/Perry TLS declarations (see the census docstring, “The identity-pinned frontier”). A new uncovered holder fails until it is scanned, receives a researched holders verdict, or is deliberately pinned as debt. Moving a researched false positive to holders graduates it from this list. A fixed or classified holder makes its old frontier pin stale, so the receipt must be deleted.",
