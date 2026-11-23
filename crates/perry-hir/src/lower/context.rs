@@ -982,7 +982,7 @@ impl LoweringContext {
         // matters under shape-deduplication.
         let fields: Vec<ClassField> = field_shapes
             .iter()
-            .map(|(name, ty)| ClassField {
+            .map(|(name, ty)| ClassField { byte_offset: byte_offset,
                 origin: crate::ClassFieldOrigin::Definition,
                 name: name.clone(),
                 key_expr: None,
@@ -1091,6 +1091,7 @@ impl LoweringContext {
         &mut self,
         keys: &[String],
         null_proto: bool,
+        byte_offset: u32,
     ) -> String {
         let shape_key = format!("@declared-keys:{null_proto}:{}", keys.join("\u{0}"));
         if let Some(existing) = self.anon_shape_classes.get(&shape_key) {
@@ -1110,7 +1111,7 @@ impl LoweringContext {
         let class_id = self.fresh_class();
         let fields: Vec<ClassField> = keys
             .iter()
-            .map(|name| ClassField {
+            .map(|name| ClassField { byte_offset: byte_offset,
                 origin: crate::ClassFieldOrigin::Declared,
                 name: name.clone(),
                 key_expr: None,

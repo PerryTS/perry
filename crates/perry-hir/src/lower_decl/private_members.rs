@@ -456,7 +456,7 @@ pub fn lower_private_prop(
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     let init = init?;
 
-    Ok(ClassField {
+    Ok(ClassField { byte_offset: prop.span.lo.0,
         origin: crate::ClassFieldOrigin::Definition,
         name,
         key_expr: None,

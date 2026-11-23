@@ -612,6 +612,9 @@ pub struct ClassField {
     pub is_readonly: bool,
     /// Legacy TypeScript decorators applied to this property.
     pub decorators: Vec<Decorator>,
+    /// Source offset of the field's declaration (0: built by the compiler
+    /// with no source member).
+    pub byte_offset: u32,
 }
 
 /// A global variable
