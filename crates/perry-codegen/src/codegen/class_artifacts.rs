@@ -741,7 +741,8 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                         opts.constructor_param_counts,
                     );
                     let found_params: Vec<perry_hir::Param> = (0..n)
-                        .map(|i| perry_hir::Param { byte_offset: 0 /*HPOS*/,
+                        .map(|i| perry_hir::Param {
+                            byte_offset: 0, /*HPOS*/
                             id: 0xFFFF_0000 + i as u32,
                             name: format!("__forward_arg{}", i),
                             ty: perry_hir::types::Type::Any,
@@ -759,7 +760,8 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                 // allocation hotness are keyed by it (`compile_method` reads
                 // `method.id`). A synthesized default constructor has no HIR
                 // function, so it gets an id nothing is keyed by.
-                let ctor_as_method = perry_hir::Function { byte_offset: 0 /*HPOS*/,
+                let ctor_as_method = perry_hir::Function {
+                    byte_offset: 0, /*HPOS*/
                     id: class.constructor.as_ref().map_or(u32::MAX, |c| c.id),
                     name: format!("{}_constructor", class.name),
                     type_params: Vec::new(),

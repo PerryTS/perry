@@ -878,7 +878,8 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             record_expr_use(discriminant, depth, scan);
             for case in cases {
@@ -1189,7 +1190,8 @@ fn judge_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             judge_expr(discriminant, env, number_arrays, integer_locals, ready, out);
             for case in cases {
@@ -1578,7 +1580,8 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 scan_expr(discriminant, param_id, uses);
                 for case in cases {

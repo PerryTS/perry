@@ -19,7 +19,8 @@ fn opts() -> CompileOptions {
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -55,7 +56,8 @@ fn set(arr: u32, value: Expr) -> Stmt {
 }
 
 fn add(l: Expr, r: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(l),
         right: Box::new(r),
@@ -68,7 +70,8 @@ fn physics_body() -> Vec<Stmt> {
     vec![
         set(A, add(at(A), at(B))),
         Stmt::If {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Gt,
                 left: Box::new(at(A)),
                 right: Box::new(Expr::Number(100.0)),
@@ -94,7 +97,8 @@ fn probe_ir(name: &str, elem: Type, body: Vec<Stmt>, update: Option<Expr>) -> St
 
 fn probe_module(name: &str, elem: Type, body: Vec<Stmt>, update: Option<Expr>) -> Module {
     let mut m = Module::new(name);
-    m.functions = vec![Function { byte_offset: 0,
+    m.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -114,7 +118,8 @@ fn probe_module(name: &str, elem: Type, body: Vec<Stmt>, update: Option<Expr>) -
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(I)),
                     right: Box::new(Expr::LocalGet(N)),
@@ -152,7 +157,8 @@ fn masked(arr: u32) -> Expr {
         byte_offset: 0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(arr)),
-        index: Box::new(Expr::Binary { byte_offset: 0,
+        index: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::BitAnd,
             left: Box::new(Expr::LocalGet(I)),
             right: Box::new(Expr::Integer(63)),
@@ -371,7 +377,8 @@ fn const_and_mutable_module_arrays_keep_global_roots_across_allocating_loops() {
             init: Some(at(A)),
         },
         Stmt::If {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(10)),
                 right: Box::new(Expr::Undefined),

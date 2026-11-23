@@ -13,7 +13,8 @@ fn index(a: u32, i: Expr) -> Expr {
     }
 }
 fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(l),
         right: Box::new(r),
@@ -41,7 +42,8 @@ fn ir_with_param_type(
 ) -> String {
     let kind = receiver;
     let mut m = Module::new("indexed_owner_contract");
-    let param = |id, name: &str, ty| Param { byte_offset: 0,
+    let param = |id, name: &str, ty| Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty,
@@ -50,7 +52,8 @@ fn ir_with_param_type(
         is_rest: false,
         arguments_object: None,
     };
-    m.functions.push(Function { byte_offset: 0,
+    m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "operate".into(),
         type_params: vec![],
@@ -63,7 +66,8 @@ fn ir_with_param_type(
         body: vec![
             Stmt::For {
                 init: Some(Box::new(let_(3, Expr::Integer(0), true))),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(get(3)),
                     right: Box::new(Expr::Integer(4)),
@@ -298,7 +302,8 @@ fn static_allocation_range_and_numeric_proofs_remove_all_admission_checks() {
 fn nested_numeric_loops_keep_scalar_recurrences_in_native_slots() {
     let inner = Stmt::For {
         init: Some(Box::new(let_(8, Expr::Integer(0), true))),
-        condition: Some(Expr::Compare { byte_offset: 0,
+        condition: Some(Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(get(8)),
             right: Box::new(Expr::Integer(4)),
@@ -422,7 +427,8 @@ fn numeric_string_region_admits_conditional_scalar_updates_and_keeps_all_exits()
     let body = vec![
         let_(4, string_code(get(3)), false),
         Stmt::If {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(get(4)),
                 right: Box::new(Expr::Integer(59)),
@@ -476,7 +482,8 @@ fn string_region_rejects_rebinding_and_calls_before_any_body_effect() {
     for body in [
         vec![
             Stmt::If {
-                condition: Expr::Compare { byte_offset: 0,
+                condition: Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(string_code(get(3))),
                     right: Box::new(Expr::Integer(59)),
@@ -501,7 +508,8 @@ fn string_region_rejects_rebinding_and_calls_before_any_body_effect() {
             }),
         ],
         vec![Stmt::If {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Gt,
                 left: Box::new(string_code(get(3))),
                 right: Box::new(Expr::Integer(0)),

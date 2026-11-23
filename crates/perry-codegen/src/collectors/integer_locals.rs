@@ -112,7 +112,10 @@ pub(crate) fn static_index_window(e: &perry_hir::Expr) -> Option<(i64, i64)> {
     if let Some(n) = int_constant(e) {
         return Some((n, n));
     }
-    let Expr::Binary { op, left, right, .. } = e else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = e
+    else {
         return None;
     };
     match op {
@@ -854,7 +857,8 @@ impl ProvenanceJudge<'_> {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases, ..
+                    cases,
+                    ..
                 } => {
                     self.walk_expr(discriminant);
                     for c in cases {
@@ -991,15 +995,12 @@ fn int32_producing_deps(
                 false
             }
         }
-        Expr::Binary { op, left, right, .. }
-            if matches!(
-                op,
-                BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::Shl
-                    | BinaryOp::Shr
-            ) =>
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(
+            op,
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr
+        ) =>
         {
             if not_bigint.bitwise_result_is_number(e) {
                 return true;
@@ -1354,9 +1355,9 @@ pub fn is_int32_producing_expr(
         {
             true
         }
-        Expr::Binary { op, left, right, .. }
-            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
-        {
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) => {
             is_int32_producing_expr(
                 left,
                 known_int_locals,

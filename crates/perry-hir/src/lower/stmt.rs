@@ -316,7 +316,8 @@ fn emit_for_of_pattern_protocol(
     *var_idx += spans.len();
     let bound = match pat {
         ast::Pat::Array(arr_pat) => {
-            let plan = crate::destructuring::plan_for_unproven_source(ctx, source, out, arr_pat.span.lo.0);
+            let plan =
+                crate::destructuring::plan_for_unproven_source(ctx, source, out, arr_pat.span.lo.0);
             crate::destructuring::lower_array_pattern_binding_guarded(
                 ctx, arr_pat, plan, false, false, out,
             )
@@ -421,8 +422,10 @@ fn emit_for_of_pattern_binding_indexed(
                         };
                         let init = if let Some(default_expr) = &assign.value {
                             let default_val = lower_expr(ctx, default_expr)?;
-                            Expr::Conditional { byte_offset: assign.span.lo.0,
-                                condition: Box::new(Expr::Compare { byte_offset: assign.span.lo.0,
+                            Expr::Conditional {
+                                byte_offset: assign.span.lo.0,
+                                condition: Box::new(Expr::Compare {
+                                    byte_offset: assign.span.lo.0,
                                     op: CompareOp::Ne,
                                     left: Box::new(prop_access.clone()),
                                     right: Box::new(Expr::Undefined),
@@ -476,7 +479,8 @@ fn emit_for_of_pattern_binding_indexed(
                 init: Some(source),
             });
             let default_val = lower_expr(ctx, &assign_pat.right)?;
-            let with_default = Expr::Conditional { byte_offset: assign_pat.span.lo.0,
+            let with_default = Expr::Conditional {
+                byte_offset: assign_pat.span.lo.0,
                 condition: Box::new(Expr::IsUndefinedOrBareNan(Box::new(Expr::LocalGet(tmp_id)))),
                 then_expr: Box::new(default_val),
                 else_expr: Box::new(Expr::LocalGet(tmp_id)),

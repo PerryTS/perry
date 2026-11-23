@@ -536,9 +536,11 @@ mod by_name_method_closure_tests {
             if !captures.is_empty() {
                 body.insert(0, Stmt::Expr(Expr::LocalGet(captures[0])));
             }
-            Expr::Closure { byte_offset: 0,
+            Expr::Closure {
+                byte_offset: 0,
                 func_id,
-                params: vec![Param { byte_offset: 0,
+                params: vec![Param {
+                    byte_offset: 0,
                     id: param_id,
                     name: "k".to_string(),
                     ty: Type::Any,
@@ -561,7 +563,8 @@ mod by_name_method_closure_tests {
             }
         };
         let mut hir = HirModule::new("objlit_by_name_test");
-        hir.functions.push(Function { byte_offset: 0,
+        hir.functions.push(Function {
+            byte_offset: 0,
             id: 0,
             name: "build".to_string(),
             type_params: Vec::new(),
@@ -575,15 +578,18 @@ mod by_name_method_closure_tests {
                     mutable: false,
                     init: Some(Expr::Number(1.0)),
                 },
-                Stmt::Return(Some(Expr::Object(vec![
-                    ("add".to_string(), closure(1, Vec::new())),
-                    // Allocating initializers AFTER each closure: that is what
-                    // makes `protect_handle` true, i.e. what puts the closure
-                    // values in a window at all.
-                    ("tag".to_string(), Expr::Object(Vec::new())),
-                    ("scale".to_string(), closure(2, vec![5])),
-                    ("last".to_string(), Expr::Object(Vec::new())),
-                ])), 0),
+                Stmt::Return(
+                    Some(Expr::Object(vec![
+                        ("add".to_string(), closure(1, Vec::new())),
+                        // Allocating initializers AFTER each closure: that is what
+                        // makes `protect_handle` true, i.e. what puts the closure
+                        // values in a window at all.
+                        ("tag".to_string(), Expr::Object(Vec::new())),
+                        ("scale".to_string(), closure(2, vec![5])),
+                        ("last".to_string(), Expr::Object(Vec::new())),
+                    ])),
+                    0,
+                ),
             ],
             is_async: false,
             is_generator: false,

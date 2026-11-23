@@ -724,8 +724,14 @@ mod tests {
             None
         );
         for (value, body) in [
-            (Expr::Await(Box::new(Expr::LocalGet(0)), 0), Expr::LocalGet(7)),
-            (Expr::LocalGet(0), Expr::Await(Box::new(Expr::LocalGet(7)), 0)),
+            (
+                Expr::Await(Box::new(Expr::LocalGet(0)), 0),
+                Expr::LocalGet(7),
+            ),
+            (
+                Expr::LocalGet(0),
+                Expr::Await(Box::new(Expr::LocalGet(7)), 0),
+            ),
         ] {
             let asynchronous = Expr::ScopedTemp {
                 id: 7,

@@ -91,7 +91,8 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
     // and died on React's "Invalid hook call" null-dispatcher TypeError.
     // (`createElement` reads `props.children` the same way the jsx-runtime
     // does, so folding children into props is shared between both paths.)
-    if let Some(react_element_call) = react_create_element_call(ctx, type_expr.clone(), &props_expr, jsx.span.lo.0)
+    if let Some(react_element_call) =
+        react_create_element_call(ctx, type_expr.clone(), &props_expr, jsx.span.lo.0)
     {
         return Ok(react_element_call);
     }
@@ -198,7 +199,9 @@ pub(crate) fn lower_jsx_fragment(
             }),
             property: "Fragment".to_string(),
         };
-        if let Some(call) = react_create_element_call(ctx, fragment_type, &props_expr, jsx.span.lo.0) {
+        if let Some(call) =
+            react_create_element_call(ctx, fragment_type, &props_expr, jsx.span.lo.0)
+        {
             return Ok(call);
         }
     }

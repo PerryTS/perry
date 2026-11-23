@@ -22,7 +22,8 @@ const ARRAY_LIKE: u32 = 4;
 const I: u32 = 10;
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -44,7 +45,8 @@ fn num(v: f64) -> Box<Expr> {
 /// `function probe(n, date, arr, arrayLike) { for (let i = 0; i < n; i++) { body } }`
 fn looped(body: Vec<Stmt>) -> Module {
     let mut module = Module::new("entry_block_alloca.ts");
-    module.functions = vec![Function { byte_offset: 0,
+    module.functions = vec![Function {
+        byte_offset: 0,
         id: 90,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -63,7 +65,8 @@ fn looped(body: Vec<Stmt>) -> Module {
                 mutable: true,
                 init: Some(Expr::Number(0.0)),
             })),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: get(I),
                 right: get(N),

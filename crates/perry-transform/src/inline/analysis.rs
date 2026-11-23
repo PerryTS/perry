@@ -215,7 +215,8 @@ pub fn scalar_aggregate_loop_param(func: &Function) -> Option<LocalId> {
     let Expr::Compare {
         op: perry_hir::CompareOp::Lt,
         left,
-        right, ..
+        right,
+        ..
     } = condition
     else {
         return None;
@@ -396,7 +397,8 @@ pub fn body_calls_func(stmts: &[Stmt], target_id: FuncId) -> bool {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 check_expr(condition, target_id)
                     || check_expr(then_expr, target_id)

@@ -130,7 +130,8 @@ fn cell_class() -> Class {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField { byte_offset: 0,
+        fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "v".to_string(),
             key_expr: None,
@@ -164,14 +165,17 @@ fn tiny_factory_class(prefix_stmts: usize) -> Class {
     for i in 0..prefix_stmts {
         body.push(Stmt::Expr(Expr::Number(i as f64)));
     }
-    body.push(Stmt::Return(Some(Expr::New {
-        byte_end: 0,
-        class_name: "Cell".to_string(),
-        args: vec![Expr::Number(1.0)],
-        type_args: Vec::new(),
-        byte_offset: 0,
-        cap_args_appended: 0,
-    }), 0));
+    body.push(Stmt::Return(
+        Some(Expr::New {
+            byte_end: 0,
+            class_name: "Cell".to_string(),
+            args: vec![Expr::Number(1.0)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }),
+        0,
+    ));
     Class {
         id: 4,
         name: "Factory".to_string(),
@@ -183,7 +187,8 @@ fn tiny_factory_class(prefix_stmts: usize) -> Class {
         heritage_lexically_shadowed: false,
         fields: Vec::new(),
         constructor: None,
-        methods: vec![Function { byte_offset: 0,
+        methods: vec![Function {
+            byte_offset: 0,
             id: FACTORY_METHOD_ID,
             name: "make".to_string(),
             type_params: Vec::new(),
@@ -251,7 +256,8 @@ fn walk_module(recurse: bool) -> Module {
     let mut body: Vec<Stmt> = Vec::new();
     if recurse {
         body.push(Stmt::If {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Gt,
                 left: Box::new(Expr::LocalGet(N_ID)),
                 right: Box::new(Expr::Number(0.0)),
@@ -259,7 +265,8 @@ fn walk_module(recurse: bool) -> Module {
             then_branch: vec![Stmt::Expr(Expr::Call {
                 byte_end: 0,
                 callee: Box::new(Expr::FuncRef(WALK_ID)),
-                args: vec![Expr::Binary { byte_offset: 0,
+                args: vec![Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::LocalGet(N_ID)),
                     right: Box::new(Expr::Number(1.0)),
@@ -270,19 +277,24 @@ fn walk_module(recurse: bool) -> Module {
             else_branch: None,
         });
     }
-    body.push(Stmt::Return(Some(Expr::New {
-        byte_end: 0,
-        class_name: "Cell".to_string(),
-        args: vec![Expr::LocalGet(N_ID)],
-        type_args: Vec::new(),
+    body.push(Stmt::Return(
+        Some(Expr::New {
+            byte_end: 0,
+            class_name: "Cell".to_string(),
+            args: vec![Expr::LocalGet(N_ID)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }),
+        0,
+    ));
+    m.functions = vec![Function {
         byte_offset: 0,
-        cap_args_appended: 0,
-    }), 0));
-    m.functions = vec![Function { byte_offset: 0,
         id: WALK_ID,
         name: "walk".to_string(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: N_ID,
             name: "n".to_string(),
             ty: Type::Number,
@@ -336,18 +348,22 @@ fn indirect_closure_module(site_count: u32, call_in_loop: bool) -> Module {
             name: format!("stage_{i}"),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::Closure { byte_offset: 0,
+            init: Some(Expr::Closure {
+                byte_offset: 0,
                 func_id: STAGE_FUNC_BASE + i,
                 params: Vec::new(),
                 return_type: Type::Named("Cell".to_string()),
-                body: vec![Stmt::Return(Some(Expr::New {
-                    byte_end: 0,
-                    class_name: "Cell".to_string(),
-                    args: vec![Expr::Number(i as f64)],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                    cap_args_appended: 0,
-                }), 0)],
+                body: vec![Stmt::Return(
+                    Some(Expr::New {
+                        byte_end: 0,
+                        class_name: "Cell".to_string(),
+                        args: vec![Expr::Number(i as f64)],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                        cap_args_appended: 0,
+                    }),
+                    0,
+                )],
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,
@@ -429,7 +445,8 @@ fn the_hot_cache_read_is_marked_gc_leaf_in_bodies_without_root_slots() {
         return;
     }
     let mut module = Module::new("rootless.ts");
-    module.functions = vec![Function { byte_offset: 0,
+    module.functions = vec![Function {
+        byte_offset: 0,
         id: WALK_ID,
         name: "rootless".to_string(),
         type_params: Vec::new(),
@@ -438,13 +455,16 @@ fn the_hot_cache_read_is_marked_gc_leaf_in_bodies_without_root_slots() {
         // A self-call keeps the body's entry stack check (a leaf body that
         // cannot recurse drops it, `expr::stack_guard::finish_stack_guard`),
         // and with it the hot-cache read this test inspects.
-        body: vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::FuncRef(WALK_ID)),
-            args: Vec::new(),
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)],
+        body: vec![Stmt::Return(
+            Some(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(Expr::FuncRef(WALK_ID)),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: true,

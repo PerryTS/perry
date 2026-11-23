@@ -6,7 +6,8 @@ use perry_hir::types::Type;
 use perry_hir::{CompareOp, Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -26,7 +27,8 @@ fn probe_ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
         mutable: true,
         init: Some(Expr::Number(0.0)),
     });
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: vec![],
@@ -84,7 +86,8 @@ fn scalar_global_stores_keep_the_store_without_root_shading() {
         Expr::Bool(true),
         Expr::Null,
         Expr::Undefined,
-        Expr::Compare { byte_offset: 0,
+        Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(1)),
             right: Box::new(Expr::Null),
@@ -144,7 +147,8 @@ fn capture_store_ir() -> String {
             name: "write".into(),
             ty: Type::Any,
             mutable: false,
-            init: Some(Expr::Closure { byte_offset: 0,
+            init: Some(Expr::Closure {
+                byte_offset: 0,
                 func_id: 3,
                 params: vec![],
                 return_type: Type::Any,
@@ -175,7 +179,8 @@ fn capture_store_ir() -> String {
         update: None,
         body,
     }];
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "capture_probe".into(),
         type_params: vec![],

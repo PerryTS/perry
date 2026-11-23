@@ -249,7 +249,9 @@ impl<'a> LoopFacts<'a> {
             Expr::Update { id, .. } => {
                 self.writes.entry(*id).or_default().push(None);
             }
-            Expr::Binary { op, left, right, .. } if is_bitwise(*op) => {
+            Expr::Binary {
+                op, left, right, ..
+            } if is_bitwise(*op) => {
                 for operand in [left.as_ref(), right.as_ref()] {
                     if let Expr::LocalGet(id) = operand {
                         self.numeric_consumers.insert(*id);
@@ -307,7 +309,9 @@ fn produces_number(ctx: &FnCtx<'_>, expr: &Expr, numbers: &BTreeSet<u32>) -> boo
         Expr::Update { id, .. } => {
             numbers.contains(id) || crate::type_analysis::is_numeric_expr(ctx, &Expr::LocalGet(*id))
         }
-        Expr::Binary { op, left, right, .. } => match op {
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
             BinaryOp::Add => {
                 produces_number(ctx, left, numbers) && produces_number(ctx, right, numbers)
             }

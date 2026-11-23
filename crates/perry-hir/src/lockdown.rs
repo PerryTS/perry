@@ -159,7 +159,8 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             visit_expr(discriminant, ctx);
             for case in cases {
@@ -330,7 +331,8 @@ mod tests {
         // `child_process.<method>` lowering that doesn't have a
         // dedicated variant yet (e.g. `fork`).
         let mut m = empty_module();
-        m.init.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
+        m.init.push(Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "child_process".into(),
             class_name: None,
             object: None,
@@ -347,7 +349,8 @@ mod tests {
         // Lockdown is scoped to child_process; other stdlib calls
         // (fs, crypto, …) are untouched.
         let mut m = empty_module();
-        m.init.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
+        m.init.push(Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "fs".into(),
             class_name: None,
             object: None,

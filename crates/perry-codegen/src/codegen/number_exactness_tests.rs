@@ -103,7 +103,8 @@ fn ir_opts() -> CompileOptions {
 }
 
 fn number_param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -115,7 +116,8 @@ fn number_param(id: u32, name: &str) -> Param {
 }
 
 fn number_fn(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -134,7 +136,8 @@ fn number_fn(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Functi
 }
 
 fn module_with(functions: Vec<Function>) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "number_exactness.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
@@ -200,7 +203,8 @@ fn fib_fn() -> Function {
     let call = |k: i64| Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::FuncRef(1)),
-        args: vec![Expr::Binary { byte_offset: 0,
+        args: vec![Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Sub,
             left: Box::new(Expr::LocalGet(10)),
             right: Box::new(Expr::Integer(k)),
@@ -214,7 +218,8 @@ fn fib_fn() -> Function {
         vec![number_param(10, "n")],
         vec![
             Stmt::If {
-                condition: Expr::Compare { byte_offset: 0,
+                condition: Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Le,
                     left: Box::new(Expr::LocalGet(10)),
                     right: Box::new(Expr::Integer(1)),
@@ -222,11 +227,15 @@ fn fib_fn() -> Function {
                 then_branch: vec![Stmt::Return(Some(Expr::LocalGet(10)), 0)],
                 else_branch: None,
             },
-            Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                op: BinaryOp::Add,
-                left: Box::new(call(1)),
-                right: Box::new(call(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::Add,
+                    left: Box::new(call(1)),
+                    right: Box::new(call(2)),
+                }),
+                0,
+            ),
         ],
     )
 }
@@ -240,36 +249,44 @@ fn grow_fn() -> Function {
         1,
         "grow",
         vec![number_param(10, "n"), number_param(11, "acc")],
-        vec![Stmt::Return(Some(Expr::Conditional { byte_offset: 0,
-            condition: Box::new(Expr::Compare { byte_offset: 0,
-                op: CompareOp::Eq,
-                left: Box::new(Expr::LocalGet(10)),
-                right: Box::new(Expr::Integer(0)),
-            }),
-            then_expr: Box::new(Expr::LocalGet(11)),
-            else_expr: Box::new(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::FuncRef(1)),
-                args: vec![
-                    Expr::Binary { byte_offset: 0,
-                        op: BinaryOp::Sub,
-                        left: Box::new(Expr::LocalGet(10)),
-                        right: Box::new(Expr::Integer(1)),
-                    },
-                    Expr::Binary { byte_offset: 0,
-                        op: BinaryOp::Add,
-                        left: Box::new(Expr::Binary { byte_offset: 0,
-                            op: BinaryOp::Mul,
-                            left: Box::new(Expr::LocalGet(11)),
-                            right: Box::new(Expr::Integer(3)),
-                        }),
-                        right: Box::new(Expr::Integer(1)),
-                    },
-                ],
-                type_args: Vec::new(),
+        vec![Stmt::Return(
+            Some(Expr::Conditional {
                 byte_offset: 0,
+                condition: Box::new(Expr::Compare {
+                    byte_offset: 0,
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(10)),
+                    right: Box::new(Expr::Integer(0)),
+                }),
+                then_expr: Box::new(Expr::LocalGet(11)),
+                else_expr: Box::new(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![
+                        Expr::Binary {
+                            byte_offset: 0,
+                            op: BinaryOp::Sub,
+                            left: Box::new(Expr::LocalGet(10)),
+                            right: Box::new(Expr::Integer(1)),
+                        },
+                        Expr::Binary {
+                            byte_offset: 0,
+                            op: BinaryOp::Add,
+                            left: Box::new(Expr::Binary {
+                                byte_offset: 0,
+                                op: BinaryOp::Mul,
+                                left: Box::new(Expr::LocalGet(11)),
+                                right: Box::new(Expr::Integer(3)),
+                            }),
+                            right: Box::new(Expr::Integer(1)),
+                        },
+                    ],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
             }),
-        }), 0)],
+            0,
+        )],
     )
 }
 
@@ -281,11 +298,15 @@ fn add_fn() -> Function {
         1,
         "add",
         vec![number_param(10, "a"), number_param(11, "b")],
-        vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op: BinaryOp::Add,
-            left: Box::new(Expr::LocalGet(10)),
-            right: Box::new(Expr::LocalGet(11)),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::Binary {
+                byte_offset: 0,
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(10)),
+                right: Box::new(Expr::LocalGet(11)),
+            }),
+            0,
+        )],
     )
 }
 
@@ -358,25 +379,31 @@ fn fractional_literal_body_stays_on_the_double_path() {
         1,
         "halfDown",
         vec![number_param(10, "n")],
-        vec![Stmt::Return(Some(Expr::Conditional { byte_offset: 0,
-            condition: Box::new(Expr::Compare { byte_offset: 0,
-                op: CompareOp::Le,
-                left: Box::new(Expr::LocalGet(10)),
-                right: Box::new(Expr::Integer(0)),
-            }),
-            then_expr: Box::new(Expr::Number(0.5)),
-            else_expr: Box::new(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::FuncRef(1)),
-                args: vec![Expr::Binary { byte_offset: 0,
-                    op: BinaryOp::Sub,
-                    left: Box::new(Expr::LocalGet(10)),
-                    right: Box::new(Expr::Integer(1)),
-                }],
-                type_args: Vec::new(),
+        vec![Stmt::Return(
+            Some(Expr::Conditional {
                 byte_offset: 0,
+                condition: Box::new(Expr::Compare {
+                    byte_offset: 0,
+                    op: CompareOp::Le,
+                    left: Box::new(Expr::LocalGet(10)),
+                    right: Box::new(Expr::Integer(0)),
+                }),
+                then_expr: Box::new(Expr::Number(0.5)),
+                else_expr: Box::new(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![Expr::Binary {
+                        byte_offset: 0,
+                        op: BinaryOp::Sub,
+                        left: Box::new(Expr::LocalGet(10)),
+                        right: Box::new(Expr::Integer(1)),
+                    }],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
             }),
-        }), 0)],
+            0,
+        )],
     );
     let ir = emitted_ir(vec![f]);
     assert!(!ir.contains("halfDown_i64"), "{NO_I64_BODY}:\n{ir}");

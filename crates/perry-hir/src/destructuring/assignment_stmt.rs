@@ -1,8 +1,8 @@
 //! Lowering of destructuring assignment statements (e.g. `[a, b] = expr` as a statement).
 
-use swc_common::Spanned;
 use super::array_fast::{self, ArraySource};
 use super::*;
+use swc_common::Spanned;
 
 #[derive(Clone)]
 enum PreparedTarget {
@@ -22,7 +22,8 @@ fn fresh_destruct_local(ctx: &mut LoweringContext, prefix: &str, ty: Type) -> (L
 }
 
 fn runtime_iterator_call(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
-    Expr::NativeMethodCall { byte_offset,
+    Expr::NativeMethodCall {
+        byte_offset,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,
@@ -53,7 +54,9 @@ pub(crate) fn lower_destructuring_assignment_stmt(
     // #10086: `[x, y] = [y, x]` and `[a, b] = <proven array>` do not need the
     // iterator protocol unless `Array.prototype[Symbol.iterator]` is patched.
     if let ast::AssignTargetPat::Array(arr_pat) = pat {
-        if let Some((mut result, plan)) = array_fast::plan_for_source(ctx, &arr_pat.elems, rhs, arr_pat.span.lo.0)? {
+        if let Some((mut result, plan)) =
+            array_fast::plan_for_source(ctx, &arr_pat.elems, rhs, arr_pat.span.lo.0)?
+        {
             result.extend(lower_array_assignment_from_expr(
                 ctx,
                 arr_pat,
@@ -222,7 +225,7 @@ fn lower_array_assignment_from_expr(
     )));
     let (exc_id, exc_name) = fresh_destruct_local(ctx, "destruct_error", Type::Any);
     result.push(Stmt::Try {
-            byte_offset: arr_pat.span.lo.0,
+        byte_offset: arr_pat.span.lo.0,
         body,
         catch: Some(CatchClause {
             param: Some((exc_id, exc_name)),
@@ -271,7 +274,8 @@ fn iterator_next_value_stmts(
                     Expr::LocalGet(next_id),
                     Expr::LocalSet(
                         value_id,
-                        Box::new(Expr::NativeMethodCall { byte_offset,
+                        Box::new(Expr::NativeMethodCall {
+                            byte_offset,
                             module: "__perry_runtime".into(),
                             class_name: None,
                             object: None,
@@ -285,7 +289,8 @@ fn iterator_next_value_stmts(
             )),
         },
         Stmt::If {
-            condition: Expr::Compare { byte_offset,
+            condition: Expr::Compare {
+                byte_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(step_id)),
                 right: Box::new(Expr::Bool(true)),
@@ -317,7 +322,8 @@ fn iterator_next_value_stmts(
     }
 
     vec![Stmt::If {
-        condition: Expr::Compare { byte_offset,
+        condition: Expr::Compare {
+            byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(done_id)),
             right: Box::new(Expr::Bool(true)),
@@ -385,7 +391,8 @@ fn lower_object_assignment_from_expr(
                     // its value), and an anonymous function takes `name`.
                     let read = Expr::LocalGet(value_id);
                     let assigned = match &assign.value {
-                        Some(init) => Expr::Conditional { byte_offset: assign.span.lo.0,
+                        Some(init) => Expr::Conditional {
+                            byte_offset: assign.span.lo.0,
                             condition: Box::new(super::pattern_binding::is_strictly_undefined(
                                 read.clone(),
                                 assign.span.lo.0,
@@ -645,7 +652,8 @@ fn value_with_default(
         return Ok(value);
     };
 
-    Ok(Expr::Conditional { byte_offset,
+    Ok(Expr::Conditional {
+        byte_offset,
         condition: Box::new(Expr::IsUndefinedOrBareNan(Box::new(value.clone()))),
         then_expr: Box::new(default_value),
         else_expr: Box::new(value),
@@ -872,7 +880,8 @@ mod shorthand_default_tests {
         let Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } = stores[0]
         else {
             panic!("`{name}` must be assigned through its default, got a bare read");

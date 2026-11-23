@@ -7,7 +7,8 @@ use perry_hir::{BinaryOp, Expr, Param, Stmt};
 use super::compute_auto_captures_with_globals;
 
 fn param(id: u32) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Any,
@@ -19,7 +20,8 @@ fn param(id: u32) -> Param {
 }
 
 fn closure(func_id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id,
         params,
         return_type: Type::Any,
@@ -47,7 +49,8 @@ fn let_(id: u32, init: Expr) -> Stmt {
 }
 
 fn add(a: u32, b: u32) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(a)),
         right: Box::new(Expr::LocalGet(b)),

@@ -3,7 +3,8 @@ use perry_hir::types::Type;
 use perry_hir::Function;
 
 fn function(body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 1,
         name: "scan".into(),
         params: vec![],
@@ -55,7 +56,8 @@ fn fixture(compound: bool, live: bool) -> Module {
     let update = if compound {
         Expr::LocalSet(
             2,
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(2)),
                 right: Box::new(Expr::Integer(1)),
@@ -76,7 +78,8 @@ fn fixture(compound: bool, live: bool) -> Module {
             mutable: true,
             init: Some(Expr::Integer(0)),
         })),
-        condition: Some(Expr::Compare { byte_offset: 0,
+        condition: Some(Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(2)),
             right: Box::new(if live { length() } else { Expr::Integer(8) }),
@@ -99,7 +102,8 @@ fn eval(e: &Expr, i: i64) -> i64 {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             let Expr::Compare {
                 op: CompareOp::Lt,

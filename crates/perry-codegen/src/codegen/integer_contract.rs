@@ -50,11 +50,15 @@ fn pieces(f: &Function) -> Option<(&Expr, &Expr, &Expr)> {
             then_branch,
             else_branch: Some(other),
         }] => Some((condition, ret(then_branch)?, ret(other)?)),
-        [Stmt::Return(Some(Expr::Conditional {
-            condition,
-            then_expr,
-            else_expr, ..
-        }), _)] => Some((condition, then_expr, else_expr)),
+        [Stmt::Return(
+            Some(Expr::Conditional {
+                condition,
+                then_expr,
+                else_expr,
+                ..
+            }),
+            _,
+        )] => Some((condition, then_expr, else_expr)),
         _ => None,
     }
 }
@@ -63,7 +67,8 @@ fn terms(e: &Expr, f: &Function, steps: &mut Vec<u32>, forcing: &mut u128) -> Op
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right, ..
+            right,
+            ..
         } => {
             terms(left, f, steps, forcing)?;
             terms(right, f, steps, forcing)
@@ -74,7 +79,8 @@ fn terms(e: &Expr, f: &Function, steps: &mut Vec<u32>, forcing: &mut u128) -> Op
             let Expr::Binary {
                 op: BinaryOp::Sub,
                 left,
-                right, ..
+                right,
+                ..
             } = &args[0]
             else {
                 return None;
@@ -133,7 +139,10 @@ pub(super) fn prove(f: &Function) -> Option<Contract> {
         return None;
     }
     let (condition, base_expr, recursive) = pieces(f)?;
-    let Expr::Compare { op, left, right, .. } = condition else {
+    let Expr::Compare {
+        op, left, right, ..
+    } = condition
+    else {
         return None;
     };
     if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == f.params[0].id) {

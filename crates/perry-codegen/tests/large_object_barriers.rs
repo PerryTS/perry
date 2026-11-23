@@ -106,7 +106,8 @@ fn assert_runtime_barrier_metadata_emitted(ir: &str) {
 }
 
 fn module_with_large_pointer_array_literal(element_count: usize) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "large_object_barriers.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -115,7 +116,8 @@ fn module_with_large_pointer_array_literal(element_count: usize) -> Module {
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function { byte_offset: 0,
+        functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -129,10 +131,10 @@ fn module_with_large_pointer_array_literal(element_count: usize) -> Module {
                     mutable: false,
                     init: Some(Expr::Array(Vec::new(), None)),
                 },
-                Stmt::Return(Some(Expr::Array(
-                    vec![Expr::LocalGet(1); element_count],
-                    None,
-                )), 0),
+                Stmt::Return(
+                    Some(Expr::Array(vec![Expr::LocalGet(1); element_count], None)),
+                    0,
+                ),
             ],
             is_async: false,
             is_generator: false,
@@ -177,7 +179,8 @@ fn module_with_large_pointer_array_literal(element_count: usize) -> Module {
 }
 
 fn module_with_large_local_array_push(element_count: usize) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "large_object_push_barriers.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -186,7 +189,8 @@ fn module_with_large_local_array_push(element_count: usize) -> Module {
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function { byte_offset: 0,
+        functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),

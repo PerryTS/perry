@@ -235,7 +235,8 @@ fn fold_string_concat(mut elems: Vec<Expr>) -> Expr {
     let mut iter = elems.drain(..);
     let mut acc = iter.next().unwrap();
     for next in iter {
-        acc = Expr::Binary { byte_offset: 0 /*HPOS*/,
+        acc = Expr::Binary {
+            byte_offset: 0, /*HPOS*/
             op: perry_hir::BinaryOp::Add,
             left: Box::new(acc),
             right: Box::new(next),

@@ -230,16 +230,18 @@ pub(super) fn record_step_kinds(stmts: &mut Vec<Stmt>, step_id: LocalId) {
             Some(Stmt::Expr(Expr::LocalSet(id, _))) if *id == step_id
         );
         match stmt {
-            Stmt::Return(Some(expr), off) if !already_recorded => match transform_iter_result(&expr) {
-                Some((value, done)) => {
-                    out.push(set_step(step_id, if done { 1.0 } else { 0.0 }));
-                    out.push(Stmt::Return(Some(value), off));
+            Stmt::Return(Some(expr), off) if !already_recorded => {
+                match transform_iter_result(&expr) {
+                    Some((value, done)) => {
+                        out.push(set_step(step_id, if done { 1.0 } else { 0.0 }));
+                        out.push(Stmt::Return(Some(value), off));
+                    }
+                    None => {
+                        out.push(set_step(step_id, 2.0));
+                        out.push(Stmt::Return(Some(expr), off));
+                    }
                 }
-                None => {
-                    out.push(set_step(step_id, 2.0));
-                    out.push(Stmt::Return(Some(expr), off));
-                }
-            },
+            }
             Stmt::Return(None, off) if !already_recorded => {
                 out.push(set_step(step_id, 2.0));
                 out.push(Stmt::Return(None, off));
@@ -312,7 +314,8 @@ mod tests {
             State {
                 num: 0,
                 body: vec![declare(1), declare(2), declare(3)],
-                exit: StateExit::Yield { byte_offset: 0,
+                exit: StateExit::Yield {
+                    byte_offset: 0,
                     value: Expr::LocalGet(1),
                     next_state: 1,
                     passthrough: None,
@@ -336,7 +339,8 @@ mod tests {
             State {
                 num: 0,
                 body: vec![Stmt::PreallocateTdzBoxes(vec![1])],
-                exit: StateExit::Yield { byte_offset: 0,
+                exit: StateExit::Yield {
+                    byte_offset: 0,
                     value: Expr::Number(1.0),
                     next_state: 1,
                     passthrough: None,

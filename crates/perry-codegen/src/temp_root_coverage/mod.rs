@@ -127,7 +127,8 @@ pub(crate) fn entry_opts() -> CompileOptions {
 }
 
 pub(crate) fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),

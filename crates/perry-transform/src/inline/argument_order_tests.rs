@@ -16,7 +16,8 @@ const BUMP: FuncId = 2;
 const G: FuncId = 3;
 
 fn param(id: LocalId) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Number,
@@ -28,7 +29,8 @@ fn param(id: LocalId) -> Param {
 }
 
 fn function(id: FuncId, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: format!("f{id}"),
         type_params: Vec::new(),
@@ -86,7 +88,8 @@ fn census_storing(stored: Option<Expr>) -> WriteCensus {
 
 /// `g(a) { return bump() + a }`
 fn g_expr_body() -> HashMap<FuncId, Function> {
-    let body = Expr::Binary { byte_offset: 0,
+    let body = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(bump_call()),
         right: Box::new(Expr::LocalGet(A)),
@@ -240,7 +243,8 @@ const B: LocalId = 11;
 const ON_BOARD: FuncId = 5;
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -249,7 +253,8 @@ fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 
 /// `onBoard(a) { return (a & 0x88) === 0 }`: `a` is read before `&` converts.
 fn on_board() -> Function {
-    let body = Expr::Compare { byte_offset: 0,
+    let body = Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Eq,
         left: Box::new(binary(
             BinaryOp::BitAnd,
@@ -308,12 +313,14 @@ fn a_local_minted_after_the_census_is_substituted_into_such_a_body() {
 /// `inRange(a) { return a >= 0 && a < 128 && (a & 0x88) === 0 }`: `>=` would
 /// convert an object before the second read.
 fn in_range() -> Function {
-    let cmp = |op: CompareOp, right: i64| Expr::Compare { byte_offset: 0,
+    let cmp = |op: CompareOp, right: i64| Expr::Compare {
+        byte_offset: 0,
         op,
         left: Box::new(Expr::LocalGet(A)),
         right: Box::new(Expr::Integer(right)),
     };
-    let and = |left: Expr, right: Expr| Expr::Logical { byte_offset: 0,
+    let and = |left: Expr, right: Expr| Expr::Logical {
+        byte_offset: 0,
         op: perry_hir::LogicalOp::And,
         left: Box::new(left),
         right: Box::new(right),
@@ -427,7 +434,8 @@ fn a_read_after_a_property_read_is_bound_first() {
 /// `f(a) { return (m = 5) === a }` with `m` the module local passed for `a`.
 #[test]
 fn a_read_after_a_store_to_the_argument_local_is_bound_first() {
-    let body = Expr::Compare { byte_offset: 0,
+    let body = Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalSet(M, Box::new(Expr::Integer(5)))),
         right: Box::new(Expr::LocalGet(A)),
@@ -440,7 +448,8 @@ fn a_read_after_a_store_to_the_argument_local_is_bound_first() {
 /// `f(a) { return () => a }`: the closure reads `a` whenever it is called.
 #[test]
 fn a_read_inside_a_closure_is_not_scanned_as_early() {
-    let closure = Expr::Closure { byte_offset: 0,
+    let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 77,
         params: Vec::new(),
         return_type: Type::Number,
@@ -468,7 +477,11 @@ fn a_read_inside_a_closure_is_not_scanned_as_early() {
 #[test]
 fn a_later_argument_that_writes_the_local_keeps_the_earlier_one_bound() {
     let body = binary(BinaryOp::Add, Expr::LocalGet(A), Expr::LocalGet(B));
-    let f = function(G, vec![param(A), param(B)], vec![Stmt::Return(Some(body), 0)]);
+    let f = function(
+        G,
+        vec![param(A), param(B)],
+        vec![Stmt::Return(Some(body), 0)],
+    );
     let bump_m = Expr::Update {
         id: M,
         op: UpdateOp::Increment,
@@ -491,7 +504,8 @@ fn a_later_argument_that_writes_the_local_keeps_the_earlier_one_bound() {
 #[test]
 fn a_read_in_a_loop_that_runs_code_is_late() {
     let t: LocalId = 12;
-    let cond = Expr::Compare { byte_offset: 0,
+    let cond = Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(t)),
         right: Box::new(Expr::LocalGet(A)),
@@ -539,7 +553,8 @@ fn a_read_in_a_loop_that_runs_code_is_late() {
 /// path with `is(a) { return a === this.k }` (`this.k` is read after `a`).
 #[test]
 fn the_statement_and_method_paths_substitute_an_early_read() {
-    let eq = |right: Expr| Expr::Compare { byte_offset: 0,
+    let eq = |right: Expr| Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(A)),
         right: Box::new(right),
@@ -615,7 +630,8 @@ fn the_statement_and_method_paths_substitute_an_early_read() {
     assert!(setup.is_empty(), "{setup:?}");
     assert!(reads_m(&result), "{result:?}");
     // Control: `this.k === a` reads the field (a getter may run) first.
-    let late = Expr::Compare { byte_offset: 0,
+    let late = Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Eq,
         left: Box::new(this_k),
         right: Box::new(Expr::LocalGet(A)),

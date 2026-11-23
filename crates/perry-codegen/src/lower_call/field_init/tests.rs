@@ -12,7 +12,8 @@ use perry_hir::types::Type;
 use perry_hir::{Class, ClassField, Function, Module, ModuleInitKind, Param};
 
 fn param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -24,7 +25,8 @@ fn param(id: u32, name: &str) -> Param {
 }
 
 fn field(name: &str) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -37,7 +39,8 @@ fn field(name: &str) -> ClassField {
 }
 
 fn func(params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 0,
         name: "constructor".to_string(),
         type_params: Vec::new(),
@@ -536,7 +539,8 @@ fn this_free_trailing_statement_does_not_disqualify() {
             vec![param(1, "x")],
             vec![
                 user_this_assign("x", 1),
-                Stmt::Expr(Expr::Binary { byte_offset: 0,
+                Stmt::Expr(Expr::Binary {
+                    byte_offset: 0,
                     op: perry_hir::BinaryOp::Add,
                     left: Box::new(Expr::Number(1.0)),
                     right: Box::new(Expr::Number(2.0)),
@@ -688,21 +692,26 @@ fn single_class_predicate_still_refuses_heritage() {
 }
 
 fn captures_this_arrow_field() -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: "createEntity".to_string(),
         key_expr: None,
         ty: Type::Any,
-        init: Some(Expr::Closure { byte_offset: 0,
+        init: Some(Expr::Closure {
+            byte_offset: 0,
             func_id: 8693,
             params: Vec::new(),
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::This),
-                property: "value".to_string(),
-                byte_offset: 0,
-            }), 0)],
+            body: vec![Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(Expr::This),
+                    property: "value".to_string(),
+                    byte_offset: 0,
+                }),
+                0,
+            )],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
             captures_this: true,
@@ -722,7 +731,8 @@ fn captures_this_arrow_field() -> ClassField {
 fn captures_this_field_ir() -> String {
     let mut registry = class(
         vec![
-            ClassField { byte_offset: 0,
+            ClassField {
+                byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "value".to_string(),
                 key_expr: None,

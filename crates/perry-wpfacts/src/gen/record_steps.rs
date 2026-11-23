@@ -145,7 +145,8 @@ fn step_of(c: Local, e: &Expr) -> Option<usize> {
     let Expr::Conditional {
         condition,
         then_expr,
-        else_expr, ..
+        else_expr,
+        ..
     } = else_expr.as_ref()
     else {
         return None;
@@ -153,7 +154,8 @@ fn step_of(c: Local, e: &Expr) -> Option<usize> {
     let Expr::Compare {
         op: CompareOp::Lt,
         left,
-        right, ..
+        right,
+        ..
     } = condition.as_ref()
     else {
         return None;
@@ -202,7 +204,8 @@ fn is_true_test(e: &Expr) -> Option<Local> {
         Expr::Compare {
             op: CompareOp::Eq,
             left,
-            right, ..
+            right,
+            ..
         } => match (left.as_ref(), right.as_ref()) {
             (Expr::LocalGet(x), Expr::Bool(true)) => Some(*x),
             _ => None,

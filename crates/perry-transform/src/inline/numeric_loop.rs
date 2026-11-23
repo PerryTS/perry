@@ -68,7 +68,8 @@ mod tests {
     use perry_hir::BinaryOp;
 
     fn function(id: FuncId, body: Vec<Stmt>) -> Function {
-        Function { byte_offset: 0,
+        Function {
+            byte_offset: 0,
             id,
             name: format!("f{id}"),
             type_params: Vec::new(),
@@ -87,7 +88,8 @@ mod tests {
     }
 
     fn closure() -> Expr {
-        Expr::Closure { byte_offset: 0,
+        Expr::Closure {
+            byte_offset: 0,
             func_id: 99,
             params: Vec::new(),
             return_type: Type::Number,
@@ -115,7 +117,8 @@ mod tests {
     }
 
     fn arithmetic(field: bool) -> Stmt {
-        Stmt::Expr(Expr::Binary { byte_offset: 0,
+        Stmt::Expr(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Mul,
             left: Box::new(if field {
                 Expr::PropertyGet {

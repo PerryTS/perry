@@ -7,21 +7,24 @@ fn num(n: f64) -> Expr {
     Expr::Number(n)
 }
 fn compare(op: CompareOp, a: Expr, b: Expr) -> Expr {
-    Expr::Compare { byte_offset: 0,
+    Expr::Compare {
+        byte_offset: 0,
         op,
         left: Box::new(a),
         right: Box::new(b),
     }
 }
 fn sub(a: Expr, b: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Sub,
         left: Box::new(a),
         right: Box::new(b),
     }
 }
 fn ternary(c: Expr, a: Expr, b: Expr) -> Expr {
-    Expr::Conditional { byte_offset: 0,
+    Expr::Conditional {
+        byte_offset: 0,
         condition: Box::new(c),
         then_expr: Box::new(a),
         else_expr: Box::new(b),
@@ -45,11 +48,13 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
     }
 }
 fn callback(body: Vec<Stmt>) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id: 99,
         params: [17, 23]
             .into_iter()
-            .map(|id| Param { byte_offset: 0,
+            .map(|id| Param {
+                byte_offset: 0,
                 id,
                 name: format!("p{id}"),
                 ty: Type::Any,
@@ -148,9 +153,11 @@ fn sign_proof_accepts_control_flow_coercions_aliases_and_both_directions() {
 #[test]
 fn sign_proof_closes_helpers_and_projection_bodies_transitively() {
     let helper = callback(branches());
-    let project = Expr::Closure { byte_offset: 0,
+    let project = Expr::Closure {
+        byte_offset: 0,
         func_id: 100,
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 17,
             name: "x".into(),
             ty: Type::Any,
@@ -289,7 +296,8 @@ fn signed_zero_joins_do_not_invent_an_exact_reciprocal_sign() {
         num(-0.0),
         num(0.0),
     );
-    let reciprocal = Expr::Binary { byte_offset: 0,
+    let reciprocal = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Div,
         left: Box::new(num(1.0)),
         right: Box::new(zero),
@@ -302,18 +310,21 @@ fn signed_zero_joins_do_not_invent_an_exact_reciprocal_sign() {
             mutable: false,
             init: Some(reciprocal),
         },
-        Stmt::Return(Some(ternary(
-            compare(CompareOp::Lt, local(17), local(23)),
-            Expr::Unary {
-                op: UnaryOp::Neg,
-                operand: Box::new(local(50)),
-            },
-            ternary(
-                compare(CompareOp::Gt, local(17), local(23)),
-                local(50),
-                num(0.0),
-            ),
-        )), 0),
+        Stmt::Return(
+            Some(ternary(
+                compare(CompareOp::Lt, local(17), local(23)),
+                Expr::Unary {
+                    op: UnaryOp::Neg,
+                    operand: Box::new(local(50)),
+                },
+                ternary(
+                    compare(CompareOp::Gt, local(17), local(23)),
+                    local(50),
+                    num(0.0),
+                ),
+            )),
+            0,
+        ),
     ];
     assert_eq!(pure_numeric_order(&callback(body)), None);
 }

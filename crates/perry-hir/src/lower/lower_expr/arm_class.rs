@@ -499,7 +499,8 @@ pub(crate) fn lower_class_expr(
                 let Some((name, value)) = named_statics.get(index as usize).cloned() else {
                     continue;
                 };
-                seq.push(Expr::StaticFieldSet { byte_offset: named_static_offsets[index as usize],
+                seq.push(Expr::StaticFieldSet {
+                    byte_offset: named_static_offsets[index as usize],
                     class_name: synthetic_name.clone(),
                     field_name: name,
                     value: Box::new(value),

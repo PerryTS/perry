@@ -11,7 +11,8 @@ use perry_hir::types::Type;
 use perry_hir::{BinaryOp, Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -34,7 +35,8 @@ fn probe_ir(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> String {
 /// `(symbol, body)` for the public entry and every clone of `probe`.
 fn probe_functions(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Vec<(String, String)> {
     let mut module = Module::new(name);
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: vec![],
@@ -104,7 +106,8 @@ fn get(view: u32, index: Expr) -> Expr {
 }
 
 fn sub1(e: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Sub,
         left: Box::new(e),
         right: Box::new(Expr::Integer(1)),
@@ -192,7 +195,8 @@ fn a_non_object_length_owns_the_storage_and_a_parameter_does_not() {
         let_(20, true, Type::Number, Expr::Integer(4)),
         Stmt::Expr(Expr::LocalSet(
             20,
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(20)),
                 right: Box::new(Expr::Integer(4)),

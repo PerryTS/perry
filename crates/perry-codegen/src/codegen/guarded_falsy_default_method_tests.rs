@@ -9,7 +9,8 @@ const INDEX: u32 = 31;
 const DEFER: u32 = 32;
 
 fn param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -32,7 +33,8 @@ fn default_get() -> Expr {
 fn candidate_method() -> Function {
     let mut defer = param(DEFER, "defer");
     defer.default = Some(default_get());
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 40,
         name: "update".to_string(),
         type_params: Vec::new(),
@@ -40,7 +42,8 @@ fn candidate_method() -> Function {
         return_type: Type::Any,
         body: vec![
             Stmt::If {
-                condition: Expr::Compare { byte_offset: 0,
+                condition: Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(DEFER)),
                     right: Box::new(Expr::Undefined),
@@ -83,7 +86,8 @@ fn fixture(method: Function) -> Module {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField { byte_offset: 0,
+        fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "DEFAULT_DEFER".to_string(),
             key_expr: None,
@@ -178,7 +182,9 @@ fn wrapper_proves_live_false_field_and_clone_erases_default_and_branch() {
 #[test]
 fn arbitrary_parameter_use_rejects_the_clone() {
     let mut method = candidate_method();
-    method.body.push(Stmt::Return(Some(Expr::LocalGet(DEFER)), 0));
+    method
+        .body
+        .push(Stmt::Return(Some(Expr::LocalGet(DEFER)), 0));
     let ir = emit(method);
     assert!(
         !ir.contains("$default_false"),

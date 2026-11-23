@@ -140,9 +140,9 @@ pub(crate) fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index
     match index {
         Expr::Integer(i) => (0..=i32::MAX as i64).contains(i),
         Expr::Number(n) => n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= i32::MAX as f64,
-        Expr::Binary { op, left, right, .. } if matches!(op, BinaryOp::BitAnd) => {
-            bitand_has_nonnegative_i32_mask(left, right)
-        }
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::BitAnd) => bitand_has_nonnegative_i32_mask(left, right),
         Expr::LocalGet(id) => {
             (ctx.integer_locals.contains(id)
                 || matches!(ctx.local_slot_reps.get(id), Some(super::SlotRep::I32)))
@@ -1001,7 +1001,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 class_name: None,
                 object: None,
                 method,
-                args, ..
+                args,
+                ..
             } = index.as_ref()
             {
                 if module == "__perry_runtime" && method == "arrayRecordIndex" {

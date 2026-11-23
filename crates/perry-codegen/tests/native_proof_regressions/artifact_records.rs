@@ -108,13 +108,16 @@ fn artifact_records_numeric_array_f64_fast_paths_and_fallback_reasons() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::IndexGet {
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(local(1)),
-                index: Box::new(int(0)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: Box::new(local(1)),
+                    index: Box::new(int(0)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -259,12 +262,15 @@ fn artifact_records_unproven_class_field_store_claims_no_raw_f64_facts() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "x".to_string(),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "x".to_string(),
+                }),
+                0,
+            ),
         ],
     );
 

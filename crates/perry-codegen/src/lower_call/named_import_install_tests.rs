@@ -6,26 +6,30 @@ use perry_hir::{
 
 fn compile_lookup(module_name: &str, property: &str) -> String {
     let mut module = Module::new("named_import_install.ts");
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "lookup".into(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::ExternFuncRef {
-                name: "js_native_module_named_esm_export_value".into(),
-                param_types: vec![Type::String, Type::String],
-                return_type: Type::Any,
+        body: vec![Stmt::Return(
+            Some(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(Expr::ExternFuncRef {
+                    name: "js_native_module_named_esm_export_value".into(),
+                    param_types: vec![Type::String, Type::String],
+                    return_type: Type::Any,
+                }),
+                args: vec![
+                    Expr::String(module_name.into()),
+                    Expr::String(property.into()),
+                ],
+                type_args: Vec::new(),
+                byte_offset: 0,
             }),
-            args: vec![
-                Expr::String(module_name.into()),
-                Expr::String(property.into()),
-            ],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)],
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: true,

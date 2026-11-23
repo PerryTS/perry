@@ -554,7 +554,8 @@ fn for_each_lowers_array_map_in_vstack() {
     // resolves via arkts_locals → __item in the emitted ForEach body.
     let mut m = empty_module();
     // Build `Expr::ArrayMap { array: ["a","b","c"], callback: (p) => Text(p) }`.
-    let item_param = perry_hir::ir::Param { byte_offset: 0,
+    let item_param = perry_hir::ir::Param {
+        byte_offset: 0,
         id: 42,
         name: "item".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -573,7 +574,8 @@ fn for_each_lowers_array_map_in_vstack() {
             ],
             None,
         )),
-        callback: Box::new(Expr::Closure { byte_offset: 0,
+        callback: Box::new(Expr::Closure {
+            byte_offset: 0,
             func_id: 0 as perry_hir::types::FuncId,
             params: vec![item_param],
             return_type: perry_hir::types::Type::Any,

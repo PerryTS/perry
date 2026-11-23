@@ -426,7 +426,8 @@ pub(in crate::rooting) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> b
         Expr::Compare {
             op: perry_hir::CompareOp::Eq | perry_hir::CompareOp::Ne,
             left,
-            right, ..
+            right,
+            ..
         } if !crate::stmt::this_field_fast_off()
             && match (left.as_ref(), right.as_ref()) {
                 (other, Expr::String(lit)) | (Expr::String(lit), other) => {
@@ -457,7 +458,8 @@ pub(in crate::rooting) fn expr_may_trigger_gc(ctx: &FnCtx<'_>, expr: &Expr) -> b
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             expr_may_trigger_gc(ctx, condition)
                 || expr_may_trigger_gc(ctx, then_expr)
@@ -554,7 +556,8 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } if crate::expr::inert_math_enabled() => {
             expr_is_inert_primitive(ctx, condition)
                 && expr_is_inert_primitive(ctx, then_expr)
@@ -564,7 +567,9 @@ pub(crate) fn expr_is_inert_primitive(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
         Expr::Compare { left, right, .. } => {
             expr_is_inert_primitive(ctx, left) && expr_is_inert_primitive(ctx, right)
         }
-        Expr::Binary { op, left, right, .. } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             expr_is_inert_primitive(ctx, left)
                 && expr_is_inert_primitive(ctx, right)
                 // `+` is the one operator whose RESULT can be a fresh heap

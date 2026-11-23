@@ -65,7 +65,8 @@ impl ArraySource {
                 name,
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::NativeMethodCall { byte_offset,
+                init: Some(Expr::NativeMethodCall {
+                    byte_offset,
                     module: "__perry_runtime".into(),
                     class_name: None,
                     object: None,
@@ -106,7 +107,8 @@ impl ArraySource {
                 init: Some(Expr::Undefined),
             },
             Stmt::If {
-                condition: Expr::Compare { byte_offset,
+                condition: Expr::Compare {
+                    byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(done)),
                     right: Box::new(Expr::Bool(true)),
@@ -115,11 +117,17 @@ impl ArraySource {
                 else_branch: Some(vec![Stmt::While {
                     condition: Expr::Bool(true),
                     body: vec![Stmt::If {
-                        condition: plan.step(crate::lower::iterator_step_call(iter, next, value, byte_offset)),
+                        condition: plan.step(crate::lower::iterator_step_call(
+                            iter,
+                            next,
+                            value,
+                            byte_offset,
+                        )),
                         then_branch: vec![Stmt::Break],
                         else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
                             id,
-                            Box::new(Expr::NativeMethodCall { byte_offset,
+                            Box::new(Expr::NativeMethodCall {
+                                byte_offset,
                                 module: "__perry_runtime".into(),
                                 class_name: None,
                                 object: None,

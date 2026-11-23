@@ -1727,15 +1727,26 @@ impl<'a> Gen<'a> {
             .copied();
         let prev_first = std::mem::replace(&mut self.m.proto_first_cur, first);
         // A declaration's own operations stand at the declaration.
-        let kind0 = self.m.stop_top.as_mut().map(|st| std::mem::replace(&mut st.gen_kind, crate::topstop::variant(s, "Stmt::")));
+        let kind0 =
+            self.m.stop_top.as_mut().map(|st| {
+                std::mem::replace(&mut st.gen_kind, crate::topstop::variant(s, "Stmt::"))
+            });
         let pos0 = match s {
             Stmt::Let { id, .. } if self.m.stop_top.is_some() => self.modules[fx.module as usize]
                 .1
                 .local_source_spans
                 .get(id)
-                .map(|sp| std::mem::replace(&mut self.m.stop_top.as_mut().unwrap().gen_pos, (fx.module, sp.start))),
+                .map(|sp| {
+                    std::mem::replace(
+                        &mut self.m.stop_top.as_mut().unwrap().gen_pos,
+                        (fx.module, sp.start),
+                    )
+                }),
             Stmt::Let { .. } => None,
-            _ => match (self.m.stop_top.as_mut(), s.byte_offset().filter(|&o| o != 0)) {
+            _ => match (
+                self.m.stop_top.as_mut(),
+                s.byte_offset().filter(|&o| o != 0),
+            ) {
                 (Some(st), Some(o)) => Some(std::mem::replace(&mut st.gen_pos, (fx.module, o))),
                 _ => None,
             },
@@ -1888,7 +1899,11 @@ impl<'a> Gen<'a> {
                 // step arms keep the enclosing arm's `live` (not gated).
                 let special = matches!(condition, Expr::IterResultGetDone)
                     || matches!(condition, Expr::LocalGet(id) if self.step.by_flag.contains_key(&(fx.module, *id)));
-                let then_live = if special { fx.live } else { self.arm_live(fx, t, then_test) };
+                let then_live = if special {
+                    fx.live
+                } else {
+                    self.arm_live(fx, t, then_test)
+                };
                 let then_fx = Fx {
                     guard: Some((t, then_test)),
                     live: then_live,
@@ -1921,7 +1936,11 @@ impl<'a> Gen<'a> {
                 self.narrow_leave(then_branch, pre);
                 self.own_guard_done(own);
                 if let Some(e) = else_branch {
-                    let else_live = if special { fx.live } else { self.arm_live(fx, t, else_test) };
+                    let else_live = if special {
+                        fx.live
+                    } else {
+                        self.arm_live(fx, t, else_test)
+                    };
                     let else_fx = Fx {
                         guard: Some((t, else_test)),
                         live: else_live,
@@ -2276,7 +2295,8 @@ fn guarded_for_of_walk(s: &Stmt) -> Option<(u32, u32)> {
             Expr::Compare {
                 op: perry_hir::CompareOp::Eq,
                 left,
-                right, ..
+                right,
+                ..
             },
         then_branch,
         ..

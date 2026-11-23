@@ -255,7 +255,8 @@ fn impure_scalar_aggregate_init_is_safe(stmts: &[Stmt], target: &Function) -> bo
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 expr_is_safe(discriminant, target, saw_target)
                     && cases.iter().all(|case| {
@@ -369,7 +370,8 @@ fn inline_functions_inner(
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases, ..
+                    cases,
+                    ..
                 } => {
                     f(discriminant);
                     for c in cases {
@@ -820,7 +822,8 @@ mod tests {
     use perry_hir::{ImportSpecifier, ModuleKind, Param};
 
     fn function(id: FuncId, body: Vec<Stmt>) -> Function {
-        Function { byte_offset: 0,
+        Function {
+            byte_offset: 0,
             id,
             name: format!("f{}", id),
             type_params: Vec::new(),
@@ -919,7 +922,8 @@ mod tests {
     #[test]
     fn pod_value_parameters_preserve_the_call_copy_boundary() {
         let mut func = function(1, vec![Stmt::Return(None, 0)]);
-        func.params.push(Param { byte_offset: 0,
+        func.params.push(Param {
+            byte_offset: 0,
             id: 1,
             name: "value".to_string(),
             ty: Type::Generic {
@@ -938,7 +942,8 @@ mod tests {
 
     #[test]
     fn nonprimitive_local_inline_argument_keeps_a_parameter_binding() {
-        let params = vec![Param { byte_offset: 0,
+        let params = vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "value".to_string(),
             ty: Type::Any,
@@ -973,7 +978,8 @@ mod tests {
 
     #[test]
     fn typed_array_inline_argument_keeps_reference_substitution() {
-        let params = vec![Param { byte_offset: 0,
+        let params = vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "values".to_string(),
             ty: Type::Named("Int32Array".to_string()),
@@ -1246,27 +1252,33 @@ mod tests {
         });
         let helper = function(
             1,
-            vec![Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::ExternFuncRef {
-                    name: "sourcePredicate".to_string(),
-                    param_types: Vec::new(),
-                    return_type: Type::Any,
+            vec![Stmt::Return(
+                Some(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: "sourcePredicate".to_string(),
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
                 }),
-                args: Vec::new(),
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }), 0)],
+                0,
+            )],
         );
         let mut root = function(
             2,
-            vec![Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::FuncRef(1)),
-                args: Vec::new(),
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+                0,
+            )],
         );
         root.name = "operation".to_string();
         root.is_exported = true;
@@ -1400,11 +1412,14 @@ mod tests {
         });
         let mut root = function(
             1,
-            vec![Stmt::Return(Some(Expr::StaticMethodCall {
-                class_name: "Registry".to_string(),
-                method_name: "of".to_string(),
-                args: vec![Expr::Object(Vec::new())],
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::StaticMethodCall {
+                    class_name: "Registry".to_string(),
+                    method_name: "of".to_string(),
+                    args: vec![Expr::Object(Vec::new())],
+                }),
+                0,
+            )],
         );
         root.name = "store".to_string();
         root.is_exported = true;
@@ -1422,13 +1437,16 @@ mod tests {
     fn cross_module_free_function_cycle_is_rejected() {
         let mut source = Module::new("/src/cycle.ts");
         let call = |id| {
-            vec![Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::FuncRef(id)),
-                args: Vec::new(),
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }), 0)]
+            vec![Stmt::Return(
+                Some(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::FuncRef(id)),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+                0,
+            )]
         };
         let mut first = function(1, call(2));
         first.is_exported = true;
@@ -1443,16 +1461,18 @@ mod tests {
         let mut source = Module::new("/src/reshape.ts");
         let mut helper = function(
             1,
-            vec![Stmt::Return(Some(Expr::Delete(Box::new(
-                Expr::PropertyGet {
+            vec![Stmt::Return(
+                Some(Expr::Delete(Box::new(Expr::PropertyGet {
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(10)),
                     property: "removed".to_string(),
                     byte_offset: 0,
-                },
-            ))), 0)],
+                }))),
+                0,
+            )],
         );
-        helper.params.push(Param { byte_offset: 0,
+        helper.params.push(Param {
+            byte_offset: 0,
             id: 10,
             name: "value".to_string(),
             ty: Type::Any,
@@ -1463,13 +1483,16 @@ mod tests {
         });
         let mut root = function(
             2,
-            vec![Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::FuncRef(1)),
-                args: vec![Expr::Undefined],
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![Expr::Undefined],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+                0,
+            )],
         );
         root.name = "reshape".to_string();
         root.is_exported = true;
@@ -1477,12 +1500,15 @@ mod tests {
         source.exported_functions.push(("reshape".to_string(), 2));
 
         let mut barrier_free = source.clone();
-        barrier_free.functions[0].body = vec![Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(10)),
-            property: "removed".to_string(),
-            byte_offset: 0,
-        }), 0)];
+        barrier_free.functions[0].body = vec![Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(10)),
+                property: "removed".to_string(),
+                byte_offset: 0,
+            }),
+            0,
+        )];
         assert!(
             gather_cross_module_functions(&barrier_free).contains_key("reshape"),
             "the helper graph must otherwise be eligible for localization"
@@ -1561,7 +1587,8 @@ mod tests {
                 unreachable!()
             };
             source.functions[0].body = vec![Stmt::Return(Some(Expr::LocalGet(1)), 0)];
-            source.functions[0].params.push(Param { byte_offset: 0,
+            source.functions[0].params.push(Param {
+                byte_offset: 0,
                 id: 1,
                 name: "value".into(),
                 ty: Type::Any,
@@ -1639,15 +1666,18 @@ mod tests {
         let mut source = Module::new("/src/package/index.ts");
         let mut loads_relative_module = function(
             1,
-            vec![Stmt::Return(Some(Expr::DynamicImport {
-                paths: vec!["./alpha".to_string()],
-                arg: Box::new(Expr::String("./alpha".to_string())),
-                options: None,
-                byte_offset: 0,
-                deferred_error: None,
-                synchronous: true,
-                deferred: false,
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::DynamicImport {
+                    paths: vec!["./alpha".to_string()],
+                    arg: Box::new(Expr::String("./alpha".to_string())),
+                    options: None,
+                    byte_offset: 0,
+                    deferred_error: None,
+                    synchronous: true,
+                    deferred: false,
+                }),
+                0,
+            )],
         );
         loads_relative_module.name = "loadAlpha".to_string();
         loads_relative_module.is_exported = true;
@@ -1662,13 +1692,16 @@ mod tests {
         let mut source = Module::new("/src/package/index.ts");
         let mut starts_relative_worker = function(
             1,
-            vec![Stmt::Return(Some(Expr::WorkerNew {
-                partial: false,
-                paths: vec!["./worker.ts".to_string()],
-                filename: Box::new(Expr::String("./worker.ts".to_string())),
-                options: None,
-                is_eval: false,
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::WorkerNew {
+                    partial: false,
+                    paths: vec!["./worker.ts".to_string()],
+                    filename: Box::new(Expr::String("./worker.ts".to_string())),
+                    options: None,
+                    is_eval: false,
+                }),
+                0,
+            )],
         );
         starts_relative_worker.name = "startWorker".to_string();
         starts_relative_worker.is_exported = true;
@@ -1684,17 +1717,20 @@ mod tests {
     fn cross_module_runtime_import_does_not_reuse_type_only_import() {
         let mut root = function(
             1,
-            vec![Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::ExternFuncRef {
-                    name: "sourcePredicate".to_string(),
-                    param_types: Vec::new(),
-                    return_type: Type::Any,
+            vec![Stmt::Return(
+                Some(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::ExternFuncRef {
+                        name: "sourcePredicate".to_string(),
+                        param_types: Vec::new(),
+                        return_type: Type::Any,
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
                 }),
-                args: Vec::new(),
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }), 0)],
+                0,
+            )],
         );
         root.name = "operation".to_string();
         let candidate = FunctionCandidate {
@@ -1792,7 +1828,8 @@ mod tests {
         );
         resolver.name = "resolve".to_string();
 
-        let wrapped_call = Expr::NativeMethodCall { byte_offset: 0,
+        let wrapped_call = Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "__perry_runtime".to_string(),
             class_name: None,
             object: None,
@@ -1877,12 +1914,15 @@ mod tests {
                         byte_offset: 0,
                     }),
                 },
-                Stmt::Return(Some(Expr::PropertyGet {
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(10)),
-                    property: "type".to_string(),
-                    byte_offset: 0,
-                }), 0),
+                Stmt::Return(
+                    Some(Expr::PropertyGet {
+                        byte_end: 0,
+                        object: Box::new(Expr::LocalGet(10)),
+                        property: "type".to_string(),
+                        byte_offset: 0,
+                    }),
+                    0,
+                ),
             ],
         );
         method.name = "exists".to_string();

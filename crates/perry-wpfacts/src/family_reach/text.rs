@@ -42,9 +42,9 @@ fn addr(e: &Expr) -> usize {
 fn const_str(e: &Expr) -> Option<String> {
     match e {
         Expr::String(s) => Some(s.clone()),
-        Expr::Binary { left, right, op, .. } if matches!(op, perry_hir::BinaryOp::Add) => {
-            Some(const_str(left)? + &const_str(right)?)
-        }
+        Expr::Binary {
+            left, right, op, ..
+        } if matches!(op, perry_hir::BinaryOp::Add) => Some(const_str(left)? + &const_str(right)?),
         _ => None,
     }
 }

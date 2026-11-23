@@ -107,7 +107,8 @@ fn lower_constructor_in_scope(
                     ctx.define_local_spanned(param_name.clone(), param_type.clone(), p.span);
                 ctx.shadow_native_instance_if_present(&param_name);
                 ctx.shadow_native_module_if_present(&param_name);
-                params.push(Param { byte_offset: p.span.lo.0,
+                params.push(Param {
+                    byte_offset: p.span.lo.0,
                     id: param_id,
                     name: param_name,
                     ty: param_type,
@@ -167,7 +168,8 @@ fn lower_constructor_in_scope(
                 ctx.shadow_native_module_if_present(&param_name);
                 // Record this param for synthesizing `this.field = param` assignment
                 param_prop_assignments.push((param_id, param_name.clone(), ts_prop.span.lo.0));
-                params.push(Param { byte_offset: ts_prop.span.lo.0,
+                params.push(Param {
+                    byte_offset: ts_prop.span.lo.0,
                     id: param_id,
                     name: param_name,
                     ty: param_type,
@@ -191,7 +193,15 @@ fn lower_constructor_in_scope(
             .map(|b| body_uses_arguments(&b.stmts))
             .unwrap_or(false);
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new(), ctor.span.lo.0);
+        append_synthetic_arguments_param(
+            ctx,
+            &mut params,
+            true,
+            false,
+            true,
+            Vec::new(),
+            ctor.span.lo.0,
+        );
     }
 
     // Issue #572: generate destructuring extractions BEFORE lowering the
@@ -225,9 +235,12 @@ fn lower_constructor_in_scope(
     // Synthesize `this.field = param` assignments for parameter properties.
     // In TypeScript, `constructor(public name: string)` automatically assigns
     // `this.name = name` at the start of the constructor body.
-    let super_pos = body
-        .iter()
-        .position(|s| matches!(s, Stmt::Expr(Expr::SuperCall(_, _) | Expr::SuperCallSpread(_))));
+    let super_pos = body.iter().position(|s| {
+        matches!(
+            s,
+            Stmt::Expr(Expr::SuperCall(_, _) | Expr::SuperCallSpread(_))
+        )
+    });
     if !field_stores.is_empty() {
         // After super() and the parameter properties, as TypeScript emits.
         let at = match super_pos {
@@ -312,7 +325,8 @@ fn lower_constructor_in_scope(
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     ctx.in_constructor_class = saved_ctor_class;
 
-    Ok(Function { byte_offset: ctor.span.lo.0,
+    Ok(Function {
+        byte_offset: ctor.span.lo.0,
         id: ctx.fresh_func(),
         name: format!("{}::constructor", class_name),
         type_params: Vec::new(),
@@ -540,7 +554,8 @@ fn lower_class_method_in_scope(
         let param_id = ctx.define_local_spanned(param_name.clone(), param_type.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
-        params.push(Param { byte_offset: param.span.lo.0,
+        params.push(Param {
+            byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: param_type,
@@ -579,7 +594,15 @@ fn lower_class_method_in_scope(
             .unwrap_or(false)
             || params_use_arguments(&method.function.params));
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new(), method.span.lo.0);
+        append_synthetic_arguments_param(
+            ctx,
+            &mut params,
+            true,
+            false,
+            true,
+            Vec::new(),
+            method.span.lo.0,
+        );
     }
 
     for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
@@ -716,7 +739,8 @@ fn lower_class_method_in_scope(
         }
     }
 
-    Ok(Function { byte_offset: method.span.lo.0,
+    Ok(Function {
+        byte_offset: method.span.lo.0,
         id: func_id,
         name,
         type_params,
@@ -852,7 +876,8 @@ fn lower_getter_method_in_scope(
     let func_id = ctx.fresh_func();
     capture_class_method_source(ctx, func_id, method);
 
-    Ok(Function { byte_offset: method.span.lo.0,
+    Ok(Function {
+        byte_offset: method.span.lo.0,
         id: func_id,
         name,
         type_params: Vec::new(),
@@ -961,7 +986,8 @@ fn lower_setter_method_in_scope(
         let param_id = ctx.define_local_spanned(param_name.clone(), param_type.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
-        params.push(Param { byte_offset: param.span.lo.0,
+        params.push(Param {
+            byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: param_type,
@@ -1040,7 +1066,8 @@ fn lower_setter_method_in_scope(
     let func_id = ctx.fresh_func();
     capture_class_method_source(ctx, func_id, method);
 
-    Ok(Function { byte_offset: method.span.lo.0,
+    Ok(Function {
+        byte_offset: method.span.lo.0,
         id: func_id,
         name,
         type_params: Vec::new(),
@@ -1122,7 +1149,8 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
             .unwrap_or(Type::Any),
     };
     if super::class_field_assign::assigned_instance_field(ctx, prop) {
-        return Ok(ClassField { byte_offset: prop.span.lo.0,
+        return Ok(ClassField {
+            byte_offset: prop.span.lo.0,
             origin: crate::ClassFieldOrigin::ConstructorStore,
             name,
             key_expr,
@@ -1176,7 +1204,8 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     let init = init?;
 
-    Ok(ClassField { byte_offset: prop.span.lo.0,
+    Ok(ClassField {
+        byte_offset: prop.span.lo.0,
         origin: crate::ClassFieldOrigin::Definition,
         name,
         key_expr,

@@ -2,7 +2,8 @@ use super::*;
 use perry_hir::Stmt;
 
 fn native(method: &str) -> Expr {
-    Expr::NativeMethodCall { byte_offset: 0,
+    Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,

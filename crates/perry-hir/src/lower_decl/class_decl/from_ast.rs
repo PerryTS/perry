@@ -589,7 +589,8 @@ pub(crate) fn lower_class_from_ast(
                     .filter(|m| m.name.starts_with("__perry_static_init_"))
                     .count();
                 let synthetic_name = format!("__perry_static_init_{}", block_idx);
-                static_methods.push(Function { byte_offset: block.span.lo.0,
+                static_methods.push(Function {
+                    byte_offset: block.span.lo.0,
                     id: ctx.fresh_func(),
                     name: synthetic_name,
                     type_params: Vec::new(),

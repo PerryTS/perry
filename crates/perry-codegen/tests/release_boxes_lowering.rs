@@ -94,7 +94,8 @@ fn entry_opts() -> CompileOptions {
 }
 
 fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -142,7 +143,8 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
 /// release correctly skips; only function-scoped cells release).
 fn ir_for_fn_body(name: &str, body: Vec<Stmt>) -> String {
     let mut m = module_with_init(name, Vec::new());
-    m.functions.push(perry_hir::Function { byte_offset: 0,
+    m.functions.push(perry_hir::Function {
+        byte_offset: 0,
         id: 7000,
         name: "driver".to_string(),
         type_params: Vec::new(),
@@ -220,7 +222,8 @@ fn release_boxes_lowers_each_kind_to_its_entry_point() {
 #[test]
 fn release_boxes_lowers_through_closure_captures() {
     let mut body = activation_frame();
-    body.push(Stmt::Expr(Expr::Closure { byte_offset: 0,
+    body.push(Stmt::Expr(Expr::Closure {
+        byte_offset: 0,
         func_id: 900,
         params: Vec::new(),
         return_type: Type::Any,
@@ -263,12 +266,14 @@ fn release_boxes_lowers_through_closure_captures() {
 #[test]
 fn escaped_user_closure_inside_step_keeps_its_box_capture_edge() {
     let mut body = activation_frame();
-    body.push(Stmt::Expr(Expr::Closure { byte_offset: 0,
+    body.push(Stmt::Expr(Expr::Closure {
+        byte_offset: 0,
         func_id: 900,
         params: Vec::new(),
         return_type: Type::Any,
         body: vec![
-            Stmt::Expr(Expr::Closure { byte_offset: 0,
+            Stmt::Expr(Expr::Closure {
+                byte_offset: 0,
                 func_id: 901,
                 params: Vec::new(),
                 return_type: Type::Any,

@@ -18,7 +18,8 @@ pub fn rewrite_producer_body(
     out_param_ids: &HashMap<FuncId, LocalId>,
 ) {
     // 1. Insert the synthetic param at the END of the param list.
-    func.params.push(perry_hir::Param { byte_offset: func.byte_offset,
+    func.params.push(perry_hir::Param {
+        byte_offset: func.byte_offset,
         id: out_param,
         name: "__deforest_out".to_string(),
         ty: Type::Array(Box::new(info.elem_ty.clone())),
@@ -166,7 +167,8 @@ impl SubstituteLocal {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.visit_expr(discriminant);
                 for c in cases {

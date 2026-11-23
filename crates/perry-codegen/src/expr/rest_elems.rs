@@ -198,7 +198,8 @@ pub(crate) fn counter_of(index: &Expr) -> Option<u32> {
         Expr::Binary {
             op: perry_hir::BinaryOp::BitOr,
             left,
-            right, ..
+            right,
+            ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => counter_of(left),
         _ => None,
     }

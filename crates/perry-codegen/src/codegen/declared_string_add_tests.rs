@@ -31,7 +31,8 @@ fn ir_opts() -> CompileOptions {
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -47,7 +48,8 @@ fn probe_fn(params: Vec<Param>, body: Expr) -> Function {
 }
 
 fn probe_fn_with_body(params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -66,7 +68,8 @@ fn probe_fn_with_body(params: Vec<Param>, body: Vec<Stmt>) -> Function {
 }
 
 fn module_with(function: Function) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "declared_string_add.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
@@ -147,7 +150,8 @@ fn module_ir(module: Module) -> String {
 }
 
 fn add(left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -513,7 +517,8 @@ fn a_boxed_local_self_append_uses_the_amortized_path() {
                 name: "reader".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Closure { byte_offset: 0,
+                init: Some(Expr::Closure {
+                    byte_offset: 0,
                     func_id: 2,
                     params: Vec::new(),
                     return_type: Type::String,
@@ -567,7 +572,8 @@ fn a_boxed_capture_self_append_uses_the_amortized_path() {
                 name: "append".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Closure { byte_offset: 0,
+                init: Some(Expr::Closure {
+                    byte_offset: 0,
                     func_id: 2,
                     params: Vec::new(),
                     return_type: Type::String,

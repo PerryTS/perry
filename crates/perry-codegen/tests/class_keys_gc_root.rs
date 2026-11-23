@@ -102,7 +102,8 @@ fn entry_opts() -> CompileOptions {
 }
 
 fn field(name: &str) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,

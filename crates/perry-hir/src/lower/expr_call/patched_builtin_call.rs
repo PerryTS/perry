@@ -75,7 +75,8 @@ pub(super) struct NamespaceGuard {
 impl NamespaceGuard {
     /// `NamespacePatched(ns) ? generic : fast`.
     pub(super) fn wrap(self, fast: Expr) -> Expr {
-        Expr::Conditional { byte_offset: 0 /*HPOS*/,
+        Expr::Conditional {
+            byte_offset: 0, /*HPOS*/
             condition: Box::new(Expr::NamespacePatched(self.ns)),
             then_expr: Box::new(self.generic),
             else_expr: Box::new(fast),

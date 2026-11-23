@@ -226,7 +226,9 @@ impl PrefixContainedParamUse {
             return;
         }
         match stmt {
-            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => self.walk_expr(expr),
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
+                self.walk_expr(expr)
+            }
             Stmt::Let {
                 init: Some(expr), ..
             } => self.walk_expr(expr),
@@ -288,7 +290,8 @@ impl PrefixContainedParamUse {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.walk_expr(discriminant);
                 for case in cases {

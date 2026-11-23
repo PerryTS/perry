@@ -13,7 +13,8 @@ const CALLBACK: u32 = 20;
 const CALLBACK_FUNC: u32 = 99;
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -34,7 +35,8 @@ fn callback_type() -> Type {
 }
 
 fn consume_function() -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 1,
         name: "consume".to_string(),
         type_params: Vec::new(),
@@ -79,7 +81,8 @@ fn outer_function(direct_literal: bool) -> Function {
         type_args: Vec::new(),
         byte_offset: 0,
     }));
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 3,
         name: "outer".to_string(),
         type_params: Vec::new(),
@@ -110,7 +113,8 @@ fn callback_body() -> Vec<Stmt> {
 }
 
 fn callback_with(func_id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id,
         params,
         return_type: Type::Void,
@@ -146,10 +150,12 @@ fn versioned_callback(func_id: u32) -> Expr {
         ],
         vec![Stmt::Expr(Expr::LocalSet(
             COUNT,
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(COUNT)),
-                right: Box::new(Expr::Binary { byte_offset: 0,
+                right: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(property(POS, "x")),
                     right: Box::new(property(VEL, "vx")),
@@ -627,7 +633,8 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
         vec![param(30, "value", Type::Any)],
         vec![Stmt::Expr(Expr::LocalSet(
             COUNT,
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(COUNT)),
                 right: Box::new(Expr::LocalGet(30)),
@@ -720,12 +727,14 @@ fn captured_scope_callee_resolution_uses_a_decoded_base() {
             mutable: true,
             init: Some(Expr::LocalGet(2)),
         },
-        Stmt::Expr(Expr::Closure { byte_offset: 0,
+        Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: CALLBACK_FUNC,
             params: Vec::new(),
             return_type: Type::Void,
             body: vec![Stmt::While {
-                condition: Expr::Compare { byte_offset: 0,
+                condition: Expr::Compare {
+                    byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(COUNT)),
                     right: Box::new(Expr::Integer(3)),

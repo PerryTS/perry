@@ -1066,7 +1066,8 @@ fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => free(condition, keys) && free(then_expr, keys) && free(else_expr, keys),
             Expr::Unary {
                 op: perry_hir::UnaryOp::Not,
@@ -1077,7 +1078,8 @@ fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
             Expr::Compare {
                 op: perry_hir::CompareOp::Eq | perry_hir::CompareOp::Ne,
                 left,
-                right, ..
+                right,
+                ..
             } => free(left, keys) && free(right, keys),
             _ => false,
         }

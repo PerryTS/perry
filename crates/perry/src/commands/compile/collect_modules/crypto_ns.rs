@@ -106,7 +106,8 @@ fn stmt_uses_global_crypto_namespace(stmt: &Stmt) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             expr_uses_global_crypto_namespace(discriminant)
                 || cases.iter().any(|case| {

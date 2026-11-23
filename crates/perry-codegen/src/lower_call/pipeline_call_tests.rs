@@ -5,7 +5,8 @@ use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -17,7 +18,8 @@ fn param(id: u32, name: &str) -> Param {
 }
 
 fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -54,13 +56,16 @@ fn alias_call_ir(mutable: bool) -> String {
                 mutable,
                 init: Some(Expr::FuncRef(1)),
             },
-            Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::LocalGet(20)),
-                args: vec![Expr::Number(7.0)],
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }), 0),
+            Stmt::Return(
+                Some(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::LocalGet(20)),
+                    args: vec![Expr::Number(7.0)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+                0,
+            ),
         ],
     );
     let mut module = Module::new("pipeline_call_test.ts");

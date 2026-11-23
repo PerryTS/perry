@@ -313,7 +313,8 @@ impl Callers {
                     *func_id,
                     *is_async || *is_generator,
                 ));
-                c.closures.push(perry_hir::Function { byte_offset: *byte_offset,
+                c.closures.push(perry_hir::Function {
+                    byte_offset: *byte_offset,
                     id: *func_id,
                     name: format!("closure#{func_id}"),
                     type_params: Vec::new(),

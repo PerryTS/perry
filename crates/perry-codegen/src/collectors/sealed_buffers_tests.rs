@@ -62,7 +62,8 @@ fn prop(recv: u32, name: &str) -> Expr {
 }
 
 fn param(id: u32) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Any,
@@ -74,7 +75,8 @@ fn param(id: u32) -> Param {
 }
 
 fn func(id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: format!("f{id}"),
         type_params: vec![],
@@ -178,7 +180,8 @@ fn a_key_that_may_be_a_string_exposes_the_receiver() {
             Stmt::Expr(get(10, Expr::LocalGet(12))),
             Stmt::Expr(get(
                 11,
-                Expr::Binary { byte_offset: 0,
+                Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(13)),
                     right: Box::new(Expr::Integer(1)),
@@ -341,7 +344,8 @@ fn a_canonical_numeric_string_key_is_an_element_key() {
 fn an_exposure_in_a_closure_or_another_function_is_remote() {
     // const a = ...; a.buffer;           (own body: late)
     // const b = ...; () => b.buffer;     (closure: remote)
-    let closure = Expr::Closure { byte_offset: 0,
+    let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 99,
         params: vec![],
         return_type: Type::Any,
@@ -395,7 +399,8 @@ fn the_statement_probe_flags_every_exposing_use() {
 fn a_direct_call_key_is_never_a_string_only_if_every_return_is() {
     // f(i) { return i | 0; }  g(i) { return "buffer"; }  h(i) { return h(i); }
     // a[f(1)];  b[g(1)];  c[h(1)];  d[k(1)] where k is not a module function.
-    let or0 = |id: u32| Expr::Binary { byte_offset: 0,
+    let or0 = |id: u32| Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitOr,
         left: Box::new(Expr::LocalGet(id)),
         right: Box::new(Expr::Integer(0)),

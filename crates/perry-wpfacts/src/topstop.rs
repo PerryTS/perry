@@ -140,7 +140,9 @@ impl StopTop {
                         'A' => 2,
                         'M' => 4,
                         _ => {
-                            eprintln!("PERRY_FACTS_STOP_ON_TOP_CLASS: letters S, A, M only (got {v:?})");
+                            eprintln!(
+                                "PERRY_FACTS_STOP_ON_TOP_CLASS: letters S, A, M only (got {v:?})"
+                            );
                             std::process::exit(2);
                         }
                     };
@@ -194,7 +196,12 @@ impl StopTop {
 
     /// The shared operation of `key` (made at its first request), with the
     /// caller `p` added.
-    pub(crate) fn shared_call(&mut self, key: (Tok, crate::model::Protocol), what: impl FnOnce() -> String, p: (u32, u32)) -> u32 {
+    pub(crate) fn shared_call(
+        &mut self,
+        key: (Tok, crate::model::Protocol),
+        what: impl FnOnce() -> String,
+        p: (u32, u32),
+    ) -> u32 {
         let id = match self.shared_key.get(&key) {
             Some(&id) => id,
             None => {
@@ -251,7 +258,9 @@ pub(crate) fn expr_offset(e: &perry_hir::Expr) -> Option<u32> {
 impl Model {
     /// The solver context running now (census of position-less operations).
     pub(crate) fn pos_ctx(&self) -> &'static str {
-        let Some(s) = self.stop_top.as_ref() else { return "" };
+        let Some(s) = self.stop_top.as_ref() else {
+            return "";
+        };
         if self.rel_phase == b'G' && s.rule.is_none() {
             "generation"
         } else if s.rule.is_some() {
@@ -292,7 +301,11 @@ impl Model {
                     _ => "other-inherited",
                 }
             } else {
-                if s.rule.is_none() && s.gen_pos == NOPOS && !s.gen_kind.is_empty() && !kind.starts_with("edge") {
+                if s.rule.is_none()
+                    && s.gen_pos == NOPOS
+                    && !s.gen_kind.is_empty()
+                    && !kind.starts_with("edge")
+                {
                     *s.gen_gap.entry(s.gen_kind).or_default() += 1;
                 }
                 kind
@@ -374,7 +387,11 @@ impl Model {
         for (a, nd) in self.nodes.iter().enumerate() {
             if nd.succ.contains(&n) {
                 k += 1;
-                let p = s.edge_pos.get(&((a as u64) << 32 | n as u64)).copied().unwrap_or(NOPOS);
+                let p = s
+                    .edge_pos
+                    .get(&((a as u64) << 32 | n as u64))
+                    .copied()
+                    .unwrap_or(NOPOS);
                 if !ps.contains(&p) {
                     ps.push(p);
                 }
@@ -383,9 +400,16 @@ impl Model {
         if k == 0 {
             return;
         }
-        b.push_str(&format!("  fed by:  {k} copy edges into node {n}, {} positions\n", ps.len()));
+        b.push_str(&format!(
+            "  fed by:  {k} copy edges into node {n}, {} positions\n",
+            ps.len()
+        ));
         for &p in ps.iter().take(5) {
-            b.push_str(&format!("  edge:    {}  {}\n", self.pos_text(p), self.source_line(p).unwrap_or_default()));
+            b.push_str(&format!(
+                "  edge:    {}  {}\n",
+                self.pos_text(p),
+                self.source_line(p).unwrap_or_default()
+            ));
         }
         if ps.len() > 5 {
             b.push_str(&format!("  edge:    ... {} more\n", ps.len() - 5));
@@ -400,7 +424,11 @@ impl Model {
             return;
         };
         // A ⊤ holder (`TOPVAL`, `top_val`) is no program value.
-        if s.done || n == self.top_tok_node || self.labels[n as usize] == "TOPVAL" || s.topvals.contains_key(&n) {
+        if s.done
+            || n == self.top_tok_node
+            || self.labels[n as usize] == "TOPVAL"
+            || s.topvals.contains_key(&n)
+        {
             return;
         }
         let src = self.cur_src;
@@ -411,7 +439,11 @@ impl Model {
         // The rule that runs, also when its body sends from another node.
         let rule_any = s.rule;
         let esc = s.esc.last().copied();
-        let wtext = if why != u32::MAX { Some(self.reason_text(why)) } else { s.why.clone() };
+        let wtext = if why != u32::MAX {
+            Some(self.reason_text(why))
+        } else {
+            s.why.clone()
+        };
         // (class, rule name, trigger)
         let (class, rule_name, trigger): (u8, String, Option<String>) =
             if src_ok && (src == self.top_tok_node || s.topvals.contains_key(&src)) {
@@ -447,7 +479,11 @@ impl Model {
                     None => w,
                 };
                 if src_top {
-                    (2, w, Some(format!("already unknown: {}", self.node_words(src))))
+                    (
+                        2,
+                        w,
+                        Some(format!("already unknown: {}", self.node_words(src))),
+                    )
                 } else {
                     (1, w, None)
                 }
@@ -488,7 +524,11 @@ impl Model {
         s.done = true;
         let capture = s.capture;
         let mut b = String::new();
-        let cl = if class == 1 { "S (seed)" } else { "A (amplifier)" };
+        let cl = if class == 1 {
+            "S (seed)"
+        } else {
+            "A (amplifier)"
+        };
         b.push_str(&format!(
             "TOP CREATED #{} class={cl}\n  rule:    {rule_name}\n  solver:  {}:{}\n",
             self.stop_top.as_ref().unwrap().seen,
@@ -551,8 +591,18 @@ impl Model {
             return;
         }
         if let Some(s) = self.stop_top.as_ref() {
-            let mut v: Vec<_> = s.nopos.iter().map(|(&(l, kd, c), &k)| (kd == "edge", k, l.file(), l.line(), kd, c)).collect();
-            v.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)).then(a.2.cmp(b.2)).then(a.3.cmp(&b.3)).then(a.5.cmp(b.5)));
+            let mut v: Vec<_> = s
+                .nopos
+                .iter()
+                .map(|(&(l, kd, c), &k)| (kd == "edge", k, l.file(), l.line(), kd, c))
+                .collect();
+            v.sort_by(|a, b| {
+                a.0.cmp(&b.0)
+                    .then(b.1.cmp(&a.1))
+                    .then(a.2.cmp(b.2))
+                    .then(a.3.cmp(&b.3))
+                    .then(a.5.cmp(b.5))
+            });
             let (mut ops, mut edges, mut inh) = (0u64, 0u64, 0u64);
             for (e, k, f, l, kd, c) in v {
                 if kd.ends_with("-inherited") {
@@ -594,7 +644,11 @@ impl Model {
         let Some(s) = self.stop_top.as_ref() else {
             return NOPOS;
         };
-        let f = self.node_fn.get(n as usize).copied().unwrap_or(crate::model::NO_FN);
+        let f = self
+            .node_fn
+            .get(n as usize)
+            .copied()
+            .unwrap_or(crate::model::NO_FN);
         if f != crate::model::NO_FN {
             let fi = &self.funcs[f as usize];
             if fi.this == n || fi.ret == n {
@@ -673,9 +727,20 @@ impl Model {
             "node {n} `{label}` ({}), from {}{}; holds [{}]{}",
             self.node_words_short(n),
             self.pos_text(p),
-            if steps.is_empty() { String::new() } else { format!(" (made by the solver, {} steps from a program node)", steps.len()) },
+            if steps.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " (made by the solver, {} steps from a program node)",
+                    steps.len()
+                )
+            },
             held.join("; "),
-            if prim != 0 { format!(" + primitives {prim:#x}") } else { String::new() }
+            if prim != 0 {
+                format!(" + primitives {prim:#x}")
+            } else {
+                String::new()
+            }
         )
     }
 
@@ -693,8 +758,16 @@ impl Model {
         match &self.toks[t as usize] {
             K::Top => "⊤ (unknown)".into(),
             K::Func(f, _) => {
-                let p = self.stop_top.as_ref().and_then(|s| s.fn_pos.get(f).copied()).unwrap_or(NOPOS);
-                format!("function `{}` at {}", self.funcs[*f as usize].name, self.pos_text(p))
+                let p = self
+                    .stop_top
+                    .as_ref()
+                    .and_then(|s| s.fn_pos.get(f).copied())
+                    .unwrap_or(NOPOS);
+                format!(
+                    "function `{}` at {}",
+                    self.funcs[*f as usize].name,
+                    self.pos_text(p)
+                )
             }
             K::ClassObj(tm) => format!("class {}", self.tmpls[*tm as usize].display),
             K::Proto(tm) => format!("prototype of class {}", self.tmpls[*tm as usize].display),
@@ -709,7 +782,10 @@ impl Model {
             }
             K::Obj(tm, _) => format!("object {}", self.tmpls[*tm as usize].display),
             K::Builtin(b) => format!("builtin {b:?}"),
-            K::BuiltinFn(_) => format!("builtin function {}", self.tok_name(t).trim_start_matches("builtin-fn:")),
+            K::BuiltinFn(_) => format!(
+                "builtin function {}",
+                self.tok_name(t).trim_start_matches("builtin-fn:")
+            ),
             K::ObjectProto => "Object.prototype".into(),
             _ => self.tok_name(t),
         }
@@ -717,7 +793,12 @@ impl Model {
 
     /// Class M: a marker that reads as ⊤ is made (`what`: the rule), or a
     /// token is marked escaped so that beside ⊤ it is that ⊤.
-    pub(crate) fn top_marker_created(&mut self, t: Tok, what: &str, at: &'static Location<'static>) {
+    pub(crate) fn top_marker_created(
+        &mut self,
+        t: Tok,
+        what: &str,
+        at: &'static Location<'static>,
+    ) {
         let Some(s) = self.stop_top.as_mut() else {
             return;
         };
@@ -739,9 +820,23 @@ impl Model {
         // Where: a parameter marker's function; else the node the running
         // rule (or the escape in progress) works on.
         if let Some(&(f, i)) = self.param_marker.get(&t) {
-            let pn = self.funcs[f as usize].params.get(i as usize).copied().unwrap_or(NO_NODE);
-            let p = self.stop_top.as_ref().unwrap().node_pos.get(pn as usize).copied().unwrap_or(NOPOS);
-            b.push_str(&format!("  param:   {} (the parameter's declaration)\n", self.pos_text(p)));
+            let pn = self.funcs[f as usize]
+                .params
+                .get(i as usize)
+                .copied()
+                .unwrap_or(NO_NODE);
+            let p = self
+                .stop_top
+                .as_ref()
+                .unwrap()
+                .node_pos
+                .get(pn as usize)
+                .copied()
+                .unwrap_or(NOPOS);
+            b.push_str(&format!(
+                "  param:   {} (the parameter's declaration)\n",
+                self.pos_text(p)
+            ));
         }
         let mut inputs: Vec<NodeId> = Vec::new();
         if let Some((rn, _)) = rule {
@@ -757,7 +852,10 @@ impl Model {
                 inputs.push(sink);
             }
         }
-        if inputs.is_empty() && self.cur_src != NO_NODE && (self.cur_src as usize) < self.nodes.len() {
+        if inputs.is_empty()
+            && self.cur_src != NO_NODE
+            && (self.cur_src as usize) < self.nodes.len()
+        {
             inputs.push(self.cur_src);
         }
         let op_pos = self.stop_top.as_ref().unwrap().cur_pos();
@@ -785,12 +883,19 @@ impl Model {
         if p.0 == SHARED {
             return format!("shared operation #{}: {}", p.1, s.shared[p.1 as usize].0);
         }
-        let path = s.paths.get(p.0 as usize).cloned().unwrap_or_else(|| format!("module#{}", p.0));
+        let path = s
+            .paths
+            .get(p.0 as usize)
+            .cloned()
+            .unwrap_or_else(|| format!("module#{}", p.0));
         match std::fs::read(&path) {
             Ok(src) => {
                 let o = (p.1 as usize).min(src.len());
                 let line = 1 + src[..o].iter().filter(|&&c| c == b'\n').count();
-                let ls = src[..o].iter().rposition(|&c| c == b'\n').map_or(0, |i| i + 1);
+                let ls = src[..o]
+                    .iter()
+                    .rposition(|&c| c == b'\n')
+                    .map_or(0, |i| i + 1);
                 format!("{path}:{line}:{}", 1 + o - ls)
             }
             Err(_) => format!("{path} @byte {}", p.1),
@@ -804,8 +909,14 @@ impl Model {
         }
         let src = std::fs::read(s.paths.get(p.0 as usize)?).ok()?;
         let o = (p.1 as usize).min(src.len());
-        let ls = src[..o].iter().rposition(|&c| c == b'\n').map_or(0, |i| i + 1);
-        let le = src[o..].iter().position(|&c| c == b'\n').map_or(src.len(), |i| o + i);
+        let ls = src[..o]
+            .iter()
+            .rposition(|&c| c == b'\n')
+            .map_or(0, |i| i + 1);
+        let le = src[o..]
+            .iter()
+            .position(|&c| c == b'\n')
+            .map_or(src.len(), |i| o + i);
         let t = String::from_utf8_lossy(&src[ls..le]).trim().to_string();
         Some(t.chars().take(160).collect())
     }
@@ -816,7 +927,11 @@ impl Model {
             return "(none)".into();
         }
         let label = self.labels[n as usize];
-        let f = self.node_fn.get(n as usize).copied().unwrap_or(crate::model::NO_FN);
+        let f = self
+            .node_fn
+            .get(n as usize)
+            .copied()
+            .unwrap_or(crate::model::NO_FN);
         let fname = |f: crate::model::FnIdx| {
             let fi = &self.funcs[f as usize];
             let m = self
@@ -845,7 +960,11 @@ impl Model {
             return format!(
                 "result of call #{c} (args {}){}",
                 site.args.len(),
-                if f != crate::model::NO_FN { format!(" in function {}", fname(f)) } else { String::new() }
+                if f != crate::model::NO_FN {
+                    format!(" in function {}", fname(f))
+                } else {
+                    String::new()
+                }
             );
         }
         if let Some(c) = self.calls.iter().position(|c| c.region == n) {
@@ -863,7 +982,11 @@ impl Model {
             .collect();
         format!(
             "node {n} label `{label}`{}, holds [{}]",
-            if f != crate::model::NO_FN { format!(" in function {}", fname(f)) } else { String::new() },
+            if f != crate::model::NO_FN {
+                format!(" in function {}", fname(f))
+            } else {
+                String::new()
+            },
             pts.join(", ")
         )
     }

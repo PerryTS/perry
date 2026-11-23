@@ -733,7 +733,8 @@ fn record_payload_source(id: u32, init: &Expr) -> Option<(u32, &Expr)> {
     let Expr::Conditional {
         condition,
         then_expr,
-        else_expr, ..
+        else_expr,
+        ..
     } = value.as_ref()
     else {
         return None;
@@ -1102,7 +1103,8 @@ impl<'a> ArrayWalk<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.walk_expr(discriminant);
                 for case in cases {
@@ -1152,7 +1154,8 @@ impl<'a> ArrayWalk<'a> {
         let Some(Expr::Compare {
             op: perry_hir::CompareOp::Lt,
             left,
-            right, ..
+            right,
+            ..
         }) = condition
         else {
             return None;

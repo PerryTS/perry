@@ -32,7 +32,8 @@ fn point_class() -> Class {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField { byte_offset: 0,
+        fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "x".to_string(),
             key_expr: None,
@@ -62,7 +63,8 @@ fn point_class() -> Class {
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -81,7 +83,8 @@ fn split_module() -> Module {
     let mut module = bare_module("ic_fast_split.ts");
     module.classes = vec![point_class()];
     module.functions = (0..4000u32)
-        .map(|i| Function { byte_offset: 0,
+        .map(|i| Function {
+            byte_offset: 0,
             id: 10_000 + i,
             name: format!("pad{i}"),
             type_params: Vec::new(),
@@ -98,7 +101,8 @@ fn split_module() -> Module {
             was_unrolled: false,
         })
         .collect();
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -143,16 +147,19 @@ fn split_module() -> Module {
                     byte_offset: 0,
                 },
             ),
-            Stmt::Return(Some(Expr::Array(
-                vec![
-                    Expr::LocalGet(20),
-                    Expr::LocalGet(21),
-                    Expr::LocalGet(22),
-                    Expr::LocalGet(23),
-                    Expr::LocalGet(24),
-                ],
-                None,
-            )), 0),
+            Stmt::Return(
+                Some(Expr::Array(
+                    vec![
+                        Expr::LocalGet(20),
+                        Expr::LocalGet(21),
+                        Expr::LocalGet(22),
+                        Expr::LocalGet(23),
+                        Expr::LocalGet(24),
+                    ],
+                    None,
+                )),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,

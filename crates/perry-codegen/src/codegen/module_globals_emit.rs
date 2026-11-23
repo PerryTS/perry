@@ -817,7 +817,8 @@ mod tests {
         ));
 
         let mut function_module = Module::new("sab_function_shadow.ts");
-        function_module.functions.push(Function { byte_offset: 0,
+        function_module.functions.push(Function {
+            byte_offset: 0,
             id: 2,
             name: "SharedArrayBuffer".to_string(),
             type_params: Vec::new(),

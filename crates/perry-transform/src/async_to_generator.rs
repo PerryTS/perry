@@ -352,7 +352,8 @@ fn rewrite_async_closures_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             rewrite_async_closures_in_expr(discriminant, work, next_local_id, next_func_id);
             for case in cases.iter_mut() {
@@ -591,7 +592,8 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
                 )));
                 new_body.append(body);
                 let while_stmt = Stmt::While {
-                    condition: Expr::Logical { byte_offset: cond.byte_offset().unwrap_or(0),
+                    condition: Expr::Logical {
+                        byte_offset: cond.byte_offset().unwrap_or(0),
                         op: LogicalOp::Or,
                         left: Box::new(Expr::LocalGet(first)),
                         right: Box::new(cond),
@@ -705,7 +707,8 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             hoist_awaits_in_expr_full(discriminant, next_id, hoisted);
             for case in cases.iter_mut() {
@@ -1089,7 +1092,8 @@ fn lift_conditional_with_await_branches(
     if let Expr::Conditional {
         condition,
         then_expr,
-        else_expr, ..
+        else_expr,
+        ..
     } = owned
     {
         hoisted.push(Stmt::Let {
@@ -1147,7 +1151,13 @@ fn logical_rhs_contains_await(expr: &Expr) -> bool {
 fn lift_logical_with_await_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: &mut Vec<Stmt>) {
     let temp_id = alloc_local(next_id);
     let owned = std::mem::replace(expr, Expr::LocalGet(temp_id));
-    if let Expr::Logical { op, left, right, byte_offset } = owned {
+    if let Expr::Logical {
+        op,
+        left,
+        right,
+        byte_offset,
+    } = owned
+    {
         hoisted.push(Stmt::Let {
             id: temp_id,
             name: format!("__logic_await_{}", temp_id),
@@ -1169,7 +1179,8 @@ fn lift_logical_with_await_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: 
                 operand: Box::new(Expr::LocalGet(temp_id)),
             },
             LogicalOp::And => Expr::LocalGet(temp_id),
-            LogicalOp::Coalesce => Expr::Compare { byte_offset,
+            LogicalOp::Coalesce => Expr::Compare {
+                byte_offset,
                 op: CompareOp::LooseEq,
                 left: Box::new(Expr::LocalGet(temp_id)),
                 right: Box::new(Expr::Null),
@@ -1258,7 +1269,8 @@ fn rewrite_stmt(stmt: &mut Stmt, had_await: &mut bool) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             rewrite_expr(discriminant, had_await);
             for case in cases.iter_mut() {
@@ -1370,7 +1382,8 @@ fn strip_in_stmt(stmt: &mut Stmt, non_promise: &mut HashSet<LocalId>) {
         Stmt::Labeled { body, .. } => strip_in_stmt(body, non_promise),
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             strip_in_expr(discriminant, non_promise);
             for case in cases {
@@ -1480,7 +1493,8 @@ fn rewrite_expr(expr: &mut Expr, had_await: &mut bool) {
         if let Expr::Await(inner, off) = std::mem::replace(expr, Expr::Undefined) {
             let mut inner = *inner;
             rewrite_expr(&mut inner, had_await);
-            *expr = Expr::Yield { byte_offset: off,
+            *expr = Expr::Yield {
+                byte_offset: off,
                 value: Some(Box::new(inner)),
                 delegate: false,
             };
@@ -1630,7 +1644,8 @@ fn scan_stmt_for_async_closures(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             scan_expr_for_async_closures(discriminant, found);
             for case in cases {
@@ -1730,7 +1745,8 @@ fn stmt_contains_await(stmt: &Stmt, found: &mut bool) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             expr_contains_await_shallow(discriminant, found)
                 || cases.iter().any(|c| body_contains_await(&c.body))

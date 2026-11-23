@@ -78,13 +78,15 @@ fn statement_expression_positions_preserve_lexical_bindings() {
                     body: leaf(),
                 }),
             },
-            Stmt::Try { byte_offset: 0,
+            Stmt::Try {
+                byte_offset: 0,
                 body: leaf(),
                 catch: None,
                 finally: None,
                 forof_completion: None,
             },
-            Stmt::Try { byte_offset: 0,
+            Stmt::Try {
+                byte_offset: 0,
                 body: vec![],
                 catch: Some(CatchClause {
                     param: None,
@@ -93,24 +95,28 @@ fn statement_expression_positions_preserve_lexical_bindings() {
                 finally: None,
                 forof_completion: None,
             },
-            Stmt::Try { byte_offset: 0,
+            Stmt::Try {
+                byte_offset: 0,
                 body: vec![],
                 catch: None,
                 finally: Some(leaf()),
                 forof_completion: None,
             },
-            Stmt::Switch { byte_offset: 0,
+            Stmt::Switch {
+                byte_offset: 0,
                 discriminant: expr.clone(),
                 cases: vec![],
             },
-            Stmt::Switch { byte_offset: 0,
+            Stmt::Switch {
+                byte_offset: 0,
                 discriminant: Expr::Number(0.0),
                 cases: vec![SwitchCase {
                     test: Some(expr.clone()),
                     body: vec![],
                 }],
             },
-            Stmt::Switch { byte_offset: 0,
+            Stmt::Switch {
+                byte_offset: 0,
                 discriminant: Expr::Number(0.0),
                 cases: vec![SwitchCase {
                     test: None,
@@ -165,7 +171,8 @@ fn statement_leaves_have_no_lexical_binding_dependency() {
 fn nested_closures_propagate_only_captured_bindings() {
     for captures_this in [false, true] {
         for captures_new_target in [false, true] {
-            let nested = Expr::Closure { byte_offset: 0,
+            let nested = Expr::Closure {
+                byte_offset: 0,
                 func_id: 99,
                 params: vec![],
                 return_type: Type::Any,

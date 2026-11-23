@@ -1331,7 +1331,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         name: format!("__reader_{}", reader_id),
                         ty: Type::Any,
                         mutable: false,
-                        init: Some(Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
+                        init: Some(Expr::NativeMethodCall {
+                            byte_offset: for_of_stmt.span.lo.0,
                             module: "readable_stream".to_string(),
                             class_name: Some("ReadableStream".to_string()),
                             object: Some(Box::new(stream_expr)),
@@ -1345,13 +1346,17 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     ctx.locals
                         .push((format!("__res_{}", res_id), res_id, Type::Any));
                     let read_call = || {
-                        Expr::Await(Box::new(Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
-                            module: "readable_stream_reader".to_string(),
-                            class_name: Some("ReadableStreamDefaultReader".to_string()),
-                            object: Some(Box::new(Expr::LocalGet(reader_id))),
-                            method: "read".to_string(),
-                            args: vec![],
-                        }), for_of_stmt.span.lo.0)
+                        Expr::Await(
+                            Box::new(Expr::NativeMethodCall {
+                                byte_offset: for_of_stmt.span.lo.0,
+                                module: "readable_stream_reader".to_string(),
+                                class_name: Some("ReadableStreamDefaultReader".to_string()),
+                                object: Some(Box::new(Expr::LocalGet(reader_id))),
+                                method: "read".to_string(),
+                                args: vec![],
+                            }),
+                            for_of_stmt.span.lo.0,
+                        )
                     };
                     result.push(Stmt::Let {
                         id: res_id,
@@ -1415,7 +1420,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
 
                     // reader.releaseLock(); — best-effort cleanup so the
                     // stream stays usable after the loop body falls out.
-                    result.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
+                    result.push(Stmt::Expr(Expr::NativeMethodCall {
+                        byte_offset: for_of_stmt.span.lo.0,
                         module: "readable_stream_reader".to_string(),
                         class_name: Some("ReadableStreamDefaultReader".to_string()),
                         object: Some(Box::new(Expr::LocalGet(reader_id))),
@@ -1546,7 +1552,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         byte_offset: for_of_stmt.span.lo.0,
                     }
                 } else if is_readline_interface_for_await {
-                    Expr::NativeMethodCall { byte_offset: for_of_stmt.span.lo.0,
+                    Expr::NativeMethodCall {
+                        byte_offset: for_of_stmt.span.lo.0,
                         module: "readline".to_string(),
                         class_name: Some("Interface".to_string()),
                         object: Some(Box::new(iter_expr_raw)),
@@ -1706,7 +1713,13 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                             user_body,
                         ));
                     }
-                    result.extend(lazy_iter_for_stmts(ctx, iter_id, result_id, loop_body, for_of_stmt.span.lo.0));
+                    result.extend(lazy_iter_for_stmts(
+                        ctx,
+                        iter_id,
+                        result_id,
+                        loop_body,
+                        for_of_stmt.span.lo.0,
+                    ));
                 }
 
                 ctx.pop_block_scope(scope_mark);
@@ -2312,21 +2325,21 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // `delete` (which compacts the entries array) can't skip an entry
             // (#6075). Array/String/iterator paths keep `idx < length`.
             let condition = if map_kv_fastpath || set_fastpath {
-                let (init_lets, cond, prefix) =
-                    crate::lower::map_set_delete_safe_for_of(
-                        ctx,
-                        arr_id,
-                        idx_id,
-                        set_fastpath,
-                        for_of_stmt.span.lo.0,
-                    );
+                let (init_lets, cond, prefix) = crate::lower::map_set_delete_safe_for_of(
+                    ctx,
+                    arr_id,
+                    idx_id,
+                    set_fastpath,
+                    for_of_stmt.span.lo.0,
+                );
                 result.extend(init_lets);
                 let mut body = prefix;
                 body.append(&mut loop_body);
                 loop_body = body;
                 cond
             } else {
-                Expr::Compare { byte_offset: for_of_stmt.span.lo.0,
+                Expr::Compare {
+                    byte_offset: for_of_stmt.span.lo.0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::PropertyGet {
@@ -2407,7 +2420,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 name: format!("__n_{}", len_id),
                 ty: Type::Number,
                 mutable: false,
-                init: Some(Expr::Binary { byte_offset: for_in_stmt.span.lo.0,
+                init: Some(Expr::Binary {
+                    byte_offset: for_in_stmt.span.lo.0,
                     op: crate::ir::BinaryOp::BitAnd,
                     left: Box::new(Expr::PropertyGet {
                         byte_end: 0,
@@ -2449,7 +2463,8 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare { byte_offset: for_in_stmt.span.lo.0,
+                condition: Some(Expr::Compare {
+                    byte_offset: for_in_stmt.span.lo.0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::LocalGet(len_id)),

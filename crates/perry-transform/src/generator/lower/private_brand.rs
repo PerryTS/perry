@@ -267,7 +267,8 @@ mod tests {
     use super::*;
 
     fn closure(is_arrow: bool, body: Vec<Stmt>) -> Expr {
-        Expr::Closure { byte_offset: 0,
+        Expr::Closure {
+            byte_offset: 0,
             func_id: 40,
             params: vec![],
             return_type: Type::Any,
@@ -435,13 +436,15 @@ mod tests {
     #[test]
     fn private_generator_continuations_restore_captured_environment() {
         for is_async in [false, true] {
-            let mut function = Function { byte_offset: 0,
+            let mut function = Function {
+                byte_offset: 0,
                 id: 1,
                 name: "gen".into(),
                 type_params: vec![],
                 params: vec![],
                 return_type: Type::Any,
-                body: vec![Stmt::Expr(Expr::Yield { byte_offset: 0,
+                body: vec![Stmt::Expr(Expr::Yield {
+                    byte_offset: 0,
                     delegate: false,
                     value: Some(Box::new(Expr::PrivateGuard {
                         class_name: "C".into(),

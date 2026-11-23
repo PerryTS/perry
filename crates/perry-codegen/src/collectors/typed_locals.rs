@@ -99,7 +99,9 @@ fn decided(cond: &Expr, proofs: &HashMap<u32, HirType>) -> Option<bool> {
             op: UnaryOp::Not,
             operand,
         } => decided(operand, proofs).map(|b| !b),
-        Expr::Logical { op, left, right, .. } => {
+        Expr::Logical {
+            op, left, right, ..
+        } => {
             let (l, r) = (decided(left, proofs), decided(right, proofs));
             match op {
                 LogicalOp::And => match (l, r) {
@@ -115,7 +117,9 @@ fn decided(cond: &Expr, proofs: &HashMap<u32, HirType>) -> Option<bool> {
                 _ => None,
             }
         }
-        Expr::Compare { op, left, right, .. } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             let eq = match op {
                 CompareOp::Eq | CompareOp::LooseEq => true,
                 CompareOp::Ne | CompareOp::LooseNe => false,
@@ -383,7 +387,9 @@ impl Env<'_> {
             Expr::LocalGet(id) => self.local(*id),
             Expr::LocalSet(_, v) => rec(v),
             Expr::Sequence(v) => v.last().and_then(rec),
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let (l, r) = (rec(left), rec(right));
                 match op {
                     // `+` concatenates when either side is a String; two
@@ -579,7 +585,10 @@ pub(crate) fn int32_writer_range(expr: &Expr) -> Option<(i64, i64)> {
         }
         _ => {}
     }
-    let Expr::Binary { op, left, right, .. } = expr else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = expr
+    else {
         return None;
     };
     if *op == BinaryOp::BitAnd {

@@ -181,9 +181,11 @@ impl Shallow for Vec<Param> {
                     default,
                     decorators,
                     is_rest,
-                    arguments_object, ..
+                    arguments_object,
+                    ..
                 } = p;
-                Param { byte_offset: p.byte_offset,
+                Param {
+                    byte_offset: p.byte_offset,
                     id: *id,
                     name: name.clone(),
                     ty: ty.clone(),
@@ -258,7 +260,13 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             op: op.clone(),
             prefix: prefix.clone(),
         },
-        Expr::Binary { op, left, right, byte_offset } => Expr::Binary { byte_offset: *byte_offset,
+        Expr::Binary {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => Expr::Binary {
+            byte_offset: *byte_offset,
             op: op.clone(),
             left: Shallow::shallow(left, n),
             right: Shallow::shallow(right, n),
@@ -267,12 +275,24 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             op: op.clone(),
             operand: Shallow::shallow(operand, n),
         },
-        Expr::Compare { op, left, right, byte_offset } => Expr::Compare { byte_offset: *byte_offset,
+        Expr::Compare {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => Expr::Compare {
+            byte_offset: *byte_offset,
             op: op.clone(),
             left: Shallow::shallow(left, n),
             right: Shallow::shallow(right, n),
         },
-        Expr::Logical { op, left, right, byte_offset } => Expr::Logical { byte_offset: *byte_offset,
+        Expr::Logical {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => Expr::Logical {
+            byte_offset: *byte_offset,
             op: op.clone(),
             left: Shallow::shallow(left, n),
             right: Shallow::shallow(right, n),
@@ -320,8 +340,10 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             class_name,
             object,
             method,
-            args, byte_offset,
-        } => Expr::NativeMethodCall { byte_offset: *byte_offset,
+            args,
+            byte_offset,
+        } => Expr::NativeMethodCall {
+            byte_offset: *byte_offset,
             module: module.clone(),
             class_name: class_name.clone(),
             object: Shallow::shallow(object, n),
@@ -444,7 +466,8 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             then_expr,
             else_expr,
             byte_offset,
-        } => Expr::Conditional { byte_offset: *byte_offset,
+        } => Expr::Conditional {
+            byte_offset: *byte_offset,
             condition: Shallow::shallow(condition, n),
             then_expr: Shallow::shallow(then_expr, n),
             else_expr: Shallow::shallow(else_expr, n),
@@ -499,7 +522,12 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             object: Shallow::shallow(object, n),
         },
         Expr::Await(a0, off) => Expr::Await(Shallow::shallow(a0, n), *off),
-        Expr::Yield { value, delegate, byte_offset } => Expr::Yield { byte_offset: *byte_offset,
+        Expr::Yield {
+            value,
+            delegate,
+            byte_offset,
+        } => Expr::Yield {
+            byte_offset: *byte_offset,
             value: Shallow::shallow(value, n),
             delegate: delegate.clone(),
         },
@@ -577,7 +605,8 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             field_name,
             value,
             byte_offset,
-        } => Expr::StaticFieldSet { byte_offset: *byte_offset,
+        } => Expr::StaticFieldSet {
+            byte_offset: *byte_offset,
             class_name: class_name.clone(),
             field_name: field_name.clone(),
             value: Shallow::shallow(value, n),

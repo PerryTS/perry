@@ -28,7 +28,8 @@ fn an_instance_stored_into_another_object_is_a_filled_record() {
     let mut m = HirModule::new("m");
     m.init = vec![
         // `links[id] ?? (links[id] = new Links())`
-        Stmt::Expr(Expr::Logical { byte_offset: 0,
+        Stmt::Expr(Expr::Logical {
+            byte_offset: 0,
             op: perry_hir::LogicalOp::Coalesce,
             left: Box::new(Expr::IndexGet {
                 element_offset: 0,

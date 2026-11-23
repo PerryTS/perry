@@ -46,7 +46,8 @@ pub(super) fn lower_cond(ctx: &mut LoweringContext, cond: &ast::CondExpr) -> Res
     let then_expr = lower_expr(ctx, &cond.cons);
     let else_expr = lower_expr(ctx, &cond.alt);
     ctx.lowering_call_callee = prev_call_callee;
-    Ok(Expr::Conditional { byte_offset: cond.span.lo.0,
+    Ok(Expr::Conditional {
+        byte_offset: cond.span.lo.0,
         condition: Box::new(condition?),
         then_expr: Box::new(then_expr?),
         else_expr: Box::new(else_expr?),
@@ -350,7 +351,8 @@ pub(super) fn lower_tpl(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> Result<Exp
         let coerced = Expr::TemplateStringCoerce(Box::new(lowered));
         result = Some(match result.take() {
             None => coerced,
-            Some(prev) => Expr::Binary { byte_offset: tpl.span.lo.0,
+            Some(prev) => Expr::Binary {
+                byte_offset: tpl.span.lo.0,
                 op: BinaryOp::Add,
                 left: Box::new(prev),
                 right: Box::new(coerced),
@@ -361,7 +363,8 @@ pub(super) fn lower_tpl(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> Result<Exp
         if let Some(quasi) = tpl.quasis.get(i + 1) {
             let quasi_str: &str = quasi.raw.as_ref();
             if !quasi_str.is_empty() {
-                result = Some(Expr::Binary { byte_offset: tpl.span.lo.0,
+                result = Some(Expr::Binary {
+                    byte_offset: tpl.span.lo.0,
                     op: BinaryOp::Add,
                     left: Box::new(result.take().expect("substitution just set result")),
                     right: Box::new(Expr::String(unescape_template(quasi_str))),
@@ -418,8 +421,14 @@ pub(super) fn lower_meta_prop(
                 ("main".to_string(), Expr::Bool(ctx.is_entry_module)),
                 ("dirname".to_string(), Expr::String(dirname)),
                 ("filename".to_string(), Expr::String(filename)),
-                ("require".to_string(), import_meta_require_value(ctx, meta_prop.span.lo.0)),
-                ("resolve".to_string(), import_meta_resolve_value(ctx, meta_prop.span.lo.0)),
+                (
+                    "require".to_string(),
+                    import_meta_require_value(ctx, meta_prop.span.lo.0),
+                ),
+                (
+                    "resolve".to_string(),
+                    import_meta_resolve_value(ctx, meta_prop.span.lo.0),
+                ),
             ]))
         }
         ast::MetaPropKind::NewTarget => {
@@ -471,7 +480,8 @@ pub(crate) fn import_meta_require_value(ctx: &mut LoweringContext, byte_offset: 
 }
 
 pub(crate) fn import_meta_resolve_value(ctx: &LoweringContext, byte_offset: u32) -> Expr {
-    Expr::NativeMethodCall { byte_offset: byte_offset,
+    Expr::NativeMethodCall {
+        byte_offset: byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -518,7 +528,8 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext, y: &ast::YieldExpr) -> Resu
         Some(arg) => Some(Box::new(lower_expr(ctx, arg)?)),
         None => None,
     };
-    Ok(Expr::Yield { byte_offset: y.span.lo.0,
+    Ok(Expr::Yield {
+        byte_offset: y.span.lo.0,
         value,
         delegate: y.delegate,
     })

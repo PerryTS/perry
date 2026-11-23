@@ -107,7 +107,8 @@ impl DelegationRoute {
 const YIELD_RESULT_MARKER: &str = "__perry_generator_yield_inner_result";
 
 fn passthrough_yield(result_id: LocalId, kind_id: LocalId, byte_offset: u32) -> Expr {
-    Expr::Yield { byte_offset,
+    Expr::Yield {
+        byte_offset,
         value: Some(Box::new(Expr::Call {
             byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
@@ -177,21 +178,26 @@ fn delegate_result_object_check(result_id: LocalId, byte_offset: u32) -> Vec<Stm
     }
     // not Object  <=>  result === null
     //                  || (typeof result !== "object" && typeof result !== "function")
-    let not_object = Expr::Logical { byte_offset,
+    let not_object = Expr::Logical {
+        byte_offset,
         op: LogicalOp::Or,
-        left: Box::new(Expr::Compare { byte_offset,
+        left: Box::new(Expr::Compare {
+            byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(result_id)),
             right: Box::new(Expr::Null),
         }),
-        right: Box::new(Expr::Logical { byte_offset,
+        right: Box::new(Expr::Logical {
+            byte_offset,
             op: LogicalOp::And,
-            left: Box::new(Expr::Compare { byte_offset,
+            left: Box::new(Expr::Compare {
+                byte_offset,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(result_id)))),
                 right: Box::new(Expr::String("object".to_string())),
             }),
-            right: Box::new(Expr::Compare { byte_offset,
+            right: Box::new(Expr::Compare {
+                byte_offset,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(result_id)))),
                 right: Box::new(Expr::String("function".to_string())),
@@ -273,8 +279,10 @@ fn delegate_next_call(
             byte_offset,
         }
     };
-    Expr::Conditional { byte_offset: 0 /*HPOS*/,
-        condition: Box::new(Expr::Compare { byte_offset,
+    Expr::Conditional {
+        byte_offset: 0, /*HPOS*/
+        condition: Box::new(Expr::Compare {
+            byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(del_next_id)))),
             right: Box::new(Expr::String("function".to_string())),
@@ -298,7 +306,12 @@ fn delegate_next_call(
 /// A sync pull's step kind: 0 a raw yielded value, 1 a raw completion value
 /// (a fixed-state delegate stepped through its intrinsic `next`, read from its
 /// record), or 2 an inner result object. It reads one record control.
-fn delegate_kind_set(kind_id: LocalId, del_next_id: LocalId, del_iter_id: LocalId, byte_offset: u32) -> Stmt {
+fn delegate_kind_set(
+    kind_id: LocalId,
+    del_next_id: LocalId,
+    del_iter_id: LocalId,
+    byte_offset: u32,
+) -> Stmt {
     Stmt::Expr(Expr::LocalSet(
         kind_id,
         Box::new(Expr::Call {
@@ -376,12 +389,10 @@ fn emit_yield_star_loop(
     linearize_body(
         &[Stmt::Expr(Expr::LocalSet(
             del_result_id,
-            Box::new(delegate_await(delegate_next_call(
-                del_next_id,
-                del_iter_id,
-                Expr::Undefined,
+            Box::new(delegate_await(
+                delegate_next_call(del_next_id, del_iter_id, Expr::Undefined, byte_offset),
                 byte_offset,
-            ), byte_offset)),
+            )),
         ))],
         states,
         current,
@@ -392,7 +403,9 @@ fn emit_yield_star_loop(
         catches,
         finallys,
     );
-    current.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id, byte_offset)));
+    current.extend(
+        del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id, byte_offset)),
+    );
     // Async `yield *`: the awaited iter-result must be an Object or `next()`
     // throws a TypeError (test262 yield-star-next-non-object-ignores-then).
     current.extend(delegate_result_object_check(del_result_id, byte_offset));
@@ -400,7 +413,8 @@ fn emit_yield_star_loop(
     // #1832: in-loop pull forwards the outer resume value (`outer.next(v)` →
     // `sent_id`) into the delegated iterator's `next(v)`.
     let reyield = match del_kind_id {
-        None => Stmt::Expr(Expr::Yield { byte_offset,
+        None => Stmt::Expr(Expr::Yield {
+            byte_offset,
             value: Some(Box::new(Expr::PropertyGet {
                 byte_end: 0,
                 byte_offset: byte_offset,
@@ -423,15 +437,20 @@ fn emit_yield_star_loop(
         reyield,
         Stmt::Expr(Expr::LocalSet(
             del_result_id,
-            Box::new(delegate_await(delegate_next_call(
-                del_next_id,
-                del_iter_id,
-                Expr::LocalGet(sent_id),
+            Box::new(delegate_await(
+                delegate_next_call(
+                    del_next_id,
+                    del_iter_id,
+                    Expr::LocalGet(sent_id),
+                    byte_offset,
+                ),
                 byte_offset,
-            ), byte_offset)),
+            )),
         )),
     ];
-    while_body.extend(del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id, byte_offset)));
+    while_body.extend(
+        del_kind_id.map(|kind| delegate_kind_set(kind, del_next_id, del_iter_id, byte_offset)),
+    );
     // Same Object-check on the in-loop pull (async generators only).
     while_body.extend(delegate_result_object_check(del_result_id, byte_offset));
     let not_done = Expr::Unary {
@@ -448,7 +467,8 @@ fn emit_yield_star_loop(
         // a raw pull value is unfinished exactly when it was yielded.
         condition: match del_kind_id {
             None => not_done,
-            Some(kind) => Expr::Conditional { byte_offset: 0 /*HPOS*/,
+            Some(kind) => Expr::Conditional {
+                byte_offset: 0, /*HPOS*/
                 condition: Box::new(kind_is(kind, 2.0, byte_offset)),
                 then_expr: Box::new(not_done),
                 else_expr: Box::new(kind_is(kind, 0.0, byte_offset)),
@@ -510,7 +530,8 @@ fn emit_yield_star_loop(
         Box::new(match del_kind_id {
             None => inner_value,
             // A raw completion value is the delegate's return value itself.
-            Some(kind) => Expr::Conditional { byte_offset: 0 /*HPOS*/,
+            Some(kind) => Expr::Conditional {
+                byte_offset: 0, /*HPOS*/
                 condition: Box::new(kind_is(kind, 2.0, byte_offset)),
                 then_expr: Box::new(inner_value),
                 else_expr: Box::new(Expr::LocalGet(del_result_id)),
@@ -547,7 +568,11 @@ pub enum StateExit {
     /// consumer — the enclosing `.next()`/`.throw()` result Promise stays
     /// pending until a real consumer `Yield` or completion is reached. Only
     /// produced when linearizing an `async function*` body.
-    Await { value: Expr, next_state: u32, byte_offset: u32 },
+    Await {
+        value: Expr,
+        next_state: u32,
+        byte_offset: u32,
+    },
     /// Goto another state (non-yielding transition)
     Goto(u32),
     /// Function is done
@@ -699,9 +724,13 @@ pub fn linearize_body(
             // yield expr at statement level (non-delegate)
             Stmt::Expr(Expr::Yield {
                 value,
-                delegate: false, byte_offset, ..
+                delegate: false,
+                byte_offset,
+                ..
             })
-            | Stmt::Expr(Expr::Yield { value, byte_offset, .. }) => {
+            | Stmt::Expr(Expr::Yield {
+                value, byte_offset, ..
+            }) => {
                 let yield_val = value
                     .as_ref()
                     .map(|v| *v.clone())
@@ -715,7 +744,8 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Yield { byte_offset: *byte_offset,
+                    exit: StateExit::Yield {
+                        byte_offset: *byte_offset,
                         value: yield_val,
                         next_state: *state_num,
                         passthrough,
@@ -741,7 +771,8 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Await { byte_offset: *off,
+                    exit: StateExit::Await {
+                        byte_offset: *off,
                         value: await_val,
                         next_state: *state_num,
                     },
@@ -765,7 +796,8 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Await { byte_offset: *off,
+                    exit: StateExit::Await {
+                        byte_offset: *off,
                         value: await_val,
                         next_state: *state_num,
                     },
@@ -788,7 +820,8 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Await { byte_offset: *off,
+                    exit: StateExit::Await {
+                        byte_offset: *off,
                         value: await_val,
                         next_state: *state_num,
                     },
@@ -809,16 +842,17 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Await { byte_offset: *off,
+                    exit: StateExit::Await {
+                        byte_offset: *off,
                         value: await_val,
                         next_state: *state_num,
                     },
                 });
                 // `return await x` — the awaited value (__sent) is the return.
-                current.push(Stmt::Return(Some(make_iter_result(
-                    Expr::LocalGet(sent_id),
-                    true,
-                )), *roff));
+                current.push(Stmt::Return(
+                    Some(make_iter_result(Expr::LocalGet(sent_id), true)),
+                    *roff,
+                ));
                 let cont_state = *state_num;
                 *state_num += 1;
                 states.push(State {
@@ -834,7 +868,8 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Await { byte_offset: *off,
+                    exit: StateExit::Await {
+                        byte_offset: *off,
                         value: await_val,
                         next_state: *state_num,
                     },
@@ -855,11 +890,14 @@ pub fn linearize_body(
             // iterator, re-yielding each value through the iterator protocol),
             // then `return { value: <final>, done: true }` so the iterator's
             // completion value becomes the generator's return value.
-            Stmt::Return(Some(Expr::Yield {
-                value: Some(inner),
-                delegate: true,
-                byte_offset: ys_off,
-            }), roff) => {
+            Stmt::Return(
+                Some(Expr::Yield {
+                    value: Some(inner),
+                    delegate: true,
+                    byte_offset: ys_off,
+                }),
+                roff,
+            ) => {
                 let del_value_id = emit_yield_star_loop(
                     inner,
                     *ys_off,
@@ -877,10 +915,10 @@ pub fn linearize_body(
                 // as spec `IteratorValue`) is the value of `yield* inner`, which is
                 // exactly what `return yield* inner` returns. Wrap it as the
                 // generator's terminal {value, done:true} and flush a Done state.
-                current.push(Stmt::Return(Some(make_iter_result(
-                    Expr::LocalGet(del_value_id),
-                    true,
-                )), *roff));
+                current.push(Stmt::Return(
+                    Some(make_iter_result(Expr::LocalGet(del_value_id), true)),
+                    *roff,
+                ));
                 let cont_state = *state_num;
                 *state_num += 1;
                 states.push(State {
@@ -909,17 +947,18 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Yield { byte_offset: *byte_offset,
+                    exit: StateExit::Yield {
+                        byte_offset: *byte_offset,
                         value: yield_val,
                         next_state: *state_num,
                         passthrough: None,
                     },
                 });
                 // Continuation state: return { value: __sent, done: true }
-                current.push(Stmt::Return(Some(make_iter_result(
-                    Expr::LocalGet(sent_id),
-                    true,
-                )), *roff));
+                current.push(Stmt::Return(
+                    Some(make_iter_result(Expr::LocalGet(sent_id), true)),
+                    *roff,
+                ));
                 let cont_state = *state_num;
                 *state_num += 1;
                 states.push(State {
@@ -933,7 +972,10 @@ pub fn linearize_body(
             Stmt::Return(val, roff) => {
                 // Add the return with {value: expr, done: true} wrapping
                 let return_val = val.clone().unwrap_or(Expr::Undefined);
-                current.push(Stmt::Return(Some(make_iter_result(return_val, true)), *roff));
+                current.push(Stmt::Return(
+                    Some(make_iter_result(return_val, true)),
+                    *roff,
+                ));
                 // Flush current as a terminal state
                 let this_state = *state_num;
                 *state_num += 1;
@@ -1018,7 +1060,8 @@ pub fn linearize_body(
                 )));
                 while_body.extend(body.iter().cloned());
                 let while_stmt = Stmt::While {
-                    condition: Expr::Logical { byte_offset: condition.byte_offset().unwrap_or(0),
+                    condition: Expr::Logical {
+                        byte_offset: condition.byte_offset().unwrap_or(0),
                         op: LogicalOp::Or,
                         left: Box::new(Expr::LocalGet(first_id)),
                         right: Box::new(condition.clone()),
@@ -1820,7 +1863,10 @@ pub fn linearize_body(
             // which is stored in __sent by the next() closure preamble.
             Stmt::Let {
                 id,
-                init: Some(Expr::Yield { value, byte_offset, .. }),
+                init:
+                    Some(Expr::Yield {
+                        value, byte_offset, ..
+                    }),
                 mutable,
                 ty,
                 name,
@@ -1834,7 +1880,8 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Yield { byte_offset: *byte_offset,
+                    exit: StateExit::Yield {
+                        byte_offset: *byte_offset,
                         value: yield_val,
                         next_state: *state_num,
                         passthrough: None,
@@ -1880,7 +1927,8 @@ pub fn linearize_body(
                 )));
                 while_body.extend(body.iter().cloned());
                 let while_stmt = Stmt::While {
-                    condition: Expr::Logical { byte_offset: condition.byte_offset().unwrap_or(0),
+                    condition: Expr::Logical {
+                        byte_offset: condition.byte_offset().unwrap_or(0),
                         op: LogicalOp::Or,
                         left: Box::new(Expr::LocalGet(first_id)),
                         right: Box::new(condition.clone()),

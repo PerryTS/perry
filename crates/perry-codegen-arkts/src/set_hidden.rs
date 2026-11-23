@@ -99,7 +99,8 @@ pub(crate) fn rewrite_set_hidden_in_expr(
                         Expr::Integer(n) => Expr::Bool(*n != 0),
                         other => other.clone(),
                     };
-                    *e = Expr::NativeMethodCall { byte_offset: *byte_offset,
+                    *e = Expr::NativeMethodCall {
+                        byte_offset: *byte_offset,
                         module: "perry/arkts".to_string(),
                         class_name: None,
                         object: None,
@@ -137,7 +138,8 @@ pub(crate) fn rewrite_set_hidden_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             rewrite_set_hidden_in_expr(condition, bindings);
             rewrite_set_hidden_in_expr(then_expr, bindings);
@@ -269,7 +271,8 @@ pub(crate) fn rewrite_set_hidden_in_closures_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             rewrite_set_hidden_in_closures_in_expr(condition, bindings);
             rewrite_set_hidden_in_closures_in_expr(then_expr, bindings);

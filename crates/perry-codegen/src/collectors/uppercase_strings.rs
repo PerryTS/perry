@@ -353,7 +353,8 @@ fn check_uses_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             check_uses_in_expr(
                 discriminant,

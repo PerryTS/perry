@@ -5,7 +5,8 @@ use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,
@@ -19,7 +20,8 @@ fn param(id: u32, name: &str) -> Param {
 /// `function f(a, k, x) { return <body>; }` with untyped parameters.
 fn function_ir(body: Expr) -> String {
     let mut m = Module::new("untyped_dispatch");
-    m.functions.push(Function { byte_offset: 0,
+    m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "f".into(),
         type_params: vec![],

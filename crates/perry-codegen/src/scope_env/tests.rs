@@ -22,7 +22,8 @@ fn mutating_closure(func_id: u32, ids: &[u32]) -> Expr {
         .map(|&id| {
             Stmt::Expr(Expr::LocalSet(
                 id,
-                Box::new(Expr::Binary { byte_offset: 0,
+                Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: perry_hir::BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(id)),
                     right: Box::new(Expr::Number(1.0)),
@@ -31,7 +32,8 @@ fn mutating_closure(func_id: u32, ids: &[u32]) -> Expr {
         })
         .collect();
     body.push(Stmt::Return(ids.last().map(|id| Expr::LocalGet(*id)), 0));
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -49,7 +51,8 @@ fn mutating_closure(func_id: u32, ids: &[u32]) -> Expr {
 }
 
 fn function(id: u32, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: format!("probe{id}"),
         type_params: Vec::new(),
@@ -190,7 +193,8 @@ fn the_map_follows_the_group_statements() {
 /// #4926 / #11771 shape: case 2 is in `v7`'s scope, but entering at case 2
 /// skips case 1's `let`, so the home never ran there.
 fn switch_read_from_next_case(case1: Vec<Stmt>) -> Vec<Stmt> {
-    vec![Stmt::Switch { byte_offset: 0,
+    vec![Stmt::Switch {
+        byte_offset: 0,
         discriminant: Expr::Number(2.0),
         cases: vec![
             perry_hir::SwitchCase {
@@ -199,9 +203,10 @@ fn switch_read_from_next_case(case1: Vec<Stmt>) -> Vec<Stmt> {
             },
             perry_hir::SwitchCase {
                 test: Some(Expr::Number(2.0)),
-                body: vec![Stmt::Return(Some(Expr::TypeOf(Box::new(Expr::LocalGet(
-                    7,
-                )))), 0)],
+                body: vec![Stmt::Return(
+                    Some(Expr::TypeOf(Box::new(Expr::LocalGet(7)))),
+                    0,
+                )],
             },
         ],
     }]
@@ -391,7 +396,8 @@ fn writes_before_every_capture_need_no_cell() {
     let early_writes = vec![
         let_num(1, 0.0),
         Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Number(5.0)))),
-        Stmt::Expr(Expr::Closure { byte_offset: 0,
+        Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 100,
             params: Vec::new(),
             return_type: Type::Any,

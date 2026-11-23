@@ -9,7 +9,8 @@ use super::*;
 // The minimal shape the collect scan matches: `async () => { await 1 }`
 // — `Expr::Closure { is_async, !is_generator }` whose body has an Await.
 fn async_closure_with_await(func_id: perry_hir::types::FuncId) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -27,7 +28,8 @@ fn async_closure_with_await(func_id: perry_hir::types::FuncId) -> Expr {
 }
 
 fn empty_fn(id: perry_hir::types::FuncId, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: String::new(),
         type_params: Vec::new(),
@@ -76,7 +78,8 @@ fn empty_class(name: &str) -> Class {
 }
 
 fn field_with_init(name: &str, init: Expr) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -164,7 +167,8 @@ fn await_(inner: Expr) -> Expr {
 
 /// An async arrow whose body is `stmts`, at `func_id`.
 fn async_closure_body(func_id: perry_hir::types::FuncId, stmts: Vec<Stmt>) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -187,7 +191,8 @@ fn async_closure_await_in_every_position_is_rewritten() {
     let cases: Vec<(&str, Vec<Stmt>)> = vec![
         (
             "ternary-then",
-            vec![Stmt::Expr(Expr::Conditional { byte_offset: 0,
+            vec![Stmt::Expr(Expr::Conditional {
+                byte_offset: 0,
                 condition: Box::new(Expr::Bool(true)),
                 then_expr: Box::new(await_(Expr::Integer(1))),
                 else_expr: Box::new(Expr::Integer(0)),
@@ -195,7 +200,8 @@ fn async_closure_await_in_every_position_is_rewritten() {
         ),
         (
             "logical-and-rhs",
-            vec![Stmt::Expr(Expr::Logical { byte_offset: 0,
+            vec![Stmt::Expr(Expr::Logical {
+                byte_offset: 0,
                 op: LogicalOp::And,
                 left: Box::new(Expr::Bool(true)),
                 right: Box::new(await_(Expr::Integer(1))),
@@ -203,7 +209,8 @@ fn async_closure_await_in_every_position_is_rewritten() {
         ),
         (
             "logical-coalesce-rhs",
-            vec![Stmt::Expr(Expr::Logical { byte_offset: 0,
+            vec![Stmt::Expr(Expr::Logical {
+                byte_offset: 0,
                 op: LogicalOp::Coalesce,
                 left: Box::new(Expr::Null),
                 right: Box::new(await_(Expr::Integer(1))),
@@ -218,14 +225,16 @@ fn async_closure_await_in_every_position_is_rewritten() {
         ),
         (
             "switch-discriminant",
-            vec![Stmt::Switch { byte_offset: 0,
+            vec![Stmt::Switch {
+                byte_offset: 0,
                 discriminant: await_(Expr::Integer(1)),
                 cases: vec![],
             }],
         ),
         (
             "switch-case-body",
-            vec![Stmt::Switch { byte_offset: 0,
+            vec![Stmt::Switch {
+                byte_offset: 0,
                 discriminant: Expr::Integer(0),
                 cases: vec![SwitchCase {
                     test: Some(Expr::Integer(0)),
@@ -235,7 +244,8 @@ fn async_closure_await_in_every_position_is_rewritten() {
         ),
         (
             "try-body",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![Stmt::Expr(await_(Expr::Integer(1)))],
                 catch: None,
                 finally: None,
@@ -244,7 +254,8 @@ fn async_closure_await_in_every_position_is_rewritten() {
         ),
         (
             "catch-body",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![],
                 catch: Some(CatchClause {
                     param: None,
@@ -256,7 +267,8 @@ fn async_closure_await_in_every_position_is_rewritten() {
         ),
         (
             "finally-body",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![],
                 catch: None,
                 finally: Some(vec![Stmt::Expr(await_(Expr::Integer(1)))]),
@@ -299,7 +311,8 @@ fn async_closure_await_in_every_position_is_rewritten() {
         ),
         (
             "binary-rhs",
-            vec![Stmt::Expr(Expr::Binary { byte_offset: 0,
+            vec![Stmt::Expr(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::Integer(1)),
                 right: Box::new(await_(Expr::Integer(1))),
@@ -383,7 +396,8 @@ fn async_closure_await_in_every_position_is_rewritten() {
 fn async_gen_fn(id: perry_hir::types::FuncId) -> Function {
     let mut f = empty_fn(
         id,
-        vec![Stmt::Expr(Expr::Yield { byte_offset: 0,
+        vec![Stmt::Expr(Expr::Yield {
+            byte_offset: 0,
             value: Some(Box::new(Expr::Await(Box::new(Expr::Integer(1)), 0))),
             delegate: false,
         })],
@@ -501,7 +515,8 @@ fn count_raw_awaits_stmt(s: &Stmt) -> usize {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             count_raw_awaits_expr(discriminant)
                 + cases
@@ -539,7 +554,8 @@ fn async_generator_linearizes_every_await_position() {
     use crate::generator::transform_generators;
 
     let y = |v: Expr| {
-        Stmt::Expr(Expr::Yield { byte_offset: 0,
+        Stmt::Expr(Expr::Yield {
+            byte_offset: 0,
             value: Some(Box::new(v)),
             delegate: false,
         })
@@ -572,7 +588,8 @@ fn async_generator_linearizes_every_await_position() {
         ),
         (
             "await-in-try-body",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![Stmt::Expr(await_(Expr::Integer(1))), y(Expr::Integer(2))],
                 catch: None,
                 finally: None,
@@ -581,7 +598,8 @@ fn async_generator_linearizes_every_await_position() {
         ),
         (
             "await-in-catch",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![y(Expr::Integer(0))],
                 catch: Some(CatchClause {
                     param: None,
@@ -601,7 +619,8 @@ fn async_generator_linearizes_every_await_position() {
         // queue and no raw `Expr::Await` survives.
         (
             "await-in-finally",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![y(Expr::Integer(0))],
                 catch: None,
                 finally: Some(vec![Stmt::Expr(await_(Expr::Integer(1)))]),
@@ -610,7 +629,8 @@ fn async_generator_linearizes_every_await_position() {
         ),
         (
             "await-in-try-and-finally",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![Stmt::Expr(await_(Expr::Integer(0))), y(Expr::Integer(5))],
                 catch: None,
                 finally: Some(vec![Stmt::Expr(await_(Expr::Integer(1)))]),
@@ -619,7 +639,8 @@ fn async_generator_linearizes_every_await_position() {
         ),
         (
             "await-in-try-catch-finally",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![y(Expr::Integer(0))],
                 catch: Some(CatchClause {
                     param: None,
@@ -631,7 +652,8 @@ fn async_generator_linearizes_every_await_position() {
         ),
         (
             "yield-in-finally-with-await",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![y(Expr::Integer(0))],
                 catch: None,
                 finally: Some(vec![
@@ -646,7 +668,8 @@ fn async_generator_linearizes_every_await_position() {
             // The pi #6728 shape: await buried in nested control flow.
             vec![Stmt::While {
                 condition: Expr::Bool(false),
-                body: vec![Stmt::Try { byte_offset: 0,
+                body: vec![Stmt::Try {
+                    byte_offset: 0,
                     body: vec![Stmt::If {
                         condition: Expr::Bool(true),
                         then_branch: vec![Stmt::Expr(await_(Expr::Integer(1)))],
@@ -660,7 +683,8 @@ fn async_generator_linearizes_every_await_position() {
         ),
         (
             "await-in-switch-case",
-            vec![Stmt::Switch { byte_offset: 0,
+            vec![Stmt::Switch {
+                byte_offset: 0,
                 discriminant: Expr::Integer(0),
                 cases: vec![SwitchCase {
                     test: Some(Expr::Integer(0)),
@@ -670,7 +694,8 @@ fn async_generator_linearizes_every_await_position() {
         ),
         (
             "await-in-ternary",
-            vec![Stmt::Expr(Expr::Conditional { byte_offset: 0,
+            vec![Stmt::Expr(Expr::Conditional {
+                byte_offset: 0,
                 condition: Box::new(Expr::Bool(true)),
                 then_expr: Box::new(await_(Expr::Integer(1))),
                 else_expr: Box::new(Expr::Integer(0)),
@@ -678,7 +703,8 @@ fn async_generator_linearizes_every_await_position() {
         ),
         (
             "await-in-logical",
-            vec![Stmt::Expr(Expr::Logical { byte_offset: 0,
+            vec![Stmt::Expr(Expr::Logical {
+                byte_offset: 0,
                 op: LogicalOp::And,
                 left: Box::new(Expr::Bool(true)),
                 right: Box::new(await_(Expr::Integer(1))),
@@ -759,7 +785,8 @@ fn async_closure_rewrite_leaves_no_residual_await() {
         ),
         (
             "in-try",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![Stmt::Expr(await_(Expr::Integer(1)))],
                 catch: None,
                 finally: None,
@@ -768,7 +795,8 @@ fn async_closure_rewrite_leaves_no_residual_await() {
         ),
         (
             "try-await-and-catch-await",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![Stmt::Expr(await_(Expr::Integer(0)))],
                 catch: Some(CatchClause {
                     param: None,
@@ -780,7 +808,8 @@ fn async_closure_rewrite_leaves_no_residual_await() {
         ),
         (
             "in-catch",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![Stmt::Expr(Expr::Integer(0))],
                 catch: Some(CatchClause {
                     param: None,
@@ -792,7 +821,8 @@ fn async_closure_rewrite_leaves_no_residual_await() {
         ),
         (
             "in-finally",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![Stmt::Expr(Expr::Integer(0))],
                 catch: None,
                 finally: Some(vec![Stmt::Expr(await_(Expr::Integer(1)))]),
@@ -803,7 +833,8 @@ fn async_closure_rewrite_leaves_no_residual_await() {
             "in-if-in-try-in-while",
             vec![Stmt::While {
                 condition: Expr::Bool(false),
-                body: vec![Stmt::Try { byte_offset: 0,
+                body: vec![Stmt::Try {
+                    byte_offset: 0,
                     body: vec![Stmt::If {
                         condition: Expr::Bool(true),
                         then_branch: vec![Stmt::Expr(await_(Expr::Integer(1)))],
@@ -817,7 +848,8 @@ fn async_closure_rewrite_leaves_no_residual_await() {
         ),
         (
             "in-ternary",
-            vec![Stmt::Expr(Expr::Conditional { byte_offset: 0,
+            vec![Stmt::Expr(Expr::Conditional {
+                byte_offset: 0,
                 condition: Box::new(Expr::Bool(true)),
                 then_expr: Box::new(await_(Expr::Integer(1))),
                 else_expr: Box::new(Expr::Integer(0)),
@@ -825,7 +857,8 @@ fn async_closure_rewrite_leaves_no_residual_await() {
         ),
         (
             "in-logical",
-            vec![Stmt::Expr(Expr::Logical { byte_offset: 0,
+            vec![Stmt::Expr(Expr::Logical {
+                byte_offset: 0,
                 op: LogicalOp::And,
                 left: Box::new(Expr::Bool(true)),
                 right: Box::new(await_(Expr::Integer(1))),
@@ -833,7 +866,8 @@ fn async_closure_rewrite_leaves_no_residual_await() {
         ),
         (
             "in-switch-case",
-            vec![Stmt::Switch { byte_offset: 0,
+            vec![Stmt::Switch {
+                byte_offset: 0,
                 discriminant: Expr::Integer(0),
                 cases: vec![SwitchCase {
                     test: Some(Expr::Integer(0)),
@@ -882,7 +916,8 @@ fn async_closure_rewrite_leaves_no_residual_await() {
 fn async_generator_closure_expressions_linearize_awaits() {
     use crate::generator::transform_generators;
 
-    let async_gen_closure = |id: perry_hir::types::FuncId, body: Vec<Stmt>| Expr::Closure { byte_offset: 0,
+    let async_gen_closure = |id: perry_hir::types::FuncId, body: Vec<Stmt>| Expr::Closure {
+        byte_offset: 0,
         func_id: id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -898,7 +933,8 @@ fn async_generator_closure_expressions_linearize_awaits() {
         is_strict: false,
     };
     let y = |v: Expr| {
-        Stmt::Expr(Expr::Yield { byte_offset: 0,
+        Stmt::Expr(Expr::Yield {
+            byte_offset: 0,
             value: Some(Box::new(v)),
             delegate: false,
         })
@@ -908,7 +944,8 @@ fn async_generator_closure_expressions_linearize_awaits() {
         ("yield-await", vec![y(await_(Expr::Integer(1)))]),
         (
             "await-in-loop-in-try",
-            vec![Stmt::Try { byte_offset: 0,
+            vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![Stmt::While {
                     condition: Expr::Bool(false),
                     body: vec![Stmt::Expr(await_(Expr::Integer(1))), y(Expr::Integer(2))],
@@ -1016,7 +1053,8 @@ fn computed_generator_receivers_match_named_methods() {
         ] {
             let mut function = empty_fn(
                 id,
-                vec![Stmt::Expr(Expr::Yield { byte_offset: 0,
+                vec![Stmt::Expr(Expr::Yield {
+                    byte_offset: 0,
                     value: Some(Box::new(Expr::This)),
                     delegate: false,
                 })],

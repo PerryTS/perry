@@ -53,7 +53,9 @@ fn index_is_definitely_numeric(e: &Expr) -> bool {
             op,
             perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::Pos | perry_hir::UnaryOp::BitNot
         ),
-        Expr::Binary { op, left, right, .. } => match op {
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
             BinaryOp::BitAnd
             | BinaryOp::BitOr
             | BinaryOp::BitXor
@@ -277,7 +279,9 @@ fn pointer_locals(
                 )
                 .then_some(Type::Number),
             },
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 if matches!(op, BinaryOp::Add) {
                     if expr_is_known_non_pointer(
                         left,
@@ -329,7 +333,9 @@ fn pointer_locals(
             // pre-collection address sat in a plain `alloca double` across the
             // loop poll. The HIR rule is fixed too, but a root decision must
             // not depend on it: an unclassifiable operand keeps the slot.
-            Expr::Logical { op, left, right, .. } => {
+            Expr::Logical {
+                op, left, right, ..
+            } => {
                 let left_ty =
                     expr_value_type(left, local_types, local_value_types, non_pointer_locals)?;
                 let right_ty =
@@ -461,7 +467,8 @@ fn pointer_locals(
             Expr::Binary {
                 op: BinaryOp::Add,
                 left,
-                right, ..
+                right,
+                ..
             } => {
                 expr_is_known_non_pointer_assuming_local(
                     left,
@@ -582,7 +589,8 @@ fn pointer_locals(
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases, ..
+                    cases,
+                    ..
                 } => {
                     memo.collect_expr_writes(discriminant, writes);
                     for case in cases {
@@ -953,7 +961,8 @@ mod tests {
         let write = |rhs| Stmt::Expr(Expr::LocalSet(1, Box::new(rhs)));
         let mut frame = vec![
             binding(1, Expr::Integer(0)),
-            Stmt::Expr(Expr::Closure { byte_offset: 0,
+            Stmt::Expr(Expr::Closure {
+                byte_offset: 0,
                 func_id: 7,
                 params: vec![],
                 return_type: Type::Void,
@@ -1080,7 +1089,8 @@ mod tests {
 
     #[test]
     fn declared_scalar_parameter_keeps_shadow_slot() {
-        let params = vec![Param { byte_offset: 0,
+        let params = vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "value".to_string(),
             ty: Type::Number,
@@ -1159,7 +1169,8 @@ mod tests {
                 mutable: false,
                 init: Some(Expr::Uint8ArrayGet {
                     array: Box::new(Expr::LocalGet(0)),
-                    index: Box::new(Expr::Binary { byte_offset: 0,
+                    index: Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::BitAnd,
                         left: Box::new(Expr::Integer(7)),
                         right: Box::new(Expr::Integer(3)),
@@ -1180,7 +1191,8 @@ mod tests {
     #[test]
     fn an_annotated_byte_receiver_cannot_drop_the_result_root() {
         for buffer in [false, true] {
-            let params = vec![Param { byte_offset: 0,
+            let params = vec![Param {
+                byte_offset: 0,
                 id: 0,
                 name: "bytes".into(),
                 ty: Type::Named(if buffer { "Buffer" } else { "Uint8Array" }.into()),
@@ -1235,7 +1247,8 @@ mod tests {
                 init: Some(Expr::Number(0.0)),
             })
             .collect();
-        body.push(Stmt::Expr(Expr::Closure { byte_offset: 0,
+        body.push(Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 7,
             params: Vec::new(),
             return_type: Type::Any,
@@ -1289,7 +1302,8 @@ mod tests {
 
     #[test]
     fn recursive_array_map_shape_collects_without_deep_type_growth() {
-        let patch_param = Param { byte_offset: 0,
+        let patch_param = Param {
+            byte_offset: 0,
             id: 1,
             name: "patch".to_string(),
             ty: return_array_of_type(64, Type::Any),
@@ -1298,7 +1312,8 @@ mod tests {
             is_rest: false,
             arguments_object: None,
         };
-        let callback_param = Param { byte_offset: 0,
+        let callback_param = Param {
+            byte_offset: 0,
             id: 2,
             name: "p".to_string(),
             ty: Type::Any,
@@ -1307,17 +1322,21 @@ mod tests {
             is_rest: false,
             arguments_object: None,
         };
-        let callback = Expr::Closure { byte_offset: 0,
+        let callback = Expr::Closure {
+            byte_offset: 0,
             func_id: 2,
             params: vec![callback_param],
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::FuncRef(1)),
-                args: vec![Expr::LocalGet(2)],
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }), 0)],
+            body: vec![Stmt::Return(
+                Some(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![Expr::LocalGet(2)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+                0,
+            )],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -1328,7 +1347,8 @@ mod tests {
             is_generator: false,
             is_strict: false,
         };
-        let function = Function { byte_offset: 0,
+        let function = Function {
+            byte_offset: 0,
             id: 1,
             name: "unixToWin".to_string(),
             type_params: Vec::new(),
@@ -1407,7 +1427,8 @@ mod tests {
     /// property read is unclassifiable exactly as it was in the failing build.
     #[test]
     fn a_coalesced_optional_chain_read_keeps_its_shadow_slot() {
-        let params = vec![Param { byte_offset: 0,
+        let params = vec![Param {
+            byte_offset: 0,
             id: 5,
             name: "opts".to_string(),
             ty: Type::Union(vec![Type::Object(Default::default()), Type::Null]),
@@ -1421,10 +1442,13 @@ mod tests {
             name: "masks".to_string(),
             ty: Type::Null,
             mutable: false,
-            init: Some(Expr::Logical { byte_offset: 0,
+            init: Some(Expr::Logical {
+                byte_offset: 0,
                 op: perry_hir::LogicalOp::Coalesce,
-                left: Box::new(Expr::Conditional { byte_offset: 0,
-                    condition: Box::new(Expr::Compare { byte_offset: 0,
+                left: Box::new(Expr::Conditional {
+                    byte_offset: 0,
+                    condition: Box::new(Expr::Compare {
+                        byte_offset: 0,
                         op: perry_hir::CompareOp::LooseEq,
                         left: Box::new(Expr::LocalGet(5)),
                         right: Box::new(Expr::Null),
@@ -1459,7 +1483,8 @@ mod tests {
                 name: "n".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Logical { byte_offset: 0,
+                init: Some(Expr::Logical {
+                    byte_offset: 0,
                     op: perry_hir::LogicalOp::Coalesce,
                     left: Box::new(Expr::Integer(1)),
                     right: Box::new(Expr::Integer(2)),
@@ -1470,7 +1495,8 @@ mod tests {
                 name: "m".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Logical { byte_offset: 0,
+                init: Some(Expr::Logical {
+                    byte_offset: 0,
                     op: perry_hir::LogicalOp::Or,
                     left: Box::new(Expr::Integer(0)),
                     right: Box::new(Expr::Bool(true)),
@@ -1490,7 +1516,8 @@ mod tests {
     fn bigint_arithmetic_results_keep_shadow_slots() {
         let bigint = || Expr::BigInt("1".to_string());
         let cases = [
-            Expr::Binary { byte_offset: 0,
+            Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Mul,
                 left: Box::new(bigint()),
                 right: Box::new(bigint()),
@@ -1530,7 +1557,8 @@ mod tests {
                 name: "product".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Binary { byte_offset: 0,
+                init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Mul,
                     left: Box::new(Expr::Integer(6)),
                     right: Box::new(Expr::Integer(7)),

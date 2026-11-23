@@ -82,7 +82,8 @@ fn reads(
         Expr::Compare {
             op: CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe,
             left,
-            right, ..
+            right,
+            ..
         } if (matches!(left.as_ref(), Expr::LocalGet(l) if *l == id)
             && matches!(right.as_ref(), Expr::Null))
             || (matches!(right.as_ref(), Expr::LocalGet(l) if *l == id)
@@ -105,12 +106,13 @@ fn block(stmts: &mut [Stmt], counts: &HashMap<LocalId, usize>) {
         let Stmt::Let {
             id,
             mutable: false,
-            init: Some(Expr::Call {
-                callee,
-                args,
-                byte_offset: call_offset,
-                ..
-            }),
+            init:
+                Some(Expr::Call {
+                    callee,
+                    args,
+                    byte_offset: call_offset,
+                    ..
+                }),
             ..
         } = &stmts[i]
         else {

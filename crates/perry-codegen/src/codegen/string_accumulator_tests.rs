@@ -28,7 +28,8 @@ fn ir_opts() -> CompileOptions {
 }
 
 fn probe(body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -50,7 +51,8 @@ fn probe(body: Vec<Stmt>) -> Function {
 /// `probe` function runs `body` against it (a module global is a persistent
 /// binding, like a closure capture or a box).
 fn module(init: Expr, body: Vec<Stmt>) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "string_accumulator.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
@@ -119,7 +121,8 @@ fn probe_ir(module: Module) -> String {
 fn self_append(rhs: Expr) -> Stmt {
     Stmt::Expr(Expr::LocalSet(
         ACC,
-        Box::new(Expr::Binary { byte_offset: 0,
+        Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(ACC)),
             right: Box::new(rhs),
@@ -179,12 +182,15 @@ fn a_length_read_of_the_accumulator_does_not_demote() {
         Expr::String(String::new()),
         vec![
             self_append(Expr::String("tok".to_string())),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(ACC)),
-                property: "length".to_string(),
-                byte_offset: 0,
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(ACC)),
+                    property: "length".to_string(),
+                    byte_offset: 0,
+                }),
+                0,
+            ),
         ],
     ));
     assert!(

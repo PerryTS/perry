@@ -223,7 +223,8 @@ fn stmt(s: &mut Stmt, open: bool) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             expr(discriminant, open);
             for c in cases {
@@ -269,7 +270,8 @@ mod tests {
 
     fn open_if(then: Vec<Stmt>, otherwise: Vec<Stmt>) -> Stmt {
         Stmt::If {
-            condition: Expr::NativeMethodCall { byte_offset: 0,
+            condition: Expr::NativeMethodCall {
+                byte_offset: 0,
                 module: "__perry_runtime".to_string(),
                 class_name: None,
                 object: None,
@@ -360,7 +362,8 @@ mod tests {
 
     #[test]
     fn a_condition_used_as_a_value_is_an_error() {
-        let mut m = module_with(vec![Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
+        let mut m = module_with(vec![Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "__perry_runtime".to_string(),
             class_name: None,
             object: None,

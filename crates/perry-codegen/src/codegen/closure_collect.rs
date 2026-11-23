@@ -53,7 +53,8 @@ fn versioned_loop_value_expr(
         perry_hir::Expr::Binary {
             op: perry_hir::BinaryOp::Add,
             left,
-            right, ..
+            right,
+            ..
         } => {
             versioned_loop_value_expr(left, param_ids, capture_ids)
                 && versioned_loop_value_expr(right, param_ids, capture_ids)
@@ -233,7 +234,8 @@ fn collect_direct_call_closures_in_stmts(
             }
             perry_hir::Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 collect_direct_call_closures_in_expr(discriminant, out);
                 for case in cases {
@@ -293,7 +295,9 @@ fn count_stmt_nodes(stmt: &perry_hir::Stmt) -> usize {
         perry_hir::Stmt::Expr(expr) | perry_hir::Stmt::Throw(expr) => {
             count += count_expr_nodes(expr)
         }
-        perry_hir::Stmt::Return(expr, _) => count += expr.as_ref().map(count_expr_nodes).unwrap_or(0),
+        perry_hir::Stmt::Return(expr, _) => {
+            count += expr.as_ref().map(count_expr_nodes).unwrap_or(0)
+        }
         perry_hir::Stmt::If {
             condition,
             then_branch,
@@ -346,7 +350,8 @@ fn count_stmt_nodes(stmt: &perry_hir::Stmt) -> usize {
         }
         perry_hir::Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             count += count_expr_nodes(discriminant);
             for case in cases {
@@ -503,7 +508,8 @@ fn scan_capture_use_stmt(
         }
         perry_hir::Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             scan_capture_use_expr(discriminant, in_loop, uses);
             for case in cases {

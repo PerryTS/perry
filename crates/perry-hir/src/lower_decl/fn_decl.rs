@@ -121,7 +121,8 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
         let is_rest = is_rest_param(&param.pat);
-        params.push(Param { byte_offset: param.span.lo.0,
+        params.push(Param {
+            byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: param_type,
@@ -385,7 +386,8 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         }
     }
 
-    Ok(Function { byte_offset: fn_decl.function.span.lo.0,
+    Ok(Function {
+        byte_offset: fn_decl.function.span.lo.0,
         id: func_id,
         name,
         type_params,

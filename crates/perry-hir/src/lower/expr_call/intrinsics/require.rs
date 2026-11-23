@@ -208,7 +208,8 @@ pub(crate) fn try_import_meta_require(
             .map(|arg| lower_expr(ctx, &arg.expr))
             .transpose()?
             .unwrap_or(Expr::Undefined);
-        return Ok(Some(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+        return Ok(Some(Expr::NativeMethodCall {
+            byte_offset: call.span.lo.0,
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,

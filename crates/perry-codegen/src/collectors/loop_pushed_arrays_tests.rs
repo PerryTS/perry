@@ -133,7 +133,8 @@ fn owned_arrays_are_only_pushed_read_and_returned() {
 fn an_array_another_body_mentions_is_not_owned() {
     let mut m = module(vec![empty(1), looped(vec![push(1)]), empty(2), push(2)]);
     // A module function pushing into the module-level array 1.
-    m.functions.push(perry_hir::Function { byte_offset: 0,
+    m.functions.push(perry_hir::Function {
+        byte_offset: 0,
         id: 0,
         name: "addTop".into(),
         type_params: Vec::new(),

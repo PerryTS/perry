@@ -182,7 +182,8 @@ fn straight_line_numeric_load_and_update_remain_live() {
         byte_offset: 0,
         byte_end: 0,
     }));
-    m.init.push(Stmt::Expr(Expr::Binary { byte_offset: 0,
+    m.init.push(Stmt::Expr(Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Mul,
         left: Box::new(Expr::PropertyGet {
             byte_end: 0,

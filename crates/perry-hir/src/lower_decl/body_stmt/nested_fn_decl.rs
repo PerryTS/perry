@@ -98,7 +98,8 @@ pub(super) fn lower_nested_fn_decl(
         let param_id = ctx.define_local_spanned(param_name.clone(), Type::Any, param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
-        params.push(Param { byte_offset: param.span.lo.0,
+        params.push(Param {
+            byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: Type::Any,
@@ -311,7 +312,8 @@ pub(super) fn lower_nested_fn_decl(
     };
     ctx.closure_display_names.insert(func_id, display_name);
 
-    let closure = Expr::Closure { byte_offset: fn_decl.function.span.lo.0,
+    let closure = Expr::Closure {
+        byte_offset: fn_decl.function.span.lo.0,
         func_id,
         params,
         return_type: Type::Any,

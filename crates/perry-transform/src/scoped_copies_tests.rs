@@ -2,7 +2,8 @@ use super::*;
 use perry_hir::SwitchCase;
 
 fn function(body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 1,
         name: "scoped".into(),
         type_params: vec![],
@@ -115,7 +116,8 @@ fn a_jump_into_a_later_switch_case_can_skip_the_source() {
         test: Some(Expr::Integer(0)),
         body,
     };
-    unchanged(vec![Stmt::Switch { byte_offset: 0,
+    unchanged(vec![Stmt::Switch {
+        byte_offset: 0,
         discriminant: Expr::Integer(1),
         cases: vec![case(vec![value(2)]), case(vec![copy(3, 2), read(3)])],
     }]);
@@ -123,7 +125,8 @@ fn a_jump_into_a_later_switch_case_can_skip_the_source() {
 
 #[test]
 fn a_captured_copy_stays() {
-    let closure = Expr::Closure { byte_offset: 0,
+    let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 9,
         params: vec![],
         return_type: Type::Any,
@@ -148,7 +151,8 @@ fn a_captured_copy_stays() {
 #[test]
 fn a_copy_inside_a_closure_folds_only_against_the_closure_body() {
     let closure = |body| {
-        Stmt::Expr(Expr::Closure { byte_offset: 0,
+        Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 9,
             params: vec![],
             return_type: Type::Any,

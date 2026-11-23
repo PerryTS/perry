@@ -38,11 +38,13 @@ fn function_ir<'a>(ir: &'a str, marker: &str) -> &'a str {
 /// plus a module-init `f(40)` — the literal site is what makes the plan a
 /// raw-`i32` tuple in the first place.
 fn recursive_module(lhs: Expr, rhs: Expr) -> Module {
-    let f = Function { byte_offset: 0,
+    let f = Function {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 10,
             name: "n".to_string(),
             ty: Type::Number,
@@ -52,31 +54,37 @@ fn recursive_module(lhs: Expr, rhs: Expr) -> Module {
             arguments_object: None,
         }],
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Conditional { byte_offset: 0,
-            condition: Box::new(Expr::Compare { byte_offset: 0,
-                op: CompareOp::Lt,
-                left: Box::new(Expr::LocalGet(10)),
-                right: Box::new(Expr::Integer(2)),
-            }),
-            then_expr: Box::new(Expr::LocalGet(10)),
-            else_expr: Box::new(Expr::Binary { byte_offset: 0,
-                op: BinaryOp::Add,
-                left: Box::new(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::FuncRef(1)),
-                    args: vec![lhs],
-                    type_args: Vec::new(),
+        body: vec![Stmt::Return(
+            Some(Expr::Conditional {
+                byte_offset: 0,
+                condition: Box::new(Expr::Compare {
                     byte_offset: 0,
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(10)),
+                    right: Box::new(Expr::Integer(2)),
                 }),
-                right: Box::new(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::FuncRef(1)),
-                    args: vec![rhs],
-                    type_args: Vec::new(),
+                then_expr: Box::new(Expr::LocalGet(10)),
+                else_expr: Box::new(Expr::Binary {
                     byte_offset: 0,
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::Call {
+                        byte_end: 0,
+                        callee: Box::new(Expr::FuncRef(1)),
+                        args: vec![lhs],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                    right: Box::new(Expr::Call {
+                        byte_end: 0,
+                        callee: Box::new(Expr::FuncRef(1)),
+                        args: vec![rhs],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
                 }),
             }),
-        }), 0)],
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -126,12 +134,14 @@ fn guarded_recursive_module(lhs: Expr, rhs: Expr) -> Module {
 /// may produce a BigInt. The recursive first argument must keep the public
 /// guard: when `x` is a BigInt, `x * x` is a BigInt too.
 fn bigint_capable_guarded_recursive_module() -> Module {
-    let f = Function { byte_offset: 0,
+    let f = Function {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: Vec::new(),
         params: vec![
-            Param { byte_offset: 0,
+            Param {
+                byte_offset: 0,
                 id: 10,
                 name: "n".to_string(),
                 ty: Type::Number,
@@ -140,7 +150,8 @@ fn bigint_capable_guarded_recursive_module() -> Module {
                 is_rest: false,
                 arguments_object: None,
             },
-            Param { byte_offset: 0,
+            Param {
+                byte_offset: 0,
                 id: 11,
                 name: "x".to_string(),
                 ty: Type::Any,
@@ -151,28 +162,34 @@ fn bigint_capable_guarded_recursive_module() -> Module {
             },
         ],
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Conditional { byte_offset: 0,
-            condition: Box::new(Expr::Compare { byte_offset: 0,
-                op: CompareOp::Lt,
-                left: Box::new(Expr::LocalGet(10)),
-                right: Box::new(Expr::Integer(1)),
-            }),
-            then_expr: Box::new(Expr::LocalGet(10)),
-            else_expr: Box::new(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::FuncRef(1)),
-                args: vec![
-                    Expr::Binary { byte_offset: 0,
-                        op: BinaryOp::Mul,
-                        left: Box::new(Expr::LocalGet(11)),
-                        right: Box::new(Expr::LocalGet(11)),
-                    },
-                    Expr::LocalGet(11),
-                ],
-                type_args: Vec::new(),
+        body: vec![Stmt::Return(
+            Some(Expr::Conditional {
                 byte_offset: 0,
+                condition: Box::new(Expr::Compare {
+                    byte_offset: 0,
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(10)),
+                    right: Box::new(Expr::Integer(1)),
+                }),
+                then_expr: Box::new(Expr::LocalGet(10)),
+                else_expr: Box::new(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::FuncRef(1)),
+                    args: vec![
+                        Expr::Binary {
+                            byte_offset: 0,
+                            op: BinaryOp::Mul,
+                            left: Box::new(Expr::LocalGet(11)),
+                            right: Box::new(Expr::LocalGet(11)),
+                        },
+                        Expr::LocalGet(11),
+                    ],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
             }),
-        }), 0)],
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -206,7 +223,8 @@ fn compile_ir(module: &Module) -> String {
 }
 
 fn arith(op: BinaryOp, right: i64) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(Expr::LocalGet(10)),
         right: Box::new(Expr::Integer(right)),
@@ -294,7 +312,8 @@ fn an_unproven_local_recursive_argument_keeps_the_boxed_call() {
     // A parameter the specialized entry did NOT bind as a raw i32 carries no
     // leaf fact, so nothing derived from it can be proven either.
     let ir = compile_ir(&recursive_module(
-        Expr::Binary { byte_offset: 0,
+        Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Sub,
             left: Box::new(Expr::Call {
                 byte_end: 0,
@@ -446,7 +465,8 @@ fn guarded_integer_return_keeps_checked_edges_and_ieee_fallback() {
 #[test]
 fn fractional_recursive_step_has_no_integer_clone() {
     let module = guarded_recursive_module(
-        Expr::Binary { byte_offset: 0,
+        Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Sub,
             left: Box::new(Expr::LocalGet(10)),
             right: Box::new(Expr::Number(0.5)),
@@ -468,38 +488,49 @@ fn integer_contract_handles_unary_forcing_and_three_recursive_edges() {
         type_args: Vec::new(),
         byte_offset: 0,
     };
-    let Stmt::Return(Some(Expr::Conditional {
-        then_expr,
-        else_expr,
-        ..
-    }), _) = &mut f.body[0]
+    let Stmt::Return(
+        Some(Expr::Conditional {
+            then_expr,
+            else_expr,
+            ..
+        }),
+        _,
+    ) = &mut f.body[0]
     else {
         panic!()
     };
     *then_expr = Box::new(Expr::Integer(7));
-    *else_expr = Box::new(Expr::Binary { byte_offset: 0,
+    *else_expr = Box::new(Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(call(1)),
         right: Box::new(Expr::Integer(2)),
     });
     assert_eq!(prove(f).unwrap().input_max, (i32::MAX - 7) / 2);
-    let Stmt::Return(Some(Expr::Conditional {
-        condition,
-        then_expr,
-        else_expr, ..
-    }), _) = &mut f.body[0]
+    let Stmt::Return(
+        Some(Expr::Conditional {
+            condition,
+            then_expr,
+            else_expr,
+            ..
+        }),
+        _,
+    ) = &mut f.body[0]
     else {
         panic!()
     };
-    *condition = Box::new(Expr::Compare { byte_offset: 0,
+    *condition = Box::new(Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Lt,
         left: Box::new(Expr::LocalGet(10)),
         right: Box::new(Expr::Integer(3)),
     });
     *then_expr = Box::new(Expr::Integer(1));
-    *else_expr = Box::new(Expr::Binary { byte_offset: 0,
+    *else_expr = Box::new(Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
-        left: Box::new(Expr::Binary { byte_offset: 0,
+        left: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(call(1)),
             right: Box::new(call(2)),

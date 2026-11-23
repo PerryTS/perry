@@ -16,7 +16,8 @@ const COLUMN_ID: u32 = 11;
 const INDEX_ID: u32 = 12;
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -34,7 +35,8 @@ fn function(
     return_type: Type,
     body: Vec<Stmt>,
 ) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -61,13 +63,16 @@ fn read_method() -> Function {
             param(INDEX_ID, "index", Type::Number),
         ],
         Type::Any,
-        vec![Stmt::Return(Some(Expr::IndexGet {
-            element_offset: 0,
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(COLUMN_ID)),
-            index: Box::new(Expr::LocalGet(INDEX_ID)),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(COLUMN_ID)),
+                index: Box::new(Expr::LocalGet(INDEX_ID)),
+            }),
+            0,
+        )],
     )
 }
 
@@ -83,7 +88,8 @@ fn checked_read_method() -> Function {
         Type::Any,
         vec![
             Stmt::If {
-                condition: Expr::Compare { byte_offset: 0,
+                condition: Expr::Compare {
+                    byte_offset: 0,
                     op: perry_hir::CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(COLUMN_ID)),
                     right: Box::new(Expr::Undefined),
@@ -105,7 +111,8 @@ fn checked_read_method() -> Function {
                 }),
             },
             Stmt::If {
-                condition: Expr::Compare { byte_offset: 0,
+                condition: Expr::Compare {
+                    byte_offset: 0,
                     op: perry_hir::CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(VALUE_ID)),
                     right: Box::new(Expr::Integer(99)),
@@ -187,7 +194,8 @@ fn shaped_reader_class() -> Class {
     class.id = 101;
     class.name = "ShapedReader".to_string();
     class.fields = vec![
-        ClassField { byte_offset: 0,
+        ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "column".to_string(),
             key_expr: None,
@@ -197,7 +205,8 @@ fn shaped_reader_class() -> Class {
             is_readonly: false,
             decorators: Vec::new(),
         },
-        ClassField { byte_offset: 0,
+        ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "defaultFlag".to_string(),
             key_expr: None,
@@ -240,7 +249,8 @@ fn shaped_push_class() -> Class {
                     index: Box::new(Expr::LocalGet(INDEX_ID)),
                 }),
             },
-            Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
+            Stmt::Expr(Expr::NativeMethodCall {
+                byte_offset: 0,
                 module: "array".to_string(),
                 class_name: None,
                 object: Some(Box::new(Expr::PropertyGet {
@@ -258,7 +268,8 @@ fn shaped_push_class() -> Class {
     let mut class = reader_class();
     class.id = 102;
     class.name = "PackedOwner".to_string();
-    class.fields = vec![ClassField { byte_offset: 0,
+    class.fields = vec![ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: "packed".to_string(),
         key_expr: None,
@@ -339,11 +350,14 @@ fn fixture() -> Module {
             },
             // A plain Number parameter may be negative or fractional. It must
             // keep the public/generic route even though the method has a clone.
-            Stmt::Return(Some(method_call(
-                Expr::LocalGet(READER),
-                Expr::LocalGet(COLUMN),
-                Expr::LocalGet(DYNAMIC_INDEX),
-            )), 0),
+            Stmt::Return(
+                Some(method_call(
+                    Expr::LocalGet(READER),
+                    Expr::LocalGet(COLUMN),
+                    Expr::LocalGet(DYNAMIC_INDEX),
+                )),
+                0,
+            ),
         ],
     );
     let mut module = Module::new("index_method_clone.ts");
@@ -419,35 +433,42 @@ fn bitset_class() -> Class {
             param(BIT_INDEX_ID, "index", Type::Any),
         ],
         Type::Any,
-        vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op: perry_hir::BinaryOp::BitAnd,
-            left: Box::new(Expr::IndexGet {
-                element_offset: 0,
+        vec![Stmt::Return(
+            Some(Expr::Binary {
                 byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(MASK_ID)),
-                index: Box::new(Expr::Unary {
-                    op: perry_hir::UnaryOp::BitNot,
-                    operand: Box::new(Expr::Unary {
+                op: perry_hir::BinaryOp::BitAnd,
+                left: Box::new(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(MASK_ID)),
+                    index: Box::new(Expr::Unary {
                         op: perry_hir::UnaryOp::BitNot,
-                        operand: Box::new(Expr::Binary { byte_offset: 0,
-                            op: perry_hir::BinaryOp::Div,
-                            left: Box::new(Expr::LocalGet(BIT_INDEX_ID)),
-                            right: Box::new(Expr::Integer(32)),
+                        operand: Box::new(Expr::Unary {
+                            op: perry_hir::UnaryOp::BitNot,
+                            operand: Box::new(Expr::Binary {
+                                byte_offset: 0,
+                                op: perry_hir::BinaryOp::Div,
+                                left: Box::new(Expr::LocalGet(BIT_INDEX_ID)),
+                                right: Box::new(Expr::Integer(32)),
+                            }),
                         }),
                     }),
                 }),
-            }),
-            right: Box::new(Expr::Binary { byte_offset: 0,
-                op: perry_hir::BinaryOp::Shl,
-                left: Box::new(Expr::Integer(1)),
-                right: Box::new(Expr::Binary { byte_offset: 0,
-                    op: perry_hir::BinaryOp::Mod,
-                    left: Box::new(Expr::LocalGet(BIT_INDEX_ID)),
-                    right: Box::new(Expr::Integer(32)),
+                right: Box::new(Expr::Binary {
+                    byte_offset: 0,
+                    op: perry_hir::BinaryOp::Shl,
+                    left: Box::new(Expr::Integer(1)),
+                    right: Box::new(Expr::Binary {
+                        byte_offset: 0,
+                        op: perry_hir::BinaryOp::Mod,
+                        left: Box::new(Expr::LocalGet(BIT_INDEX_ID)),
+                        right: Box::new(Expr::Integer(32)),
+                    }),
                 }),
             }),
-        }), 0)],
+            0,
+        )],
     );
     let mut class = reader_class();
     class.id = 103;
@@ -523,7 +544,8 @@ fn emit_versioned_checked_reader_loop() -> String {
                 name: "limit".to_string(),
                 ty: Type::Number,
                 mutable: false,
-                init: Some(Expr::Binary { byte_offset: 0,
+                init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: perry_hir::BinaryOp::BitOr,
                     left: Box::new(Expr::LocalGet(BOUND)),
                     right: Box::new(Expr::Integer(0)),
@@ -537,7 +559,8 @@ fn emit_versioned_checked_reader_loop() -> String {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(COUNTER)),
                     right: Box::new(Expr::LocalGet(LIMIT)),
@@ -562,7 +585,8 @@ fn emit_versioned_checked_reader_loop() -> String {
                         }),
                     },
                     Stmt::If {
-                        condition: Expr::Logical { byte_offset: 0,
+                        condition: Expr::Logical {
+                            byte_offset: 0,
                             op: perry_hir::LogicalOp::And,
                             left: Box::new(Expr::LocalGet(FILTER)),
                             right: Box::new(Expr::Unary {
@@ -867,7 +891,8 @@ fn selector_rejects_mutated_defaulted_and_closure_captured_indices() {
     let mut captured = candidate;
     captured.body.insert(
         0,
-        Stmt::Expr(Expr::Closure { byte_offset: 0,
+        Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 901,
             params: Vec::new(),
             return_type: Type::Number,
@@ -912,13 +937,16 @@ fn selector_does_not_guard_an_object_whose_field_produces_the_index() {
                     byte_offset: 0,
                 }),
             },
-            Stmt::Return(Some(Expr::IndexGet {
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(ARRAY_ID)),
-                index: Box::new(Expr::LocalGet(DERIVED_ID)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(ARRAY_ID)),
+                    index: Box::new(Expr::LocalGet(DERIVED_ID)),
+                }),
+                0,
+            ),
         ],
     );
     assert!(
@@ -934,7 +962,8 @@ fn selector_does_not_guard_an_object_whose_field_produces_the_index() {
         name: "derived".to_string(),
         ty: Type::Number,
         mutable: false,
-        init: Some(Expr::Binary { byte_offset: 0,
+        init: Some(Expr::Binary {
+            byte_offset: 0,
             op: perry_hir::BinaryOp::Add,
             left: Box::new(Expr::LocalGet(SOURCE_ID)),
             right: Box::new(Expr::Integer(0)),

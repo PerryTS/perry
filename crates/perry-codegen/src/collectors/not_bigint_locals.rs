@@ -108,7 +108,8 @@ impl NotBigIntFacts {
                     | BinaryOp::Shl
                     | BinaryOp::Shr,
                 left,
-                right, ..
+                right,
+                ..
             } => self.expr_is_not_bigint(left) || self.expr_is_not_bigint(right),
             Expr::Unary {
                 op: UnaryOp::BitNot,
@@ -372,7 +373,8 @@ pub(super) fn collect_writes<'a>(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 collect_writes_expr(discriminant, writes, candidates);
                 for case in cases {
@@ -432,7 +434,8 @@ mod tests {
     }
 
     fn xor(l: Expr, r: Expr) -> Expr {
-        Expr::Binary { byte_offset: 0,
+        Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::BitXor,
             left: Box::new(l),
             right: Box::new(r),

@@ -343,7 +343,8 @@ pub(super) fn reads_in_stmt(ctx: &FnCtx<'_>, s: &Stmt, out: &mut Vec<Read>) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             reads_in_expr(ctx, discriminant, out);
             for c in cases {
@@ -492,7 +493,8 @@ fn stmt_read(s: &Stmt, trusted: &dyn Fn(&Expr) -> bool) -> Paths {
         Stmt::DoWhile { body, .. } => nested(body),
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             if expr_reads(discriminant, trusted) {
                 Paths::READ

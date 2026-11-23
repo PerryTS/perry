@@ -312,7 +312,8 @@ fn owned_async_module_body_is_active_only_when_its_module_runs() {
     let id = hir.functions[0].id;
     // Collection normally resolves the literal before activation. This unit
     // fixture starts at lowered HIR, so supply that existing execution edge.
-    let perry_hir::Stmt::Expr(perry_hir::Expr::Await(value, _)) = &mut hir.functions[0].body[0] else {
+    let perry_hir::Stmt::Expr(perry_hir::Expr::Await(value, _)) = &mut hir.functions[0].body[0]
+    else {
         panic!("await expression");
     };
     let perry_hir::Expr::DynamicImport { paths, .. } = value.as_mut() else {

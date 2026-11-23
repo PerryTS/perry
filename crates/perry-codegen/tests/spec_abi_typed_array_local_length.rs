@@ -3,7 +3,8 @@ use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, Param, Stmt, TYPED_ARRAY_KIND_FLOAT64};
 
 fn param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -39,7 +40,8 @@ fn function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
 #[test]
 fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entry() {
     let mut module = Module::new("spec_abi_typed_array_local_length.ts");
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 7,
         name: "fill".to_string(),
         type_params: Vec::new(),
@@ -51,7 +53,8 @@ fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entr
                 name: "index".to_string(),
                 ty: Type::Number,
                 mutable: false,
-                init: Some(Expr::Binary { byte_offset: 0,
+                init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: perry_hir::BinaryOp::Sub,
                     left: Box::new(Expr::LocalGet(101)),
                     right: Box::new(Expr::Integer(10_000)),

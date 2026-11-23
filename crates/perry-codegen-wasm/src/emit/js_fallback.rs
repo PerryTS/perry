@@ -198,7 +198,8 @@ impl WasmModuleEmitter {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 let disc = self.emit_js_expr(discriminant, locals);
                 out.push_str(&format!("{pad}    switch (toJsValue({disc})) {{\n"));
@@ -301,7 +302,9 @@ impl WasmModuleEmitter {
                 )
             }
             Expr::GlobalSet(_, val) => self.emit_js_expr(val, locals),
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
                 match op {
@@ -313,7 +316,9 @@ impl WasmModuleEmitter {
                     _ => format!("fromJsValue(toJsValue({}) + toJsValue({}))", l, r),
                 }
             }
-            Expr::Compare { op, left, right, .. } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
                 let js_op = match op {
@@ -331,7 +336,9 @@ impl WasmModuleEmitter {
                     l, js_op, r
                 )
             }
-            Expr::Logical { op, left, right, .. } => {
+            Expr::Logical {
+                op, left, right, ..
+            } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
                 // The left operand runs once: the arrow yields `[left]` when it is the
@@ -557,7 +564,8 @@ impl WasmModuleEmitter {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 let c = self.emit_js_expr(condition, locals);
                 let t = self.emit_js_expr(then_expr, locals);
@@ -569,7 +577,8 @@ impl WasmModuleEmitter {
                 method,
                 object,
                 args,
-                class_name, ..
+                class_name,
+                ..
             } => {
                 let normalized = module.strip_prefix("node:").unwrap_or(module);
                 match normalized {

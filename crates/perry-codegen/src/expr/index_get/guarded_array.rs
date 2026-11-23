@@ -1204,12 +1204,14 @@ mod compact_read_tests {
 
     fn ir(body: Vec<Stmt>) -> String {
         let mut module = Module::new("compact_array_reads");
-        module.functions.push(Function { byte_offset: 0,
+        module.functions.push(Function {
+            byte_offset: 0,
             id: 1,
             name: "read".into(),
             type_params: vec![],
             params: vec![
-                Param { byte_offset: 0,
+                Param {
+                    byte_offset: 0,
                     id: 1,
                     name: "array".into(),
                     ty: Type::Array(Box::new(Type::Any)),
@@ -1218,7 +1220,8 @@ mod compact_read_tests {
                     is_rest: false,
                     arguments_object: None,
                 },
-                Param { byte_offset: 0,
+                Param {
+                    byte_offset: 0,
                     id: 2,
                     name: "key".into(),
                     ty: Type::Any,
@@ -1257,13 +1260,16 @@ mod compact_read_tests {
 
     #[test]
     fn compact_array_read_guards_own_slot_and_sends_holes_cold() {
-        let ll = ir(vec![Stmt::Return(Some(Expr::IndexGet {
-            element_offset: 0,
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(Expr::Integer(1)),
-        }), 0)]);
+        let ll = ir(vec![Stmt::Return(
+            Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::Integer(1)),
+            }),
+            0,
+        )]);
         assert!(ll.contains("33023"), "type and forwarding word");
         assert!(
             !ll.contains("icmp ne i64"),
@@ -1287,12 +1293,15 @@ mod compact_read_tests {
 
     #[test]
     fn compact_array_length_uses_header_and_generic_miss() {
-        let ll = ir(vec![Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            property: "length".into(),
-            byte_offset: 0,
-        }), 0)]);
+        let ll = ir(vec![Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                property: "length".into(),
+                byte_offset: 0,
+            }),
+            0,
+        )]);
         assert!(ll.contains("plen.check_gc") && ll.contains("33023"));
         assert!(ll.contains("uitofp i32"));
         assert!(ll.contains("call double @js_value_length_property_f64"));

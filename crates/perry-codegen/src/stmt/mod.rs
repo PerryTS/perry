@@ -513,7 +513,8 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
                         }
                         return lower_if(
                             ctx,
-                            &perry_hir::Expr::Compare { byte_offset: 0 /*HPOS*/,
+                            &perry_hir::Expr::Compare {
+                                byte_offset: 0, /*HPOS*/
                                 op: perry_hir::CompareOp::Eq,
                                 left: Box::new(args[0].clone()),
                                 right: Box::new(perry_hir::Expr::Bool(false)),
@@ -864,7 +865,8 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
         // preceding case is valid JS.
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => lower_switch(ctx, discriminant, cases),
 
         // Labeled statement: set the pending label so the next loop

@@ -78,7 +78,8 @@ fn empty_opts() -> CompileOptions {
 }
 
 fn param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -90,7 +91,8 @@ fn param(id: u32, name: &str) -> Param {
 }
 
 fn module_with_recursive_constructor_return() -> Module {
-    let ctor = Function { byte_offset: 0,
+    let ctor = Function {
+        byte_offset: 0,
         id: 1,
         name: "constructor".to_string(),
         type_params: Vec::new(),
@@ -98,14 +100,17 @@ fn module_with_recursive_constructor_return() -> Module {
         return_type: Type::Void,
         body: vec![Stmt::If {
             condition: Expr::Bool(false),
-            then_branch: vec![Stmt::Return(Some(Expr::New {
-                byte_end: 0,
-                class_name: "RecursiveCtor".to_string(),
-                args: vec![Expr::Bool(false), Expr::LocalGet(11)],
-                type_args: Vec::new(),
-                byte_offset: 0,
-                cap_args_appended: 0,
-            }), 0)],
+            then_branch: vec![Stmt::Return(
+                Some(Expr::New {
+                    byte_end: 0,
+                    class_name: "RecursiveCtor".to_string(),
+                    args: vec![Expr::Bool(false), Expr::LocalGet(11)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+                0,
+            )],
             else_branch: None,
         }],
         is_async: false,
@@ -118,7 +123,8 @@ fn module_with_recursive_constructor_return() -> Module {
         decorators: Vec::new(),
     };
 
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "constructor_recursion.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

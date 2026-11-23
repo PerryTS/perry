@@ -6,22 +6,28 @@ use crate::{
 use perry_hir::{types::Type, BinaryOp, Expr, Param, Stmt};
 
 fn comparator(effect: bool) -> Expr {
-    let mut body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-        op: BinaryOp::Sub,
-        left: Box::new(Expr::LocalGet(17)),
-        right: Box::new(Expr::LocalGet(23)),
-    }), 0)];
+    let mut body = vec![Stmt::Return(
+        Some(Expr::Binary {
+            byte_offset: 0,
+            op: BinaryOp::Sub,
+            left: Box::new(Expr::LocalGet(17)),
+            right: Box::new(Expr::LocalGet(23)),
+        }),
+        0,
+    )];
     if effect {
         body.insert(
             0,
             Stmt::Expr(Expr::LocalSet(17, Box::new(Expr::Number(0.0)))),
         );
     }
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id: 99,
         params: [17, 23]
             .into_iter()
-            .map(|id| Param { byte_offset: 0,
+            .map(|id| Param {
+                byte_offset: 0,
                 id,
                 name: format!("p{id}"),
                 ty: Type::Number,

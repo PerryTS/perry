@@ -12,7 +12,8 @@ fn empty_opts() -> CompileOptions {
 }
 
 fn test_function(id: u32, value: f64) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: "lex".to_string(),
         type_params: Vec::new(),
@@ -38,7 +39,8 @@ fn dollar_export_aliases_resolve_function_identity_not_sanitized_spelling() {
         function.name = name.into();
         function.is_exported = true;
         function.params = (0..arity)
-            .map(|i| Param { byte_offset: 0,
+            .map(|i| Param {
+                byte_offset: 0,
                 id: id * 100 + i,
                 name: format!("a{i}"),
                 ty: Type::Any,

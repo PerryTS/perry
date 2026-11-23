@@ -395,7 +395,8 @@ fn walk_writes_for_unsigned_i32(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 walk_writes_in_expr_for_unsigned_i32(discriminant, saw_any, disqualified);
                 for c in cases {
@@ -649,7 +650,8 @@ pub fn walk_writes_for_strict(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 walk_writes_in_expr_for_strict(
                     discriminant,
@@ -1189,7 +1191,8 @@ pub fn collect_localset_ids_in_stmts_filtered(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 collect_localset_ids_in_expr_filtered(
                     discriminant,
@@ -1408,7 +1411,8 @@ pub fn collect_localset_ids_in_expr_filtered(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             walk(condition, out);
             walk(then_expr, out);

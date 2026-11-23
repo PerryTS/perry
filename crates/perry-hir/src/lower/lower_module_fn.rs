@@ -1610,7 +1610,8 @@ pub fn lower_module_full_with_platform_globals(
                 name: format!("__perry_import_meta_require_{id}"),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::NativeMethodCall { byte_offset: require_offset,
+                init: Some(Expr::NativeMethodCall {
+                    byte_offset: require_offset,
                     module: "module".to_string(),
                     class_name: None,
                     object: None,

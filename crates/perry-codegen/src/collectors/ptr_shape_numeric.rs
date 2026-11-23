@@ -931,7 +931,9 @@ fn expr_numeric_by_construction_with_region(
             perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot => rec(operand),
             _ => false,
         },
-        Expr::Binary { op, left, right, .. } => match op {
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
             // `+` concatenates strings; both sides must be numbers.
             BinaryOp::Add => {
                 (rec(left) || numeric_view_value_or_undefined(left))
@@ -1135,7 +1137,8 @@ mod region_number_tests {
     fn add_to_acc(id: u32) -> Stmt {
         Stmt::Expr(Expr::LocalSet(
             ACC,
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: perry_hir::BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(ACC)),
                 right: Box::new(Expr::LocalGet(id)),
@@ -1250,7 +1253,8 @@ mod region_number_tests {
         // point judges the write, it does not refuse every written local.
         let numeric_write = Expr::LocalSet(
             ACC,
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: perry_hir::BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(ACC)),
                 right: Box::new(Expr::Number(1.0)),

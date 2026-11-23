@@ -6,7 +6,8 @@ use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,
@@ -29,7 +30,8 @@ fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
 
 /// `() => { <cap> = 42 }`: captures `cap` and mutates it, so `cap` is a cell.
 fn writer(func_id: u32, cap: u32) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -50,7 +52,8 @@ fn writer(func_id: u32, cap: u32) -> Expr {
 fn resume_ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
     let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
     let mut module = Module::new("binding_cell.ts");
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "resume".into(),
         type_params: Vec::new(),

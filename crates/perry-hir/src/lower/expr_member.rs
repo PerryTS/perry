@@ -9,9 +9,9 @@
 //! (regular object vs class static vs enum vs builtin namespace) then
 //! emit the right HIR variant.
 
-use swc_common::Spanned;
 use crate::types::Type;
 use anyhow::Result;
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;
@@ -479,7 +479,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // holds and toggles are observable. Lower to a 0-arg
                     // native getter that reads the runtime flag.
                     "sourceMapsEnabled" => {
-                        return Ok(Expr::NativeMethodCall { byte_offset: member.span.lo.0,
+                        return Ok(Expr::NativeMethodCall {
+                            byte_offset: member.span.lo.0,
                             module: "process".to_string(),
                             class_name: None,
                             object: None,
@@ -659,7 +660,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "features" => return Ok(process_features_literal()),
                     // #3108: live boolean toggle — see the matching arm above.
                     "sourceMapsEnabled" => {
-                        return Ok(Expr::NativeMethodCall { byte_offset: member.span.lo.0,
+                        return Ok(Expr::NativeMethodCall {
+                            byte_offset: member.span.lo.0,
                             module: "process".to_string(),
                             class_name: None,
                             object: None,
@@ -1749,7 +1751,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // For properties that map to FFI functions, generate a NativeMethodCall
                     // with no args (property getter)
                     let object_expr = lower_expr(ctx, &member.obj)?;
-                    return Ok(Expr::NativeMethodCall { byte_offset: member.span.lo.0,
+                    return Ok(Expr::NativeMethodCall {
+                        byte_offset: member.span.lo.0,
                         module: module_name,
                         class_name: class_filter,
                         object: Some(Box::new(object_expr)),

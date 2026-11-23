@@ -19,7 +19,8 @@ use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -31,7 +32,8 @@ fn param(id: u32, name: &str) -> Param {
 }
 
 fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -61,13 +63,16 @@ fn underapplied_call_ir() -> String {
         2,
         "caller",
         Vec::new(),
-        vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::FuncRef(1)),
-            args: vec![Expr::Number(7.0)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(Expr::FuncRef(1)),
+                args: vec![Expr::Number(7.0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            0,
+        )],
     );
     let mut module = Module::new("underapply_pad_test.ts");
     module.functions = vec![callee, caller];

@@ -296,7 +296,9 @@ fn infer_expr(
             }
             Some(ctx.functions.get(function_id)?.return_type.clone())
         }
-        Expr::Binary { op, left, right, .. } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             use perry_hir::BinaryOp;
             let left = infer_expr(ctx, locals, left, depth + 1)?;
             let right = infer_expr(ctx, locals, right, depth + 1)?;
@@ -921,11 +923,13 @@ mod tests {
     use perry_hir::{Param, TypeAlias};
 
     fn function(id: u32, name: &str, body: Vec<Stmt>, payload: &Type) -> Function {
-        Function { byte_offset: 0,
+        Function {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             type_params: Vec::new(),
-            params: vec![Param { byte_offset: 0,
+            params: vec![Param {
+                byte_offset: 0,
                 id: id * 10,
                 name: "value".to_string(),
                 ty: payload.clone(),
@@ -1040,11 +1044,13 @@ mod tests {
             ],
             &payload,
         );
-        let one_pass_number = Function { byte_offset: 0,
+        let one_pass_number = Function {
+            byte_offset: 0,
             id: 5,
             name: "onePassNumber".to_string(),
             type_params: Vec::new(),
-            params: vec![Param { byte_offset: 0,
+            params: vec![Param {
+                byte_offset: 0,
                 id: 50,
                 name: "value".to_string(),
                 ty: payload.clone(),

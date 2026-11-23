@@ -169,7 +169,8 @@ fn flat_const_stmts_are_safe(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 flat_const_expr_is_safe(discriminant, id, row_aliases, FlatConstUse::Value)
                     && cases.iter().all(|case| {
@@ -374,7 +375,8 @@ fn any_top_level_expr(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 if pred(discriminant) {
                     return true;
@@ -554,7 +556,8 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             expr_has_mutation(condition, id)
                 || expr_has_mutation(then_expr, id)
@@ -651,7 +654,10 @@ mod tests {
 
     #[test]
     fn flat_const_rejects_rows_used_as_javascript_values() {
-        let returned_directly = vec![perry_hir::Stmt::Return(Some(index(Expr::LocalGet(7), 0)), 0)];
+        let returned_directly = vec![perry_hir::Stmt::Return(
+            Some(index(Expr::LocalGet(7), 0)),
+            0,
+        )];
         assert!(!flat_const_array_uses_are_read_only(&returned_directly, 7));
 
         let returned_alias = vec![
@@ -736,12 +742,15 @@ mod tests {
     fn a_call_that_receives_nothing_still_counts_as_unknown_code() {
         let body = vec![
             perry_hir::Stmt::Expr(call(101, Vec::new())),
-            perry_hir::Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(7)),
-                property: "v".to_string(),
-                byte_offset: 0,
-            }), 0),
+            perry_hir::Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(7)),
+                    property: "v".to_string(),
+                    byte_offset: 0,
+                }),
+                0,
+            ),
         ];
         assert!(body_contains_call(&body));
         // and the escape-shaped predicate is exactly what does NOT see it
@@ -756,11 +765,15 @@ mod tests {
             property: "v".to_string(),
             byte_offset: 0,
         };
-        let body = vec![perry_hir::Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op: BinaryOp::Add,
-            left: Box::new(read),
-            right: Box::new(Expr::Integer(1)),
-        }), 0)];
+        let body = vec![perry_hir::Stmt::Return(
+            Some(Expr::Binary {
+                byte_offset: 0,
+                op: BinaryOp::Add,
+                left: Box::new(read),
+                right: Box::new(Expr::Integer(1)),
+            }),
+            0,
+        )];
         assert!(!body_contains_call(&body));
     }
 
@@ -774,7 +787,8 @@ mod tests {
                 name: "x".to_string(),
                 ty: perry_hir::types::Type::Number,
                 mutable: false,
-                init: Some(Expr::Binary { byte_offset: 0,
+                init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::Integer(1)),
                     right: Box::new(call(102, vec![Expr::Integer(2)])),

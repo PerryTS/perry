@@ -281,13 +281,15 @@ mod tests {
     use std::collections::HashMap;
 
     fn function(id: FuncId, params: Vec<LocalId>, body: Vec<Stmt>) -> Function {
-        Function { byte_offset: 0,
+        Function {
+            byte_offset: 0,
             id,
             name: format!("f{id}"),
             type_params: Vec::new(),
             params: params
                 .into_iter()
-                .map(|id| Param { byte_offset: 0,
+                .map(|id| Param {
+                    byte_offset: 0,
                     id,
                     name: format!("p{id}"),
                     ty: Type::Number,
@@ -321,7 +323,8 @@ mod tests {
     }
 
     fn greater(local: LocalId, value: i64) -> Expr {
-        Expr::Compare { byte_offset: 0,
+        Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Gt,
             left: Box::new(Expr::LocalGet(local)),
             right: Box::new(Expr::Integer(value)),

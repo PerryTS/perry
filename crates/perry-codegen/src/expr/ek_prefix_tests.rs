@@ -7,7 +7,8 @@ use perry_hir::{Expr, Function, Module as HirModule, Param, Stmt};
 
 fn module_ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
     let mut hir = HirModule::new("ek_prefix_test");
-    hir.functions.push(Function { byte_offset: 0,
+    hir.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -35,7 +36,8 @@ fn module_ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty,
@@ -205,13 +207,16 @@ fn read_ir(numeric: bool) -> String {
             param(1, "array", Type::Array(Box::new(elem))),
             param(2, "key", Type::Any),
         ],
-        vec![Stmt::Return(Some(Expr::IndexGet {
-            element_offset: 0,
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(Expr::Integer(1)),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::Integer(1)),
+            }),
+            0,
+        )],
     )
 }
 
@@ -393,13 +398,16 @@ fn inline_writers_raise_the_frontier() {
 fn dynamic_read_ic_takes_the_prefix_hit_first() {
     let ll = module_ir(
         vec![param(1, "o", Type::Any), param(2, "i", Type::Number)],
-        vec![Stmt::Return(Some(Expr::IndexGet {
-            element_offset: 0,
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(Expr::LocalGet(2)),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::LocalGet(2)),
+            }),
+            0,
+        )],
     );
     let guard = block(&ll, "arrlike.ic.array_guard");
     assert!(

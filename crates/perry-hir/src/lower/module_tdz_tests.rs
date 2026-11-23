@@ -19,7 +19,8 @@ fn let_stmt(id: LocalId, name: &str, init: Expr) -> Stmt {
 }
 
 fn function(id: FuncId, name: &str, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -38,7 +39,8 @@ fn function(id: FuncId, name: &str, body: Vec<Stmt>) -> Function {
 }
 
 fn closure(func_id: FuncId, body: Vec<Stmt>) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,

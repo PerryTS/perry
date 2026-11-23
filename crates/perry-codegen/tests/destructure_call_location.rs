@@ -99,7 +99,8 @@ fn base_opts() -> CompileOptions {
 /// `Number` arg. Offset 8 sits on line 2 of the source below.
 fn module_with_destructure_coercible() -> Module {
     let mut m = Module::new("destr.ts");
-    m.init = vec![Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
+    m.init = vec![Stmt::Expr(Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,

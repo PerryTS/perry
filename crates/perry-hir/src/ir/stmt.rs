@@ -131,10 +131,12 @@ impl Stmt {
             Stmt::Try { byte_offset, .. } => Some(*byte_offset),
             Stmt::Switch { byte_offset, .. } => Some(*byte_offset),
             // A loop or branch stands at its condition.
-            Stmt::If { condition, .. } | Stmt::While { condition, .. } | Stmt::DoWhile { condition, .. } => {
-                condition.byte_offset()
-            }
-            Stmt::For { condition: Some(c), .. } => c.byte_offset(),
+            Stmt::If { condition, .. }
+            | Stmt::While { condition, .. }
+            | Stmt::DoWhile { condition, .. } => condition.byte_offset(),
+            Stmt::For {
+                condition: Some(c), ..
+            } => c.byte_offset(),
             _ => None,
         }
     }

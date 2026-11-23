@@ -3,7 +3,8 @@ use perry_hir::types::Type;
 use perry_hir::{ArgumentsObjectMeta, Expr, Function, Module, Param, Stmt};
 
 fn params(mapped: bool) -> Vec<Param> {
-    let param = |id, name: &str| Param { byte_offset: 0,
+    let param = |id, name: &str| Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,
@@ -23,7 +24,8 @@ fn params(mapped: bool) -> Vec<Param> {
 }
 
 fn closure(id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id: id,
         params,
         return_type: Type::Any,
@@ -53,7 +55,8 @@ fn write() -> Stmt {
 
 fn module(params: Vec<Param>, body: Vec<Stmt>) -> Module {
     let mut m = Module::new("mapped");
-    m.functions.push(Function { byte_offset: 0,
+    m.functions.push(Function {
+        byte_offset: 0,
         id: 10,
         name: "outer".into(),
         type_params: Vec::new(),

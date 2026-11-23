@@ -394,7 +394,8 @@ impl<'a> Proof<'a> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 self.expr(condition, function);
                 let mut v = self.expr(then_expr, function);
@@ -720,7 +721,8 @@ impl<'a> Proof<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.expr(discriminant, f);
                 for c in cases {

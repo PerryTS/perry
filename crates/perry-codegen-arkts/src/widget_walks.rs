@@ -111,7 +111,8 @@ pub(crate) fn walk_init_for_closure_targets_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             walk_init_for_closure_targets_in_expr(condition, out);
             walk_init_for_closure_targets_in_expr(then_expr, out);
@@ -230,7 +231,8 @@ pub(crate) fn walk_for_set_hidden_targets_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             walk_for_set_hidden_targets_in_expr(condition, out);
             walk_for_set_hidden_targets_in_expr(then_expr, out);

@@ -122,7 +122,8 @@ pub fn absorb_writes_into_index_used(stmts: &[perry_hir::Stmt], out: &mut HashSe
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 absorb_writes_in_expr(discriminant, out);
                 for c in cases {
@@ -174,7 +175,8 @@ pub fn collect_localsets_in_expr_for_propagate<'a>(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             collect_localsets_in_expr_for_propagate(condition, out);
             collect_localsets_in_expr_for_propagate(then_expr, out);
@@ -287,7 +289,8 @@ pub fn walk_index_uses_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 walk_index_uses_in_expr(discriminant, out);
                 for c in cases {
@@ -446,7 +449,8 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             walk_index_uses_in_expr(condition, out);
             walk_index_uses_in_expr(then_expr, out);

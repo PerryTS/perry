@@ -27,7 +27,8 @@ fn counter_class() -> Class {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField { byte_offset: 0,
+        fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "n".to_string(),
             key_expr: None,
@@ -61,21 +62,25 @@ fn counter_class() -> Class {
 fn probe_ir(op: BinaryOp, prefix: bool) -> String {
     let mut m = Module::new("member_update_class_field.ts");
     let mut class = counter_class();
-    class.methods = vec![Function { byte_offset: 0,
+    class.methods = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::PropertyUpdate {
-            object: Box::new(Expr::This),
-            property: "n".to_string(),
-            op,
-            prefix,
-            strict: true,
-            byte_offset: 0,
-            byte_end: 0,
-        }), 0)],
+        body: vec![Stmt::Return(
+            Some(Expr::PropertyUpdate {
+                object: Box::new(Expr::This),
+                property: "n".to_string(),
+                op,
+                prefix,
+                strict: true,
+                byte_offset: 0,
+                byte_end: 0,
+            }),
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: true,

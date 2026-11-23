@@ -54,7 +54,8 @@ pub(crate) fn numeric_arg_resolved(
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 cur = match evaluate_condition(condition, bindings, &HashMap::new()) {
                     Some(false) => else_expr,

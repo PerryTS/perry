@@ -93,7 +93,8 @@ fn expr_is_number_or_bigint(e: &Expr, leaves: &KeyLeaves<'_>) -> bool {
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right, ..
+            right,
+            ..
         } => expr_is_numeric_key(left, leaves) && expr_is_numeric_key(right, leaves),
         // Every other binary operator applies ToNumeric to both sides.
         Expr::Binary { .. } => true,
@@ -198,7 +199,8 @@ mod tests {
             let_stmt(2, Some(Expr::LocalGet(1))),
             set(
                 2,
-                Expr::Binary { byte_offset: 0,
+                Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::Integer(1)),
@@ -247,7 +249,8 @@ mod tests {
             let_stmt(1, Some(Expr::Integer(0))),
             set(
                 1,
-                Expr::Binary { byte_offset: 0,
+                Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(1)),
                     right: Box::new(Expr::String("x".into())),
@@ -261,7 +264,8 @@ mod tests {
     fn parameters_are_never_admitted() {
         // `var x` re-declaring parameter 1 reuses its id; the slot holds the
         // caller's argument before that `Let` runs.
-        let params = vec![Param { byte_offset: 0,
+        let params = vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "x".into(),
             ty: HirType::Number,

@@ -33,7 +33,8 @@ fn ir_opts() -> CompileOptions {
 }
 
 fn number_param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -48,17 +49,22 @@ fn number_param(id: u32, name: &str) -> Param {
 /// `number` params, so codegen emits the public trampoline plus `$typed_f64`
 /// and `$generic` bodies.
 fn candidate_fn(id: u32, name: &str, op: BinaryOp) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
         params: vec![number_param(10, "a"), number_param(11, "b")],
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op,
-            left: Box::new(Expr::LocalGet(10)),
-            right: Box::new(Expr::LocalGet(11)),
-        }), 0)],
+        body: vec![Stmt::Return(
+            Some(Expr::Binary {
+                byte_offset: 0,
+                op,
+                left: Box::new(Expr::LocalGet(10)),
+                right: Box::new(Expr::LocalGet(11)),
+            }),
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -71,7 +77,8 @@ fn candidate_fn(id: u32, name: &str, op: BinaryOp) -> Function {
 }
 
 fn module_with(functions: Vec<Function>) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "clone_suffix.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),

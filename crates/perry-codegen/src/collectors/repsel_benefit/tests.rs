@@ -9,7 +9,8 @@ fn get(id: u32) -> Expr {
 }
 
 fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(l),
         right: Box::new(r),
@@ -26,7 +27,8 @@ fn this_get(field: &str) -> Expr {
 }
 
 fn method(body: Vec<Stmt>) -> perry_hir::Function {
-    perry_hir::Function { byte_offset: 0,
+    perry_hir::Function {
+        byte_offset: 0,
         id: 1,
         name: "m".to_string(),
         type_params: Vec::new(),
@@ -62,11 +64,10 @@ fn tower_route_break_even_is_one_field_site() {
     );
     assert!(!tower_route_profitable(&one, &fields, &HashSet::new()));
 
-    let two = method(vec![Stmt::Return(Some(bin(
-        BinaryOp::Add,
-        this_get("a"),
-        this_get("c"),
-    )), 0)]);
+    let two = method(vec![Stmt::Return(
+        Some(bin(BinaryOp::Add, this_get("a"), this_get("c"))),
+        0,
+    )]);
     assert_eq!(
         proven_receiver_clone_benefit_sites(&two, &fields, &HashSet::new()),
         2

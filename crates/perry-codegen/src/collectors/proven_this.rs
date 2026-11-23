@@ -443,7 +443,8 @@ fn rewrite_array_field_reads_in_stmts(stmts: &mut [Stmt], aliases: &HashMap<Stri
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 rewrite_array_field_reads(discriminant, aliases);
                 for case in cases {

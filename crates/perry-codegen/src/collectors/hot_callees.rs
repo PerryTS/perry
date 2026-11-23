@@ -414,7 +414,8 @@ fn walk_stmt(s: &Stmt, in_loop: bool, scan: &mut HotCalleeScan) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             walk_expr(discriminant, in_loop, scan);
             for c in cases {
@@ -490,7 +491,8 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             walk_expr(condition, in_loop, scan);
             walk_expr(then_expr, in_loop, scan);
@@ -689,7 +691,8 @@ fn count_alloc_sites_in_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 count_alloc_sites_in_expr(discriminant, closure_id, sites);
                 for case in cases {
@@ -847,11 +850,13 @@ mod recursion_participant_tests {
     use perry_hir::{Function, Param};
 
     fn func(id: u32, body: Vec<Stmt>) -> Function {
-        Function { byte_offset: 0,
+        Function {
+            byte_offset: 0,
             id,
             name: format!("f{id}"),
             type_params: Vec::new(),
-            params: vec![Param { byte_offset: 0,
+            params: vec![Param {
+                byte_offset: 0,
                 id: id * 10,
                 name: "n".to_string(),
                 ty: Type::Number,
@@ -874,13 +879,16 @@ mod recursion_participant_tests {
     }
 
     fn call_stmt(fid: u32) -> Stmt {
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::FuncRef(fid)),
-            args: vec![Expr::Integer(1)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)
+        Stmt::Return(
+            Some(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(Expr::FuncRef(fid)),
+                args: vec![Expr::Integer(1)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            0,
+        )
     }
 
     fn new_expr() -> Expr {

@@ -6,7 +6,8 @@ use super::*;
 #[test]
 fn detects_simple_producer() {
     // function f() { const out = []; out.push(1); return out; }
-    let func = Function { byte_offset: 0,
+    let func = Function {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: vec![],
@@ -163,7 +164,8 @@ fn rejects_producer_called_inside_closure() {
     //   }
     let helper = make_simple_producer(); // id=1, the producer
 
-    let closure = Expr::Closure { byte_offset: 0,
+    let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 2,
         params: vec![],
         return_type: Type::Number,
@@ -183,12 +185,15 @@ fn rejects_producer_called_inside_closure() {
                 }),
             },
             // return v.length;
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(30)),
-                property: "length".to_string(),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(30)),
+                    property: "length".to_string(),
+                }),
+                0,
+            ),
         ],
         captures: vec![],
         mutable_captures: vec![],
@@ -201,7 +206,8 @@ fn rejects_producer_called_inside_closure() {
         is_strict: false,
     };
 
-    let factory = Function { byte_offset: 0,
+    let factory = Function {
+        byte_offset: 0,
         id: 3,
         name: "factory".to_string(),
         type_params: vec![],
@@ -255,7 +261,8 @@ fn still_deforests_when_caller_is_not_a_closure() {
     //   function caller() { const v = helper(); /* ...used... */ }
     let helper = make_simple_producer(); // id=1
 
-    let caller = Function { byte_offset: 0,
+    let caller = Function {
+        byte_offset: 0,
         id: 2,
         name: "caller".to_string(),
         type_params: vec![],
@@ -318,7 +325,8 @@ fn deforests_producer_called_from_class_method() {
     //   class C { m() { const v = helper(); return v.length; } }
     let helper = make_simple_producer(); // id=1, the producer
 
-    let method = Function { byte_offset: 0,
+    let method = Function {
+        byte_offset: 0,
         id: 2,
         name: "m".to_string(),
         type_params: vec![],
@@ -338,12 +346,15 @@ fn deforests_producer_called_from_class_method() {
                     byte_offset: 0,
                 }),
             },
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(30)),
-                property: "length".to_string(),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(30)),
+                    property: "length".to_string(),
+                }),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -460,7 +471,8 @@ fn deforests_producer_called_from_class_method() {
 /// A module with `function f() { const out = []; out.push(1); return out; }`
 /// and a caller `function g() { const v = f(); return v; }`.
 fn producer_and_plain_caller() -> Module {
-    let caller = Function { byte_offset: 0,
+    let caller = Function {
+        byte_offset: 0,
         id: 2,
         name: "g".to_string(),
         type_params: vec![],
@@ -581,7 +593,8 @@ fn rejects_deforest_when_class_method_uses_super() {
     //   }
     let helper = make_simple_producer(); // id=1, the producer
 
-    let method_with_super = Function { byte_offset: 0,
+    let method_with_super = Function {
+        byte_offset: 0,
         id: 2,
         name: "m".to_string(),
         type_params: vec![],
@@ -603,9 +616,12 @@ fn rejects_deforest_when_class_method_uses_super() {
                 }),
             },
             // return super.foo;
-            Stmt::Return(Some(Expr::SuperPropertyGet {
-                property: "foo".to_string(),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::SuperPropertyGet {
+                    property: "foo".to_string(),
+                }),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -675,7 +691,8 @@ fn still_deforests_when_method_has_no_super() {
     // but added here for symmetry with the super test above.
     let helper = make_simple_producer(); // id=1
 
-    let plain_method = Function { byte_offset: 0,
+    let plain_method = Function {
+        byte_offset: 0,
         id: 2,
         name: "m".to_string(),
         type_params: vec![],
@@ -695,12 +712,15 @@ fn still_deforests_when_method_has_no_super() {
                     byte_offset: 0,
                 }),
             },
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(30)),
-                property: "length".to_string(),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(30)),
+                    property: "length".to_string(),
+                }),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -865,7 +885,8 @@ fn the_recursive_fuse_inside_a_producer_body_counts() {
                 mutable: true,
                 init: Some(Expr::Integer(0)),
             })),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: perry_hir::CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(41)),
                 right: Box::new(Expr::PropertyGet {
@@ -920,7 +941,8 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
     let outer = base;
     let child = base + 1;
     let j = base + 2;
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: format!("fuse_consumer_{id}"),
         type_params: vec![],
@@ -955,7 +977,8 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(j)),
                     right: Box::new(Expr::PropertyGet {
@@ -993,7 +1016,8 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
 }
 
 fn make_simple_producer() -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: vec![],

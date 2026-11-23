@@ -274,11 +274,13 @@ mod tests {
     /// (forcing the "dead from here" clear).
     fn rooted_local_ir() -> String {
         let mut hir = HirModule::new("inline_shadow_slot_test");
-        hir.functions.push(Function { byte_offset: 0,
+        hir.functions.push(Function {
+            byte_offset: 0,
             id: 0,
             name: "roots".to_string(),
             type_params: Vec::new(),
-            params: vec![Param { byte_offset: 0,
+            params: vec![Param {
+                byte_offset: 0,
                 id: 0,
                 name: "o".to_string(),
                 ty: Type::Any,

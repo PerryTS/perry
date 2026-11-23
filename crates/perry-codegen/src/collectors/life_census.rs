@@ -1106,7 +1106,8 @@ impl Census<'_> {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.expr(discriminant, None);
                 for c in cases {
@@ -1460,7 +1461,9 @@ impl Census<'_> {
                     self.call_site = saved;
                 }
             }
-            Expr::Compare { op, left, right, .. } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 let address = match op {
                     CompareOp::Eq | CompareOp::Ne => true,
                     CompareOp::LooseEq | CompareOp::LooseNe => {

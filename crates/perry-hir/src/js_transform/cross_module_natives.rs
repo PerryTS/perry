@@ -666,7 +666,9 @@ pub fn fix_native_instance_stmt(
                 fix_native_instance_expr(e, native_instances, local_id_instances);
             }
         }
-        Stmt::Return(Some(e), _) => fix_native_instance_expr(e, native_instances, local_id_instances),
+        Stmt::Return(Some(e), _) => {
+            fix_native_instance_expr(e, native_instances, local_id_instances)
+        }
         Stmt::Return(None, _) => {}
         Stmt::If {
             condition,
@@ -719,7 +721,8 @@ pub fn fix_native_instance_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             fix_native_instance_expr(discriminant, native_instances, local_id_instances);
             for case in cases {
@@ -777,7 +780,12 @@ pub fn fix_native_instance_expr(
 ) {
     match expr {
         // The key case: method calls that might be on native instances
-        Expr::Call { callee, args, byte_offset, .. } => {
+        Expr::Call {
+            callee,
+            args,
+            byte_offset,
+            ..
+        } => {
             // Check if this is a method call: obj.method(args)
             if let Expr::PropertyGet {
                 object, property, ..
@@ -797,7 +805,8 @@ pub fn fix_native_instance_expr(
                     let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
 
                     // Transform to NativeMethodCall
-                    *expr = Expr::NativeMethodCall { byte_offset: *byte_offset,
+                    *expr = Expr::NativeMethodCall {
+                        byte_offset: *byte_offset,
                         module: native_module,
                         class_name: Some(native_class),
                         object: Some(Box::new(object_expr)),
@@ -839,7 +848,8 @@ pub fn fix_native_instance_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             fix_native_instance_expr(condition, native_instances, local_id_instances);
             fix_native_instance_expr(then_expr, native_instances, local_id_instances);
@@ -899,7 +909,13 @@ pub fn fix_native_instance_expr(
         }
         Expr::Await(inner, _) => {
             // Handle Await(Call{PropertyGet{obj...}}) pattern for native instances
-            if let Expr::Call { callee, args, byte_offset, .. } = inner.as_mut() {
+            if let Expr::Call {
+                callee,
+                args,
+                byte_offset,
+                ..
+            } = inner.as_mut()
+            {
                 if let Expr::PropertyGet {
                     object, property, ..
                 } = callee.as_mut()
@@ -919,7 +935,8 @@ pub fn fix_native_instance_expr(
                         let object_expr = std::mem::replace(object.as_mut(), Expr::Undefined);
 
                         // Replace the inner Call with NativeMethodCall (wrapped by Await)
-                        *inner.as_mut() = Expr::NativeMethodCall { byte_offset: *byte_offset,
+                        *inner.as_mut() = Expr::NativeMethodCall {
+                            byte_offset: *byte_offset,
                             module: native_module,
                             class_name: Some(native_class),
                             object: Some(Box::new(object_expr)),

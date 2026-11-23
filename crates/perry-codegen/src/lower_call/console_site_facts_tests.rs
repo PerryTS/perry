@@ -23,7 +23,8 @@ fn compile(body: Vec<Stmt>, proven: &[u32]) -> String {
 
 fn compile_with_site(body: Vec<Stmt>, proven: &[u32], key: &str, flags: u8) -> String {
     let mut hir = HirModule::new("console_site_facts");
-    hir.functions.push(Function { byte_offset: 0,
+    hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
@@ -213,7 +214,8 @@ fn native_dispatch_namespace_selection_matches_the_shared_predicate() {
             byte_offset: SITE,
             byte_end: 0,
         };
-        let pair = Expr::Conditional { byte_offset: 0,
+        let pair = Expr::Conditional {
+            byte_offset: 0,
             condition: Box::new(Expr::NamespacePatched(namespace.into())),
             then_expr: Box::new(generic),
             else_expr: Box::new(fast),

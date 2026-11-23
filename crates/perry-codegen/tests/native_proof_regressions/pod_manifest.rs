@@ -638,12 +638,15 @@ fn native_pod_view_length_survives_immutable_local_alias() {
                 mutable: false,
                 init: Some(local(2)),
             },
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(local(3)),
-                property: "length".to_string(),
-                byte_offset: 0,
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(local(3)),
+                    property: "length".to_string(),
+                    byte_offset: 0,
+                }),
+                0,
+            ),
         ],
     );
 

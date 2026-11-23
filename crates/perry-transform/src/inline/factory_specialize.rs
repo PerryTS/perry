@@ -452,7 +452,8 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases, ..
+                    cases,
+                    ..
                 } => {
                     rewrite_call_init(
                         discriminant,
@@ -593,7 +594,8 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 rewrite_call_init(
                     condition,

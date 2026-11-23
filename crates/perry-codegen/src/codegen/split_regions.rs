@@ -476,7 +476,9 @@ fn guard_proof(cond: &Expr) -> Option<(u32, Type)> {
             left,
             ..
         } => guard_proof(left),
-        Expr::Compare { op, left, right, .. } if matches!(op, CompareOp::Eq | CompareOp::LooseEq) => {
+        Expr::Compare {
+            op, left, right, ..
+        } if matches!(op, CompareOp::Eq | CompareOp::LooseEq) => {
             let (tested, lit) = match (left.as_ref(), right.as_ref()) {
                 (Expr::TypeOf(x), Expr::String(s)) | (Expr::String(s), Expr::TypeOf(x)) => (x, s),
                 _ => return None,
@@ -799,7 +801,8 @@ fn try_extract(
             .cloned()
             .unwrap_or_else(|| format!("v{id}"));
         param_desc.push(format!("{}:{}", name, type_name(&proof)));
-        params.push(Param { byte_offset: 0 /*HPOS*/,
+        params.push(Param {
+            byte_offset: 0, /*HPOS*/
             id: fresh,
             name,
             ty: proof,
@@ -891,11 +894,17 @@ fn try_extract(
     }
     match outs.len() {
         0 => {}
-        1 => body.push(Stmt::Return(Some(Expr::LocalGet(remap[&outs[0]])), 0 /*HPOS*/)),
-        _ => body.push(Stmt::Return(Some(Expr::Array(
-            outs.iter().map(|id| Expr::LocalGet(remap[id])).collect(),
-            None,
-        )), 0 /*HPOS*/)),
+        1 => body.push(Stmt::Return(
+            Some(Expr::LocalGet(remap[&outs[0]])),
+            0, /*HPOS*/
+        )),
+        _ => body.push(Stmt::Return(
+            Some(Expr::Array(
+                outs.iter().map(|id| Expr::LocalGet(remap[id])).collect(),
+                None,
+            )),
+            0, /*HPOS*/
+        )),
     }
     let func_id = sh.next_func + 1;
     sh.next_func = func_id;
@@ -1023,7 +1032,8 @@ fn try_extract(
             })
             .collect();
         sh.closure_names.push((func_id, name));
-        Expr::Closure { byte_offset: 0 /*HPOS*/,
+        Expr::Closure {
+            byte_offset: 0, /*HPOS*/
             func_id,
             params,
             return_type: Type::Any,
@@ -1039,7 +1049,8 @@ fn try_extract(
             is_strict: ctx.is_strict,
         }
     } else {
-        sh.out.push(Function { byte_offset: 0 /*HPOS*/,
+        sh.out.push(Function {
+            byte_offset: 0, /*HPOS*/
             id: func_id,
             name,
             type_params: Vec::new(),
@@ -1792,7 +1803,8 @@ fn split_closures_in(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 split_closures_in_expr(discriminant, names, facts, sh);
                 for c in cases {

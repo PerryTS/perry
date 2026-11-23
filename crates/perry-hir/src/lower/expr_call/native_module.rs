@@ -152,7 +152,8 @@ fn lower_os_module_method_call(
         "cpus" => Some(Expr::OsCpus),
         "networkInterfaces" => Some(Expr::OsNetworkInterfaces),
         "userInfo" => Some(user_info_expr_for_call(call, args.to_vec())),
-        "getPriority" | "setPriority" => Some(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+        "getPriority" | "setPriority" => Some(Expr::NativeMethodCall {
+            byte_offset: call.span.lo.0,
             module: "os".to_string(),
             class_name: None,
             object: None,
@@ -369,7 +370,8 @@ pub(super) fn try_native_module_methods(
             ctx.lookup_native_module(ident.sym.as_ref()),
             Some(("inspector/promises", Some("Session")))
         ) {
-            return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+            return Ok(Ok(Expr::NativeMethodCall {
+                byte_offset: call.span.lo.0,
                 module: "inspector/promises".to_string(),
                 class_name: None,
                 object: None,
@@ -411,7 +413,8 @@ pub(super) fn try_native_module_methods(
             ) {
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     if method_ident.sym.as_ref() == "from" {
-                        return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            byte_offset: call.span.lo.0,
                             module: "readable_stream".to_string(),
                             class_name: Some("ReadableStream".to_string()),
                             object: None,
@@ -422,7 +425,13 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            args = match process_module::try_process_module_methods(ctx, member, &obj_name, args, call.span.lo.0)? {
+            args = match process_module::try_process_module_methods(
+                ctx,
+                member,
+                &obj_name,
+                args,
+                call.span.lo.0,
+            )? {
                 Ok(expr) => return Ok(Ok(expr)),
                 Err(rest) => rest,
             };
@@ -469,7 +478,8 @@ pub(super) fn try_native_module_methods(
                         | "cachedDataVersionTag"
                         | "getHeapSnapshot"
                         | "writeHeapSnapshot" => {
-                            return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                byte_offset: call.span.lo.0,
                                 module: "v8".to_string(),
                                 class_name: None,
                                 object: None,

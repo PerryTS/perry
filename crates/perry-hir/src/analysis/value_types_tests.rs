@@ -15,7 +15,8 @@ fn function_type(return_type: Type) -> Type {
 }
 
 fn function_decl(id: FuncId, name: &str, return_type: Type) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -34,7 +35,8 @@ fn function_decl(id: FuncId, name: &str, return_type: Type) -> Function {
 }
 
 fn class_field(name: &str, ty: Type) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: crate::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -47,7 +49,8 @@ fn class_field(name: &str, ty: Type) -> ClassField {
 }
 
 fn closure_returning(return_type: Type) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id: 99,
         params: Vec::new(),
         return_type,
@@ -605,7 +608,8 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
         setters: Vec::new(),
         static_accessor_names: Vec::new(),
         static_accessor_fn_ids: Vec::new(),
-        static_fields: vec![ClassField { byte_offset: 0,
+        static_fields: vec![ClassField {
+            byte_offset: 0,
             origin: crate::ClassFieldOrigin::Definition,
             name: "count".to_string(),
             key_expr: None,
@@ -615,7 +619,8 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
             is_readonly: false,
             decorators: Vec::new(),
         }],
-        static_methods: vec![Function { byte_offset: 0,
+        static_methods: vec![Function {
+            byte_offset: 0,
             id: 2,
             name: "make".to_string(),
             type_params: Vec::new(),
@@ -1665,7 +1670,8 @@ fn path_to_namespaced_path_requires_string_input() {
 #[test]
 fn mixed_bigint_number_arithmetic_is_not_bigint() {
     let env = empty_env();
-    let mixed = Expr::Binary { byte_offset: 0,
+    let mixed = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::BigInt("1".to_string())),
         right: Box::new(Expr::Number(2.0)),
@@ -1673,7 +1679,8 @@ fn mixed_bigint_number_arithmetic_is_not_bigint() {
     // `1n + 2` throws a TypeError at runtime, so it is not a BigInt.
     assert_eq!(infer_expr_type(&mixed, &env), Type::Any);
 
-    let both = Expr::Binary { byte_offset: 0,
+    let both = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Mul,
         left: Box::new(Expr::BigInt("2".to_string())),
         right: Box::new(Expr::BigInt("3".to_string())),
@@ -1686,7 +1693,8 @@ fn logical_and_or_unions_both_operands() {
     let env = empty_env();
     // `0 && "x"` evaluates to `0` (a number), so the result is number | string,
     // not just the right operand's type.
-    let expr = Expr::Logical { byte_offset: 0,
+    let expr = Expr::Logical {
+        byte_offset: 0,
         op: LogicalOp::And,
         left: Box::new(Expr::Number(0.0)),
         right: Box::new(Expr::String("x".to_string())),
@@ -1697,7 +1705,8 @@ fn logical_and_or_unions_both_operands() {
     );
 
     // Equal operand types collapse rather than forming a redundant union.
-    let same = Expr::Logical { byte_offset: 0,
+    let same = Expr::Logical {
+        byte_offset: 0,
         op: LogicalOp::Or,
         left: Box::new(Expr::String("a".to_string())),
         right: Box::new(Expr::String("b".to_string())),
@@ -1713,7 +1722,8 @@ fn logical_and_or_unions_both_operands() {
 fn nullish_coalescing_keeps_an_unknown_left_operand_unknown() {
     let env = empty_env();
     // An unresolved local is `Any`.
-    let unknown = Expr::Logical { byte_offset: 0,
+    let unknown = Expr::Logical {
+        byte_offset: 0,
         op: LogicalOp::Coalesce,
         left: Box::new(Expr::LocalGet(999)),
         right: Box::new(Expr::Null),
@@ -1722,10 +1732,13 @@ fn nullish_coalescing_keeps_an_unknown_left_operand_unknown() {
 
     // The exact lowering of `opts?.masks ?? null` on a receiver whose type the
     // environment does not know: `opts == null ? undefined : opts.masks`.
-    let optional_chain = Expr::Logical { byte_offset: 0,
+    let optional_chain = Expr::Logical {
+        byte_offset: 0,
         op: LogicalOp::Coalesce,
-        left: Box::new(Expr::Conditional { byte_offset: 0,
-            condition: Box::new(Expr::Compare { byte_offset: 0,
+        left: Box::new(Expr::Conditional {
+            byte_offset: 0,
+            condition: Box::new(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::LooseEq,
                 left: Box::new(Expr::LocalGet(5)),
                 right: Box::new(Expr::Null),
@@ -1746,7 +1759,8 @@ fn nullish_coalescing_keeps_an_unknown_left_operand_unknown() {
 #[test]
 fn nullish_coalescing_takes_the_right_operand_only_for_a_nullish_left() {
     let env = empty_env();
-    let coalesce = |left: Expr, right: Expr| Expr::Logical { byte_offset: 0,
+    let coalesce = |left: Expr, right: Expr| Expr::Logical {
+        byte_offset: 0,
         op: LogicalOp::Coalesce,
         left: Box::new(left),
         right: Box::new(right),
@@ -1905,7 +1919,8 @@ fn resolves_this_and_super_in_class_context() {
 #[test]
 fn bitwise_result_is_number_only_with_a_non_bigint_operand() {
     let env = empty_env();
-    let binary = |op, left, right| Expr::Binary { byte_offset: 0,
+    let binary = |op, left, right| Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),

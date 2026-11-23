@@ -603,14 +603,16 @@ fn same_put_value_receiver_expr(target: &Expr, receiver: &Expr) -> bool {
                 class_name: a_class,
                 object: a_object,
                 method: a_method,
-                args: a_args, ..
+                args: a_args,
+                ..
             },
             Expr::NativeMethodCall {
                 module: b_module,
                 class_name: b_class,
                 object: b_object,
                 method: b_method,
-                args: b_args, ..
+                args: b_args,
+                ..
             },
         ) => {
             a_module == b_module

@@ -21,7 +21,8 @@ fn row_class() -> Class {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField { byte_offset: 0,
+        fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "value".to_string(),
             key_expr: None,
@@ -51,7 +52,8 @@ fn row_class() -> Class {
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -75,16 +77,20 @@ fn module_with_callback(declare_source_array_param: bool) -> Module {
         ));
     }
 
-    let callback = Expr::Closure { byte_offset: 0,
+    let callback = Expr::Closure {
+        byte_offset: 0,
         func_id: CLOSURE_ID,
         params: callback_params,
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(ELEMENT_ID)),
-            property: "value".to_string(),
-            byte_offset: 0,
-        }), 0)],
+        body: vec![Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(ELEMENT_ID)),
+                property: "value".to_string(),
+                byte_offset: 0,
+            }),
+            0,
+        )],
         captures: Vec::new(),
         mutable_captures: Vec::new(),
         captures_this: false,
@@ -184,7 +190,8 @@ fn callback_source_array_alias_keeps_the_shape_guard() {
 }
 
 fn module_with_some_callback(captures_this: bool) -> Module {
-    let callback = Expr::Closure { byte_offset: 0,
+    let callback = Expr::Closure {
+        byte_offset: 0,
         func_id: CLOSURE_ID,
         params: vec![param(ELEMENT_ID, "row", Type::Named("Row".to_string()))],
         return_type: Type::Boolean,

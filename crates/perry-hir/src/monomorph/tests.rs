@@ -42,7 +42,8 @@ fn test_substitute_type() {
 fn test_monomorphize_substitutes_pod_layout_type_vars() {
     let type_var_t = Type::TypeVar("T".to_string());
     let packet_ty = Type::Named("Packet".to_string());
-    let layout_func = Function { byte_offset: 0,
+    let layout_func = Function {
+        byte_offset: 0,
         id: 1,
         name: "layout".to_string(),
         type_params: vec![TypeParam {
@@ -62,10 +63,13 @@ fn test_monomorphize_substitutes_pod_layout_type_vars() {
             Stmt::Expr(Expr::PodLayoutAlignOf {
                 ty: type_var_t.clone(),
             }),
-            Stmt::Return(Some(Expr::PodLayoutOffsetOf {
-                ty: type_var_t,
-                field_path: vec!["payload".to_string()],
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PodLayoutOffsetOf {
+                    ty: type_var_t,
+                    field_path: vec!["payload".to_string()],
+                }),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -121,7 +125,8 @@ fn test_monomorphize_substitutes_native_pod_view_type_vars() {
         base: "PerryPodView".to_string(),
         type_args: vec![packet_ty.clone()],
     };
-    let view_func = Function { byte_offset: 0,
+    let view_func = Function {
+        byte_offset: 0,
         id: 1,
         name: "view".to_string(),
         type_params: vec![TypeParam {
@@ -129,7 +134,8 @@ fn test_monomorphize_substitutes_native_pod_view_type_vars() {
             constraint: None,
             default: None,
         }],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 0,
             name: "arena".to_string(),
             ty: Type::Named("NativeArena".to_string()),
@@ -139,12 +145,15 @@ fn test_monomorphize_substitutes_native_pod_view_type_vars() {
             arguments_object: None,
         }],
         return_type: generic_view_ty.clone(),
-        body: vec![Stmt::Return(Some(Expr::NativePodView {
-            owner: Box::new(Expr::LocalGet(0)),
-            byte_offset: Box::new(Expr::Integer(0)),
-            count: Box::new(Expr::Integer(1)),
-            view_type: Some(generic_view_ty),
-        }), 0)],
+        body: vec![Stmt::Return(
+            Some(Expr::NativePodView {
+                owner: Box::new(Expr::LocalGet(0)),
+                byte_offset: Box::new(Expr::Integer(0)),
+                count: Box::new(Expr::Integer(1)),
+                view_type: Some(generic_view_ty),
+            }),
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -184,7 +193,8 @@ fn test_monomorphize_substitutes_native_pod_view_type_vars() {
 #[test]
 fn test_monomorphize_generic_function() {
     // Create a generic identity function: function identity<T>(x: T): T { return x; }
-    let identity_func = Function { byte_offset: 0,
+    let identity_func = Function {
+        byte_offset: 0,
         id: 1,
         name: "identity".to_string(),
         type_params: vec![TypeParam {
@@ -192,7 +202,8 @@ fn test_monomorphize_generic_function() {
             constraint: None,
             default: None,
         }],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 0,
             name: "x".to_string(),
             ty: Type::TypeVar("T".to_string()),
@@ -263,7 +274,8 @@ fn test_monomorphize_generic_function() {
 #[test]
 fn test_monomorphize_updates_call_sites() {
     // Create a generic function
-    let identity_func = Function { byte_offset: 0,
+    let identity_func = Function {
+        byte_offset: 0,
         id: 1,
         name: "identity".to_string(),
         type_params: vec![TypeParam {
@@ -271,7 +283,8 @@ fn test_monomorphize_updates_call_sites() {
             constraint: None,
             default: None,
         }],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 0,
             name: "x".to_string(),
             ty: Type::TypeVar("T".to_string()),
@@ -335,7 +348,8 @@ fn test_monomorphize_updates_call_sites() {
 #[test]
 fn test_monomorphize_instantiates_generic_calls_inside_native_method_calls() {
     // Create a generic function
-    let identity_func = Function { byte_offset: 0,
+    let identity_func = Function {
+        byte_offset: 0,
         id: 1,
         name: "identity".to_string(),
         type_params: vec![TypeParam {
@@ -343,7 +357,8 @@ fn test_monomorphize_instantiates_generic_calls_inside_native_method_calls() {
             constraint: None,
             default: None,
         }],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 0,
             name: "x".to_string(),
             ty: Type::TypeVar("T".to_string()),
@@ -369,7 +384,8 @@ fn test_monomorphize_instantiates_generic_calls_inside_native_method_calls() {
 
     // Add call to identity<string>("hello")
     // The generic call is only reachable as the argument of a native method call.
-    module.init.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
+    module.init.push(Stmt::Expr(Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "console".to_string(),
         class_name: None,
         object: None,
@@ -626,7 +642,8 @@ fn test_monomorphize_updates_native_arena_dispose_owner_generic_call() {
 #[test]
 fn test_type_inference_from_arguments() {
     // Create a generic identity function: function identity<T>(x: T): T { return x; }
-    let identity_func = Function { byte_offset: 0,
+    let identity_func = Function {
+        byte_offset: 0,
         id: 1,
         name: "identity".to_string(),
         type_params: vec![TypeParam {
@@ -634,7 +651,8 @@ fn test_type_inference_from_arguments() {
             constraint: None,
             default: None,
         }],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 0,
             name: "x".to_string(),
             ty: Type::TypeVar("T".to_string()),
@@ -725,7 +743,8 @@ fn test_type_inference_from_arguments() {
 #[test]
 fn test_type_inference_string() {
     // Create a generic identity function
-    let identity_func = Function { byte_offset: 0,
+    let identity_func = Function {
+        byte_offset: 0,
         id: 1,
         name: "identity".to_string(),
         type_params: vec![TypeParam {
@@ -733,7 +752,8 @@ fn test_type_inference_string() {
             constraint: None,
             default: None,
         }],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 0,
             name: "x".to_string(),
             ty: Type::TypeVar("T".to_string()),
@@ -791,7 +811,8 @@ fn test_type_inference_string() {
 
 #[test]
 fn test_type_inference_rest_type_var_binds_tuple() {
-    let collect_func = Function { byte_offset: 0,
+    let collect_func = Function {
+        byte_offset: 0,
         id: 1,
         name: "collect".to_string(),
         type_params: vec![TypeParam {
@@ -802,7 +823,8 @@ fn test_type_inference_rest_type_var_binds_tuple() {
             })),
             default: None,
         }],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 0,
             name: "params".to_string(),
             ty: Type::TypeVar("Params".to_string()),
@@ -854,7 +876,8 @@ fn test_type_inference_rest_type_var_binds_tuple() {
 
 #[test]
 fn test_type_inference_rest_array_binds_element_type() {
-    let collect_func = Function { byte_offset: 0,
+    let collect_func = Function {
+        byte_offset: 0,
         id: 1,
         name: "collect".to_string(),
         type_params: vec![TypeParam {
@@ -862,7 +885,8 @@ fn test_type_inference_rest_array_binds_element_type() {
             constraint: None,
             default: None,
         }],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 0,
             name: "items".to_string(),
             ty: Type::Array(Box::new(Type::TypeVar("T".to_string()))),
@@ -914,7 +938,8 @@ fn generic_view_function(id: FuncId, name: &str) -> Function {
         type_args: vec![Type::TypeVar("T".to_string())],
     };
 
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: vec![TypeParam {
@@ -924,12 +949,15 @@ fn generic_view_function(id: FuncId, name: &str) -> Function {
         }],
         params: vec![],
         return_type: view_ty.clone(),
-        body: vec![Stmt::Return(Some(Expr::NativePodView {
-            owner: Box::new(Expr::NativeArenaAlloc(Box::new(Expr::Integer(64)))),
-            byte_offset: Box::new(Expr::Integer(0)),
-            count: Box::new(Expr::Integer(1)),
-            view_type: Some(view_ty),
-        }), 0)],
+        body: vec![Stmt::Return(
+            Some(Expr::NativePodView {
+                owner: Box::new(Expr::NativeArenaAlloc(Box::new(Expr::Integer(64)))),
+                byte_offset: Box::new(Expr::Integer(0)),
+                count: Box::new(Expr::Integer(1)),
+                view_type: Some(view_ty),
+            }),
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -942,7 +970,8 @@ fn generic_view_function(id: FuncId, name: &str) -> Function {
 }
 
 fn generic_number_function(id: FuncId, name: &str) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: vec![TypeParam {
@@ -965,7 +994,8 @@ fn generic_number_function(id: FuncId, name: &str) -> Function {
 }
 
 fn generic_arena_function(id: FuncId, name: &str) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: vec![TypeParam {
@@ -975,9 +1005,10 @@ fn generic_arena_function(id: FuncId, name: &str) -> Function {
         }],
         params: vec![],
         return_type: Type::Named("NativeArena".to_string()),
-        body: vec![Stmt::Return(Some(Expr::NativeArenaAlloc(Box::new(
-            Expr::Integer(64),
-        ))), 0)],
+        body: vec![Stmt::Return(
+            Some(Expr::NativeArenaAlloc(Box::new(Expr::Integer(64)))),
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -1088,7 +1119,8 @@ fn a_specialized_class_reports_the_generics_display_name() {
 fn fill_defaults_skips_constructors_that_read_arguments() {
     fn class_with_ctor(name: &str, id: u32, reads_arguments: bool) -> Class {
         let mut params = vec![
-            Param { byte_offset: 0,
+            Param {
+                byte_offset: 0,
                 id: 1,
                 name: "p".to_string(),
                 ty: Type::Any,
@@ -1097,7 +1129,8 @@ fn fill_defaults_skips_constructors_that_read_arguments() {
                 is_rest: false,
                 arguments_object: None,
             },
-            Param { byte_offset: 0,
+            Param {
+                byte_offset: 0,
                 id: 2,
                 name: "q".to_string(),
                 ty: Type::Any,
@@ -1108,7 +1141,8 @@ fn fill_defaults_skips_constructors_that_read_arguments() {
             },
         ];
         if reads_arguments {
-            params.push(Param { byte_offset: 0,
+            params.push(Param {
+                byte_offset: 0,
                 id: 3,
                 name: "arguments".to_string(),
                 ty: Type::Any,
@@ -1133,7 +1167,8 @@ fn fill_defaults_skips_constructors_that_read_arguments() {
             extends_expr: None,
             heritage_lexically_shadowed: false,
             fields: Vec::new(),
-            constructor: Some(Function { byte_offset: 0,
+            constructor: Some(Function {
+                byte_offset: 0,
                 id: 100 + id,
                 name: format!("{}_constructor", name),
                 type_params: Vec::new(),

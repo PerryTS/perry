@@ -34,7 +34,8 @@ const RET_UNDEFINED: &str = "ret double 0x7FFC000000000001";
 const OVERRIDE_CALL: &str = "@js_ctor_return_override(";
 
 fn field(name: &str) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -47,7 +48,8 @@ fn field(name: &str) -> ClassField {
 }
 
 fn param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -71,7 +73,8 @@ fn ctor(tail: Vec<Stmt>) -> Function {
         byte_end: 0,
     })];
     body.extend(tail);
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 900,
         name: "constructor".to_string(),
         type_params: Vec::new(),
