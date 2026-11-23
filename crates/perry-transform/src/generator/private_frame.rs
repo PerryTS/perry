@@ -674,7 +674,7 @@ fn lower_list(
             body.insert(
                 0,
                 Stmt::If {
-                    condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
+                    condition: Expr::Compare { byte_offset: frame_offset,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(op)),
                         right: Box::new(Expr::Number(1.0)),
