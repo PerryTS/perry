@@ -348,6 +348,10 @@ pub(crate) fn lower_opt_chain_expr(
             // on string builtins (`type?.split?.(...)`) — see
             // `opt_call_func_nullish_guard`. `None` for non-member callees.
             let mut opt_call_member_receiver: Option<Expr> = None;
+            // True when `check_expr` is the FUNCTION VALUE (`obj.method?.(args)`),
+            // false when it is the receiver (`obj?.method(args)`, `foo?.bar?.(args)`):
+            // only a function-value test needs the string-builtin-safe guard.
+            let mut check_is_func_value = false;
             // True when the RECEIVER is itself an optional chain, so its
             // lowered `Expr::Conditional` really is a short-circuit and may be
             // destructured as one. See `receiver_is_optional_chain`.
@@ -406,6 +410,7 @@ pub(crate) fn lower_opt_chain_expr(
                         receiver_is_chain = receiver_is_optional_chain(&m.obj);
                         let (obj, prop) = lower_member_flat(m)?;
                         opt_call_member_receiver = Some(obj);
+                        check_is_func_value = true;
                         (prop.clone(), prop)
                     }
                     ast::Expr::OptChain(inner) => match &*inner.base {
@@ -733,9 +738,9 @@ pub(crate) fn lower_opt_chain_expr(
             // callable, so use the string-builtin-safe guard to avoid a
             // false short-circuit (`"a/b".split?.(...)`). Otherwise
             // (`check_expr` is a receiver, or callee is not a member) the
-            // plain nullish check is correct.
-            let condition = if !callee_from_chain && opt_call_member_receiver.is_some() {
-                let recv = opt_call_member_receiver.unwrap();
+            // plain nullish check is the test: `recv?.method(args)` tests
+            // the receiver, and a nullish receiver is never a string.
+            let condition = if let (true, Some(recv)) = (check_is_func_value, opt_call_member_receiver) {
                 opt_call_func_nullish_guard(&recv, check_expr, opt_chain.span.lo.0)
             } else {
                 Expr::Compare {
