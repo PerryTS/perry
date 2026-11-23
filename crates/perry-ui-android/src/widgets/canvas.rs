@@ -491,6 +491,11 @@ fn repaint(handle: i64) {
                         DrawCmd::Clear | DrawCmd::ClearRect(..) => {
                             // PorterDuff.Mode.CLEAR erases every pixel inside the clip.
                             if let DrawCmd::ClearRect(x, y, w, h) = cmd {
+                                // Density scaling can push the rect past the f32 range, and
+                                // Skia ignores a non-finite clip, which would clear everything.
+                                if ![*x, *y, *x + *w, *y + *h].iter().all(|v| v.is_finite()) {
+                                    continue;
+                                }
                                 let _ = env.call_method(
                                     &canvas,
                                     jni::jni_str!("save"),
@@ -1137,11 +1142,6 @@ pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
     // Normalized so `clipRect` gets ordered endpoints for a negative width or height.
     let (x, w) = if w < 0.0 { (x + w, -w) } else { (x, w) };
     let (y, h) = if h < 0.0 { (y + h, -h) } else { (y, h) };
-    // Past the f32 range the rectangle turns infinite, and Skia ignores a
-    // non-finite clip, which would clear the whole canvas.
-    if ![x, y, x + w, y + h].iter().all(|v| (*v as f32).is_finite()) {
-        return;
-    }
     push_cmd(
         handle,
         |d| DrawCmd::ClearRect(x as f32 * d, y as f32 * d, w as f32 * d, h as f32 * d),
