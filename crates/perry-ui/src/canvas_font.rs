@@ -58,12 +58,7 @@ pub fn parse_canvas_font(spec: &str) -> Option<CanvasFont> {
                 font.bold = match w {
                     "bold" | "bolder" => true,
                     "lighter" => false,
-                    n => {
-                        n.parse::<f64>()
-                            .ok()
-                            .filter(|n| (1.0..=1000.0).contains(n))?
-                            >= 600.0
-                    }
+                    n => css_number(n).filter(|n| (1.0..=1000.0).contains(n))? >= 600.0,
                 };
                 std::mem::replace(&mut weight, true)
             }
@@ -124,7 +119,7 @@ fn parse_size(word: &str) -> Option<f64> {
     } else {
         (word.strip_suffix("pt")?, 4.0 / 3.0)
     };
-    let size = num.parse::<f64>().ok()? * scale;
+    let size = css_number(num)? * scale;
     (size.is_finite() && size > 0.0).then_some(size)
 }
 
@@ -138,9 +133,29 @@ fn is_line_height(word: &str) -> bool {
     word == "normal"
         || UNITS.iter().any(|unit| {
             word.strip_suffix(unit)
-                .and_then(|num| num.parse::<f64>().ok())
-                .is_some_and(|n| n.is_finite() && n >= 0.0)
+                .and_then(css_number)
+                .is_some_and(|n| n >= 0.0)
         })
+}
+
+/// A CSS `<number>`: digits with an optional fraction (`.5`, `1.5`, never `1.`) and
+/// exponent. Rust's float parser alone also takes `1.`, `inf` and `nan`.
+fn css_number(s: &str) -> Option<f64> {
+    let unsigned = s.strip_prefix(['+', '-']).unwrap_or(s);
+    let (mantissa, exponent) = match unsigned.find(['e', 'E']) {
+        Some(i) => (&unsigned[..i], Some(&unsigned[i + 1..])),
+        None => (unsigned, None),
+    };
+    let digits = |d: &str| !d.is_empty() && d.bytes().all(|b| b.is_ascii_digit());
+    let mantissa_ok = match mantissa.split_once('.') {
+        Some((int, frac)) => (int.is_empty() || digits(int)) && digits(frac),
+        None => digits(mantissa),
+    };
+    let exponent_ok = exponent.is_none_or(|e| digits(e.strip_prefix(['+', '-']).unwrap_or(e)));
+    (mantissa_ok && exponent_ok)
+        .then(|| s.parse::<f64>().ok())
+        .flatten()
+        .filter(|n| n.is_finite())
 }
 
 /// An unquoted CSS identifier: no leading digit (or `-` + digit), and only
@@ -199,8 +214,8 @@ mod tests {
             "four prefixes"
         );
         assert_eq!(
-            parse_canvas_font("700.5 20px/1e0 serif"),
-            Some(font(20.0, true, false, &["serif"]))
+            parse_canvas_font("700.5 .5e2px/1e0 serif"),
+            Some(font(50.0, true, false, &["serif"]))
         );
         assert_eq!(
             parse_canvas_font("italic small-caps 700 8px serif"),
@@ -242,6 +257,10 @@ mod tests {
             "16px/-1 serif",
             "16px/inf serif",
             "1000.5 16px serif",
+            "700. 20px serif",
+            "20.px serif",
+            "16px/1.e2 serif",
+            "nan 16px serif",
         ] {
             assert_eq!(parse_canvas_font(bad), None, "{bad:?}");
         }
