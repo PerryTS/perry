@@ -46,6 +46,8 @@ const ae = async function () {};
 const ge = function* () { yield 1; };
 const age = async function* () { yield 1; };
 function plain() {}
+(a as any).protoKind = 0;
+(plain as any).protoKind = 99;
 console.log([AsyncProto !== Function.prototype, GenProto !== Function.prototype, AsyncGenProto !== Function.prototype, AsyncProto !== GenProto, GenProto !== AsyncGenProto].join(","));
 console.log([Object.getPrototypeOf(a) === AsyncProto, Object.getPrototypeOf(g) === GenProto, Object.getPrototypeOf(ag) === AsyncGenProto, Reflect.getPrototypeOf(a) === AsyncProto, Object.getPrototypeOf(plain) === Function.prototype].join(","));
 console.log([Object.getPrototypeOf(ae) === AsyncProto, Object.getPrototypeOf(ge) === GenProto, Object.getPrototypeOf(age) === AsyncGenProto].join(","));

@@ -1638,12 +1638,16 @@ function wrapImportsForI64(imports) {
 // What closure_new makes. Its class, not its keys, tells a closure from a plain
 // object that has `funcIdx` / `captures` fields, at no per-closure cost.
 class __PerryClosure {
+  // Its index in `__fnKindProtos`: private, so no program property can change it.
+  #protoKind;
   // Non-enumerable, so `for...in` and `Object.keys` see only a closure's own properties.
-  // `protoKind` indexes `__fnKindProtos`; a plain function has none.
   constructor(funcIdx, captureCount, protoKind) {
     __defineHidden(this, 'funcIdx', funcIdx);
     __defineHidden(this, 'captures', new Array(captureCount | 0));
-    if (protoKind) __defineHidden(this, 'protoKind', protoKind);
+    this.#protoKind = protoKind | 0;
+  }
+  static protoKindOf(closure) {
+    return #protoKind in closure ? closure.#protoKind : 0;
   }
 }
 // A function expression whose body reads its own `this`: its body takes the
@@ -1678,7 +1682,7 @@ const __fnKindProtos = [
 // A closure's host prototype is its class's; the program sees its kind's.
 function __programPrototype(obj, proto) {
   return proto === __PerryClosure.prototype || proto === __PerryReceiverClosure.prototype
-    ? __fnKindProtos[obj.protoKind | 0]
+    ? __fnKindProtos[__PerryClosure.protoKindOf(obj)]
     : proto;
 }
 
