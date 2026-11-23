@@ -444,7 +444,7 @@ fn ty_of(e: &Expr, env: &Env<'_>, cx: &Ctx<'_>) -> Type {
             else_expr,
             ..
         } => join(&ty_of(then_expr, env, cx), &ty_of(else_expr, env, cx)),
-        Expr::Logical { op, left, right } => {
+        Expr::Logical { op, left, right, .. } => {
             let l = ty_of(left, env, cx);
             let r = ty_of(right, env, cx);
             match op {

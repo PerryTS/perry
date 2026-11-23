@@ -1024,7 +1024,7 @@ pub(crate) fn try_lower_optional_method_call(
                     if p == property && same_base(o)))
     };
     let guard_matches = reads_method(condition)
-        || matches!(condition, Expr::Logical { op: perry_hir::LogicalOp::And, left, right }
+        || matches!(condition, Expr::Logical { op: perry_hir::LogicalOp::And, left, right, .. }
             if reads_method(left)
                 && matches!(right.as_ref(), Expr::Compare { op: perry_hir::CompareOp::Ne, left: t, right: s, .. }
                     if matches!(s.as_ref(), Expr::String(k) if k == "string")

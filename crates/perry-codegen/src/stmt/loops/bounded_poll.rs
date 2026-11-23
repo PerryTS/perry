@@ -740,7 +740,7 @@ fn guard_window(e: &Expr, id: u32) -> (i64, i64) {
         Expr::Logical {
             op: perry_hir::LogicalOp::And,
             left,
-            right,
+            right, ..
         } => {
             let (a, b) = (guard_window(left, id), guard_window(right, id));
             (a.0.max(b.0), a.1.min(b.1))

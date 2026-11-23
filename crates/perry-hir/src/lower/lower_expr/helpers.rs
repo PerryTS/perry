@@ -388,7 +388,7 @@ pub(crate) fn opt_call_func_nullish_guard(
             left: Box::new(Expr::TypeOf(Box::new(receiver.clone()))),
             right: Box::new(Expr::String("string".to_string())),
         };
-        Expr::Logical {
+        Expr::Logical { byte_offset,
             op: LogicalOp::And,
             left: Box::new(func_nullish),
             right: Box::new(not_string),

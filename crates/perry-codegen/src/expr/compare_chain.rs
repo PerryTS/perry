@@ -69,7 +69,7 @@ fn plan(
         Expr::Logical {
             op: LogicalOp::And,
             left,
-            right,
+            right, ..
         } => {
             let next = plan(ctx, right, yes, no, nodes)?;
             plan(ctx, left, next, no, nodes)
@@ -77,7 +77,7 @@ fn plan(
         Expr::Logical {
             op: LogicalOp::Or,
             left,
-            right,
+            right, ..
         } => {
             let next = plan(ctx, right, yes, no, nodes)?;
             plan(ctx, left, yes, next, nodes)

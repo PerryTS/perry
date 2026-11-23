@@ -963,7 +963,7 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
     // regardless. `??` keeps its nullish test on the UNCOERCED left value —
     // a coerced hole (NaN) is indistinguishable from a stored NaN, but
     // `NaN ?? x` is NaN while `undefined ?? x` is `x`.
-    if let Expr::Logical { op, left, right } = expr {
+    if let Expr::Logical { op, left, right, .. } = expr {
         if is_numeric_expr(ctx, expr) {
             let value = lower_numeric_logical_for_number_context(ctx, *op, left, right)?;
             return Ok((value, true));
@@ -1853,7 +1853,7 @@ pub(crate) fn lower_boolean_logical_value(
             Expr::Logical {
                 op: LogicalOp::And | LogicalOp::Or,
                 left,
-                right,
+                right, ..
             } => boolean(left) && boolean(right),
             _ => false,
         }

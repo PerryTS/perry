@@ -228,7 +228,7 @@ impl JsEmitter {
             }
 
             // --- Logical ---
-            Expr::Logical { op, left, right } => {
+            Expr::Logical { op, left, right, .. } => {
                 self.output.push('(');
                 self.emit_expr(left);
                 let op_str = match op {

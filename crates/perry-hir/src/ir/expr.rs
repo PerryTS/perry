@@ -155,6 +155,7 @@ pub enum Expr {
         op: LogicalOp,
         left: Box<Expr>,
         right: Box<Expr>,
+        byte_offset: u32,
     },
 
     // Function call
@@ -3068,6 +3069,7 @@ impl Expr {
             | Expr::NewDynamic { byte_offset, .. }
             | Expr::NewDynamicSpread { byte_offset, .. }
             | Expr::Closure { byte_offset, .. }
+            | Expr::Logical { byte_offset, .. }
             | Expr::PutValueSet { byte_offset, .. }
             | Expr::DynamicImport { byte_offset, .. } => Some(*byte_offset),
             Expr::Await(_, o) => Some(*o),

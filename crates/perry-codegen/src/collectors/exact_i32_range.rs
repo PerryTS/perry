@@ -428,7 +428,7 @@ fn guard_conjuncts(cond: &Expr, counter: u32, out: &mut Vec<(CompareOp, Expr)>) 
         Expr::Logical {
             op: LogicalOp::And,
             left,
-            right,
+            right, ..
         } => {
             guard_conjuncts(left, counter, out);
             guard_conjuncts(right, counter, out);

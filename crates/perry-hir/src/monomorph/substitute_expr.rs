@@ -49,7 +49,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             left: Box::new(substitute_expr(left, substitutions)),
             right: Box::new(substitute_expr(right, substitutions)),
         },
-        Expr::Logical { op, left, right } => Expr::Logical {
+        Expr::Logical { op, left, right, byte_offset } => Expr::Logical { byte_offset: *byte_offset,
             op: *op,
             left: Box::new(substitute_expr(left, substitutions)),
             right: Box::new(substitute_expr(right, substitutions)),

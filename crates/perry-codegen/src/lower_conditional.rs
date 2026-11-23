@@ -244,7 +244,7 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     if let Expr::Logical {
         op: LogicalOp::And | LogicalOp::Or,
         left,
-        right,
+        right, ..
     } = expr
     {
         // Only total primitive comparisons can move across this branch.

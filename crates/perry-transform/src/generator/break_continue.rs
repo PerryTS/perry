@@ -657,7 +657,7 @@ pub fn desugar_switch_to_ifs(
         let mut guarded = Vec::new();
         guard_switch_breaks(&case.body, done_id, &mut guarded);
         out.push(Stmt::If {
-            condition: Expr::Logical {
+            condition: Expr::Logical { byte_offset,
                 op: LogicalOp::And,
                 left: Box::new(Expr::Unary {
                     op: UnaryOp::Not,

@@ -92,7 +92,7 @@ fn basis(ctx: &FnCtx<'_>, e: &Expr, depth: u8) -> Basis {
         Expr::Logical {
             op: LogicalOp::Coalesce,
             left,
-            right,
+            right, ..
         } => {
             let left = match basis(ctx, left, depth - 1) {
                 Basis::No

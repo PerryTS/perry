@@ -588,7 +588,7 @@ fn rewrite_expr(expr: &Expr, recv: Recv, property: &str, hoist_id: u32) -> Expr 
             left: rec(left),
             right: rec(right),
         },
-        Expr::Logical { op, left, right } => Expr::Logical {
+        Expr::Logical { op, left, right, byte_offset } => Expr::Logical { byte_offset: *byte_offset,
             op: *op,
             left: rec(left),
             right: rec(right),
@@ -1067,9 +1067,9 @@ fn map_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
                 right: r(right, f),
             }
         }
-        Expr::Logical { op, left, right } => {
+        Expr::Logical { op, left, right, byte_offset } => {
             let left = r(left, f);
-            Expr::Logical {
+            Expr::Logical { byte_offset: *byte_offset,
                 op: *op,
                 left,
                 right: r(right, f),
