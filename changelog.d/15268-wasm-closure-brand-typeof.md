@@ -1,0 +1,1 @@
+On `--target web`, an object whose prototype chain reaches a function (`Object.create(F)`, `Object.setPrototypeOf({}, F)`) reports `typeof` "object" instead of "function": the runtime tells a closure by a private-field brand rather than `instanceof`.

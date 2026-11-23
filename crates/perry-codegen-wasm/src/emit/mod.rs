@@ -40,6 +40,7 @@ mod string_collection;
 mod ui_method_map;
 
 // Shared prelude — each sibling re-imports these via `use super::*;`.
+use perry_hir::fn_proto::FnProtoKind;
 use perry_hir::ir::*;
 use perry_hir::types::{FuncId, GlobalId, LocalId};
 use std::collections::BTreeMap;

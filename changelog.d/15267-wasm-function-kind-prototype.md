@@ -1,0 +1,1 @@
+`--target web`: `Object.getPrototypeOf` and `Reflect.getPrototypeOf` on an async function, a generator or an async generator return `AsyncFunction.prototype`, `GeneratorFunction.prototype` or `AsyncGeneratorFunction.prototype` instead of `Function.prototype` (#15117).

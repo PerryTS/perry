@@ -1642,10 +1642,21 @@ function wrapImportsForI64(imports) {
 // What closure_new makes. Its class, not its keys, tells a closure from a plain
 // object that has `funcIdx` / `captures` fields, at no per-closure cost.
 class __PerryClosure {
+  // A brand, not `instanceof`: an object whose prototype chain reaches a closure is no closure.
+  #brand;
+  static is(v) {
+    return typeof v === 'object' && v !== null && #brand in v;
+  }
+  // Its index in `__fnKindProtos`: private, so no program property can change it.
+  #protoKind;
   // Non-enumerable, so `for...in` and `Object.keys` see only a closure's own properties.
-  constructor(funcIdx, captureCount) {
+  constructor(funcIdx, captureCount, protoKind) {
     __defineHidden(this, 'funcIdx', funcIdx);
     __defineHidden(this, 'captures', new Array(captureCount | 0));
+    this.#protoKind = protoKind | 0;
+  }
+  static protoKindOf(closure) {
+    return #protoKind in closure ? closure.#protoKind : 0;
   }
 }
 // A function expression whose body reads its own `this`: its body takes the
@@ -1655,7 +1666,7 @@ let __closureReceiver;
 // One value per function declaration, keyed by its table index (`function_value`).
 const __functionValues = new Map();
 function __isPerryClosure(v) {
-  return v instanceof __PerryClosure;
+  return __PerryClosure.is(v);
 }
 // `receiver.m(...args)` where `m` is a Perry closure. The receiver is cleared
 // after the call either way, so no later closure entry can see it.
@@ -1670,12 +1681,17 @@ function __callClosureMethod(closure, receiver, args) {
 function __typeOf(v) {
   return __isPerryClosure(v) ? 'function' : typeof v;
 }
-// A closure's host prototype is its class's; the program sees Function.prototype.
-// The closure records no function kind, so an async or generator function answers
-// Function.prototype too.
-function __programPrototype(proto) {
+// The prototype a function of each kind has: plain, async, generator, async generator.
+const __fnKindProtos = [
+  Function.prototype,
+  Object.getPrototypeOf(async function () {}),
+  Object.getPrototypeOf(function* () {}),
+  Object.getPrototypeOf(async function* () {}),
+];
+// A closure's host prototype is its class's; the program sees its kind's.
+function __programPrototype(obj, proto) {
   return proto === __PerryClosure.prototype || proto === __PerryReceiverClosure.prototype
-    ? Function.prototype
+    ? __fnKindProtos[__PerryClosure.protoKindOf(obj)]
     : proto;
 }
 
@@ -2348,8 +2364,8 @@ const __memDispatch = {
   },
   object_set_prototype_of: (obj, proto) => Object.setPrototypeOf(obj, proto),
   // Object.getPrototypeOf boxes a primitive; Reflect.getPrototypeOf throws for one.
-  object_get_prototype_of: (obj) => __programPrototype(Object.getPrototypeOf(obj)),
-  reflect_get_prototype_of: (obj) => __programPrototype(Reflect.getPrototypeOf(obj)),
+  object_get_prototype_of: (obj) => __programPrototype(obj, Object.getPrototypeOf(obj)),
+  reflect_get_prototype_of: (obj) => __programPrototype(obj, Reflect.getPrototypeOf(obj)),
   // `super[key]` with HomeObject `home`: the lookup starts at home's [[Prototype]]
   // at call time (see __superGet, which also takes a class method's home).
   object_super_get: (home, receiver, key) => __superGet(home, key, receiver),
@@ -2377,6 +2393,8 @@ const __memDispatch = {
     const obj = Object.create(proto);
     return props === undefined ? obj : Object.defineProperties(obj, __hostDescriptors(props));
   },
+  object_define_property: (obj, key, desc) => Object.defineProperty(obj, key, __hostDescriptor(desc)),
+  object_define_properties: (obj, props) => Object.defineProperties(obj, __hostDescriptors(props)),
   object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
   // `{ a, ...rest } = obj`: a new object with obj's own enumerable keys, symbols
   // included, except the statically named ones (CopyDataProperties). Defined, not
@@ -2523,15 +2541,17 @@ const __memDispatch = {
   // Captures are stored as BigInt (i64 NaN-boxed bits).
   // __jsValueToBits converts JS values to BigInt for WASM calls.
   // __bitsToJsValue converts BigInt return values back to JS.
-  closure_new: (funcIdx, captureCount, receivesThis) =>
-    receivesThis ? new __PerryReceiverClosure(funcIdx, captureCount) : new __PerryClosure(funcIdx, captureCount),
+  closure_new: (funcIdx, captureCount, receivesThis, protoKind) =>
+    receivesThis
+      ? new __PerryReceiverClosure(funcIdx, captureCount, protoKind)
+      : new __PerryClosure(funcIdx, captureCount, protoKind),
   // A function declaration used as a value: one closure per function, so it keeps its
   // identity and properties across reads, with the `prototype` object an ordinary
   // function has (`prototype.constructor` is the function).
-  function_value: (funcIdx) => {
+  function_value: (funcIdx, protoKind) => {
     let fn = __functionValues.get(funcIdx);
     if (!fn) {
-      fn = new __PerryClosure(funcIdx, 0);
+      fn = new __PerryClosure(funcIdx, 0, protoKind);
       const prototype = {};
       Object.defineProperty(prototype, 'constructor', { value: fn, writable: true, configurable: true });
       Object.defineProperty(fn, 'prototype', { value: prototype, writable: true });
@@ -2937,7 +2957,7 @@ const __memDispatch = {
   class_extends_null: (className) => { classParentTable[String(className)] = null; },
   // `class A extends F` with a user function F: A's prototype inherits F's current one.
   class_extends_value: (className, value) => {
-    if (value instanceof __PerryClosure && (value.prototype === null || __holdsProperties(value.prototype))) {
+    if (__isPerryClosure(value) && (value.prototype === null || __holdsProperties(value.prototype))) {
       __classFunctionParentProtos.set(String(className), value.prototype);
     }
   },
@@ -6086,33 +6106,45 @@ function __constructHostFunction(fn, args) {
 
 const hostCallbacks = new WeakMap();
 
-// A descriptor map whose accessors the host can call. A Perry closure is not callable
-// by the host, so its accessor runs it with the receiver as `this`. Each descriptor is
-// copied, reading its fields once in ToPropertyDescriptor's order, so the caller's map
-// and descriptors stay as they are.
+// A descriptor whose accessors the host can call. A Perry closure is not callable by
+// the host, so its accessor runs it with the receiver as `this`. The descriptor is
+// copied, reading its fields once in ToPropertyDescriptor's order, so the caller's
+// descriptor stays as it is.
+function __hostDescriptor(desc) {
+  if (!__holdsProperties(desc)) return desc;
+  const copy = Object.create(null);
+  for (const field of ['enumerable', 'configurable', 'value', 'writable', 'get', 'set']) {
+    if (!(field in desc)) continue;
+    const v = desc[field];
+    copy[field] = (field === 'get' || field === 'set') ? __hostAccessor(v) : v;
+  }
+  return copy;
+}
+
+// One wrapper per closure, so redefining a non-configurable accessor with the same
+// closure is a no-op, as it is for a host function.
+const hostAccessors = new WeakMap();
+function __hostAccessor(v) {
+  if (!__isPerryClosure(v)) return v;
+  let fn = hostAccessors.get(v);
+  if (!fn) {
+    fn = function (...args) {
+      const result = __callClosureMethod(v, this, args);
+      __memDispatch.propagate_exception(true);
+      return result;
+    };
+    hostAccessors.set(v, fn);
+  }
+  return fn;
+}
+
+// A descriptor map of `__hostDescriptor` copies; the caller's map stays as it is.
 function __hostDescriptors(props) {
   if (!__holdsProperties(props)) return props;
   const descs = Object.create(null);
   for (const key of Reflect.ownKeys(props)) {
     if (!Object.prototype.propertyIsEnumerable.call(props, key)) continue;
-    const desc = props[key];
-    if (!__holdsProperties(desc)) {
-      descs[key] = desc;
-      continue;
-    }
-    const copy = Object.create(null);
-    for (const field of ['enumerable', 'configurable', 'value', 'writable', 'get', 'set']) {
-      if (!(field in desc)) continue;
-      const v = desc[field];
-      copy[field] = (field === 'get' || field === 'set') && __isPerryClosure(v)
-        ? function (...args) {
-            const result = __callClosureMethod(v, this, args);
-            __memDispatch.propagate_exception(true);
-            return result;
-          }
-        : v;
-    }
-    descs[key] = copy;
+    descs[key] = __hostDescriptor(props[key]);
   }
   return descs;
 }

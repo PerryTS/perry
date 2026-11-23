@@ -38,6 +38,13 @@ use crate::runtime_abi::{
 pub(crate) const INFO_TYPE: &str =
     "{ ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64, i16 }";
 
+/// `INFO_TYPE` with the source-in-mask word split into its two 32-bit
+/// relocations. A `<2 x i32>` keeps the `i64`'s 8-byte alignment; a
+/// `{ i32, i32 }` aligns to 4 and moves every later field on wasm32.
+fn compressed_info_type() -> String {
+    INFO_TYPE.strip_suffix("i64, i16 }").unwrap().to_string() + "<2 x i32>, i16 }"
+}
+
 /// The own slots a body's function objects are born with
 /// (`JsFunctionInfo::own_slots`): one, `prototype`, for a body that owns it
 /// from birth (a constructing plain function, a generator, an async
@@ -468,14 +475,14 @@ fn render_definition(
     // A masked 64-bit symbol difference is not a portable object relocation.
     let compressed_in_mask = source_in_mask && source_encoding.as_ref().unwrap().2.is_some();
     let info_type = if compressed_in_mask {
-        INFO_TYPE.strip_suffix("i64, i16 }").unwrap().to_string() + "{ i32, i32 }, i16 }"
+        compressed_info_type()
     } else {
         INFO_TYPE.to_string()
     };
     let mask_field = if compressed_in_mask {
         let (delta, _, offset) = source_encoding.as_ref().unwrap();
         format!(
-            "{{ i32, i32 }} {{ i32 trunc (i64 {delta} to i32), i32 {} }}",
+            "<2 x i32> <i32 trunc (i64 {delta} to i32), i32 {}>",
             offset.unwrap()
         )
     } else {
@@ -607,6 +614,35 @@ mod tests {
         })
     }
 
+    #[cfg(feature = "llvm-inprocess")]
+    #[test]
+    fn compressed_source_mask_keeps_the_info_layout_on_every_pointer_width() {
+        use inkwell::{context::Context, targets::TargetData};
+        let context = Context::create();
+        let ir = format!(
+            "%Plain = type {INFO_TYPE}\n%Compressed = type {}\n",
+            compressed_info_type()
+        );
+        let module = crate::inprocess::parse_ir_text(&context, &ir, "info_layout").unwrap();
+        let plain = module.get_struct_type("Plain").unwrap();
+        let compressed = module.get_struct_type("Compressed").unwrap();
+        for layout in ["e-p:64:64-i64:64", "e-p:32:32-i64:64"] {
+            let data = TargetData::create(layout);
+            assert_eq!(
+                data.get_abi_size(&compressed),
+                data.get_abi_size(&plain),
+                "{layout}"
+            );
+            for element in [12, 13] {
+                assert_eq!(
+                    data.offset_of_element(&compressed, element),
+                    data.offset_of_element(&plain, element),
+                    "{layout} element {element}"
+                );
+            }
+        }
+    }
+
     #[test]
     fn compressed_source_parts_are_direct_and_keep_the_common_info_size() {
         for versioned in [false, true] {
@@ -640,7 +676,7 @@ mod tests {
                 assert!(ir.contains(", i32, i32, i32, i32, i32, i32 }"), "{ir}");
                 assert!(ir.contains("i32 31, i32 79, i32 0, i32 trunc"), "{ir}");
             } else {
-                assert!(ir.contains("i16, { i32, i32 }, i16 }, i32, i32 }"), "{ir}");
+                assert!(ir.contains("i16, <2 x i32>, i16 }, i32, i32 }"), "{ir}");
                 assert!(ir.contains("ptr null, i32 79, i16"), "{ir}");
             }
         }
