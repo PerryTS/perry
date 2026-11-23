@@ -3116,7 +3116,7 @@ pub struct Model {
     /// the next `cons_untagged` queues its replay (consumed at its entry).
     pub chain_active: bool,
     pub chain_defer: bool,
-    pub chain_q: Vec<(NodeId, Cons)>,
+    pub chain_q: Vec<(NodeId, Cons, u32)>,
     /// Past the work bound (`Model::past_work_bound`): a call that would
     /// make a new calling context runs the function's shared instance
     /// (`Model::bind_layout`), so the solve reaches a coarser fixpoint.
