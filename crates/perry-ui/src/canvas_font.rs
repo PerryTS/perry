@@ -33,6 +33,8 @@ pub fn parse_canvas_font(spec: &str) -> Option<CanvasFont> {
         ..CanvasFont::default()
     };
     let mut rest = spec.trim();
+    // Style, variant and weight may each appear once; `normal` sets none of them.
+    let (mut style, mut variant, mut weight, mut prefixes) = (false, false, false, 0);
     loop {
         let end = rest
             .find(|c: char| c.is_whitespace() || c == '/')
@@ -44,12 +46,25 @@ pub fn parse_canvas_font(spec: &str) -> Option<CanvasFont> {
             rest = tail.trim_start();
             break;
         }
-        match lower.as_str() {
-            "normal" | "small-caps" => {}
-            "italic" | "oblique" => font.italic = true,
-            "bold" | "bolder" => font.bold = true,
-            "lighter" => font.bold = false,
-            w => font.bold = w.parse::<u16>().ok().filter(|n| (1..=1000).contains(n))? >= 600,
+        prefixes += 1;
+        let seen = match lower.as_str() {
+            "normal" => false,
+            "small-caps" => std::mem::replace(&mut variant, true),
+            "italic" | "oblique" => {
+                font.italic = true;
+                std::mem::replace(&mut style, true)
+            }
+            w => {
+                font.bold = match w {
+                    "bold" | "bolder" => true,
+                    "lighter" => false,
+                    n => n.parse::<u16>().ok().filter(|n| (1..=1000).contains(n))? >= 600,
+                };
+                std::mem::replace(&mut weight, true)
+            }
+        };
+        if seen || prefixes > 3 {
+            return None;
         }
         rest = tail.trim_start();
         if rest.is_empty() {
@@ -78,7 +93,9 @@ pub fn parse_canvas_font(spec: &str) -> Option<CanvasFont> {
         // characters (NUL among them) cannot reach a platform font API.
         if name.is_empty()
             || name.chars().any(char::is_control)
-            || !quoted && CSS_WIDE_KEYWORDS.contains(&name.to_ascii_lowercase().as_str())
+            || !quoted
+                && (CSS_WIDE_KEYWORDS.contains(&name.to_ascii_lowercase().as_str())
+                    || !name.split_whitespace().all(is_ident))
         {
             return None;
         }
@@ -106,12 +123,28 @@ fn parse_size(word: &str) -> Option<f64> {
     (size.is_finite() && size > 0.0).then_some(size)
 }
 
+/// `normal`, or a non-negative number, percentage or CSS length.
 fn is_line_height(word: &str) -> bool {
-    let num = ["px", "pt", "em", "%"]
-        .iter()
-        .find_map(|unit| word.strip_suffix(unit))
-        .unwrap_or(word);
-    word == "normal" || num.parse::<f64>().is_ok_and(|n| n.is_finite() && n >= 0.0)
+    const UNITS: &[&str] = &[
+        "", "%", "px", "pt", "pc", "cm", "mm", "q", "in", "em", "rem", "ex", "rex", "ch", "rch",
+        "cap", "rcap", "ic", "ric", "lh", "rlh", "vw", "vh", "vi", "vb", "vmin", "vmax",
+    ];
+    let split = word
+        .find(|c: char| c.is_ascii_alphabetic() || c == '%')
+        .unwrap_or(word.len());
+    let (num, unit) = word.split_at(split);
+    word == "normal"
+        || UNITS.contains(&unit) && num.parse::<f64>().is_ok_and(|n| n.is_finite() && n >= 0.0)
+}
+
+/// An unquoted CSS identifier: no leading digit (or `-` + digit), and only
+/// letters, digits, `-`, `_` or non-ASCII characters.
+fn is_ident(word: &str) -> bool {
+    let body = word.strip_prefix('-').unwrap_or(word);
+    body.chars().next().is_some_and(|c| !c.is_ascii_digit())
+        && word
+            .chars()
+            .all(|c| c.is_alphanumeric() || c == '-' || c == '_' || !c.is_ascii())
 }
 
 #[cfg(test)]
@@ -151,6 +184,19 @@ mod tests {
             Some(font(14.0, false, false, &["serif"]))
         );
         assert_eq!(
+            parse_canvas_font("bold 16px/1rem Times New Roman"),
+            Some(font(16.0, true, false, &["Times New Roman"]))
+        );
+        assert_eq!(
+            parse_canvas_font("normal italic small-caps 700 8px serif"),
+            None,
+            "four prefixes"
+        );
+        assert_eq!(
+            parse_canvas_font("italic small-caps 700 8px serif"),
+            Some(font(8.0, true, true, &["serif"]))
+        );
+        assert_eq!(
             parse_canvas_font("16px / 1.5 Menlo"),
             Some(font(16.0, false, false, &["Menlo"]))
         );
@@ -177,6 +223,12 @@ mod tests {
             "12px inherit",
             "12px serif, initial",
             "12px Ex\u{0}ample",
+            "italic italic 20px sans-serif",
+            "bold 600 20px serif",
+            "normal normal normal normal 20px serif",
+            "12px Arial;",
+            "12px 3D Font",
+            "16px/1r serif",
         ] {
             assert_eq!(parse_canvas_font(bad), None, "{bad:?}");
         }
