@@ -32,7 +32,7 @@
 //! The process exits with code 86 after printing one block to stderr.
 //! Off: `Model::stop_top` is `None`, and nothing of this runs.
 
-use crate::model::{Cons, Model, NodeId, Tok, NO_NODE, TOP};
+use crate::model::{CallId, Cons, Model, NodeId, Tok, NO_NODE, TOP};
 use crate::pts::FxHashMap;
 use std::panic::Location;
 use std::sync::Mutex;
@@ -454,6 +454,26 @@ impl Model {
             held.join("; "),
             if prim != 0 { format!(" + primitives {prim:#x}") } else { String::new() }
         )
+    }
+
+    /// Nodes `ns` a native model made for solver call of `by` (root program
+    /// call `root`) with no program position take that of `root`'s (else
+    /// `by`'s) result node.
+    pub(crate) fn solver_call_pos(&mut self, root: CallId, by: CallId, ns: &[NodeId]) {
+        let p = [root, by]
+            .iter()
+            .filter_map(|&c| self.calls.get(c as usize))
+            .map(|c| self.node_program_pos(c.ret))
+            .find(|&p| p != NOPOS);
+        let Some(p) = p else { return };
+        let s = self.stop_top.as_mut().unwrap();
+        for &n in ns {
+            if let Some(slot) = s.node_pos.get_mut(n as usize) {
+                if *slot == NOPOS {
+                    *slot = p;
+                }
+            }
+        }
     }
 
     fn node_words_short(&self, n: NodeId) -> String {
