@@ -144,11 +144,14 @@ fn red_heldmem_extends_array_ctor_members_held() {
     ));
 }
 
-/// HELDMEM 3(a): the class itself: its [[Prototype]] is Array (reached along
-/// the chain only, escape.rs `chain_escape && builtin_function`).
+/// HELDMEM 3(a): the class itself: its [[Prototype]] is Array, reached along
+/// the chain only (escape.rs `chain_escape && builtin_function`).
+/// PREMISE (owner-approved 2026-11-19): unknown code never writes members of
+/// intrinsics it reaches along a handed value's chain: Array's members are
+/// not held, as for an instance of the class.
 #[test]
 fn red_heldmem_extends_array_class_ctor_members_held() {
-    assert!(v_escapes_from(
+    assert!(!v_escapes_from(
         "class A extends Array {} (globalThis as any).hostTake(A);",
         "Array as any"
     ));
