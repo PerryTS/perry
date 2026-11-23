@@ -63,7 +63,11 @@ fn function_constructor_is_dynamic_code() {
     assert!(dynamic(
         "const g: any = function () {}; const h = g[k]; h(d);"
     ));
-    assert!(d_escape("const g: any = function () {}; g[k](d);").is_some());
+    // Closed world (owner 2026-11-14): without interpreted code the
+    // Function constructor runs no program text; the other members a
+    // function holds under the key (`call`, `apply`, `bind`,
+    // `Object.prototype`'s) keep nothing of `d` with `this` = `g`.
+    assert_eq!(d_escape("const g: any = function () {}; g[k](d);"), None);
     assert!(dynamic("class A {} (A as any)[k](d);"));
     // A builtin constructor is a function: its `constructor` is Function.
     assert!(dynamic("const O: any = Object; O.constructor(d);"));

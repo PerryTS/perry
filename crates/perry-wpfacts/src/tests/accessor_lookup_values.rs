@@ -498,3 +498,100 @@ console.log(payload.n); // LOOKUP_N
     )
     .unwrap();
 }
+
+/// A Proxy further up an ordinary object's chain runs its traps in the
+/// Annex B loop's [[GetOwnProperty]] / [[GetPrototypeOf]] steps. (Today the
+/// chain step degrades the Proxy, E9: its handler's traps are opaque.)
+#[test]
+fn accessor_lookup_proxy_on_the_chain_runs_its_descriptor_trap() {
+    lookup_site(r#"
+declare function external(x: unknown): void;
+class Payload { n = 1; }
+const payload = new Payload();
+const px = new Proxy({}, { getOwnPropertyDescriptor(target, key) { external(payload); return undefined; } });
+const receiver: any = Object.create(px);
+receiver.__lookupGetter__("x");
+console.log(payload.n); // LOOKUP_N
+"#, false).unwrap();
+}
+
+#[test]
+fn accessor_lookup_proxy_on_the_chain_runs_its_prototype_trap() {
+    lookup_site(
+        r#"
+declare function external(x: unknown): void;
+class Payload { n = 1; }
+const payload = new Payload();
+const px = new Proxy({}, { getPrototypeOf(target) { external(payload); return null; } });
+const receiver: any = Object.create(px);
+receiver.__lookupGetter__("x");
+console.log(payload.n); // LOOKUP_N
+"#,
+        false,
+    )
+    .unwrap();
+}
+
+#[test]
+fn accessor_lookup_proxy_on_the_chain_returns_the_trap_getter() {
+    lookup_site(r#"
+declare function external(x: unknown): void;
+class Payload { n = 1; }
+const payload = new Payload();
+const px = new Proxy({}, { getOwnPropertyDescriptor(target, key) { return { get: () => external(payload), configurable: true }; } });
+const receiver: any = Object.create(px);
+const g = receiver.__lookupGetter__("x");
+g();
+console.log(payload.n); // LOOKUP_N
+"#, false).unwrap();
+}
+
+#[test]
+fn accessor_lookup_trapless_proxy_on_the_chain_runs_nothing() {
+    lookup_site(
+        r#"
+declare function external(x: unknown): void;
+class Payload { n = 1; }
+const payload = new Payload();
+const px = new Proxy({}, {});
+const receiver: any = Object.create(px);
+receiver.__lookupGetter__("x");
+console.log(payload.n); // LOOKUP_N
+"#,
+        true,
+    )
+    .unwrap();
+}
+
+/// [[Get]], `in` and [[Set]] reaching a Proxy on the chain run its
+/// get / has / set traps (10.1.8.1 step 3, 10.1.7.1, 10.1.9.2 step 2.b).
+#[test]
+fn ordinary_ops_reaching_a_proxy_on_the_chain_run_its_traps() {
+    for (op, trap) in [
+        (
+            "receiver.x;",
+            "get(t: any, k: any, r: any) { external(payload); return 1; }",
+        ),
+        (
+            "console.log(\"x\" in receiver);",
+            "has(t: any, k: any) { external(payload); return true; }",
+        ),
+        (
+            "receiver.x = 1;",
+            "set(t: any, k: any, v: any, r: any) { external(payload); return true; }",
+        ),
+    ] {
+        let src = format!(
+            r#"
+declare function external(x: unknown): void;
+class Payload {{ n = 1; }}
+const payload = new Payload();
+const px = new Proxy({{}}, {{ {trap} }});
+const receiver: any = Object.create(px);
+{op}
+console.log(payload.n); // LOOKUP_N
+"#
+        );
+        lookup_site(&src, false).unwrap_or_else(|e| panic!("{op}: {}", &e[..e.len().min(400)]));
+    }
+}
