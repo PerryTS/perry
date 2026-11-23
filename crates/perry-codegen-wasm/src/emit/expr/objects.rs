@@ -514,6 +514,11 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, val);
                 self.emit_memcall(func, "object_coerce", 1);
             }
+            Expr::SymbolFor(key) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, key);
+                self.emit_memcall(func, "symbol_for", 1);
+            }
             Expr::In { property, object } => {
                 // JS evaluates the property before the object.
                 let (object, bridge) = match object.as_ref() {
