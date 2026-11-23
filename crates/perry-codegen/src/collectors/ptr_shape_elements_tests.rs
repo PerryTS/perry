@@ -1741,3 +1741,112 @@ fn the_env_gate_disables_element_facts() {
         "element facts must track PERRY_PTR_SHAPE_LOCALS exactly"
     );
 }
+
+/// `for (const r of rows)` as `perry_hir::lower::for_of_guard::source_for_of`
+/// lowers it: `const t = rows; if (arrayRecordNeedsIterator(t) == false) {
+/// for (k = 0; k < t.length; k++) { const r = t[k]; … } } else { … }`.
+fn source_walk(src: u32, root: u32, k: u32, condition_holds: bool, body: Vec<Stmt>) -> Vec<Stmt> {
+    vec![
+        Stmt::Let {
+            id: src,
+            name: format!("__perry_src_{src}"),
+            ty: Type::Array(Box::new(Type::Named("C".to_string()))),
+            mutable: false,
+            init: Some(Expr::LocalGet(root)),
+        },
+        Stmt::If {
+            condition: Expr::Compare {
+                op: CompareOp::Eq,
+                left: Box::new(Expr::NativeMethodCall {
+                    module: "__perry_runtime".into(),
+                    class_name: None,
+                    object: None,
+                    method: "arrayRecordNeedsIterator".into(),
+                    args: vec![Expr::LocalGet(src)],
+                }),
+                right: Box::new(Expr::Bool(!condition_holds)),
+            },
+            then_branch: vec![bounded_loop(k, src, body)],
+            else_branch: Some(Vec::new()),
+        },
+    ]
+}
+
+#[test]
+fn source_walk_for_of_promotes_the_element() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let mut stmts = vec![
+        let_arr(1, "rows"),
+        let_c(2, "row"),
+        push(1, Expr::LocalGet(2)),
+    ];
+    stmts.extend(source_walk(
+        3,
+        1,
+        4,
+        true,
+        vec![let_elem(5, "r", 3, 4), read_x(5)],
+    ));
+    let facts = source_walk_elements(&stmts, &classes, true);
+    assert_eq!(facts.element_read_class(5), Some("C"));
+    assert!(facts.push_is_contained(2, 1));
+}
+
+/// The guard admits only `== false`: the arm under `arrayRecordNeedsIterator(t)
+/// == true` may hold a patched iterator's array, so the call stays an escape.
+#[test]
+fn source_walk_guard_must_test_false() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let mut stmts = vec![
+        let_arr(1, "rows"),
+        let_c(2, "row"),
+        push(1, Expr::LocalGet(2)),
+    ];
+    stmts.extend(source_walk(
+        3,
+        1,
+        4,
+        false,
+        vec![let_elem(5, "r", 3, 4), read_x(5)],
+    ));
+    let facts = source_walk_elements(&stmts, &classes, true);
+    assert!(facts.element_read_class(5).is_none());
+    assert!(!facts.push_is_contained(2, 1));
+}
+
+/// A live iteration protocol leaves the guard an escape: the fallback arm
+/// could hand the array to a patched iterator.
+#[test]
+fn source_walk_guard_needs_a_dead_record() {
+    let c = class_c();
+    let cs = [c];
+    let classes = classes_of(&cs);
+    let mut stmts = vec![
+        let_arr(1, "rows"),
+        let_c(2, "row"),
+        push(1, Expr::LocalGet(2)),
+    ];
+    stmts.extend(source_walk(
+        3,
+        1,
+        4,
+        true,
+        vec![let_elem(5, "r", 3, 4), read_x(5)],
+    ));
+    let facts = source_walk_elements(&stmts, &classes, false);
+    assert!(facts.element_read_class(5).is_none());
+}
+
+fn source_walk_elements(
+    stmts: &[Stmt],
+    classes: &HashMap<String, &Class>,
+    record_dead: bool,
+) -> ElementShapeFacts {
+    let mut facts = facts_for(classes, Vec::new());
+    facts.install_array_record_protocol_dead(record_dead);
+    elements_with(stmts, classes, &facts)
+}

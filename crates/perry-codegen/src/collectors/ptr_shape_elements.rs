@@ -955,6 +955,28 @@ impl<'a> ArrayWalk<'a> {
         true
     }
 
+    /// The guard of a for-of source walk (`perry_hir::lower::for_of_guard::
+    /// source_for_of`): `arrayRecordNeedsIterator(A) == false` over a proven
+    /// array. The call reads the array's iteration facts and flags and runs no
+    /// program code, so it is no escape. Its arms are walked as they are: the
+    /// counted loop under E5, the IteratorRecord arm under the dead record.
+    fn source_walk_guard(&self, condition: &Expr) -> bool {
+        let Expr::Compare {
+            op: perry_hir::CompareOp::Eq,
+            left,
+            right,
+        } = condition
+        else {
+            return false;
+        };
+        let Some(args) = runtime_call(left, "arrayRecordNeedsIterator") else {
+            return false;
+        };
+        self.record_dead
+            && matches!(right.as_ref(), Expr::Bool(false))
+            && matches!(args, [Expr::LocalGet(s)] | [Expr::LocalGet(s), Expr::Bool(_)] if self.root_of(*s).is_some())
+    }
+
     fn walk_stmt(&mut self, s: &Stmt) {
         match s {
             Stmt::Let { id, init, .. } => {
@@ -1048,7 +1070,9 @@ impl<'a> ArrayWalk<'a> {
                 then_branch,
                 else_branch,
             } => {
-                self.walk_expr(condition);
+                if !self.source_walk_guard(condition) {
+                    self.walk_expr(condition);
+                }
                 self.walk_stmts(then_branch);
                 if let Some(eb) = else_branch {
                     self.walk_stmts(eb);
