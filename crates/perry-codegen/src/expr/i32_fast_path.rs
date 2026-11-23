@@ -1374,7 +1374,7 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
     if let Expr::Logical {
         op: perry_hir::LogicalOp::Coalesce,
         left,
-        right,
+        right, ..
     } = e
     {
         if let Some(value) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {

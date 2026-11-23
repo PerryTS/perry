@@ -542,7 +542,7 @@ impl<'a> UseWalk<'a> {
                 ) && self.value_or_element_is_numeric(tracked, left)
                     && self.value_or_element_is_numeric(tracked, right)
             }
-            Expr::Logical { op, left, right } => {
+            Expr::Logical { op, left, right, .. } => {
                 matches!(op, LogicalOp::Or | LogicalOp::Coalesce)
                     && self.value_or_element_is_numeric(tracked, left)
                     && self.value_is_numeric(tracked, right)

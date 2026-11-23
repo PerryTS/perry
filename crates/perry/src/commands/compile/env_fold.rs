@@ -172,7 +172,7 @@ fn try_const(e: &Expr, env: &Env) -> Option<Const> {
             op: UnaryOp::Not,
             operand,
         } => try_const(operand, env).map(|c| Const::Bool(!c.truthy())),
-        Expr::Logical { op, left, right } => {
+        Expr::Logical { op, left, right, .. } => {
             let l = try_const(left, env)?;
             match op {
                 LogicalOp::And => {

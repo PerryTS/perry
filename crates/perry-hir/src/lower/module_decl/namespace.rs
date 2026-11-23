@@ -173,6 +173,7 @@ fn namespace_object(
     name: &str,
     is_exported: bool,
     outer: Option<Outer<'_>>,
+    byte_offset: u32,
 ) -> Result<Expr> {
     match ctx.lookup_local(name) {
         // The namespace's own binding: still pending for its first block,
@@ -188,7 +189,7 @@ fn namespace_object(
                             property: name.to_string(),
                             byte_offset: 0,
                         };
-                        Expr::Logical {
+                        Expr::Logical { byte_offset,
                             op: LogicalOp::Or,
                             left: Box::new(published()),
                             right: Box::new(Expr::PropertySet {
@@ -246,7 +247,7 @@ fn lower_namespace_block(
         Some(outer) => format!("{}.{name}", outer.qualified),
         None => name.clone(),
     };
-    let object = namespace_object(ctx, module, &name, is_exported, outer)?;
+    let object = namespace_object(ctx, module, &name, is_exported, outer, ts_module.span.lo.0)?;
 
     // A namespace body is its own scope: its bindings shadow same-named outer
     // ones and go out of scope at its end (TypeScript's `namespace Parser {

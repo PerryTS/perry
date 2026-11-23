@@ -811,7 +811,7 @@ fn collect_conjunct_guards(e: &Expr, st: &State, out: &mut Vec<(u32, CompareOp, 
         Expr::Logical {
             op: LogicalOp::And,
             left,
-            right,
+            right, ..
         } => {
             collect_conjunct_guards(left, st, out);
             collect_conjunct_guards(right, st, out);

@@ -591,7 +591,7 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
                 )));
                 new_body.append(body);
                 let while_stmt = Stmt::While {
-                    condition: Expr::Logical {
+                    condition: Expr::Logical { byte_offset: cond.byte_offset().unwrap_or(0),
                         op: LogicalOp::Or,
                         left: Box::new(Expr::LocalGet(first)),
                         right: Box::new(cond),
@@ -1147,7 +1147,7 @@ fn logical_rhs_contains_await(expr: &Expr) -> bool {
 fn lift_logical_with_await_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: &mut Vec<Stmt>) {
     let temp_id = alloc_local(next_id);
     let owned = std::mem::replace(expr, Expr::LocalGet(temp_id));
-    if let Expr::Logical { op, left, right } = owned {
+    if let Expr::Logical { op, left, right, byte_offset } = owned {
         hoisted.push(Stmt::Let {
             id: temp_id,
             name: format!("__logic_await_{}", temp_id),
@@ -1169,7 +1169,7 @@ fn lift_logical_with_await_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: 
                 operand: Box::new(Expr::LocalGet(temp_id)),
             },
             LogicalOp::And => Expr::LocalGet(temp_id),
-            LogicalOp::Coalesce => Expr::Compare { byte_offset: 0 /*HPOS*/,
+            LogicalOp::Coalesce => Expr::Compare { byte_offset,
                 op: CompareOp::LooseEq,
                 left: Box::new(Expr::LocalGet(temp_id)),
                 right: Box::new(Expr::Null),

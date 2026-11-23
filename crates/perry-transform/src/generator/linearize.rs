@@ -177,14 +177,14 @@ fn delegate_result_object_check(result_id: LocalId, byte_offset: u32) -> Vec<Stm
     }
     // not Object  <=>  result === null
     //                  || (typeof result !== "object" && typeof result !== "function")
-    let not_object = Expr::Logical {
+    let not_object = Expr::Logical { byte_offset,
         op: LogicalOp::Or,
         left: Box::new(Expr::Compare { byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(result_id)),
             right: Box::new(Expr::Null),
         }),
-        right: Box::new(Expr::Logical {
+        right: Box::new(Expr::Logical { byte_offset,
             op: LogicalOp::And,
             left: Box::new(Expr::Compare { byte_offset,
                 op: CompareOp::Ne,
@@ -1018,7 +1018,7 @@ pub fn linearize_body(
                 )));
                 while_body.extend(body.iter().cloned());
                 let while_stmt = Stmt::While {
-                    condition: Expr::Logical {
+                    condition: Expr::Logical { byte_offset: condition.byte_offset().unwrap_or(0),
                         op: LogicalOp::Or,
                         left: Box::new(Expr::LocalGet(first_id)),
                         right: Box::new(condition.clone()),
@@ -1880,7 +1880,7 @@ pub fn linearize_body(
                 )));
                 while_body.extend(body.iter().cloned());
                 let while_stmt = Stmt::While {
-                    condition: Expr::Logical {
+                    condition: Expr::Logical { byte_offset: condition.byte_offset().unwrap_or(0),
                         op: LogicalOp::Or,
                         left: Box::new(Expr::LocalGet(first_id)),
                         right: Box::new(condition.clone()),

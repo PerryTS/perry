@@ -87,7 +87,7 @@ pub(crate) fn catch_route_condition(
     } else {
         CompareOp::Gt
     };
-    Expr::Logical {
+    Expr::Logical { byte_offset: route.byte_offset,
         op: LogicalOp::And,
         left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
             op: lower_op,
@@ -116,7 +116,7 @@ pub(crate) fn finally_abrupt_condition(
     } else {
         CompareOp::Gt
     };
-    Expr::Logical {
+    Expr::Logical { byte_offset: route.byte_offset,
         op: LogicalOp::And,
         left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
             op: lower_op,
@@ -461,7 +461,7 @@ pub(crate) fn finally_route_condition(
     state_id: LocalId,
     inclusive_lower: bool,
 ) -> Expr {
-    Expr::Logical {
+    Expr::Logical { byte_offset: route.byte_offset,
         op: LogicalOp::And,
         left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
             op: if inclusive_lower {
@@ -484,14 +484,14 @@ pub(crate) fn finally_route_condition(
 /// — `Type(result) is not Object`. Used to enforce the spec requirement that a
 /// delegated `return()`/`next()` result be an Object.
 fn not_object_condition(result: Expr, byte_offset: u32) -> Expr {
-    Expr::Logical {
+    Expr::Logical { byte_offset,
         op: LogicalOp::Or,
         left: Box::new(Expr::Compare { byte_offset,
             op: CompareOp::Eq,
             left: Box::new(result.clone()),
             right: Box::new(Expr::Null),
         }),
-        right: Box::new(Expr::Logical {
+        right: Box::new(Expr::Logical { byte_offset,
             op: LogicalOp::And,
             left: Box::new(Expr::Compare { byte_offset,
                 op: CompareOp::Ne,
@@ -560,7 +560,7 @@ pub(crate) fn build_yield_star_return_routes(
         let m_id = alloc_local(next_local_id); // captured `return` method
         let r_id = alloc_local(next_local_id); // awaited inner result
 
-        let in_interval = Expr::Logical {
+        let in_interval = Expr::Logical { byte_offset: route.byte_offset,
             op: LogicalOp::And,
             left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                 op: CompareOp::Gt,
@@ -589,7 +589,7 @@ pub(crate) fn build_yield_star_return_routes(
         };
         // if (__m === undefined || __m === null) { done = true; return {v, true}; }
         let mut no_method = Stmt::If {
-            condition: Expr::Logical {
+            condition: Expr::Logical { byte_offset: route.byte_offset,
                 op: LogicalOp::Or,
                 left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                     op: CompareOp::Eq,
@@ -814,7 +814,7 @@ pub(crate) fn build_yield_star_throw_routes(
         let ic_id = alloc_local(next_local_id); // awaited inner-close result
         let de_id = alloc_local(next_local_id); // caught delegation-protocol error
 
-        let in_interval = Expr::Logical {
+        let in_interval = Expr::Logical { byte_offset: route.byte_offset,
             op: LogicalOp::And,
             left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                 op: CompareOp::Gt,
@@ -863,7 +863,7 @@ pub(crate) fn build_yield_star_throw_routes(
             }),
         };
         let close_inner = Stmt::If {
-            condition: Expr::Logical {
+            condition: Expr::Logical { byte_offset: route.byte_offset,
                 op: LogicalOp::And,
                 left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                     op: CompareOp::Ne,
@@ -899,7 +899,7 @@ pub(crate) fn build_yield_star_throw_routes(
             else_branch: None,
         };
         let no_method = Stmt::If {
-            condition: Expr::Logical {
+            condition: Expr::Logical { byte_offset: route.byte_offset,
                 op: LogicalOp::Or,
                 left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                     op: CompareOp::Eq,

@@ -118,7 +118,7 @@ fn shape(f: &perry_hir::Function) -> Option<Shape> {
         Expr::Logical {
             op: LogicalOp::Coalesce,
             left,
-            right,
+            right, ..
         } => (left.as_ref(), Some(FieldReadDefault::of(right)?)),
         e => (e, None),
     };

@@ -159,7 +159,7 @@ fn simple_word(e: &Expr) -> bool {
         Expr::Logical {
             op: LogicalOp::Coalesce,
             left,
-            right,
+            right, ..
         } => simple_word(left) && simple(right),
         Expr::PropertyGet { .. } => place(e),
         Expr::IndexGet { object, index, .. } => place(object) && simple(index),

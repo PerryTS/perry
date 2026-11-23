@@ -320,17 +320,17 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
         }),
 
         // Logical
-        ast::BinaryOp::LogicalAnd => Ok(Expr::Logical {
+        ast::BinaryOp::LogicalAnd => Ok(Expr::Logical { byte_offset: bin.span.lo.0,
             op: LogicalOp::And,
             left,
             right,
         }),
-        ast::BinaryOp::LogicalOr => Ok(Expr::Logical {
+        ast::BinaryOp::LogicalOr => Ok(Expr::Logical { byte_offset: bin.span.lo.0,
             op: LogicalOp::Or,
             left,
             right,
         }),
-        ast::BinaryOp::NullishCoalescing => Ok(Expr::Logical {
+        ast::BinaryOp::NullishCoalescing => Ok(Expr::Logical { byte_offset: bin.span.lo.0,
             op: LogicalOp::Coalesce,
             left,
             right,

@@ -836,7 +836,7 @@ fn implied<'p>(
         Expr::Logical {
             op: LogicalOp::And,
             left,
-            right,
+            right, ..
         } if positive => {
             let mut l = Vec::new();
             implied(left, true, subst, pred, depth, &mut l);
@@ -846,7 +846,7 @@ fn implied<'p>(
         Expr::Logical {
             op: LogicalOp::Or,
             left,
-            right,
+            right, ..
         } if !positive => {
             let mut l = Vec::new();
             implied(left, false, subst, pred, depth, &mut l);

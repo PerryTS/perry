@@ -89,7 +89,7 @@ pub(crate) fn field_read_call_at(ctx: &FnCtx<'_>, callee: &Expr, args: &[Expr]) 
         index: Box::new(index),
     };
     Some(match fact.default {
-        Some(bits) => Expr::Logical {
+        Some(bits) => Expr::Logical { byte_offset: 0 /*HPOS*/,
             op: LogicalOp::Coalesce,
             left: Box::new(read),
             right: Box::new(Expr::Number(f64::from_bits(bits))),

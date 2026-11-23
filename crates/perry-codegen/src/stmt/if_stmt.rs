@@ -125,7 +125,7 @@ fn try_const_fold_condition(ctx: &FnCtx<'_>, condition: &perry_hir::Expr) -> Opt
                 CompareOp::Ge => c >= literal_val,
             })
         }
-        Expr::Logical { op, left, right } => {
+        Expr::Logical { op, left, right, .. } => {
             let l = try_const_fold_condition(ctx, left)?;
             match op {
                 LogicalOp::And => {

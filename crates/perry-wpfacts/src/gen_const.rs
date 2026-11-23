@@ -53,7 +53,7 @@ impl<'a> Gen<'a> {
                 let r = self.const_eval(mi, right)?;
                 Const::Bool(compare(*op, &l, &r)?)
             }
-            Expr::Logical { op, left, right } => {
+            Expr::Logical { op, left, right, .. } => {
                 let l = self.const_eval(mi, left)?;
                 let pick_left = match op {
                     LogicalOp::And => !l.truthy(),

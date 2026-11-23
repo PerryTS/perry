@@ -272,7 +272,7 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             left: Shallow::shallow(left, n),
             right: Shallow::shallow(right, n),
         },
-        Expr::Logical { op, left, right } => Expr::Logical {
+        Expr::Logical { op, left, right, byte_offset } => Expr::Logical { byte_offset: *byte_offset,
             op: op.clone(),
             left: Shallow::shallow(left, n),
             right: Shallow::shallow(right, n),

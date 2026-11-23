@@ -76,7 +76,7 @@ fn at_rest_or_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Logical {
             op: LogicalOp::Coalesce,
             left,
-            right,
+            right, ..
         } => int32_literal(right) && int32_element(ctx, left, true),
         _ => false,
     }

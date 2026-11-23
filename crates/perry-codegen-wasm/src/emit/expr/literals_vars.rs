@@ -319,7 +319,7 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
-            Expr::Logical { op, left, right } => {
+            Expr::Logical { op, left, right, .. } => {
                 match op {
                     LogicalOp::And => {
                         // Short-circuit: if left is falsy, return left; else return right

@@ -1582,7 +1582,7 @@ fn lower_stmts_using_aware_inner(
                         byte_offset: decl.span.lo.0,
                     };
                     result.push(Stmt::If {
-                        condition: Expr::Logical {
+                        condition: Expr::Logical { byte_offset: decl.span.lo.0,
                             op: LogicalOp::And,
                             left: Box::new(Expr::Compare { byte_offset: decl.span.lo.0,
                                 op: CompareOp::Ne,
@@ -1639,7 +1639,7 @@ fn lower_stmts_using_aware_inner(
                 let dispose_err = ctx.fresh_local();
 
                 // if (id !== null && id !== undefined) [await] id.<method>()
-                let null_check = Expr::Logical {
+                let null_check = Expr::Logical { byte_offset: using_decl.span.lo.0,
                     op: LogicalOp::And,
                     left: Box::new(Expr::Compare { byte_offset: using_decl.span.lo.0,
                         op: CompareOp::Ne,
