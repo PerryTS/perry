@@ -85,8 +85,9 @@ pub struct StopTop {
     /// `PERRY_TOPSTOP_TOPFROM=1`: the ⊤ chain of an input that holds ⊤.
     topfrom: bool,
     /// Under `topfrom`: the first arrival of ⊤ in each node: its sender
-    /// (`cur_src`), the reason named, the rule running, the solver line.
-    top_from: FxHashMap<NodeId, (NodeId, u32, Option<(NodeId, Cons)>, &'static Location<'static>)>,
+    /// (`cur_src`), the reason named, the rule running, the solver line,
+    /// the origin `add_top` names and the escape that runs (if any).
+    top_from: FxHashMap<NodeId, (NodeId, u32, Option<(NodeId, Cons)>, &'static Location<'static>, String)>,
 }
 
 static CAPTURE: Mutex<Option<Vec<String>>> = Mutex::new(None);
@@ -198,9 +199,20 @@ impl Model {
         }
         if s.topfrom {
             let (src, why) = (self.cur_src, self.cur_why);
-            let s = self.stop_top.as_mut().unwrap();
-            let rule = s.rule;
-            s.top_from.entry(n).or_insert((src, why, rule, at));
+            if !s.top_from.contains_key(&n) {
+                let mut o = s.why.clone().map_or(String::new(), |w| format!(" origin \"{w}\""));
+                if let Some((t, r, sink)) = s.esc.last().copied() {
+                    o += &format!(
+                        " during escape of {} ({}) on node {sink} `{}`",
+                        self.tok_name(t),
+                        self.reason_text(r),
+                        self.labels[sink as usize]
+                    );
+                }
+                let s = self.stop_top.as_mut().unwrap();
+                let rule = s.rule;
+                s.top_from.insert(n, (src, why, rule, at, o));
+            }
         }
         let s = self.stop_top.as_ref().unwrap();
         let src = self.cur_src;
@@ -501,15 +513,16 @@ impl Model {
         let mut cur = n;
         let mut seen = std::collections::HashSet::new();
         while seen.insert(cur) && seen.len() < 400 {
-            let Some(&(src, why, rule, at)) = s.top_from.get(&cur) else {
+            let Some((src, why, rule, at, o)) = s.top_from.get(&cur) else {
                 out += &format!("\n    top-from: node {cur}: no recorded arrival");
                 break;
             };
+            let (src, why, rule, at) = (*src, *why, *rule, *at);
             let p = self.node_program_pos(cur);
             let w = if why != u32::MAX { self.reason_text(why) } else { String::new() };
             let r = rule.map_or(String::new(), |(rn, c)| format!(" rule {} on {rn}", c.kind_name()));
             out += &format!(
-                "\n    top-from: node {cur} `{}` at {} <- {}{r} [{w}] ({}:{})",
+                "\n    top-from: node {cur} `{}` at {} <- {}{r} [{w}]{o} ({}:{})",
                 self.labels[cur as usize],
                 self.pos_text(p),
                 if src == NO_NODE { "NO_NODE".to_string() } else { format!("{src} `{}`", self.labels.get(src as usize).copied().unwrap_or("?")) },
