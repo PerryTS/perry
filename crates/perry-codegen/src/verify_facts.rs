@@ -495,7 +495,7 @@ fn raw_site_inner(
 }
 
 /// The witness site of code lowered outside any body context (P2's boxed
-/// entry, DESIGN-p2 §5): the metadata `raw_site_inner` writes, with the
+/// entry): the metadata `raw_site_inner` writes, with the
 /// emitting symbol as the copy and no source offset.
 pub(crate) fn raw_entry_site(prefix: &str, copy: &str, fact: Fact, what: &str) -> SiteArg {
     let (name, ordinal) = MODULE.with(|m| {

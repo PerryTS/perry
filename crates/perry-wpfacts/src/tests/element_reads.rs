@@ -1,5 +1,5 @@
 //! Element reads of ordinary Arrays whose storage the program never moves
-//! (`bindings::ElementRead`, representation RFC §10.7, phase P4).
+//! (`bindings::ElementRead`, `internals/representation.md` §7, phase P4).
 
 use crate::ElementRead;
 

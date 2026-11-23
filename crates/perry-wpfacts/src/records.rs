@@ -1,4 +1,4 @@
-//! Value records (DESIGN-p4l4 rev 3.2 §2, VR-1): which object-literal
+//! Value records (VR-1): which object-literal
 //! templates are represented as their fields by value, and why each other
 //! one stays a heap object.
 //!
@@ -605,7 +605,7 @@ pub(crate) fn derive(
     // S0 negative control `vruntyped` (§10.3): R5UntypedCall ignored.
     s.ignore_untyped = sabotage == Some("vruntyped");
     s.tmpl_module = templates.iter().map(|t| (t.id, t.module)).collect();
-    // S0 negative controls (DESIGN-p4l4 §10.3): an identity route ignored.
+    // S0 negative controls: an identity route ignored.
     s.ignored_route = match sabotage {
         Some("vrident" | "vrinline") => Some("==="),
         Some("vrswitch") => Some("switch"),

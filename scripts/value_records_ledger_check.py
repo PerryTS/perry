@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Value records (DESIGN-p4l4 §10.4): each parity fixture's expected
+"""Value records: each parity fixture's expected
 admissions, read from its `// vr-expect: <birth keys> <verdict prefix>`
 lines, against the facts dump's `records` ledger with
 PERRY_FACTS_VALUE_RECORDS=1.

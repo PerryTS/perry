@@ -169,7 +169,7 @@ pub fn chars_to_number(c: Iv) -> Iv {
 pub struct Iv {
     pub lo: i64,
     pub hi: i64,
-    /// −0 tolerance (RFC §10.3 as amended, PR D): besides the integers in
+    /// −0 tolerance (`internals/representation.md` §3, PR D): besides the integers in
     /// `[lo, hi]` the node may hold `-0`. Only the solve sets it (rules
     /// under `eval_with(.., true)`); `0` then lies in `[lo, hi]`. After the
     /// zero-sign solve no exported interval carries it (`zero_sign`): a node
@@ -456,7 +456,7 @@ pub fn eval(op: RangeOp, l: Iv, r: Iv) -> Iv {
     eval_with(op, l, r, false)
 }
 
-/// [`eval`], with −0 tolerance when `tol` (RFC §10.3 as amended, PR D;
+/// [`eval`], with −0 tolerance when `tol` (`internals/representation.md` §3, PR D;
 /// `Model::zero_sign`): a result that is ⊤ under the strict rule only because
 /// it may be `-0` (`0 * negative`, `-x` of an interval holding 0, `%` of a
 /// possibly negative dividend) is the integer hull with [`Iv::nz`], and the

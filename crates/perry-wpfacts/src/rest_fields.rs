@@ -1,4 +1,4 @@
-//! I32 at rest, PR C (representation RFC §10.7; DESIGN-n1-at-rest §4): the
+//! I32 at rest, PR C (`internals/representation.md` §7): the
 //! I32 field lanes of a class.
 //!
 //! A class field whose representation is I32 (`FieldFacts::rep`, PR A: a

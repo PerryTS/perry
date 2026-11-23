@@ -1,4 +1,4 @@
-//! Int demand (representation RFC §10.3): a node has int demand when one of
+//! Int demand (`internals/representation.md` §3): a node has int demand when one of
 //! the values it holds can reach an int consumer.
 //!
 //! An int consumer is an operand the language converts to an integer: an
@@ -96,7 +96,7 @@ pub(crate) fn int32_constant(e: &perry_hir::Expr) -> bool {
         && v <= f64::from(i32::MAX)
 }
 
-/// I32 at rest (RFC §10.7, PR A): the at-rest facts are on. Demand is then
+/// I32 at rest (`internals/representation.md` §7, PR A): the at-rest facts are on. Demand is then
 /// solved before the derive, so a field's representation can read it
 /// (`lib.rs`). `PERRY_FACTS_AT_REST=0` restores main's facts.
 pub(crate) fn at_rest_demand() -> bool {

@@ -212,7 +212,7 @@ pub(crate) fn run(
             std::env::var("PERRY_FACTS_CONST_ARRAYS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
-        // Off unless `=1` until VR-6 (DESIGN-p4l4 §7).
+        // Off unless `=1` until VR-6.
         value_records: std::env::var("PERRY_FACTS_VALUE_RECORDS").as_deref() == Ok("1"),
         no_record_signatures: matches!(
             std::env::var("PERRY_FACTS_RECORD_SIGNATURES").as_deref(),
@@ -680,7 +680,7 @@ fn elision_for(
     // gap tests must then fail).
     let unchecked = pf.sabotage.as_deref() == Some("unchecked");
     out.interp_guard = pf.interp_guard.is_some() && !unchecked;
-    // DESIGN-p4l4 VR-2: the admitted value records' classes, for check mode
+    // VR-2: the admitted value records' classes, for check mode
     // only (`expr/record_witness.rs`); empty with the switch off.
     out.record_classes = pf
         .templates
@@ -867,7 +867,7 @@ fn elision_for(
         out.fill_births.extend(mb.fill_births.iter().copied());
         out.rest_lane_reads
             .extend(mb.rest_lane_reads.iter().copied());
-        // DESIGN-p4l4 VR-4b: the record arrays. Their record's layout is
+        // VR-4b: the record arrays. Their record's layout is
         // this module's (wpfacts rejects a record array held in another
         // module); without it codegen refuses the module.
         {
@@ -896,7 +896,7 @@ fn elision_for(
         }
         let rep = |r: &perry_wpfacts::Rep| facts_rep(*r);
         for (id, sig) in &mb.signatures {
-            // DESIGN-p4l4 VR-3b: a Record slot whose layout this module
+            // VR-3b: a Record slot whose layout this module
             // lowers (`record_layout`: the literal is born here).
             let mut record = |r: &perry_wpfacts::Rep| match r {
                 perry_wpfacts::Rep::Record(r) => {
@@ -938,7 +938,7 @@ fn elision_for(
             }
             out.signatures.insert(*id, sig);
         }
-        // Same-module typed calls only (DESIGN-p2 rev 2.2 §2).
+        // Same-module typed calls only.
         let module_index = pf.module_paths.iter().position(|p| p == path);
         for (offset, (callee_module, func_id)) in &mb.typed_calls {
             if Some(*callee_module as usize) == module_index {
@@ -1041,7 +1041,7 @@ fn elision_for(
                 }
             }
             out.local_reps.insert(*id, facts_rep(b.rep));
-            // DESIGN-p4l4 VR-3a: a binding of one admitted value record is
+            // VR-3a: a binding of one admitted value record is
             // its fields by value (`perry_codegen::value_records`). The
             // template's literal must be born in this module (its class is
             // this module's, or it stays an `Expr::Object`).
@@ -1490,7 +1490,7 @@ pub(crate) fn activation(
             std::env::var("PERRY_FACTS_CONST_ARRAYS").as_deref(),
             Ok("0") | Ok("off") | Ok("false")
         ),
-        // Off unless `=1` until VR-6 (DESIGN-p4l4 §7).
+        // Off unless `=1` until VR-6.
         value_records: std::env::var("PERRY_FACTS_VALUE_RECORDS").as_deref() == Ok("1"),
         no_record_signatures: matches!(
             std::env::var("PERRY_FACTS_RECORD_SIGNATURES").as_deref(),
@@ -1649,7 +1649,7 @@ fn verification_sites(
 
 /// `PERRY_WP_ELEMENT_READS=0` withholds wpfacts' proven element reads
 /// (`ModuleBindings::element_reads`): every element read keeps its guarded
-/// tier (representation RFC §10.7, P4).
+/// tier (`internals/representation.md` §7, P4).
 fn element_reads_enabled() -> bool {
     !matches!(
         std::env::var("PERRY_WP_ELEMENT_READS").as_deref(),
@@ -1658,7 +1658,7 @@ fn element_reads_enabled() -> bool {
 }
 
 /// The layout codegen lowers an admitted value record of template `tmpl`
-/// with, when its literal is born in module `path` (DESIGN-p4l4 VR-3a).
+/// with, when its literal is born in module `path` (VR-3a).
 fn record_layout(
     pf: &perry_wpfacts::ProgramFacts,
     path: &str,
@@ -1718,7 +1718,7 @@ fn facts_rep(r: perry_wpfacts::Rep) -> perry_codegen::FactsRep {
                 || (a.elem == ElemRep::I32
                     && std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("restrep")),
         }),
-        // DESIGN-p4l4 VR-2: codegen lowers records from VR-3; until then a
+        // VR-2: codegen lowers records from VR-3; until then a
         // record is the Boxed word it is today.
         Rep::Record(_) => FactsRep::Boxed,
     }

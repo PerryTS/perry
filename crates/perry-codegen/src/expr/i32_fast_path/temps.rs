@@ -1,4 +1,4 @@
-//! N1 phase 1: integer temporaries stay integers (representation RFC §10.3,
+//! N1 phase 1: integer temporaries stay integers (`internals/representation.md` §3,
 //! P1 "expression temporaries take the fact's representation").
 //!
 //! A temporary has no binding, so it has no fact of its own: its

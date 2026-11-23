@@ -1,8 +1,8 @@
-# NUM seed audit (P3 B1, DESIGN-p3 rev 3.1 §2.2, REVIEW-p3 D2)
+# NUM seed audit (P3 B1, REVIEW-p3 D2)
 
 Every non-test use of `prim::NUM` in perry-wpfacts, one row each. A **seed** puts NUM into a node; its citation names the runtime function or the codegen lowering that produces the value, which must be a plain double (canonical IEEE, never a NaN-boxed tag). A **read/map** row tests the fact or maps a family to its prims and seeds nothing.
 
-There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdlib (DESIGN-p3 §1.1). So every runtime Number below is built by `JSValue::number` / `as f64` / f64 arithmetic. Raw-bits ingress (v8.deserialize, bun:ffi f64/f32) is not modeled by wpfacts (those values are ⊤) and is fixed separately (lane NANB).
+There are no non-test callers of `JSValue::int32` in perry-runtime or perry-stdlib. So every runtime Number below is built by `JSValue::number` / `as f64` / f64 arithmetic. Raw-bits ingress (v8.deserialize, bun:ffi f64/f32) is not modeled by wpfacts (those values are ⊤) and is fixed separately (lane NANB).
 
 `tests/num_seeds_audit.rs` fails when the per-file count of `prim::NUM` uses differs from this table, so a new seed cannot land without a row.
 

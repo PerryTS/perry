@@ -1,4 +1,4 @@
-// VR-3b S0 arm `vruntyped` (DESIGN-p4l4 §10.3): a record passed by a call
+// VR-3b S0 arm `vruntyped`: a record passed by a call
 // that is no typed call of one body. Correct: R5UntypedCall rejects the
 // template, which stays a heap object. Sabotaged (the rule ignored): `use`
 // takes the record as its lanes, the untyped call hands a copy to `use`'s

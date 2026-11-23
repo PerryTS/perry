@@ -1,4 +1,4 @@
-//! P3 B1 (DESIGN-p3-canonical-numbers rev 3.1 §2): consumers that drop an
+//! P3 B1: consumers that drop an
 //! INT32 test because the facts prove a value a plain Number.
 //!
 //! The fact is wpfacts' NUM declaration (REVIEW-p3 R2): an element read whose

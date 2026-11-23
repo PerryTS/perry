@@ -1,4 +1,4 @@
-//! I32 at rest, PR B (representation RFC §10.7; DESIGN-n1-at-rest §3, §6):
+//! I32 at rest, PR B (`internals/representation.md` §7):
 //! the element sites and the births of at-rest Arrays.
 //!
 //! wpfacts (`rest_elems`) admits an Array template at rest when every

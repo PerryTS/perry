@@ -826,7 +826,7 @@ fn prologue_cost_switch_is_a_cache_input() {
     );
 }
 
-/// Value records (DESIGN-p4l4 §7): the switch changes the facts (and, from
+/// Value records: the switch changes the facts (and, from
 /// VR-3, emitted code), so `=1` must never reuse an object built without it.
 #[test]
 fn value_records_switch_is_a_cache_input() {

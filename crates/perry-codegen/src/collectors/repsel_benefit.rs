@@ -2,7 +2,7 @@
 //! proven-receiver clone (#7142).
 //!
 //! The canonical-i32 profitability term that used to live here (#7128, the
-//! `15_mandelbrot` refusal) is gone (representation RFC §10.8, P5): whether a
+//! `15_mandelbrot` refusal) is gone (`internals/representation.md` §8, P5): whether a
 //! local is worth an i32 slot is the whole-program facts' int demand
 //! (`codegen/facts_rep.rs`), a property of the value and not of one body.
 

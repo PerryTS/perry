@@ -1,4 +1,4 @@
-//! The whole-program representation of locals (representation RFC §10,
+//! The whole-program representation of locals (`internals/representation.md`,
 //! phase P1): a `let` the facts cover takes the facts' representation
 //! (`ElisionFacts::local_reps`, wpfacts `BindingFacts::rep`), and codegen
 //! does not choose one for it.
