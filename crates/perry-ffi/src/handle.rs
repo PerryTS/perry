@@ -1873,7 +1873,12 @@ pub fn set_native_handle_props(handle: Handle, bits: u64) -> bool {
     stored
 }
 fn scan_native_payload_roots(visitor: &mut GcRootVisitor<'_>) {
+    // Full marks reach a parked owner's bag only through a word naming its id
+    // (`FfiPayloads::property_bag`); minors and relocations rewrite every bag.
     for mut entry in HANDLES.iter_mut() {
+        if visitor.is_full_mark() && !crate::handle_lifecycle::payload_bag_is_rooted(*entry.key()) {
+            continue;
+        }
         if let Some(slot) = entry.props_slot() {
             visitor.visit_nanbox_u64_slot(slot);
         }

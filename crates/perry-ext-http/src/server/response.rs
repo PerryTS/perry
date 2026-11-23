@@ -1912,11 +1912,13 @@ pub(crate) fn response_state_mut(handle: i64) -> Option<&'static mut ResponseSta
 /// it ended: it is destroyed, and `'close'` fires once.
 pub(crate) fn close_abandoned_response(handle: i64) {
     if heap::is_response(handle) {
-        if heap::close_emitted(handle) {
+        let roots = perry_ffi::TransientRootScope::enter();
+        let owner = roots.root_addr(handle);
+        if heap::close_emitted(owner.get()) {
             return;
         }
-        heap::set_field(handle, b"destroyed", f64::from_bits(TAG_TRUE));
-        heap::emit_close(handle);
+        heap::set_field(owner.get(), b"destroyed", f64::from_bits(TAG_TRUE));
+        heap::emit_close(owner.get());
         return;
     }
     let Some(state) = response_state_mut(handle) else {

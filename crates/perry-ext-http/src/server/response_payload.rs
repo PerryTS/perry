@@ -294,11 +294,15 @@ pub(crate) fn add_listener(handle: i64, method: &'static [u8], event: &str, call
 }
 /// node's `emitCloseNT`: `'close'` fires once, latched by `_closed`.
 pub(crate) fn emit_close(handle: i64) {
-    if field(handle, b"_closed").is_some_and(truthy) {
+    // Each property operation can run JS and move the response: re-read it.
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(value(handle));
+    let h = || (owner.get().to_bits() & PTR_MASK) as i64;
+    if field(h(), b"_closed").is_some_and(truthy) {
         return;
     }
-    set_field(handle, b"_closed", bool_value(true));
-    emit(handle, "close");
+    set_field(h(), b"_closed", bool_value(true));
+    emit(h(), "close");
 }
 /// Whether the response's `'close'` has fired.
 pub(crate) fn close_emitted(handle: i64) -> bool {
