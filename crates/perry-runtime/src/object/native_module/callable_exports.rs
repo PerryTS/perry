@@ -165,19 +165,7 @@ pub fn bound_native_callable_export_value(module_name: &str, property_name: &str
             crate::gc::gc_collect_minor();
         }
     });
-    let exposed_name = if export_module_name == "fs" || export_module_name == "sqlite" {
-        native_callable_export_display_name(export_module_name, property_name)
-    } else if export_module_name == "url" && property_name == "resolveObject" {
-        realm_native_url_resolveObject_metadata!(name)
-    } else if export_module_name == "http" && property_name == "_connectionListener" {
-        realm_native_http_connectionListener_metadata!(name)
-    } else if export_module_name == "module" && property_name == "runMain" {
-        realm_native_module_runMain_metadata!(name)
-    } else if export_module_name == "fs" && property_name == "_toUnixTimestamp" {
-        realm_native_fs_toUnixTimestamp_metadata!(name)
-    } else {
-        property_name
-    };
+    let exposed_name = native_callable_export_display_name(export_module_name, property_name);
     closure.with_mut_ptr(|c: *mut crate::closure::ClosureHeader| {
         set_bound_native_closure_name(c, exposed_name);
     });
@@ -423,7 +411,12 @@ pub(super) fn native_callable_export_display_name<'a>(module: &str, prop: &'a st
             _ => prop,
         }
     } else {
-        prop
+        match (module, prop) {
+            ("url", "resolveObject") => realm_native_url_resolveObject_metadata!(name),
+            ("http", "_connectionListener") => realm_native_http_connectionListener_metadata!(name),
+            ("module", "runMain") => realm_native_module_runMain_metadata!(name),
+            _ => prop,
+        }
     }
 }
 
@@ -1959,3 +1952,7 @@ pub(crate) unsafe fn nm_attach_util(
 #[cfg(test)]
 #[path = "buffer_proto_call_tests.rs"]
 mod buffer_proto_call_tests;
+
+#[cfg(test)]
+#[path = "callable_export_name_tests.rs"]
+mod callable_export_name_tests;
