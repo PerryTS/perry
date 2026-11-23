@@ -284,6 +284,7 @@ pub(super) unsafe fn install_fetch_registrations() {
         fn js_register_object_url_fns(
             create: unsafe extern "C" fn(f64) -> *mut perry_runtime::StringHeader,
             resolve: unsafe extern "C" fn(f64) -> f64,
+            revoke: unsafe extern "C" fn(f64),
         );
         // #4965: Headers → `res.setHeaders` entries-JSON producer.
         fn js_register_global_headers_entries_json(
@@ -318,6 +319,7 @@ pub(super) unsafe fn install_fetch_registrations() {
     js_register_object_url_fns(
         crate::fetch_blob::js_url_create_object_url,
         crate::fetch_blob::js_buffer_resolve_object_url,
+        crate::fetch_blob::js_url_revoke_object_url,
     );
     js_register_global_headers_entries_json(crate::fetch::js_headers_setheaders_entries_json);
     js_register_global_headers_object_json(crate::fetch::js_headers_fetch_object_json);
