@@ -1,0 +1,1 @@
+On the web target, a labeled `continue` inside an async function reaches its labeled `for` or `while`: the async body's JavaScript puts the label on the loop itself instead of on a block around it, which made the bundle fail to parse.
