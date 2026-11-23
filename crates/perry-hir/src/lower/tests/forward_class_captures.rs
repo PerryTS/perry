@@ -30,8 +30,51 @@ fn lower(source: &str) -> crate::ir::Module {
     super::lower_module(&ast, "t", "t.ts").expect("source lowers")
 }
 
+/// The debug text without whitespace and without each `Return`'s source
+/// offset (`Return(value,offset)` reads `Return(value)`): the assertions
+/// compare the shape of what a body reads, not where it stands.
 fn strip(debug: String) -> String {
-    debug.chars().filter(|ch| !ch.is_whitespace()).collect()
+    let text: String = debug.chars().filter(|ch| !ch.is_whitespace()).collect();
+    let bytes = text.as_bytes();
+    let mut cuts = Vec::new();
+    for (at, _) in text.match_indices("Return(") {
+        if at > 0 && (bytes[at - 1].is_ascii_alphanumeric() || bytes[at - 1] == b'_') {
+            continue;
+        }
+        let open = at + "Return".len();
+        let mut depth = 0usize;
+        let mut close = open;
+        for (i, &b) in bytes.iter().enumerate().skip(open) {
+            match b {
+                b'(' => depth += 1,
+                b')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        close = i;
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let digits = text[..close]
+            .bytes()
+            .rev()
+            .take_while(u8::is_ascii_digit)
+            .count();
+        if digits > 0 && bytes[close - digits - 1] == b',' {
+            cuts.push((close - digits - 1, close));
+        }
+    }
+    cuts.sort_unstable();
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    for (from, to) in cuts {
+        out.push_str(&text[copied..from]);
+        copied = to;
+    }
+    out.push_str(&text[copied..]);
+    out
 }
 
 fn main_body(module: &crate::ir::Module) -> String {
