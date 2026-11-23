@@ -775,7 +775,7 @@ fn lower_assignment_target(
                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                         let field_name = prop_ident.sym.to_string();
                         if ctx.has_static_field(&resolved_class, &field_name) {
-                            return Ok(Expr::StaticFieldSet {
+                            return Ok(Expr::StaticFieldSet { byte_offset,
                                 class_name: resolved_class,
                                 field_name,
                                 value,
@@ -1165,19 +1165,19 @@ fn lower_assignment_target(
         ast::AssignTarget::Pat(pat) => lower_destructuring_assignment(ctx, pat, value),
         // Unwrap TypeScript type annotations and parentheses for assignment
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Paren(paren)) => {
-            lower_expr_assignment(ctx, &paren.expr, value)
+            lower_expr_assignment(ctx, &paren.expr, value, byte_offset)
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsAs(ts_as)) => {
-            lower_expr_assignment(ctx, &ts_as.expr, value)
+            lower_expr_assignment(ctx, &ts_as.expr, value, byte_offset)
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsNonNull(ts_nn)) => {
-            lower_expr_assignment(ctx, &ts_nn.expr, value)
+            lower_expr_assignment(ctx, &ts_nn.expr, value, byte_offset)
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsTypeAssertion(ts_ta)) => {
-            lower_expr_assignment(ctx, &ts_ta.expr, value)
+            lower_expr_assignment(ctx, &ts_ta.expr, value, byte_offset)
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsSatisfies(ts_sat)) => {
-            lower_expr_assignment(ctx, &ts_sat.expr, value)
+            lower_expr_assignment(ctx, &ts_sat.expr, value, byte_offset)
         }
         other => Err(anyhow!("Unsupported assignment target: {:?}", other)),
     }

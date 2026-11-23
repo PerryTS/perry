@@ -9,6 +9,7 @@ pub(crate) fn lower_expr_assignment(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
     value: Box<Expr>,
+    byte_offset: u32,
 ) -> Result<Expr> {
     match expr {
         // #6300: identifier stores — including the ones reached by unwrapping a
@@ -30,7 +31,7 @@ pub(crate) fn lower_expr_assignment(
                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                         let field_name = prop_ident.sym.to_string();
                         if ctx.has_static_field(&obj_name, &field_name) {
-                            return Ok(Expr::StaticFieldSet {
+                            return Ok(Expr::StaticFieldSet { byte_offset,
                                 class_name: obj_name,
                                 field_name,
                                 value,
@@ -124,11 +125,11 @@ pub(crate) fn lower_expr_assignment(
             })
         }
         // Recursively unwrap parens and type annotations
-        ast::Expr::Paren(paren) => lower_expr_assignment(ctx, &paren.expr, value),
-        ast::Expr::TsAs(ts_as) => lower_expr_assignment(ctx, &ts_as.expr, value),
-        ast::Expr::TsNonNull(ts_nn) => lower_expr_assignment(ctx, &ts_nn.expr, value),
-        ast::Expr::TsTypeAssertion(ts_ta) => lower_expr_assignment(ctx, &ts_ta.expr, value),
-        ast::Expr::TsSatisfies(ts_sat) => lower_expr_assignment(ctx, &ts_sat.expr, value),
+        ast::Expr::Paren(paren) => lower_expr_assignment(ctx, &paren.expr, value, byte_offset),
+        ast::Expr::TsAs(ts_as) => lower_expr_assignment(ctx, &ts_as.expr, value, byte_offset),
+        ast::Expr::TsNonNull(ts_nn) => lower_expr_assignment(ctx, &ts_nn.expr, value, byte_offset),
+        ast::Expr::TsTypeAssertion(ts_ta) => lower_expr_assignment(ctx, &ts_ta.expr, value, byte_offset),
+        ast::Expr::TsSatisfies(ts_sat) => lower_expr_assignment(ctx, &ts_sat.expr, value, byte_offset),
         _ => Err(anyhow!(
             "Unsupported expression as assignment target: {:?}",
             expr
