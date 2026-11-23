@@ -1,4 +1,5 @@
-// Bug 15 (perry-feather#111): every http.get registers two native handle ids
+// perry-test: run-timeout=60
+// #15145: every http.get registers two native handle ids
 // (the ClientRequest and its IncomingMessage) in a shared band of 262k, so
 // 140k requests exhaust it unless finished exchanges give their ids back. They
 // may come back only through a collection that proves nothing names them:

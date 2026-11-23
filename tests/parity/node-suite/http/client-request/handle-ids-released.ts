@@ -1,4 +1,4 @@
-// Bug 15 (perry-feather#111): a finished client exchange's ClientRequest and
+// A finished client exchange's ClientRequest and
 // IncomingMessage give their native handle ids back only through a collection
 // that proves nothing names them, and until then they keep answering like
 // Node. Every 100th request/response pair is kept and must keep answering
@@ -7,8 +7,8 @@
 // one. Every way an exchange ends runs too: response end, destroy before the
 // response, destroy mid-body, AbortSignal, timeout + destroy, connection
 // refused, upgrade, and a reader that attaches only after 'close' and an
-// allocation churn. The id-band pressure run (140k requests) is the
-// integration test crates/perry/tests/http_client_handle_ids_released.rs.
+// allocation churn. The id-band pressure run (140k requests) is
+// handle-id-pressure.ts.
 // The server speaks raw HTTP/1.1 on `net`, so the only per-request handles are
 // the client's.
 import http from "node:http";
@@ -69,8 +69,6 @@ function get(port: number, path: string, agent: http.Agent | false, extra: any =
 }
 
 async function main(port: number, refusedPort: number) {
-  const t0 = Date.now();
-  const lap = (what: string) => console.error(what, Date.now() - t0);
   const agent = new http.Agent({ keepAlive: true, maxSockets: 8 });
   const kept: any[] = [];
   const marks = new WeakMap<object, number>();
@@ -91,7 +89,6 @@ async function main(port: number, refusedPort: number) {
       }
     }
   }
-  lap("requests");
   console.log("requests ok", ok, "of", TOTAL);
   console.log("kept", kept.length, "same as a later one", sameAsKept, "weak hits", weakHits);
   let answers = 0;
@@ -161,7 +158,6 @@ async function main(port: number, refusedPort: number) {
       });
     });
   }
-  lap("paths");
   console.log("upgrades", upgrades);
 
   // A reader that attaches only after the exchange finished (Perry's
