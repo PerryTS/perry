@@ -141,6 +141,13 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
 /// `np`'s key `a`, with the written key (`None`: any key).
 /// CLIFFC what-if (env PERRY_CLIFFC_W4=1): a store into TOP or an unmodeled
 /// write is not recorded as a write onto a builtin prototype.
+/// CLIFFD arm (env PERRY_CLIFFD_NOINTRW=1): a builtin object handed to
+/// unknown code records no write of its members (`builtin_fields_sink`).
+pub(crate) fn cliffd_nointrw() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_CLIFFD_NOINTRW").is_some_and(|v| v == "1"))
+}
+
 pub(crate) fn cliffc_w4() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("PERRY_CLIFFC_W4").is_some_and(|v| v == "1"))
