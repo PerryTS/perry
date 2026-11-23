@@ -273,7 +273,7 @@ fn delegate_next_call(
             byte_offset,
         }
     };
-    Expr::Conditional {
+    Expr::Conditional { byte_offset: 0 /*HPOS*/,
         condition: Box::new(Expr::Compare { byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(del_next_id)))),
@@ -448,7 +448,7 @@ fn emit_yield_star_loop(
         // a raw pull value is unfinished exactly when it was yielded.
         condition: match del_kind_id {
             None => not_done,
-            Some(kind) => Expr::Conditional {
+            Some(kind) => Expr::Conditional { byte_offset: 0 /*HPOS*/,
                 condition: Box::new(kind_is(kind, 2.0, byte_offset)),
                 then_expr: Box::new(not_done),
                 else_expr: Box::new(kind_is(kind, 0.0, byte_offset)),
@@ -510,7 +510,7 @@ fn emit_yield_star_loop(
         Box::new(match del_kind_id {
             None => inner_value,
             // A raw completion value is the delegate's return value itself.
-            Some(kind) => Expr::Conditional {
+            Some(kind) => Expr::Conditional { byte_offset: 0 /*HPOS*/,
                 condition: Box::new(kind_is(kind, 2.0, byte_offset)),
                 then_expr: Box::new(inner_value),
                 else_expr: Box::new(Expr::LocalGet(del_result_id)),

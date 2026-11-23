@@ -550,7 +550,7 @@ pub fn check_escapes_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             check_escapes_in_expr(condition, candidates, classes, escaped);
             check_escapes_in_expr(then_expr, candidates, classes, escaped);

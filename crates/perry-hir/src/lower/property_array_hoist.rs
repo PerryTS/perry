@@ -347,7 +347,7 @@ fn expr_is_hoist_safe(expr: &Expr, scan: &Scan<'_>) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_is_hoist_safe(condition, scan)
                 && expr_is_hoist_safe(then_expr, scan)
@@ -434,7 +434,7 @@ fn expr_reads_property(expr: &Expr, recv: Recv, property: &str) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_reads_property(condition, recv, property)
                 || expr_reads_property(then_expr, recv, property)
@@ -621,8 +621,8 @@ fn rewrite_expr(expr: &Expr, recv: Recv, property: &str, hoist_id: u32) -> Expr 
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
-        } => Expr::Conditional {
+            else_expr, ..
+        } => Expr::Conditional { byte_offset: 0 /*HPOS*/,
             condition: rec(condition),
             then_expr: rec(then_expr),
             else_expr: rec(else_expr),
@@ -1094,10 +1094,11 @@ fn map_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
             condition,
             then_expr,
             else_expr,
+            byte_offset,
         } => {
             let condition = r(condition, f);
             let then_expr = r(then_expr, f);
-            Expr::Conditional {
+            Expr::Conditional { byte_offset: *byte_offset,
                 condition,
                 then_expr,
                 else_expr: r(else_expr, f),

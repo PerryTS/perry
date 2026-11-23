@@ -69,7 +69,7 @@ impl<'a> Gen<'a> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 if self.const_eval(mi, condition)?.truthy() {
                     self.const_eval(mi, then_expr)?

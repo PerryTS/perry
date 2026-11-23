@@ -198,7 +198,7 @@ fn arg_is_order_free(ctx: &FnCtx<'_>, e: &perry_hir::Expr) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             arg_is_order_free(ctx, condition)
                 && arg_is_order_free(ctx, then_expr)

@@ -72,8 +72,8 @@ fn capture_base(
 
 /// One step of an optional chain's lowered short-circuit spine.
 enum SpineFrame {
-    /// A `?.` guard: `condition ? then_expr : <rest of the spine>`.
-    Guard(Box<Expr>, Box<Expr>),
+    /// A `?.` guard: `condition ? then_expr : <rest of the spine>`, at its offset.
+    Guard(Box<Expr>, Box<Expr>, u32),
     /// A temporary the chain bound for the rest of the spine (a link's
     /// receiver, evaluated once inside the upstream guard).
     Temp(LocalId, Box<Expr>),
@@ -97,8 +97,9 @@ fn split_short_circuit_spine(mut value: Expr) -> (Expr, Vec<SpineFrame>) {
                 condition,
                 then_expr,
                 else_expr,
+                byte_offset,
             } if frames.is_empty() || matches!(*then_expr, Expr::Undefined) => {
-                frames.push(SpineFrame::Guard(condition, then_expr));
+                frames.push(SpineFrame::Guard(condition, then_expr, byte_offset));
                 value = *else_expr;
             }
             Expr::ScopedTemp {
@@ -120,7 +121,8 @@ fn rebuild_short_circuit_spine(frames: Vec<SpineFrame>, live: Expr) -> Expr {
         .into_iter()
         .rev()
         .fold(live, |live, frame| match frame {
-            SpineFrame::Guard(condition, then_expr) => Expr::Conditional {
+            SpineFrame::Guard(condition, then_expr, byte_offset) => Expr::Conditional {
+                byte_offset,
                 condition,
                 then_expr,
                 else_expr: Box::new(live),
@@ -279,7 +281,7 @@ pub(crate) fn lower_opt_chain_expr(
                 ));
             }
             Ok(bind_bases(
-                Expr::Conditional {
+                Expr::Conditional { byte_offset: opt_chain.span.lo.0,
                     condition: Box::new(Expr::Compare { byte_offset: opt_chain.span.lo.0,
                         op: CompareOp::LooseEq,
                         left: Box::new(obj_expr),
@@ -487,7 +489,7 @@ pub(crate) fn lower_opt_chain_expr(
                     // whole short-circuit spine (several `?.` links nest
                     // their guards), not just the outer guard's else branch.
                     let (inner_else, mut upstream_frames) = split_short_circuit_spine(check_expr);
-                    let SpineFrame::Guard(inner_cond, inner_then) = upstream_frames.remove(0)
+                    let SpineFrame::Guard(inner_cond, inner_then, inner_offset) = upstream_frames.remove(0)
                     else {
                         unreachable!("a Conditional spine starts with its guard");
                     };
@@ -563,7 +565,7 @@ pub(crate) fn lower_opt_chain_expr(
                                 right: Box::new(Expr::Null),
                             },
                         };
-                        let guarded_call = Expr::Conditional {
+                        let guarded_call = Expr::Conditional { byte_offset: opt_chain.span.lo.0,
                             condition: Box::new(guard_cond),
                             then_expr: Box::new(Expr::Undefined),
                             else_expr: Box::new(outer_call),
@@ -576,7 +578,7 @@ pub(crate) fn lower_opt_chain_expr(
                         // chain returns `undefined` instead of throwing
                         // "Cannot read properties of <nullish> (reading 'method')".
                         match receiver_for_member_guard {
-                            Some(recv) => Box::new(Expr::Conditional {
+                            Some(recv) => Box::new(Expr::Conditional { byte_offset: opt_chain.span.lo.0,
                                 condition: Box::new(Expr::Compare { byte_offset: opt_chain.span.lo.0,
                                     op: CompareOp::LooseEq,
                                     left: Box::new(recv),
@@ -608,7 +610,7 @@ pub(crate) fn lower_opt_chain_expr(
                             left: Box::new(recv),
                             right: Box::new(Expr::Null),
                         };
-                        Box::new(Expr::Conditional {
+                        Box::new(Expr::Conditional { byte_offset: opt_chain.span.lo.0,
                             condition: Box::new(guard_cond),
                             then_expr: Box::new(Expr::Undefined),
                             else_expr: Box::new(outer_call),
@@ -617,7 +619,7 @@ pub(crate) fn lower_opt_chain_expr(
                         Box::new(outer_call)
                     };
                     return Ok(bind_bases(
-                        Expr::Conditional {
+                        Expr::Conditional { byte_offset: inner_offset,
                             condition: inner_cond,
                             then_expr: inner_then,
                             else_expr: Box::new(rebuild_short_circuit_spine(
@@ -691,7 +693,7 @@ pub(crate) fn lower_opt_chain_expr(
                             right: Box::new(Expr::Null),
                         },
                     };
-                    Box::new(Expr::Conditional {
+                    Box::new(Expr::Conditional { byte_offset: opt_chain.span.lo.0,
                         condition: Box::new(guard_cond),
                         then_expr: Box::new(Expr::Undefined),
                         else_expr: Box::new(call_expr),
@@ -727,7 +729,7 @@ pub(crate) fn lower_opt_chain_expr(
                 }
             };
             Ok(bind_bases(
-                Expr::Conditional {
+                Expr::Conditional { byte_offset: opt_chain.span.lo.0,
                     condition: Box::new(condition),
                     then_expr: Box::new(Expr::Undefined),
                     else_expr,

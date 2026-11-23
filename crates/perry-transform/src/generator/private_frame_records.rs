@@ -34,7 +34,7 @@ fn payload_shape(e: &Expr, record: u32, flag: u32) -> Option<u32> {
     let Expr::Conditional {
         condition,
         then_expr,
-        else_expr,
+        else_expr, ..
     } = value.as_ref()
     else {
         return None;
@@ -108,7 +108,7 @@ pub(super) fn normalize(stmts: &[Stmt], child: u32) -> Vec<Stmt> {
                 if *id == payload
                     && !matches!(value.as_ref(), Expr::Undefined)
                     && payload_shape(value, record, flag) != Some(payload)
-                    && !matches!(value.as_ref(),Expr::Conditional {condition,then_expr,else_expr}
+                    && !matches!(value.as_ref(),Expr::Conditional {condition,then_expr,else_expr, ..}
                         if mode(condition,flag) && matches!(then_expr.as_ref(),Expr::GetIterator(input) if get(input,record)) && get(else_expr,record))
                 {
                     bad = true
@@ -178,7 +178,7 @@ pub(super) fn normalize(stmts: &[Stmt], child: u32) -> Vec<Stmt> {
             if let Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } = e
             {
                 if let Expr::Bool(yes) = condition.as_ref() {

@@ -514,14 +514,14 @@ pub(crate) fn lower_ident_assignment(
         // resolved before the value is evaluated, as in the spec.
         let global = Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset,
             object: Box::new(Expr::GlobalGet(0)),
             property: "globalThis".to_string(),
         };
         let target = with_envs
             .iter()
             .rev()
-            .fold(global, |outer, env| Expr::Conditional {
+            .fold(global, |outer, env| Expr::Conditional { byte_offset,
                 condition: Box::new(Expr::ObjectHasOwn(
                     Box::new(Expr::LocalGet(*env)),
                     Box::new(Expr::String(name.clone())),

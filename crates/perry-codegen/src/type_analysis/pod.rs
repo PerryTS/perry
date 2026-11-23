@@ -160,7 +160,7 @@ fn collect_pod_numeric_field_read_locals(ctx: &FnCtx<'_>, expr: &Expr, out: &mut
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             collect_pod_numeric_field_read_locals(ctx, condition, out);
             collect_pod_numeric_field_read_locals(ctx, then_expr, out);
@@ -274,7 +274,7 @@ fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) 
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_may_materialize_pod_local(ctx, condition, target_id)
                 || expr_may_materialize_pod_local(ctx, then_expr, target_id)

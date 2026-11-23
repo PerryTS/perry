@@ -174,7 +174,7 @@ pub fn collect_localsets_in_expr_for_propagate<'a>(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             collect_localsets_in_expr_for_propagate(condition, out);
             collect_localsets_in_expr_for_propagate(then_expr, out);
@@ -446,7 +446,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             walk_index_uses_in_expr(condition, out);
             walk_index_uses_in_expr(then_expr, out);

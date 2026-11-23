@@ -333,7 +333,7 @@ fn lift_conditional_with_yield_branches(
     if let Expr::Conditional {
         mut condition,
         then_expr,
-        else_expr,
+        else_expr, ..
     } = owned
     {
         // The condition always runs first; hoist any yields it holds above

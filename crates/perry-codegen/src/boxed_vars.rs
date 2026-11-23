@@ -584,7 +584,7 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             collect_nested_closure_boxed_vars_in_expr(condition, out);
             collect_nested_closure_boxed_vars_in_expr(then_expr, out);
@@ -1010,7 +1010,7 @@ fn collect_closure_refs_and_writes_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             collect_closure_refs_and_writes_in_expr(condition, refs, writes);
             collect_closure_refs_and_writes_in_expr(then_expr, refs, writes);
@@ -1265,7 +1265,7 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             collect_outer_writes_in_expr(condition, out);
             collect_outer_writes_in_expr(then_expr, out);
@@ -1478,7 +1478,7 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             collect_write_ids_in_expr(condition, out);
             collect_write_ids_in_expr(then_expr, out);
@@ -1816,7 +1816,7 @@ fn collect_closure_let_types_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             collect_closure_let_types_in_expr(condition, out);
             collect_closure_let_types_in_expr(then_expr, out);

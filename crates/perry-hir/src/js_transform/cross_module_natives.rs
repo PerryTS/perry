@@ -839,7 +839,7 @@ pub fn fix_native_instance_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             fix_native_instance_expr(condition, native_instances, local_id_instances);
             fix_native_instance_expr(then_expr, native_instances, local_id_instances);

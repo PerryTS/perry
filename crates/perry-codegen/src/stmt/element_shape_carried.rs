@@ -154,7 +154,7 @@ pub(super) fn expr_reads_local(expr: &Expr, id: u32) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_reads_local(condition, id)
                 || expr_reads_local(then_expr, id)

@@ -735,7 +735,7 @@ pub fn check_array_escapes_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             check_array_escapes_in_expr(condition, candidates, escaped);
             check_array_escapes_in_expr(then_expr, candidates, escaped);

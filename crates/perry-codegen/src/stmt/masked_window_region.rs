@@ -221,7 +221,7 @@ fn expr_is_number_under(
         Expr::Conditional {
             condition: _,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_is_number_under(ctx, refined, eligible, then_expr)
                 && expr_is_number_under(ctx, refined, eligible, else_expr)

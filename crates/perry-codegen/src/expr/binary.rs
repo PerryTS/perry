@@ -494,7 +494,7 @@ fn is_strict_null_defaulted_local(expr: &Expr) -> bool {
     let Expr::Conditional {
         condition,
         then_expr,
-        else_expr,
+        else_expr, ..
     } = expr
     else {
         return false;

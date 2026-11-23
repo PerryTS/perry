@@ -1408,7 +1408,7 @@ pub fn collect_localset_ids_in_expr_filtered(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             walk(condition, out);
             walk(then_expr, out);

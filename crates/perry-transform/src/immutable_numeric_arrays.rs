@@ -433,7 +433,7 @@ fn lookup(values: &[Expr], base: i64, index: LocalId, byte_offset: u32) -> Expr 
         return values[0].clone();
     }
     let middle = values.len() / 2;
-    Expr::Conditional {
+    Expr::Conditional { byte_offset,
         condition: Box::new(Expr::Compare { byte_offset,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(index)),

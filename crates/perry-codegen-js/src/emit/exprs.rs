@@ -9,7 +9,7 @@ impl JsEmitter {
         let Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } = body
         else {
             return false;
@@ -473,7 +473,7 @@ impl JsEmitter {
             }
 
             // --- Conditional (ternary) ---
-            Expr::Conditional { condition, then_expr, else_expr } => {
+            Expr::Conditional { condition, then_expr, else_expr, .. } => {
                 self.output.push('(');
                 self.emit_expr(condition);
                 self.output.push_str(" ? ");

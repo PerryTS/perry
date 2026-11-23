@@ -451,7 +451,7 @@ fn step_of<'a>(s: &'a Expr, negated: bool) -> Option<Step<'a>> {
     let Expr::Conditional {
         condition,
         then_expr,
-        else_expr,
+        else_expr, ..
     } = s
     else {
         return None;

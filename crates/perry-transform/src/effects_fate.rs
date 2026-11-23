@@ -799,7 +799,7 @@ impl<'e> Walk<'_, 'e> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 self.test_sub(e, condition);
                 self.test_sub(e, then_expr);
@@ -845,7 +845,7 @@ impl<'e> Walk<'_, 'e> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 self.test_sub(value, condition);
                 self.into(value, s, then_expr);
@@ -957,7 +957,7 @@ impl<'e> Walk<'_, 'e> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 self.test_sub(e, condition);
                 self.sub(e, then_expr);

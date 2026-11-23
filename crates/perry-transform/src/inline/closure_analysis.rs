@@ -15,7 +15,7 @@ pub fn body_contains_super_call(stmts: &[Stmt]) -> bool {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => check_expr(condition) || check_expr(then_expr) || check_expr(else_expr),
             Expr::Call { callee, args, .. } => check_expr(callee) || args.iter().any(check_expr),
             Expr::Array(elements, _) => elements.iter().any(check_expr),
@@ -525,7 +525,7 @@ pub fn is_pure_function(func: &Function) -> bool {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 expr_is_pure(condition, known)
                     && expr_is_pure(then_expr, known)

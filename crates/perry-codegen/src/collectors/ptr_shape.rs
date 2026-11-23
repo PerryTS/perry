@@ -1223,7 +1223,7 @@ impl<'a> UseWalk<'a> {
                     if let Some(Expr::Conditional {
                         condition,
                         then_expr,
-                        else_expr,
+                        else_expr, ..
                     }) = init.as_ref()
                     {
                         if let (

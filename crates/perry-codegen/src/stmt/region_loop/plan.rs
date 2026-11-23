@@ -564,7 +564,7 @@ impl Planner<'_, '_> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 let c = self.expr(condition, st);
                 let t = self.expr(then_expr, c.clone());

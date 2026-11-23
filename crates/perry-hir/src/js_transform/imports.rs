@@ -798,7 +798,7 @@ pub fn transform_expr(
         Expr::GlobalSet(_, value) => {
             transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional { condition, then_expr, else_expr, .. } => {
             transform_expr(condition, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(then_expr, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(else_expr, js_imports, extern_func_to_js, local_name_to_js, tracker);

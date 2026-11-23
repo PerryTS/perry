@@ -366,7 +366,7 @@ fn element_shape_loop_pure_expr_collect(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             matches!(condition.as_ref(), Expr::PropertyGet { .. })
                 && crate::expr::element_shape_reads::integer_arm(then_expr).is_some()

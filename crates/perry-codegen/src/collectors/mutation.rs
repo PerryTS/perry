@@ -554,7 +554,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_has_mutation(condition, id)
                 || expr_has_mutation(then_expr, id)

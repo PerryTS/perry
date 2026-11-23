@@ -110,7 +110,7 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32, defer_apply: bool) -
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => observes(condition, id) || (observes(then_expr, id) && observes(else_expr, id)),
             Expr::Sequence(exprs) => exprs.iter().any(|expr| observes(expr, id)),
             Expr::Call { callee, args, .. } => {

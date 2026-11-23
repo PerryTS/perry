@@ -500,7 +500,7 @@ impl Scan {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 self.expr(condition, Use::Consume);
                 self.expr(then_expr, how);
