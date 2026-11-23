@@ -1,0 +1,1 @@
+The translated docs catalogs are synced with the English source again; new and changed passages show in English until translated, instead of keeping outdated text such as the canvas `setFont`/`fillText` support notes.
