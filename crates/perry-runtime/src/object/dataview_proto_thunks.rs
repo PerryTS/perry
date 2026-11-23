@@ -302,6 +302,16 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
             2,
         ),
         (
+            "getFloat16",
+            crate::fn_info!(#[realm(DataView.prototype.getFloat16)] export crate::object::dataview_proto_thunks::dv_get_float16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
+            1,
+        ),
+        (
+            "setFloat16",
+            crate::fn_info!(#[realm(DataView.prototype.setFloat16)] export crate::object::dataview_proto_thunks::dv_set_float16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
+            2,
+        ),
+        (
             "getFloat32",
             crate::fn_info!(#[realm(DataView.prototype.getFloat32)] export crate::object::dataview_proto_thunks::dv_get_float32, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
             1,
@@ -339,16 +349,6 @@ pub(crate) fn install_dataview_proto_methods(proto_obj: *mut ObjectHeader) {
         (
             "setBigUint64",
             crate::fn_info!(#[realm(DataView.prototype.setBigUint64)] export crate::object::dataview_proto_thunks::dv_set_biguint64, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
-            2,
-        ),
-        (
-            "getFloat16",
-            crate::fn_info!(#[realm(DataView.prototype.getFloat16)] export crate::object::dataview_proto_thunks::dv_get_float16, 2; with_rest(1), with_flags(crate::closure::FN_BUILTIN)),
-            1,
-        ),
-        (
-            "setFloat16",
-            crate::fn_info!(#[realm(DataView.prototype.setFloat16)] export crate::object::dataview_proto_thunks::dv_set_float16, 3; with_rest(2), with_flags(crate::closure::FN_BUILTIN)),
             2,
         ),
     ];
