@@ -1,0 +1,1 @@
+`libperry_ui_android.a` no longer carries 111 no-op `js_*` stubs for stdlib and ext-wrapper symbols (`js_bcrypt_*`, `js_argon2_*`, `js_crypto_*`, `js_sqlite_*`, `js_zlib_*` and others). An Android `perry/ui` link always puts `libperry_stdlib.a` and the wrapper archives first, so the stubs were never the definition a program ran.
