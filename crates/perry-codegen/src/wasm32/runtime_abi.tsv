@@ -443,7 +443,7 @@ js_bcrypt_compare	ptr	ptr,ptr
 js_bcrypt_compare_sync	f64	ptr,ptr
 js_bcrypt_gen_salt	ptr	f64
 js_bcrypt_gen_salt_sync	ptr	f64
-js_bcrypt_hash	ptr	ptr,f64
+js_bcrypt_hash	ptr	ptr,i64
 js_bcrypt_hash_sync	ptr	ptr,i64
 js_bigint_add	ptr	ptr,ptr
 js_bigint_and	ptr	ptr,ptr

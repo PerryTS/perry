@@ -2,3 +2,4 @@ hash 60 $2b$10$ true false
 sync 60 $2b$04$ true false
 salt 29 $2b$05$ 29 $2b$06$
 salted true true $2b$10$
+async salt true true $2b$10$
