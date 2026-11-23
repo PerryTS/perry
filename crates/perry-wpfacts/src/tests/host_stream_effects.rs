@@ -216,13 +216,13 @@ fn c1_stream_given_to_unknown_code() {
     );
 }
 
-/// C1 closed: `globalThis.sink` is never written in a closed program, so
+/// C1 closed: `external()` is never written in a closed program, so
 /// `f(s)` has no callee (it throws) and the stream reaches no other code:
 /// the only cancel reason is R.
 #[test]
 fn c1_closed_world_sink() {
     let pf = facts(&format!(
-        "{C1}\nconst f = (globalThis as any).sink;\nf(s);\nexport const keep = 1;\n"
+        "{C1}\nconst f = external();\nf(s);\nexport const keep = 1;\n"
     ));
     show(&pf, &["y"], &["C", "R"]);
     let y = site(&pf, "y");

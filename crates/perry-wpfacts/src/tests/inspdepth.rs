@@ -12,12 +12,13 @@ use super::*;
 fn facts_of(body: &str) -> ProgramFacts {
     facts(&format!(
         r#"
+        declare function external(x?: unknown): any;
         import {{ inspect }} from "util";
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         const s = new Svc();
         class Deep {{
-            [inspect.custom]() {{ (globalThis as any).hostTake(s); return "D"; }}
+            [inspect.custom]() {{ external(s); return "D"; }}
         }}
         {body}
         console.log(g(s));

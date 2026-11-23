@@ -37,7 +37,8 @@ fn native(pf: &ProgramFacts, key: &str) -> bool {
 fn top_and_fn_callee_keeps_arg_unescaped() {
     let pf = facts(
         r#"
-        const U: any = (globalThis as any).u;
+        declare function external(x?: unknown): any;
+        const U: any = external();
         function g(c: { qx: number }): number { return 1; }
         const ctx = { qx: 1 };
         (U && g)(ctx);
@@ -118,7 +119,7 @@ fn falsy_left_primitives_stay() {
             "an empty string or a number",
             "const z: any = [0][0] > 1 ? \"\" : [0][0];",
         ),
-        ("⊤", "const z: any = (globalThis as any).u;"),
+        ("⊤", "const z: any = external();"),
         (
             "an object or null",
             "const z: any = [0][0] > 1 ? { a: 1 } : null;",

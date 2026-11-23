@@ -104,9 +104,10 @@ fn an_escaped_instance_ends_the_field_fact() {
     // The instance reaches code the solver does not see: anything can be
     // stored into its field.
     let src = r#"
+        declare function external(x?: unknown): any;
     class Box { tag = "a"; }
     const b = new Box();
-    (globalThis as any).sink(b);
+    external(b);
     console.log(b.tag);
     "#;
     assert!(!field_fact(src, "Box", "tag", FactsConfig::default()));
