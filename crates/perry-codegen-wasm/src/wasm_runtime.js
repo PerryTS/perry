@@ -3459,12 +3459,13 @@ self.onmessage = async function(e) {
     if (!fn) { self.postMessage({ type: "error", message: "Function not found at index " + msg.funcIdx }); return; }
 
     const captures = (msg.captures || []).map(c => __jsValueToBits(c));
+    const call = (...args) => { while (args.length < fn.length) args.push(TAG_UNDEFINED); return fn(...args); };
 
     if (msg.type === "map") {
       const results = [];
       for (let i = 0; i < msg.chunk.length; i++) {
         const argBits = __jsValueToBits(msg.chunk[i]);
-        const resultBits = fn(...captures, argBits);
+        const resultBits = call(...captures, argBits);
         results.push(__bitsToJsValue(resultBits));
       }
       self.postMessage({ type: "result", data: results });
@@ -3472,7 +3473,7 @@ self.onmessage = async function(e) {
       const filtered = [];
       for (let i = 0; i < msg.chunk.length; i++) {
         const argBits = __jsValueToBits(msg.chunk[i]);
-        const resultBits = fn(...captures, argBits);
+        const resultBits = call(...captures, argBits);
         const jsResult = __bitsToJsValue(resultBits);
         // Truthy check matching Perry semantics
         if (jsResult !== undefined && jsResult !== null && jsResult !== false && jsResult !== 0 && jsResult !== "") {
@@ -3481,7 +3482,7 @@ self.onmessage = async function(e) {
       }
       self.postMessage({ type: "result", data: filtered });
     } else if (msg.type === "exec") {
-      const resultBits = fn(...captures);
+      const resultBits = call(...captures);
       self.postMessage({ type: "result", data: __bitsToJsValue(resultBits) });
     }
   } catch (err) {
@@ -3564,7 +3565,7 @@ self.onmessage = async function(e) {
     const captures = (closure.captures || []);
     const results = [];
     for (let i = 0; i < array.length; i++) {
-      const resultBits = fn(...captures, __jsValueToBits(array[i]));
+      const resultBits = fn(...captures, ...__padBigintArgs(fn, captures.length, [__jsValueToBits(array[i])]));
       results.push(__bitsToJsValue(resultBits));
     }
     return results;
@@ -3578,7 +3579,7 @@ self.onmessage = async function(e) {
     const captures = (closure.captures || []);
     const results = [];
     for (let i = 0; i < array.length; i++) {
-      const resultBits = fn(...captures, __jsValueToBits(array[i]));
+      const resultBits = fn(...captures, ...__padBigintArgs(fn, captures.length, [__jsValueToBits(array[i])]));
       const jsResult = __bitsToJsValue(resultBits);
       if (jsResult !== undefined && jsResult !== null && jsResult !== false && jsResult !== 0 && jsResult !== "") {
         results.push(array[i]);
@@ -3593,7 +3594,7 @@ self.onmessage = async function(e) {
     const fn = table.get(closure.funcIdx | 0);
     if (!fn) return undefined;
     const captures = (closure.captures || []);
-    return __bitsToJsValue(fn(...captures));
+    return __bitsToJsValue(fn(...__padBigintArgs(fn, 0, [...captures])));
   }
 
   return {
