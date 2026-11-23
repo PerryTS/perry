@@ -257,7 +257,9 @@ impl Model {
                     .pts
                     .to_sorted()
                     .into_iter()
-                    .filter(|&t| escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t))
+                    .filter(|&t| {
+                        escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                    })
                     .collect();
                 self.ledger_again_beside_top(n, &gone);
             }
@@ -719,7 +721,9 @@ impl Model {
         for (reason, retained) in sinks {
             let root = l.enter_sink(n);
             for &t in toks {
-                if retained != Some(t) && escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t) {
+                if retained != Some(t)
+                    && escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                {
                     l.again(t, reason, std::panic::Location::caller());
                 }
             }

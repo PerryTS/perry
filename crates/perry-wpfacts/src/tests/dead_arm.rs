@@ -91,7 +91,12 @@ fn deadarm_nested_arm_of_a_dead_arm_does_not_run() {
 fn deadarm_else_of_a_falsy_test_runs() {
     let pf = facts(&src("up(new B());"));
     let k = kind(&pf, "other");
-    assert!(k.objs.len() == 1, "other holds box: {}\n{}", k.desc(), pf.dump_text());
+    assert!(
+        k.objs.len() == 1,
+        "other holds box: {}\n{}",
+        k.desc(),
+        pf.dump_text()
+    );
 }
 
 /// Guard: once an A reaches the test, the arm runs.
@@ -99,9 +104,19 @@ fn deadarm_else_of_a_falsy_test_runs() {
 fn deadarm_arm_runs_once_its_test_can_be_truthy() {
     let pf = facts(&src("up(new B()); up(new A());"));
     let k = kind(&pf, "kid");
-    assert!(!k.objs.is_empty(), "kids holds an img: {}\n{}", k.desc(), pf.dump_text());
+    assert!(
+        !k.objs.is_empty(),
+        "kids holds an img: {}\n{}",
+        k.desc(),
+        pf.dump_text()
+    );
     let n = kind(&pf, "nested");
-    assert!(n.objs.len() == 1, "nested holds box: {}\n{}", n.desc(), pf.dump_text());
+    assert!(
+        n.objs.len() == 1,
+        "nested holds box: {}\n{}",
+        n.desc(),
+        pf.dump_text()
+    );
 }
 
 /// Guard: a ⊤ test (a parsed input) runs both arms.
@@ -118,7 +133,12 @@ console.log(h.a, h.b);
     );
     for f in ["a", "b"] {
         let k = kind(&pf, f);
-        assert!(k.objs.len() == 1, "{f} holds box: {}\n{}", k.desc(), pf.dump_text());
+        assert!(
+            k.objs.len() == 1,
+            "{f} holds box: {}\n{}",
+            k.desc(),
+            pf.dump_text()
+        );
     }
 }
 
@@ -145,7 +165,12 @@ console.log(h.v);
 "#,
     );
     let k = kind(&pf, "v");
-    assert!(k.objs.len() == 1, "v holds box: {}\n{}", k.desc(), pf.dump_text());
+    assert!(
+        k.objs.len() == 1,
+        "v holds box: {}\n{}",
+        k.desc(),
+        pf.dump_text()
+    );
 }
 
 /// PERFNOW131: a function whose body has a gated arm keeps its summary
@@ -201,12 +226,11 @@ dispatch(b, new Ev());
         crate::Hold::Midway,
         std::time::Instant::now(),
     );
-    let d = g
-        .m
-        .funcs
-        .iter()
-        .position(|f| f.name.ends_with(":dispatch"))
-        .unwrap() as u32;
+    let d =
+        g.m.funcs
+            .iter()
+            .position(|f| f.name.ends_with(":dispatch"))
+            .unwrap() as u32;
     assert!(
         g.m.sum.of.contains_key(&d),
         "dispatch must keep its summary: {}",

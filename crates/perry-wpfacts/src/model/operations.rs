@@ -127,7 +127,12 @@ impl Model {
                     crate::builtins::WK_ITERATOR | "__proto__" | crate::STAR_KEY
                 ),
             };
-            if hit && !self.array_member_unsure.iter().any(|&(x, s, _)| x == t && s == site) {
+            if hit
+                && !self
+                    .array_member_unsure
+                    .iter()
+                    .any(|&(x, s, _)| x == t && s == site)
+            {
                 let on = self.tok_name(t);
                 let r = self.reason(&format!("{what} on {on}"));
                 self.array_member_unsure.push((t, site, r));

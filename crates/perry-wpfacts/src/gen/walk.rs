@@ -1868,7 +1868,11 @@ impl<'a> Gen<'a> {
                 // step arms keep the enclosing arm's `live` (not gated).
                 let special = matches!(condition, Expr::IterResultGetDone)
                     || matches!(condition, Expr::LocalGet(id) if self.step.by_flag.contains_key(&(fx.module, *id)));
-                let then_live = if special { fx.live } else { self.arm_live(fx, t, then_test) };
+                let then_live = if special {
+                    fx.live
+                } else {
+                    self.arm_live(fx, t, then_test)
+                };
                 let then_fx = Fx {
                     guard: Some((t, then_test)),
                     live: then_live,
@@ -1901,7 +1905,11 @@ impl<'a> Gen<'a> {
                 self.narrow_leave(then_branch, pre);
                 self.own_guard_done(own);
                 if let Some(e) = else_branch {
-                    let else_live = if special { fx.live } else { self.arm_live(fx, t, else_test) };
+                    let else_live = if special {
+                        fx.live
+                    } else {
+                        self.arm_live(fx, t, else_test)
+                    };
                     let else_fx = Fx {
                         guard: Some((t, else_test)),
                         live: else_live,

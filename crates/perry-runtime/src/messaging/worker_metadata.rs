@@ -115,10 +115,7 @@ extern "C" fn metadata_getter(closure: *const ClosureHeader, this: crate::closur
 pub(crate) fn install_worker_metadata_getters(prototype: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let prototype = scope.root_nanbox_f64(prototype);
-    for (index, &name) in WORKER_PROTOTYPE_ACCESSORS
-        .iter()
-        .enumerate()
-    {
+    for (index, &name) in WORKER_PROTOTYPE_ACCESSORS.iter().enumerate() {
         let capture = [(index as f64).to_bits()];
         let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc_init(
             crate::fn_info!(metadata_getter, 0; with_declared(0), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),

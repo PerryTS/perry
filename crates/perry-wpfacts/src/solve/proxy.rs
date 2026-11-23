@@ -418,7 +418,13 @@ impl Model {
         // [[GetOwnProperty]] of each key: the trap, the descriptor read.
         let k = self.proxy_key_arg(Key::any(), NO_NODE);
         let desc = self.node_l("proxy-gopd-ret");
-        self.proxy_trap(p, "getOwnPropertyDescriptor", Some(Key::any()), vec![target, k], desc);
+        self.proxy_trap(
+            p,
+            "getOwnPropertyDescriptor",
+            Some(Key::any()),
+            vec![target, k],
+            desc,
+        );
         self.proxy_result_reads(
             desc,
             &[

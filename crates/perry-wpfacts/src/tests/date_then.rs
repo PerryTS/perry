@@ -44,14 +44,20 @@ fn witness(resolve: &str) -> (Verdict, String) {
 #[test]
 fn dthen_promise_resolve_of_a_date_keeps_the_witness() {
     let (v, dump) = witness("const p = Promise.resolve(new Date());");
-    assert!(!matches!(v, Verdict::No(_)), "n.v proven, got {v:?}\n{dump}");
+    assert!(
+        !matches!(v, Verdict::No(_)),
+        "n.v proven, got {v:?}\n{dump}"
+    );
 }
 
 /// RED before DTHEN: `resolve(new Date())` in an executor (pn62 m5n).
 #[test]
 fn dthen_resolver_given_a_date_keeps_the_witness() {
     let (v, dump) = witness("const p = new Promise((resolve) => { resolve(new Date()); });");
-    assert!(!matches!(v, Verdict::No(_)), "n.v proven, got {v:?}\n{dump}");
+    assert!(
+        !matches!(v, Verdict::No(_)),
+        "n.v proven, got {v:?}\n{dump}"
+    );
 }
 
 /// The app chain (pair c17-A): a Worker's message listener resolves with
