@@ -244,7 +244,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         let param_ty = get_pat_type(param, ctx);
         let param_id = ctx.define_local_spanned(param_name.clone(), param_ty.clone(), param.span());
         ctx.shadow_native_instance_if_present(&param_name);
-        params.push(Param {
+        params.push(Param { byte_offset: param.span().lo.0,
             id: param_id,
             name: param_name,
             ty: param_ty,
@@ -657,7 +657,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         let param_ty = crate::lower_patterns::get_pat_type(&param.pat, ctx);
         let param_id = ctx.define_local_spanned(param_name.clone(), param_ty.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
-        params.push(Param {
+        params.push(Param { byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: param_ty,
@@ -722,6 +722,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
             simple_parameters,
             !mapped,
             mapped_parameter_ids,
+            fn_expr.function.span.lo.0,
         );
     }
     for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {

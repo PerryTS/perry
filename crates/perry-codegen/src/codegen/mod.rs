@@ -1084,7 +1084,7 @@ fn lower_module(
                                 && !last_is_synthetic_arguments
                                 && has_rest
                                 && !has_user_rest;
-                            perry_hir::Param {
+                            perry_hir::Param { byte_offset: 0 /*HPOS*/,
                                 id: param_index as perry_hir::types::LocalId,
                                 name: format!("arg{param_index}"),
                                 ty: perry_hir::types::Type::Any,

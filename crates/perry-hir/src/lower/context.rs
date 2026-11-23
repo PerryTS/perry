@@ -126,7 +126,7 @@ impl LoweringContext {
                 };
                 return Expr::Closure { byte_offset: ident.span.lo.0,
                     func_id,
-                    params: vec![Param {
+                    params: vec![Param { byte_offset: ident.span.lo.0,
                         id: param_id,
                         name: "__x".to_string(),
                         ty: Type::Any,
@@ -1004,7 +1004,7 @@ impl LoweringContext {
         let mut ctor_body: Vec<Stmt> = Vec::with_capacity(field_shapes.len());
         for (name, ty) in field_shapes {
             let param_id = self.fresh_local();
-            ctor_params.push(Param {
+            ctor_params.push(Param { byte_offset: byte_offset,
                 id: param_id,
                 name: name.clone(),
                 ty: ty.clone(),

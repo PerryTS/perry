@@ -1335,7 +1335,7 @@ pub fn transform_generator_function_with_extra_captures(
         };
         let return_closure = Expr::Closure { byte_offset: fn_offset,
             func_id: return_func_id_val,
-            params: vec![perry_hir::Param {
+            params: vec![perry_hir::Param { byte_offset: fn_offset,
                 id: return_param_id,
                 name: "__ret_val".to_string(),
                 ty: Type::Any,
@@ -1473,7 +1473,7 @@ pub fn transform_generator_function_with_extra_captures(
             let agstep_closure = Expr::Closure { byte_offset: fn_offset,
                 func_id: agstep_func_id,
                 params: vec![
-                    perry_hir::Param {
+                    perry_hir::Param { byte_offset: fn_offset,
                         id: next_param_id,
                         name: "__val".to_string(),
                         ty: Type::Any,
@@ -1482,7 +1482,7 @@ pub fn transform_generator_function_with_extra_captures(
                         decorators: Vec::new(),
                         arguments_object: None,
                     },
-                    perry_hir::Param {
+                    perry_hir::Param { byte_offset: fn_offset,
                         id: is_error_param_id,
                         name: "__gen_op".to_string(),
                         ty: Type::Any,
@@ -1526,7 +1526,7 @@ pub fn transform_generator_function_with_extra_captures(
             };
             let throw_closure = Expr::Closure { byte_offset: fn_offset,
                 func_id: throw_func_id_val,
-                params: vec![perry_hir::Param {
+                params: vec![perry_hir::Param { byte_offset: fn_offset,
                     id: throw_param_id,
                     name: "__throw_val".to_string(),
                     ty: Type::Any,
@@ -1570,7 +1570,7 @@ pub fn transform_generator_function_with_extra_captures(
             };
             let next_closure = Expr::Closure { byte_offset: fn_offset,
                 func_id: next_func_id_val,
-                params: vec![perry_hir::Param {
+                params: vec![perry_hir::Param { byte_offset: fn_offset,
                     id: next_param_id,
                     name: "__val".to_string(),
                     ty: Type::Any,
@@ -1655,7 +1655,7 @@ pub fn transform_generator_function_with_extra_captures(
             };
             dispatch.append(&mut next_body);
             let mut params = vec![
-                perry_hir::Param {
+                perry_hir::Param { byte_offset: fn_offset,
                     id: op_id,
                     name: "__gen_op".into(),
                     ty: Type::Number,
@@ -1664,7 +1664,7 @@ pub fn transform_generator_function_with_extra_captures(
                     decorators: Vec::new(),
                     arguments_object: None,
                 },
-                perry_hir::Param {
+                perry_hir::Param { byte_offset: fn_offset,
                     id: next_param_id,
                     name: "__gen_arg".into(),
                     ty: Type::Any,

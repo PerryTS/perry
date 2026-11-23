@@ -181,9 +181,9 @@ impl Shallow for Vec<Param> {
                     default,
                     decorators,
                     is_rest,
-                    arguments_object,
+                    arguments_object, ..
                 } = p;
-                Param {
+                Param { byte_offset: p.byte_offset,
                     id: *id,
                     name: name.clone(),
                     ty: ty.clone(),

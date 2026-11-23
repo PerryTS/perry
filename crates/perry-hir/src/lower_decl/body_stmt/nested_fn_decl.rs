@@ -98,7 +98,7 @@ pub(super) fn lower_nested_fn_decl(
         let param_id = ctx.define_local_spanned(param_name.clone(), Type::Any, param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
-        params.push(Param {
+        params.push(Param { byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: Type::Any,
@@ -152,6 +152,7 @@ pub(super) fn lower_nested_fn_decl(
             simple_parameters,
             !mapped,
             mapped_parameter_ids,
+            fn_decl.function.span.lo.0,
         );
     }
     for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {

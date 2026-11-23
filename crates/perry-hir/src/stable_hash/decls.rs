@@ -297,6 +297,7 @@ impl SH for Param {
             decorators,
             is_rest,
             arguments_object,
+            byte_offset: _,
         } = self;
         id.hash(h);
         name.hash(h);

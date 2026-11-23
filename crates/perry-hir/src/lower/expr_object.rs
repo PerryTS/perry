@@ -284,7 +284,7 @@ fn lower_method_prop(
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
         let param_id = ctx.define_local_spanned(param_name.clone(), param_type.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
-        params.push(Param {
+        params.push(Param { byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: param_type,
@@ -337,6 +337,7 @@ fn lower_method_prop(
             simple_parameters,
             !mapped,
             mapped_parameter_ids,
+            method.function.span.lo.0,
         );
     }
     for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
@@ -609,7 +610,7 @@ fn lower_accessor_prop(
             let param_id =
                 ctx.define_local_spanned(param_name.clone(), param_type.clone(), pat.span());
             ctx.shadow_native_instance_if_present(&param_name);
-            params.push(Param {
+            params.push(Param { byte_offset: pat.span().lo.0,
                 id: param_id,
                 name: param_name,
                 ty: param_type,
@@ -647,6 +648,7 @@ fn lower_accessor_prop(
             true,
             !mapped,
             mapped_parameter_ids,
+            byte_offset,
         );
     }
 
@@ -1114,7 +1116,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         let iife_func_id = ctx.fresh_func();
         let scope_mark = ctx.enter_scope();
         let param_id = ctx.define_local("__perry_obj_iife".to_string(), Type::Any);
-        let param = Param {
+        let param = Param { byte_offset: obj.span.lo.0,
             id: param_id,
             name: "__perry_obj_iife".to_string(),
             ty: Type::Any,
@@ -1673,7 +1675,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     let iife_func_id = ctx.fresh_func();
     let scope_mark = ctx.enter_scope();
     let param_id = ctx.define_local("__perry_obj_iife".to_string(), Type::Any);
-    let param = Param {
+    let param = Param { byte_offset: obj.span.lo.0,
         id: param_id,
         name: "__perry_obj_iife".to_string(),
         ty: Type::Any,
