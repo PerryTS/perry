@@ -509,6 +509,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
     assert_eq!(
         infer_expr_type(
             &Expr::StaticMethodCall {
+                byte_offset: 0,
                 class_name: "Widget".to_string(),
                 method_name: "make".to_string(),
                 args: Vec::new(),

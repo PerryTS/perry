@@ -8,7 +8,12 @@ use super::*;
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_calls(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
-            Expr::Call { callee, args, .. } => {
+            Expr::Call {
+                callee,
+                args,
+                byte_offset,
+                ..
+            } => {
                 // Check for method call patterns: obj.method(args)
                 if let Expr::PropertyGet {
                     object, property, ..
@@ -78,6 +83,7 @@ impl<'a> FuncEmitCtx<'a> {
                             self.emit_expr(
                                 func,
                                 &Expr::StaticMethodCall {
+                                    byte_offset: *byte_offset,
                                     class_name: class_name.clone(),
                                     method_name: property.clone(),
                                     args: args.clone(),

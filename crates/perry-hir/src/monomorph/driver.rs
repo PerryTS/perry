@@ -516,6 +516,7 @@ fn collect_instantiations_in_expr(
             key,
             receiver,
             args,
+            ..
         } => {
             collect_instantiations_in_expr(home, ctx, module, idx);
             collect_instantiations_in_expr(key, ctx, module, idx);

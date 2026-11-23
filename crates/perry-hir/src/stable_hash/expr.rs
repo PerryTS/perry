@@ -127,7 +127,7 @@ impl SH for Expr {
             Expr::StaticFieldGet { class_name, field_name, } => { tag(h, 46); class_name.hash(h); field_name.hash(h); }
             Expr::StaticFieldSet { class_name, field_name, value, .. } => { tag(h, 47); class_name.hash(h); field_name.hash(h); value.as_ref().hash(h); }
             Expr::ClassStaticSymbolSet { class_name, key, value, } => { tag(h, 48); class_name.hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
-            Expr::StaticMethodCall { class_name, method_name, args, } => { tag(h, 49); class_name.hash(h); method_name.hash(h); args.hash(h); }
+            Expr::StaticMethodCall { class_name, method_name, args, .. } => { tag(h, 49); class_name.hash(h); method_name.hash(h); args.hash(h); }
             Expr::This => tag(h, 50),
             Expr::SuperCall(args, _) => { tag(h, 51); args.hash(h); }
             Expr::SuperMethodCall { method, args } => { tag(h, 52); method.hash(h); args.hash(h); }
@@ -136,7 +136,7 @@ impl SH for Expr {
             Expr::SuperPropertySet { parent_class_id, parent_class_name, key, value } => { tag(h, 12238); parent_class_id.hash(h); parent_class_name.hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::ObjectSuperPropertyGet { home, key, receiver } => { tag(h, 12231); home.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); }
             Expr::ObjectSuperPropertySet { home, key, value, receiver } => { tag(h, 12239); home.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); receiver.as_ref().hash(h); }
-            Expr::ObjectSuperMethodCall { home, key, receiver, args } => { tag(h, 12232); home.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); args.hash(h); }
+            Expr::ObjectSuperMethodCall { home, key, receiver, args, .. } => { tag(h, 12232); home.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); args.hash(h); }
             Expr::EnvGet(s) => { tag(h, 53); s.hash(h); }
             Expr::EnvGetDynamic(e) => { tag(h, 54); e.as_ref().hash(h); }
             Expr::ProcessEnv => tag(h, 55),

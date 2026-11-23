@@ -16,6 +16,7 @@ impl<'a> FuncEmitCtx<'a> {
                 key,
                 receiver,
                 args,
+                ..
             } if self.current_class.is_none() => {
                 // Call frame: 0 the callee read below, 1 receiver, 2 key, 3 args.
                 self.emit_frame_begin(func, 4);

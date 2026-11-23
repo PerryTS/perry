@@ -2722,6 +2722,7 @@ impl<'a> Gen<'a> {
                 class_name,
                 method_name,
                 args,
+                ..
             } => {
                 let c = self.class_value(mi, class_name);
                 let a = self.evaluate_all(fx, args);

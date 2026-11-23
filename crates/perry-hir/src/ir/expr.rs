@@ -879,6 +879,8 @@ pub enum Expr {
         class_name: String,
         method_name: String,
         args: Vec<Expr>,
+        /// The call's source offset (`call.span.lo.0`); ignored by stable hashing.
+        byte_offset: u32,
     },
 
     // This expression
@@ -945,6 +947,8 @@ pub enum Expr {
         key: Box<Expr>,
         receiver: Box<Expr>,
         args: Vec<Expr>,
+        /// The call's source offset (`call.span.lo.0`); ignored by stable hashing.
+        byte_offset: u32,
     },
 
     // Environment variable access: process.env.VARNAME
@@ -3072,7 +3076,9 @@ impl Expr {
             | Expr::StaticFieldSet { byte_offset, .. }
             | Expr::Logical { byte_offset, .. }
             | Expr::PutValueSet { byte_offset, .. }
-            | Expr::DynamicImport { byte_offset, .. } => Some(*byte_offset),
+            | Expr::DynamicImport { byte_offset, .. }
+            | Expr::StaticMethodCall { byte_offset, .. }
+            | Expr::ObjectSuperMethodCall { byte_offset, .. } => Some(*byte_offset),
             Expr::Await(_, o) | Expr::SuperCall(_, o) => Some(*o),
             _ => None,
         }

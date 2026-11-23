@@ -1364,6 +1364,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             key,
             receiver,
             args,
+            ..
         } => {
             replace_this_in_expr(home, this_id);
             replace_this_in_expr(key, this_id);

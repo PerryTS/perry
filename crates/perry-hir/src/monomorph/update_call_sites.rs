@@ -333,6 +333,7 @@ fn update_call_sites_in_expr(
             key,
             receiver,
             args,
+            ..
         } => {
             update_call_sites_in_expr(home, ctx, lookup);
             update_call_sites_in_expr(key, ctx, lookup);

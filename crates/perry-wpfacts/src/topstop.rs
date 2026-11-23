@@ -275,8 +275,8 @@ pub(crate) fn unlocated_kind(e: &perry_hir::Expr) -> Option<&'static str> {
         } => "IndexSet.element",
         Expr::NativeMethodCall { byte_offset: 0, .. } => "NativeMethodCall",
         Expr::New { byte_offset: 0, .. } => "New",
-        Expr::StaticMethodCall { .. } => "StaticMethodCall",
-        Expr::ObjectSuperMethodCall { .. } => "ObjectSuperMethodCall",
+        Expr::StaticMethodCall { byte_offset: 0, .. } => "StaticMethodCall",
+        Expr::ObjectSuperMethodCall { byte_offset: 0, .. } => "ObjectSuperMethodCall",
         _ => return None,
     })
 }

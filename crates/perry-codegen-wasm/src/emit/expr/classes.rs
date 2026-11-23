@@ -638,6 +638,7 @@ impl<'a> FuncEmitCtx<'a> {
                 class_name,
                 method_name,
                 args,
+                ..
             } => {
                 // Try to call compiled static method directly
                 if let Some(statics) = self.emitter.class_static_map.get(class_name.as_str()) {

@@ -403,7 +403,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             class_name,
             method_name,
             args,
+            byte_offset,
         } => Expr::StaticMethodCall {
+            byte_offset: *byte_offset,
             class_name: class_name.clone(),
             method_name: method_name.clone(),
             args: args
@@ -463,7 +465,9 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             key,
             receiver,
             args,
+            byte_offset,
         } => Expr::ObjectSuperMethodCall {
+            byte_offset: *byte_offset,
             home: Box::new(substitute_expr(home, substitutions)),
             key: Box::new(substitute_expr(key, substitutions)),
             receiver: Box::new(substitute_expr(receiver, substitutions)),

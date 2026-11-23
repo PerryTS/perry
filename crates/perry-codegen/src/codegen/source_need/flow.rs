@@ -1224,6 +1224,7 @@ impl<'a> Build<'a> {
                 class_name,
                 method_name,
                 args,
+                ..
             } => {
                 let target = self.class_by_name(mi, class_name).and_then(|_| {
                     self.static_sigs

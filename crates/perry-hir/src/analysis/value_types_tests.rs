@@ -696,6 +696,7 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
     assert_eq!(
         infer_expr_type(
             &Expr::StaticMethodCall {
+                byte_offset: 0,
                 class_name: "Widget".to_string(),
                 method_name: "make".to_string(),
                 args: Vec::new(),
@@ -839,6 +840,7 @@ fn infers_named_class_and_interface_property_facts() {
     assert_eq!(
         infer_expr_type(
             &Expr::StaticMethodCall {
+                byte_offset: 0,
                 class_name: "Child".to_string(),
                 method_name: "version".to_string(),
                 args: Vec::new(),
