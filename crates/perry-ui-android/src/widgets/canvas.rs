@@ -29,6 +29,7 @@ pub enum DrawCmd {
         dh: f32,
     },
     Clear,
+    ClearRect(f32, f32, f32, f32),
     // Stateful (HTML-canvas-style) API. Colors are ARGB; coordinates and
     // widths are already scaled to device pixels.
     SetFillColor(i32),
@@ -100,6 +101,7 @@ fn command_batch_renders(commands: &[DrawCmd]) -> bool {
         matches!(
             cmd,
             DrawCmd::Clear
+                | DrawCmd::ClearRect(..)
                 | DrawCmd::Stroke(..)
                 | DrawCmd::FillGradient(..)
                 | DrawCmd::FillRect(..)
@@ -486,9 +488,32 @@ fn repaint(handle: i64) {
 
                 for cmd in &cmds {
                     match cmd {
-                        DrawCmd::Clear => {
-                            // Fill with transparent (clear the bitmap)
-                            // Use PorterDuff.Mode.CLEAR to erase all pixels
+                        DrawCmd::Clear | DrawCmd::ClearRect(..) => {
+                            // PorterDuff.Mode.CLEAR erases every pixel inside the clip.
+                            if let DrawCmd::ClearRect(x, y, w, h) = cmd {
+                                // Density scaling can push the rect past the f32 range, and
+                                // Skia ignores a non-finite clip, which would clear everything.
+                                if ![*x, *y, *x + *w, *y + *h].iter().all(|v| v.is_finite()) {
+                                    continue;
+                                }
+                                let _ = env.call_method(
+                                    &canvas,
+                                    jni::jni_str!("save"),
+                                    jni::jni_sig!("()I"),
+                                    &[],
+                                );
+                                let _ = env.call_method(
+                                    &canvas,
+                                    jni::jni_str!("clipRect"),
+                                    jni::jni_sig!("(FFFF)Z"),
+                                    &[
+                                        JValue::Float(*x),
+                                        JValue::Float(*y),
+                                        JValue::Float(*x + *w),
+                                        JValue::Float(*y + *h),
+                                    ],
+                                );
+                            }
                             let mode_class = env
                                 .find_class(jni::jni_str!("android/graphics/PorterDuff$Mode"))
                                 .expect("PorterDuff$Mode");
@@ -507,6 +532,14 @@ fn repaint(handle: i64) {
                                 jni::jni_sig!("(ILandroid/graphics/PorterDuff$Mode;)V"),
                                 &[JValue::Int(0), JValue::Object(&clear_mode)],
                             );
+                            if matches!(cmd, DrawCmd::ClearRect(..)) {
+                                let _ = env.call_method(
+                                    &canvas,
+                                    jni::jni_str!("restore"),
+                                    jni::jni_sig!("()V"),
+                                    &[],
+                                );
+                            }
                         }
                         DrawCmd::BeginPath => {
                             path_points.clear();
@@ -1100,6 +1133,18 @@ pub fn fill_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
     push_cmd(
         handle,
         |d| DrawCmd::FillRect(x as f32 * d, y as f32 * d, w as f32 * d, h as f32 * d),
+        true,
+    );
+}
+
+/// Clear a rectangle to transparent, keeping what earlier commands drew outside it.
+pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    // Normalized so `clipRect` gets ordered endpoints for a negative width or height.
+    let (x, w) = if w < 0.0 { (x + w, -w) } else { (x, w) };
+    let (y, h) = if h < 0.0 { (y + h, -h) } else { (y, h) };
+    push_cmd(
+        handle,
+        |d| DrawCmd::ClearRect(x as f32 * d, y as f32 * d, w as f32 * d, h as f32 * d),
         true,
     );
 }
