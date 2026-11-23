@@ -139,19 +139,6 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
 
 /// Diagnostic: the reasons of the writes [`native_written`] counts for
 /// `np`'s key `a`, with the written key (`None`: any key).
-/// CLIFFC what-if (env PERRY_CLIFFC_W4=1): a store into TOP or an unmodeled
-/// write is not recorded as a write onto a builtin prototype.
-/// CLIFFD arm (env PERRY_CLIFFD_NOINTRW=1): a builtin object handed to
-/// unknown code records no write of its members (`builtin_fields_sink`).
-pub(crate) fn cliffd_nointrw() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PERRY_CLIFFD_NOINTRW").is_some_and(|v| v == "1"))
-}
-
-pub(crate) fn cliffc_w4() -> bool {
-    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("PERRY_CLIFFC_W4").is_some_and(|v| v == "1"))
-}
 fn cliffc_diag() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("PERRY_CLIFFC_DIAG").is_some_and(|v| v == "1"))
@@ -510,7 +497,9 @@ fn note_write(
     known: Option<(Tok, bool)>,
     value: WriteValue,
 ) {
-    if cliffc_w4() && (t == TOP || what.contains("unmodeled")) {
+    // P-N1 (owner 2026-11-23): whole program, a value the analysis does not
+    // model is no intrinsic, so a write onto ⊤ writes none of them.
+    if t == TOP && !m.foreign_code() {
         return;
     }
     if t != TOP

@@ -110,9 +110,6 @@ impl Model {
         site: Option<SiteId>,
         what: &str,
     ) {
-        if crate::builtins::cliffc_w4() && (t == TOP || what.contains("unmodeled")) {
-            return;
-        }
         if self.array_member_write.is_some() || t == TOP || !self.tok_on_array_chain(t) {
             return;
         }
@@ -233,7 +230,8 @@ impl Model {
     /// ([`Model::fnproto_write`], [`Model::fnproto_borrow_write`]). `key` `None`: an operation whose key the
     /// model does not keep (a definition, a deletion).
     pub fn note_fnproto_write(&mut self, t: Tok, key: Option<Key>, what: &str) {
-        if crate::builtins::cliffc_w4() && (t == TOP || what.contains("unmodeled")) {
+        // P-N1: whole program, ⊤ is never `%Object.prototype%`.
+        if t == TOP && !self.foreign_code() {
             return;
         }
         if !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto)) {
@@ -349,6 +347,17 @@ impl Model {
             l.push_str(&line());
             r.push(l);
         }
+    }
+
+    /// Code the analysis does not see may run beside the program: per unit
+    /// (the other units), an unseen module, or the linked interpreter. All
+    /// three are known before the solve. Only then may a value the analysis
+    /// does not model be a built-in prototype, a built-in constructor or the
+    /// global object (premise P-N1, owner 2026-11-23: whole program, the
+    /// program reaches an intrinsic only by its name, by a declared builtin
+    /// result or by modeled reflection).
+    pub(crate) fn foreign_code(&self) -> bool {
+        self.unit_mode || self.unseen_module_runs || self.interp_linked
     }
 
     pub fn reason(&mut self, s: &str) -> u32 {

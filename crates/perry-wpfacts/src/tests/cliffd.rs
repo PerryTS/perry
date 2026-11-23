@@ -4,7 +4,7 @@
 //! (perf_hooks/prototypes.rs, performance_methods.rs `to_json`: a fresh
 //! record, no program code, no store on a handed value), so its members stay
 //! the realm's. (b) A builtin object handed to unknown code keeps its
-//! intrinsic members (owner premise 2026-11-19, arm PERRY_CLIFFD_NOINTRW=1);
+//! intrinsic members (owner premise 2026-11-19);
 //! a program store onto it is still seen. (c) Every [[Prototype]] chain the
 //! realm declares ends (ECMA-262 10.1.2.1 step 8: no cycles), so the
 //! solver's chain walks over it end.
@@ -67,12 +67,11 @@ fn performance_to_json_value_call_keeps_the_realm() {
 }
 
 /// (b) Handed to unknown code, `performance` keeps its intrinsic `now`
-/// under the arm (premise 2026-11-19); without the arm, unknown code is
-/// taken to have written it (the cliff this arm removes).
+/// (premise 2026-11-19).
 #[test]
 fn handed_builtin_keeps_intrinsic_members() {
     let held = now_keeps_o(&format!("{HELD}sink(performance);"));
-    assert_eq!(held, crate::builtins::cliffd_nointrw(), "arm {}", crate::builtins::cliffd_nointrw());
+    assert!(held, "a handed builtin lost its intrinsic now");
 }
 
 /// (b, keep) A program store onto the handed builtin is still seen: the

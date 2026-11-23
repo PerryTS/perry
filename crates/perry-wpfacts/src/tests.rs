@@ -1673,6 +1673,7 @@ mod navigator_decl;
 mod navigator_store;
 mod hostval3;
 mod cliffd;
+mod amp_loop;
 mod performance_store;
 mod global_self_store;
 mod global_define_navigator;
