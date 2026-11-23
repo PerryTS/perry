@@ -979,6 +979,7 @@ fn high_surrogate_distributes_over_group() {
 /// alias form (`Script`/`sc`/`Script_Extensions`/`scx`) and long + short names.
 #[test]
 fn unicode17_scripts_expand_to_codepoint_ranges() {
+    perex::install_unicode_properties();
     for (property, member) in [
         ("Script=Beria_Erfe", '\u{16EA0}'),
         ("sc=Berf", '\u{16EA0}'),

@@ -238,8 +238,8 @@
     {
       "path": "crates/perry-runtime/src/string/concat_parts.rs",
       "function": "concat_parts_general",
-      "body_sha256": "f8335e9e2b5f7d91a8de1d2b5db51be25c0970633e8e3646e8d81dd45538f1e8",
-      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number arm, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header. Re-audited 2026-11-15 against d0f763f475 (#14658): the INT32 digit arm is deleted (a Number has one encoding); the exact-STRING_TAG arm and the js_jsvalue_to_string fallback are unchanged.",
+      "body_sha256": "0658ecb822e513a89f022ab0fe667f667c01c1cf3380d2f2bfc4a293c6677be2",
+      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number arm, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header. Re-audited 2026-11-15 against d0f763f475 (#14658): the INT32 digit arm is deleted (a Number has one encoding); the exact-STRING_TAG arm and the js_jsvalue_to_string fallback are unchanged. Re-audited 2026-11-23 (raw-handle ratchet): the rooted piece is read through with_const_ptr at its use; the STRING_TAG + is_valid_string_ptr admission and the js_jsvalue_to_string fallback are unchanged.",
       "rule": "mask-cast",
       "support_files": []
     },
@@ -372,17 +372,17 @@
     {
       "path": "crates/perry-runtime/src/string/concat_parts.rs",
       "function": "concat_parts_general",
-      "body_sha256": "f8335e9e2b5f7d91a8de1d2b5db51be25c0970633e8e3646e8d81dd45538f1e8",
-      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number arm, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header. Re-audited 2026-11-15 against d0f763f475 (#14658): the INT32 digit arm is deleted (a Number has one encoding); the exact-STRING_TAG arm and the js_jsvalue_to_string fallback are unchanged.",
+      "body_sha256": "0658ecb822e513a89f022ab0fe667f667c01c1cf3380d2f2bfc4a293c6677be2",
+      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number arm, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header. Re-audited 2026-11-15 against d0f763f475 (#14658): the INT32 digit arm is deleted (a Number has one encoding); the exact-STRING_TAG arm and the js_jsvalue_to_string fallback are unchanged. Re-audited 2026-11-23 (raw-handle ratchet): the rooted piece is read through with_const_ptr at its use; the STRING_TAG + is_valid_string_ptr admission and the js_jsvalue_to_string fallback are unchanged.",
       "rule": "heap-tag-only",
       "support_files": []
     }
   ],
   "support_files": {
-    "crates/perry-runtime/src/node_stream_event_emitter.rs": "ddb10bb241a67790ca53c6d988253225a9e180b0e24c48075c179e98a22cff3f",
-    "crates/perry-runtime/src/string/concat.rs": "673d231bb80bf1a2ed2c94745add8cd5a40332f756562dfd13d14b4aa8102ddc",
+    "crates/perry-runtime/src/node_stream_event_emitter.rs": "9b1b4341af484d21ad59d70c2ec44513821d5b599ebcb681b2d0b0c6061fbeb8",
+    "crates/perry-runtime/src/string/concat.rs": "683973907631c31db97645e9f2428fb6abeec2f569a66941cb83036622964543",
     "crates/perry-runtime/src/object/builtin_proto_entries.rs": "958ee4c11de504d165af8cceedecd3f0fd41f6585cf92645afa3087ecef3edae",
-    "crates/perry-runtime/src/object/property_ops/put_value.rs": "da9922e090054dd3af6b3464a01473677941fd7007fe8d032984a08389d2a449",
+    "crates/perry-runtime/src/object/property_ops/put_value.rs": "ff25dbdcced834a1a9704b95b70b1baf7bd018b793d18c789efc1cd328318269",
     "crates/perry-runtime/src/array/join.rs": "c292af7990171f08b140aad3a2c88dd775dd47d098ad5e2f6f1a1e37a5785041",
     "crates/perry-runtime/src/dgram/listeners.rs": "8e447c1cbf5278a055f8770b5415db63d937ff7b4a70705d65253240f071d7dd",
     "crates/perry-codegen/src/expr/rest_fields.rs": "212b950e2689a8bc86e00e8bef85d6d10cfddf46478697da006da7abe014cdc8",
