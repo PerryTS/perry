@@ -1,0 +1,1 @@
+A host that links a `--output-type staticlib` archive without `--whole-archive`/`-force_load` keeps the program's feature installer: `perry_module_init` now names the `_perry_feature_installs.o` member, so BigInt, the regex engine and `import.meta.url` work in a plain link instead of aborting or silently returning the input (#14787).
