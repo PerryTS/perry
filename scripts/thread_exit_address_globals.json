@@ -4117,10 +4117,11 @@
    "file": "crates/perry-runtime/src/object/global_fetch.rs",
    "names": [
     "OBJECT_URL_CREATE",
-    "OBJECT_URL_RESOLVE"
+    "OBJECT_URL_RESOLVE",
+    "OBJECT_URL_REVOKE"
    ],
    "verdict": "no_heap_address",
-   "why": "AtomicPtr holding perry-stdlib extern \"C\" object-URL function pointers, stored once by js_register_object_url_fns (global_fetch.rs:223-224); code addresses, never a heap pointer."
+   "why": "AtomicPtr holding perry-stdlib extern \"C\" object-URL function pointers, stored once by js_register_object_url_fns; code addresses, never a heap pointer."
   },
   {
    "file": "crates/perry-runtime/src/object/proto_validity.rs",

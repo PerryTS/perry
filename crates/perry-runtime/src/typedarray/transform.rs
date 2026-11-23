@@ -430,8 +430,8 @@ pub(crate) fn typed_array_find_last_this(
     let receiver = Some(scope.root_raw_const_ptr(ta));
     // Each read hands the current rooted receiver straight to its consumer.
     let current_get = |i: i32| match receiver.as_ref() {
-        Some(root) => root.with_const_ptr(|t| unsafe { js_typed_array_get(t, i) }),
-        None => unsafe { js_typed_array_get(ta, i) },
+        Some(root) => root.with_const_ptr(|t| js_typed_array_get(t, i)),
+        None => js_typed_array_get(ta, i),
     };
     let current_value = || match receiver.as_ref() {
         Some(root) => root.with_const_ptr(|t| ta_receiver_value(t)),
@@ -493,8 +493,8 @@ pub(crate) fn typed_array_find_last_index_this(
     let receiver = Some(scope.root_raw_const_ptr(ta));
     // Each read hands the current rooted receiver straight to its consumer.
     let current_get = |i: i32| match receiver.as_ref() {
-        Some(root) => root.with_const_ptr(|t| unsafe { js_typed_array_get(t, i) }),
-        None => unsafe { js_typed_array_get(ta, i) },
+        Some(root) => root.with_const_ptr(|t| js_typed_array_get(t, i)),
+        None => js_typed_array_get(ta, i),
     };
     let current_value = || match receiver.as_ref() {
         Some(root) => root.with_const_ptr(|t| ta_receiver_value(t)),
