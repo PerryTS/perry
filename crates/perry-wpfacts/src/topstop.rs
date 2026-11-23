@@ -369,10 +369,11 @@ impl Model {
         }
         let k = steps.len();
         for (i, st) in steps.into_iter().enumerate() {
-            if i == 3 && k > 4 {
+            let all = std::env::var_os("PERRY_TOPSTOP_VIAHOLD").is_some();
+            if !all && i == 3 && k > 4 {
                 b.push_str(&format!("  via:     ... {} more steps\n", k - 4));
             }
-            if i < 3 || i + 1 == k {
+            if all || i < 3 || i + 1 == k {
                 b.push_str(&format!("  via:     {st}\n"));
             }
         }
@@ -402,6 +403,13 @@ impl Model {
                 "node {cur} `{}` was made by the solver applying {r} on node {from} `{}`",
                 self.labels[cur as usize], self.labels[from as usize]
             ));
+            if std::env::var_os("PERRY_TOPSTOP_VIAHOLD").is_some() && cur > 0 && self.labels[cur as usize - 1] == "implicit-recv" {
+                let r = cur - 1;
+                let ts = self.nodes[r as usize].pts.to_sorted();
+                let w: Vec<String> = ts.iter().take(3).map(|&t| self.tok_words(t)).collect();
+                let lst = steps.pop().unwrap();
+                steps.push(format!("{lst} [recv {r} holds {} toks: {}]", ts.len(), w.join("; ")));
+            }
             cur = from;
         }
         if p == NOPOS {
