@@ -2098,6 +2098,12 @@ impl<'a> Gen<'a> {
             return n;
         }
         let n = self.m.node_named("local", || format!("local({mi},{id})"));
+        // A declared local (a parameter too) stands at its declaration.
+        if self.m.stop_top.is_some() {
+            if let Some(sp) = self.modules[mi as usize].1.local_source_spans.get(&id) {
+                self.m.stop_top.as_mut().unwrap().node_pos[n as usize] = (mi, sp.start);
+            }
+        }
         self.m.own(n);
         self.mods[mi as usize].locals.insert(id, n);
         #[cfg(test)]
