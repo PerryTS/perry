@@ -192,6 +192,20 @@ console.log(JSON.stringify(new MyErr("hidden")) + " " + Object.keys(new Bare("k"
     );
 }
 
+#[test]
+fn a_thrown_builtin_error_subclass_keeps_its_name() {
+    assert_eq!(
+        run_web_source(
+            r#"
+try { throw new RangeError("x"); } catch (e: any) { console.log(e.name, e instanceof RangeError, e.message); }
+const all = [new TypeError("t"), new ReferenceError("r"), new SyntaxError("s"), new RangeError("o", { cause: 1 }), new Error("e")];
+console.log(all.map((e) => e.name + ":" + e.message).join(" "));
+"#
+        ),
+        "RangeError true x\nTypeError:t ReferenceError:r SyntaxError:s RangeError:o Error:e"
+    );
+}
+
 // `textSetFontWeight(widget, size, weight)` sets both; the weight is the native
 // 0..1 scale, mapped onto CSS 100..900 and clamped.
 #[test]

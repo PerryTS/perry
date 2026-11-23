@@ -1638,6 +1638,11 @@ function wrapImportsForI64(imports) {
 // What closure_new makes. Its class, not its keys, tells a closure from a plain
 // object that has `funcIdx` / `captures` fields, at no per-closure cost.
 class __PerryClosure {
+  // A brand, not `instanceof`: an object whose prototype chain reaches a closure is no closure.
+  #brand;
+  static is(v) {
+    return typeof v === 'object' && v !== null && #brand in v;
+  }
   // Non-enumerable, so `for...in` and `Object.keys` see only a closure's own properties.
   constructor(funcIdx, captureCount) {
     __defineHidden(this, 'funcIdx', funcIdx);
@@ -1651,7 +1656,7 @@ let __closureReceiver;
 // One value per function declaration, keyed by its table index (`function_value`).
 const __functionValues = new Map();
 function __isPerryClosure(v) {
-  return v instanceof __PerryClosure;
+  return __PerryClosure.is(v);
 }
 // `receiver.m(...args)` where `m` is a Perry closure. The receiver is cleared
 // after the call either way, so no later closure entry can see it.
@@ -2929,7 +2934,7 @@ const __memDispatch = {
   class_extends_null: (className) => { classParentTable[String(className)] = null; },
   // `class A extends F` with a user function F: A's prototype inherits F's current one.
   class_extends_value: (className, value) => {
-    if (value instanceof __PerryClosure && (value.prototype === null || __holdsProperties(value.prototype))) {
+    if (__isPerryClosure(value) && (value.prototype === null || __holdsProperties(value.prototype))) {
       __classFunctionParentProtos.set(String(className), value.prototype);
     }
   },
@@ -3163,6 +3168,8 @@ const __memDispatch = {
 
   // Error — args are plain JS values
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
+  error_new_kind: (kind, msg) =>
+    new ([Error, TypeError, RangeError, ReferenceError, SyntaxError][kind] || Error)(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
   // `super(msg)` in a class extending a built-in Error: the instance is a plain
   // object (see __classInstance), so it takes the message the Error constructor would

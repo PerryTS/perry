@@ -302,24 +302,17 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "error_new", 1);
             }
             Expr::ErrorNewWithOptions {
+                kind,
                 message,
                 options: _,
-                ..
             } => {
-                // WASM stub: ignore options/cause, falls back to plain Error
-                self.emit_frame_begin(func, 1);
-                self.emit_store_arg(func, 0, message);
-                self.emit_memcall(func, "error_new", 1);
+                // WASM stub: ignores options/cause
+                self.emit_error_new_kind(func, *kind, message);
             }
-            Expr::TypeErrorNew(msg)
-            | Expr::RangeErrorNew(msg)
-            | Expr::ReferenceErrorNew(msg)
-            | Expr::SyntaxErrorNew(msg) => {
-                // WASM stub: alias to error_new
-                self.emit_frame_begin(func, 1);
-                self.emit_store_arg(func, 0, msg);
-                self.emit_memcall(func, "error_new", 1);
-            }
+            Expr::TypeErrorNew(msg) => self.emit_error_new_kind(func, 1, msg),
+            Expr::RangeErrorNew(msg) => self.emit_error_new_kind(func, 2, msg),
+            Expr::ReferenceErrorNew(msg) => self.emit_error_new_kind(func, 3, msg),
+            Expr::SyntaxErrorNew(msg) => self.emit_error_new_kind(func, 4, msg),
             Expr::AggregateErrorNew {
                 errors: _,
                 message,
@@ -334,5 +327,20 @@ impl<'a> FuncEmitCtx<'a> {
             _ => return false,
         }
         true
+    }
+
+    /// `kind` follows `Expr::ErrorNewWithOptions`: 1 TypeError, 2 RangeError,
+    /// 3 ReferenceError, 4 SyntaxError, anything else Error.
+    fn emit_error_new_kind(&mut self, func: &mut Function, kind: u32, msg: &Expr) {
+        self.emit_frame_begin(func, 2);
+        self.emit_slot_addr(func, 0);
+        func.instruction(&Instruction::I64Const((kind as f64).to_bits() as i64));
+        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+            offset: 0,
+            align: 3,
+            memory_index: 0,
+        }));
+        self.emit_store_arg(func, 1, msg);
+        self.emit_memcall(func, "error_new_kind", 2);
     }
 }

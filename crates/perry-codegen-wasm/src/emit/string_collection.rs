@@ -267,6 +267,7 @@ impl WasmModuleEmitter {
             "date_to_locale_time_string",
             "date_to_json",
             "error_new",
+            "error_new_kind",
             "error_message",
             "error_super_init",
             "global_property",
