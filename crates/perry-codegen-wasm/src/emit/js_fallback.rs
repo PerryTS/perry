@@ -331,7 +331,7 @@ impl WasmModuleEmitter {
                     l, js_op, r
                 )
             }
-            Expr::Logical { op, left, right } => {
+            Expr::Logical { op, left, right, .. } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
                 // The left operand runs once: the arrow yields `[left]` when it is the

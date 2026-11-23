@@ -165,7 +165,7 @@ fn lower_logical_assignment(
 ) -> Result<Expr> {
     let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
     let right = Box::new(lower_assignment_target(ctx, &assign.left, Box::new(rhs), assign.span.lo.0)?);
-    Ok(Expr::Logical { op, left, right })
+    Ok(Expr::Logical { byte_offset: assign.span.lo.0, op, left, right })
 }
 
 fn register_assignment_native_instance(
@@ -1393,7 +1393,7 @@ fn compound_member_assign_once(
             left: Box::new(read),
             right: Box::new(rhs),
         }),
-        None => Expr::Logical {
+        None => Expr::Logical { byte_offset: assign.span.lo.0,
             op: logical_op.unwrap(),
             left: Box::new(read),
             right: Box::new(write_of(rhs)),
@@ -1630,7 +1630,7 @@ pub(crate) fn hoist_compound_member_assign(
         })
     } else {
         // `read OP (target = rhs)` — mirrors `lower_logical_assignment`.
-        Expr::Logical {
+        Expr::Logical { byte_offset: assign.span.lo.0,
             op: logical_op.unwrap(),
             left: Box::new(read),
             right: Box::new(write_of(rhs)),

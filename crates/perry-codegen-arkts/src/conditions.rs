@@ -115,7 +115,7 @@ pub(crate) fn serialize_condition(
                 wrap(right, bindings, r)
             )
         }
-        Expr::Logical { op, left, right } => {
+        Expr::Logical { op, left, right, .. } => {
             let op_str = match op {
                 LogicalOp::And => " && ",
                 LogicalOp::Or => " || ",
@@ -287,7 +287,7 @@ pub(crate) fn evaluate_condition(
                 };
                 Some(Lit::Bool(res))
             }
-            Expr::Logical { op, left, right } => {
+            Expr::Logical { op, left, right, .. } => {
                 let l = to_lit(left, bindings, compile_time_consts)?;
                 match op {
                     LogicalOp::And => {

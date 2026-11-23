@@ -1963,7 +1963,7 @@ impl Rewriter<'_> {
                 op: UnaryOp::Not,
                 operand,
             } => self.cond(operand),
-            Expr::Logical { op, left, right } if self.rec_of(left).is_some() => {
+            Expr::Logical { op, left, right, .. } if self.rec_of(left).is_some() => {
                 let u = self.rec_of(left).unwrap();
                 self.reach(u);
                 self.census.presence += 1;

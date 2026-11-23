@@ -329,7 +329,7 @@ fn pointer_locals(
             // pre-collection address sat in a plain `alloca double` across the
             // loop poll. The HIR rule is fixed too, but a root decision must
             // not depend on it: an unclassifiable operand keeps the slot.
-            Expr::Logical { op, left, right } => {
+            Expr::Logical { op, left, right, .. } => {
                 let left_ty =
                     expr_value_type(left, local_types, local_value_types, non_pointer_locals)?;
                 let right_ty =

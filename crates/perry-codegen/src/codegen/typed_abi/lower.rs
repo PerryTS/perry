@@ -133,7 +133,7 @@ fn lower_typed_i1_expr_with_env(
             let v = lower_typed_i1_expr_with_env(blk, operand, locals, reps)?;
             Ok(blk.xor(crate::types::I1, &v, "true"))
         }
-        Expr::Logical { op, left, right } => {
+        Expr::Logical { op, left, right, .. } => {
             let l = lower_typed_i1_expr_with_env(blk, left, locals, reps)?;
             let r = lower_typed_i1_expr_with_env(blk, right, locals, reps)?;
             Ok(match op {

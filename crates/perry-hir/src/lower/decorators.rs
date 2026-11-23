@@ -334,7 +334,7 @@ the decorator running for side effects only."
                     right: Box::new(Expr::Undefined),
                 };
                 let condition = match invocation_args.first() {
-                    Some(target_expr) => Expr::Logical {
+                    Some(target_expr) => Expr::Logical { byte_offset: dec_offset,
                         op: LogicalOp::And,
                         left: Box::new(ne_undef),
                         right: Box::new(Expr::Compare { byte_offset: dec_offset,

@@ -534,7 +534,7 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
             Expr::Logical {
                 op: LogicalOp::And | LogicalOp::Or,
                 left,
-                right,
+                right, ..
             } => {
                 let a = self.expr(left, env)?;
                 let b = self.truth(&a)?;

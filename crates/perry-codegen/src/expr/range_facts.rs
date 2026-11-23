@@ -1039,7 +1039,7 @@ pub(crate) fn guarded_buffer_indices_for_condition(
         Expr::Logical {
             op: LogicalOp::And,
             left,
-            right,
+            right, ..
         } => {
             let mut out = guarded_buffer_indices_for_condition(ctx, left, scope_id);
             out.extend(guarded_buffer_indices_for_condition(ctx, right, scope_id));

@@ -1703,7 +1703,7 @@ fn expr_is_typed_i1_safe(expr: &Expr, locals: &HashMap<u32, TypedParamRep>) -> b
             op: UnaryOp::Not,
             operand,
         } => expr_is_typed_i1_safe(operand, locals),
-        Expr::Logical { op, left, right } => {
+        Expr::Logical { op, left, right, .. } => {
             matches!(op, LogicalOp::And | LogicalOp::Or)
                 && expr_is_typed_i1_safe(left, locals)
                 && expr_is_typed_i1_safe(right, locals)

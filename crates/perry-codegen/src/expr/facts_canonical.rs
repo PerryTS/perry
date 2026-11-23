@@ -64,7 +64,7 @@ pub(crate) fn of(ctx: &FnCtx<'_>, e: &Expr) -> Option<Num> {
         Expr::Logical {
             op: LogicalOp::Coalesce,
             left,
-            right,
+            right, ..
         } => {
             of(ctx, left)?;
             let d = matches!(right.as_ref(), Expr::Integer(_) | Expr::Number(_))

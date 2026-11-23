@@ -1175,7 +1175,7 @@ impl<'a> Gen<'a> {
                 }
             },
             Expr::Compare { op, left, right, .. } => self.compare_expr(fx, op, left, right),
-            Expr::Logical { op, left, right } => {
+            Expr::Logical { op, left, right, .. } => {
                 let plan = match op {
                     LogicalOp::And => self.own_guard_plan(left, crate::gen::Region::Expr(right)),
                     LogicalOp::Or => match left.as_ref() {

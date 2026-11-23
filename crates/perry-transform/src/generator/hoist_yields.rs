@@ -382,6 +382,7 @@ fn lift_logical_with_yield_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: 
         op,
         mut left,
         right,
+        byte_offset,
     } = owned
     {
         // `left` always evaluates; hoist any yields it holds above the temp.
@@ -403,14 +404,14 @@ fn lift_logical_with_yield_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: 
                 op: UnaryOp::Not,
                 operand: Box::new(Expr::LocalGet(temp_id)),
             },
-            LogicalOp::Coalesce => Expr::Logical {
+            LogicalOp::Coalesce => Expr::Logical { byte_offset,
                 op: LogicalOp::Or,
-                left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                left: Box::new(Expr::Compare { byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(temp_id)),
                     right: Box::new(Expr::Null),
                 }),
-                right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                right: Box::new(Expr::Compare { byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(temp_id)),
                     right: Box::new(Expr::Undefined),

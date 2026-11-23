@@ -99,7 +99,7 @@ fn decided(cond: &Expr, proofs: &HashMap<u32, HirType>) -> Option<bool> {
             op: UnaryOp::Not,
             operand,
         } => decided(operand, proofs).map(|b| !b),
-        Expr::Logical { op, left, right } => {
+        Expr::Logical { op, left, right, .. } => {
             let (l, r) = (decided(left, proofs), decided(right, proofs));
             match op {
                 LogicalOp::And => match (l, r) {
