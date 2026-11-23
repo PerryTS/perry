@@ -473,7 +473,15 @@ pub fn note_native_data_write(
 
 /// Does a recorded write already cover a write of `t`'s key `k` (an
 /// accessor-capable one only if `accessor`) storing `value`?
+///
+/// Whole program a write onto ⊤ writes no intrinsic (P-N1, [`note_write`]):
+/// there is nothing to record, so it is covered. The settle steps that
+/// write (`settle_native_given`) ask this before they report a change;
+/// without it each pass of the fixpoint found the same write new again.
 fn write_covered(m: &Model, t: Tok, k: Option<Atom>, accessor: bool, value: WriteValue) -> bool {
+    if t == TOP && !m.foreign_code() {
+        return true;
+    }
     let covers = |x: &crate::model::NativeWrite| {
         (x.accessor || !accessor)
             && (x.opaque
