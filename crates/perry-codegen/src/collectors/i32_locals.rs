@@ -1614,7 +1614,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             walk(property, out);
             walk(object, out);
         }
-        Expr::SuperCall(args)
+        Expr::SuperCall(args, _)
         | Expr::SuperMethodCall { args, .. }
         | Expr::StaticMethodCall { args, .. } => {
             for a in args {

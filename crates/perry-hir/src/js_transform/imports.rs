@@ -958,7 +958,7 @@ pub fn transform_expr(
         Expr::StaticFieldSet { value, .. } => {
             transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::SuperCall(args) => {
+        Expr::SuperCall(args, _) => {
             for arg in args {
                 transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }

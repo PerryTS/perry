@@ -2717,7 +2717,7 @@ impl<'a> Gen<'a> {
                 self.region_read(fx, n)
             }
             Expr::ModuleTopThis => fx.this,
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 let a = self.evaluate_all(fx, args);
                 self.super_ctor(fx, a, vec![])
             }

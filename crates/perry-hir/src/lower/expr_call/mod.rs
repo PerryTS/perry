@@ -511,7 +511,7 @@ fn lower_call_inner(
             if let Some(spread_args) = spread_args {
                 return Ok(Expr::SuperCallSpread(spread_args));
             }
-            Ok(Expr::SuperCall(args))
+            Ok(Expr::SuperCall(args, call.span.lo.0))
         }
         ast::Callee::Expr(expr) => {
             // Check for super.method() call

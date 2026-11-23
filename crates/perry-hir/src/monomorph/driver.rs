@@ -475,7 +475,7 @@ fn collect_instantiations_in_expr(
             }
         }
         Expr::Await(inner, _) => collect_instantiations_in_expr(inner, ctx, module, idx),
-        Expr::SuperCall(args) => {
+        Expr::SuperCall(args, _) => {
             for arg in args {
                 collect_instantiations_in_expr(arg, ctx, module, idx);
             }
