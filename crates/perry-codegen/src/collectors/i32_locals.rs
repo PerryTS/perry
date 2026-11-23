@@ -1654,6 +1654,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             key,
             receiver,
             args,
+            ..
         } => {
             walk(home, out);
             walk(key, out);

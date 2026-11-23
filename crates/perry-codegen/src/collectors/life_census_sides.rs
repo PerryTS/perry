@@ -216,6 +216,7 @@ pub(super) fn node_side(m: &ModuleCensus, parent: &Expr, child: &Expr) -> String
             class_name,
             method_name,
             args,
+            ..
         } => {
             let i = args
                 .iter()

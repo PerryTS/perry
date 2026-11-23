@@ -177,7 +177,13 @@ pub(crate) fn guard_shared_first_static_get(ctx: &LoweringContext, expr: Expr) -
 /// evaluation's `C.m()` is), else the call on the evaluated object. Arguments
 /// holding a function or class are left by value, as for `new`.
 pub(crate) fn guard_shared_first_static_call(ctx: &LoweringContext, expr: Expr) -> Expr {
-    let Expr::Call { callee, args, .. } = &expr else {
+    let Expr::Call {
+        callee,
+        args,
+        byte_offset,
+        ..
+    } = &expr
+    else {
         return expr;
     };
     let Expr::PropertyGet {
@@ -202,6 +208,7 @@ pub(crate) fn guard_shared_first_static_call(ctx: &LoweringContext, expr: Expr) 
             template: template.clone(),
         }),
         then_expr: Box::new(Expr::StaticMethodCall {
+            byte_offset: *byte_offset,
             class_name: template.clone(),
             method_name: property.clone(),
             args: args.clone(),

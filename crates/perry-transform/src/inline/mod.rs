@@ -1415,6 +1415,7 @@ mod tests {
             1,
             vec![Stmt::Return(
                 Some(Expr::StaticMethodCall {
+                    byte_offset: 0,
                     class_name: "Registry".to_string(),
                     method_name: "of".to_string(),
                     args: vec![Expr::Object(Vec::new())],

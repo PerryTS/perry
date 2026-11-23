@@ -997,7 +997,7 @@ pub fn transform_expr(
             home,
             key,
             receiver,
-            args,
+            args, ..
         } => {
             transform_expr(home, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);

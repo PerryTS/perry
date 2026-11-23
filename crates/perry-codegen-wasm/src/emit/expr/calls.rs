@@ -93,6 +93,7 @@ impl<'a> FuncEmitCtx<'a> {
                             self.emit_expr(
                                 func,
                                 &Expr::StaticMethodCall {
+                                    byte_offset: *byte_offset,
                                     class_name: class_name.clone(),
                                     method_name: property.clone(),
                                     args: args.to_vec(),

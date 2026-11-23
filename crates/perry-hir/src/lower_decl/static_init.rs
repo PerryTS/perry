@@ -220,11 +220,12 @@ fn build_interleaved_static_init_stmts_impl(
                 }
                 field_idx += 1;
             }
-            ast::ClassMember::StaticBlock(_) => {
+            ast::ClassMember::StaticBlock(block) => {
                 let method_name = format!("__perry_static_init_{}", block_idx);
                 block_idx += 1;
                 if static_methods.iter().any(|m| m.name == method_name) {
                     out.push(Stmt::Expr(Expr::StaticMethodCall {
+                        byte_offset: block.span.lo.0,
                         class_name: class_name.to_string(),
                         method_name,
                         args: Vec::new(),

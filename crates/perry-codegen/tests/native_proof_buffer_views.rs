@@ -1728,6 +1728,7 @@ fn native_owned_static_method_v8_escape_invalidates_views() {
                     int(8),
                 ),
                 Stmt::Expr(Expr::StaticMethodCall {
+                    byte_offset: 0,
                     class_name: "RemoteNs".to_string(),
                     method_name: "invoke".to_string(),
                     args: vec![Expr::Array(vec![local(2)], None)],

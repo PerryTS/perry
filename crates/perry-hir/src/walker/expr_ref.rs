@@ -901,6 +901,7 @@ where
             key,
             receiver,
             args,
+            ..
         } => {
             f(home);
             f(key);

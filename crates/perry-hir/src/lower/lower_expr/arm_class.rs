@@ -525,7 +525,21 @@ pub(crate) fn lower_class_expr(
                 let Some(block_name) = static_block_names.get(index as usize).cloned() else {
                     continue;
                 };
+                // The call stands at the static block it runs.
+                let Some(block_offset) = class_expr
+                    .class
+                    .body
+                    .iter()
+                    .filter_map(|m| match m {
+                        ast::ClassMember::StaticBlock(b) => Some(b.span.lo.0),
+                        _ => None,
+                    })
+                    .nth(index as usize)
+                else {
+                    continue;
+                };
                 seq.push(Expr::StaticMethodCall {
+                    byte_offset: block_offset,
                     class_name: synthetic_name.clone(),
                     method_name: block_name,
                     args: Vec::new(),
