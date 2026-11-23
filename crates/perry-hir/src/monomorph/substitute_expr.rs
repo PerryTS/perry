@@ -363,7 +363,8 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             class_name,
             field_name,
             value,
-        } => Expr::StaticFieldSet {
+            byte_offset,
+        } => Expr::StaticFieldSet { byte_offset: *byte_offset,
             class_name: class_name.clone(),
             field_name: field_name.clone(),
             value: Box::new(substitute_expr(value, substitutions)),

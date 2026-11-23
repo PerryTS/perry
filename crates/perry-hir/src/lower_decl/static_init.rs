@@ -173,7 +173,7 @@ fn build_interleaved_static_init_stmts_impl(
                 value: Box::new(init_value),
             })
         } else {
-            Stmt::Expr(Expr::StaticFieldSet {
+            Stmt::Expr(Expr::StaticFieldSet { byte_offset: 0 /*HPOS ClassField*/,
                 class_name: class_name.to_string(),
                 field_name: sf.name.clone(),
                 value: Box::new(init_value),
@@ -189,7 +189,7 @@ fn build_interleaved_static_init_stmts_impl(
         for (field_name, value) in
             computed_field_key_initializers(class_body, fields, static_fields)
         {
-            out.push(Stmt::Expr(Expr::StaticFieldSet {
+            out.push(Stmt::Expr(Expr::StaticFieldSet { byte_offset: 0 /*HPOS ClassField*/,
                 class_name: class_name.to_string(),
                 field_name,
                 value: Box::new(value),
