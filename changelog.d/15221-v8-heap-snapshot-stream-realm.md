@@ -1,0 +1,1 @@
+- `v8.getHeapSnapshot()` in a program that imports only `node:v8` no longer aborts with `runtime layout STREAM_PROTOTYPE is born, but the program's realm does not reach it`: the `node:v8` namespace declares that it births a `node:stream.Readable` (#15150).
