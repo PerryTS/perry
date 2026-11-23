@@ -266,7 +266,8 @@ impl Scan {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.expr(discriminant, Use::Consume);
                 for c in cases {
@@ -500,7 +501,8 @@ impl Scan {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 self.expr(condition, Use::Consume);
                 self.expr(then_expr, how);

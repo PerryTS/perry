@@ -508,7 +508,8 @@ fn stmt_any(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             expr_pred(discriminant)
                 || cases.iter().any(|c| {

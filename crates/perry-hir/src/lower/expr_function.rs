@@ -244,7 +244,8 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         let param_ty = get_pat_type(param, ctx);
         let param_id = ctx.define_local_spanned(param_name.clone(), param_ty.clone(), param.span());
         ctx.shadow_native_instance_if_present(&param_name);
-        params.push(Param { byte_offset: param.span().lo.0,
+        params.push(Param {
+            byte_offset: param.span().lo.0,
             id: param_id,
             name: param_name,
             ty: param_ty,
@@ -458,7 +459,8 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         }
     }
 
-    Ok(Expr::Closure { byte_offset: arrow.span.lo.0,
+    Ok(Expr::Closure {
+        byte_offset: arrow.span.lo.0,
         func_id,
         params,
         return_type: Type::Any,
@@ -572,7 +574,8 @@ fn lower_named_fn_expr(
 
     Ok(Expr::Call {
         byte_end: 0,
-        callee: Box::new(Expr::Closure { byte_offset: fn_expr.function.span.lo.0,
+        callee: Box::new(Expr::Closure {
+            byte_offset: fn_expr.function.span.lo.0,
             func_id: wrapper_func_id,
             params: Vec::new(),
             return_type: Type::Any,
@@ -657,7 +660,8 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         let param_ty = crate::lower_patterns::get_pat_type(&param.pat, ctx);
         let param_id = ctx.define_local_spanned(param_name.clone(), param_ty.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
-        params.push(Param { byte_offset: param.span.lo.0,
+        params.push(Param {
+            byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: param_ty,
@@ -1434,7 +1438,8 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         }
     }
 
-    Ok(Expr::Closure { byte_offset: fn_expr.function.span.lo.0,
+    Ok(Expr::Closure {
+        byte_offset: fn_expr.function.span.lo.0,
         func_id,
         params,
         return_type: Type::Any,
@@ -1753,7 +1758,8 @@ fn insert_class_capture_refresh_inside_expressions(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 visit_expr(discriminant, regs);
                 for case in cases {

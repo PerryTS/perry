@@ -454,7 +454,9 @@ fn try_unroll_for(
 
     // 2. Condition must be `LocalGet(iv_id) {<,<=} INTEGER`.
     let (cmp_op, hi) = match condition.as_ref()? {
-        Expr::Compare { op, left, right, .. } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             let left_id = match left.as_ref() {
                 Expr::LocalGet(id) if *id == iv_id => *id,
                 _ => return None,
@@ -615,7 +617,8 @@ fn stmt_is_unrollable(stmt: &Stmt, iv_id: LocalId, loop_depth: u32) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             // Switch case bodies have `break` that targets the switch (not
             // the enclosing for). Counted as depth + 1 to allow them.
@@ -711,7 +714,8 @@ fn substitute_localget_with_int_in_stmt(stmt: &mut Stmt, iv_id: LocalId, value: 
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             substitute_localget_with_int(discriminant, iv_id, value);
             for c in cases {
@@ -913,7 +917,8 @@ fn refresh_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             refresh_in_expr(discriminant, remap, next_id, next_func_id);
             for c in cases {
@@ -1145,7 +1150,8 @@ mod tests {
                 mutable: true,
                 init: Some(integer(lo)),
             })),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op,
                 left: Box::new(ivar(iv_id)),
                 right: Box::new(integer(hi)),
@@ -1166,7 +1172,8 @@ mod tests {
         let i = 1u32;
         let body = vec![Stmt::Expr(Expr::LocalSet(
             acc,
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(acc)),
                 right: Box::new(ivar(i)),
@@ -1258,7 +1265,8 @@ mod tests {
     #[test]
     fn rejects_loop_with_try() {
         let i = 1u32;
-        let body = vec![Stmt::Try { byte_offset: 0,
+        let body = vec![Stmt::Try {
+            byte_offset: 0,
             body: vec![],
             catch: None,
             finally: None,
@@ -1280,7 +1288,8 @@ mod tests {
                 mutable: true,
                 init: Some(Expr::LocalGet(99)),
             })),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(i)),
                 right: Box::new(integer(3)),
@@ -1306,7 +1315,8 @@ mod tests {
                 mutable: true,
                 init: Some(integer(0)),
             })),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(i)),
                 right: Box::new(Expr::LocalGet(99)),
@@ -1333,9 +1343,11 @@ mod tests {
         let kx = 2u32;
         let inner_body = vec![Stmt::Expr(Expr::LocalSet(
             acc,
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
-                left: Box::new(Expr::Binary { byte_offset: 0,
+                left: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(acc)),
                     right: Box::new(Expr::LocalGet(ky)),
@@ -1366,7 +1378,8 @@ mod tests {
                         Expr::Binary {
                             op: BinaryOp::Add,
                             left,
-                            right, ..
+                            right,
+                            ..
                         } => {
                             // left = (acc + ky); right = kx
                             match right.as_ref() {
@@ -1436,7 +1449,8 @@ mod tests {
         // for would leave a stray Stmt::Break with no enclosing loop.
         let i = 1u32;
         let body = vec![Stmt::If {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(i)),
                 right: Box::new(Expr::Integer(1)),
@@ -1458,7 +1472,8 @@ mod tests {
             3,
             vec![Stmt::Expr(Expr::LocalSet(
                 acc,
-                Box::new(Expr::Binary { byte_offset: 0,
+                Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(acc)),
                     right: Box::new(Expr::LocalGet(i)),
@@ -1552,7 +1567,8 @@ mod tests {
                 init: None,
             },
             Stmt::If {
-                condition: Expr::Compare { byte_offset: 0,
+                condition: Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(ivar(i)),
                     right: Box::new(integer(0)),
@@ -1652,7 +1668,8 @@ mod tests {
         let fns = 2u32;
         let body = vec![Stmt::Expr(Expr::ArrayPush {
             array_id: fns,
-            value: Box::new(Expr::Closure { byte_offset: 0,
+            value: Box::new(Expr::Closure {
+                byte_offset: 0,
                 func_id: 0,
                 params: vec![],
                 return_type: Type::Number,
@@ -1691,7 +1708,8 @@ mod tests {
     fn counts_expression_trees_inside_one_statement() {
         let mut expression = ivar(1);
         for _ in 0..40 {
-            expression = Expr::Binary { byte_offset: 0,
+            expression = Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(expression),
                 right: Box::new(integer(1)),
@@ -1719,7 +1737,8 @@ mod tests {
         // the inner one (80 nodes).
         let accumulate = Stmt::Expr(Expr::LocalSet(
             100,
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(ivar(100)),
                 right: Box::new(ivar(2)),

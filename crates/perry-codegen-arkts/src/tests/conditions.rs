@@ -72,7 +72,8 @@ fn issue_410_local_get_resolves_through_bindings_not_placeholder() {
     // shape changed from "resolved condition" to "true" once the
     // root-level gate landed.
     let mobile_id: LocalId = 5;
-    let init = Expr::Compare { byte_offset: 0,
+    let init = Expr::Compare {
+        byte_offset: 0,
         op: perry_hir::ir::CompareOp::Eq,
         left: Box::new(Expr::PropertyGet {
             byte_end: 0,
@@ -124,7 +125,8 @@ fn issue_410_platform_constant_inlines_as_number_literal() {
     let bindings = HashMap::new();
     let mut consts = HashMap::new();
     consts.insert(plat_id, 9.0);
-    let cmp = Expr::Compare { byte_offset: 0,
+    let cmp = Expr::Compare {
+        byte_offset: 0,
         op: perry_hir::ir::CompareOp::Eq,
         left: Box::new(Expr::LocalGet(plat_id)),
         right: Box::new(Expr::Integer(9)),
@@ -178,7 +180,8 @@ fn issue_410_conditional_addchild_emits_valid_arkts_if_block() {
     m.init.push(let_widget(
         mobile_id,
         "mobile",
-        Expr::Compare { byte_offset: 0,
+        Expr::Compare {
+            byte_offset: 0,
             op: perry_hir::ir::CompareOp::Eq,
             left: Box::new(Expr::LocalGet(plat_id)),
             right: Box::new(Expr::Integer(9)),
@@ -359,7 +362,8 @@ fn issue_413_evaluate_condition_folds_literal_eq_false() {
     // 1 === 2 → Some(false)
     let bindings = HashMap::new();
     let consts = HashMap::new();
-    let cmp = Expr::Compare { byte_offset: 0,
+    let cmp = Expr::Compare {
+        byte_offset: 0,
         op: perry_hir::ir::CompareOp::Eq,
         left: Box::new(Expr::Integer(1)),
         right: Box::new(Expr::Integer(2)),
@@ -372,7 +376,8 @@ fn issue_413_evaluate_condition_folds_literal_eq_true() {
     // 1 === 1 → Some(true)
     let bindings = HashMap::new();
     let consts = HashMap::new();
-    let cmp = Expr::Compare { byte_offset: 0,
+    let cmp = Expr::Compare {
+        byte_offset: 0,
         op: perry_hir::ir::CompareOp::Eq,
         left: Box::new(Expr::Integer(1)),
         right: Box::new(Expr::Integer(1)),
@@ -402,7 +407,8 @@ fn issue_413_evaluate_condition_resolves_through_compile_time_consts() {
     let bindings = HashMap::new();
     let mut consts = HashMap::new();
     consts.insert(plat_id, 9.0);
-    let cmp = Expr::Compare { byte_offset: 0,
+    let cmp = Expr::Compare {
+        byte_offset: 0,
         op: perry_hir::ir::CompareOp::Eq,
         left: Box::new(Expr::LocalGet(plat_id)),
         right: Box::new(Expr::Integer(9)),
@@ -417,14 +423,17 @@ fn issue_413_evaluate_condition_logical_or_short_circuits() {
     let bindings = HashMap::new();
     let mut consts = HashMap::new();
     consts.insert(plat_id, 9.0);
-    let cmp = Expr::Logical { byte_offset: 0,
+    let cmp = Expr::Logical {
+        byte_offset: 0,
         op: perry_hir::ir::LogicalOp::Or,
-        left: Box::new(Expr::Compare { byte_offset: 0,
+        left: Box::new(Expr::Compare {
+            byte_offset: 0,
             op: perry_hir::ir::CompareOp::Eq,
             left: Box::new(Expr::LocalGet(plat_id)),
             right: Box::new(Expr::Integer(1)),
         }),
-        right: Box::new(Expr::Compare { byte_offset: 0,
+        right: Box::new(Expr::Compare {
+            byte_offset: 0,
             op: perry_hir::ir::CompareOp::Eq,
             left: Box::new(Expr::LocalGet(plat_id)),
             right: Box::new(Expr::Integer(9)),
@@ -464,7 +473,8 @@ fn issue_413_literal_only_if_block_drops_dead_branch_emits_only_then() {
         nmc("Button", vec![Expr::String("dead".into())]),
     ));
     m.init.push(Stmt::If {
-        condition: Expr::Compare { byte_offset: 0,
+        condition: Expr::Compare {
+            byte_offset: 0,
             op: perry_hir::ir::CompareOp::Eq,
             left: Box::new(Expr::Integer(1)),
             right: Box::new(Expr::Integer(2)),
@@ -511,7 +521,8 @@ fn issue_413_literal_only_if_block_keeps_then_inlines_no_if_wrapper() {
         nmc("Button", vec![Expr::String("live".into())]),
     ));
     m.init.push(Stmt::If {
-        condition: Expr::Compare { byte_offset: 0,
+        condition: Expr::Compare {
+            byte_offset: 0,
             op: perry_hir::ir::CompareOp::Eq,
             left: Box::new(Expr::Integer(1)),
             right: Box::new(Expr::Integer(1)),
@@ -567,7 +578,8 @@ fn issue_413_platform_const_eq_drops_dead_branch_in_addchild() {
         nmc("Button", vec![Expr::String("desktop".into())]),
     ));
     m.init.push(Stmt::If {
-        condition: Expr::Compare { byte_offset: 0,
+        condition: Expr::Compare {
+            byte_offset: 0,
             op: perry_hir::ir::CompareOp::Eq,
             left: Box::new(Expr::LocalGet(plat_id)),
             right: Box::new(Expr::Integer(1)),
@@ -618,7 +630,8 @@ fn issue_413_local_get_resolves_through_binding_to_platform_compare() {
     m.init.push(let_widget(
         mobile_id,
         "mobile",
-        Expr::Compare { byte_offset: 0,
+        Expr::Compare {
+            byte_offset: 0,
             op: perry_hir::ir::CompareOp::Eq,
             left: Box::new(Expr::LocalGet(plat_id)),
             right: Box::new(Expr::Integer(1)),
@@ -745,7 +758,8 @@ fn issue_413_serialize_condition_parenthesizes_unary_of_compare() {
         let mut b = HashMap::new();
         b.insert(
             mobile_id,
-            Expr::Compare { byte_offset: 0,
+            Expr::Compare {
+                byte_offset: 0,
                 op: perry_hir::ir::CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(plat_id)),
                 right: Box::new(Expr::Integer(1)),
@@ -791,7 +805,8 @@ fn issue_413_serialize_condition_parenthesizes_or_chain_with_unary() {
     let mut bindings = HashMap::new();
     bindings.insert(
         isios_id,
-        Expr::Compare { byte_offset: 0,
+        Expr::Compare {
+            byte_offset: 0,
             op: perry_hir::ir::CompareOp::Eq,
             left: Box::new(Expr::LocalGet(plat_id)),
             right: Box::new(Expr::Integer(1)),
@@ -800,16 +815,20 @@ fn issue_413_serialize_condition_parenthesizes_or_chain_with_unary() {
     let mut consts = HashMap::new();
     consts.insert(plat_id, 9.0);
     // (__platform__ === 1) || (__platform__ === 2) || (!isIOS && something)
-    let chain = Expr::Logical { byte_offset: 0,
+    let chain = Expr::Logical {
+        byte_offset: 0,
         op: perry_hir::ir::LogicalOp::Or,
-        left: Box::new(Expr::Logical { byte_offset: 0,
+        left: Box::new(Expr::Logical {
+            byte_offset: 0,
             op: perry_hir::ir::LogicalOp::Or,
-            left: Box::new(Expr::Compare { byte_offset: 0,
+            left: Box::new(Expr::Compare {
+                byte_offset: 0,
                 op: perry_hir::ir::CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(plat_id)),
                 right: Box::new(Expr::Integer(1)),
             }),
-            right: Box::new(Expr::Compare { byte_offset: 0,
+            right: Box::new(Expr::Compare {
+                byte_offset: 0,
                 op: perry_hir::ir::CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(plat_id)),
                 right: Box::new(Expr::Integer(2)),

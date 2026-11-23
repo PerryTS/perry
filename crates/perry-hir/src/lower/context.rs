@@ -124,9 +124,11 @@ impl LoweringContext {
                     "String" => Expr::StringCoerce(Box::new(Expr::LocalGet(param_id))),
                     _ => unreachable!(),
                 };
-                return Expr::Closure { byte_offset: ident.span.lo.0,
+                return Expr::Closure {
+                    byte_offset: ident.span.lo.0,
                     func_id,
-                    params: vec![Param { byte_offset: ident.span.lo.0,
+                    params: vec![Param {
+                        byte_offset: ident.span.lo.0,
                         id: param_id,
                         name: "__x".to_string(),
                         ty: Type::Any,
@@ -982,7 +984,8 @@ impl LoweringContext {
         // matters under shape-deduplication.
         let fields: Vec<ClassField> = field_shapes
             .iter()
-            .map(|(name, ty)| ClassField { byte_offset: byte_offset,
+            .map(|(name, ty)| ClassField {
+                byte_offset: byte_offset,
                 origin: crate::ClassFieldOrigin::Definition,
                 name: name.clone(),
                 key_expr: None,
@@ -1004,7 +1007,8 @@ impl LoweringContext {
         let mut ctor_body: Vec<Stmt> = Vec::with_capacity(field_shapes.len());
         for (name, ty) in field_shapes {
             let param_id = self.fresh_local();
-            ctor_params.push(Param { byte_offset: byte_offset,
+            ctor_params.push(Param {
+                byte_offset: byte_offset,
                 id: param_id,
                 name: name.clone(),
                 ty: ty.clone(),
@@ -1021,7 +1025,8 @@ impl LoweringContext {
                 byte_end: 0,
             }));
         }
-        let constructor = Function { byte_offset: byte_offset,
+        let constructor = Function {
+            byte_offset: byte_offset,
             id: self.fresh_func(),
             name: "constructor".to_string(),
             type_params: Vec::new(),
@@ -1111,7 +1116,8 @@ impl LoweringContext {
         let class_id = self.fresh_class();
         let fields: Vec<ClassField> = keys
             .iter()
-            .map(|name| ClassField { byte_offset: byte_offset,
+            .map(|name| ClassField {
+                byte_offset: byte_offset,
                 origin: crate::ClassFieldOrigin::Declared,
                 name: name.clone(),
                 key_expr: None,

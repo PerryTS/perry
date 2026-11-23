@@ -16,9 +16,11 @@ fn ir_labelled(extra: Vec<Stmt>, label: Option<&str>) -> String {
     let mut body = vec![Stmt::Expr(Expr::Uint8ArraySet {
         array: Box::new(Expr::LocalGet(1)),
         index: Box::new(Expr::LocalGet(2)),
-        value: Box::new(Expr::Binary { byte_offset: 0,
+        value: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::BitAnd,
-            left: Box::new(Expr::Binary { byte_offset: 0,
+            left: Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(element()),
                 right: Box::new(Expr::Integer(1)),
@@ -27,11 +29,13 @@ fn ir_labelled(extra: Vec<Stmt>, label: Option<&str>) -> String {
         }),
     })];
     body.extend(extra);
-    m.functions.push(Function { byte_offset: 0,
+    m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "inc".into(),
         type_params: vec![],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "buf".into(),
             ty: Type::Named("Buffer".into()),
@@ -52,7 +56,8 @@ fn ir_labelled(extra: Vec<Stmt>, label: Option<&str>) -> String {
                         mutable: true,
                         init: Some(Expr::Integer(0)),
                     })),
-                    condition: Some(Expr::Compare { byte_offset: 0,
+                    condition: Some(Expr::Compare {
+                        byte_offset: 0,
                         op: CompareOp::Lt,
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::PropertyGet {

@@ -172,7 +172,10 @@ impl<'a> Gen<'a> {
     /// anything else tests its own value's truthiness.
     pub(crate) fn guard_test(&mut self, fx: &Fx, condition: &Expr) -> (NodeId, u8, u8) {
         use crate::model::guard::*;
-        if let Expr::Compare { op, left, right, .. } = condition {
+        if let Expr::Compare {
+            op, left, right, ..
+        } = condition
+        {
             let (operand, nil) = match (left.as_ref(), right.as_ref()) {
                 (x, Expr::Undefined) | (Expr::Undefined, x) => (Some(x), Expr::Undefined),
                 (x, Expr::Null) | (Expr::Null, x) => (Some(x), Expr::Null),
@@ -1048,7 +1051,9 @@ impl<'a> Gen<'a> {
                 self.narrowed_write(mi, *id, out);
                 out
             }
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let shift = matches!(op, perry_hir::BinaryOp::UShr);
                 let out = self.tmp("binary");
                 let r = self.m.reason("ToPrimitive operand");
@@ -1174,8 +1179,12 @@ impl<'a> Gen<'a> {
                     out
                 }
             },
-            Expr::Compare { op, left, right, .. } => self.compare_expr(fx, op, left, right),
-            Expr::Logical { op, left, right, .. } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => self.compare_expr(fx, op, left, right),
+            Expr::Logical {
+                op, left, right, ..
+            } => {
                 let plan = match op {
                     LogicalOp::And => self.own_guard_plan(left, crate::gen::Region::Expr(right)),
                     LogicalOp::Or => match left.as_ref() {
@@ -1226,7 +1235,8 @@ impl<'a> Gen<'a> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } if self.m.ns_pairs && matches!(condition.as_ref(), Expr::NamespacePatched(_)) => {
                 let Expr::NamespacePatched(ns) = condition.as_ref() else {
                     unreachable!()
@@ -1236,7 +1246,8 @@ impl<'a> Gen<'a> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 let plan = self.own_guard_plan(condition, crate::gen::Region::Expr(then_expr));
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
@@ -2333,7 +2344,8 @@ impl<'a> Gen<'a> {
             Expr::StaticFieldSet {
                 class_name,
                 field_name,
-                value, ..
+                value,
+                ..
             } => {
                 let c = self.class_value(mi, class_name);
                 let v = self.expr(fx, value);

@@ -548,11 +548,13 @@ fn idxset_inbounds_ir() -> String {
 
 fn idxset_inbounds_ir_for_target(target: Option<&str>) -> String {
     let mut m = Module::new("idxset_inbounds_census.ts");
-    m.functions = vec![Function { byte_offset: 0,
+    m.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: VAL_ID,
             name: "v".to_string(),
             ty: Type::Any,
@@ -578,7 +580,8 @@ fn idxset_inbounds_ir_for_target(target: Option<&str>) -> String {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(IDX_ID)),
                     right: Box::new(Expr::Integer(8)),
@@ -632,11 +635,13 @@ fn idxset_recv_global_ir() -> String {
         mutable: true,
         init: Some(Expr::Array(Vec::new(), None)),
     }];
-    m.functions = vec![Function { byte_offset: 0,
+    m.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: VAL_ID,
             name: "v".to_string(),
             ty: Type::Any,
@@ -655,7 +660,8 @@ fn idxset_recv_global_ir() -> String {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(IDX_ID)),
                     right: Box::new(Expr::Integer(8)),
@@ -729,11 +735,13 @@ fn idxset_recv_global_ir() -> String {
 fn idxset_recv_captured_ir() -> String {
     const FILL_ID: u32 = 31;
     let mut m = Module::new("idxset_recv_captured_census.ts");
-    m.functions = vec![Function { byte_offset: 0,
+    m.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: VAL_ID,
             name: "v".to_string(),
             ty: Type::Any,
@@ -756,7 +764,8 @@ fn idxset_recv_captured_ir() -> String {
                 name: "fill".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Closure { byte_offset: 0,
+                init: Some(Expr::Closure {
+                    byte_offset: 0,
                     func_id: 2,
                     params: Vec::new(),
                     return_type: Type::Any,
@@ -768,7 +777,8 @@ fn idxset_recv_captured_ir() -> String {
                             mutable: true,
                             init: Some(Expr::Integer(0)),
                         })),
-                        condition: Some(Expr::Compare { byte_offset: 0,
+                        condition: Some(Expr::Compare {
+                            byte_offset: 0,
                             op: CompareOp::Lt,
                             left: Box::new(Expr::LocalGet(IDX_ID)),
                             right: Box::new(Expr::Integer(8)),
@@ -824,7 +834,8 @@ fn idxset_recv_captured_ir() -> String {
 /// #7511 gates (same fixture as `array_push.rs::parent_gate_tests`).
 fn apush_ir() -> String {
     let mut m = Module::new("apush_census.ts");
-    m.functions = vec![Function { byte_offset: 0,
+    m.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -866,7 +877,8 @@ fn apush_ir() -> String {
 fn idxset_runtime_key_ir() -> String {
     const ARR_ID: u32 = 31;
     let mut m = Module::new("idxset_runtime_key_census.ts");
-    let param = |id: u32, name: &str, ty: Type| Param { byte_offset: 0,
+    let param = |id: u32, name: &str, ty: Type| Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -875,7 +887,8 @@ fn idxset_runtime_key_ir() -> String {
         is_rest: false,
         arguments_object: None,
     };
-    m.functions = vec![Function { byte_offset: 0,
+    m.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -914,7 +927,8 @@ fn idxset_runtime_key_ir() -> String {
 fn dynarr_set_ir() -> String {
     const ARR_ID: u32 = 31;
     let mut m = Module::new("dynarr_set_census.ts");
-    let param = |id: u32, name: &str| Param { byte_offset: 0,
+    let param = |id: u32, name: &str| Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -923,7 +937,8 @@ fn dynarr_set_ir() -> String {
         is_rest: false,
         arguments_object: None,
     };
-    m.functions = vec![Function { byte_offset: 0,
+    m.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -984,11 +999,13 @@ fn idxset_bounded_quiet_facts() -> crate::codegen::ProgramFactsView {
 
 fn idxset_bounded_ir_with(quiet: bool) -> String {
     let mut m = Module::new("idxset_bounded_census.ts");
-    m.functions = vec![Function { byte_offset: 0,
+    m.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: VAL_ID,
             name: "v".to_string(),
             ty: Type::Any,
@@ -1014,7 +1031,8 @@ fn idxset_bounded_ir_with(quiet: bool) -> String {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(IDX_ID)),
                     right: Box::new(Expr::PropertyGet {
@@ -1065,11 +1083,13 @@ fn private_field_set_ir() -> String {
     const CLASS_ID: u32 = 2;
     const SET_ID: u32 = 40;
     let mut m = Module::new("private_field_set_census.ts");
-    let set = Function { byte_offset: 0,
+    let set = Function {
+        byte_offset: 0,
         id: SET_ID,
         name: "set".to_string(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: VAL_ID,
             name: "v".to_string(),
             ty: Type::Any,
@@ -1113,7 +1133,8 @@ fn private_field_set_ir() -> String {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField { byte_offset: 0,
+        fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "#x".to_string(),
             key_expr: None,
@@ -1175,7 +1196,8 @@ fn ctor_prologue_ir() -> String {
 /// record. The incoming value can become a young pointer after suspension.
 fn generator_state_ir() -> String {
     let mut m = Module::new("generator_state_census.ts");
-    m.functions = vec![Function { byte_offset: 0,
+    m.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: Vec::new(),
@@ -1189,45 +1211,50 @@ fn generator_state_ir() -> String {
                 mutable: true,
                 init: Some(Expr::Undefined),
             },
-            Stmt::Return(Some(Expr::LinkGeneratorPrototype {
-                obj: Box::new(Expr::Closure { byte_offset: 0,
-                    func_id: 2,
-                    params: vec![Param { byte_offset: 0,
-                        id: 3,
-                        name: "sent".into(),
-                        ty: Type::Any,
-                        default: None,
-                        is_rest: false,
-                        decorators: Vec::new(),
-                        arguments_object: None,
-                    }],
-                    return_type: Type::Any,
-                    body: vec![
-                        Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::LocalGet(3)))),
-                        Stmt::Expr(Expr::PropertyGet {
-                            byte_end: 0,
-                            object: Box::new(Expr::LocalGet(1)),
-                            property: "value".into(),
+            Stmt::Return(
+                Some(Expr::LinkGeneratorPrototype {
+                    obj: Box::new(Expr::Closure {
+                        byte_offset: 0,
+                        func_id: 2,
+                        params: vec![Param {
                             byte_offset: 0,
-                        }),
-                        Stmt::Return(Some(Expr::LocalGet(1)), 0),
-                    ],
-                    captures: vec![1],
-                    mutable_captures: vec![1],
-                    captures_this: false,
-                    captures_new_target: false,
-                    construct_only: false,
-                    enclosing_class: None,
-                    is_arrow: true,
+                            id: 3,
+                            name: "sent".into(),
+                            ty: Type::Any,
+                            default: None,
+                            is_rest: false,
+                            decorators: Vec::new(),
+                            arguments_object: None,
+                        }],
+                        return_type: Type::Any,
+                        body: vec![
+                            Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::LocalGet(3)))),
+                            Stmt::Expr(Expr::PropertyGet {
+                                byte_end: 0,
+                                object: Box::new(Expr::LocalGet(1)),
+                                property: "value".into(),
+                                byte_offset: 0,
+                            }),
+                            Stmt::Return(Some(Expr::LocalGet(1)), 0),
+                        ],
+                        captures: vec![1],
+                        mutable_captures: vec![1],
+                        captures_this: false,
+                        captures_new_target: false,
+                        construct_only: false,
+                        enclosing_class: None,
+                        is_arrow: true,
+                        is_async: false,
+                        is_generator: false,
+                        is_strict: false,
+                    }),
                     is_async: false,
-                    is_generator: false,
-                    is_strict: false,
+                    fixed_state: true,
+                    i32_controls: Vec::new(),
+                    i1_controls: Vec::new(),
                 }),
-                is_async: false,
-                fixed_state: true,
-                i32_controls: Vec::new(),
-                i1_controls: Vec::new(),
-            }), 0),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,

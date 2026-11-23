@@ -202,7 +202,8 @@ fn loop_range(
     let Expr::Compare {
         op: CompareOp::Lt,
         left,
-        right, ..
+        right,
+        ..
     } = condition
     else {
         return None;
@@ -359,7 +360,8 @@ fn scan_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 expr(discriminant);
                 for case in cases {
@@ -433,14 +435,21 @@ fn lookup(values: &[Expr], base: i64, index: LocalId, byte_offset: u32) -> Expr 
         return values[0].clone();
     }
     let middle = values.len() / 2;
-    Expr::Conditional { byte_offset,
-        condition: Box::new(Expr::Compare { byte_offset,
+    Expr::Conditional {
+        byte_offset,
+        condition: Box::new(Expr::Compare {
+            byte_offset,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(index)),
             right: Box::new(Expr::Integer(base + middle as i64)),
         }),
         then_expr: Box::new(lookup(&values[..middle], base, index, byte_offset)),
-        else_expr: Box::new(lookup(&values[middle..], base + middle as i64, index, byte_offset)),
+        else_expr: Box::new(lookup(
+            &values[middle..],
+            base + middle as i64,
+            index,
+            byte_offset,
+        )),
     }
 }
 

@@ -8,7 +8,8 @@ use super::*;
 use std::collections::{HashMap, HashSet};
 
 fn runtime(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
-    Expr::NativeMethodCall { byte_offset,
+    Expr::NativeMethodCall {
+        byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -326,7 +327,8 @@ pub(super) fn protocol_only(stmts: &[Stmt], id: LocalId) -> bool {
                 object: None,
                 class_name: None,
                 method,
-                args, ..
+                args,
+                ..
             } if module == "__perry_runtime"
                 && matches!(
                     method.as_str(),
@@ -660,7 +662,8 @@ fn lower_list(
             *next_local += 1;
             params.insert(
                 0,
-                perry_hir::Param { byte_offset: frame_offset,
+                perry_hir::Param {
+                    byte_offset: frame_offset,
                     id: op,
                     name: "__frame_op".into(),
                     ty: Type::Number,
@@ -674,7 +677,8 @@ fn lower_list(
             body.insert(
                 0,
                 Stmt::If {
-                    condition: Expr::Compare { byte_offset: frame_offset,
+                    condition: Expr::Compare {
+                        byte_offset: frame_offset,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(op)),
                         right: Box::new(Expr::Number(1.0)),
@@ -703,7 +707,14 @@ fn lower_list(
         prefix.append(body);
         let catch_id = *next_local;
         *next_local += 1;
-        *body = super::lower::wrap_generator_resume_body(prefix, executing, done, catch_id, false, frame_offset);
+        *body = super::lower::wrap_generator_resume_body(
+            prefix,
+            executing,
+            done,
+            catch_id,
+            false,
+            frame_offset,
+        );
         // The HIR remapper above also updates the explicit control identities.
         let _ = (i32_controls, i1_controls);
         let mut replacement = Vec::new();
@@ -921,12 +932,15 @@ fn lower_owned_resume(
                 }
             }
         }
-    } else if let Some(Stmt::Return(Some(Expr::LinkGeneratorPrototype {
-        obj,
-        fixed_state: true,
-        is_async: false,
-        ..
-    }), _)) = f.body.last_mut()
+    } else if let Some(Stmt::Return(
+        Some(Expr::LinkGeneratorPrototype {
+            obj,
+            fixed_state: true,
+            is_async: false,
+            ..
+        }),
+        _,
+    )) = f.body.last_mut()
     {
         body(obj, templates, uses, next_local, next_func);
     }

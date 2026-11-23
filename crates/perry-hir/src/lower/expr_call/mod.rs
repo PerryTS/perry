@@ -429,7 +429,8 @@ fn lower_call_inner(
                     if module_name.strip_prefix("node:").unwrap_or(module_name) == "sqlite"
                         && matches!(method_name, "Database" | "DatabaseSync")
                     {
-                        return Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                        return Ok(Expr::NativeMethodCall {
+                            byte_offset: call.span.lo.0,
                             module: "sqlite".to_string(),
                             class_name: None,
                             object: None,

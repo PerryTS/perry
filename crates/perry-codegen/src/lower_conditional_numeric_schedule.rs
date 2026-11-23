@@ -13,7 +13,8 @@ fn number(expr: &Expr, local: &impl Fn(u32) -> bool) -> bool {
         Expr::Binary {
             op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div,
             left,
-            right, ..
+            right,
+            ..
         } => number(left, local) && number(right, local),
         _ => false,
     }
@@ -39,7 +40,8 @@ mod tests {
     use super::*;
     use perry_hir::CompareOp;
     fn cmp(left: Expr) -> Expr {
-        Expr::Compare { byte_offset: 0,
+        Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(left),
             right: Box::new(Expr::Integer(4)),
@@ -47,7 +49,8 @@ mod tests {
     }
     #[test]
     fn numeric_schedule_requires_actual_scalar_leaves() {
-        let arithmetic = cmp(Expr::Binary { byte_offset: 0,
+        let arithmetic = cmp(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Mul,
             left: Box::new(Expr::LocalGet(1)),
             right: Box::new(Expr::LocalGet(1)),

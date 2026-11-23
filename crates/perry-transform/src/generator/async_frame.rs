@@ -62,7 +62,8 @@ pub(super) fn admission(module: &Module) -> HashSet<FuncId> {
         }
         if let Expr::Yield {
             value: Some(value),
-            delegate: false, ..
+            delegate: false,
+            ..
         }
         | Expr::Await(value, _) = e
         {
@@ -289,7 +290,8 @@ pub(super) fn lower(f: &mut Function, controls: (Vec<LocalId>, Vec<LocalId>)) {
         releases(body, &slots);
     }
     let owner = std::mem::replace(closure, Expr::Undefined);
-    *closure = Expr::NativeMethodCall { byte_offset: frame_offset,
+    *closure = Expr::NativeMethodCall {
+        byte_offset: frame_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -320,14 +322,16 @@ mod tests {
     fn fixture() -> Module {
         let mut m = Module::new("async_owner");
         m.class_family_syntax = Some(Default::default());
-        m.functions.push(Function { byte_offset: 0,
+        m.functions.push(Function {
+            byte_offset: 0,
             id: 0,
             name: "suspended".into(),
             type_params: vec![],
             params: vec![],
             return_type: Type::Any,
             body: vec![
-                Stmt::Expr(Expr::Yield { byte_offset: 0,
+                Stmt::Expr(Expr::Yield {
+                    byte_offset: 0,
                     value: Some(Box::new(Expr::Number(7.0))),
                     delegate: false,
                 }),
@@ -468,7 +472,8 @@ mod tests {
             match mode {
                 0 => m.functions[0].captures.push(91),
                 1 => {
-                    m.functions[0].params.push(perry_hir::Param { byte_offset: 0,
+                    m.functions[0].params.push(perry_hir::Param {
+                        byte_offset: 0,
                         id: 91,
                         name: "callback".into(),
                         ty: Type::Any,
@@ -486,7 +491,8 @@ mod tests {
                     }));
                 }
                 2 => m.functions[0].is_strict = false,
-                _ => m.functions[0].body.push(Stmt::Expr(Expr::Closure { byte_offset: 0,
+                _ => m.functions[0].body.push(Stmt::Expr(Expr::Closure {
+                    byte_offset: 0,
                     func_id: 9,
                     params: vec![],
                     return_type: Type::Any,

@@ -189,7 +189,9 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 match op {
                     BinaryOp::Add => {
                         // Use js_add for dynamic dispatch (handles string+number etc.)
@@ -257,7 +259,9 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
-            Expr::Compare { op, left, right, .. } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 self.emit_expr(func, left);
                 self.emit_expr(func, right);
                 // For strict equality on mixed types, use JS bridge
@@ -325,7 +329,9 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
-            Expr::Logical { op, left, right, .. } => {
+            Expr::Logical {
+                op, left, right, ..
+            } => {
                 match op {
                     LogicalOp::And => {
                         // Short-circuit: if left is falsy, return left; else return right
@@ -420,7 +426,8 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, condition);

@@ -2,7 +2,8 @@ use super::*;
 use perry_hir::types::Type;
 
 fn param(id: LocalId, name: &str, default: Option<Expr>) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,
@@ -14,7 +15,8 @@ fn param(id: LocalId, name: &str, default: Option<Expr>) -> Param {
 }
 
 fn function(id: FuncId, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.into(),
         type_params: vec![],
@@ -47,8 +49,10 @@ fn optional(id: LocalId, value: Expr, body: Expr) -> Expr {
     Expr::ScopedTemp {
         id,
         value: Box::new(value),
-        body: Box::new(Expr::Conditional { byte_offset: 0,
-            condition: Box::new(Expr::Compare { byte_offset: 0,
+        body: Box::new(Expr::Conditional {
+            byte_offset: 0,
+            condition: Box::new(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::LooseEq,
                 left: Box::new(Expr::LocalGet(id)),
                 right: Box::new(Expr::Null),
@@ -106,11 +110,15 @@ fn scoped_defaults_preserve_order_tdz_arity_and_skipped_initializers() {
             ),
             param(2, "second", Some(Expr::LocalGet(1))),
         ],
-        vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op: BinaryOp::Add,
-            left: Box::new(Expr::LocalGet(1)),
-            right: Box::new(Expr::LocalGet(2)),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::Binary {
+                byte_offset: 0,
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(1)),
+                right: Box::new(Expr::LocalGet(2)),
+            }),
+            0,
+        )],
     ));
     module.functions.push(function(
         2,
@@ -166,20 +174,24 @@ fn scoped_temps_are_private_to_recursive_activations() {
     let mut module = Module::new("scoped_temp");
     let recurse = call(
         1,
-        vec![Expr::Binary { byte_offset: 0,
+        vec![Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Sub,
             left: Box::new(Expr::LocalGet(1)),
             right: Box::new(Expr::Number(1.0)),
         }],
     );
-    let body = Expr::Conditional { byte_offset: 0,
-        condition: Box::new(Expr::Compare { byte_offset: 0,
+    let body = Expr::Conditional {
+        byte_offset: 0,
+        condition: Box::new(Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Le,
             left: Box::new(Expr::LocalGet(1)),
             right: Box::new(Expr::Number(0.0)),
         }),
         then_expr: Box::new(Expr::Number(0.0)),
-        else_expr: Box::new(Expr::Binary { byte_offset: 0,
+        else_expr: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(recurse),
             right: Box::new(Expr::LocalGet(100)),
@@ -189,11 +201,14 @@ fn scoped_temps_are_private_to_recursive_activations() {
         1,
         "sum",
         vec![param(1, "n", None)],
-        vec![Stmt::Return(Some(Expr::ScopedTemp {
-            id: 100,
-            value: Box::new(Expr::LocalGet(1)),
-            body: Box::new(body),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::ScopedTemp {
+                id: 100,
+                value: Box::new(Expr::LocalGet(1)),
+                body: Box::new(body),
+            }),
+            0,
+        )],
     ));
     run_js(module, "require('node:assert/strict').equal(sum(4), 10);");
 }
@@ -222,7 +237,8 @@ fn generator_defaults_keep_creation_time_and_historical_complex_expansion() {
             Some(optional(
                 101,
                 call(99, vec![]),
-                Expr::Binary { byte_offset: 0,
+                Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(property(101)),
                     right: Box::new(property(101)),
@@ -257,7 +273,8 @@ fn constructor_scoped_temps_survive_recursive_field_initialization_and_module_te
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField { byte_offset: 0,
+        fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "result".into(),
             key_expr: None,
@@ -265,7 +282,8 @@ fn constructor_scoped_temps_survive_recursive_field_initialization_and_module_te
             init: Some(optional(
                 100,
                 call(99, vec![]),
-                Expr::Binary { byte_offset: 0,
+                Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(call(98, vec![])),
                     right: Box::new(property(100)),
@@ -327,37 +345,45 @@ fn closure_scoped_temps_are_activation_local() {
         name: "sumClosure".into(),
         ty: Type::Any,
         mutable: false,
-        init: Some(Expr::Closure { byte_offset: 0,
+        init: Some(Expr::Closure {
+            byte_offset: 0,
             func_id: 10,
             params: vec![param(20, "n", None)],
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::ScopedTemp {
-                id: 100,
-                value: Box::new(Expr::LocalGet(20)),
-                body: Box::new(Expr::Conditional { byte_offset: 0,
-                    condition: Box::new(Expr::Compare { byte_offset: 0,
-                        op: CompareOp::Le,
-                        left: Box::new(Expr::LocalGet(20)),
-                        right: Box::new(Expr::Number(0.0)),
-                    }),
-                    then_expr: Box::new(Expr::Number(0.0)),
-                    else_expr: Box::new(Expr::Binary { byte_offset: 0,
-                        op: BinaryOp::Add,
-                        left: Box::new(Expr::Call {
-                            byte_end: 0,
-                            callee: Box::new(Expr::LocalGet(10)),
-                            args: vec![Expr::Binary { byte_offset: 0,
-                                op: BinaryOp::Sub,
-                                left: Box::new(Expr::LocalGet(20)),
-                                right: Box::new(Expr::Number(1.0)),
-                            }],
-                            type_args: vec![],
+            body: vec![Stmt::Return(
+                Some(Expr::ScopedTemp {
+                    id: 100,
+                    value: Box::new(Expr::LocalGet(20)),
+                    body: Box::new(Expr::Conditional {
+                        byte_offset: 0,
+                        condition: Box::new(Expr::Compare {
                             byte_offset: 0,
+                            op: CompareOp::Le,
+                            left: Box::new(Expr::LocalGet(20)),
+                            right: Box::new(Expr::Number(0.0)),
                         }),
-                        right: Box::new(Expr::LocalGet(100)),
+                        then_expr: Box::new(Expr::Number(0.0)),
+                        else_expr: Box::new(Expr::Binary {
+                            byte_offset: 0,
+                            op: BinaryOp::Add,
+                            left: Box::new(Expr::Call {
+                                byte_end: 0,
+                                callee: Box::new(Expr::LocalGet(10)),
+                                args: vec![Expr::Binary {
+                                    byte_offset: 0,
+                                    op: BinaryOp::Sub,
+                                    left: Box::new(Expr::LocalGet(20)),
+                                    right: Box::new(Expr::Number(1.0)),
+                                }],
+                                type_args: vec![],
+                                byte_offset: 0,
+                            }),
+                            right: Box::new(Expr::LocalGet(100)),
+                        }),
                     }),
                 }),
-            }), 0)],
+                0,
+            )],
             captures: vec![10],
             mutable_captures: vec![],
             captures_this: false,

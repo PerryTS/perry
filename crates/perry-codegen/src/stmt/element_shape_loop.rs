@@ -366,7 +366,8 @@ fn element_shape_loop_pure_expr_collect(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             matches!(condition.as_ref(), Expr::PropertyGet { .. })
                 && crate::expr::element_shape_reads::integer_arm(then_expr).is_some()
@@ -885,7 +886,9 @@ fn match_element_shape_versioned_loop(
     }
 
     let (op, left, right) = match condition? {
-        Expr::Compare { op, left, right, .. } => (*op, left.as_ref(), right.as_ref()),
+        Expr::Compare {
+            op, left, right, ..
+        } => (*op, left.as_ref(), right.as_ref()),
         _ => return None,
     };
     if !matches!(op, CompareOp::Lt) || !matches!(left, Expr::LocalGet(id) if *id == counter_id) {
@@ -1032,7 +1035,8 @@ fn match_element_shape_versioned_loop(
             Expr::Binary {
                 op: BinaryOp::Mod,
                 left,
-                right, ..
+                right,
+                ..
             } if carried.is_none() => {
                 let (Expr::LocalGet(num_id), Expr::LocalGet(modulus_id)) =
                     (left.as_ref(), right.as_ref())

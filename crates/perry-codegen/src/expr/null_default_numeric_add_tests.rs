@@ -29,7 +29,8 @@ fn result(init: Expr) -> Stmt {
 }
 
 fn increment(expr: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(expr),
         right: Box::new(Expr::Integer(1)),
@@ -42,8 +43,10 @@ fn null_defaulted_dynamic_increment_has_guarded_numeric_fast_path() {
         "null_defaulted_dynamic_increment",
         vec![
             value(Expr::String("4".to_string())),
-            result(increment(Expr::Conditional { byte_offset: 0,
-                condition: Box::new(Expr::Compare { byte_offset: 0,
+            result(increment(Expr::Conditional {
+                byte_offset: 0,
+                condition: Box::new(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(VALUE)),
                     right: Box::new(Expr::Null),

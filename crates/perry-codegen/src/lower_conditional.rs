@@ -189,7 +189,8 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     if let Expr::Compare {
         op: perry_hir::CompareOp::Lt,
         left,
-        right, ..
+        right,
+        ..
     } = expr
     {
         if let Expr::NativeMethodCall {
@@ -208,14 +209,17 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     return Ok(ready);
                 }
                 lower_expr(ctx, &args[4])?;
-                let predicate = Expr::Conditional { byte_offset: 0 /*HPOS*/,
+                let predicate = Expr::Conditional {
+                    byte_offset: 0, /*HPOS*/
                     condition: Box::new(args[0].clone()),
-                    then_expr: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                    then_expr: Box::new(Expr::Compare {
+                        byte_offset: 0, /*HPOS*/
                         op: perry_hir::CompareOp::Eq,
                         left: Box::new(args[3].clone()),
                         right: Box::new(Expr::Bool(false)),
                     }),
-                    else_expr: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                    else_expr: Box::new(Expr::Compare {
+                        byte_offset: 0, /*HPOS*/
                         op: perry_hir::CompareOp::Lt,
                         left: left.clone(),
                         right: Box::new(args[1].clone()),
@@ -233,7 +237,10 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     }
     // An integer product, sum or difference the intervals bound is compared
     // as integers.
-    if let Expr::Compare { op, left, right, .. } = expr {
+    if let Expr::Compare {
+        op, left, right, ..
+    } = expr
+    {
         if let Some(bit) = crate::expr::int_product::try_lower_compare(ctx, *op, left, right)? {
             return Ok(bit);
         }
@@ -244,7 +251,8 @@ pub(crate) fn lower_test(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     if let Expr::Logical {
         op: LogicalOp::And | LogicalOp::Or,
         left,
-        right, ..
+        right,
+        ..
     } = expr
     {
         // Only total primitive comparisons can move across this branch.
@@ -358,7 +366,8 @@ pub(crate) fn lower_conditional(
     if let Some(args) = array_record::finish_args(condition, then_expr, else_expr) {
         return lower_expr(
             ctx,
-            &Expr::NativeMethodCall { byte_offset: 0 /*HPOS*/,
+            &Expr::NativeMethodCall {
+                byte_offset: 0, /*HPOS*/
                 module: "__perry_runtime".into(),
                 class_name: None,
                 object: None,

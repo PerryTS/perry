@@ -547,7 +547,8 @@ fn guarded_default_binding(stmt: &Stmt) -> Option<LocalId> {
     let Expr::Compare {
         op: CompareOp::Eq,
         left,
-        right, ..
+        right,
+        ..
     } = condition
     else {
         return None;
@@ -638,7 +639,8 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         Stmt::Labeled { body, .. } => for_each_expr_in_stmt(body, f),
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -692,7 +694,8 @@ pub(crate) fn for_each_expr_in_stmt_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut 
         Stmt::Labeled { body, .. } => for_each_expr_in_stmt_mut(body, f),
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -797,7 +800,8 @@ mod tests {
     }
 
     fn param(id: LocalId, name: &str) -> Param {
-        Param { byte_offset: 0,
+        Param {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             ty: Type::Any,
@@ -809,7 +813,8 @@ mod tests {
     }
 
     fn arrow(func_id: u32, params: Vec<Param>, ret: Expr, captures_this: bool) -> Expr {
-        Expr::Closure { byte_offset: 0,
+        Expr::Closure {
+            byte_offset: 0,
             func_id,
             params,
             return_type: Type::Any,
@@ -854,7 +859,8 @@ mod tests {
 
     fn guard(id: LocalId, default: Expr) -> Stmt {
         Stmt::If {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(id)),
                 right: Box::new(Expr::Undefined),
@@ -1110,22 +1116,26 @@ mod tests {
                 mutable: false,
                 init: Some(arrow(1, vec![], Expr::Integer(1), false)),
             },
-            Stmt::Return(Some(Expr::Closure { byte_offset: 0,
-                func_id: 2,
-                params: vec![],
-                return_type: Type::Any,
-                body: vec![Stmt::Return(Some(call_local(F, vec![])), 0)],
-                captures: vec![F],
-                mutable_captures: vec![],
-                captures_this: false,
-                captures_new_target: false,
-                construct_only: false,
-                enclosing_class: None,
-                is_arrow: true,
-                is_async: false,
-                is_generator: false,
-                is_strict: true,
-            }), 0),
+            Stmt::Return(
+                Some(Expr::Closure {
+                    byte_offset: 0,
+                    func_id: 2,
+                    params: vec![],
+                    return_type: Type::Any,
+                    body: vec![Stmt::Return(Some(call_local(F, vec![])), 0)],
+                    captures: vec![F],
+                    mutable_captures: vec![],
+                    captures_this: false,
+                    captures_new_target: false,
+                    construct_only: false,
+                    enclosing_class: None,
+                    is_arrow: true,
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: true,
+                }),
+                0,
+            ),
         ];
         let before = stmts.clone();
         let mut next = 100;
@@ -1295,7 +1305,8 @@ mod tests {
     }
 
     fn function_calling_f() -> Function {
-        Function { byte_offset: 0,
+        Function {
+            byte_offset: 0,
             id: 3,
             name: "h".to_string(),
             type_params: Vec::new(),

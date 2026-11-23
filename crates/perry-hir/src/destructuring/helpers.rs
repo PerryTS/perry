@@ -146,7 +146,8 @@ pub(crate) fn rewrite_use_state_tuple(ctx: &mut LoweringContext, init: &ast::Exp
         }
         arg_exprs.push(lower_expr(ctx, &a.expr).ok()?);
     }
-    Some(Expr::NativeMethodCall { byte_offset: swc_common::Spanned::span(init).lo.0,
+    Some(Expr::NativeMethodCall {
+        byte_offset: swc_common::Spanned::span(init).lo.0,
         module: "perry/tui".to_string(),
         class_name: None,
         object: None,

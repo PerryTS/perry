@@ -138,7 +138,8 @@ mod tests {
     use perry_hir::{Export, Function};
 
     fn function(id: u32, name: &str) -> Function {
-        Function { byte_offset: 0,
+        Function {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             type_params: Vec::new(),

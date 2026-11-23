@@ -85,7 +85,8 @@ pub(super) fn try_static_method_and_instance(
                     member.obj.as_ref(),
                 )
             {
-                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                return Ok(Ok(Expr::NativeMethodCall {
+                    byte_offset: call.span.lo.0,
                     module: "readable_stream".to_string(),
                     class_name: Some("ReadableStream".to_string()),
                     object: None,
@@ -144,7 +145,8 @@ pub(super) fn try_static_method_and_instance(
                                 )
                         });
                     if is_supported_native_class_static {
-                        return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            byte_offset: call.span.lo.0,
                             module: module_name.to_string(),
                             class_name: Some(class_name.to_string()),
                             object: None,
@@ -199,7 +201,8 @@ pub(super) fn try_static_method_and_instance(
                                     | Some(("node:stream/web", Some("ReadableStream")))
                             ) || (obj_name == "ReadableStream" && is_imported_upper));
                         if is_readable_stream_from {
-                            return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                byte_offset: call.span.lo.0,
                                 module: "readable_stream".to_string(),
                                 class_name: Some("ReadableStream".to_string()),
                                 object: None,
@@ -300,7 +303,8 @@ pub(super) fn try_static_method_and_instance(
                     } else {
                         // Get the object expression (the instance variable)
                         let object_expr = lower_expr(ctx, &member.obj)?;
-                        return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                        return Ok(Ok(Expr::NativeMethodCall {
+                            byte_offset: call.span.lo.0,
                             module: module_name,
                             class_name: Some(class_name), // Use the registered class name
                             object: Some(Box::new(object_expr)),
@@ -330,7 +334,8 @@ pub(super) fn try_static_method_and_instance(
                 {
                     let method_name = method_ident.sym.to_string();
                     let object_expr = lower_expr(ctx, &member.obj)?;
-                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                    return Ok(Ok(Expr::NativeMethodCall {
+                        byte_offset: call.span.lo.0,
                         module: module_name.to_string(),
                         class_name: Some(class_name.to_string()),
                         object: Some(Box::new(object_expr)),
@@ -381,7 +386,8 @@ pub(super) fn try_static_method_and_instance(
             if let ast::MemberProp::Ident(method_ident) = &member.prop {
                 let method_name = method_ident.sym.to_string();
                 let object_expr = lower_expr(ctx, &member.obj)?;
-                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                return Ok(Ok(Expr::NativeMethodCall {
+                    byte_offset: call.span.lo.0,
                     module: module_name.to_string(),
                     class_name: None, // Will be set by js_transform if needed
                     object: Some(Box::new(object_expr)),
@@ -477,7 +483,8 @@ pub(super) fn try_static_method_and_instance(
                 if (is_fastify_reply && is_fastify_reply_chain_method)
                     || (is_http_client_request && is_client_request_chain_method)
                 {
-                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                    return Ok(Ok(Expr::NativeMethodCall {
+                        byte_offset: call.span.lo.0,
                         module: module.clone(),
                         class_name: class_name.clone(),
                         object: Some(Box::new(object_expr)),
@@ -512,7 +519,8 @@ pub(super) fn try_static_method_and_instance(
                         _ => None,
                     };
                 if let Some(result_class) = chained_class {
-                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                    return Ok(Ok(Expr::NativeMethodCall {
+                        byte_offset: call.span.lo.0,
                         module: module.clone(),
                         class_name: Some(result_class.to_string()),
                         object: Some(Box::new(object_expr)),

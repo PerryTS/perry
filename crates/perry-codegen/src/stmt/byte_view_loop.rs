@@ -144,7 +144,9 @@ impl Walk<'_, '_> {
                 index,
                 value,
             } => self.element(object, index) && self.expr(value),
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 matches!(
                     op,
                     BinaryOp::Add
@@ -201,7 +203,8 @@ fn match_plan(
     let Some(Expr::Compare {
         op: CompareOp::Lt,
         left,
-        right, ..
+        right,
+        ..
     }) = condition
     else {
         return None;

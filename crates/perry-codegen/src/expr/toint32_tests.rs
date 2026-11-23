@@ -21,7 +21,8 @@ const H: u32 = 2;
 const TOWER_FRACTION_MASK: &str = "4503599627370495";
 
 fn number_param() -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id: A,
         name: "a".to_string(),
         ty: Type::Number,
@@ -44,7 +45,8 @@ fn converting_bodies(target: Option<&str>, body: Vec<Stmt>) -> Vec<String> {
         type_args: Vec::new(),
         byte_offset: 0,
     }));
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: Vec::new(),
@@ -102,7 +104,8 @@ fn returning(expr: Expr) -> Vec<Stmt> {
 }
 
 fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),

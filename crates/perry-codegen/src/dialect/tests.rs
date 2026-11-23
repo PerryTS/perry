@@ -177,7 +177,8 @@ fn cell_class() -> Class {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField { byte_offset: 0,
+        fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "v".to_string(),
             key_expr: None,

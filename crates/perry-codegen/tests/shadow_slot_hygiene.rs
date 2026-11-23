@@ -120,7 +120,8 @@ fn entry_opts() -> CompileOptions {
 const ARRAY_BIRTH: &str = "label %arrlit.fast.";
 
 fn shadow_hygiene_module() -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -132,7 +133,8 @@ fn shadow_hygiene_module() -> Module {
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function { byte_offset: 0,
+        functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -203,7 +205,8 @@ fn shadow_hygiene_module() -> Module {
 }
 
 fn top_level_shadow_module(name: &str) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -325,7 +328,8 @@ fn persistent_index_alias_shadow_module() -> Module {
 }
 
 fn flat_const_row_alias_shadow_module() -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "entry_flat_const_shadow.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -410,7 +414,8 @@ fn flat_const_row_alias_shadow_module() -> Module {
 }
 
 fn reassigned_any_shadow_module() -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -422,7 +427,8 @@ fn reassigned_any_shadow_module() -> Module {
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function { byte_offset: 0,
+        functions: vec![Function {
+            byte_offset: 0,
             id: 2,
             name: "probe_reassign".to_string(),
             type_params: Vec::new(),
@@ -480,7 +486,8 @@ fn reassigned_any_shadow_module() -> Module {
 }
 
 fn mixed_any_alias_shadow_module() -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -492,7 +499,8 @@ fn mixed_any_alias_shadow_module() -> Module {
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function { byte_offset: 0,
+        functions: vec![Function {
+            byte_offset: 0,
             id: 4,
             name: "probe_mixed_any_alias".to_string(),
             type_params: Vec::new(),
@@ -565,7 +573,8 @@ fn mixed_any_alias_shadow_module() -> Module {
 }
 
 fn closure_captured_write_shadow_module() -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -577,7 +586,8 @@ fn closure_captured_write_shadow_module() -> Module {
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function { byte_offset: 0,
+        functions: vec![Function {
+            byte_offset: 0,
             id: 3,
             name: "probe_closure_write".to_string(),
             type_params: Vec::new(),
@@ -596,7 +606,8 @@ fn closure_captured_write_shadow_module() -> Module {
                     name: "writer".to_string(),
                     ty: Type::Any,
                     mutable: false,
-                    init: Some(Expr::Closure { byte_offset: 0,
+                    init: Some(Expr::Closure {
+                        byte_offset: 0,
                         func_id: 30,
                         params: Vec::new(),
                         return_type: Type::Any,
@@ -664,7 +675,8 @@ fn closure_captured_write_shadow_module() -> Module {
 fn duplicate_var_decl_shadow_module() -> Module {
     let mut module = shadow_hygiene_module();
     module.name = "dup_var_shadow.ts".to_string();
-    module.functions = vec![Function { byte_offset: 0,
+    module.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -1179,7 +1191,8 @@ fn closure_body_write_to_captured_outer_local_is_visible_to_shadow_analysis() {
 // ── Representation-selection Phase 3a: canonical string locals ─────────────
 
 fn canonical_str_shadow_module() -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -1191,7 +1204,8 @@ fn canonical_str_shadow_module() -> Module {
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function { byte_offset: 0,
+        functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe_str".to_string(),
             type_params: Vec::new(),
@@ -1208,7 +1222,8 @@ fn canonical_str_shadow_module() -> Module {
                 // acc = acc + "x" — the canonical `+=` self-append shape.
                 Stmt::Expr(Expr::LocalSet(
                     1,
-                    Box::new(Expr::Binary { byte_offset: 0,
+                    Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: perry_hir::BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(1)),
                         right: Box::new(Expr::String("x".to_string())),
@@ -1228,12 +1243,15 @@ fn canonical_str_shadow_module() -> Module {
                     init: Some(Expr::String("measure me".to_string())),
                 },
                 // src.length — the canonical `.length` tag dispatch.
-                Stmt::Return(Some(Expr::PropertyGet {
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(2)),
-                    property: "length".to_string(),
-                    byte_offset: 0,
-                }), 0),
+                Stmt::Return(
+                    Some(Expr::PropertyGet {
+                        byte_end: 0,
+                        object: Box::new(Expr::LocalGet(2)),
+                        property: "length".to_string(),
+                        byte_offset: 0,
+                    }),
+                    0,
+                ),
             ],
             is_async: false,
             is_generator: false,
@@ -1291,7 +1309,8 @@ fn declared_string_lie_self_append_module() -> Module {
         },
         Stmt::Expr(Expr::LocalSet(
             1,
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: perry_hir::BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(1)),
                 right: Box::new(Expr::Number(1.0)),

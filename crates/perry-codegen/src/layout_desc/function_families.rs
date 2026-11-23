@@ -458,9 +458,10 @@ mod tests {
             })
         };
         assert_eq!(
-            prefix(&[set("a"), set("b"), Stmt::Return(None, 0), set("c")], &|_| {
-                false
-            }),
+            prefix(
+                &[set("a"), set("b"), Stmt::Return(None, 0), set("c")],
+                &|_| { false }
+            ),
             vec![Key::String("a".into()), Key::String("b".into())]
         );
         assert!(prefix(&[set("__proto__")], &|_| false).is_empty());

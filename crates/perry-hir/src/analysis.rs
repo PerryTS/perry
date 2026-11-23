@@ -257,7 +257,8 @@ pub fn collect_local_refs_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             collect_local_refs_expr(discriminant, refs, visited);
             for case in cases {
@@ -370,7 +371,8 @@ pub(crate) fn collect_assigned_locals_stmt(stmt: &Stmt, assigned: &mut Vec<Local
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             collect_assigned_locals_expr(discriminant, assigned);
             for case in cases {
@@ -617,7 +619,8 @@ fn substitute_lexical_this_in_stmt(stmt: &mut Stmt, replacement: &Expr) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             on_expr(discriminant);
             for case in cases {
@@ -775,7 +778,8 @@ fn remap_local_ids_in_stmt_propagating(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             remap_with_propagation(discriminant, map, fp);
             for c in cases {
@@ -923,7 +927,8 @@ fn remap_local_ids_in_stmt(stmt: &mut Stmt, map: &std::collections::HashMap<Loca
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             remap_local_ids_in_expr(discriminant, map);
             for c in cases {
@@ -1135,7 +1140,8 @@ fn replace_this_in_stmt(stmt: &mut Stmt, this_id: LocalId) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             replace_this_in_expr(discriminant, this_id);
             for c in cases {
@@ -1254,7 +1260,8 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             replace_this_in_expr(condition, this_id);
             replace_this_in_expr(then_expr, this_id);
@@ -1443,7 +1450,8 @@ mod local_refs_depth_tests {
             .spawn(|| {
                 let mut expr = Expr::LocalGet(DEPTH);
                 for id in 0..DEPTH {
-                    expr = Expr::Conditional { byte_offset: 0,
+                    expr = Expr::Conditional {
+                        byte_offset: 0,
                         condition: Box::new(Expr::LocalGet(id)),
                         then_expr: Box::new(Expr::Undefined),
                         else_expr: Box::new(expr),

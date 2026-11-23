@@ -16,7 +16,8 @@ fn set(id: u32, rhs: Expr) -> Stmt {
 }
 
 fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(l),
         right: Box::new(r),
@@ -47,7 +48,8 @@ fn u8_get(arr_id: u32, idx: Expr) -> Expr {
 
 /// Params: `arr: Int32Array` (id 0), `off: number` (id 1) unless overridden.
 fn int32_array_param(id: u32) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: HirType::Named("Int32Array".to_string()),
@@ -59,7 +61,8 @@ fn int32_array_param(id: u32) -> Param {
 }
 
 fn number_param(id: u32) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: HirType::Number,
@@ -71,7 +74,8 @@ fn number_param(id: u32) -> Param {
 }
 
 fn any_param(id: u32) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: HirType::Any,
@@ -216,11 +220,14 @@ fn returned_bitwise_result_keeps_local_eligible() {
     let stmts = vec![
         let_stmt(5, HirType::Any, Some(idx_get(0, Expr::LocalGet(1)))),
         set(5, xor(Expr::LocalGet(5), Expr::Integer(7))),
-        Stmt::Return(Some(bin(
-            BinaryOp::BitAnd,
-            Expr::LocalGet(5),
-            Expr::Integer(0xff),
-        )), 0),
+        Stmt::Return(
+            Some(bin(
+                BinaryOp::BitAnd,
+                Expr::LocalGet(5),
+                Expr::Integer(0xff),
+            )),
+            0,
+        ),
     ];
     let got = run(&stmts, &params);
     assert!(
@@ -256,11 +263,10 @@ fn assert_byte_read_uses_observation_constrained_i32_proof(read: Expr) {
 
     let coerced = vec![
         let_stmt(5, HirType::Any, Some(read)),
-        Stmt::Return(Some(bin(
-            BinaryOp::BitOr,
-            Expr::LocalGet(5),
-            Expr::Integer(0),
-        )), 0),
+        Stmt::Return(
+            Some(bin(BinaryOp::BitOr, Expr::LocalGet(5), Expr::Integer(0))),
+            0,
+        ),
     ];
     assert!(
         run(&coerced, &[]).contains(&5),

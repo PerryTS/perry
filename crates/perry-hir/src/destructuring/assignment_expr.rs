@@ -1,7 +1,7 @@
 //! Lowering of destructuring assignment expressions (`[a, b] = expr` as a value).
 
-use swc_common::Spanned;
 use super::*;
+use swc_common::Spanned;
 
 /// Lower a destructuring assignment expression.
 /// For [a, b] = expr or { a, b } = expr, we generate a Sequence expression:

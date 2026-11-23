@@ -130,7 +130,8 @@ fn closure_free_exprs_of_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             f(discriminant);
             for case in cases {
@@ -250,7 +251,8 @@ fn closure_capture_ids_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<Loc
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             closure_capture_ids_expr(discriminant, out);
             for case in cases {
@@ -492,7 +494,8 @@ pub fn synthesize_class_captures(
         if env_mode || inherited_cap_ids.contains(&cid) {
             continue;
         }
-        fields.push(ClassField { byte_offset: class_offset,
+        fields.push(ClassField {
+            byte_offset: class_offset,
             origin: crate::ClassFieldOrigin::Capture,
             name: crate::cap_fields::cap_field_name(cap_salt, cid),
             key_expr: None,
@@ -897,7 +900,8 @@ pub fn synthesize_class_captures(
             // count and pack ancestor rest params via the closure-rest table.
             let (params, body) = if has_heritage {
                 let pid = ctx.fresh_local();
-                let params = vec![Param { byte_offset: class_offset,
+                let params = vec![Param {
+                    byte_offset: class_offset,
                     id: pid,
                     name: "__perry_dflt_args".to_string(),
                     ty: Type::Any,
@@ -913,7 +917,8 @@ pub fn synthesize_class_captures(
             } else {
                 (Vec::new(), Vec::new())
             };
-            Function { byte_offset: class_offset,
+            Function {
+                byte_offset: class_offset,
                 id: ctx.fresh_func(),
                 name: format!("{}::constructor", name),
                 type_params: Vec::new(),
@@ -963,7 +968,8 @@ pub fn synthesize_class_captures(
             .get(&outer_id)
             .cloned()
             .unwrap_or(Type::Any);
-        ctor.params.push(Param { byte_offset: class_offset,
+        ctor.params.push(Param {
+            byte_offset: class_offset,
             id: fresh_param_id,
             name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
             ty,
@@ -1249,7 +1255,8 @@ fn stmt_has_direct_super_call(stmt: &Stmt) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             expr_has_direct_super_call(discriminant)
                 || cases.iter().any(|case| {
@@ -1478,7 +1485,8 @@ pub(crate) fn append_new_args_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             append_new_args_expr(discriminant, class_name, cap_args, skip_if_present);
             for c in cases {
@@ -1613,7 +1621,8 @@ fn stamp_self_new_stmt(stmt: &mut Stmt, class_name: &str, eval_id: LocalId) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             stamp_self_new_expr(discriminant, class_name, eval_id);
             for c in cases {

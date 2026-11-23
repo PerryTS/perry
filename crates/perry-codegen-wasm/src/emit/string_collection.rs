@@ -584,7 +584,8 @@ impl WasmModuleEmitter {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.collect_strings_in_expr(discriminant);
                 for case in cases {
@@ -627,7 +628,8 @@ impl WasmModuleEmitter {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 self.collect_strings_in_expr(condition);
                 self.collect_strings_in_expr(then_expr);
@@ -646,7 +648,8 @@ impl WasmModuleEmitter {
                 method,
                 args,
                 class_name,
-                object, ..
+                object,
+                ..
             } => {
                 for a in args {
                     self.collect_strings_in_expr(a);
@@ -771,7 +774,8 @@ impl WasmModuleEmitter {
             Expr::StaticFieldSet {
                 class_name,
                 field_name,
-                value, ..
+                value,
+                ..
             } => {
                 self.intern_string(class_name);
                 self.intern_string(field_name);

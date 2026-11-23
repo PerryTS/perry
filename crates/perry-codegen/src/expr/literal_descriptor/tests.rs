@@ -4,7 +4,8 @@ use perry_hir::{Class, ClassField, Expr, Function, Module, Param, Stmt};
 fn fixture(records: usize, fields: usize) -> Module {
     let class_name = "__AnonShape_descriptor_test";
     let params: Vec<_> = (0..fields)
-        .map(|i| Param { byte_offset: 0,
+        .map(|i| Param {
+            byte_offset: 0,
             id: i as u32 + 1,
             name: format!("k{i}"),
             ty: Type::Number,
@@ -14,7 +15,8 @@ fn fixture(records: usize, fields: usize) -> Module {
             arguments_object: None,
         })
         .collect();
-    let constructor = Function { byte_offset: 0,
+    let constructor = Function {
+        byte_offset: 0,
         id: 1,
         name: "constructor".into(),
         type_params: vec![],
@@ -52,7 +54,8 @@ fn fixture(records: usize, fields: usize) -> Module {
         native_extends: None,
         heritage_lexically_shadowed: false,
         fields: (0..fields)
-            .map(|i| ClassField { byte_offset: 0,
+            .map(|i| ClassField {
+                byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: format!("k{i}"),
                 ty: Type::Number,
@@ -314,7 +317,8 @@ fn born_wide_factory_uses_return_shape_fact() {
 }
 
 fn literal_closure(body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id: 2002,
         params: vec![],
         return_type: Type::Void,

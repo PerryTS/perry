@@ -100,7 +100,11 @@ pub(super) fn is_passthrough_method(method: &str) -> bool {
 /// - `randomUUID()` → `Expr::CryptoRandomUUID`; option-bearing calls keep
 ///   the generic call shape so codegen can pass the options value through.
 /// - `randomBytes(size)` → `Expr::CryptoRandomBytes`.
-pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>, byte_offset: u32) -> Option<Expr> {
+pub(super) fn lower_crypto_passthrough(
+    method: &str,
+    args: Vec<Expr>,
+    byte_offset: u32,
+) -> Option<Expr> {
     match method {
         "randomFillSync" => {
             if args.is_empty() {

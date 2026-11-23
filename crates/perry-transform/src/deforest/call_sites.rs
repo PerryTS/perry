@@ -324,7 +324,8 @@ fn match_consume_loop(
         Expr::Compare {
             op: perry_hir::CompareOp::Lt,
             left,
-            right, ..
+            right,
+            ..
         } => {
             if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == j_id) {
                 return None;

@@ -823,7 +823,8 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
             Expr::Binary {
                 op: perry_hir::BinaryOp::Add,
                 left,
-                right, ..
+                right,
+                ..
             } => syntactic_str(left, declared) || syntactic_str(right, declared),
             Expr::Conditional {
                 then_expr,
@@ -870,7 +871,8 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                         | perry_hir::CompareOp::LooseEq
                         | perry_hir::CompareOp::LooseNe,
                     left,
-                    right, ..
+                    right,
+                    ..
                 } => {
                     if let Expr::LocalGet(id) = left.as_ref() {
                         if !syntactic_str(right, self.declared) {
@@ -953,7 +955,8 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases, ..
+                    cases,
+                    ..
                 } => {
                     self.expr(discriminant);
                     for c in cases {

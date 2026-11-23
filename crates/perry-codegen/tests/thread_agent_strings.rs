@@ -12,7 +12,8 @@ fn literal_ir(name: &str, method: Option<&str>, opts: CompileOptions, deferred: 
     }
     module.init.push(Stmt::Expr(Expr::String(LITERAL.into())));
     if let Some(method) = method {
-        let closure = Expr::Closure { byte_offset: 0,
+        let closure = Expr::Closure {
+            byte_offset: 0,
             func_id: 17,
             params: Vec::new(),
             return_type: Type::String,
@@ -36,7 +37,8 @@ fn literal_ir(name: &str, method: Option<&str>, opts: CompileOptions, deferred: 
                 closure,
             ]
         };
-        module.init.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
+        module.init.push(Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "perry/thread".into(),
             class_name: None,
             object: None,

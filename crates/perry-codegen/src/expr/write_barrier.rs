@@ -110,7 +110,8 @@ fn static_value(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => store_free(condition) && static_value(ctx, then_expr) && static_value(ctx, else_expr),
         Expr::Call { callee, args, .. } => {
             let Expr::FuncRef(id) = callee.as_ref() else {

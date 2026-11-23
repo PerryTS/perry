@@ -16,7 +16,8 @@ const LOOKUP: &str = "call double @js_method_lookup(";
 const CALL_SPLIT: &str = "call double @js_method_call_split(";
 
 fn param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -55,7 +56,8 @@ fn effectful_arg() -> Expr {
 /// `function f(o, g) { return <body>; }` in an otherwise empty module.
 fn module_with(body: Expr) -> Module {
     let mut m = Module::new("method_order.ts");
-    m.functions.push(Function { byte_offset: 0,
+    m.functions.push(Function {
+        byte_offset: 0,
         id: 50,
         name: "f".to_string(),
         type_params: Vec::new(),
@@ -139,7 +141,8 @@ fn an_effectful_argument_runs_after_the_lookup() {
 #[test]
 fn an_optional_call_reads_the_method_once() {
     // `o.m?.(1)` as the optional-chain lowering builds it.
-    let guard = Expr::Compare { byte_offset: 0,
+    let guard = Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::LooseEq,
         left: Box::new(Expr::PropertyGet {
             byte_end: 0,
@@ -149,7 +152,8 @@ fn an_optional_call_reads_the_method_once() {
         }),
         right: Box::new(Expr::Null),
     };
-    let ir = ir_for(module_with(Expr::Conditional { byte_offset: 0,
+    let ir = ir_for(module_with(Expr::Conditional {
+        byte_offset: 0,
         condition: Box::new(guard),
         then_expr: Box::new(Expr::Undefined),
         else_expr: Box::new(method_call(Expr::LocalGet(RECV), vec![Expr::Number(1.0)])),

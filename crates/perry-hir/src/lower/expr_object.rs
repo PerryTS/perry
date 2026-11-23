@@ -284,7 +284,8 @@ fn lower_method_prop(
         let param_type = extract_param_type_with_ctx(&param.pat, Some(ctx));
         let param_id = ctx.define_local_spanned(param_name.clone(), param_type.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
-        params.push(Param { byte_offset: param.span.lo.0,
+        params.push(Param {
+            byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: param_type,
@@ -479,7 +480,8 @@ fn lower_method_prop(
         let has_synth_args = params.last().is_some_and(|p| p.arguments_object.is_some());
         ctx.func_defaults
             .push((func_id, defaults, param_ids, rest_idx, has_synth_args));
-        ctx.pending_functions.push(Function { byte_offset: method.function.span.lo.0,
+        ctx.pending_functions.push(Function {
+            byte_offset: method.function.span.lo.0,
             id: func_id,
             name: func_name,
             type_params: Vec::new(),
@@ -509,7 +511,8 @@ fn lower_method_prop(
             .filter(|id| assigned_set.contains(id) || ctx.var_hoisted_ids.contains(id))
             .copied()
             .collect();
-        Expr::Closure { byte_offset: method.function.span.lo.0,
+        Expr::Closure {
+            byte_offset: method.function.span.lo.0,
             func_id,
             params,
             return_type,
@@ -610,7 +613,8 @@ fn lower_accessor_prop(
             let param_id =
                 ctx.define_local_spanned(param_name.clone(), param_type.clone(), pat.span());
             ctx.shadow_native_instance_if_present(&param_name);
-            params.push(Param { byte_offset: pat.span().lo.0,
+            params.push(Param {
+                byte_offset: pat.span().lo.0,
                 id: param_id,
                 name: param_name,
                 ty: param_type,
@@ -709,7 +713,8 @@ fn lower_accessor_prop(
     // runtime accessor-invocation path binds `this` via IMPLICIT_THIS (the same
     // way `Object.defineProperty(obj, k, { get(){…} })` already worked), so the
     // closure must NOT capture it.
-    let closure = Expr::Closure { byte_offset: byte_offset,
+    let closure = Expr::Closure {
+        byte_offset: byte_offset,
         func_id,
         params,
         return_type: Type::Any,
@@ -1116,7 +1121,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         let iife_func_id = ctx.fresh_func();
         let scope_mark = ctx.enter_scope();
         let param_id = ctx.define_local("__perry_obj_iife".to_string(), Type::Any);
-        let param = Param { byte_offset: obj.span.lo.0,
+        let param = Param {
+            byte_offset: obj.span.lo.0,
             id: param_id,
             name: "__perry_obj_iife".to_string(),
             ty: Type::Any,
@@ -1543,7 +1549,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
 
         let captures = iife_captures(ctx, &body, &inner_local_ids);
         let body_uses_this = body.iter().any(uses_this_stmt);
-        let closure = Expr::Closure { byte_offset: obj.span.lo.0,
+        let closure = Expr::Closure {
+            byte_offset: obj.span.lo.0,
             func_id: iife_func_id,
             params: vec![param],
             return_type: Type::Any,
@@ -1675,7 +1682,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     let iife_func_id = ctx.fresh_func();
     let scope_mark = ctx.enter_scope();
     let param_id = ctx.define_local("__perry_obj_iife".to_string(), Type::Any);
-    let param = Param { byte_offset: obj.span.lo.0,
+    let param = Param {
+        byte_offset: obj.span.lo.0,
         id: param_id,
         name: "__perry_obj_iife".to_string(),
         ty: Type::Any,
@@ -1763,7 +1771,8 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     // common non-this-key cases; the scan keeps the existing fast path.
     let body_uses_this = body.iter().any(uses_this_stmt);
     let static_obj = Expr::object_literal(props);
-    let closure = Expr::Closure { byte_offset: obj.span.lo.0,
+    let closure = Expr::Closure {
+        byte_offset: obj.span.lo.0,
         func_id: iife_func_id,
         params: vec![param],
         return_type: Type::Any,

@@ -111,7 +111,8 @@ fn admitted_binding(stmt: &ast::ForOfStmt) -> Option<(&ast::VarDecl, &ast::Bindi
 }
 
 fn runtime(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
-    Expr::NativeMethodCall { byte_offset,
+    Expr::NativeMethodCall {
+        byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -152,10 +153,16 @@ pub(crate) fn admitted_typed_array_holder(
         mutable: false,
         init: Some(source),
     });
-    Expr::Conditional { byte_offset,
-        condition: Box::new(Expr::Compare { byte_offset,
+    Expr::Conditional {
+        byte_offset,
+        condition: Box::new(Expr::Compare {
+            byte_offset,
             op: CompareOp::Eq,
-            left: Box::new(runtime("typedArrayForOfAdmits", vec![Expr::LocalGet(id)], byte_offset)),
+            left: Box::new(runtime(
+                "typedArrayForOfAdmits",
+                vec![Expr::LocalGet(id)],
+                byte_offset,
+            )),
             right: Box::new(Expr::Bool(true)),
         }),
         then_expr: Box::new(Expr::LocalGet(id)),
@@ -345,7 +352,8 @@ fn source_for_of(
                 mutable: true,
                 init: Some(Expr::Integer(0)),
             })),
-            condition: Some(Expr::Compare { byte_offset: stmt.span.lo.0,
+            condition: Some(Expr::Compare {
+                byte_offset: stmt.span.lo.0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(counter)),
                 right: Box::new(Expr::PropertyGet {
@@ -397,7 +405,8 @@ fn source_for_of(
             entry_args.push(Expr::Bool(true));
         }
         let plain = if typed {
-            Expr::Compare { byte_offset: stmt.span.lo.0,
+            Expr::Compare {
+                byte_offset: stmt.span.lo.0,
                 op: CompareOp::Eq,
                 left: Box::new(runtime(
                     "typedArrayForOfAdmits",
@@ -407,9 +416,14 @@ fn source_for_of(
                 right: Box::new(Expr::Bool(true)),
             }
         } else {
-            Expr::Compare { byte_offset: stmt.span.lo.0,
+            Expr::Compare {
+                byte_offset: stmt.span.lo.0,
                 op: CompareOp::Eq,
-                left: Box::new(runtime("arrayRecordNeedsIterator", entry_args, stmt.span.lo.0)),
+                left: Box::new(runtime(
+                    "arrayRecordNeedsIterator",
+                    entry_args,
+                    stmt.span.lo.0,
+                )),
                 right: Box::new(Expr::Bool(false)),
             }
         };
@@ -572,8 +586,10 @@ fn literal_for_of(
         let body = body?;
         let mut select = Expr::LocalGet(temps[n - 1].0);
         for (i, (id, _)) in temps.iter().enumerate().take(n - 1).rev() {
-            select = Expr::Conditional { byte_offset: stmt.span.lo.0,
-                condition: Box::new(Expr::Compare { byte_offset: stmt.span.lo.0,
+            select = Expr::Conditional {
+                byte_offset: stmt.span.lo.0,
+                condition: Box::new(Expr::Compare {
+                    byte_offset: stmt.span.lo.0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(counter)),
                     right: Box::new(Expr::Integer(i as i64)),
@@ -598,7 +614,8 @@ fn literal_for_of(
                 mutable: true,
                 init: Some(Expr::Integer(0)),
             })),
-            condition: Some(Expr::Compare { byte_offset: stmt.span.lo.0,
+            condition: Some(Expr::Compare {
+                byte_offset: stmt.span.lo.0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(counter)),
                 right: Box::new(Expr::Integer(n as i64)),

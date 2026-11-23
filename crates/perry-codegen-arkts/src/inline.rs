@@ -247,7 +247,8 @@ pub(crate) fn inline_calls_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             inline_calls_in_expr(
                 condition,
@@ -306,9 +307,13 @@ pub(crate) fn inline_calls_in_expr(
                     is_async: false,
                     byte_offset,
                     ..
-                }) if params.len() == args.len() => {
-                    (params.clone(), body.clone(), args.clone(), *is_strict, *byte_offset)
-                }
+                }) if params.len() == args.len() => (
+                    params.clone(),
+                    body.clone(),
+                    args.clone(),
+                    *is_strict,
+                    *byte_offset,
+                ),
                 _ => return,
             },
             _ => return,
@@ -324,7 +329,8 @@ pub(crate) fn inline_calls_in_expr(
     // Build a synthetic Function so `inline_one_call` can do its
     // standard remapping work. Re-uses the existing helper rather
     // than duplicating the local-id offset / param-substitution logic.
-    let synth_func = perry_hir::ir::Function { byte_offset: fn_offset,
+    let synth_func = perry_hir::ir::Function {
+        byte_offset: fn_offset,
         id: 0,
         name: String::new(),
         type_params: Vec::new(),

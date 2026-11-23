@@ -1230,7 +1230,8 @@ fn chunk_statements(
         let fn_id = *next_id;
         *next_id = (*next_id).saturating_add(1);
         let ci = chunk_fns.len();
-        chunk_fns.push(perry_hir::Function { byte_offset: 0 /*HPOS*/,
+        chunk_fns.push(perry_hir::Function {
+            byte_offset: 0, /*HPOS*/
             id: fn_id,
             name: format!("{ENTRY_CHUNK_PREFIX}{module_name}_{ci}"),
             type_params: Vec::new(),
@@ -1326,7 +1327,8 @@ mod tests {
     }
 
     fn empty_closure_with_id(func_id: u32, body: Vec<Stmt>) -> Expr {
-        Expr::Closure { byte_offset: 0,
+        Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: vec![],
             return_type: Type::Any,
@@ -1546,7 +1548,8 @@ mod tests {
 
         let mut preallocated = module_with_init(vec![
             Stmt::PreallocateBoxes(vec![20]),
-            Stmt::Try { byte_offset: 0,
+            Stmt::Try {
+                byte_offset: 0,
                 body: vec![let_stmt(20, "captured", Expr::Number(2.0))],
                 catch: None,
                 finally: None,
@@ -1571,7 +1574,8 @@ mod tests {
             Stmt::Expr(Expr::LocalGet(0)),
         ]);
         // an existing function with a high id, and a closure with an even higher id
-        m.functions.push(perry_hir::Function { byte_offset: 0,
+        m.functions.push(perry_hir::Function {
+            byte_offset: 0,
             id: 500,
             name: "f".into(),
             type_params: vec![],
@@ -1599,7 +1603,8 @@ mod tests {
             heritage_lexically_shadowed: false,
             fields: vec![],
             constructor: None,
-            methods: vec![perry_hir::Function { byte_offset: 0,
+            methods: vec![perry_hir::Function {
+                byte_offset: 0,
                 id: 12_000,
                 name: "method".into(),
                 type_params: vec![],
@@ -1650,7 +1655,7 @@ mod tests {
         // return inline, in order. target=1 maximizes chunking.
         let mut m = module_with_init(vec![
             let_stmt(0, "x", Expr::Number(1.0)), // chunk
-            Stmt::Return(None, 0),                  // must-stay, inline
+            Stmt::Return(None, 0),               // must-stay, inline
             let_stmt(1, "y", Expr::Number(2.0)), // chunk
             Stmt::Expr(Expr::LocalGet(1)),       // chunk
         ]);
@@ -1721,7 +1726,8 @@ mod tests {
     /// A plain closure expression, reused for both the wrapper's outer
     /// anonymous IIFE and (by default) its inner `__perry_cjs_factory`.
     fn factory_closure(func_id: u32, body: Vec<Stmt>) -> Expr {
-        Expr::Closure { byte_offset: 0,
+        Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: vec![],
             return_type: Type::Any,
@@ -1792,7 +1798,8 @@ mod tests {
         // A param disqualifies it — the wrapper's factory always takes none.
         let mut with_param = factory_closure(103, vec![]);
         if let Expr::Closure { params, .. } = &mut with_param {
-            params.push(perry_hir::Param { byte_offset: 0,
+            params.push(perry_hir::Param {
+                byte_offset: 0,
                 id: 200,
                 name: "x".into(),
                 ty: Type::Any,

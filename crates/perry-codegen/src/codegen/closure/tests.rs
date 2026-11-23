@@ -10,7 +10,8 @@ use perry_hir::{Expr, Function, Module as HirModule, Stmt, UpdateOp};
 /// (`js_to_numeric`) can run a user `valueOf` and therefore collect between
 /// the read and the write.
 fn one_capture_closure_ir() -> String {
-    let closure = Expr::Closure { byte_offset: 0,
+    let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 1,
         params: Vec::new(),
         return_type: Type::Any,
@@ -35,7 +36,8 @@ fn one_capture_closure_ir() -> String {
         is_strict: true,
     };
     let mut hir = HirModule::new("closure_self_root_test");
-    hir.functions.push(Function { byte_offset: 0,
+    hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "outer".to_string(),
         type_params: Vec::new(),
@@ -81,7 +83,8 @@ fn one_capture_closure_ir() -> String {
 /// closure body takes the *unboxed* capture accessors — the pair whose
 /// writer (`js_closure_set_capture_bits`) does no bounds check at all.
 fn unboxed_capture_update_ir() -> String {
-    let closure = Expr::Closure { byte_offset: 0,
+    let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 1,
         params: Vec::new(),
         return_type: Type::Any,
@@ -105,7 +108,8 @@ fn unboxed_capture_update_ir() -> String {
         is_strict: true,
     };
     let mut hir = HirModule::new("closure_unboxed_update_test");
-    hir.functions.push(Function { byte_offset: 0,
+    hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "outer".to_string(),
         type_params: Vec::new(),

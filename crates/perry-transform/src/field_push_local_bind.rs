@@ -163,7 +163,8 @@ fn field_push_candidate(stmt: &Stmt, fields: &[(String, Type)]) -> Option<(Strin
         class_name: None,
         object: Some(object),
         method,
-        args, ..
+        args,
+        ..
     }) = stmt
     else {
         return None;
@@ -194,7 +195,8 @@ mod tests {
     use perry_hir::ClassField;
 
     fn push_stmt(field: &str) -> Stmt {
-        Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
+        Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "array".to_string(),
             class_name: None,
             object: Some(Box::new(Expr::PropertyGet {
@@ -209,7 +211,8 @@ mod tests {
     }
 
     fn method(body: Vec<Stmt>) -> Function {
-        Function { byte_offset: 0,
+        Function {
+            byte_offset: 0,
             id: 1,
             name: "add".to_string(),
             type_params: Vec::new(),
@@ -229,7 +232,8 @@ mod tests {
     }
 
     fn field(name: &str, ty: Type) -> ClassField {
-        ClassField { byte_offset: 0,
+        ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: name.to_string(),
             key_expr: None,

@@ -2,13 +2,15 @@ use super::*;
 
 fn fixture(ty: Type) -> Module {
     let mut m = Module::new("private_frame");
-    m.functions.push(Function { byte_offset: 0,
+    m.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "producer".into(),
         type_params: vec![],
         params: vec![],
         return_type: ty,
-        body: vec![Stmt::Expr(Expr::Yield { byte_offset: 0,
+        body: vec![Stmt::Expr(Expr::Yield {
+            byte_offset: 0,
             value: Some(Box::new(Expr::Number(7.0))),
             delegate: false,
         })],
@@ -43,7 +45,8 @@ fn fixture(ty: Type) -> Module {
                 Expr::Undefined,
                 Expr::LocalSet(11, Box::new(runtime("iteratorStepOutput", vec![], 0))),
             ],
-         0,)),
+            0,
+        )),
     ];
     m
 }
@@ -138,7 +141,8 @@ fn private_frame_lifetime_cannot_cross_its_consumer_scope() {
 #[test]
 fn private_frame_capture_even_without_body_read_is_an_escape() {
     let mut m = fixture(Type::Any);
-    let closure = Expr::Closure { byte_offset: 0,
+    let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 2,
         params: vec![],
         return_type: Type::Any,
@@ -206,7 +210,8 @@ fn private_frame_terminal_logging_cannot_hide_observable_getters() {
             property: "log".into(),
             byte_offset: 0,
         }),
-        args: vec![Expr::Binary { byte_offset: 0,
+        args: vec![Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::String("caller ".into())),
             right: Box::new(Expr::IndexGet {
@@ -232,7 +237,8 @@ fn private_frame_logging_requires_primitive_writes_not_a_number_annotation() {
     for (value, expected) in [
         (Expr::Number(1.0), true),
         (
-            Expr::Closure { byte_offset: 0,
+            Expr::Closure {
+                byte_offset: 0,
                 func_id: 9,
                 params: vec![],
                 return_type: Type::Any,
@@ -285,7 +291,8 @@ fn nested_argument_fixture(escapes: bool) -> Module {
     let mut consumer = m.functions[0].clone();
     consumer.id = 1;
     consumer.name = "consumer".into();
-    consumer.params = vec![perry_hir::Param { byte_offset: 0,
+    consumer.params = vec![perry_hir::Param {
+        byte_offset: 0,
         id: 30,
         name: "input".into(),
         ty: Type::Any,
@@ -295,7 +302,8 @@ fn nested_argument_fixture(escapes: bool) -> Module {
         arguments_object: None,
     }];
     consumer.body = if escapes {
-        vec![Stmt::Expr(Expr::Yield { byte_offset: 0,
+        vec![Stmt::Expr(Expr::Yield {
+            byte_offset: 0,
             value: Some(Box::new(Expr::LocalGet(30))),
             delegate: false,
         })]
@@ -308,8 +316,10 @@ fn nested_argument_fixture(escapes: bool) -> Module {
                     Expr::Undefined,
                     Expr::LocalSet(31, Box::new(runtime("iteratorStepOutput", vec![], 0))),
                 ],
-             0,)),
-            Stmt::Expr(Expr::Yield { byte_offset: 0,
+                0,
+            )),
+            Stmt::Expr(Expr::Yield {
+                byte_offset: 0,
                 value: Some(Box::new(Expr::Number(8.0))),
                 delegate: false,
             }),

@@ -153,7 +153,8 @@ fn inline_bindings_builder(expr: Expr) -> Expr {
         return expr;
     }
     let id = params[0].id;
-    let Some((Stmt::Return(Some(Expr::LocalGet(result)), _), definitions)) = body.split_last() else {
+    let Some((Stmt::Return(Some(Expr::LocalGet(result)), _), definitions)) = body.split_last()
+    else {
         return expr;
     };
     // Only the compiler-generated static accessor definitions qualify. If

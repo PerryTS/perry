@@ -48,12 +48,16 @@ impl<'a> Gen<'a> {
                 op: UnaryOp::Not,
                 operand,
             } => Const::Bool(!self.const_eval(mi, operand)?.truthy()),
-            Expr::Compare { op, left, right, .. } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 let l = self.const_eval(mi, left)?;
                 let r = self.const_eval(mi, right)?;
                 Const::Bool(compare(*op, &l, &r)?)
             }
-            Expr::Logical { op, left, right, .. } => {
+            Expr::Logical {
+                op, left, right, ..
+            } => {
                 let l = self.const_eval(mi, left)?;
                 let pick_left = match op {
                     LogicalOp::And => !l.truthy(),
@@ -69,7 +73,8 @@ impl<'a> Gen<'a> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 if self.const_eval(mi, condition)?.truthy() {
                     self.const_eval(mi, then_expr)?

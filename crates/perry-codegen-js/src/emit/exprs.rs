@@ -9,7 +9,8 @@ impl JsEmitter {
         let Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } = body
         else {
             return false;

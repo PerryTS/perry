@@ -1129,7 +1129,8 @@ fn rewrite_return_record_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 rewrite_return_record_expr(discriminant, record_id, field_locals);
                 for case in cases {
@@ -1576,7 +1577,8 @@ fn stmts_are_safe(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 expr_is_safe(discriminant, array_id, aliases, fields)
                     && cases.iter().all(|case| {
@@ -1719,7 +1721,8 @@ fn rewrite_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 rewrite_expr(discriminant, array_id, aliases, fields);
                 for case in cases {
@@ -1784,7 +1787,8 @@ mod tests {
                 }),
             },
             Stmt::Expr(if observe_identity {
-                Expr::Compare { byte_offset: 0,
+                Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::LocalGet(2)),
@@ -1961,7 +1965,8 @@ mod tests {
                 condition: Expr::Bool(false),
             },
             Stmt::Expr(if observe_identity {
-                Expr::Compare { byte_offset: 0,
+                Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(1)),
                     right: Box::new(Expr::LocalGet(1)),

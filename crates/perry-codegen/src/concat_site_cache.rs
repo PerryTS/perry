@@ -107,7 +107,9 @@ fn const_int(ctx: &FnCtx<'_>, e: &Expr) -> Option<i64> {
             op: UnaryOp::Neg,
             operand,
         } => const_int(ctx, operand).and_then(|v| v.checked_neg()),
-        Expr::Binary { op, left, right, .. } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let a = const_int(ctx, left)?;
             let b = const_int(ctx, right)?;
             match op {

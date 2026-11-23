@@ -1,8 +1,8 @@
 //! Recursive lowering of binding patterns (`let { a, b } = expr`).
 
-use swc_common::Spanned;
 use super::array_fast::{self, ArraySource};
 use super::*;
+use swc_common::Spanned;
 
 fn is_global_this_value(ctx: &LoweringContext, expr: &Expr) -> bool {
     matches!(expr, Expr::GlobalGet(_))
@@ -81,7 +81,8 @@ fn single_name_target(pat: &ast::Pat) -> Option<String> {
 /// Build a call into the runtime iterator-protocol helpers (same dispatch the
 /// assignment-destructuring path uses).
 fn runtime_iterator_call(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
-    Expr::NativeMethodCall { byte_offset,
+    Expr::NativeMethodCall {
+        byte_offset,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,
@@ -94,7 +95,8 @@ fn runtime_iterator_call(method: &str, args: Vec<Expr>, byte_offset: u32) -> Exp
 /// (`[a = d]`, `{a = d}`). Distinct from `IsUndefinedOrBareNan`: a genuine NaN
 /// element/property must NOT trigger the default (`let [a = 1] = [NaN]` → NaN).
 pub(super) fn is_strictly_undefined(value: Expr, byte_offset: u32) -> Expr {
-    Expr::Compare { byte_offset,
+    Expr::Compare {
+        byte_offset,
         op: CompareOp::Eq,
         left: Box::new(value),
         right: Box::new(Expr::Undefined),
@@ -129,7 +131,8 @@ fn iterator_next_value_stmts(
                     Expr::LocalGet(next_id),
                     Expr::LocalSet(
                         value_id,
-                        Box::new(Expr::NativeMethodCall { byte_offset,
+                        Box::new(Expr::NativeMethodCall {
+                            byte_offset,
                             module: "__perry_runtime".into(),
                             class_name: None,
                             object: None,
@@ -143,7 +146,8 @@ fn iterator_next_value_stmts(
             )),
         },
         Stmt::If {
-            condition: Expr::Compare { byte_offset,
+            condition: Expr::Compare {
+                byte_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(step_id)),
                 right: Box::new(Expr::Bool(true)),
@@ -177,7 +181,8 @@ fn iterator_next_value_stmts(
     }
 
     vec![Stmt::If {
-        condition: Expr::Compare { byte_offset,
+        condition: Expr::Compare {
+            byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(done_id)),
             right: Box::new(Expr::Bool(true)),
@@ -329,8 +334,12 @@ pub(crate) fn lower_array_pattern_binding(
                         &assign_pat.right,
                         single_name_target(&assign_pat.left).as_deref(),
                     )?;
-                    let with_default = Expr::Conditional { byte_offset: assign_pat.span.lo.0,
-                        condition: Box::new(is_strictly_undefined(Expr::LocalGet(value_id), assign_pat.span.lo.0)),
+                    let with_default = Expr::Conditional {
+                        byte_offset: assign_pat.span.lo.0,
+                        condition: Box::new(is_strictly_undefined(
+                            Expr::LocalGet(value_id),
+                            assign_pat.span.lo.0,
+                        )),
                         then_expr: Box::new(default_val),
                         else_expr: Box::new(Expr::LocalGet(value_id)),
                     };
@@ -362,7 +371,8 @@ pub(crate) fn lower_array_pattern_binding(
     // Every write to this private bit constructs a Boolean. Reify that
     // predicate at the completion boundary, rather than asking codegen to
     // infer a stable initializer type for a deliberately mutable local.
-    let completion_done = Expr::Compare { byte_offset: arr_pat.span.lo.0,
+    let completion_done = Expr::Compare {
+        byte_offset: arr_pat.span.lo.0,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(done_id)),
         right: Box::new(Expr::Bool(true)),
@@ -617,8 +627,12 @@ pub(crate) fn lower_pattern_binding_into(
             )?;
             // A destructuring default applies only when the source is strictly
             // `undefined` (not a genuine NaN value — `let [a = 1] = [NaN]` → NaN).
-            let with_default = Expr::Conditional { byte_offset: assign_pat.span.lo.0,
-                condition: Box::new(is_strictly_undefined(Expr::LocalGet(tmp_id), assign_pat.span.lo.0)),
+            let with_default = Expr::Conditional {
+                byte_offset: assign_pat.span.lo.0,
+                condition: Box::new(is_strictly_undefined(
+                    Expr::LocalGet(tmp_id),
+                    assign_pat.span.lo.0,
+                )),
                 then_expr: Box::new(default_val),
                 else_expr: Box::new(Expr::LocalGet(tmp_id)),
             };
@@ -878,7 +892,8 @@ pub(crate) fn lower_pattern_binding_into(
                             });
                             let default_val =
                                 lower_default_named(ctx, default_expr, Some(name.as_str()))?;
-                            Expr::Conditional { byte_offset: assign.span.lo.0,
+                            Expr::Conditional {
+                                byte_offset: assign.span.lo.0,
                                 condition: Box::new(is_strictly_undefined(
                                     Expr::LocalGet(val_tmp_id),
                                     assign.span.lo.0,

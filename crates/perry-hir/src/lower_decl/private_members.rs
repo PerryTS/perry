@@ -119,7 +119,8 @@ fn lower_private_method_in_scope(
         let param_id = ctx.define_local_spanned(param_name.clone(), param_type.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
-        params.push(Param { byte_offset: param.span.lo.0,
+        params.push(Param {
+            byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: param_type,
@@ -156,7 +157,15 @@ fn lower_private_method_in_scope(
             .map(|b| body_uses_arguments(&b.stmts))
             .unwrap_or(false);
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new(), method.span.lo.0);
+        append_synthetic_arguments_param(
+            ctx,
+            &mut params,
+            true,
+            false,
+            true,
+            Vec::new(),
+            method.span.lo.0,
+        );
     }
 
     // Extract return type
@@ -228,7 +237,8 @@ fn lower_private_method_in_scope(
         }
     }
 
-    Ok(Function { byte_offset: method.span.lo.0,
+    Ok(Function {
+        byte_offset: method.span.lo.0,
         id: func_id,
         name,
         type_params,
@@ -288,7 +298,8 @@ fn lower_private_getter_in_scope(
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
-    Ok(Function { byte_offset: method.span.lo.0,
+    Ok(Function {
+        byte_offset: method.span.lo.0,
         id: ctx.fresh_func(),
         name,
         type_params: Vec::new(),
@@ -336,7 +347,8 @@ fn lower_private_setter_in_scope(
         let param_id = ctx.define_local_spanned(param_name.clone(), param_type.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
-        params.push(Param { byte_offset: param.span.lo.0,
+        params.push(Param {
+            byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: param_type,
@@ -377,7 +389,8 @@ fn lower_private_setter_in_scope(
     ctx.exit_scope(scope_mark);
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
-    Ok(Function { byte_offset: method.span.lo.0,
+    Ok(Function {
+        byte_offset: method.span.lo.0,
         id: ctx.fresh_func(),
         name,
         type_params: Vec::new(),
@@ -456,7 +469,8 @@ pub fn lower_private_prop(
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     let init = init?;
 
-    Ok(ClassField { byte_offset: prop.span.lo.0,
+    Ok(ClassField {
+        byte_offset: prop.span.lo.0,
         origin: crate::ClassFieldOrigin::Definition,
         name,
         key_expr: None,

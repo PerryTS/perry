@@ -12,7 +12,8 @@ use perry_hir::types::{FuncId, Type};
 use perry_hir::{ClassField, Decorator, Function, Param};
 
 fn field(name: &str) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -86,7 +87,8 @@ fn store_x(id: u32) -> Stmt {
 }
 
 fn function(id: FuncId, name: &str, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -215,7 +217,8 @@ fn return_inside_a_closure_body_is_not_exempt() {
     let (facts, _) = facts_for(Vec::new());
     let stmts = vec![
         let_c(1, "escapes"),
-        Stmt::Expr(Expr::Closure { byte_offset: 0,
+        Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 99,
             params: Vec::new(),
             return_type: Type::Any,
@@ -642,14 +645,17 @@ fn exported_return_shape_prepass_is_anon_only_and_alias_aware() {
     let mut producer = function(
         70,
         "makeRecord",
-        vec![Stmt::Return(Some(Expr::New {
-            byte_end: 0,
-            class_name: ANON.to_string(),
-            args: Vec::new(),
-            type_args: Vec::new(),
-            byte_offset: 0,
-            cap_args_appended: 0,
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::New {
+                byte_end: 0,
+                class_name: ANON.to_string(),
+                args: Vec::new(),
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+            0,
+        )],
     );
     producer.is_exported = true;
 
@@ -683,7 +689,11 @@ fn exported_return_shape_prepass_is_anon_only_and_alias_aware() {
 /// `return new C()` directly is fresh by construction — no body proof needed.
 #[test]
 fn direct_new_return_is_a_fact() {
-    let (facts, _) = facts_for(vec![function(3, "mk", vec![Stmt::Return(Some(new_c()), 0)])]);
+    let (facts, _) = facts_for(vec![function(
+        3,
+        "mk",
+        vec![Stmt::Return(Some(new_c()), 0)],
+    )]);
     assert_eq!(facts.return_shape_class(3), Some("C"));
 }
 
@@ -700,10 +710,12 @@ fn direct_new_return_is_a_fact() {
 /// `collect_fresh_return_sources` and this fails at the producer assertion.
 #[test]
 fn agreeing_conditional_return_is_a_fact_and_seeds_its_caller() {
-    let conditional = Expr::Conditional { byte_offset: 0,
+    let conditional = Expr::Conditional {
+        byte_offset: 0,
         condition: Box::new(Expr::Bool(true)),
         then_expr: Box::new(new_c()),
-        else_expr: Box::new(Expr::Conditional { byte_offset: 0,
+        else_expr: Box::new(Expr::Conditional {
+            byte_offset: 0,
             condition: Box::new(Expr::Bool(false)),
             then_expr: Box::new(new_c()),
             else_expr: Box::new(new_c()),
@@ -740,7 +752,8 @@ fn conditional_return_with_any_non_fresh_arm_gets_no_fact() {
         (true, new_c(), Expr::LocalGet(999)),
         (false, Expr::LocalGet(999), new_c()),
     ] {
-        let returned = Expr::Conditional { byte_offset: 0,
+        let returned = Expr::Conditional {
+            byte_offset: 0,
             condition: Box::new(Expr::Bool(true)),
             then_expr: Box::new(then_expr),
             else_expr: Box::new(else_expr),
@@ -774,7 +787,8 @@ fn disagreeing_conditional_return_classes_get_no_fact() {
         byte_offset: 0,
         cap_args_appended: 0,
     };
-    let returned = |else_expr| Expr::Conditional { byte_offset: 0,
+    let returned = |else_expr| Expr::Conditional {
+        byte_offset: 0,
         condition: Box::new(Expr::Bool(true)),
         then_expr: Box::new(new_c()),
         else_expr: Box::new(else_expr),
@@ -805,7 +819,8 @@ fn disagreeing_conditional_return_classes_get_no_fact() {
 /// `collect_return_outcomes` and both producer assertions fail.
 #[test]
 fn deterministic_logical_return_is_a_fact_and_seeds_its_caller() {
-    let logical = |op, left| Expr::Logical { byte_offset: 0,
+    let logical = |op, left| Expr::Logical {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(new_c()),
@@ -814,18 +829,18 @@ fn deterministic_logical_return_is_a_fact_and_seeds_its_caller() {
         function(
             34,
             "and_fresh",
-            vec![Stmt::Return(Some(logical(
-                perry_hir::LogicalOp::And,
-                Expr::Bool(true),
-            )), 0)],
+            vec![Stmt::Return(
+                Some(logical(perry_hir::LogicalOp::And, Expr::Bool(true))),
+                0,
+            )],
         ),
         function(
             35,
             "or_fresh",
-            vec![Stmt::Return(Some(logical(
-                perry_hir::LogicalOp::Or,
-                Expr::Bool(false),
-            )), 0)],
+            vec![Stmt::Return(
+                Some(logical(perry_hir::LogicalOp::Or, Expr::Bool(false))),
+                0,
+            )],
         ),
     ]);
     assert_eq!(facts.return_shape_class(34), Some("C"));
@@ -850,35 +865,49 @@ fn deterministic_logical_return_is_a_fact_and_seeds_its_caller() {
 #[test]
 fn nested_logical_fallback_returns_only_fresh_objects() {
     let flag = Expr::LocalGet(999);
-    let inner = Expr::Logical { byte_offset: 0,
+    let inner = Expr::Logical {
+        byte_offset: 0,
         op: perry_hir::LogicalOp::And,
         left: Box::new(flag.clone()),
         right: Box::new(new_c()),
     };
-    let with_fallback = Expr::Logical { byte_offset: 0,
+    let with_fallback = Expr::Logical {
+        byte_offset: 0,
         op: perry_hir::LogicalOp::Or,
         left: Box::new(inner),
         right: Box::new(new_c()),
     };
     let (facts, _) = facts_for(vec![
-        function(36, "with_fallback", vec![Stmt::Return(Some(with_fallback), 0)]),
+        function(
+            36,
+            "with_fallback",
+            vec![Stmt::Return(Some(with_fallback), 0)],
+        ),
         function(
             37,
             "and_without_fallback",
-            vec![Stmt::Return(Some(Expr::Logical { byte_offset: 0,
-                op: perry_hir::LogicalOp::And,
-                left: Box::new(flag.clone()),
-                right: Box::new(new_c()),
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::Logical {
+                    byte_offset: 0,
+                    op: perry_hir::LogicalOp::And,
+                    left: Box::new(flag.clone()),
+                    right: Box::new(new_c()),
+                }),
+                0,
+            )],
         ),
         function(
             38,
             "or_without_guard",
-            vec![Stmt::Return(Some(Expr::Logical { byte_offset: 0,
-                op: perry_hir::LogicalOp::Or,
-                left: Box::new(flag),
-                right: Box::new(new_c()),
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::Logical {
+                    byte_offset: 0,
+                    op: perry_hir::LogicalOp::Or,
+                    left: Box::new(flag),
+                    right: Box::new(new_c()),
+                }),
+                0,
+            )],
         ),
     ]);
     assert_eq!(facts.return_shape_class(36), Some("C"));
@@ -905,20 +934,28 @@ fn consumed_logical_allocation_does_not_set_the_return_class() {
             function(
                 39,
                 "and_consumes_left",
-                vec![Stmt::Return(Some(Expr::Logical { byte_offset: 0,
-                    op: perry_hir::LogicalOp::And,
-                    left: Box::new(new_d.clone()),
-                    right: Box::new(new_c()),
-                }), 0)],
+                vec![Stmt::Return(
+                    Some(Expr::Logical {
+                        byte_offset: 0,
+                        op: perry_hir::LogicalOp::And,
+                        left: Box::new(new_d.clone()),
+                        right: Box::new(new_c()),
+                    }),
+                    0,
+                )],
             ),
             function(
                 40,
                 "or_consumes_right",
-                vec![Stmt::Return(Some(Expr::Logical { byte_offset: 0,
-                    op: perry_hir::LogicalOp::Or,
-                    left: Box::new(new_c()),
-                    right: Box::new(new_d),
-                }), 0)],
+                vec![Stmt::Return(
+                    Some(Expr::Logical {
+                        byte_offset: 0,
+                        op: perry_hir::LogicalOp::Or,
+                        left: Box::new(new_c()),
+                        right: Box::new(new_d),
+                    }),
+                    0,
+                )],
             ),
         ],
     );
@@ -934,11 +971,15 @@ fn nullish_coalescing_return_remains_fail_closed() {
     let (facts, _) = facts_for(vec![function(
         41,
         "coalesce",
-        vec![Stmt::Return(Some(Expr::Logical { byte_offset: 0,
-            op: perry_hir::LogicalOp::Coalesce,
-            left: Box::new(Expr::Null),
-            right: Box::new(new_c()),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::Logical {
+                byte_offset: 0,
+                op: perry_hir::LogicalOp::Coalesce,
+                left: Box::new(Expr::Null),
+                right: Box::new(new_c()),
+            }),
+            0,
+        )],
     )]);
     assert_eq!(facts.return_shape_class(41), None);
 }
@@ -1058,14 +1099,17 @@ fn disagreeing_return_classes_get_no_fact() {
         vec![function(
             9,
             "one",
-            vec![Stmt::Return(Some(Expr::New {
-                byte_end: 0,
-                class_name: "D".to_string(),
-                args: Vec::new(),
-                type_args: Vec::new(),
-                byte_offset: 0,
-                cap_args_appended: 0,
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::New {
+                    byte_end: 0,
+                    class_name: "D".to_string(),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+                0,
+            )],
         )],
     );
     assert_eq!(facts.return_shape_class(9), Some("D"));
@@ -1110,7 +1154,11 @@ fn module_barrier_denies_every_fact() {
 /// `FuncId` instead of consulting `closure_binding_func` and this fails.
 #[test]
 fn indirect_callee_is_not_seeded() {
-    let (facts, c) = facts_for(vec![function(11, "mk", vec![Stmt::Return(Some(new_c()), 0)])]);
+    let (facts, c) = facts_for(vec![function(
+        11,
+        "mk",
+        vec![Stmt::Return(Some(new_c()), 0)],
+    )]);
     assert_eq!(facts.return_shape_class(11), Some("C"));
     let classes = classes_of(&c);
     let caller = vec![
@@ -1140,7 +1188,11 @@ fn indirect_callee_is_not_seeded() {
 /// caller denies it exactly as escaping a `new`-seeded one does.
 #[test]
 fn call_seeded_candidate_still_obeys_containment() {
-    let (facts, c) = facts_for(vec![function(12, "mk", vec![Stmt::Return(Some(new_c()), 0)])]);
+    let (facts, c) = facts_for(vec![function(
+        12,
+        "mk",
+        vec![Stmt::Return(Some(new_c()), 0)],
+    )]);
     let classes = classes_of(&c);
     let caller = vec![
         Stmt::Let {
@@ -1176,7 +1228,8 @@ fn call_seeded_candidate_still_obeys_containment() {
 #[test]
 fn producer_with_params_still_gets_a_fact() {
     let mut f = function(13, "mk1", vec![Stmt::Return(Some(new_c()), 0)]);
-    f.params = vec![Param { byte_offset: 0,
+    f.params = vec![Param {
+        byte_offset: 0,
         id: 100,
         name: "n".to_string(),
         ty: Type::Number,
@@ -1232,7 +1285,8 @@ fn boxed_producer_local_gets_no_fact() {
     let body = vec![
         let_c(1, "o"),
         // A closure that mutably captures `o` — boxes it.
-        Stmt::Expr(Expr::Closure { byte_offset: 0,
+        Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 98,
             params: Vec::new(),
             return_type: Type::Any,
@@ -1277,7 +1331,8 @@ fn let_closure(id: u32, name: &str, func_id: FuncId, body: Vec<Stmt>) -> Stmt {
         name: name.to_string(),
         ty: Type::Any,
         mutable: false,
-        init: Some(Expr::Closure { byte_offset: 0,
+        init: Some(Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: Vec::new(),
             return_type: Type::Any,
@@ -1333,13 +1388,16 @@ fn iife_module(extra_iife_stmts: Vec<Stmt>) -> Module {
         let_closure(2, "run", 3, run_body()),
     ];
     iife_body.extend(extra_iife_stmts);
-    iife_body.push(Stmt::Return(Some(Expr::Call {
-        byte_end: 0,
-        callee: Box::new(Expr::LocalGet(2)),
-        args: Vec::new(),
-        type_args: Vec::new(),
-        byte_offset: 0,
-    }), 0));
+    iife_body.push(Stmt::Return(
+        Some(Expr::Call {
+            byte_end: 0,
+            callee: Box::new(Expr::LocalGet(2)),
+            args: Vec::new(),
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+        0,
+    ));
 
     let mut hir = Module::new("t");
     hir.classes.push(class_c());
@@ -1466,7 +1524,8 @@ fn a_reassigned_callee_binding_is_not_resolved() {
     // …and the same write hidden inside a closure body, which is the position
     // a per-region scan would miss.
     binding_is_killed_by(
-        vec![Stmt::Expr(Expr::Closure { byte_offset: 0,
+        vec![Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 77,
             params: Vec::new(),
             return_type: Type::Any,
@@ -1493,7 +1552,12 @@ fn a_reassigned_callee_binding_is_not_resolved() {
 #[test]
 fn a_twice_bound_callee_binding_is_not_resolved() {
     binding_is_killed_by(
-        vec![let_closure(1, "mk", 42, vec![Stmt::Return(Some(new_c()), 0)])],
+        vec![let_closure(
+            1,
+            "mk",
+            42,
+            vec![Stmt::Return(Some(new_c()), 0)],
+        )],
         "a second binding of the same id",
     );
 }
@@ -1526,7 +1590,8 @@ fn a_with_statement_write_disqualifies_the_callee_binding() {
 #[test]
 fn a_catch_bound_callee_id_is_not_resolved() {
     binding_is_killed_by(
-        vec![Stmt::Try { byte_offset: 0,
+        vec![Stmt::Try {
+            byte_offset: 0,
             body: Vec::new(),
             catch: Some(perry_hir::CatchClause {
                 param: Some((1, "mk".to_string())),
@@ -1550,7 +1615,8 @@ fn a_catch_bound_callee_id_is_not_resolved() {
 fn a_callee_id_that_is_also_a_parameter_is_not_resolved() {
     let mut hir = iife_module(Vec::new());
     let mut f = function(60, "outer", vec![Stmt::Return(Some(new_c()), 0)]);
-    f.params = vec![Param { byte_offset: 0,
+    f.params = vec![Param {
+        byte_offset: 0,
         id: 1,
         name: "mk".to_string(),
         ty: Type::Any,
@@ -1729,7 +1795,12 @@ fn a_contested_func_id_carries_no_fact() {
     hir.classes.push(class_c());
     hir.init = vec![
         let_closure(10, "mk", 1, vec![Stmt::Return(Some(new_c()), 0)]),
-        let_closure(11, "other", 1, vec![Stmt::Return(Some(Expr::Number(1.0)), 0)]),
+        let_closure(
+            11,
+            "other",
+            1,
+            vec![Stmt::Return(Some(Expr::Number(1.0)), 0)],
+        ),
     ];
     let facts = super::super::collect_module_dispatch_facts(&hir);
     assert_eq!(
@@ -1744,7 +1815,12 @@ fn a_contested_func_id_carries_no_fact() {
     ok.classes.push(class_c());
     ok.init = vec![
         let_closure(10, "mk", 1, vec![Stmt::Return(Some(new_c()), 0)]),
-        let_closure(11, "other", 2, vec![Stmt::Return(Some(Expr::Number(1.0)), 0)]),
+        let_closure(
+            11,
+            "other",
+            2,
+            vec![Stmt::Return(Some(Expr::Number(1.0)), 0)],
+        ),
     ];
     assert_eq!(
         super::super::collect_module_dispatch_facts(&ok).return_shape_class(1),
@@ -1757,7 +1833,12 @@ fn a_contested_func_id_carries_no_fact() {
     let mut collide = Module::new("t");
     collide.classes.push(class_c());
     collide.functions = vec![function(1, "fn_mk", vec![Stmt::Return(Some(new_c()), 0)])];
-    collide.init = vec![let_closure(10, "mk", 1, vec![Stmt::Return(Some(new_c()), 0)])];
+    collide.init = vec![let_closure(
+        10,
+        "mk",
+        1,
+        vec![Stmt::Return(Some(new_c()), 0)],
+    )];
     assert_eq!(
         super::super::collect_module_dispatch_facts(&collide).return_shape_class(1),
         None,
@@ -1784,12 +1865,15 @@ fn named_accessor_locals_reuse_containment_and_vet_accessor_this_flow() {
         function(
             90,
             "derived",
-            vec![Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::This),
-                property: "x".into(),
-                byte_offset: 0,
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(Expr::This),
+                    property: "x".into(),
+                    byte_offset: 0,
+                }),
+                0,
+            )],
         ),
     ));
     c.setters.push((
@@ -1825,7 +1909,8 @@ fn named_accessor_locals_reuse_containment_and_vet_accessor_this_flow() {
             byte_end: 0,
         }),
     ];
-    c.setters[0].1.params.push(Param { byte_offset: 0,
+    c.setters[0].1.params.push(Param {
+        byte_offset: 0,
         id: 99,
         name: "v".into(),
         ty: Type::Any,

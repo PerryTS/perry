@@ -136,7 +136,8 @@ fn entry_opts() -> CompileOptions {
 }
 
 fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -337,7 +338,8 @@ fn concat_accumulator_is_rooted_and_written_back() {
             byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                object: Box::new(Expr::Binary { byte_offset: 0,
+                object: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: perry_hir::BinaryOp::Add,
                     left: Box::new(Expr::String("a".to_string())),
                     right: Box::new(Expr::String("b".to_string())),
@@ -402,7 +404,8 @@ fn string_method_with_non_allocating_args_emits_no_rooting_calls() {
             byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                object: Box::new(Expr::Binary { byte_offset: 0,
+                object: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: perry_hir::BinaryOp::Add,
                     left: Box::new(Expr::String("a".to_string())),
                     right: Box::new(Expr::String("b".to_string())),
@@ -706,7 +709,8 @@ fn registered_root_operands_are_reloaded_rather_than_rooted() {
 /// object literal is not. That is the same pairing as the reported repro, where
 /// the sibling was a `number`-returning call whose body allocated.
 fn allocating_numeric() -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: perry_hir::BinaryOp::Sub,
         left: Box::new(allocating()),
         right: Box::new(Expr::Number(0.0)),
@@ -754,7 +758,8 @@ fn init_ir(ir: &str) -> &str {
 fn init_ir_slices_only_the_function_under_test() {
     let ir = ir_for(
         "scope_check.ts",
-        vec![Stmt::Expr(Expr::Binary { byte_offset: 0,
+        vec![Stmt::Expr(Expr::Binary {
+            byte_offset: 0,
             op: perry_hir::BinaryOp::Add,
             left: Box::new(Expr::String("acc:".to_string())),
             right: Box::new(allocating_numeric()),
@@ -796,7 +801,8 @@ fn init_ir_slices_only_the_function_under_test() {
 fn string_literal_concat_operand_is_re_derived_below_the_allocating_sibling() {
     let ir = ir_for(
         "concat_reload.ts",
-        vec![Stmt::Expr(Expr::Binary { byte_offset: 0,
+        vec![Stmt::Expr(Expr::Binary {
+            byte_offset: 0,
             op: perry_hir::BinaryOp::Add,
             left: Box::new(Expr::String("acc:".to_string())),
             right: Box::new(allocating_numeric()),
@@ -886,10 +892,12 @@ fn string_literal_concat_operand_is_re_derived_below_the_allocating_sibling() {
 fn string_literal_concat_operand_is_not_re_derived_when_nothing_collects() {
     let ir = ir_for(
         "concat_noreload.ts",
-        vec![Stmt::Expr(Expr::Binary { byte_offset: 0,
+        vec![Stmt::Expr(Expr::Binary {
+            byte_offset: 0,
             op: perry_hir::BinaryOp::Add,
             left: Box::new(Expr::String("acc:".to_string())),
-            right: Box::new(Expr::Compare { byte_offset: 0,
+            right: Box::new(Expr::Compare {
+                byte_offset: 0,
                 op: perry_hir::CompareOp::Lt,
                 left: Box::new(Expr::Number(1.0)),
                 right: Box::new(Expr::Number(2.0)),
@@ -1087,7 +1095,8 @@ fn wtf8_literal_operand_is_re_derived_under_native_lowering() {
 fn wtf8_operand_ir() -> String {
     ir_for(
         "wtf8_operand.ts",
-        vec![Stmt::Expr(Expr::Binary { byte_offset: 0,
+        vec![Stmt::Expr(Expr::Binary {
+            byte_offset: 0,
             op: perry_hir::BinaryOp::Add,
             left: Box::new(Expr::WtfString(vec![0xED, 0xA0, 0x80])),
             right: Box::new(allocating_numeric()),
@@ -1200,7 +1209,8 @@ fn wtf8_operand_is_re_derived(f: &str) -> Result<(), String> {
 /// initializer) between the allocation and the value `new` yields.
 fn module_with_new_running_ctor(name: &str) -> Module {
     let mut module = module_with_new(name, Vec::new());
-    module.classes[0].fields = vec![perry_hir::ClassField { byte_offset: 0,
+    module.classes[0].fields = vec![perry_hir::ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: "v".to_string(),
         key_expr: None,

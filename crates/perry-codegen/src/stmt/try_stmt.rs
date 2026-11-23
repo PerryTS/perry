@@ -183,7 +183,8 @@ fn iterator_cleanup_expr(expr: &perry_hir::Expr) -> bool {
             class_name: None,
             object: None,
             method,
-            args, ..
+            args,
+            ..
         } => {
             module == "__perry_runtime"
                 && (method == "iteratorCloseOnThrow"
@@ -275,7 +276,8 @@ pub(crate) fn lower_try(
     if let Some(args) = outlined {
         lower_expr(
             ctx,
-            &perry_hir::Expr::NativeMethodCall { byte_offset,
+            &perry_hir::Expr::NativeMethodCall {
+                byte_offset,
                 module: "__perry_runtime".into(),
                 class_name: None,
                 object: None,
@@ -383,14 +385,16 @@ mod tests {
     #[test]
     fn array_record_cleanup_has_no_normal_path_savepoint() {
         use perry_hir::{Expr, Stmt};
-        let close = |method: &str, args| Expr::NativeMethodCall { byte_offset: 0,
+        let close = |method: &str, args| Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,
             method: method.into(),
             args,
         };
-        let expr = Expr::Conditional { byte_offset: 0,
+        let expr = Expr::Conditional {
+            byte_offset: 0,
             condition: Box::new(Expr::Bool(false)),
             then_expr: Box::new(close("iteratorCloseOnThrow", vec![])),
             else_expr: Box::new(close(
@@ -458,11 +462,13 @@ mod tests {
     fn iterator_cleanup_ir_keeps_unwind_edge_without_hot_push_or_pop() {
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut module = perry_hir::Module::new("iterret_cleanup");
-        module.init.push(perry_hir::Stmt::Try { byte_offset: 0,
+        module.init.push(perry_hir::Stmt::Try {
+            byte_offset: 0,
             body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::Number(42.0))],
             catch: Some(perry_hir::CatchClause {
                 param: Some((1, "__forof_err_1".into())),
-                body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::NativeMethodCall { byte_offset: 0,
+                body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::NativeMethodCall {
+                    byte_offset: 0,
                     module: "__perry_runtime".into(),
                     class_name: None,
                     object: None,
@@ -511,7 +517,8 @@ mod tests {
     fn a_throw_under_its_own_handler_branches_to_it() {
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut module = perry_hir::Module::new("local_throw");
-        module.init.push(perry_hir::Stmt::Try { byte_offset: 0,
+        module.init.push(perry_hir::Stmt::Try {
+            byte_offset: 0,
             body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::Number(42.0))],
             catch: Some(perry_hir::CatchClause {
                 param: Some((1, "e".into())),
@@ -584,7 +591,8 @@ mod tests {
     fn try_entry_is_free_and_the_pad_restores_by_stack_pointer() {
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut module = perry_hir::Module::new("free_try");
-        module.init.push(perry_hir::Stmt::Try { byte_offset: 0,
+        module.init.push(perry_hir::Stmt::Try {
+            byte_offset: 0,
             body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::Number(42.0))],
             catch: Some(perry_hir::CatchClause {
                 param: Some((1, "e".into())),

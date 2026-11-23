@@ -22,23 +22,27 @@ fn dark_mode_ir(target: Option<&str>) -> String {
         is_deferred_require: false,
         is_adopted_require: false,
     });
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "darkModeResult".into(),
         type_params: vec![],
         params: vec![],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::ExternFuncRef {
-                name: "isDarkMode".into(),
-                param_types: vec![],
-                return_type: Type::Any,
+        body: vec![Stmt::Return(
+            Some(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(Expr::ExternFuncRef {
+                    name: "isDarkMode".into(),
+                    param_types: vec![],
+                    return_type: Type::Any,
+                }),
+                args: vec![],
+                type_args: vec![],
+                byte_offset: 0,
             }),
-            args: vec![],
-            type_args: vec![],
-            byte_offset: 0,
-        }), 0)],
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: true,

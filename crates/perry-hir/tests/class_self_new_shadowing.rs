@@ -22,7 +22,8 @@ fn constructs_own_class(module: &perry_hir::Module, ret: &Expr, class_name: &str
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } if matches!(condition.as_ref(), Expr::ClassIsFirstEvaluation { .. }) => {
             let outer: Vec<_> = module
                 .init

@@ -6,9 +6,9 @@
 //! `[a, b] = arr` and `{a, b} = obj` (these last two desugar to a
 //! sequence expression of individual assignments).
 
-use swc_common::Spanned;
 use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::destructuring::lower_destructuring_assignment;
@@ -165,8 +165,18 @@ fn lower_logical_assignment(
     op: LogicalOp,
 ) -> Result<Expr> {
     let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-    let right = Box::new(lower_assignment_target(ctx, &assign.left, Box::new(rhs), assign.span.lo.0)?);
-    Ok(Expr::Logical { byte_offset: assign.span.lo.0, op, left, right })
+    let right = Box::new(lower_assignment_target(
+        ctx,
+        &assign.left,
+        Box::new(rhs),
+        assign.span.lo.0,
+    )?);
+    Ok(Expr::Logical {
+        byte_offset: assign.span.lo.0,
+        op,
+        left,
+        right,
+    })
 }
 
 fn register_assignment_native_instance(
@@ -323,7 +333,10 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         // still a declared binding (var hoisting) — self-assignment before
         // the declaration statement is fine and yields undefined.
         if ctx.lookup_local(name).is_none() {
-            return Ok(throw_reference_error_unresolvable_assignment(name, assign.span.lo.0));
+            return Ok(throw_reference_error_unresolvable_assignment(
+                name,
+                assign.span.lo.0,
+            ));
         }
     }
 
@@ -378,7 +391,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::AddAssign => {
             // a += b becomes a = a + b
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
+            Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Add,
                 left,
                 right: Box::new(rhs),
@@ -386,7 +400,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::SubAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
+            Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Sub,
                 left,
                 right: Box::new(rhs),
@@ -394,7 +409,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::MulAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
+            Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Mul,
                 left,
                 right: Box::new(rhs),
@@ -402,7 +418,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::DivAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
+            Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Div,
                 left,
                 right: Box::new(rhs),
@@ -410,7 +427,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::ModAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
+            Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Mod,
                 left,
                 right: Box::new(rhs),
@@ -418,7 +436,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::BitAndAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
+            Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::BitAnd,
                 left,
                 right: Box::new(rhs),
@@ -426,7 +445,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::BitOrAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
+            Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::BitOr,
                 left,
                 right: Box::new(rhs),
@@ -434,7 +454,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::BitXorAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
+            Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::BitXor,
                 left,
                 right: Box::new(rhs),
@@ -442,7 +463,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::LShiftAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
+            Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Shl,
                 left,
                 right: Box::new(rhs),
@@ -450,7 +472,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::RShiftAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
+            Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Shr,
                 left,
                 right: Box::new(rhs),
@@ -458,7 +481,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         }
         ast::AssignOp::ZeroFillRShiftAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
+            Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::UShr,
                 left,
                 right: Box::new(rhs),
@@ -467,7 +491,8 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::ExpAssign => {
             // a **= b becomes a = a ** b
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-            Box::new(Expr::Binary { byte_offset: assign.span.lo.0,
+            Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Pow,
                 left,
                 right: Box::new(rhs),
@@ -522,7 +547,8 @@ pub(crate) fn lower_ident_assignment(
         let target = with_envs
             .iter()
             .rev()
-            .fold(global, |outer, env| Expr::Conditional { byte_offset,
+            .fold(global, |outer, env| Expr::Conditional {
+                byte_offset,
                 condition: Box::new(Expr::ObjectHasOwn(
                     Box::new(Expr::LocalGet(*env)),
                     Box::new(Expr::String(name.clone())),
@@ -777,7 +803,8 @@ fn lower_assignment_target(
                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                         let field_name = prop_ident.sym.to_string();
                         if ctx.has_static_field(&resolved_class, &field_name) {
-                            return Ok(Expr::StaticFieldSet { byte_offset,
+                            return Ok(Expr::StaticFieldSet {
+                                byte_offset,
                                 class_name: resolved_class,
                                 field_name,
                                 value,
@@ -881,7 +908,8 @@ fn lower_assignment_target(
                             };
                             if let Some(method) = setter_method {
                                 let object_expr = lower_expr(ctx, &member.obj)?;
-                                return Ok(Expr::NativeMethodCall { byte_offset,
+                                return Ok(Expr::NativeMethodCall {
+                                    byte_offset,
                                     module: module_name,
                                     class_name: Some(class_name),
                                     object: Some(Box::new(object_expr)),
@@ -1390,12 +1418,14 @@ fn compound_member_assign_once(
     // branch that needs it (`read OP (target = rhs)`).
     let rhs = lower_expr(ctx, &assign.right)?;
     let mut body = match bin_op {
-        Some(op) => write_of(Expr::Binary { byte_offset: assign.span.lo.0,
+        Some(op) => write_of(Expr::Binary {
+            byte_offset: assign.span.lo.0,
             op,
             left: Box::new(read),
             right: Box::new(rhs),
         }),
-        None => Expr::Logical { byte_offset: assign.span.lo.0,
+        None => Expr::Logical {
+            byte_offset: assign.span.lo.0,
             op: logical_op.unwrap(),
             left: Box::new(read),
             right: Box::new(write_of(rhs)),
@@ -1625,14 +1655,16 @@ pub(crate) fn hoist_compound_member_assign(
     // semantics are preserved (`a[k] ||= v` doesn't write when `a[k]` is truthy).
     let rhs = lower_expr(ctx, &assign.right)?;
     let final_expr = if let Some(op) = bin_op {
-        write_of(Expr::Binary { byte_offset: assign.span.lo.0,
+        write_of(Expr::Binary {
+            byte_offset: assign.span.lo.0,
             op,
             left: Box::new(read),
             right: Box::new(rhs),
         })
     } else {
         // `read OP (target = rhs)` — mirrors `lower_logical_assignment`.
-        Expr::Logical { byte_offset: assign.span.lo.0,
+        Expr::Logical {
+            byte_offset: assign.span.lo.0,
             op: logical_op.unwrap(),
             left: Box::new(read),
             right: Box::new(write_of(rhs)),

@@ -525,7 +525,9 @@ impl<'a> UseWalk<'a> {
                 matches!(op, UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot)
                     && self.value_or_element_is_numeric(tracked, operand)
             }
-            Expr::Binary { op, left, right, .. } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 matches!(
                     op,
                     BinaryOp::Add
@@ -542,7 +544,9 @@ impl<'a> UseWalk<'a> {
                 ) && self.value_or_element_is_numeric(tracked, left)
                     && self.value_or_element_is_numeric(tracked, right)
             }
-            Expr::Logical { op, left, right, .. } => {
+            Expr::Logical {
+                op, left, right, ..
+            } => {
                 matches!(op, LogicalOp::Or | LogicalOp::Coalesce)
                     && self.value_or_element_is_numeric(tracked, left)
                     && self.value_is_numeric(tracked, right)
@@ -652,7 +656,8 @@ impl<'a> UseWalk<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.walk_expr(discriminant);
                 for case in cases {
@@ -980,7 +985,8 @@ mod tests {
     }
 
     fn capturing_closure(captures: Vec<u32>) -> Expr {
-        Expr::Closure { byte_offset: 0,
+        Expr::Closure {
+            byte_offset: 0,
             func_id: 0,
             params: vec![],
             return_type: HirType::Void,
@@ -1082,7 +1088,8 @@ mod tests {
                 Stmt::Expr(index_set(
                     ARR,
                     Expr::Integer(1),
-                    Expr::Binary { byte_offset: 0,
+                    Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(index_get(ARR, Expr::Integer(1))),
                         right: Box::new(Expr::Integer(1)),

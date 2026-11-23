@@ -25,7 +25,8 @@ fn assert_carrier_is_materialized(module: &Module) {
 #[test]
 fn reference_from_generated_function_keeps_materialized_aggregate() {
     let mut module = tests::aggregate_fixture(false);
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 99,
         name: "__obj_method_computed".to_string(),
         type_params: Vec::new(),
@@ -51,20 +52,24 @@ fn reference_from_generated_function_keeps_materialized_aggregate() {
 #[test]
 fn module_local_reference_from_closure_body_keeps_materialized_aggregate() {
     let mut module = tests::aggregate_fixture(false);
-    *module.init.last_mut().expect("observer statement") = Stmt::Expr(Expr::Closure { byte_offset: 0,
+    *module.init.last_mut().expect("observer statement") = Stmt::Expr(Expr::Closure {
+        byte_offset: 0,
         func_id: 99,
         params: Vec::new(),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(property(
-            Expr::IndexGet {
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                index: Box::new(Expr::Integer(0)),
-            },
-            "component",
-        )), 0)],
+        body: vec![Stmt::Return(
+            Some(property(
+                Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::Integer(0)),
+                },
+                "component",
+            )),
+            0,
+        )],
         captures: Vec::new(),
         mutable_captures: Vec::new(),
         captures_this: false,

@@ -112,10 +112,17 @@ fn build_dispatch_while_body(
                     )));
                     case_body.push(Stmt::Return(Some(value.clone()), *byte_offset));
                 } else {
-                    case_body.push(Stmt::Return(Some(make_iter_result(value.clone(), false)), *byte_offset));
+                    case_body.push(Stmt::Return(
+                        Some(make_iter_result(value.clone(), false)),
+                        *byte_offset,
+                    ));
                 }
             }
-            StateExit::Await { value, next_state, byte_offset } => {
+            StateExit::Await {
+                value,
+                next_state,
+                byte_offset,
+            } => {
                 // A user `return X` can sit in a yield/await-free control-flow
                 // block (e.g. `if (c) return X;`) that the linearizer's catch-all
                 // accumulated into this Await state's body ahead of the `await`.
@@ -135,7 +142,10 @@ fn build_dispatch_while_body(
                 if async_step {
                     // Suspend on the microtask queue; resume delivers the
                     // settled value through `__sent`.
-                    case_body.push(Stmt::Return(Some(async_step_chain(value.clone())), *byte_offset));
+                    case_body.push(Stmt::Return(
+                        Some(async_step_chain(value.clone())),
+                        *byte_offset,
+                    ));
                 } else {
                     // Busy-wait fallback (the `.return()` continuation path):
                     // evaluate the await inline and continue to the next state.
@@ -168,14 +178,20 @@ fn build_dispatch_while_body(
                             done_id,
                             Box::new(Expr::Bool(true)),
                         )));
-                        case_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true)), fn_offset));
+                        case_body.push(Stmt::Return(
+                            Some(make_iter_result(Expr::Undefined, true)),
+                            fn_offset,
+                        ));
                     }
                 } else {
                     case_body.push(Stmt::Expr(Expr::LocalSet(
                         done_id,
                         Box::new(Expr::Bool(true)),
                     )));
-                    case_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true)), fn_offset));
+                    case_body.push(Stmt::Return(
+                        Some(make_iter_result(Expr::Undefined, true)),
+                        fn_offset,
+                    ));
                 }
             }
         }
@@ -188,7 +204,8 @@ fn build_dispatch_while_body(
             continue;
         }
         while_body.push(Stmt::If {
-            condition: Expr::Compare { byte_offset: fn_offset,
+            condition: Expr::Compare {
+                byte_offset: fn_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(num as f64)),
@@ -203,7 +220,10 @@ fn build_dispatch_while_body(
         done_id,
         Box::new(Expr::Bool(true)),
     )));
-    while_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true)), fn_offset));
+    while_body.push(Stmt::Return(
+        Some(make_iter_result(Expr::Undefined, true)),
+        fn_offset,
+    ));
     if fixed_state {
         cases.push(perry_hir::SwitchCase {
             test: None,
@@ -760,7 +780,10 @@ pub fn transform_generator_function_with_extra_captures(
         // if (__done) return { value: undefined, done: true };
         Stmt::If {
             condition: Expr::LocalGet(done_id),
-            then_branch: vec![Stmt::Return(Some(make_iter_result(Expr::Undefined, true)), fn_offset)],
+            then_branch: vec![Stmt::Return(
+                Some(make_iter_result(Expr::Undefined, true)),
+                fn_offset,
+            )],
             else_branch: None,
         },
         // while (true) { if-chain }
@@ -1191,10 +1214,10 @@ pub fn transform_generator_function_with_extra_captures(
         // no finally re-run (the finally already ran on normal completion).
         return_resume_body.push(Stmt::If {
             condition: Expr::LocalGet(done_id),
-            then_branch: vec![Stmt::Return(Some(make_iter_result(
-                Expr::LocalGet(return_param_id),
-                true,
-            )), fn_offset)],
+            then_branch: vec![Stmt::Return(
+                Some(make_iter_result(Expr::LocalGet(return_param_id), true)),
+                fn_offset,
+            )],
             else_branch: None,
         });
         // #4445: mark the generator "executing" while the resume runs (the
@@ -1250,10 +1273,10 @@ pub fn transform_generator_function_with_extra_captures(
             true,
             &hoisted_ids,
         ));
-        return_fallback.push(Stmt::Return(Some(make_iter_result(
-            Expr::LocalGet(return_param_id),
-            true,
-        )), fn_offset));
+        return_fallback.push(Stmt::Return(
+            Some(make_iter_result(Expr::LocalGet(return_param_id), true)),
+            fn_offset,
+        ));
         if has_yielding_finally {
             // #4438 B2-finally: route `.return(v)` into the innermost enclosing
             // yielding finally — record the pending return and jump to
@@ -1333,9 +1356,11 @@ pub fn transform_generator_function_with_extra_captures(
                 fn_offset,
             )
         };
-        let return_closure = Expr::Closure { byte_offset: fn_offset,
+        let return_closure = Expr::Closure {
+            byte_offset: fn_offset,
             func_id: return_func_id_val,
-            params: vec![perry_hir::Param { byte_offset: fn_offset,
+            params: vec![perry_hir::Param {
+                byte_offset: fn_offset,
                 id: return_param_id,
                 name: "__ret_val".to_string(),
                 ty: Type::Any,
@@ -1449,7 +1474,8 @@ pub fn transform_generator_function_with_extra_captures(
             );
             let step_inner = vec![
                 Stmt::If {
-                    condition: Expr::Compare { byte_offset: fn_offset,
+                    condition: Expr::Compare {
+                        byte_offset: fn_offset,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(is_error_param_id)),
                         right: Box::new(Expr::Number(2.0)),
@@ -1463,17 +1489,24 @@ pub fn transform_generator_function_with_extra_captures(
                     else_branch: Some(next_resume_body),
                 },
             ];
-            let mut step_body =
-                wrap_async_gen_step_body(step_inner, executing_id, done_id, agstep_catch_id, fn_offset);
+            let mut step_body = wrap_async_gen_step_body(
+                step_inner,
+                executing_id,
+                done_id,
+                agstep_catch_id,
+                fn_offset,
+            );
             // Turn every `{value, done}` return into an `AsyncStepDone` that
             // settles the activation's result Promise; `AsyncStepChain` (await)
             // returns are left as-is.
             wrap_iter_result_returns_in_async_step_done(&mut step_body);
 
-            let agstep_closure = Expr::Closure { byte_offset: fn_offset,
+            let agstep_closure = Expr::Closure {
+                byte_offset: fn_offset,
                 func_id: agstep_func_id,
                 params: vec![
-                    perry_hir::Param { byte_offset: fn_offset,
+                    perry_hir::Param {
+                        byte_offset: fn_offset,
                         id: next_param_id,
                         name: "__val".to_string(),
                         ty: Type::Any,
@@ -1482,7 +1515,8 @@ pub fn transform_generator_function_with_extra_captures(
                         decorators: Vec::new(),
                         arguments_object: None,
                     },
-                    perry_hir::Param { byte_offset: fn_offset,
+                    perry_hir::Param {
+                        byte_offset: fn_offset,
                         id: is_error_param_id,
                         name: "__gen_op".to_string(),
                         ty: Type::Any,
@@ -1524,9 +1558,11 @@ pub fn transform_generator_function_with_extra_captures(
                     fn_offset,
                 )
             };
-            let throw_closure = Expr::Closure { byte_offset: fn_offset,
+            let throw_closure = Expr::Closure {
+                byte_offset: fn_offset,
                 func_id: throw_func_id_val,
-                params: vec![perry_hir::Param { byte_offset: fn_offset,
+                params: vec![perry_hir::Param {
+                    byte_offset: fn_offset,
                     id: throw_param_id,
                     name: "__throw_val".to_string(),
                     ty: Type::Any,
@@ -1568,9 +1604,11 @@ pub fn transform_generator_function_with_extra_captures(
                     fn_offset,
                 )
             };
-            let next_closure = Expr::Closure { byte_offset: fn_offset,
+            let next_closure = Expr::Closure {
+                byte_offset: fn_offset,
                 func_id: next_func_id_val,
-                params: vec![perry_hir::Param { byte_offset: fn_offset,
+                params: vec![perry_hir::Param {
+                    byte_offset: fn_offset,
                     id: next_param_id,
                     name: "__val".to_string(),
                     ty: Type::Any,
@@ -1634,7 +1672,8 @@ pub fn transform_generator_function_with_extra_captures(
             } else {
                 vec![
                     Stmt::If {
-                        condition: Expr::Compare { byte_offset: fn_offset,
+                        condition: Expr::Compare {
+                            byte_offset: fn_offset,
                             op: CompareOp::Eq,
                             left: Box::new(Expr::LocalGet(op_id)),
                             right: Box::new(Expr::Number(1.0)),
@@ -1643,7 +1682,8 @@ pub fn transform_generator_function_with_extra_captures(
                         else_branch: None,
                     },
                     Stmt::If {
-                        condition: Expr::Compare { byte_offset: fn_offset,
+                        condition: Expr::Compare {
+                            byte_offset: fn_offset,
                             op: CompareOp::Eq,
                             left: Box::new(Expr::LocalGet(op_id)),
                             right: Box::new(Expr::Number(2.0)),
@@ -1655,7 +1695,8 @@ pub fn transform_generator_function_with_extra_captures(
             };
             dispatch.append(&mut next_body);
             let mut params = vec![
-                perry_hir::Param { byte_offset: fn_offset,
+                perry_hir::Param {
+                    byte_offset: fn_offset,
                     id: op_id,
                     name: "__gen_op".into(),
                     ty: Type::Number,
@@ -1664,7 +1705,8 @@ pub fn transform_generator_function_with_extra_captures(
                     decorators: Vec::new(),
                     arguments_object: None,
                 },
-                perry_hir::Param { byte_offset: fn_offset,
+                perry_hir::Param {
+                    byte_offset: fn_offset,
                     id: next_param_id,
                     name: "__gen_arg".into(),
                     ty: Type::Any,
@@ -1698,7 +1740,8 @@ pub fn transform_generator_function_with_extra_captures(
                 completion_catch_id,
                 fn_offset,
             );
-            Expr::Closure { byte_offset: fn_offset,
+            Expr::Closure {
+                byte_offset: fn_offset,
                 func_id: next_func_id_val,
                 params,
                 return_type: Type::Any,

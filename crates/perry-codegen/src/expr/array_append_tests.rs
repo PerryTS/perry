@@ -4,7 +4,8 @@ use perry_hir::{Expr, Function, Module as HirModule, Stmt};
 
 fn append_ir(ty: Type, value: Expr) -> String {
     let mut hir = HirModule::new("append_size_test");
-    hir.functions.push(Function { byte_offset: 0,
+    hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "pushes".to_string(),
         type_params: Vec::new(),

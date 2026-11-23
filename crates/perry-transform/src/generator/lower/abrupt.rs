@@ -87,14 +87,17 @@ pub(crate) fn catch_route_condition(
     } else {
         CompareOp::Gt
     };
-    Expr::Logical { byte_offset: route.byte_offset,
+    Expr::Logical {
+        byte_offset: route.byte_offset,
         op: LogicalOp::And,
-        left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+        left: Box::new(Expr::Compare {
+            byte_offset: route.byte_offset,
             op: lower_op,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_start_state as f64)),
         }),
-        right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+        right: Box::new(Expr::Compare {
+            byte_offset: route.byte_offset,
             op: CompareOp::Le,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(upper as f64)),
@@ -116,14 +119,17 @@ pub(crate) fn finally_abrupt_condition(
     } else {
         CompareOp::Gt
     };
-    Expr::Logical { byte_offset: route.byte_offset,
+    Expr::Logical {
+        byte_offset: route.byte_offset,
         op: LogicalOp::And,
-        left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+        left: Box::new(Expr::Compare {
+            byte_offset: route.byte_offset,
             op: lower_op,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_start_state as f64)),
         }),
-        right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+        right: Box::new(Expr::Compare {
+            byte_offset: route.byte_offset,
             op: CompareOp::Le,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_end_state as f64)),
@@ -162,10 +168,10 @@ pub(crate) fn build_completion_resume_stmts(
         done_id,
         Box::new(Expr::Bool(true)),
     )));
-    return_fallback.push(Stmt::Return(Some(make_iter_result(
-        Expr::LocalGet(pending_value_id),
-        true,
-    )), fn_offset));
+    return_fallback.push(Stmt::Return(
+        Some(make_iter_result(Expr::LocalGet(pending_value_id), true)),
+        fn_offset,
+    ));
     let resume_return = build_abrupt_routing(
         &[],
         finallys,
@@ -182,7 +188,8 @@ pub(crate) fn build_completion_resume_stmts(
     );
     vec![
         Stmt::If {
-            condition: Expr::Compare { byte_offset: fn_offset,
+            condition: Expr::Compare {
+                byte_offset: fn_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(pending_type_id)),
                 right: Box::new(Expr::Number(1.0)),
@@ -194,7 +201,8 @@ pub(crate) fn build_completion_resume_stmts(
             else_branch: None,
         },
         Stmt::If {
-            condition: Expr::Compare { byte_offset: fn_offset,
+            condition: Expr::Compare {
+                byte_offset: fn_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(pending_type_id)),
                 right: Box::new(Expr::Number(2.0)),
@@ -461,9 +469,11 @@ pub(crate) fn finally_route_condition(
     state_id: LocalId,
     inclusive_lower: bool,
 ) -> Expr {
-    Expr::Logical { byte_offset: route.byte_offset,
+    Expr::Logical {
+        byte_offset: route.byte_offset,
         op: LogicalOp::And,
-        left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+        left: Box::new(Expr::Compare {
+            byte_offset: route.byte_offset,
             op: if inclusive_lower {
                 CompareOp::Ge
             } else {
@@ -472,7 +482,8 @@ pub(crate) fn finally_route_condition(
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_start_state as f64)),
         }),
-        right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+        right: Box::new(Expr::Compare {
+            byte_offset: route.byte_offset,
             op: CompareOp::Le,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.post_finally_state as f64)),
@@ -484,21 +495,26 @@ pub(crate) fn finally_route_condition(
 /// — `Type(result) is not Object`. Used to enforce the spec requirement that a
 /// delegated `return()`/`next()` result be an Object.
 fn not_object_condition(result: Expr, byte_offset: u32) -> Expr {
-    Expr::Logical { byte_offset,
+    Expr::Logical {
+        byte_offset,
         op: LogicalOp::Or,
-        left: Box::new(Expr::Compare { byte_offset,
+        left: Box::new(Expr::Compare {
+            byte_offset,
             op: CompareOp::Eq,
             left: Box::new(result.clone()),
             right: Box::new(Expr::Null),
         }),
-        right: Box::new(Expr::Logical { byte_offset,
+        right: Box::new(Expr::Logical {
+            byte_offset,
             op: LogicalOp::And,
-            left: Box::new(Expr::Compare { byte_offset,
+            left: Box::new(Expr::Compare {
+                byte_offset,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::TypeOf(Box::new(result.clone()))),
                 right: Box::new(Expr::String("object".to_string())),
             }),
-            right: Box::new(Expr::Compare { byte_offset,
+            right: Box::new(Expr::Compare {
+                byte_offset,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::TypeOf(Box::new(result))),
                 right: Box::new(Expr::String("function".to_string())),
@@ -560,14 +576,17 @@ pub(crate) fn build_yield_star_return_routes(
         let m_id = alloc_local(next_local_id); // captured `return` method
         let r_id = alloc_local(next_local_id); // awaited inner result
 
-        let in_interval = Expr::Logical { byte_offset: route.byte_offset,
+        let in_interval = Expr::Logical {
+            byte_offset: route.byte_offset,
             op: LogicalOp::And,
-            left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+            left: Box::new(Expr::Compare {
+                byte_offset: route.byte_offset,
                 op: CompareOp::Gt,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(route.suspend_state_lo as f64)),
             }),
-            right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+            right: Box::new(Expr::Compare {
+                byte_offset: route.byte_offset,
                 op: CompareOp::Le,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(route.suspend_state_hi as f64)),
@@ -589,14 +608,17 @@ pub(crate) fn build_yield_star_return_routes(
         };
         // if (__m === undefined || __m === null) { done = true; return {v, true}; }
         let mut no_method = Stmt::If {
-            condition: Expr::Logical { byte_offset: route.byte_offset,
+            condition: Expr::Logical {
+                byte_offset: route.byte_offset,
                 op: LogicalOp::Or,
-                left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+                left: Box::new(Expr::Compare {
+                    byte_offset: route.byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(m_id)),
                     right: Box::new(Expr::Undefined),
                 }),
-                right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+                right: Box::new(Expr::Compare {
+                    byte_offset: route.byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(m_id)),
                     right: Box::new(Expr::Null),
@@ -604,10 +626,10 @@ pub(crate) fn build_yield_star_return_routes(
             },
             then_branch: vec![
                 Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
-                Stmt::Return(Some(make_iter_result(
-                    Expr::LocalGet(return_param_id),
-                    true,
-                )), route.byte_offset),
+                Stmt::Return(
+                    Some(make_iter_result(Expr::LocalGet(return_param_id), true)),
+                    route.byte_offset,
+                ),
             ],
             else_branch: None,
         };
@@ -642,25 +664,31 @@ pub(crate) fn build_yield_star_return_routes(
             },
             then_branch: vec![
                 Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
-                Stmt::Return(Some(make_iter_result(
+                Stmt::Return(
+                    Some(make_iter_result(
+                        Expr::PropertyGet {
+                            byte_end: 0,
+                            byte_offset: route.byte_offset,
+                            object: Box::new(Expr::LocalGet(r_id)),
+                            property: "value".to_string(),
+                        },
+                        true,
+                    )),
+                    route.byte_offset,
+                ),
+            ],
+            else_branch: Some(vec![Stmt::Return(
+                Some(make_iter_result(
                     Expr::PropertyGet {
                         byte_end: 0,
                         byte_offset: route.byte_offset,
                         object: Box::new(Expr::LocalGet(r_id)),
                         property: "value".to_string(),
                     },
-                    true,
-                )), route.byte_offset),
-            ],
-            else_branch: Some(vec![Stmt::Return(Some(make_iter_result(
-                Expr::PropertyGet {
-                    byte_end: 0,
-                    byte_offset: route.byte_offset,
-                    object: Box::new(Expr::LocalGet(r_id)),
-                    property: "value".to_string(),
-                },
-                false,
-            )), route.byte_offset)]),
+                    false,
+                )),
+                route.byte_offset,
+            )]),
         };
 
         let protocol = if route.is_async {
@@ -670,7 +698,10 @@ pub(crate) fn build_yield_star_return_routes(
             // generator too: run its enclosing finally through the shared path.
             if let Stmt::If { else_branch, .. } = &mut dispatch_done {
                 // GeneratorYield returns an unfinished inner result unchanged.
-                *else_branch = Some(vec![Stmt::Return(Some(Expr::LocalGet(r_id)), route.byte_offset)]);
+                *else_branch = Some(vec![Stmt::Return(
+                    Some(Expr::LocalGet(r_id)),
+                    route.byte_offset,
+                )]);
             }
             if let Stmt::If { then_branch, .. } = &mut dispatch_done {
                 *then_branch = vec![Stmt::Expr(Expr::LocalSet(
@@ -700,7 +731,8 @@ pub(crate) fn build_yield_star_return_routes(
                 else_branch,
             } = &mut no_method
             {
-                *condition = Expr::Compare { byte_offset: route.byte_offset,
+                *condition = Expr::Compare {
+                    byte_offset: route.byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(r_id)),
                     right: Box::new(Expr::Undefined),
@@ -814,14 +846,17 @@ pub(crate) fn build_yield_star_throw_routes(
         let ic_id = alloc_local(next_local_id); // awaited inner-close result
         let de_id = alloc_local(next_local_id); // caught delegation-protocol error
 
-        let in_interval = Expr::Logical { byte_offset: route.byte_offset,
+        let in_interval = Expr::Logical {
+            byte_offset: route.byte_offset,
             op: LogicalOp::And,
-            left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+            left: Box::new(Expr::Compare {
+                byte_offset: route.byte_offset,
                 op: CompareOp::Gt,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(route.suspend_state_lo as f64)),
             }),
-            right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+            right: Box::new(Expr::Compare {
+                byte_offset: route.byte_offset,
                 op: CompareOp::Le,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(route.suspend_state_hi as f64)),
@@ -863,14 +898,17 @@ pub(crate) fn build_yield_star_throw_routes(
             }),
         };
         let close_inner = Stmt::If {
-            condition: Expr::Logical { byte_offset: route.byte_offset,
+            condition: Expr::Logical {
+                byte_offset: route.byte_offset,
                 op: LogicalOp::And,
-                left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+                left: Box::new(Expr::Compare {
+                    byte_offset: route.byte_offset,
                     op: CompareOp::Ne,
                     left: Box::new(Expr::LocalGet(ret_m_id)),
                     right: Box::new(Expr::Undefined),
                 }),
-                right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+                right: Box::new(Expr::Compare {
+                    byte_offset: route.byte_offset,
                     op: CompareOp::Ne,
                     left: Box::new(Expr::LocalGet(ret_m_id)),
                     right: Box::new(Expr::Null),
@@ -899,14 +937,17 @@ pub(crate) fn build_yield_star_throw_routes(
             else_branch: None,
         };
         let no_method = Stmt::If {
-            condition: Expr::Logical { byte_offset: route.byte_offset,
+            condition: Expr::Logical {
+                byte_offset: route.byte_offset,
                 op: LogicalOp::Or,
-                left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+                left: Box::new(Expr::Compare {
+                    byte_offset: route.byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(m_id)),
                     right: Box::new(Expr::Undefined),
                 }),
-                right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
+                right: Box::new(Expr::Compare {
+                    byte_offset: route.byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(m_id)),
                     right: Box::new(Expr::Null),
@@ -965,7 +1006,10 @@ pub(crate) fn build_yield_star_throw_routes(
                 ))],
                 // Keep the existing suspended resume state so next(v) drives
                 // delegate.next(v), rather than re-yielding this throw result.
-                else_branch: Some(vec![Stmt::Return(Some(Expr::LocalGet(route.result_id)), route.byte_offset)]),
+                else_branch: Some(vec![Stmt::Return(
+                    Some(Expr::LocalGet(route.result_id)),
+                    route.byte_offset,
+                )]),
             }
         };
 
@@ -1024,7 +1068,7 @@ pub(crate) fn build_yield_star_throw_routes(
             continue;
         }
         let protocol = Stmt::Try {
-                    byte_offset: route.byte_offset,
+            byte_offset: route.byte_offset,
             body: protocol_body,
             catch: Some(CatchClause {
                 param: Some((de_id, "__yield_star_throw_e".to_string())),
@@ -1053,7 +1097,8 @@ mod sync_delegation_result_tests {
 
     #[test]
     fn unfinished_return_and_throw_results_are_preserved() {
-        let route = DelegationRoute { byte_offset: 0,
+        let route = DelegationRoute {
+            byte_offset: 0,
             is_async: false,
             suspend_state_lo: 0,
             suspend_state_hi: 4,
@@ -1104,7 +1149,9 @@ mod sync_delegation_result_tests {
         else {
             panic!("done");
         };
-        assert!(matches!(&yielded[0], Stmt::Return(Some(Expr::LocalGet(id)), _) if id == result_id));
+        assert!(
+            matches!(&yielded[0], Stmt::Return(Some(Expr::LocalGet(id)), _) if id == result_id)
+        );
         let routes = build_yield_star_throw_routes(
             &[route],
             &[],
@@ -1128,14 +1175,18 @@ mod sync_delegation_result_tests {
         else {
             panic!("done");
         };
-        assert!(matches!(&yielded[0], Stmt::Return(Some(Expr::LocalGet(2)), _)));
+        assert!(matches!(
+            &yielded[0],
+            Stmt::Return(Some(Expr::LocalGet(2)), _)
+        ));
         assert!(
             matches!(&finished[0], Stmt::Expr(Expr::LocalSet(3, value)) if matches!(**value, Expr::Number(4.0)))
         );
     }
     #[test]
     fn sync_protocol_calls_do_not_get_the_call_property() {
-        let route = DelegationRoute { byte_offset: 0,
+        let route = DelegationRoute {
+            byte_offset: 0,
             is_async: false,
             suspend_state_lo: 0,
             suspend_state_hi: 4,

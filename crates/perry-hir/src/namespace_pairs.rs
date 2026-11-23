@@ -119,7 +119,8 @@ fn pick(e: &mut Expr, proven: Arms<'_>) {
     if let Expr::Conditional {
         condition,
         then_expr,
-        else_expr, ..
+        else_expr,
+        ..
     } = e
     {
         if let Expr::NamespacePatched(ns) = condition.as_ref() {
@@ -197,7 +198,8 @@ fn stmts(body: &mut [Stmt], proven: Arms<'_>) {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 pick(discriminant, proven);
                 for case in cases {
@@ -330,7 +332,8 @@ mod tests {
             byte_offset: offset,
             byte_end: 0,
         };
-        Expr::Conditional { byte_offset: 0,
+        Expr::Conditional {
+            byte_offset: 0,
             condition: Box::new(Expr::NamespacePatched("Math".into())),
             then_expr: Box::new(Expr::Call {
                 callee: Box::new(member),
@@ -362,7 +365,8 @@ mod tests {
             + 1;
         m.functions[1].body.insert(
             0,
-            Stmt::Expr(Expr::Closure { byte_offset: 0,
+            Stmt::Expr(Expr::Closure {
+                byte_offset: 0,
                 func_id: closure,
                 params: Vec::new(),
                 return_type: crate::types::Type::Any,

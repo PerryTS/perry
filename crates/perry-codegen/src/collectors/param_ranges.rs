@@ -201,7 +201,8 @@ fn visit_stmt(stmt: &Stmt, module_constants: &HashMap<u32, f64>, scan: &mut Scan
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             visit_expr(discriminant, module_constants, scan);
             for case in cases {
@@ -359,7 +360,8 @@ mod tests {
     const MATMUL: u32 = 5;
 
     fn param(id: u32, name: &str) -> Param {
-        Param { byte_offset: 0,
+        Param {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             ty: Type::Number,
@@ -371,7 +373,8 @@ mod tests {
     }
 
     fn matmul_fn(body: Vec<Stmt>) -> Function {
-        Function { byte_offset: 0,
+        Function {
+            byte_offset: 0,
             id: MATMUL,
             name: "matmul".to_string(),
             type_params: Vec::new(),

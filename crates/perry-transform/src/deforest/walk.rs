@@ -155,7 +155,8 @@ pub fn max_in_stmt(stmt: &Stmt, max_id: &mut LocalId) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             max_in_expr(discriminant, max_id);
             for c in cases {
@@ -290,7 +291,8 @@ impl<'a> StmtRefWalker<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.visit_expr(discriminant);
                 for c in cases {

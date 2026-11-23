@@ -11,7 +11,8 @@ use perry_hir::{ArgumentsObjectMeta, Expr, Function, Module, Param, Stmt};
 const RELEASE: &str = "call void @js_box_scope_release(i64 ";
 
 fn param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,
@@ -23,7 +24,8 @@ fn param(id: u32, name: &str) -> Param {
 }
 
 fn closure(func_id: u32, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -52,7 +54,8 @@ fn let_stmt(id: u32, init: Expr) -> Stmt {
 }
 
 fn function(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 1,
         name: name.into(),
         type_params: Vec::new(),

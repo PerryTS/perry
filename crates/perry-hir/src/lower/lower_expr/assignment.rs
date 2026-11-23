@@ -16,9 +16,12 @@ pub(crate) fn lower_expr_assignment(
         // parenthesized / TS-cast assignment target below — go through the one
         // shared helper, so the `const`-immutability check can't be bypassed by
         // writing `(c as any) = 9` instead of `c = 9`.
-        ast::Expr::Ident(ident) => {
-            crate::lower::expr_assign::lower_ident_assignment(ctx, ident.sym.to_string(), value, byte_offset)
-        }
+        ast::Expr::Ident(ident) => crate::lower::expr_assign::lower_ident_assignment(
+            ctx,
+            ident.sym.to_string(),
+            value,
+            byte_offset,
+        ),
         ast::Expr::Member(member) => {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 // #5938 follow-up: resolve scope-local class renames so a
@@ -31,7 +34,8 @@ pub(crate) fn lower_expr_assignment(
                     if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                         let field_name = prop_ident.sym.to_string();
                         if ctx.has_static_field(&obj_name, &field_name) {
-                            return Ok(Expr::StaticFieldSet { byte_offset,
+                            return Ok(Expr::StaticFieldSet {
+                                byte_offset,
                                 class_name: obj_name,
                                 field_name,
                                 value,
@@ -128,8 +132,12 @@ pub(crate) fn lower_expr_assignment(
         ast::Expr::Paren(paren) => lower_expr_assignment(ctx, &paren.expr, value, byte_offset),
         ast::Expr::TsAs(ts_as) => lower_expr_assignment(ctx, &ts_as.expr, value, byte_offset),
         ast::Expr::TsNonNull(ts_nn) => lower_expr_assignment(ctx, &ts_nn.expr, value, byte_offset),
-        ast::Expr::TsTypeAssertion(ts_ta) => lower_expr_assignment(ctx, &ts_ta.expr, value, byte_offset),
-        ast::Expr::TsSatisfies(ts_sat) => lower_expr_assignment(ctx, &ts_sat.expr, value, byte_offset),
+        ast::Expr::TsTypeAssertion(ts_ta) => {
+            lower_expr_assignment(ctx, &ts_ta.expr, value, byte_offset)
+        }
+        ast::Expr::TsSatisfies(ts_sat) => {
+            lower_expr_assignment(ctx, &ts_sat.expr, value, byte_offset)
+        }
         _ => Err(anyhow!(
             "Unsupported expression as assignment target: {:?}",
             expr

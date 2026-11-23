@@ -949,7 +949,8 @@ fn collect_module_one(
         // flag is on before any dependency's top-level code runs.
         hir_module.init.insert(
             0,
-            perry_hir::Stmt::Expr(perry_hir::Expr::NativeMethodCall { byte_offset: hir_module.byte_offset,
+            perry_hir::Stmt::Expr(perry_hir::Expr::NativeMethodCall {
+                byte_offset: hir_module.byte_offset,
                 module: "__perry_runtime".to_string(),
                 class_name: None,
                 object: None,

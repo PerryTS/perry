@@ -156,9 +156,12 @@ fn apply_lexical(
             {
                 *init = Some(Expr::Undefined);
             }
-            module
-                .init
-                .insert(index + 1, Stmt::Expr(tdz_check::check(id, &name, 0 /*HPOS Let: the declaration's offset*/)));
+            module.init.insert(
+                index + 1,
+                Stmt::Expr(tdz_check::check(
+                    id, &name, 0, /*HPOS Let: the declaration's offset*/
+                )),
+            );
         }
     }
     // A checked `let x;` must end its dead zone when the declaration runs:
@@ -659,7 +662,8 @@ fn rw_stmt(stmt: &mut Stmt, rw: &Rw<'_>) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             rw_expr(discriminant, rw);
             for case in cases {
@@ -779,13 +783,31 @@ fn guard(expr: &mut Expr, rw: &Rw<'_>) {
     let taken = std::mem::replace(expr, Expr::Undefined);
     *expr = match (taken, rw.direct_throws) {
         // PutValue throws after the right-hand side has been evaluated.
-        (Expr::LocalSet(_, value), true) => Expr::Sequence(vec![*value, tdz_check::throw(name, 0 /*HPOS LocalGet/LocalSet: the guarded access's offset*/)]),
+        (Expr::LocalSet(_, value), true) => Expr::Sequence(vec![
+            *value,
+            tdz_check::throw(
+                name, 0, /*HPOS LocalGet/LocalSet: the guarded access's offset*/
+            ),
+        ]),
         (Expr::LocalSet(id, value), false) => {
-            Expr::LocalSet(id, Box::new(tdz_check::check_then(id, name, *value, 0 /*HPOS LocalGet/LocalSet: the guarded access's offset*/)))
+            Expr::LocalSet(
+                id,
+                Box::new(tdz_check::check_then(
+                    id, name, *value,
+                    0, /*HPOS LocalGet/LocalSet: the guarded access's offset*/
+                )),
+            )
         }
         // Every other access reads the binding before anything else runs.
-        (_, true) => tdz_check::throw(name, 0 /*HPOS LocalGet/LocalSet: the guarded access's offset*/),
-        (access, false) => Expr::Sequence(vec![tdz_check::check(id, name, 0 /*HPOS LocalGet/LocalSet: the guarded access's offset*/), access]),
+        (_, true) => tdz_check::throw(
+            name, 0, /*HPOS LocalGet/LocalSet: the guarded access's offset*/
+        ),
+        (access, false) => Expr::Sequence(vec![
+            tdz_check::check(
+                id, name, 0, /*HPOS LocalGet/LocalSet: the guarded access's offset*/
+            ),
+            access,
+        ]),
     };
 }
 

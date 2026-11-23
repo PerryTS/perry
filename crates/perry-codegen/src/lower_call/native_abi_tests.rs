@@ -6,13 +6,15 @@ use perry_hir::{Expr, Function, Module, Stmt};
 
 fn native_call(module_name: &str, class: Option<&str>, method: &str, receiver: bool) -> String {
     let mut module = Module::new("native_abi_test.ts");
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "probe".into(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Any,
-        body: vec![Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
+        body: vec![Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: 0,
             module: module_name.into(),
             class_name: class.map(str::to_owned),
             object: receiver.then(|| Box::new(Expr::Number(1.0))),

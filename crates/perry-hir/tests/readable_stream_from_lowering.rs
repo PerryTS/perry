@@ -47,7 +47,8 @@ fn readable_stream_from_static_factory_lowers_to_native_factory() {
             class_name,
             object,
             method,
-            args, ..
+            args,
+            ..
         } => {
             assert_eq!(module, "readable_stream");
             assert_eq!(class_name.as_deref(), Some("ReadableStream"));

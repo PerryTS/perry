@@ -66,7 +66,13 @@ pub(crate) fn rewrite_state_in_stmt(stmt: &mut Stmt, reg: &HashMap<LocalId, Stat
 
 pub(crate) fn rewrite_state_in_expr(e: &mut Expr, reg: &HashMap<LocalId, StateBinding>) {
     // Detect `state.set(v)` first (most specific shape).
-    if let Expr::Call { callee, args, byte_offset, .. } = e {
+    if let Expr::Call {
+        callee,
+        args,
+        byte_offset,
+        ..
+    } = e
+    {
         if args.len() == 1 {
             if let Expr::PropertyGet {
                 object, property, ..
@@ -76,7 +82,8 @@ pub(crate) fn rewrite_state_in_expr(e: &mut Expr, reg: &HashMap<LocalId, StateBi
                     if let Expr::LocalGet(state_id) = object.as_ref() {
                         if let Some(binding) = reg.get(state_id) {
                             let value_expr = args[0].clone();
-                            *e = Expr::NativeMethodCall { byte_offset: *byte_offset,
+                            *e = Expr::NativeMethodCall {
+                                byte_offset: *byte_offset,
                                 module: "perry/ui".to_string(),
                                 class_name: None,
                                 object: None,

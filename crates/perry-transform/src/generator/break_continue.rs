@@ -60,7 +60,8 @@ pub fn rewrite_break_continue_in_stmts(
                 // so this rewriter descends them and converts the loop-level
                 // `continue`s to sentinels; `break`s were already folded
                 // into the desugar's done-flag.
-                let desugared = desugar_switch_to_ifs(&discriminant, &cases, byte_offset, next_local_id);
+                let desugared =
+                    desugar_switch_to_ifs(&discriminant, &cases, byte_offset, next_local_id);
                 stmts.splice(i..=i, desugared);
             }
             mut other => {
@@ -306,7 +307,9 @@ pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
                 init: Some(Expr::Await(_, _)),
                 ..
             } if super::linearize::linearize_async_generator() => return true,
-            Stmt::Return(Some(Expr::Await(_, _)), _) if super::linearize::linearize_async_generator() => {
+            Stmt::Return(Some(Expr::Await(_, _)), _)
+                if super::linearize::linearize_async_generator() =>
+            {
                 return true
             }
             Stmt::Throw(Expr::Await(_, _)) if super::linearize::linearize_async_generator() => {
@@ -597,7 +600,8 @@ pub fn desugar_switch_to_ifs(
     let idx_id = alloc_local(next_local_id);
     let done_id = alloc_local(next_local_id);
 
-    let idx_is_unmatched = || Expr::Compare { byte_offset,
+    let idx_is_unmatched = || Expr::Compare {
+        byte_offset,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(idx_id)),
         right: Box::new(Expr::Number(unmatched)),
@@ -625,7 +629,8 @@ pub fn desugar_switch_to_ifs(
             then_branch: vec![
                 Stmt::Expr(Expr::LocalSet(t_id, Box::new(test.clone()))),
                 Stmt::If {
-                    condition: Expr::Compare { byte_offset,
+                    condition: Expr::Compare {
+                        byte_offset,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(d_id)),
                         right: Box::new(Expr::LocalGet(t_id)),
@@ -657,13 +662,15 @@ pub fn desugar_switch_to_ifs(
         let mut guarded = Vec::new();
         guard_switch_breaks(&case.body, done_id, &mut guarded);
         out.push(Stmt::If {
-            condition: Expr::Logical { byte_offset,
+            condition: Expr::Logical {
+                byte_offset,
                 op: LogicalOp::And,
                 left: Box::new(Expr::Unary {
                     op: UnaryOp::Not,
                     operand: Box::new(Expr::LocalGet(done_id)),
                 }),
-                right: Box::new(Expr::Compare { byte_offset,
+                right: Box::new(Expr::Compare {
+                    byte_offset,
                     op: CompareOp::Le,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::Number(i as f64)),
@@ -926,7 +933,8 @@ fn escape_set(carrier: LocalId, value: f64) -> Stmt {
 }
 
 fn escape_is(carrier: LocalId, op: CompareOp, value: f64) -> Expr {
-    Expr::Compare { byte_offset: 0 /*HPOS*/,
+    Expr::Compare {
+        byte_offset: 0, /*HPOS*/
         op,
         left: Box::new(Expr::LocalGet(carrier)),
         right: Box::new(Expr::Number(value)),

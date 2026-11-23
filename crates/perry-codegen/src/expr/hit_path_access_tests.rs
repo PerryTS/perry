@@ -10,7 +10,8 @@ use perry_hir::types::Type;
 use perry_hir::{Class, ClassField, Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -22,7 +23,8 @@ fn param(id: u32, ty: Type) -> Param {
 }
 
 fn function(params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: vec![],
@@ -91,12 +93,15 @@ fn declared_typed_array_length_reads_the_header_inline() {
     let ir = probe_ir(&module(
         "ta_length",
         vec![param(1, named("Float64Array"))],
-        vec![Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            property: "length".into(),
-            byte_offset: 0,
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                property: "length".into(),
+                byte_offset: 0,
+            }),
+            0,
+        )],
     ));
     let fast =
         block_body(&ir, "plen.fast").unwrap_or_else(|| panic!("no inline length arm:\n{ir}"));
@@ -156,13 +161,16 @@ fn declared_typed_array_unproven_index_access_is_inline() {
     let get = probe_ir(&module(
         "ta_dynamic_get",
         vec![param(1, named("Float64Array")), param(2, Type::Number)],
-        vec![Stmt::Return(Some(Expr::IndexGet {
-            element_offset: 0,
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(Expr::LocalGet(2)),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::LocalGet(2)),
+            }),
+            0,
+        )],
     ));
     assert!(
         get.contains("ta.read.load")
@@ -229,13 +237,16 @@ fn owner_element_store_join_has_no_bag_arm() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::IndexGet {
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                index: Box::new(Expr::LocalGet(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(1)),
+                    index: Box::new(Expr::LocalGet(2)),
+                }),
+                0,
+            ),
         ],
     ));
     let stores = labels(&ir, "bytes.store.");
@@ -323,10 +334,13 @@ fn plain_double_array_literal_skips_notes_and_marking() {
     let ir = probe_ir(&module(
         "numeric_literal",
         vec![param(1, Type::Number), param(2, Type::Number)],
-        vec![Stmt::Return(Some(Expr::Array(
-            vec![Expr::LocalGet(1), Expr::LocalGet(2), Expr::Number(3.0)],
-            None,
-        )), 0)],
+        vec![Stmt::Return(
+            Some(Expr::Array(
+                vec![Expr::LocalGet(1), Expr::LocalGet(2), Expr::Number(3.0)],
+                None,
+            )),
+            0,
+        )],
     ));
     let plain = block_body(&ir, "arrlit.plain_numbers")
         .unwrap_or_else(|| panic!("no plain-number arm:\n{ir}"));
@@ -363,7 +377,8 @@ fn point_class() -> Class {
         native_extends: None,
         extends_expr: None,
         heritage_lexically_shadowed: false,
-        fields: vec![ClassField { byte_offset: 0,
+        fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "x".to_string(),
             key_expr: None,
@@ -405,12 +420,15 @@ fn class_field_read_is_the_shape_site_read() {
     let mut m = module(
         "class_field_fused",
         vec![param(1, named("Point"))],
-        vec![Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            property: "x".into(),
-            byte_offset: 0,
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                property: "x".into(),
+                byte_offset: 0,
+            }),
+            0,
+        )],
     );
     // `x = 0`: born on an `F64` lane, so the read is raw.
     let mut point = point_class();

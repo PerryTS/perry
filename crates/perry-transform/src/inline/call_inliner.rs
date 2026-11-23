@@ -125,11 +125,14 @@ fn returns_only_anonymous_records(function: &Function) -> bool {
     fn inspect(stmts: &[Stmt], saw_return: &mut bool) -> bool {
         for stmt in stmts {
             match stmt {
-                Stmt::Return(Some(Expr::New {
-                    class_name,
-                    cap_args_appended: 0,
-                    ..
-                }), _) if class_name.starts_with("__AnonShape_") => *saw_return = true,
+                Stmt::Return(
+                    Some(Expr::New {
+                        class_name,
+                        cap_args_appended: 0,
+                        ..
+                    }),
+                    _,
+                ) if class_name.starts_with("__AnonShape_") => *saw_return = true,
                 Stmt::Return(_, _) => return false,
                 Stmt::If {
                     then_branch,
@@ -290,7 +293,8 @@ fn loop_has_prototype_surgery(stmts: &[Stmt]) -> bool {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 expr_has_prototype_surgery(discriminant)
                     || cases.iter().any(|case| {
@@ -482,7 +486,8 @@ pub fn inline_calls_in_stmts(
                         class_name: None,
                         object: None,
                         method,
-                        args, ..
+                        args,
+                        ..
                     } if module == "__perry_runtime"
                         && method == "requireObjectCoercible"
                         && matches!(
@@ -1041,7 +1046,8 @@ pub fn inline_calls_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             hoisted.extend(inline_calls_in_expr(
                 condition,
@@ -2095,7 +2101,8 @@ fn fold_scalar_aggregate_param_length(stmts: &mut [Stmt], param_id: LocalId, len
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 fold_expr(discriminant, param_id, len);
                 for case in cases {
@@ -2316,7 +2323,8 @@ mod tests {
     fn nested_closure_expr(depth: usize) -> Expr {
         let mut expr = Expr::Integer(1);
         for func_id in 0..depth as u32 {
-            expr = Expr::Closure { byte_offset: 0,
+            expr = Expr::Closure {
+                byte_offset: 0,
                 func_id,
                 params: Vec::new(),
                 return_type: Type::Any,
@@ -2393,7 +2401,8 @@ mod tests {
     /// parameter: a local argument keeps its parameter-binding boundary, so
     /// inlining `keep(x)` yields the setup `let e = x`.
     fn keep_candidate() -> HashMap<FuncId, Function> {
-        let param = perry_hir::Param { byte_offset: 0,
+        let param = perry_hir::Param {
+            byte_offset: 0,
             id: 100,
             name: "e".to_string(),
             ty: Type::Any,
@@ -2402,7 +2411,8 @@ mod tests {
             is_rest: false,
             arguments_object: None,
         };
-        let keep = Function { byte_offset: 0,
+        let keep = Function {
+            byte_offset: 0,
             id: 7,
             name: "keep".to_string(),
             type_params: Vec::new(),
@@ -2481,7 +2491,8 @@ mod tests {
                 Expr::LocalSet(1, Box::new(Expr::Integer(1))),
                 call(Expr::FuncRef(7), vec![Expr::LocalGet(1)]),
             ]),
-            Expr::Binary { byte_offset: 0,
+            Expr::Binary {
+                byte_offset: 0,
                 op: perry_hir::BinaryOp::Add,
                 left: Box::new(Expr::LocalSet(1, Box::new(Expr::Integer(1)))),
                 right: Box::new(call(Expr::FuncRef(7), vec![Expr::LocalGet(1)])),

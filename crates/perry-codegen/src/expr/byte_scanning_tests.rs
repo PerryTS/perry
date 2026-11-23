@@ -8,7 +8,8 @@ fn read_ir(class: &str, dedicated: bool, global: bool) -> String {
 
 fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition: bool) -> String {
     let mut module = Module::new("byte_scan.ts");
-    let param = |id, ty| Param { byte_offset: 0,
+    let param = |id, ty| Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -34,7 +35,8 @@ fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition
         }
     };
     let read = if addition {
-        Expr::Binary { byte_offset: 0,
+        Expr::Binary {
+            byte_offset: 0,
             op: perry_hir::BinaryOp::Add,
             left: Box::new(read),
             right: Box::new(Expr::Integer(1)),
@@ -51,7 +53,8 @@ fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition
             init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(256))))),
         });
     }
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "read".into(),
         type_params: vec![],
@@ -184,7 +187,8 @@ fn byte_scanning_reuses_the_number_loop_scope() {
         for while_loop in [false, true] {
             for live_length in [false, true] {
                 let mut module = Module::new("scan_index.ts");
-                let param = |id, ty| Param { byte_offset: 0,
+                let param = |id, ty| Param {
+                    byte_offset: 0,
                     id,
                     name: format!("p{id}"),
                     ty,
@@ -193,7 +197,8 @@ fn byte_scanning_reuses_the_number_loop_scope() {
                     is_rest: false,
                     arguments_object: None,
                 };
-                module.functions.push(Function { byte_offset: 0,
+                module.functions.push(Function {
+                    byte_offset: 0,
                     id: 1,
                     name: "scan".into(),
                     type_params: vec![],
@@ -205,7 +210,8 @@ fn byte_scanning_reuses_the_number_loop_scope() {
                     body: vec![
                         Stmt::For {
                             init: None,
-                            condition: Some(Expr::Compare { byte_offset: 0,
+                            condition: Some(Expr::Compare {
+                                byte_offset: 0,
                                 op: CompareOp::Lt,
                                 left: Box::new(Expr::LocalGet(2)),
                                 right: Box::new(Expr::Integer(8)),

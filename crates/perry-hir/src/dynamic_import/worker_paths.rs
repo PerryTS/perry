@@ -217,7 +217,8 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
             Expr::Binary {
                 op: BinaryOp::Add,
                 left,
-                right, ..
+                right,
+                ..
             } => {
                 let left = self.strings(left, depth + 1)?;
                 let right = self.strings(right, depth + 1)?;
@@ -248,7 +249,8 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 self.pure_selector(condition, depth + 1)?;
                 let mut then_values = self.resolve(then_expr, depth + 1)?;

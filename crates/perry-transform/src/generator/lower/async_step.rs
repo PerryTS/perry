@@ -197,9 +197,10 @@ pub fn build_async_step_driver_direct(
     // re-runs these (idempotent) stores.
     let reject_arm: Vec<Stmt> = {
         let mut stmts = build_box_release_stmts(release_ids);
-        stmts.push(Stmt::Return(Some(promise_reject(Expr::LocalGet(
-            catch_e_id,
-        ))), fn_offset));
+        stmts.push(Stmt::Return(
+            Some(promise_reject(Expr::LocalGet(catch_e_id))),
+            fn_offset,
+        ));
         stmts
     };
     let resolve_arm: Vec<Stmt> = {
@@ -210,10 +211,13 @@ pub fn build_async_step_driver_direct(
         // promise_all_chains). The return value already lives in the
         // iter-result TLS slot, and a box release neither allocates nor
         // collects, so ordering the releases first cannot disturb it.
-        stmts.push(Stmt::Return(Some(Expr::AsyncStepDone {
-            value: Box::new(Expr::IterResultGetValue),
-            step_closure: Box::new(Expr::LocalGet(step_self_id)),
-        }), fn_offset));
+        stmts.push(Stmt::Return(
+            Some(Expr::AsyncStepDone {
+                value: Box::new(Expr::IterResultGetValue),
+                step_closure: Box::new(Expr::LocalGet(step_self_id)),
+            }),
+            fn_offset,
+        ));
         stmts
     };
 
@@ -249,10 +253,13 @@ pub fn build_async_step_driver_direct(
         },
         Stmt::If {
             condition: Expr::AsyncStepDeclined(Box::new(Expr::LocalGet(resumed_id))),
-            then_branch: vec![Stmt::Return(Some(Expr::AsyncStepChain {
-                value: Box::new(Expr::LocalGet(awaited_id)),
-                step_closure: Box::new(Expr::LocalGet(step_self_id)),
-            }), fn_offset)],
+            then_branch: vec![Stmt::Return(
+                Some(Expr::AsyncStepChain {
+                    value: Box::new(Expr::LocalGet(awaited_id)),
+                    step_closure: Box::new(Expr::LocalGet(step_self_id)),
+                }),
+                fn_offset,
+            )],
             else_branch: Some(vec![
                 Stmt::Expr(Expr::LocalSet(
                     value_param_id,
@@ -280,13 +287,16 @@ pub fn build_async_step_driver_direct(
                     // Use the step closure captured at entry so nested
                     // calls cannot disturb the TLS self-reference before
                     // the error re-entry path runs.
-                    Stmt::Return(Some(Expr::Call {
-                        byte_end: 0,
-                        callee: Box::new(Expr::LocalGet(step_self_id)),
-                        args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
-                        type_args: vec![],
-                        byte_offset: fn_offset,
-                    }), fn_offset),
+                    Stmt::Return(
+                        Some(Expr::Call {
+                            byte_end: 0,
+                            callee: Box::new(Expr::LocalGet(step_self_id)),
+                            args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
+                            type_args: vec![],
+                            byte_offset: fn_offset,
+                        }),
+                        fn_offset,
+                    ),
                 ],
             }),
             finally: None,
@@ -323,10 +333,12 @@ pub fn build_async_step_driver_direct(
     step_captures.dedup();
     let step_mut_captures: Vec<LocalId> = next_mutable_captures;
 
-    let step_closure = Expr::Closure { byte_offset: fn_offset,
+    let step_closure = Expr::Closure {
+        byte_offset: fn_offset,
         func_id: step_func_id,
         params: vec![
-            perry_hir::Param { byte_offset: fn_offset,
+            perry_hir::Param {
+                byte_offset: fn_offset,
                 id: value_param_id,
                 name: "__step_value".to_string(),
                 ty: any_ty.clone(),
@@ -335,7 +347,8 @@ pub fn build_async_step_driver_direct(
                 decorators: Vec::new(),
                 arguments_object: None,
             },
-            perry_hir::Param { byte_offset: fn_offset,
+            perry_hir::Param {
+                byte_offset: fn_offset,
                 id: is_error_param_id,
                 name: "__step_is_error".to_string(),
                 ty: bool_ty.clone(),
@@ -373,9 +386,12 @@ pub fn build_async_step_driver_direct(
             mutable: false,
             init: Some(step_closure),
         },
-        Stmt::Return(Some(Expr::AsyncFirstCall {
-            step_closure: Box::new(Expr::LocalGet(step_id)),
-        }), fn_offset),
+        Stmt::Return(
+            Some(Expr::AsyncFirstCall {
+                step_closure: Box::new(Expr::LocalGet(step_id)),
+            }),
+            fn_offset,
+        ),
     ]);
     wrapper
 }

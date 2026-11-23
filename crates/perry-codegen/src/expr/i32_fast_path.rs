@@ -56,7 +56,10 @@ pub(crate) fn is_known_i32_range(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// expression natively, operands included, which an unproven operand must
 /// not be. `>>>` yields a Uint32 and is left to the range walk.
 fn is_int32_bitwise_result(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    let Expr::Binary { op, left, right, .. } = e else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = e
+    else {
         return false;
     };
     matches!(
@@ -840,11 +843,14 @@ fn region_i32_chain_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
         Expr::Binary {
             op: BinaryOp::BitOr,
             left,
-            right, ..
+            right,
+            ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => {
             region_i32_chain_magnitude_bits(ctx, left).map(|l| l.min(I32_CHAIN_LEAF_BITS))
         }
-        Expr::Binary { op, left, right, .. } if is_i32_chain_op(*op) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if is_i32_chain_op(*op) => {
             let l = region_i32_chain_magnitude_bits(ctx, left)?;
             let r = region_i32_chain_magnitude_bits(ctx, right)?;
             combine_i32_chain_bits(*op, left, right, l, r)
@@ -1035,23 +1041,25 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
         Expr::Binary {
             op: BinaryOp::BitOr,
             left,
-            right, ..
+            right,
+            ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => {
             Some(lower_expr_native_i32(ctx, left)?.value)
         }
-        Expr::Binary { op, left, right, .. }
-            if matches!(
-                op,
-                BinaryOp::Add
-                    | BinaryOp::Sub
-                    | BinaryOp::Mul
-                    | BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::Shl
-                    | BinaryOp::Shr
-                    | BinaryOp::UShr
-            ) =>
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(
+            op,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+                | BinaryOp::UShr
+        ) =>
         {
             let l = lower_expr_native_i32(ctx, left)?.value;
             let mut r = lower_expr_native_i32(ctx, right)?.value;
@@ -1374,7 +1382,8 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
     if let Expr::Logical {
         op: perry_hir::LogicalOp::Coalesce,
         left,
-        right, ..
+        right,
+        ..
     } = e
     {
         if let Some(value) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
@@ -1482,7 +1491,8 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         Expr::Binary {
             op: BinaryOp::BitOr,
             left,
-            right, ..
+            right,
+            ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => lower_expr_native_i32(ctx, left)?.value,
         // Last-resort ARITHMETIC, reached when `lower_expr_value` could not
         // produce a value at all. It is a SECOND emitter of the same
@@ -1507,7 +1517,9 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
             let d = lower_expr(ctx, e)?;
             ctx.block().toint32(&d)
         }
-        Expr::Binary { op, left, right, .. } if is_i32_chain_op(*op) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if is_i32_chain_op(*op) => {
             let l = lower_expr_native_i32(ctx, left)?.value;
             let mut r = lower_expr_native_i32(ctx, right)?.value;
             let blk = ctx.block();
@@ -1708,7 +1720,8 @@ fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         Expr::Binary {
             op: BinaryOp::UShr,
             left,
-            right, ..
+            right,
+            ..
         } => {
             let l = lower_expr_native_u32(ctx, left)?.value;
             let r = lower_expr_native_u32(ctx, right)?.value;

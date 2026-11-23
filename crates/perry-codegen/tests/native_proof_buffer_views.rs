@@ -126,7 +126,8 @@ fn module_with_classes_and_params(
 ) -> Module {
     let mut module = Module::new(name);
     module.classes = classes;
-    module.functions = vec![Function { byte_offset: 0,
+    module.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -212,7 +213,8 @@ fn assert_typed_array_get_fallback_reason(artifact: &serde_json::Value, reason: 
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -224,7 +226,8 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 }
 
 fn class_field(name: &str, ty: Type) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -400,7 +403,8 @@ fn native_arena_owner_alias_let(id: u32, name: &str, owner_id: u32, mutable: boo
 }
 
 fn runtime_condition(cond_id: u32) -> Expr {
-    Expr::Compare { byte_offset: 0,
+    Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Ne,
         left: Box::new(local(cond_id)),
         right: Box::new(int(0)),
@@ -427,7 +431,8 @@ fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
 }
 
 fn bit_or_zero(value: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitOr,
         left: Box::new(value),
         right: Box::new(int(0)),
@@ -435,7 +440,8 @@ fn bit_or_zero(value: Expr) -> Expr {
 }
 
 fn div(left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Div,
         left: Box::new(left),
         right: Box::new(right),
@@ -443,7 +449,8 @@ fn div(left: Expr, right: Expr) -> Expr {
 }
 
 fn add(left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -546,7 +553,8 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
 }
 
 fn native_module_call(module: &str, method: &str, args: Vec<Expr>) -> Expr {
-    Expr::NativeMethodCall { byte_offset: 0,
+    Expr::NativeMethodCall {
+        byte_offset: 0,
         module: module.to_string(),
         class_name: None,
         object: None,
@@ -640,7 +648,8 @@ fn for_loop_with_op_start_and_update(
 ) -> Stmt {
     Stmt::For {
         init: Some(Box::new(number_let(counter_id, "i", true, start))),
-        condition: Some(Expr::Compare { byte_offset: 0,
+        condition: Some(Expr::Compare {
+            byte_offset: 0,
             op,
             left: Box::new(local(counter_id)),
             right: Box::new(bound),
@@ -662,18 +671,21 @@ fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
 fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
     let body = vec![
         buffer_let(1, "buf", int(8)),
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
-                byte_offset: PROVEN_SITE,
-                object: Box::new(local(1)),
-                property: "readUInt32BE".to_string(),
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: PROVEN_SITE,
+                    object: Box::new(local(1)),
+                    property: "readUInt32BE".to_string(),
+                }),
+                args: vec![int(0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
             }),
-            args: vec![int(0)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0),
+            0,
+        ),
     ];
 
     let artifact = proven_artifact_json("artifact_buffer_read_u32.ts", body);
@@ -778,18 +790,21 @@ fn loop_length_bound_does_not_prove_multibyte_buffer_read_inbounds() {
 fn artifact_records_buffer_read_double_as_f64() {
     let body = vec![
         buffer_let(1, "buf", int(8)),
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
-                byte_offset: PROVEN_SITE,
-                object: Box::new(local(1)),
-                property: "readDoubleLE".to_string(),
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: PROVEN_SITE,
+                    object: Box::new(local(1)),
+                    property: "readDoubleLE".to_string(),
+                }),
+                args: vec![int(0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
             }),
-            args: vec![int(0)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0),
+            0,
+        ),
     ];
 
     let artifact = proven_artifact_json("artifact_buffer_read_double.ts", body);
@@ -819,15 +834,18 @@ fn artifact_records_buffer_read_double_as_f64() {
 fn artifact_records_buffer_read_float_as_f32_and_float_extend_materialization() {
     let body = vec![
         buffer_let(1, "buf", int(8)),
-        Stmt::Return(Some(call(
-            Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: PROVEN_SITE,
-                object: Box::new(local(1)),
-                property: "readFloatLE".to_string(),
-            },
-            vec![int(0)],
-        )), 0),
+        Stmt::Return(
+            Some(call(
+                Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: PROVEN_SITE,
+                    object: Box::new(local(1)),
+                    property: "readFloatLE".to_string(),
+                },
+                vec![int(0)],
+            )),
+            0,
+        ),
     ];
 
     let artifact = proven_artifact_json("artifact_buffer_read_f32.ts", body);
@@ -933,7 +951,8 @@ fn explicit_width_guard_proves_wide_buffer_read() {
         buffer_let(1, "buf", int(16)),
         Stmt::For {
             init: Some(Box::new(number_let(2, "i", true, int(0)))),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Le,
                 left: Box::new(add(local(2), int(4))),
                 right: Box::new(length(1)),
@@ -965,7 +984,8 @@ fn proven_buffer_and_typed_array_reads_are_numeric_operands() {
         number_let(2, "sum", true, int(0)),
         Stmt::For {
             init: Some(Box::new(number_let(3, "i", true, int(0)))),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Le,
                 left: Box::new(add(local(3), int(4))),
                 right: Box::new(length(1)),
@@ -1034,7 +1054,8 @@ fn unproven_bounds_typed_array_read_is_a_numeric_operand_without_a_call() {
                 3,
                 Box::new(add(
                     local(3),
-                    Expr::Binary { byte_offset: 0,
+                    Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Mul,
                         left: Box::new(number(0.5)),
                         right: Box::new(index_get(1, local(4))),
@@ -1234,7 +1255,8 @@ fn native_owned_view_identity_keeps_numeric_add_on_the_native_path() {
             5,
             "layoutIndex",
             false,
-            Expr::Binary { byte_offset: 0,
+            Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Div,
                 left: Box::new(Expr::PodLayoutSizeOf {
                     ty: layout_ty.clone(),
@@ -1739,7 +1761,8 @@ fn native_owned_closure_capture_through_owner_alias_invalidates_views() {
                 name: "f".to_string(),
                 ty: closure_type(Type::Number),
                 mutable: false,
-                init: Some(Expr::Closure { byte_offset: 0,
+                init: Some(Expr::Closure {
+                    byte_offset: 0,
                     func_id: 90,
                     params: Vec::new(),
                     return_type: Type::Number,
@@ -1782,10 +1805,13 @@ fn native_owned_uint8array_get_fallback_uses_uint8array_helper() {
                 int(16),
             ),
             Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(1)))),
-            Stmt::Return(Some(Expr::Uint8ArrayGet {
-                array: Box::new(local(2)),
-                index: Box::new(int(0)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::Uint8ArrayGet {
+                    array: Box::new(local(2)),
+                    index: Box::new(int(0)),
+                }),
+                0,
+            ),
         ],
     );
     // Codegen migrated the disposed-view fallback from `js_uint8array_get`
@@ -1861,10 +1887,13 @@ fn uint8array_const_local_length_uses_inline_byte_get_set() {
                     value: Box::new(local(3)),
                 })],
             ),
-            Stmt::Return(Some(Expr::Uint8ArrayGet {
-                array: Box::new(local(2)),
-                index: Box::new(int(0)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::Uint8ArrayGet {
+                    array: Box::new(local(2)),
+                    index: Box::new(int(0)),
+                }),
+                0,
+            ),
         ],
     );
     assert!(
@@ -1898,7 +1927,8 @@ fn bounded_buffer_read_modify_write_keeps_inline_byte_store() {
         array: Box::new(local(1)),
         index: Box::new(local(2)),
     };
-    let value = Expr::Binary { byte_offset: 0,
+    let value = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitAnd,
         left: Box::new(add(read, int(1))),
         right: Box::new(int(255)),

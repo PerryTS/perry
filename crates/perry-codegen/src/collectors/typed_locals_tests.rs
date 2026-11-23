@@ -35,7 +35,8 @@ fn method(recv: Expr, name: &str, args: Vec<Expr>) -> Expr {
 }
 
 fn typeof_is(id: u32, lit: &str, eq: bool) -> Expr {
-    Expr::Compare { byte_offset: 0,
+    Expr::Compare {
+        byte_offset: 0,
         op: if eq { CompareOp::Eq } else { CompareOp::Ne },
         left: Box::new(Expr::TypeOf(Box::new(get(id)))),
         right: Box::new(Expr::String(lit.into())),
@@ -43,7 +44,8 @@ fn typeof_is(id: u32, lit: &str, eq: bool) -> Expr {
 }
 
 fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(l),
         right: Box::new(r),
@@ -195,7 +197,8 @@ fn concat_with_a_string_is_a_string_and_unknown_operands_stay_unknown() {
 
 #[test]
 fn a_closure_capturing_before_the_write_disqualifies_the_local() {
-    let clo = Expr::Closure { byte_offset: 0,
+    let clo = Expr::Closure {
+        byte_offset: 0,
         func_id: 50,
         params: Vec::new(),
         return_type: HirType::Any,
@@ -251,12 +254,15 @@ fn a_literal_array_local_stays_an_array_through_in_place_pushes() {
             value: Box::new(Expr::String("x".into())),
             field_writeback: None,
         }),
-        Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(get(5)),
-            property: "length".into(),
-            byte_offset: 0,
-        }), 0),
+        Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(get(5)),
+                property: "length".into(),
+                byte_offset: 0,
+            }),
+            0,
+        ),
     ];
     let t = run(&body, &[]);
     assert_eq!(t.arrays, HashSet::from([5]));
@@ -267,7 +273,8 @@ fn a_literal_array_local_stays_an_array_through_in_place_pushes() {
 }
 
 fn closure(func_id: u32, body: Vec<Stmt>) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: HirType::Any,
@@ -331,7 +338,10 @@ fn arr_any() -> HirType {
 
 #[test]
 fn cloned_iife_proofs_keep_their_own_depth_budget_across_hash_seeds() {
-    let shallow = iife(60, vec![Stmt::Return(Some(Expr::Array(Vec::new(), None)), 0)]);
+    let shallow = iife(
+        60,
+        vec![Stmt::Return(Some(Expr::Array(Vec::new(), None)), 0)],
+    );
     let mut deep = shallow.clone();
     for _ in 0..5 {
         deep = Expr::Sequence(vec![deep]);

@@ -110,7 +110,8 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32, defer_apply: bool) -
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => observes(condition, id) || (observes(then_expr, id) && observes(else_expr, id)),
             Expr::Sequence(exprs) => exprs.iter().any(|expr| observes(expr, id)),
             Expr::Call { callee, args, .. } => {
@@ -960,11 +961,15 @@ mod length_only_tests {
 
     #[test]
     fn accepts_exact_length_reads_at_arbitrary_depth() {
-        let body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op: perry_hir::BinaryOp::Add,
-            left: Box::new(Expr::Integer(1)),
-            right: Box::new(length()),
-        }), 0)];
+        let body = vec![Stmt::Return(
+            Some(Expr::Binary {
+                byte_offset: 0,
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::Integer(1)),
+                right: Box::new(length()),
+            }),
+            0,
+        )];
         assert!(arguments_used_only_for_length(&body, ARGUMENTS));
     }
 
@@ -975,13 +980,16 @@ mod length_only_tests {
             ARGUMENTS
         ));
         assert!(!arguments_used_only_for_length(
-            &[Stmt::Return(Some(Expr::IndexGet {
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(ARGUMENTS)),
-                index: Box::new(Expr::Integer(0)),
-            }), 0)],
+            &[Stmt::Return(
+                Some(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(ARGUMENTS)),
+                    index: Box::new(Expr::Integer(0)),
+                }),
+                0
+            )],
             ARGUMENTS
         ));
         assert!(!arguments_used_only_for_length(
@@ -1013,7 +1021,8 @@ mod elision_tests {
     const ARGUMENTS: u32 = 17;
 
     fn param(id: u32, name: &str) -> Param {
-        Param { byte_offset: 0,
+        Param {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             ty: Type::Any,
@@ -1064,17 +1073,21 @@ mod elision_tests {
     fn reads() -> Vec<Stmt> {
         vec![
             Stmt::Expr(length()),
-            Stmt::Return(Some(Expr::IndexGet {
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-                object: args(),
-                index: Box::new(Expr::Binary { byte_offset: 0,
-                    op: perry_hir::BinaryOp::Sub,
-                    left: Box::new(length()),
-                    right: Box::new(index(0)),
+            Stmt::Return(
+                Some(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: args(),
+                    index: Box::new(Expr::Binary {
+                        byte_offset: 0,
+                        op: perry_hir::BinaryOp::Sub,
+                        left: Box::new(length()),
+                        right: Box::new(index(0)),
+                    }),
                 }),
-            }), 0),
+                0,
+            ),
         ]
     }
 
@@ -1125,11 +1138,15 @@ mod elision_tests {
             observe,
         ];
         assert_eq!(arguments_object_flags(&params(false), &early_exit), 0);
-        let conditional = vec![Stmt::Return(Some(Expr::Logical { byte_offset: 0,
-            op: perry_hir::LogicalOp::And,
-            left: Box::new(Expr::Bool(false)),
-            right: args(),
-        }), 0)];
+        let conditional = vec![Stmt::Return(
+            Some(Expr::Logical {
+                byte_offset: 0,
+                op: perry_hir::LogicalOp::And,
+                left: Box::new(Expr::Bool(false)),
+                right: args(),
+            }),
+            0,
+        )];
         assert_eq!(arguments_object_flags(&params(false), &conditional), 0);
     }
 
@@ -1226,20 +1243,26 @@ mod elision_tests {
         // a spread nested in an argument are not call-spread operands.
         let spread = perry_hir::CallArg::Spread(*args());
         for body in [
-            vec![Stmt::Return(Some(Expr::NewDynamicSpread {
-                callee: Box::new(Expr::LocalGet(A)),
-                args: vec![spread.clone()],
-                byte_offset: 0,
-                byte_end: 0,
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::NewDynamicSpread {
+                    callee: Box::new(Expr::LocalGet(A)),
+                    args: vec![spread.clone()],
+                    byte_offset: 0,
+                    byte_end: 0,
+                }),
+                0,
+            )],
             vec![Stmt::Expr(Expr::SuperCallSpread(vec![spread.clone()]))],
-            vec![Stmt::Return(Some(Expr::CallSpread {
-                callee: Box::new(Expr::LocalGet(A)),
-                args: vec![perry_hir::CallArg::Expr(*args())],
-                type_args: Vec::new(),
-                byte_offset: 0,
-                byte_end: 0,
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::CallSpread {
+                    callee: Box::new(Expr::LocalGet(A)),
+                    args: vec![perry_hir::CallArg::Expr(*args())],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    byte_end: 0,
+                }),
+                0,
+            )],
         ] {
             assert_eq!(arguments_elision(&params(false), &body), None);
         }

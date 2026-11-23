@@ -114,7 +114,8 @@ impl<'hir> ClosureWrites<'hir> {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases, ..
+                    cases,
+                    ..
                 } => {
                     self.collect_expr_writes(discriminant, writes);
                     for case in cases {

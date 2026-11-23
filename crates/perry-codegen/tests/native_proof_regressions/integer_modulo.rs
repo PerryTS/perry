@@ -1,7 +1,8 @@
 use super::*;
 
 fn modulo(left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Mod,
         left: Box::new(left),
         right: Box::new(right),
@@ -184,7 +185,8 @@ fn non_i32_left_operands_use_checked_path_with_number_mod_fallback() {
             number_let(3, "iterations", false, int(64)),
             Stmt::For {
                 init: Some(Box::new(number_let(2, "i", true, ushr_zero(int(0))))),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(local(2)),
                     right: Box::new(local(3)),

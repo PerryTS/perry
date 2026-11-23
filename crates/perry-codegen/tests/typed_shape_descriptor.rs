@@ -78,7 +78,8 @@ fn empty_opts() -> CompileOptions {
 }
 
 fn field(name: &str, ty: Type) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -122,7 +123,8 @@ fn class(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
 
 fn module_with_new(class: Class) -> Module {
     let class_name = class.name.clone();
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "typed_shape_descriptor.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -131,20 +133,24 @@ fn module_with_new(class: Class) -> Module {
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function { byte_offset: 0,
+        functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
             params: Vec::new(),
             return_type: Type::Named(class_name.clone()),
-            body: vec![Stmt::Return(Some(Expr::New {
-                byte_end: 0,
-                class_name,
-                args: Vec::new(),
-                type_args: Vec::new(),
-                byte_offset: 0,
-                cap_args_appended: 0,
-            }), 0)],
+            body: vec![Stmt::Return(
+                Some(Expr::New {
+                    byte_end: 0,
+                    class_name,
+                    args: Vec::new(),
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    cap_args_appended: 0,
+                }),
+                0,
+            )],
             is_async: false,
             is_generator: false,
             is_strict: false,

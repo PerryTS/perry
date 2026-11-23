@@ -32,7 +32,8 @@ const KINDS: [(&str, u8); 11] = [
 ];
 
 fn field(name: &str, ty: Type) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -75,7 +76,8 @@ fn holder(fields: Vec<ClassField>) -> Class {
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -87,7 +89,8 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 }
 
 fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -332,7 +335,8 @@ fn arena_module(call_between: bool) -> Module {
                     init: Some(element(1, "left", 2)),
                 },
                 Stmt::If {
-                    condition: Expr::Compare { byte_offset: 0,
+                    condition: Expr::Compare {
+                        byte_offset: 0,
                         op: CompareOp::Lt,
                         left: Box::new(Expr::LocalGet(5)),
                         right: Box::new(Expr::Integer(0)),

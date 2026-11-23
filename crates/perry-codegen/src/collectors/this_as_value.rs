@@ -299,7 +299,8 @@ pub fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<Strin
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 expr_uses_this_as_value(discriminant, fields)
                     || cases.iter().any(|c| {
@@ -452,7 +453,8 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             expr_uses_this_as_value(condition, fields)
                 || expr_uses_this_as_value(then_expr, fields)
@@ -553,7 +555,8 @@ mod tests {
     use std::collections::HashMap;
 
     fn function(name: &str, body: Vec<Stmt>) -> Function {
-        Function { byte_offset: 0,
+        Function {
+            byte_offset: 0,
             id: 0,
             name: name.to_string(),
             type_params: Vec::new(),
@@ -573,7 +576,8 @@ mod tests {
     }
 
     fn field(name: &str) -> ClassField {
-        ClassField { byte_offset: 0,
+        ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: name.to_string(),
             key_expr: None,
