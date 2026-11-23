@@ -1288,6 +1288,12 @@ pub fn stroke_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
 }
 
 pub fn arc(handle: i64, x: f64, y: f64, r: f64, start: f64, end: f64) {
+    if !([x, y, r, start, end].iter().all(|v| v.is_finite()) && r >= 0.0) {
+        return;
+    }
+    // Whole turns come off in f64, so huge angles keep their sweep once cast to f32.
+    let turns = (start / std::f64::consts::TAU).floor() * std::f64::consts::TAU;
+    let (start, end) = (start - turns, end - turns);
     push_cmd(
         handle,
         |d| {
