@@ -34,20 +34,24 @@ mod tests {
 
     #[test]
     fn hash_sync_accepts_a_salt_string_or_a_cost() {
-        let password = alloc_string("pw").as_raw();
+        // A fresh string per call: a held raw pointer would go stale across the
+        // allocating calls below.
+        fn password() -> *mut perry_ffi::StringHeader {
+            alloc_string("pw").as_raw()
+        }
         let salt = js_bcrypt_gen_salt_sync(4.0);
         let salt_bits = JsValue::from_string_ptr(salt).bits() as i64;
-        let salted = unsafe { js_bcrypt_hash_sync(password, salt_bits) };
+        let salted = unsafe { js_bcrypt_hash_sync(password(), salt_bits) };
         assert!(text(salted).starts_with(&text(salt)));
-        let matches = unsafe { js_bcrypt_compare_sync(password, salted) };
+        let matches = unsafe { js_bcrypt_compare_sync(password(), salted) };
         assert_eq!(matches.to_bits(), JsValue::from_bool(true).bits());
 
         let cost_bits = JsValue::from_number(5.0).bits() as i64;
-        assert!(text(unsafe { js_bcrypt_hash_sync(password, cost_bits) }).starts_with("$2b$05$"));
+        assert!(text(unsafe { js_bcrypt_hash_sync(password(), cost_bits) }).starts_with("$2b$05$"));
 
         let undefined = JsValue::UNDEFINED.bits() as i64;
-        assert!(unsafe { js_bcrypt_hash_sync(password, undefined) }.is_null());
+        assert!(unsafe { js_bcrypt_hash_sync(password(), undefined) }.is_null());
         let bad_salt = JsValue::from_string_ptr(alloc_string("$2y$04$abc").as_raw()).bits() as i64;
-        assert!(unsafe { js_bcrypt_hash_sync(password, bad_salt) }.is_null());
+        assert!(unsafe { js_bcrypt_hash_sync(password(), bad_salt) }.is_null());
     }
 }
