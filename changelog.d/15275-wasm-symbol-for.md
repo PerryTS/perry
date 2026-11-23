@@ -1,0 +1,1 @@
+On `--target web`, `Symbol.iterator` and the other well-known symbols, and `Symbol.for(key)`, evaluate to the real symbol instead of `undefined`, so `static [Symbol.iterator] = 1` is stored under the symbol rather than the key `"undefined"`.

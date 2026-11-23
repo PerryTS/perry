@@ -576,7 +576,11 @@ impl WasmModuleEmitter {
         // (an object literal's method) has its own home object.
         let mut closure_class: std::collections::HashMap<(usize, FuncId), String> =
             Default::default();
+        let mut proto_kinds = Vec::new();
         for (mod_idx, (_, module)) in modules.iter().enumerate() {
+            for f in &module.functions {
+                proto_kinds.push((mod_idx, f.id, FnProtoKind::of_function(module, f)));
+            }
             let mut module_closures: Vec<CollectedClosure> = Vec::new();
             collect_closures_from_stmts(&module.init, &mut module_closures);
             for global in &module.globals {
@@ -662,8 +666,12 @@ impl WasmModuleEmitter {
             // One function per FuncId: a closure the HIR reaches by two paths (a static
             // field initializer is also in `init`) is emitted once.
             let mut seen = std::collections::HashSet::new();
-            for (fid, params, body, caps, mut_caps, this, _) in module_closures {
+            for (fid, params, body, caps, mut_caps, this, _, (is_async, is_generator)) in
+                module_closures
+            {
                 if seen.insert(fid) {
+                    let kind = FnProtoKind::of_closure(module, fid, is_async, is_generator, &body);
+                    proto_kinds.push((mod_idx, fid, kind));
                     closure_funcs.push((fid, params, body, caps, mut_caps, this, mod_idx));
                 }
             }
@@ -924,6 +932,11 @@ impl WasmModuleEmitter {
                 self.module_func_maps[*mod_idx].insert(*func_id, user_func_idx);
                 self.record_rest_param(user_func_idx, leading, params);
                 user_func_idx += 1;
+            }
+        }
+        for (mod_idx, id, kind) in proto_kinds {
+            if let Some(&idx) = self.module_func_maps[mod_idx].get(&id) {
+                self.fn_proto_kinds.insert(idx, kind);
             }
         }
 

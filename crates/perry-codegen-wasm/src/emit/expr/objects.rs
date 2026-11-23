@@ -62,6 +62,19 @@ impl<'a> FuncEmitCtx<'a> {
                 }
                 self.emit_memcall(func, "object_create", 2);
             }
+            Expr::ObjectDefineProperty(obj, key, desc) => {
+                self.emit_frame_begin(func, 3);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_store_arg(func, 1, key);
+                self.emit_store_arg(func, 2, desc);
+                self.emit_memcall(func, "object_define_property", 3);
+            }
+            Expr::ObjectDefineProperties(obj, props) => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_store_arg(func, 1, props);
+                self.emit_memcall(func, "object_define_properties", 2);
+            }
             Expr::ObjectSetPrototypeOf(obj, proto) => {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, obj);
@@ -219,9 +232,10 @@ impl<'a> FuncEmitCtx<'a> {
                             .get(&func_idx)
                             .copied()
                             .unwrap_or(func_idx);
-                        self.emit_frame_begin(func, 1);
+                        self.emit_frame_begin(func, 2);
                         self.emit_store_const(func, 0, table_idx as f64);
-                        self.emit_memcall(func, "function_value", 1);
+                        self.emit_store_const(func, 1, self.emitter.fn_proto_code(func_idx));
+                        self.emit_memcall(func, "function_value", 2);
                         return true;
                     }
                 }
@@ -499,6 +513,11 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, val);
                 self.emit_memcall(func, "object_coerce", 1);
+            }
+            Expr::SymbolFor(key) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, key);
+                self.emit_memcall(func, "symbol_for", 1);
             }
             Expr::In { property, object } => {
                 // JS evaluates the property before the object.

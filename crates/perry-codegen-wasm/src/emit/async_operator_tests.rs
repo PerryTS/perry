@@ -51,3 +51,48 @@ f("9", 4).then((v) => console.log(v), (e) => console.log("threw " + e.message));
         "3,12,3.5,3,3,-1,5,36,2.25,1"
     );
 }
+
+// An async body's labeled `continue` reaches the labeled `for` and `while`, through a
+// chain of labels too, and a labeled block still takes `break`. Expected output is Node's.
+#[test]
+fn async_body_labeled_continue_targets_its_loop() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  let r = "";
+  outer: for (let i = 0; i < 2; i++) {
+    for (let j = 0; j < 2; j++) { if (j === 0) continue outer; r += i + "" + j; }
+  }
+  let i = 0;
+  w: while (i < 3) { i++; for (;;) { if (i === 2) continue w; break; } r += "w" + i; }
+  a: b: for (let k = 0; k < 2; k++) { for (;;) { if (k === 0) continue a; break; } r += "a" + k; }
+  blk: { r += "b"; if (i === 3) break blk; r += "x"; }
+  return r + " done";
+}
+f().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "w1w3a1b done"
+    );
+}
+
+// An async body runs `do...while`, whose body runs once even when the condition starts
+// falsy, and whose condition takes JavaScript truthiness. Expected output is Node's.
+#[test]
+fn async_body_do_while_runs_until_condition_is_falsy() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  let i = 0; do { i++; } while (i < 3);
+  let n = 0; do { n++; } while (0);
+  let s = "ab"; do { s = s.slice(1); } while (s);
+  return i + "," + n + "," + JSON.stringify(s);
+}
+f().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "3,1,\"\""
+    );
+}
