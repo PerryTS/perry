@@ -36,9 +36,12 @@ const show = (v: any) => v + ":" + typeof v;
 const nul: any = id(null);
 const s5: any = id("5");
 const tru: any = id(true);
+const arr: any = [1];
+function mutate(xs: any): number { xs[0] = 9; return 0; }
+console.log(Math.max(arr, mutate(arr), 0));
 console.log([show(Math.max(nul)), show(Math.min(s5)), show(Math.max(tru)), show(Math.min(id(undefined))), show(Math.max()), show(Math.min()), 1 / Math.max(-0), show(Math.max(nul, s5, tru))].join(" "));
 "#
         ),
-        "0:number 5:number 1:number NaN:number -Infinity:number Infinity:number -Infinity 5:number"
+        "9\n0:number 5:number 1:number NaN:number -Infinity:number Infinity:number -Infinity 5:number"
     );
 }
