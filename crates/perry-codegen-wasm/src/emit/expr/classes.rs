@@ -281,6 +281,25 @@ impl<'a> FuncEmitCtx<'a> {
                         self.emit_memcall(func, "map_new", 0);
                         return true;
                     }
+                    // The host's WeakMap, constructed as a bare `new Map` is (see new_dynamic).
+                    "WeakMap" if !self.emitter.user_classes.contains(class_name.as_str()) => {
+                        let callee = Expr::PropertyGet {
+                            byte_offset: 0,
+                            byte_end: 0,
+                            object: Box::new(Expr::GlobalGet(0)),
+                            property: class_name.clone(),
+                        };
+                        self.emit_expr(
+                            func,
+                            &Expr::NewDynamic {
+                                callee: Box::new(callee),
+                                args: args.clone(),
+                                byte_offset: 0,
+                                byte_end: 0,
+                            },
+                        );
+                        return true;
+                    }
                     "Set" => {
                         if let Some(arg) = args.first() {
                             self.emit_frame_begin(func, 1);
