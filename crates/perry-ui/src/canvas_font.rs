@@ -58,7 +58,12 @@ pub fn parse_canvas_font(spec: &str) -> Option<CanvasFont> {
                 font.bold = match w {
                     "bold" | "bolder" => true,
                     "lighter" => false,
-                    n => n.parse::<u16>().ok().filter(|n| (1..=1000).contains(n))? >= 600,
+                    n => {
+                        n.parse::<f64>()
+                            .ok()
+                            .filter(|n| (1.0..=1000.0).contains(n))?
+                            >= 600.0
+                    }
                 };
                 std::mem::replace(&mut weight, true)
             }
@@ -129,12 +134,13 @@ fn is_line_height(word: &str) -> bool {
         "", "%", "px", "pt", "pc", "cm", "mm", "q", "in", "em", "rem", "ex", "rex", "ch", "rch",
         "cap", "rcap", "ic", "ric", "lh", "rlh", "vw", "vh", "vi", "vb", "vmin", "vmax",
     ];
-    let split = word
-        .find(|c: char| c.is_ascii_alphabetic() || c == '%')
-        .unwrap_or(word.len());
-    let (num, unit) = word.split_at(split);
+    // Any unit whose removal leaves a whole CSS number, so `1e0` and `1rem` both parse.
     word == "normal"
-        || UNITS.contains(&unit) && num.parse::<f64>().is_ok_and(|n| n.is_finite() && n >= 0.0)
+        || UNITS.iter().any(|unit| {
+            word.strip_suffix(unit)
+                .and_then(|num| num.parse::<f64>().ok())
+                .is_some_and(|n| n.is_finite() && n >= 0.0)
+        })
 }
 
 /// An unquoted CSS identifier: no leading digit (or `-` + digit), and only
@@ -193,6 +199,10 @@ mod tests {
             "four prefixes"
         );
         assert_eq!(
+            parse_canvas_font("700.5 20px/1e0 serif"),
+            Some(font(20.0, true, false, &["serif"]))
+        );
+        assert_eq!(
             parse_canvas_font("italic small-caps 700 8px serif"),
             Some(font(8.0, true, true, &["serif"]))
         );
@@ -229,6 +239,9 @@ mod tests {
             "12px Arial;",
             "12px 3D Font",
             "16px/1r serif",
+            "16px/-1 serif",
+            "16px/inf serif",
+            "1000.5 16px serif",
         ] {
             assert_eq!(parse_canvas_font(bad), None, "{bad:?}");
         }
