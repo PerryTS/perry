@@ -284,7 +284,7 @@ fn scan_stmt_handle_uses(stmt: &Stmt, out: &mut HashSet<LocalId>) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             scan_expr_handle_uses(discriminant, out);
             for case in cases {
@@ -477,7 +477,7 @@ fn rewrite_stmt(stmt: &mut Stmt, bindings: &HashMap<LocalId, StateBinding>, fres
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             rewrite_expr(discriminant, bindings, fresh);
             for case in cases {

@@ -763,7 +763,7 @@ impl<'e> Walk<'_, 'e> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.at("Switch");
                 self.expr(discriminant);

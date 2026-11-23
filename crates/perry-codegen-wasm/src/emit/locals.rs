@@ -183,7 +183,7 @@ pub(super) fn collect_locals(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 collect_expr_locals(discriminant, map, count, offset);
                 for case in cases {

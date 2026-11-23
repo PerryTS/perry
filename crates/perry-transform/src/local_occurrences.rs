@@ -358,7 +358,7 @@ fn count_stmt(stmt: &Stmt, c: &mut Counter) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             count_expr(discriminant, c);
             for case in cases {

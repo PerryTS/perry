@@ -179,7 +179,7 @@ pub fn find_outer_writes_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             find_outer_writes_expr(discriminant, inner_ids, out);
             for case in cases {
@@ -408,7 +408,7 @@ fn find_thread_hazard_stmt(
             .or_else(|| finally.as_deref().and_then(stmts)),
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => expr(discriminant).or_else(|| {
             cases.iter().find_map(|case| {
                 case.test

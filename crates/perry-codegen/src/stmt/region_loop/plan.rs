@@ -683,7 +683,7 @@ impl Planner<'_, '_> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 // `break` inside a switch leaves the switch; conservatively
                 // everything after a switch is stale.
@@ -839,7 +839,7 @@ pub(super) fn body_refused(ss: &[Stmt]) -> bool {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 e_bad(discriminant)
                     || cases
@@ -891,7 +891,7 @@ pub(super) fn body_nodes(ss: &[Stmt]) -> usize {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 e_n(discriminant)
                     + cases
@@ -962,7 +962,7 @@ pub(super) fn assigned(ss: &[Stmt], extra: &[&Expr]) -> HashSet<u32> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 e_walk(discriminant, out);
                 for c in cases {
@@ -1076,7 +1076,7 @@ pub(super) fn accesses(ss: &[Stmt]) -> Vec<(Recv, String, bool, usize, Option<&E
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 e_walk(discriminant, out);
                 for c in cases {

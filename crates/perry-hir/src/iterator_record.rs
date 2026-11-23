@@ -646,7 +646,7 @@ fn walk_stmt(stmt: &mut Stmt, f: &mut impl FnMut(&mut Expr)) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for c in cases {

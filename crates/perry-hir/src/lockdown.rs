@@ -159,7 +159,7 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             visit_expr(discriminant, ctx);
             for case in cases {

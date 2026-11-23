@@ -157,7 +157,7 @@ fn apply_stmts(body: &mut [Stmt], fix: &mut dyn FnMut(FuncId, &mut [Param])) {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 apply_expr(discriminant, fix);
                 for c in cases.iter_mut() {

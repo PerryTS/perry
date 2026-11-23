@@ -138,7 +138,7 @@ fn collect_used_object_fields_in_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 collect_used_object_fields_in_expr(
                     discriminant,
@@ -371,7 +371,7 @@ pub fn check_object_literal_escapes_in_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 check_object_literal_escapes_in_expr(discriminant, candidates, escaped);
                 for case in cases {

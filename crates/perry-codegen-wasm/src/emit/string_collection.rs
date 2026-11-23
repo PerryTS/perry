@@ -584,7 +584,7 @@ impl WasmModuleEmitter {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.collect_strings_in_expr(discriminant);
                 for case in cases {

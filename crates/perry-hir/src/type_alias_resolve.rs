@@ -481,7 +481,7 @@ fn fix_stmts(stmts: &mut [Stmt], table: &AliasTable) {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 fix_expr(discriminant, table);
                 for case in cases {

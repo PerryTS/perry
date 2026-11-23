@@ -372,7 +372,7 @@ pub(super) fn collect_writes<'a>(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 collect_writes_expr(discriminant, writes, candidates);
                 for case in cases {

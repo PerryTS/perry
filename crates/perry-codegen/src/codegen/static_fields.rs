@@ -523,7 +523,7 @@ fn collect_inline_invoked_static_blocks(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 walk_expr(discriminant, out);
                 cases.iter().for_each(|case| {

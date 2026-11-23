@@ -255,7 +255,7 @@ fn impure_scalar_aggregate_init_is_safe(stmts: &[Stmt], target: &Function) -> bo
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 expr_is_safe(discriminant, target, saw_target)
                     && cases.iter().all(|case| {
@@ -369,7 +369,7 @@ fn inline_functions_inner(
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases,
+                    cases, ..
                 } => {
                     f(discriminant);
                     for c in cases {

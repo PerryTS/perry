@@ -606,7 +606,7 @@ fn additive_flow_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             additive_flow_expr(
                 discriminant,
@@ -1019,7 +1019,7 @@ fn collect_facts<'a>(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 collect_facts_expr(
                     discriminant,
@@ -1325,7 +1325,7 @@ fn collect_closure_refs_stmt(s: &Stmt, out: &mut HashSet<u32>) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_closure_refs(discriminant, out);
             for case in cases {
@@ -1477,7 +1477,7 @@ fn observe_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 observe(discriminant, false, cands, types, additive, exact_i32, disq);
                 for case in cases {

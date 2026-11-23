@@ -266,7 +266,7 @@ impl Scan {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(discriminant, Use::Consume);
                 for c in cases {

@@ -211,7 +211,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut WidenSets, env: &HirTypeEnv) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             visit_expr(discriminant, out, env);
             for c in cases {

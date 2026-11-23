@@ -234,7 +234,7 @@ fn collect_direct_call_closures_in_stmts(
             }
             perry_hir::Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 collect_direct_call_closures_in_expr(discriminant, out);
                 for case in cases {
@@ -347,7 +347,7 @@ fn count_stmt_nodes(stmt: &perry_hir::Stmt) -> usize {
         }
         perry_hir::Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             count += count_expr_nodes(discriminant);
             for case in cases {
@@ -504,7 +504,7 @@ fn scan_capture_use_stmt(
         }
         perry_hir::Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             scan_capture_use_expr(discriminant, in_loop, uses);
             for case in cases {

@@ -52,6 +52,7 @@ pub fn rewrite_break_continue_in_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                byte_offset,
             } if switch_cases_have_loop_continue(&cases) => {
                 // Replace the switch (currently a placeholder after the
                 // mem::replace) with its if-chain desugar and reprocess from
@@ -59,7 +60,7 @@ pub fn rewrite_break_continue_in_stmts(
                 // so this rewriter descends them and converts the loop-level
                 // `continue`s to sentinels; `break`s were already folded
                 // into the desugar's done-flag.
-                let desugared = desugar_switch_to_ifs(&discriminant, &cases, next_local_id);
+                let desugared = desugar_switch_to_ifs(&discriminant, &cases, byte_offset, next_local_id);
                 stmts.splice(i..=i, desugared);
             }
             mut other => {
@@ -584,6 +585,7 @@ fn stmts_have_loop_level_continue(stmts: &[Stmt]) -> bool {
 pub fn desugar_switch_to_ifs(
     discriminant: &Expr,
     cases: &[SwitchCase],
+    byte_offset: u32,
     next_local_id: &mut u32,
 ) -> Vec<Stmt> {
     let n = cases.len();
@@ -595,7 +597,7 @@ pub fn desugar_switch_to_ifs(
     let idx_id = alloc_local(next_local_id);
     let done_id = alloc_local(next_local_id);
 
-    let idx_is_unmatched = || Expr::Compare { byte_offset: 0 /*HPOS*/,
+    let idx_is_unmatched = || Expr::Compare { byte_offset,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(idx_id)),
         right: Box::new(Expr::Number(unmatched)),
@@ -623,7 +625,7 @@ pub fn desugar_switch_to_ifs(
             then_branch: vec![
                 Stmt::Expr(Expr::LocalSet(t_id, Box::new(test.clone()))),
                 Stmt::If {
-                    condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
+                    condition: Expr::Compare { byte_offset,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(d_id)),
                         right: Box::new(Expr::LocalGet(t_id)),
@@ -661,7 +663,7 @@ pub fn desugar_switch_to_ifs(
                     op: UnaryOp::Not,
                     operand: Box::new(Expr::LocalGet(done_id)),
                 }),
-                right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                right: Box::new(Expr::Compare { byte_offset,
                     op: CompareOp::Le,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::Number(i as f64)),
@@ -1115,11 +1117,17 @@ fn rewrite_escape_in_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                byte_offset,
             } if cases
                 .iter()
                 .any(|c| stmts_can_escape_to_label(&c.body, label)) =>
             {
-                Some(desugar_switch_to_ifs(discriminant, cases, next_local_id))
+                Some(desugar_switch_to_ifs(
+                    discriminant,
+                    cases,
+                    *byte_offset,
+                    next_local_id,
+                ))
             }
             _ => None,
         };

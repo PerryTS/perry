@@ -84,7 +84,7 @@ fn count_in_stmt(s: &Stmt, n: &mut usize) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             count_in_expr(discriminant, n);
             for c in cases {

@@ -113,7 +113,7 @@ fn widen_mutable_captures_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             widen_mutable_captures_expr(discriminant, scope_mutable);
             for case in cases {
@@ -447,7 +447,7 @@ fn collect_closure_assigned_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_closure_assigned_expr(discriminant, out);
             for case in cases {
@@ -755,7 +755,7 @@ fn collect_closure_captures_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_closure_captures_expr(discriminant, out);
             for case in cases {
@@ -1051,7 +1051,7 @@ fn collect_scope_level_assigns_stmt(stmt: &Stmt, out: &mut std::collections::Has
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_scope_level_assigns_expr(discriminant, out);
             for case in cases {
@@ -1180,7 +1180,7 @@ fn collect_closure_assigned_in_closure_body_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_closure_assigned_in_body_expr(discriminant, out);
             for case in cases {

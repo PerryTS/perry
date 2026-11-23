@@ -410,7 +410,7 @@ pub(crate) fn for_each_stmt_part<'a>(stmt: &'a Stmt, f: &mut dyn FnMut(Part<'a>)
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(Part::Expr(discriminant));
             for case in cases {

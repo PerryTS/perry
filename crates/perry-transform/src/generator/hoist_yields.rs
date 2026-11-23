@@ -138,7 +138,7 @@ fn hoist_yields_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             hoist_yields_in_expr_full(discriminant, next_id, hoisted);
             for case in cases.iter_mut() {

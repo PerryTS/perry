@@ -1991,6 +1991,7 @@ pub fn linearize_body(
             Stmt::Switch {
                 discriminant,
                 cases,
+                byte_offset,
             } if super::hoist_yields::expr_contains_yield(discriminant)
                 || cases.iter().any(|c| {
                     body_contains_yield(&c.body)
@@ -2002,6 +2003,7 @@ pub fn linearize_body(
                 let desugared = super::break_continue::desugar_switch_to_ifs(
                     discriminant,
                     cases,
+                    *byte_offset,
                     next_local_id,
                 );
                 linearize_body(

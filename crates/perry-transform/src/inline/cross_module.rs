@@ -72,7 +72,7 @@ pub fn is_cross_module_safe(body: &[Stmt]) -> bool {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 check_expr(discriminant)
                     && cases.iter().all(|c| {
@@ -538,7 +538,7 @@ fn walk_stmts(stmts: &[Stmt], visit: &mut impl FnMut(&Expr)) {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 visit(discriminant);
                 for case in cases {
@@ -995,7 +995,7 @@ fn walk_stmts_mut(stmts: &mut [Stmt], visit: &mut impl FnMut(&mut Expr)) {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 visit(discriminant);
                 for case in cases {
@@ -1230,7 +1230,7 @@ pub fn is_cross_module_safe_with_externs(body: &[Stmt], extern_names: &mut Vec<S
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 check_expr(discriminant, extern_names)
                     && cases.iter().all(|c| {

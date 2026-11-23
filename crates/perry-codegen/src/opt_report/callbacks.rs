@@ -99,7 +99,7 @@ fn scan_stmts(stmts: &[Stmt]) {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 scan_expr(discriminant);
                 for c in cases {

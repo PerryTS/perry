@@ -7692,7 +7692,7 @@ fn collect_stmt_exprs<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a perry_hir::Expr>)
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 out.push(discriminant);
                 for c in cases {
@@ -9040,7 +9040,7 @@ fn collect_guarded_array_aliases_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             collect_guarded_array_aliases_in_expr(ctx, arr_id, discriminant, aliases)
                 | cases.iter().any(|case| {
@@ -9669,7 +9669,7 @@ fn stmt_mutates_local(stmt: &perry_hir::Stmt, local_id: u32) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             expr_mutates_local(discriminant, local_id)
                 || cases.iter().any(|case| {
@@ -9900,7 +9900,7 @@ fn stmt_array_length_effect(
         ),
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => first_blocking_loop_effect(
             std::iter::once(expr_array_length_effect(
                 ctx,
@@ -10345,7 +10345,7 @@ pub(crate) fn stmt_preserves_array_length(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             expr_preserves_array_length(
                 ctx,

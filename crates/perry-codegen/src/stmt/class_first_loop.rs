@@ -265,7 +265,7 @@ fn guards_outside_loops(stmts: &[Stmt], binding: u32) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             guards(discriminant)
                 || cases.iter().any(|c| {
@@ -487,7 +487,7 @@ fn resolve_guards_in_stmt(stmt: &mut Stmt, binding: u32, is_first: bool) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             exprs(discriminant);
             for case in cases {

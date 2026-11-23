@@ -577,6 +577,7 @@ fn process_stmts(
             Stmt::Switch {
                 discriminant,
                 mut cases,
+                byte_offset,
             } => {
                 for case in cases.iter_mut() {
                     process_stmts(
@@ -589,6 +590,7 @@ fn process_stmts(
                     );
                 }
                 out.push(Stmt::Switch {
+                    byte_offset,
                     discriminant,
                     cases,
                 });
@@ -775,7 +777,7 @@ fn walk_stmt_exprs<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
         Stmt::Try { .. } => {}
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for c in cases {

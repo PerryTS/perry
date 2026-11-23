@@ -870,7 +870,7 @@ impl<'a> W<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(st, discriminant);
                 // R9BIRTH1 rule B (ECMA-262 14.12.4 CaseBlockEvaluation): a

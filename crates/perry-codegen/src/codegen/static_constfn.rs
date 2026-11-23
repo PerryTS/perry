@@ -385,7 +385,7 @@ pub(crate) fn collect_literal_finals(
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases,
+                    cases, ..
                 } => {
                     expr(discriminant, m, p, r, w, out);
                     for c in cases {

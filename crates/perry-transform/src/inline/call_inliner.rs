@@ -290,7 +290,7 @@ fn loop_has_prototype_surgery(stmts: &[Stmt]) -> bool {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 expr_has_prototype_surgery(discriminant)
                     || cases.iter().any(|case| {
@@ -2095,7 +2095,7 @@ fn fold_scalar_aggregate_param_length(stmts: &mut [Stmt], param_id: LocalId, len
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 fold_expr(discriminant, param_id, len);
                 for case in cases {

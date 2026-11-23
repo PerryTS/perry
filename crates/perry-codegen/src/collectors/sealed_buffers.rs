@@ -247,7 +247,7 @@ impl Probe<'_> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(discriminant);
                 for case in cases {
@@ -574,7 +574,7 @@ impl<'a> Scan<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.walk_expr(discriminant);
                 for case in cases {

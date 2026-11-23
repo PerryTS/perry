@@ -291,7 +291,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr_this_safe(discriminant, ctx)
                     && cases.iter().all(|case| {
@@ -624,7 +624,7 @@ fn expr_mentions_this(e: &Expr) -> bool {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 visit(discriminant, found);
                 for case in cases {

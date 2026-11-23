@@ -535,7 +535,7 @@ impl HirTypeEnv {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.collect_expr_declarations(discriminant);
                 for case in cases {

@@ -230,7 +230,7 @@ pub(crate) fn count_local_refs_stmt(stmt: &Stmt, counts: &mut HashMap<LocalId, u
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             count_local_refs_expr(discriminant, counts);
             for c in cases {

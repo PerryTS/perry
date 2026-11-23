@@ -288,7 +288,7 @@ impl PrefixContainedParamUse {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.walk_expr(discriminant);
                 for case in cases {

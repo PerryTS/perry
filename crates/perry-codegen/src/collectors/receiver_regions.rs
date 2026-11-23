@@ -1717,7 +1717,7 @@ fn enders_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             enders_in_expr(discriminant, is_inert, is_trusted_operation, out);
             for c in cases {

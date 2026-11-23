@@ -97,7 +97,7 @@ impl OutUsageAnalyzer {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.visit_expr(discriminant);
                 for c in cases {

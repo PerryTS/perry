@@ -301,7 +301,7 @@ fn visit_stmt_for_dyn_imports<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             visit_expr_for_dyn_imports(discriminant, f);
             for c in cases {
@@ -406,7 +406,7 @@ fn visit_stmt_for_dyn_imports_ref<F: FnMut(&Expr)>(stmt: &Stmt, f: &mut F) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             visit_expr_for_dyn_imports_ref(discriminant, f);
             for case in cases {
@@ -588,7 +588,7 @@ fn visit_stmt_for_worker_new<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             visit_expr_for_worker_new(discriminant, f);
             for c in cases {
@@ -693,7 +693,7 @@ fn visit_stmt_for_worker_new_ref<F: FnMut(&Expr)>(stmt: &Stmt, f: &mut F) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             visit_expr_for_worker_new_ref(discriminant, f);
             for case in cases {
