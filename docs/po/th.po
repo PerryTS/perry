@@ -238,7 +238,7 @@ msgstr "แพลตฟอร์ม"
 #: src/ui/overview.md:230 src/ui/styling-matrix.md:9
 #: src/ui/styling-matrix.md:41 src/ui/styling-matrix.md:51
 #: src/ui/styling-matrix.md:58 src/ui/styling-matrix.md:66
-#: src/ui/styling-matrix.md:79 src/ui/styling-matrix.md:90 src/ui/canvas.md:102
+#: src/ui/styling-matrix.md:79 src/ui/styling-matrix.md:90 src/ui/canvas.md:103
 #: src/ui/menus.md:68 src/ui/menus.md:111 src/ui/dialogs.md:108
 #: src/ui/animation.md:64 src/ui/on-frame.md:46 src/ui/multi-window.md:81
 #: src/ui/multi-window.md:98 src/ui/multi-window.md:109
@@ -258,17 +258,16 @@ msgstr "macOS"
 #: src/SUMMARY.md:75 src/ui/overview.md:230 src/ui/styling-matrix.md:9
 #: src/ui/styling-matrix.md:41 src/ui/styling-matrix.md:51
 #: src/ui/styling-matrix.md:58 src/ui/styling-matrix.md:66
-#: src/ui/styling-matrix.md:79 src/ui/styling-matrix.md:91 src/ui/canvas.md:103
-#: src/ui/menus.md:112 src/ui/dialogs.md:108 src/ui/animation.md:65
-#: src/platforms/overview.md:10 src/platforms/overview.md:69
-#: src/platforms/ios.md:1 src/platforms/tvos.md:170
-#: src/system/preferences.md:35 src/system/keychain.md:26
-#: src/system/notifications.md:121 src/system/audio.md:100
-#: src/system/media.md:87 src/system/other.md:21 src/system/other.md:38
-#: src/widgets/platforms.md:16 src/widgets/platforms.md:25
-#: src/widgets/platforms.md:44 src/widgets/platforms.md:68
-#: src/plugins/native-extensions.md:300 src/plugins/appstore-review.md:73
-#: src/testing/geisterhand.md:260
+#: src/ui/styling-matrix.md:79 src/ui/styling-matrix.md:91 src/ui/menus.md:112
+#: src/ui/dialogs.md:108 src/ui/animation.md:65 src/platforms/overview.md:10
+#: src/platforms/overview.md:69 src/platforms/ios.md:1
+#: src/platforms/tvos.md:170 src/system/preferences.md:35
+#: src/system/keychain.md:26 src/system/notifications.md:121
+#: src/system/audio.md:100 src/system/media.md:87 src/system/other.md:21
+#: src/system/other.md:38 src/widgets/platforms.md:16
+#: src/widgets/platforms.md:25 src/widgets/platforms.md:44
+#: src/widgets/platforms.md:68 src/plugins/native-extensions.md:300
+#: src/plugins/appstore-review.md:73 src/testing/geisterhand.md:260
 msgid "iOS"
 msgstr "iOS"
 
@@ -293,12 +292,12 @@ msgstr "tvOS"
 #: src/SUMMARY.md:78 src/ui/styling-matrix.md:9 src/ui/styling-matrix.md:41
 #: src/ui/styling-matrix.md:51 src/ui/styling-matrix.md:58
 #: src/ui/styling-matrix.md:66 src/ui/styling-matrix.md:79
-#: src/ui/styling-matrix.md:94 src/platforms/overview.md:13
-#: src/platforms/overview.md:69 src/platforms/watchos.md:1
-#: src/platforms/watchos.md:25 src/system/audio_module.md:134
-#: src/system/media.md:93 src/widgets/platforms.md:19
-#: src/widgets/platforms.md:25 src/widgets/platforms.md:54
-#: src/widgets/platforms.md:84
+#: src/ui/styling-matrix.md:94 src/ui/canvas.md:108
+#: src/platforms/overview.md:13 src/platforms/overview.md:69
+#: src/platforms/watchos.md:1 src/platforms/watchos.md:25
+#: src/system/audio_module.md:134 src/system/media.md:93
+#: src/widgets/platforms.md:19 src/widgets/platforms.md:25
+#: src/widgets/platforms.md:54 src/widgets/platforms.md:84
 msgid "watchOS"
 msgstr "watchOS"
 
@@ -309,7 +308,7 @@ msgstr "การตีพิมพ์ใน App Store"
 #: src/SUMMARY.md:80 src/ui/styling-matrix.md:9 src/ui/styling-matrix.md:41
 #: src/ui/styling-matrix.md:51 src/ui/styling-matrix.md:58
 #: src/ui/styling-matrix.md:66 src/ui/styling-matrix.md:79
-#: src/ui/styling-matrix.md:95 src/ui/canvas.md:106 src/ui/animation.md:66
+#: src/ui/styling-matrix.md:95 src/ui/canvas.md:107 src/ui/animation.md:66
 #: src/ui/on-frame.md:48 src/platforms/overview.md:14
 #: src/platforms/overview.md:69 src/platforms/android.md:1
 #: src/i18n/overview.md:92 src/i18n/overview.md:105
@@ -338,7 +337,7 @@ msgstr "HarmonyOS NEXT"
 #: src/ui/overview.md:230 src/ui/styling-matrix.md:9
 #: src/ui/styling-matrix.md:41 src/ui/styling-matrix.md:51
 #: src/ui/styling-matrix.md:58 src/ui/styling-matrix.md:66
-#: src/ui/styling-matrix.md:79 src/ui/styling-matrix.md:97 src/ui/canvas.md:105
+#: src/ui/styling-matrix.md:79 src/ui/styling-matrix.md:97 src/ui/canvas.md:106
 #: src/ui/menus.md:113 src/ui/dialogs.md:108 src/ui/animation.md:67
 #: src/ui/on-frame.md:50 src/ui/multi-window.md:82 src/ui/multi-window.md:99
 #: src/ui/multi-window.md:110 src/ui/multi-window.md:126
@@ -366,7 +365,7 @@ msgstr "Linux (GTK4)"
 #: src/SUMMARY.md:86 src/ui/overview.md:230 src/ui/styling-matrix.md:9
 #: src/ui/styling-matrix.md:41 src/ui/styling-matrix.md:51
 #: src/ui/styling-matrix.md:58 src/ui/styling-matrix.md:66
-#: src/ui/styling-matrix.md:79 src/ui/styling-matrix.md:98 src/ui/canvas.md:100
+#: src/ui/styling-matrix.md:79 src/ui/styling-matrix.md:98 src/ui/canvas.md:101
 #: src/ui/menus.md:115 src/ui/dialogs.md:108 src/ui/animation.md:69
 #: src/ui/multi-window.md:152 src/platforms/web.md:1
 #: src/system/preferences.md:39 src/system/keychain.md:30
@@ -1074,7 +1073,7 @@ msgstr ""
 #: src/language/limitations.md:295 src/threading/overview.md:477
 #: src/ui/overview.md:239 src/ui/widgets.md:718 src/ui/layout.md:393
 #: src/ui/styling.md:387 src/ui/state.md:226 src/ui/events.md:167
-#: src/ui/canvas.md:120 src/ui/menus.md:119 src/ui/tray.md:106
+#: src/ui/canvas.md:125 src/ui/menus.md:119 src/ui/tray.md:106
 #: src/ui/dialogs.md:166 src/ui/table.md:158 src/ui/animation.md:71
 #: src/ui/multi-window.md:158 src/ui/theming.md:166 src/ui/camera.md:143
 #: src/ui/webview.md:270 src/platforms/overview.md:80 src/platforms/macos.md:86
@@ -1282,7 +1281,7 @@ msgstr ""
 "`os` / `cpu` / `libc` ของคุณ ต้องการ Node.js ≥ 16"
 
 #: src/getting-started/installation.md:80 src/ui/styling-matrix.md:88
-#: src/ui/canvas.md:98 src/ui/menus.md:109 src/ui/tray.md:66 src/ui/tray.md:81
+#: src/ui/canvas.md:99 src/ui/menus.md:109 src/ui/tray.md:66 src/ui/tray.md:81
 #: src/ui/animation.md:62 src/ui/on-frame.md:43 src/ui/multi-window.md:79
 #: src/ui/multi-window.md:96 src/ui/multi-window.md:107
 #: src/ui/multi-window.md:123 src/ui/multi-window.md:139
@@ -1673,7 +1672,7 @@ msgstr ""
 "และ simulator"
 
 #: src/getting-started/installation.md:219 src/ui/overview.md:230
-#: src/ui/canvas.md:104 src/ui/menus.md:114 src/ui/dialogs.md:108
+#: src/ui/canvas.md:105 src/ui/menus.md:114 src/ui/dialogs.md:108
 #: src/ui/animation.md:68 src/ui/multi-window.md:83 src/ui/multi-window.md:100
 #: src/ui/multi-window.md:111 src/ui/multi-window.md:127
 #: src/ui/multi-window.md:143 src/ui/multi-window.md:151
@@ -15910,7 +15909,7 @@ msgstr "HWND Button"
 msgid "`<button>`"
 msgstr "`<button>`"
 
-#: src/ui/overview.md:233 src/ui/widgets.md:15 src/ui/canvas.md:88
+#: src/ui/overview.md:233 src/ui/widgets.md:15 src/ui/canvas.md:89
 #: src/platforms/macos.md:26 src/platforms/ios.md:52 src/platforms/tvos.md:52
 #: src/platforms/watchos.md:139 src/platforms/android.md:40
 #: src/platforms/windows.md:51 src/platforms/linux.md:39
@@ -15962,35 +15961,35 @@ msgstr "Flexbox"
 msgid "NSMenu"
 msgstr "NSMenu"
 
-#: src/ui/overview.md:235 src/ui/menus.md:113 src/ui/menus.md:114
-#: src/ui/dialogs.md:111 src/ui/dialogs.md:112 src/ui/webview.md:186
-#: src/ui/webview.md:190 src/ui/webview.md:191 src/ui/webview.md:192
-#: src/platforms/overview.md:71 src/platforms/overview.md:73
-#: src/platforms/overview.md:74 src/platforms/overview.md:77
-#: src/platforms/watchos.md:29 src/container/security.md:185
-#: src/container/security.md:186 src/container/security.md:187
-#: src/system/geolocation.md:131 src/system/background.md:86
-#: src/system/background.md:87 src/system/background.md:88
-#: src/cli/perry-toml.md:122 src/cli/perry-toml.md:123
-#: src/cli/perry-toml.md:130 src/cli/perry-toml.md:160
-#: src/cli/perry-toml.md:175 src/cli/perry-toml.md:176
-#: src/cli/perry-toml.md:177 src/cli/perry-toml.md:184
-#: src/cli/perry-toml.md:192 src/cli/perry-toml.md:193
-#: src/cli/perry-toml.md:194 src/cli/perry-toml.md:252
-#: src/cli/perry-toml.md:255 src/cli/perry-toml.md:263
-#: src/cli/perry-toml.md:271 src/cli/perry-toml.md:310
-#: src/cli/perry-toml.md:313 src/cli/perry-toml.md:319
-#: src/cli/perry-toml.md:322 src/cli/perry-toml.md:337
-#: src/cli/perry-toml.md:338 src/cli/perry-toml.md:340
-#: src/cli/perry-toml.md:341 src/cli/perry-toml.md:342
-#: src/cli/perry-toml.md:343 src/cli/perry-toml.md:344
-#: src/cli/perry-toml.md:355 src/cli/perry-toml.md:356
-#: src/cli/perry-toml.md:367 src/cli/perry-toml.md:388
-#: src/cli/perry-toml.md:389 src/cli/perry-toml.md:418
-#: src/cli/app-updates.md:56 src/cli/app-updates.md:57
-#: src/cli/app-updates.md:58 src/cli/app-updates.md:60
-#: src/internals/memory-model.md:340 src/internals/memory-model.md:341
-#: src/contributing/building.md:73
+#: src/ui/overview.md:235 src/ui/canvas.md:108 src/ui/menus.md:113
+#: src/ui/menus.md:114 src/ui/dialogs.md:111 src/ui/dialogs.md:112
+#: src/ui/webview.md:186 src/ui/webview.md:190 src/ui/webview.md:191
+#: src/ui/webview.md:192 src/platforms/overview.md:71
+#: src/platforms/overview.md:73 src/platforms/overview.md:74
+#: src/platforms/overview.md:77 src/platforms/watchos.md:29
+#: src/container/security.md:185 src/container/security.md:186
+#: src/container/security.md:187 src/system/geolocation.md:131
+#: src/system/background.md:86 src/system/background.md:87
+#: src/system/background.md:88 src/cli/perry-toml.md:122
+#: src/cli/perry-toml.md:123 src/cli/perry-toml.md:130
+#: src/cli/perry-toml.md:160 src/cli/perry-toml.md:175
+#: src/cli/perry-toml.md:176 src/cli/perry-toml.md:177
+#: src/cli/perry-toml.md:184 src/cli/perry-toml.md:192
+#: src/cli/perry-toml.md:193 src/cli/perry-toml.md:194
+#: src/cli/perry-toml.md:252 src/cli/perry-toml.md:255
+#: src/cli/perry-toml.md:263 src/cli/perry-toml.md:271
+#: src/cli/perry-toml.md:310 src/cli/perry-toml.md:313
+#: src/cli/perry-toml.md:319 src/cli/perry-toml.md:322
+#: src/cli/perry-toml.md:337 src/cli/perry-toml.md:338
+#: src/cli/perry-toml.md:340 src/cli/perry-toml.md:341
+#: src/cli/perry-toml.md:342 src/cli/perry-toml.md:343
+#: src/cli/perry-toml.md:344 src/cli/perry-toml.md:355
+#: src/cli/perry-toml.md:356 src/cli/perry-toml.md:367
+#: src/cli/perry-toml.md:388 src/cli/perry-toml.md:389
+#: src/cli/perry-toml.md:418 src/cli/app-updates.md:56
+#: src/cli/app-updates.md:57 src/cli/app-updates.md:58
+#: src/cli/app-updates.md:60 src/internals/memory-model.md:340
+#: src/internals/memory-model.md:341 src/contributing/building.md:73
 msgid "—"
 msgstr "—"
 
@@ -16012,7 +16011,7 @@ msgid ""
 msgstr "พฤติกรรมเฉพาะแพลตฟอร์มถูกระบุไว้ในหน้าเอกสารของแต่ละวิดเจ็ต"
 
 #: src/ui/overview.md:241 src/ui/layout.md:396 src/ui/styling.md:389
-#: src/ui/state.md:229 src/ui/events.md:170 src/ui/canvas.md:122
+#: src/ui/state.md:229 src/ui/events.md:170 src/ui/canvas.md:127
 #: src/ui/table.md:160 src/ui/animation.md:74 src/ui/camera.md:145
 #: src/ui/webview.md:272
 msgid "[Widgets](widgets.md) — All available widgets"
@@ -20256,7 +20255,9 @@ msgstr "`borderless`"
 msgid "`perry_ui_textfield_set_borderless`"
 msgstr "`perry_ui_textfield_set_borderless`"
 
-#: src/ui/styling-matrix.md:88 src/ui/canvas.md:100 src/ui/canvas.md:101
+#: src/ui/styling-matrix.md:88 src/ui/canvas.md:101 src/ui/canvas.md:102
+#: src/ui/canvas.md:103 src/ui/canvas.md:104 src/ui/canvas.md:105
+#: src/ui/canvas.md:106 src/ui/canvas.md:107
 msgid "Wired"
 msgstr "เชื่อมต่อแล้ว"
 
@@ -21155,13 +21156,13 @@ msgid ""
 "`direction` `0` runs top to bottom and `1` left to right. The path is closed "
 "straight down to the bottom edge, so the example above shades the area under "
 "its line on every backend; a path with fewer than two points fills nothing. "
-"Only `moveTo`/`lineTo` points shape the area, joined in order into one "
-"outline: a later `moveTo` continues it rather than starting a separate area, "
-"so draw one series per `beginPath`. The fill color set by `setFillColor` is "
-"unchanged afterwards."
+"Only `moveTo`/`lineTo` and `arc` points (an arc as short segments) shape the "
+"area, joined in order into one outline: a later `moveTo` continues it rather "
+"than starting a separate area, so draw one series per `beginPath`. The fill "
+"color set by `setFillColor` is unchanged afterwards."
 msgstr ""
 
-#: src/ui/canvas.md:90
+#: src/ui/canvas.md:91
 msgid ""
 "```typescript\n"
 "canvas.setFillColor(0.0, 0.0, 0.0, 1.0)\n"
@@ -21175,20 +21176,20 @@ msgstr ""
 "canvas.fillText(\"Hello Canvas!\", 50, 50)\n"
 "```"
 
-#: src/ui/canvas.md:96 src/ui/menus.md:107 src/ui/tray.md:64
+#: src/ui/canvas.md:97 src/ui/menus.md:107 src/ui/tray.md:64
 #: src/ui/dialogs.md:106 src/ui/animation.md:60 src/ui/multi-window.md:145
 #: src/ui/webview.md:226
 msgid "Platform Notes"
 msgstr "หมายเหตุเกี่ยวกับแพลตฟอร์ม"
 
-#: src/ui/canvas.md:98 src/ui/animation.md:62 src/ui/multi-window.md:79
+#: src/ui/canvas.md:99 src/ui/animation.md:62 src/ui/multi-window.md:79
 #: src/ui/multi-window.md:96 src/ui/multi-window.md:107
 #: src/ui/multi-window.md:123 src/ui/multi-window.md:139
 #: src/ui/multi-window.md:147 src/ui/camera.md:137 src/system/other.md:18
 msgid "Implementation"
 msgstr "การ Implement"
 
-#: src/ui/canvas.md:98 src/platforms/overview.md:7 src/system/media.md:84
+#: src/ui/canvas.md:99 src/platforms/overview.md:7 src/system/media.md:84
 #: src/testing/geisterhand.md:298
 #: src/internals/rfc-rooting-by-construction.md:352
 #: src/internals/node-api-host.md:588 src/internals/node-api-host.md:624
@@ -21196,54 +21197,60 @@ msgstr "การ Implement"
 msgid "Status"
 msgstr "สถานะ"
 
-#: src/ui/canvas.md:100
+#: src/ui/canvas.md:101
 msgid "HTML5 Canvas"
 msgstr "HTML5 Canvas"
 
-#: src/ui/canvas.md:101
+#: src/ui/canvas.md:102
 msgid "WASM"
 msgstr "WASM"
 
-#: src/ui/canvas.md:101
+#: src/ui/canvas.md:102
 msgid "HTML5 Canvas via JS bridge"
 msgstr "HTML5 Canvas ผ่าน JS bridge"
 
-#: src/ui/canvas.md:102 src/ui/canvas.md:103
+#: src/ui/canvas.md:103 src/ui/canvas.md:104
 msgid "Core Graphics (CGContext)"
 msgstr "Core Graphics (CGContext)"
 
-#: src/ui/canvas.md:102 src/ui/canvas.md:103 src/ui/canvas.md:104
-#: src/ui/canvas.md:105 src/ui/canvas.md:106
-msgid "Partial infrastructure; stateful API incomplete"
-msgstr "โครงสร้างพื้นฐานบางส่วน; stateful API ไม่สมบูรณ์"
-
 #: src/ui/canvas.md:104
+#, fuzzy
+msgid "iOS, tvOS, visionOS"
+msgstr "iOS / tvOS / visionOS"
+
+#: src/ui/canvas.md:105
 msgid "Cairo"
 msgstr "Cairo"
 
-#: src/ui/canvas.md:105
+#: src/ui/canvas.md:106
 msgid "GDI command buffer"
 msgstr "กําหนดการ GDI"
 
-#: src/ui/canvas.md:106
+#: src/ui/canvas.md:107
 msgid "Canvas/Bitmap"
 msgstr "Canvas/Bitmap"
 
 #: src/ui/canvas.md:108
+msgid "Ignored (no-op)"
+msgstr ""
+
+#: src/ui/canvas.md:110
 #, fuzzy
 msgid ""
-"The native parity matrix currently marks `setFillColor`, `setStrokeColor`, "
-"`setLineWidth`, `fillRect`, `strokeRect`, `arc`, `closePath`, `fill`, and "
-"stateful `stroke` unsupported. `setFont` and `fillText` draw text natively "
-"on macOS, iOS, tvOS, visionOS, Android, Linux and Windows, in the current "
-"fill color with `y` on the alphabetic baseline; watchOS ignores them. "
-"Windows draws text opaque, because GDI text has no alpha, and Linux uses "
-"only the first family of the font list. `setFont` reads the CSS `font` "
-"shorthand with `px` or `pt` sizes; any other spec leaves the font unchanged. "
-"`Canvas()` creation, clear/begin/move/line primitives, the lower-level "
-"colored stroke and gradient entries, and image drawing have native "
-"implementations, but that lower-level surface does not make the HTML-style "
-"examples above fully functional."
+"The stateful API (`setFillColor`, `setStrokeColor`, `setLineWidth`, "
+"`fillRect`, `strokeRect`, `beginPath`, `moveTo`, `lineTo`, `arc`, "
+"`closePath`, `fill` and `stroke`) follows HTML canvas: fill and stroke start "
+"black with a line width of 1, `arc` takes radians and runs clockwise, and "
+"`fill` uses the nonzero rule. watchOS ignores the whole API. Windows draws "
+"opaque, because GDI has no alpha; macOS and Windows flatten arcs to short "
+"line segments. `setFont` and `fillText` draw text natively on macOS, iOS, "
+"tvOS, visionOS, Android, Linux and Windows, in the current fill color with "
+"`y` on the alphabetic baseline; watchOS ignores them. Windows draws text "
+"opaque, because GDI text has no alpha, and Linux uses only the first family "
+"of the font list. `setFont` reads the CSS `font` shorthand with `px` or `pt` "
+"sizes; any other spec leaves the font unchanged. `Canvas()` creation, clear/"
+"begin/move/line primitives, the lower-level colored stroke and gradient "
+"entries, and image drawing have native implementations."
 msgstr ""
 "แมตริกซ์ความเท่าเทียมพื้นเมืองในขณะนี้มีเครื่องหมาย `setFillColor`, `setStrokeColor`, "
 "`setLineWidth`, `fillRect`, `strokeRect`, `arc`, `closePath`, `fill`, "
@@ -21252,11 +21259,11 @@ msgstr ""
 "และการวาดภาพมีการดําเนินงานพื้นบ้าน แต่พื้นผิวระดับล่างนั้นไม่ได้ทําให้ตัวอย่างแบบ HTML "
 "บนมีฟังก์ชันอย่างเต็มที่"
 
-#: src/ui/canvas.md:123
+#: src/ui/canvas.md:128
 msgid "[Animation](animation.md) — Animating widget properties"
 msgstr "[Animation](animation.md) — แอนิเมตคุณสมบัติของวิดเจ็ต"
 
-#: src/ui/canvas.md:124
+#: src/ui/canvas.md:129
 msgid "[Styling](styling.md) — Widget styling"
 msgstr "[Styling](styling.md) — การจัดสไตล์วิดเจ็ต"
 
@@ -92227,6 +92234,9 @@ msgid ""
 "and attaches only the package tarballs whose bytes match the public npm "
 "SHA-1."
 msgstr ""
+
+#~ msgid "Partial infrastructure; stateful API incomplete"
+#~ msgstr "โครงสร้างพื้นฐานบางส่วน; stateful API ไม่สมบูรณ์"
 
 #~ msgid "`perry-ext-cheerio`"
 #~ msgstr "`perry-ext-cheerio`"
