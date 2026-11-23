@@ -107,7 +107,7 @@ fn lower_constructor_in_scope(
                     ctx.define_local_spanned(param_name.clone(), param_type.clone(), p.span);
                 ctx.shadow_native_instance_if_present(&param_name);
                 ctx.shadow_native_module_if_present(&param_name);
-                params.push(Param {
+                params.push(Param { byte_offset: p.span.lo.0,
                     id: param_id,
                     name: param_name,
                     ty: param_type,
@@ -167,7 +167,7 @@ fn lower_constructor_in_scope(
                 ctx.shadow_native_module_if_present(&param_name);
                 // Record this param for synthesizing `this.field = param` assignment
                 param_prop_assignments.push((param_id, param_name.clone()));
-                params.push(Param {
+                params.push(Param { byte_offset: ts_prop.span.lo.0,
                     id: param_id,
                     name: param_name,
                     ty: param_type,
@@ -191,7 +191,7 @@ fn lower_constructor_in_scope(
             .map(|b| body_uses_arguments(&b.stmts))
             .unwrap_or(false);
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
+        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new(), ctor.span.lo.0);
     }
 
     // Issue #572: generate destructuring extractions BEFORE lowering the
@@ -541,7 +541,7 @@ fn lower_class_method_in_scope(
         let param_id = ctx.define_local_spanned(param_name.clone(), param_type.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
-        params.push(Param {
+        params.push(Param { byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: param_type,
@@ -580,7 +580,7 @@ fn lower_class_method_in_scope(
             .unwrap_or(false)
             || params_use_arguments(&method.function.params));
     if needs_arguments_synth {
-        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new());
+        append_synthetic_arguments_param(ctx, &mut params, true, false, true, Vec::new(), method.span.lo.0);
     }
 
     for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
@@ -964,7 +964,7 @@ fn lower_setter_method_in_scope(
         let param_id = ctx.define_local_spanned(param_name.clone(), param_type.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
-        params.push(Param {
+        params.push(Param { byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: param_type,

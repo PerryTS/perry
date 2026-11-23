@@ -897,7 +897,7 @@ pub fn synthesize_class_captures(
             // count and pack ancestor rest params via the closure-rest table.
             let (params, body) = if has_heritage {
                 let pid = ctx.fresh_local();
-                let params = vec![Param {
+                let params = vec![Param { byte_offset: class_offset,
                     id: pid,
                     name: "__perry_dflt_args".to_string(),
                     ty: Type::Any,
@@ -963,7 +963,7 @@ pub fn synthesize_class_captures(
             .get(&outer_id)
             .cloned()
             .unwrap_or(Type::Any);
-        ctor.params.push(Param {
+        ctor.params.push(Param { byte_offset: class_offset,
             id: fresh_param_id,
             name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
             ty,

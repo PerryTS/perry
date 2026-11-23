@@ -941,7 +941,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             func_id: *func_id,
             params: params
                 .iter()
-                .map(|p| Param {
+                .map(|p| Param { byte_offset: p.byte_offset,
                     id: p.id,
                     name: p.name.clone(),
                     ty: substitute_type(&p.ty, substitutions),
