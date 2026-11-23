@@ -95,6 +95,7 @@ impl Model {
                 act
             ),
             Cons::Raise { region } => format!("Raise region={region}"),
+            Cons::HandRaise { region } => format!("HandRaise region={region}"),
             Cons::TopSink { reason } => {
                 format!("TopSink reason={:?}", self.reasons.get(reason as usize))
             }

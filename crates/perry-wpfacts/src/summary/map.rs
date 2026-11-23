@@ -90,6 +90,7 @@ pub fn map_cons(
         },
         TopSink { reason } => TopSink { reason },
         Raise { region } => Raise { region: n(region) },
+        HandRaise { region } => HandRaise { region: n(region) },
         RuntimeStore { reason, retained } => RuntimeStore { reason, retained },
         HandOver { reason, ctor, arg } => HandOver { reason, ctor, arg },
         OwnOnly { f, dst } => OwnOnly { f, dst: n(dst) },

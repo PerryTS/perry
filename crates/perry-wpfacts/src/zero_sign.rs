@@ -164,7 +164,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::ArrayLenArg { .. }
         | Cons::CaseMap { .. }
         | Cons::ConsoleFormat { .. }
-        | Cons::Raise { .. }
+        | Cons::Raise { .. } | Cons::HandRaise { .. }
         | Cons::Identity { .. }
         | Cons::HasProp { .. }
         | Cons::OwnProp { .. }

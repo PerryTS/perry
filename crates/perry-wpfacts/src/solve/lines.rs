@@ -44,6 +44,7 @@ impl Model {
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
             Cons::Raise { region } => format!("raise {n} {region}"),
+            Cons::HandRaise { region } => format!("handraise {n} {region}"),
             Cons::RuntimeStore { reason, retained } => {
                 format!("runtimestore {n} {retained} {reason}")
             }

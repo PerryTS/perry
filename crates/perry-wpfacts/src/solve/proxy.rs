@@ -729,7 +729,7 @@ impl Model {
             }
             // An observation; a throw region: the trap calls run in the
             // shared cell every catch reads (`proxy_trap`).
-            Cons::Identity { .. } | Cons::Raise { .. } => {}
+            Cons::Identity { .. } | Cons::Raise { .. } | Cons::HandRaise { .. } => {}
             // Rule PXCALL: a call or `new` of the Proxy (`proxy_call`).
             Cons::Call { .. }
             | Cons::CallThis { .. }

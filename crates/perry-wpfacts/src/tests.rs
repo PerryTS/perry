@@ -119,6 +119,7 @@ mod escaped_method_this;
 mod export_star;
 mod family_reach;
 mod fetch_headers;
+mod fetchstop;
 mod field_array_push;
 mod field_test_narrowing;
 mod field_truthy_filter;

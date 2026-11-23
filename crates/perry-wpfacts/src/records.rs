@@ -279,7 +279,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::Range { .. }
         | Cons::Defined { .. }
         | Cons::TopIfTop { .. }
-        | Cons::Raise { .. }
+        | Cons::Raise { .. } | Cons::HandRaise { .. }
         // It reads the node's Strings only (rule CONSOLE-PCT).
         | Cons::ConsoleFormat { .. } => Allowed,
         // Arithmetic and coercion: ToPrimitive on the record.
@@ -431,7 +431,7 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         | Cons::Range { .. }
         | Cons::Defined { .. }
         | Cons::TopIfTop { .. }
-        | Cons::Raise { .. } => Use::Allowed,
+        | Cons::Raise { .. } | Cons::HandRaise { .. } => Use::Allowed,
         Cons::ArgInto { call, .. } | Cons::RetInto { call, .. } => Use::TypedCall(*call),
         Cons::MCall { key, .. } | Cons::Load { key, .. } | Cons::FieldTruthy { key, .. } => {
             op(named(key))
@@ -797,7 +797,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 regions.insert(n as NodeId);
             }
             for c in &node.cons {
-                if let Cons::Raise { region } = c {
+                if let Cons::Raise { region } | Cons::HandRaise { region } = c {
                     regions.insert(*region);
                 }
             }
@@ -1367,7 +1367,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     | Cons::Guard { .. }
                                     | Cons::Defined { .. }
                                     | Cons::TopIfTop { .. }
-                                    | Cons::Raise { .. }
+                                    | Cons::Raise { .. } | Cons::HandRaise { .. }
                                     | Cons::BirthField { .. }
                             )
                             || matches!(k, Cons::Implicit { proto, .. } if sanctioned(*proto))
@@ -1937,7 +1937,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::Range { .. }
                 | Cons::Defined { .. }
                 | Cons::TopIfTop { .. }
-                | Cons::Raise { .. }
+                | Cons::Raise { .. } | Cons::HandRaise { .. }
                 | Cons::ArgInto { .. }
                 | Cons::Arith { .. }
                 | Cons::Plus { .. }

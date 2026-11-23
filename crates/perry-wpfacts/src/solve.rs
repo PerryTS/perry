@@ -360,7 +360,7 @@ impl Model {
     fn may_run_code(c: &Cons) -> bool {
         !matches!(
             c,
-            Cons::Raise { .. }
+            Cons::Raise { .. } | Cons::HandRaise { .. }
                 | Cons::Identity { .. }
                 | Cons::Guard { .. }
                 | Cons::Defined { .. }
@@ -1940,13 +1940,18 @@ impl Model {
                 d.store_top.entry(n).or_insert(c);
             }
         }
+        // The native's region gets what that code may throw once a value
+        // reaches `n` (HandRaise), not when the sink is attached: an empty
+        // slot (`fetch(url)`: no `init`, no `init.body`) hands nothing.
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
-            self.raise_top(
-                region,
-                n,
-                "a native hands a value to unknown code, which may throw",
-            );
+            let seen = self.nodes[n as usize]
+                .cons
+                .iter()
+                .any(|x| matches!(x, Cons::HandRaise { region: r } if *r == region));
+            if region != u32::MAX && !seen {
+                self.cons(n, Cons::HandRaise { region });
+            }
         }
         if self.sunk_nodes.insert(n) {
             self.cons(n, Cons::TopSink { reason });

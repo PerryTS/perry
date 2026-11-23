@@ -242,6 +242,15 @@ impl Model {
                     );
                 }
             }
+            Cons::HandRaise { region } => {
+                if !toks.is_empty() {
+                    self.raise_top(
+                        region,
+                        n,
+                        "a native hands a value to unknown code, which may throw",
+                    );
+                }
+            }
             Cons::TopSink { reason } | Cons::RuntimeStore { reason, .. } => {
                 let retained = if let Cons::RuntimeStore { retained, .. } = c {
                     Some(*retained)

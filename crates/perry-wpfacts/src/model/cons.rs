@@ -190,6 +190,12 @@ pub enum Cons {
     /// section 8): once ⊤ is here, unknown code may run (a getter, a trap,
     /// ToPrimitive, a callee) and throw anything into the region.
     Raise { region: NodeId },
+    /// The node is a value a native hands to unknown code (`sink_node`)
+    /// during a call that runs in throw region `region`: once a value
+    /// (a token, ⊤ included) is here, that code may run with it and throw
+    /// anything into the region. Primitives run no code; an empty node
+    /// hands nothing and raises nothing.
+    HandRaise { region: NodeId },
     /// A realm field already retains its canonical value. Storing it again
     /// exposes no new reach; every other alternative takes the usual sink.
     RuntimeStore { reason: u32, retained: Tok },
@@ -1093,6 +1099,7 @@ impl Cons {
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } | Cons::RuntimeStore { .. } => "top",
             Cons::Raise { .. } => "raise",
+            Cons::HandRaise { .. } => "handraise",
             Cons::HandOver { .. } => "handover",
             Cons::OwnOnly { .. } => "ownonly",
             Cons::CallerValue { .. } => "callervalue",
