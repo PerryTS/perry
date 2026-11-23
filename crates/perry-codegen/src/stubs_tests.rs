@@ -1,7 +1,10 @@
 //! Startup-registration objects on ELF: the registration pointer must land in
 //! `.init_array`. Kept out of `stubs.rs` so the tests survive reverting it.
 
-use crate::stubs::{generate_feature_installer_object, generate_static_shape_seed_object};
+use crate::stubs::{
+    generate_feature_installer_object, generate_static_shape_seed_object,
+    FEATURE_INSTALLS_LINK_ANCHOR,
+};
 
 /// `(name, sh_type, sh_flags, sh_size)` of every section of a 64-bit
 /// little-endian ELF object.
@@ -96,4 +99,14 @@ fn elf_startup_registration_lands_in_init_array() {
             "{target} seed: the seed unit is data and registers nothing"
         );
     }
+}
+
+/// A static archive member is extracted only for a symbol something names, so
+/// the installer object defines the global anchor a staticlib entry calls.
+#[test]
+fn feature_installer_object_defines_its_link_anchor() {
+    let obj = generate_feature_installer_object(&[], None, &[], 0, Some("linux"))
+        .expect("the installer unit compiles");
+    let name = FEATURE_INSTALLS_LINK_ANCHOR.as_bytes();
+    assert!(obj.windows(name.len()).any(|w| w == name));
 }
