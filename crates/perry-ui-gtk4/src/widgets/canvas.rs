@@ -50,6 +50,35 @@ enum DrawCommand {
         b: f64,
         a: f64,
     },
+    SetStrokeColor {
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    },
+    SetLineWidth(f64),
+    FillRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
+    StrokeRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
+    Arc {
+        x: f64,
+        y: f64,
+        r: f64,
+        start: f64,
+        end: f64,
+    },
+    ClosePath,
+    FillPath,
+    StrokePath,
     SetFont(CanvasFont),
     FillText {
         text: String,
@@ -78,6 +107,10 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
                 | DrawCommand::DrawImage { .. }
                 | DrawCommand::ClearRect { .. }
                 | DrawCommand::FillText { .. }
+                | DrawCommand::FillRect { .. }
+                | DrawCommand::StrokeRect { .. }
+                | DrawCommand::FillPath
+                | DrawCommand::StrokePath
         )
     })
 }
@@ -90,7 +123,10 @@ fn carry_state(state: &mut Vec<DrawCommand>, commands: Vec<DrawCommand>) -> Vec<
     for cmd in &commands {
         if matches!(
             cmd,
-            DrawCommand::SetFillColor { .. } | DrawCommand::SetFont(_)
+            DrawCommand::SetFillColor { .. }
+                | DrawCommand::SetStrokeColor { .. }
+                | DrawCommand::SetLineWidth(_)
+                | DrawCommand::SetFont(_)
         ) {
             state.retain(|kept| std::mem::discriminant(kept) != std::mem::discriminant(cmd));
             state.push(cmd.clone());
@@ -209,20 +245,62 @@ pub fn create(width: f64, height: f64) -> i64 {
             // Track current path points for gradient fill
             let mut path_points: Vec<(f64, f64)> = Vec::new();
             let mut cur_fill = (0.0, 0.0, 0.0, 1.0);
+            let mut cur_stroke = (0.0, 0.0, 0.0, 1.0);
+            let mut cur_width = 1.0;
             let mut cur_font = CanvasFont::default();
+            // The path the stateful fill()/stroke() render: its MoveTo, LineTo, Arc and ClosePath.
+            let mut path: Vec<&DrawCommand> = Vec::new();
 
             for cmd in commands.iter() {
                 match cmd {
                     DrawCommand::BeginPath => {
                         path_points.clear();
+                        path.clear();
                     }
                     DrawCommand::MoveTo(x, y) => {
                         // GTK4/Cairo origin is top-left — same as TypeScript expects.
                         // No Y-flip needed (unlike macOS which is bottom-left).
                         path_points.push((*x, *y));
+                        path.push(cmd);
                     }
                     DrawCommand::LineTo(x, y) => {
                         path_points.push((*x, *y));
+                        path.push(cmd);
+                    }
+                    DrawCommand::Arc { .. } | DrawCommand::ClosePath => path.push(cmd),
+                    DrawCommand::SetStrokeColor { r, g, b, a } => {
+                        cur_stroke = (*r, *g, *b, *a);
+                    }
+                    DrawCommand::SetLineWidth(w) => cur_width = *w,
+                    DrawCommand::FillRect { x, y, w, h } => {
+                        cr.save().ok();
+                        cr.set_source_rgba(cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
+                        cr.rectangle(*x, *y, *w, *h);
+                        cr.fill().ok();
+                        cr.restore().ok();
+                    }
+                    DrawCommand::StrokeRect { x, y, w, h } => {
+                        cr.save().ok();
+                        cr.set_source_rgba(cur_stroke.0, cur_stroke.1, cur_stroke.2, cur_stroke.3);
+                        cr.set_line_width(cur_width);
+                        cr.rectangle(*x, *y, *w, *h);
+                        cr.stroke().ok();
+                        cr.restore().ok();
+                    }
+                    DrawCommand::FillPath => {
+                        cr.save().ok();
+                        cr.set_source_rgba(cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
+                        add_path(cr, &path);
+                        cr.fill().ok();
+                        cr.restore().ok();
+                    }
+                    DrawCommand::StrokePath => {
+                        cr.save().ok();
+                        cr.set_source_rgba(cur_stroke.0, cur_stroke.1, cur_stroke.2, cur_stroke.3);
+                        cr.set_line_width(cur_width);
+                        add_path(cr, &path);
+                        cr.stroke().ok();
+                        cr.restore().ok();
                     }
                     DrawCommand::Stroke {
                         r,
@@ -389,6 +467,39 @@ pub fn create(width: f64, height: f64) -> i64 {
     handle
 }
 
+/// The end angle HTML canvas `arc` reaches from `start` going clockwise: a span of 2π or
+/// more is the whole circle, any other span is taken modulo 2π.
+fn clockwise_end(start: f64, end: f64) -> f64 {
+    let tau = std::f64::consts::TAU;
+    if end - start >= tau {
+        start + tau
+    } else {
+        start + (end - start).rem_euclid(tau)
+    }
+}
+
+/// Makes `path` cairo's current path. Cairo already treats a line_to with no current point as
+/// a move_to and joins the current point to an arc's start, as HTML canvas does; its
+/// increasing angles run clockwise in the top-left-origin space.
+fn add_path(cr: &gtk4::cairo::Context, path: &[&DrawCommand]) {
+    cr.new_path();
+    for cmd in path {
+        match **cmd {
+            DrawCommand::MoveTo(x, y) => cr.move_to(x, y),
+            DrawCommand::LineTo(x, y) => cr.line_to(x, y),
+            DrawCommand::Arc {
+                x,
+                y,
+                r,
+                start,
+                end,
+            } => cr.arc(x, y, r, start, clockwise_end(start, end)),
+            DrawCommand::ClosePath => cr.close_path(),
+            _ => {}
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use gtk4::prelude::*;
@@ -484,8 +595,65 @@ fn push_cmd(handle: i64, cmd: DrawCommand) {
     });
 }
 
+fn redraw(handle: i64) {
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(area) = widget.downcast_ref::<DrawingArea>() {
+            area.queue_draw();
+        }
+    }
+}
+
 pub fn set_fill_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     push_cmd(handle, DrawCommand::SetFillColor { r, g, b, a });
+}
+
+pub fn set_stroke_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    push_cmd(handle, DrawCommand::SetStrokeColor { r, g, b, a });
+}
+
+pub fn set_line_width(handle: i64, w: f64) {
+    push_cmd(handle, DrawCommand::SetLineWidth(w));
+}
+
+pub fn fill_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCommand::FillRect { x, y, w, h });
+    redraw(handle);
+}
+
+pub fn stroke_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCommand::StrokeRect { x, y, w, h });
+    redraw(handle);
+}
+
+/// A non-finite argument or a negative radius records nothing; HTML canvas ignores the first
+/// and throws on the second.
+pub fn arc(handle: i64, x: f64, y: f64, r: f64, start: f64, end: f64) {
+    if [x, y, r, start, end].iter().all(|v| v.is_finite()) && r >= 0.0 {
+        push_cmd(
+            handle,
+            DrawCommand::Arc {
+                x,
+                y,
+                r,
+                start,
+                end,
+            },
+        );
+    }
+}
+
+pub fn close_path(handle: i64) {
+    push_cmd(handle, DrawCommand::ClosePath);
+}
+
+pub fn fill(handle: i64) {
+    push_cmd(handle, DrawCommand::FillPath);
+    redraw(handle);
+}
+
+pub fn stroke_path(handle: i64) {
+    push_cmd(handle, DrawCommand::StrokePath);
+    redraw(handle);
 }
 
 /// An invalid font spec keeps the previous font, as HTML canvas does.

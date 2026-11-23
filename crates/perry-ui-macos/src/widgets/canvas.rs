@@ -656,6 +656,28 @@ pub fn move_to(handle: i64, x: f64, y: f64) {
     }
 }
 
+/// Adds a circular arc as HTML canvas does: a line from the current point to the arc's
+/// start, then the arc clockwise on screen from `start` to `end` (radians). The arc is
+/// recorded as short chords so fill, stroke and fillGradient share the one point list.
+pub fn arc(handle: i64, x: f64, y: f64, r: f64, start: f64, end: f64) {
+    if !([x, y, r, start, end].iter().all(|v| v.is_finite()) && r >= 0.0) {
+        return;
+    }
+    let tau = std::f64::consts::TAU;
+    let sweep = if end - start >= tau {
+        tau
+    } else {
+        (end - start).rem_euclid(tau)
+    };
+    // About 2pt per chord, at least 8 per full turn.
+    let steps = ((sweep * r / 2.0).ceil() as usize)
+        .clamp((8.0 * sweep / tau).ceil().max(1.0) as usize, 4096);
+    for i in 0..=steps {
+        let a = start + sweep * i as f64 / steps as f64;
+        line_to(handle, x + r * a.cos(), y + r * a.sin());
+    }
+}
+
 /// Line to point.
 pub fn line_to(handle: i64, x: f64, y: f64) {
     if let Some(key) = get_canvas_key(handle) {
@@ -983,6 +1005,45 @@ mod tests {
     use super::*;
     use objc2_app_kit::NSApplication;
     use perry_runtime as _;
+
+    #[test]
+    fn arc_records_a_clockwise_chord_path_from_start_to_end() {
+        let mtm =
+            MainThreadMarker::new().expect("panic-abort tests run on the process main thread");
+        let _app = NSApplication::sharedApplication(mtm);
+        let canvas = create(100.0, 100.0);
+        arc(canvas, 50.0, 50.0, 10.0, 0.0, std::f64::consts::FRAC_PI_2);
+        arc(canvas, 0.0, 0.0, f64::NAN, 0.0, 1.0);
+        let key = get_canvas_key(canvas).unwrap();
+        let points: Vec<(f64, f64)> = CANVAS_COMMANDS.with(|cmds| {
+            cmds.borrow()[&key]
+                .iter()
+                .map(|c| match c {
+                    DrawCommand::LineTo(x, y) => (*x, *y),
+                    _ => panic!("arc recorded a command other than LineTo"),
+                })
+                .collect()
+        });
+        let close = |(x, y): (f64, f64), (ex, ey): (f64, f64)| {
+            (x - ex).abs() < 1e-9 && (y - ey).abs() < 1e-9
+        };
+        assert!(
+            close(points[0], (60.0, 50.0)),
+            "starts at angle 0: {:?}",
+            points[0]
+        );
+        assert!(
+            close(*points.last().unwrap(), (50.0, 60.0)),
+            "ends a quarter turn clockwise on screen (y down)"
+        );
+        assert!(
+            points.len() >= 9,
+            "a quarter circle of radius 10 is several chords"
+        );
+        assert!(points
+            .iter()
+            .all(|&(x, y)| ((x - 50.0).hypot(y - 50.0) - 10.0).abs() < 1e-9));
+    }
 
     #[test]
     fn clear_rect_records_its_rect_after_earlier_commands() {
