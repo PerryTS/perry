@@ -1711,6 +1711,7 @@ impl<'a> Gen<'a> {
         disc: &Expr,
         cases: &[perry_hir::SwitchCase],
         i: usize,
+        byte_offset: u32,
     ) -> usize {
         if !matches!(disc, Expr::PropertyGet { .. }) {
             return 0;
@@ -1735,7 +1736,8 @@ impl<'a> Gen<'a> {
         let Some(lit) = cases[i].test.as_ref() else {
             return 0;
         };
-        let cond = Expr::Compare { byte_offset: 0 /*HPOS*/,
+        let cond = Expr::Compare {
+            byte_offset,
             op: CompareOp::Eq,
             left: Box::new(disc.clone()),
             right: Box::new(lit.clone()),
