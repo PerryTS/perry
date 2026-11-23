@@ -130,7 +130,7 @@ fn for_in_shape<'s>(body: &'s [Stmt], keys_of: impl Fn(u32) -> Option<u32>) -> O
 fn runs_in_place(body: &[Stmt]) -> bool {
     let mut ok = true;
     for_each_stmt_shallow(body, &mut |s| {
-        if matches!(s, Stmt::Return(_)) {
+        if matches!(s, Stmt::Return(_, _)) {
             ok = false;
         }
     });

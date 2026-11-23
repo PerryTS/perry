@@ -147,8 +147,8 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             is_arrow,
             is_async,
             is_generator,
-            is_strict,
-        } => Expr::Closure {
+            is_strict, byte_offset, ..
+        } => Expr::Closure { byte_offset: *byte_offset,
             func_id: func_id.clone(),
             params: Shallow::shallow(params, n),
             return_type: return_type.clone(),

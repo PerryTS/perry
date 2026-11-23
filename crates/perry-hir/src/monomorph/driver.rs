@@ -206,7 +206,7 @@ fn collect_instantiations_in_stmt(
             }
         }
         Stmt::Expr(expr) => collect_instantiations_in_expr(expr, ctx, module, idx),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(e) = expr {
                 collect_instantiations_in_expr(e, ctx, module, idx);
             }
@@ -474,7 +474,7 @@ fn collect_instantiations_in_expr(
                 collect_instantiations_in_expr(t, ctx, module, idx);
             }
         }
-        Expr::Await(inner) => collect_instantiations_in_expr(inner, ctx, module, idx),
+        Expr::Await(inner, _) => collect_instantiations_in_expr(inner, ctx, module, idx),
         Expr::SuperCall(args) => {
             for arg in args {
                 collect_instantiations_in_expr(arg, ctx, module, idx);

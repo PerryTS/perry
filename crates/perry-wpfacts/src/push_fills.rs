@@ -284,7 +284,7 @@ fn any_stmt(ss: &[Stmt], f: &mut dyn FnMut(&Stmt) -> bool) -> bool {
             Stmt::Switch { cases, .. } => cases.iter().any(|c| any_stmt(&c.body, f)),
             Stmt::Let { .. }
             | Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Throw(_)
             | Stmt::Break
             | Stmt::Continue
@@ -298,14 +298,14 @@ fn any_stmt(ss: &[Stmt], f: &mut dyn FnMut(&Stmt) -> bool) -> bool {
 }
 
 fn returns(ss: &[Stmt]) -> bool {
-    any_stmt(ss, &mut |s| matches!(s, Stmt::Return(_)))
+    any_stmt(ss, &mut |s| matches!(s, Stmt::Return(_, _)))
 }
 
 fn jumps(ss: &[Stmt]) -> bool {
     any_stmt(ss, &mut |s| {
         matches!(
             s,
-            Stmt::Return(_)
+            Stmt::Return(_, _)
                 | Stmt::Break
                 | Stmt::Continue
                 | Stmt::LabeledBreak(_)

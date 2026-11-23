@@ -352,7 +352,7 @@ pub(crate) fn for_each_stmt_part<'a>(stmt: &'a Stmt, f: &mut dyn FnMut(Part<'a>)
             }
         }
         Stmt::Expr(expr) | Stmt::Throw(expr) => f(Part::Expr(expr)),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(expr) = expr {
                 f(Part::Expr(expr));
             }

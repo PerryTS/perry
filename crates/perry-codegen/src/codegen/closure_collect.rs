@@ -176,7 +176,7 @@ fn collect_direct_call_closures_in_stmts(
             perry_hir::Stmt::Expr(expr) | perry_hir::Stmt::Throw(expr) => {
                 collect_direct_call_closures_in_expr(expr, out)
             }
-            perry_hir::Stmt::Return(expr) => {
+            perry_hir::Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     collect_direct_call_closures_in_expr(expr, out);
                 }
@@ -293,7 +293,7 @@ fn count_stmt_nodes(stmt: &perry_hir::Stmt) -> usize {
         perry_hir::Stmt::Expr(expr) | perry_hir::Stmt::Throw(expr) => {
             count += count_expr_nodes(expr)
         }
-        perry_hir::Stmt::Return(expr) => count += expr.as_ref().map(count_expr_nodes).unwrap_or(0),
+        perry_hir::Stmt::Return(expr, _) => count += expr.as_ref().map(count_expr_nodes).unwrap_or(0),
         perry_hir::Stmt::If {
             condition,
             then_branch,
@@ -430,7 +430,7 @@ fn scan_capture_use_stmt(
         perry_hir::Stmt::Expr(expr) | perry_hir::Stmt::Throw(expr) => {
             scan_capture_use_expr(expr, in_loop, uses);
         }
-        perry_hir::Stmt::Return(expr) => {
+        perry_hir::Stmt::Return(expr, _) => {
             if let Some(expr) = expr {
                 scan_capture_use_expr(expr, in_loop, uses);
             }

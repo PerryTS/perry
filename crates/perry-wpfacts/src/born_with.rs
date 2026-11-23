@@ -168,8 +168,8 @@ pub(crate) fn store_only_keys(f: &Function) -> Option<Vec<String>> {
                 };
                 keys.push(k.clone())
             }
-            Stmt::Return(None) if i + 1 == n => {}
-            Stmt::Return(Some(Expr::This)) if i + 1 == n => {}
+            Stmt::Return(None, _) if i + 1 == n => {}
+            Stmt::Return(Some(Expr::This), _) if i + 1 == n => {}
             _ => return None,
         }
     }

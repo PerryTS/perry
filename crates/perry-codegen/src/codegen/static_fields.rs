@@ -473,7 +473,7 @@ fn collect_inline_invoked_static_blocks(
         match s {
             Stmt::Let { init: Some(e), .. } => walk_expr(e, out),
             Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, out),
-            Stmt::Return(Some(e)) => walk_expr(e, out),
+            Stmt::Return(Some(e), _) => walk_expr(e, out),
             Stmt::If {
                 condition,
                 then_branch,

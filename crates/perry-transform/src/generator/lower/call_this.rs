@@ -15,10 +15,10 @@ pub(crate) fn generator_stmt_uses_call_this(stmt: &Stmt) -> bool {
             init: Some(expr), ..
         } => generator_expr_uses_call_this(expr),
         Stmt::Let { init: None, .. } => false,
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+        Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
             generator_expr_uses_call_this(expr)
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)

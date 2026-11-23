@@ -70,7 +70,7 @@ impl Names {
                 }
                 Stmt::PreallocateTdzBoxes(ids) => self.tdz.extend(ids),
                 Stmt::Expr(expr) | Stmt::Throw(expr) => self.expr(expr),
-                Stmt::Return(expr) => {
+                Stmt::Return(expr, _) => {
                     if let Some(expr) = expr {
                         self.expr(expr);
                     }

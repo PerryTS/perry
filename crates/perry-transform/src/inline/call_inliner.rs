@@ -7,7 +7,7 @@ use super::*;
 
 pub fn stmt_contains_return(s: &Stmt) -> bool {
     match s {
-        Stmt::Return(_) => true,
+        Stmt::Return(_, _) => true,
         Stmt::If {
             then_branch,
             else_branch,
@@ -65,7 +65,7 @@ pub fn convert_returns_in_stmts(stmts: &mut Vec<Stmt>, let_id: LocalId) {
     let mut i = 0;
     while i < stmts.len() {
         match &mut stmts[i] {
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 let break_stmt = Stmt::Break;
                 if let Some(e) = opt.take() {
                     let assign = Stmt::Expr(Expr::LocalSet(let_id, Box::new(e)));
@@ -129,8 +129,8 @@ fn returns_only_anonymous_records(function: &Function) -> bool {
                     class_name,
                     cap_args_appended: 0,
                     ..
-                })) if class_name.starts_with("__AnonShape_") => *saw_return = true,
-                Stmt::Return(_) => return false,
+                }), _) if class_name.starts_with("__AnonShape_") => *saw_return = true,
+                Stmt::Return(_, _) => return false,
                 Stmt::If {
                     then_branch,
                     else_branch,
@@ -188,7 +188,7 @@ fn returns_only_anonymous_records(function: &Function) -> bool {
             class_name,
             cap_args_appended: 0,
             ..
-        }))) if class_name.starts_with("__AnonShape_")
+        }), _)) if class_name.starts_with("__AnonShape_")
     ) {
         return false;
     }
@@ -246,7 +246,7 @@ fn loop_has_prototype_surgery(stmts: &[Stmt]) -> bool {
                 init: Some(expr), ..
             }
             | Stmt::Expr(expr)
-            | Stmt::Return(Some(expr))
+            | Stmt::Return(Some(expr), _)
             | Stmt::Throw(expr) => expr_has_prototype_surgery(expr),
             Stmt::If {
                 condition,
@@ -300,7 +300,7 @@ fn loop_has_prototype_surgery(stmts: &[Stmt]) -> bool {
             }
             Stmt::Labeled { body, .. } => stmt_has_prototype_surgery(body),
             Stmt::Let { init: None, .. }
-            | Stmt::Return(None)
+            | Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -519,12 +519,12 @@ pub fn inline_calls_in_stmts(
                             .take(inlined_stmts.len().saturating_sub(1))
                             .any(stmt_contains_return);
                         let trailing_is_return =
-                            matches!(inlined_stmts.last(), Some(Stmt::Return(Some(_))));
+                            matches!(inlined_stmts.last(), Some(Stmt::Return(Some(_), _)));
                         if !has_nested_return && trailing_is_return {
                             // Collapse: convert the trailing Return into the
                             // original Let-binding.
                             if let Some(last) = inlined_stmts.last_mut() {
-                                if let Stmt::Return(Some(ret_expr)) = last {
+                                if let Stmt::Return(Some(ret_expr), _) = last {
                                     let e = std::mem::replace(ret_expr, Expr::Undefined);
                                     *last = Stmt::Let {
                                         id: let_id,
@@ -594,7 +594,7 @@ pub fn inline_calls_in_stmts(
                     }
                 }
             }
-            Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 let hoisted = inline_calls_in_expr(
                     expr,
                     func_candidates,
@@ -1684,7 +1684,7 @@ pub fn try_inline_simple_call(
                 }
                 // Pattern 1: single Return(expr)
                 if func.body.len() == 1 {
-                    if let Stmt::Return(Some(return_expr)) = &func.body[0] {
+                    if let Stmt::Return(Some(return_expr), _) = &func.body[0] {
                         // Issue #858: params that are captured by some
                         // closure inside the body MUST be materialized as a
                         // fresh `Let` rather than substituted in place with
@@ -1722,7 +1722,7 @@ pub fn try_inline_simple_call(
                 // and the last must be Return(Some(expr)).
                 if func.body.len() > 1 {
                     let last = func.body.last().unwrap();
-                    if let Stmt::Return(Some(return_expr)) = last {
+                    if let Stmt::Return(Some(return_expr), _) = last {
                         let all_lets = func.body[..func.body.len() - 1].iter().all(|s| {
                             matches!(
                                 s,
@@ -1850,7 +1850,7 @@ pub fn try_inline_simple_call(
 
                     // Check for single return statement
                     if method_candidate.func.body.len() == 1 {
-                        if let Stmt::Return(Some(return_expr)) = &method_candidate.func.body[0] {
+                        if let Stmt::Return(Some(return_expr), _) = &method_candidate.func.body[0] {
                             // Issue #858: see fn-call branch above. Same
                             // closure-captured-param materialization rule
                             // applies to method-call inlining.
@@ -1941,7 +1941,7 @@ pub fn try_inline_simple_call(
                             match stmt {
                                 // Anything after `return;` is dead: splicing
                                 // it would run it (#10416's sibling shape).
-                                Stmt::Return(None) => break,
+                                Stmt::Return(None, _) => break,
                                 Stmt::Expr(e) => {
                                     let mut expr = e.clone();
                                     substitute_locals(&mut expr, &shared_param_map, next_local_id);
@@ -2038,7 +2038,7 @@ fn fold_scalar_aggregate_param_length(stmts: &mut [Stmt], param_id: LocalId, len
                 }
             }
             Stmt::Expr(expr) | Stmt::Throw(expr) => fold_expr(expr, param_id, len),
-            Stmt::Return(value) => {
+            Stmt::Return(value, _) => {
                 if let Some(value) = value {
                     fold_expr(value, param_id, len);
                 }

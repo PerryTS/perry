@@ -77,6 +77,9 @@ fn build_dispatch_while_body(
     done_id: LocalId,
     sent_id: LocalId,
     step_id: Option<LocalId>,
+    // The generator function construct: the dispatch scaffolding that
+    // completes the generator stands there.
+    fn_offset: u32,
 ) -> Vec<Stmt> {
     let mut while_body: Vec<Stmt> = Vec::new();
     let mut cases = Vec::new();
@@ -88,6 +91,7 @@ fn build_dispatch_while_body(
                 value,
                 next_state,
                 passthrough,
+                byte_offset,
             } => {
                 if body_contains_return(&case_body) {
                     prepend_done_before_returns(&mut case_body, done_id);
@@ -106,12 +110,12 @@ fn build_dispatch_while_body(
                         step_id,
                         Box::new(Expr::LocalGet(*kind_id)),
                     )));
-                    case_body.push(Stmt::Return(Some(value.clone())));
+                    case_body.push(Stmt::Return(Some(value.clone()), *byte_offset));
                 } else {
-                    case_body.push(Stmt::Return(Some(make_iter_result(value.clone(), false))));
+                    case_body.push(Stmt::Return(Some(make_iter_result(value.clone(), false)), *byte_offset));
                 }
             }
-            StateExit::Await { value, next_state } => {
+            StateExit::Await { value, next_state, byte_offset } => {
                 // A user `return X` can sit in a yield/await-free control-flow
                 // block (e.g. `if (c) return X;`) that the linearizer's catch-all
                 // accumulated into this Await state's body ahead of the `await`.
@@ -131,13 +135,13 @@ fn build_dispatch_while_body(
                 if async_step {
                     // Suspend on the microtask queue; resume delivers the
                     // settled value through `__sent`.
-                    case_body.push(Stmt::Return(Some(async_step_chain(value.clone()))));
+                    case_body.push(Stmt::Return(Some(async_step_chain(value.clone())), *byte_offset));
                 } else {
                     // Busy-wait fallback (the `.return()` continuation path):
                     // evaluate the await inline and continue to the next state.
                     case_body.push(Stmt::Expr(Expr::LocalSet(
                         sent_id,
-                        Box::new(Expr::Await(Box::new(value.clone()))),
+                        Box::new(Expr::Await(Box::new(value.clone()), *byte_offset)),
                     )));
                     case_body.push(Stmt::Continue);
                 }
@@ -158,20 +162,20 @@ fn build_dispatch_while_body(
                 if has_return {
                     prepend_done_before_returns(&mut case_body, done_id);
                     rewrite_returns_as_done(&mut case_body);
-                    let last_is_return = matches!(case_body.last(), Some(Stmt::Return(_)));
+                    let last_is_return = matches!(case_body.last(), Some(Stmt::Return(_, _)));
                     if !last_is_return {
                         case_body.push(Stmt::Expr(Expr::LocalSet(
                             done_id,
                             Box::new(Expr::Bool(true)),
                         )));
-                        case_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
+                        case_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true)), fn_offset));
                     }
                 } else {
                     case_body.push(Stmt::Expr(Expr::LocalSet(
                         done_id,
                         Box::new(Expr::Bool(true)),
                     )));
-                    case_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
+                    case_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true)), fn_offset));
                 }
             }
         }
@@ -199,7 +203,7 @@ fn build_dispatch_while_body(
         done_id,
         Box::new(Expr::Bool(true)),
     )));
-    while_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
+    while_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true)), fn_offset));
     if fixed_state {
         cases.push(perry_hir::SwitchCase {
             test: None,
@@ -223,7 +227,7 @@ fn build_dispatch_while_body(
 fn wrap_iter_result_returns_in_async_step_done(stmts: &mut Vec<Stmt>) {
     for stmt in stmts.iter_mut() {
         match stmt {
-            Stmt::Return(Some(expr)) => {
+            Stmt::Return(Some(expr), _) => {
                 if is_iter_result(expr) {
                     let inner = std::mem::replace(expr, Expr::Undefined);
                     *expr = async_step_resolve(inner);
@@ -312,6 +316,7 @@ pub fn transform_generator_function_with_extra_captures(
 ) -> (Vec<LocalId>, Vec<LocalId>) {
     // Generator bodies run later inside synthesized step closures, so direct
     // `this` reads need the receiver from the original generator call.
+    let fn_offset = func.byte_offset;
     let captures_this = captures_this || generator_body_uses_call_this(&func.body);
     let private_brand_id =
         private_brand::uses_private_names(&mut func.body).then(|| alloc_local(next_local_id));
@@ -644,6 +649,7 @@ pub fn transform_generator_function_with_extra_captures(
         done_id,
         sent_id,
         step_id,
+        fn_offset,
     );
 
     // The next() closure parameter — receives the value from next(val) calls
@@ -749,7 +755,7 @@ pub fn transform_generator_function_with_extra_captures(
         // if (__done) return { value: undefined, done: true };
         Stmt::If {
             condition: Expr::LocalGet(done_id),
-            then_branch: vec![Stmt::Return(Some(make_iter_result(Expr::Undefined, true)))],
+            then_branch: vec![Stmt::Return(Some(make_iter_result(Expr::Undefined, true)), fn_offset)],
             else_branch: None,
         },
         // while (true) { if-chain }
@@ -1182,7 +1188,7 @@ pub fn transform_generator_function_with_extra_captures(
             then_branch: vec![Stmt::Return(Some(make_iter_result(
                 Expr::LocalGet(return_param_id),
                 true,
-            )))],
+            )), fn_offset)],
             else_branch: None,
         });
         // #4445: mark the generator "executing" while the resume runs (the
@@ -1241,7 +1247,7 @@ pub fn transform_generator_function_with_extra_captures(
         return_fallback.push(Stmt::Return(Some(make_iter_result(
             Expr::LocalGet(return_param_id),
             true,
-        ))));
+        )), fn_offset));
         if has_yielding_finally {
             // #4438 B2-finally: route `.return(v)` into the innermost enclosing
             // yielding finally — record the pending return and jump to
@@ -1320,7 +1326,7 @@ pub fn transform_generator_function_with_extra_captures(
                 is_async_generator,
             )
         };
-        let return_closure = Expr::Closure {
+        let return_closure = Expr::Closure { byte_offset: fn_offset,
             func_id: return_func_id_val,
             params: vec![perry_hir::Param {
                 id: return_param_id,
@@ -1456,7 +1462,7 @@ pub fn transform_generator_function_with_extra_captures(
             // returns are left as-is.
             wrap_iter_result_returns_in_async_step_done(&mut step_body);
 
-            let agstep_closure = Expr::Closure {
+            let agstep_closure = Expr::Closure { byte_offset: fn_offset,
                 func_id: agstep_func_id,
                 params: vec![
                     perry_hir::Param {
@@ -1508,7 +1514,7 @@ pub fn transform_generator_function_with_extra_captures(
                     is_async_generator,
                 )
             };
-            let throw_closure = Expr::Closure {
+            let throw_closure = Expr::Closure { byte_offset: fn_offset,
                 func_id: throw_func_id_val,
                 params: vec![perry_hir::Param {
                     id: throw_param_id,
@@ -1550,7 +1556,7 @@ pub fn transform_generator_function_with_extra_captures(
                     is_async_generator,
                 )
             };
-            let next_closure = Expr::Closure {
+            let next_closure = Expr::Closure { byte_offset: fn_offset,
                 func_id: next_func_id_val,
                 params: vec![perry_hir::Param {
                     id: next_param_id,
@@ -1678,7 +1684,7 @@ pub fn transform_generator_function_with_extra_captures(
                 done_id,
                 completion_catch_id,
             );
-            Expr::Closure {
+            Expr::Closure { byte_offset: fn_offset,
                 func_id: next_func_id_val,
                 params,
                 return_type: Type::Any,
@@ -1738,7 +1744,7 @@ pub fn transform_generator_function_with_extra_captures(
                 Vec::new()
             },
         };
-        new_body.push(Stmt::Return(Some(linked)));
+        new_body.push(Stmt::Return(Some(linked), fn_offset));
     }
 
     if let Some(id) = private_brand_id {

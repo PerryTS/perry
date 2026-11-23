@@ -446,7 +446,7 @@ fn lower_return_expr(ctx: &mut FnCtx<'_>, expr: &perry_hir::Expr) -> Result<Stri
 pub(crate) fn lower_stmt(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
     // A receiver run is straight-line code; it never enters or
     // leaves a branch, a loop or a handler.
-    let straight = matches!(stmt, Stmt::Expr(_) | Stmt::Let { .. } | Stmt::Return(_));
+    let straight = matches!(stmt, Stmt::Expr(_) | Stmt::Let { .. } | Stmt::Return(_, _));
     if !straight {
         crate::expr::layout_read::end_run(ctx);
     }
@@ -549,7 +549,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             Ok(())
         }
 
-        Stmt::Return(Some(e)) => {
+        Stmt::Return(Some(e), _) => {
             // Inside an inlined constructor body, an explicit `return <value>`
             // applies spec return-override semantics and yields the `new`
             // expression's value — it must NOT emit a function-level `ret`
@@ -615,7 +615,7 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             ctx.block().ret(DOUBLE, &final_v);
             Ok(())
         }
-        Stmt::Return(None) => {
+        Stmt::Return(None, _) => {
             // Inside an inlined constructor body, a bare `return;` keeps the
             // implicit `this` and jumps to the shared after-block — never a
             // function-level `ret`. Leaving the result slot untouched is what
@@ -1203,7 +1203,7 @@ fn stmt_variant_name(s: &Stmt) -> &'static str {
     match s {
         Stmt::Expr(_) => "Expr",
         Stmt::Let { .. } => "Let",
-        Stmt::Return(_) => "Return",
+        Stmt::Return(_, _) => "Return",
         Stmt::If { .. } => "If",
         Stmt::While { .. } => "While",
         Stmt::DoWhile { .. } => "DoWhile",

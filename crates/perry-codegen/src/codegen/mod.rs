@@ -908,7 +908,7 @@ fn lower_module(
             .getter_names
             .iter()
             .enumerate()
-            .map(|(index, prop)| perry_hir::Function {
+            .map(|(index, prop)| perry_hir::Function { byte_offset: 0 /*HPOS*/,
                 id: 0,
                 name: format!("get_{}", prop),
                 type_params: Vec::new(),
@@ -932,7 +932,7 @@ fn lower_module(
         let imported_setters: Vec<perry_hir::Function> = ic
             .setter_names
             .iter()
-            .map(|prop| perry_hir::Function {
+            .map(|prop| perry_hir::Function { byte_offset: 0 /*HPOS*/,
                 id: 0,
                 name: format!("set_{}", prop),
                 type_params: Vec::new(),
@@ -998,7 +998,7 @@ fn lower_module(
                 .method_names
                 .iter()
                 .enumerate()
-                .map(|(index, m)| perry_hir::Function {
+                .map(|(index, m)| perry_hir::Function { byte_offset: 0 /*HPOS*/,
                     id: 0,
                     name: m.clone(),
                     type_params: Vec::new(),
@@ -1099,7 +1099,7 @@ fn lower_module(
                             }
                         })
                         .collect();
-                    perry_hir::Function {
+                    perry_hir::Function { byte_offset: 0 /*HPOS*/,
                         id: 0,
                         name: name.clone(),
                         type_params: Vec::new(),
@@ -4260,7 +4260,7 @@ fn lower_module(
     // the inliner would erase its call before the backend emits the real work.
     if hir.async_init_function.is_some() {
         let id = entry_outline::max_func_id(hir) + 1;
-        let finish = perry_hir::Function {
+        let finish = perry_hir::Function { byte_offset: 0 /*HPOS*/,
             id,
             name: "async module completion".into(),
             type_params: Vec::new(),

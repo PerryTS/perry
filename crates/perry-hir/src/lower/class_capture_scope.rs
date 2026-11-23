@@ -169,7 +169,7 @@ impl Pruner {
                 init: Some(expr), ..
             }
             | Stmt::Expr(expr)
-            | Stmt::Return(Some(expr))
+            | Stmt::Return(Some(expr), _)
             | Stmt::Throw(expr) => self.expr(expr),
             Stmt::If {
                 condition,

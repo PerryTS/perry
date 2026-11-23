@@ -346,7 +346,7 @@ fn visit_stmt<'a>(
 ) {
     stmt(s);
     match s {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 visit_expr(e, home, stmt, expr);
             }

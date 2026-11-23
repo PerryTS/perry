@@ -291,7 +291,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         // Type operations
         Expr::TypeOf(inner) => Expr::TypeOf(Box::new(substitute_expr(inner, substitutions))),
         Expr::Void(inner) => Expr::Void(Box::new(substitute_expr(inner, substitutions))),
-        Expr::Yield { value, delegate } => Expr::Yield {
+        Expr::Yield { value, delegate, byte_offset } => Expr::Yield { byte_offset: *byte_offset,
             value: value
                 .as_ref()
                 .map(|v| Box::new(substitute_expr(v, substitutions))),
@@ -306,7 +306,7 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
         },
 
         // Await
-        Expr::Await(inner) => Expr::Await(Box::new(substitute_expr(inner, substitutions))),
+        Expr::Await(inner, off) => Expr::Await(Box::new(substitute_expr(inner, substitutions)), *off),
 
         // New
         Expr::New {
@@ -934,8 +934,8 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
             is_arrow,
             is_async,
             is_generator,
-            is_strict,
-        } => Expr::Closure {
+            is_strict, byte_offset, ..
+        } => Expr::Closure { byte_offset: *byte_offset,
             func_id: *func_id,
             params: params
                 .iter()
@@ -1134,8 +1134,8 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
             init: init.as_ref().map(|e| substitute_expr(e, substitutions)),
         },
         Stmt::Expr(expr) => Stmt::Expr(substitute_expr(expr, substitutions)),
-        Stmt::Return(expr) => {
-            Stmt::Return(expr.as_ref().map(|e| substitute_expr(e, substitutions)))
+        Stmt::Return(expr, off) => {
+            Stmt::Return(expr.as_ref().map(|e| substitute_expr(e, substitutions)), *off)
         }
         Stmt::If {
             condition,

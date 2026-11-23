@@ -92,8 +92,8 @@ impl SH for Expr {
             Expr::In { property, object } => { tag(h, 39); property.as_ref().hash(h); object.as_ref().hash(h); }
             Expr::PrivateBrandCheck { class_name, class_id, field_name, kind, is_static, receiver_is_brand_owner, object } => { tag(h, 12401); class_name.hash(h); class_id.hash(h); field_name.hash(h); kind.hash(h); is_static.hash(h); receiver_is_brand_owner.hash(h); object.as_ref().hash(h); }
             Expr::PrivateGuard { class_name, class_id, field_name, kind, op, receiver_is_brand_owner, object } => { tag(h, 12402); class_name.hash(h); class_id.hash(h); field_name.hash(h); kind.hash(h); op.hash(h); receiver_is_brand_owner.hash(h); object.as_ref().hash(h); }
-            Expr::Await(e) => { tag(h, 40); e.as_ref().hash(h); }
-            Expr::Yield { value, delegate } => { tag(h, 41); value.hash(h); delegate.hash(h); }
+            Expr::Await(e, _) => { tag(h, 40); e.as_ref().hash(h); }
+            Expr::Yield { value, delegate, .. } => { tag(h, 41); value.hash(h); delegate.hash(h); }
             // #5253: `byte_offset` is diagnostic-only — excluded from the hash
             // for the same reason as `Call.byte_offset` (see #5247 above).
             Expr::New { class_name, args, type_args, .. } => { tag(h, 42); class_name.hash(h); args.hash(h); type_args.hash(h); }
@@ -581,7 +581,7 @@ impl SH for Expr {
             Expr::UrlSearchParamsSort(e) => { tag(h, 703); e.as_ref().hash(h); }
             Expr::UrlSearchParamsForEach { params, callback, this_arg } => { tag(h, 704); params.as_ref().hash(h); callback.as_ref().hash(h); match this_arg { Some(v) => { tag(h, 1); v.as_ref().hash(h); } None => tag(h, 0), } }
             Expr::Delete(e) => { tag(h, 381); e.as_ref().hash(h); }
-            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, captures_new_target, enclosing_class, is_arrow, is_async, is_generator, is_strict, } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); captures_new_target.hash(h); enclosing_class.hash(h); is_arrow.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
+            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, captures_new_target, enclosing_class, is_arrow, is_async, is_generator, is_strict, .. } => { tag(h, 382); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); captures_new_target.hash(h); enclosing_class.hash(h); is_arrow.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
             Expr::RegExp { pattern, flags } => { tag(h, 383); pattern.hash(h); flags.hash(h); }
             Expr::RegExpDynamic { pattern, flags, is_call } => { tag(h, 475); pattern.as_ref().hash(h); if let Some(f_box) = flags { tag(h, 476); f_box.as_ref().hash(h); } else { tag(h, 477); } tag(h, if *is_call { 478 } else { 479 }); }
             Expr::StringMatch { string, regex } => { tag(h, 385); string.as_ref().hash(h); regex.as_ref().hash(h); }

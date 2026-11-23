@@ -625,7 +625,7 @@ pub(crate) fn nonnegative_index_fast_array_params(
             then_branch: sentinel_branch,
             else_branch: None,
         },
-        Stmt::Return(Some(Expr::LocalGet(return_id))),
+        Stmt::Return(Some(Expr::LocalGet(return_id)), _),
     ) = (
         &method.body[0],
         &method.body[1],
@@ -1445,7 +1445,7 @@ fn typed_f64_receiver_body_rejection_reason(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => receiver_expr_is_typed_f64_safe(
+        Stmt::Return(Some(expr), _) => receiver_expr_is_typed_f64_safe(
             chain_fields,
             expr,
             &locals,
@@ -1552,8 +1552,8 @@ fn typed_f64_body_rejection_reason(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) if expr_is_typed_f64_safe(expr, &locals) => None,
-        Stmt::Return(Some(_)) => Some(TypedCloneRejectionReason::ReturnExprNotTypedF64Safe),
+        Stmt::Return(Some(expr), _) if expr_is_typed_f64_safe(expr, &locals) => None,
+        Stmt::Return(Some(_), _) => Some(TypedCloneRejectionReason::ReturnExprNotTypedF64Safe),
         _ => Some(TypedCloneRejectionReason::BodyNotSingleReturn),
     }
 }
@@ -1580,8 +1580,8 @@ fn typed_i32_body_rejection_reason(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) if expr_is_typed_i32_safe(expr, &locals) => None,
-        Stmt::Return(Some(_)) => Some(TypedCloneRejectionReason::ReturnExprNotTypedI32Safe),
+        Stmt::Return(Some(expr), _) if expr_is_typed_i32_safe(expr, &locals) => None,
+        Stmt::Return(Some(_), _) => Some(TypedCloneRejectionReason::ReturnExprNotTypedI32Safe),
         _ => Some(TypedCloneRejectionReason::BodyNotSingleReturn),
     }
 }
@@ -1617,8 +1617,8 @@ fn typed_i1_body_rejection_reason(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) if expr_is_typed_i1_safe(expr, &locals) => None,
-        Stmt::Return(Some(_)) => Some(TypedCloneRejectionReason::ReturnExprNotTypedI1Safe),
+        Stmt::Return(Some(expr), _) if expr_is_typed_i1_safe(expr, &locals) => None,
+        Stmt::Return(Some(_), _) => Some(TypedCloneRejectionReason::ReturnExprNotTypedI1Safe),
         _ => Some(TypedCloneRejectionReason::BodyNotSingleReturn),
     }
 }
@@ -1645,8 +1645,8 @@ fn typed_string_body_rejection_reason(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) if expr_is_typed_string_safe(expr, &locals) => None,
-        Stmt::Return(Some(_)) => Some(TypedCloneRejectionReason::ReturnExprNotTypedStringSafe),
+        Stmt::Return(Some(expr), _) if expr_is_typed_string_safe(expr, &locals) => None,
+        Stmt::Return(Some(_), _) => Some(TypedCloneRejectionReason::ReturnExprNotTypedStringSafe),
         _ => Some(TypedCloneRejectionReason::BodyNotSingleReturn),
     }
 }

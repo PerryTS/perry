@@ -211,7 +211,7 @@ pub fn wrap_in_promise_resolve(value: Expr) -> Expr {
 pub fn wrap_returns_in_promise(stmts: &mut Vec<Stmt>) {
     for stmt in stmts.iter_mut() {
         match stmt {
-            Stmt::Return(Some(expr)) => {
+            Stmt::Return(Some(expr), _) => {
                 let inner = std::mem::replace(expr, Expr::Undefined);
                 *expr = wrap_in_promise_resolve(inner);
             }

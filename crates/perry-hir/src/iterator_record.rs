@@ -563,7 +563,7 @@ impl IteratorRecordPlan {
 
 fn walk_stmt(stmt: &mut Stmt, f: &mut impl FnMut(&mut Expr)) {
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 f(e);
             }

@@ -147,7 +147,7 @@ pub(crate) fn scan_module_level_addchild_in_stmt(
         return;
     }
     match stmt {
-        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => {
             scan_module_level_addchild_in_expr(e, module_locals, found);
         }
         Stmt::If {
@@ -253,7 +253,7 @@ pub(crate) fn rewrite_view_builder_calls_in_stmt(
     lookup: &HashMap<perry_hir::types::FuncId, &ViewBuilder>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) => {
             rewrite_view_builder_calls_in_expr(e, lookup);
         }
         Stmt::Let { init: Some(e), .. } => {
@@ -414,7 +414,7 @@ pub(crate) fn scan_closure_body_for_view_builder_calls_in_stmt<'a>(
     seen: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) => {
             scan_closure_body_for_view_builder_calls_in_expr(e, lookup, out, seen);
         }
         Stmt::Let { init: Some(e), .. } => {

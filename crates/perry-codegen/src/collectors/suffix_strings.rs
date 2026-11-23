@@ -160,7 +160,7 @@ fn mask_expr(expr: &mut Expr, allowed: &HashSet<u32>, updates: &mut HashSet<u32>
 
 fn mask_stmt(stmt: &mut Stmt, allowed: &HashSet<u32>, updates: &mut HashSet<u32>) {
     match stmt {
-        Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) | Stmt::Throw(e) => {
+        Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) | Stmt::Throw(e) => {
             mask_expr(e, allowed, updates, false)
         }
         Stmt::Expr(e) => mask_expr(e, allowed, updates, true),

@@ -633,7 +633,7 @@ fn for_each_stmt(stmts: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
             Stmt::Labeled { body, .. } => for_each_stmt(std::slice::from_ref(body.as_ref()), f),
             Stmt::Expr(_)
             | Stmt::Throw(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Let { .. }
             | Stmt::Break
             | Stmt::Continue

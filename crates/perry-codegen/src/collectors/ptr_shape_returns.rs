@@ -456,7 +456,7 @@ fn producer_return_class(
     }
     // The body must not be able to fall off its end (module doc).
     match f.body.last() {
-        Some(Stmt::Return(Some(_))) | Some(Stmt::Throw(_)) => {}
+        Some(Stmt::Return(Some(_), _)) | Some(Stmt::Throw(_)) => {}
         _ => return None,
     }
     let mut returns = Vec::new();
@@ -754,7 +754,7 @@ fn seeded_class_of_local(stmts: &[Stmt], want: u32) -> Option<&str> {
 fn collect_own_returns<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a Expr>) -> bool {
     let mut ok = true;
     walk_stmts(stmts, &mut |s| {
-        if let Stmt::Return(r) = s {
+        if let Stmt::Return(r, _) = s {
             match r {
                 Some(e) => out.push(e),
                 None => ok = false,

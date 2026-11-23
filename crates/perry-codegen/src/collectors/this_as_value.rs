@@ -247,7 +247,7 @@ pub fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<Strin
     for s in stmts {
         let bad = match s {
             Stmt::Expr(e) | Stmt::Throw(e) => expr_uses_this_as_value(e, fields),
-            Stmt::Return(opt) => opt
+            Stmt::Return(opt, _) => opt
                 .as_ref()
                 .is_some_and(|e| expr_uses_this_as_value(e, fields)),
             Stmt::Let { init, .. } => init
@@ -443,7 +443,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)

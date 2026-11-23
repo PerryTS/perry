@@ -30,7 +30,7 @@ impl OutUsageAnalyzer {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.visit_expr(e),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     self.visit_expr(e);
                 }

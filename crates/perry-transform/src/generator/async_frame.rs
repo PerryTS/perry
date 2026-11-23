@@ -62,9 +62,9 @@ pub(super) fn admission(module: &Module) -> HashSet<FuncId> {
         }
         if let Expr::Yield {
             value: Some(value),
-            delegate: false,
+            delegate: false, ..
         }
-        | Expr::Await(value) = e
+        | Expr::Await(value, _) = e
         {
             if let Expr::LocalGet(id) = value.as_ref() {
                 *local_awaits.entry(*id).or_default() += 1;
@@ -190,7 +190,7 @@ fn closed_body(
             | Expr::Yield {
                 delegate: false, ..
             }
-            | Expr::Await(_) => true,
+            | Expr::Await(_, _) => true,
             Expr::Call { callee, .. } => {
                 if promise_intrinsic(callee) {
                     true
@@ -232,7 +232,7 @@ fn closed_body(
 }
 
 pub(super) fn lower(f: &mut Function, controls: (Vec<LocalId>, Vec<LocalId>)) {
-    let Some(Stmt::Return(Some(Expr::AsyncFirstCall { step_closure }))) = f.body.last() else {
+    let Some(Stmt::Return(Some(Expr::AsyncFirstCall { step_closure }), _)) = f.body.last() else {
         return;
     };
     let Expr::LocalGet(step) = step_closure.as_ref() else {

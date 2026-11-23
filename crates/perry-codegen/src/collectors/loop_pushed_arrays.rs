@@ -162,10 +162,10 @@ impl Walk<'_> {
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
             // Returning the array hands it out only as the function ends.
-            Stmt::Return(Some(Expr::LocalGet(id))) => {
+            Stmt::Return(Some(Expr::LocalGet(id)), _) => {
                 self.mentioned.insert(*id);
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.expr(e);
                 }

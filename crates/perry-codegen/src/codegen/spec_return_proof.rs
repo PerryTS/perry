@@ -453,7 +453,7 @@ fn verify_single_pass_sequence(
                     }
                 }
                 Stmt::Break | Stmt::Continue => exits.push(locals),
-                Stmt::Return(Some(value)) => {
+                Stmt::Return(Some(value), _) => {
                     *found_return = true;
                     observe_expr_effects(ctx, &mut locals, value);
                     if !expr_proves(ctx, &locals, value, expected_return, 0) {
@@ -725,14 +725,14 @@ fn verify_block(
             Stmt::Expr(expr) => {
                 observe_expr_effects(ctx, locals, expr);
             }
-            Stmt::Return(Some(value)) => {
+            Stmt::Return(Some(value), _) => {
                 *found_return = true;
                 observe_expr_effects(ctx, locals, value);
                 if !expr_proves(ctx, locals, value, expected_return, 0) {
                     return false;
                 }
             }
-            Stmt::Return(None) => return false,
+            Stmt::Return(None, _) => return false,
             Stmt::If {
                 condition,
                 then_branch,
@@ -857,7 +857,7 @@ fn verify_function(ctx: &ProofCtx<'_>, function: &Function) -> bool {
         return false;
     }
     match function.body.last() {
-        Some(Stmt::Return(Some(_))) | Some(Stmt::Throw(_)) => {}
+        Some(Stmt::Return(Some(_), _)) | Some(Stmt::Throw(_)) => {}
         _ => return false,
     }
     let Some(plan) = ctx.plans.get(&function.id) else {

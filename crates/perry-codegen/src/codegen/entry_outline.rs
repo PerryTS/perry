@@ -888,7 +888,7 @@ enum TopLevelKind {
 fn stmt_contains_return(stmt: &perry_hir::Stmt) -> bool {
     use perry_hir::Stmt;
     match stmt {
-        Stmt::Return(_) => true,
+        Stmt::Return(_, _) => true,
         Stmt::If {
             then_branch,
             else_branch,
@@ -1230,7 +1230,7 @@ fn chunk_statements(
         let fn_id = *next_id;
         *next_id = (*next_id).saturating_add(1);
         let ci = chunk_fns.len();
-        chunk_fns.push(perry_hir::Function {
+        chunk_fns.push(perry_hir::Function { byte_offset: 0 /*HPOS*/,
             id: fn_id,
             name: format!("{ENTRY_CHUNK_PREFIX}{module_name}_{ci}"),
             type_params: Vec::new(),

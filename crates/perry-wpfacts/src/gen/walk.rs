@@ -1863,7 +1863,7 @@ impl<'a> Gen<'a> {
             Stmt::Expr(e) => {
                 let _ = self.expr_zs(fx, e);
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     let v = self.expr_zs(fx, e);
                     let v = self.live_gate(fx, v);
@@ -2120,7 +2120,7 @@ impl<'a> Gen<'a> {
                                         | Stmt::Continue
                                         | Stmt::LabeledBreak(_)
                                         | Stmt::LabeledContinue(_)
-                                        | Stmt::Return(_)
+                                        | Stmt::Return(_, _)
                                         | Stmt::Throw(_)
                                 )
                             )

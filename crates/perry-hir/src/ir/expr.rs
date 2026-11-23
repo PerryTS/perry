@@ -439,13 +439,19 @@ pub enum Expr {
         object: Box<Expr>,
     },
 
-    // Await expression (for async functions)
-    Await(Box<Expr>),
+    // Await expression (for async functions). The second field is the
+    // source byte offset (`span.lo.0`) of the `await` expression; an
+    // await synthesized by a desugaring takes the offset of the construct
+    // it is made for. Excluded from stable-hashing.
+    Await(Box<Expr>, u32),
 
     // Yield expression (for generator functions)
     Yield {
         value: Option<Box<Expr>>,
         delegate: bool,
+        /// Source byte offset (`span.lo.0`) of the `yield` / `yield*`
+        /// expression. Excluded from stable-hashing.
+        byte_offset: u32,
     },
 
     // New expression (class instantiation)
@@ -2424,6 +2430,10 @@ pub enum Expr {
     Closure {
         /// Unique ID for this closure's underlying function
         func_id: FuncId,
+        /// Source byte offset (`span.lo.0`) of the arrow / function
+        /// expression; a synthesized closure takes the offset of the source
+        /// construct it is made for. Excluded from stable-hashing.
+        byte_offset: u32,
         /// Parameter definitions
         params: Vec<Param>,
         /// Return type

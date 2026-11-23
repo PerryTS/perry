@@ -159,7 +159,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_expr(func, expr);
                 func.instruction(&Instruction::Drop);
             }
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     self.emit_expr(func, expr);
                 } else {
@@ -544,7 +544,7 @@ impl<'a> FuncEmitCtx<'a> {
 /// Check if a statement or its children contain a return statement
 pub(super) fn has_return(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Return(_) => true,
+        Stmt::Return(_, _) => true,
         Stmt::If {
             then_branch,
             else_branch,

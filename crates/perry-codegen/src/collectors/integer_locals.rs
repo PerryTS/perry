@@ -261,7 +261,7 @@ fn scan_ta_view_escapes_stmt(stmt: &perry_hir::Stmt, views: &mut HashMap<u32, i6
         scan_ta_view_escapes_expr(e, views);
     }
     match stmt {
-        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
             scan_ta_view_escapes_expr(e, views);
         }
         Stmt::If { condition, .. } => scan_ta_view_escapes_expr(condition, views),
@@ -775,7 +775,7 @@ impl ProvenanceJudge<'_> {
                 }
                 Stmt::Let { init: None, .. } => {}
                 Stmt::Expr(e) | Stmt::Throw(e) => self.walk_expr(e),
-                Stmt::Return(opt) => {
+                Stmt::Return(opt, _) => {
                     if let Some(e) = opt {
                         self.walk_expr(e);
                     }

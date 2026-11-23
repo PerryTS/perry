@@ -26,6 +26,8 @@ pub(crate) fn emit_driver(
     result_id: LocalId,
     next_call: Expr,
     mut body: Vec<Stmt>,
+    // Source offset of the `for await` statement the driver lowers.
+    byte_offset: u32,
 ) {
     let active = boolean_local(ctx, output, "__iterator_close_active");
     let throwing = boolean_local(ctx, output, "__iterator_close_throwing");
@@ -89,7 +91,7 @@ pub(crate) fn emit_driver(
                     this_arg: Box::new(Expr::LocalGet(iter_id)),
                     args: Box::new(Expr::Array(vec![], None)),
                 }),
-            )))],
+                         byte_offset,)))],
             else_branch: None,
         },
     ];

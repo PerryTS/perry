@@ -264,7 +264,7 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
                     continue;
                 }
                 match stmt {
-                    Stmt::Return(value) => {
+                    Stmt::Return(value, _) => {
                         let value = match value {
                             Some(v) => self.expr(v, &env)?,
                             None => Value::Undefined,

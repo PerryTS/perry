@@ -205,7 +205,7 @@ fn impure_scalar_aggregate_init_is_safe(stmts: &[Stmt], target: &Function) -> bo
                 .as_ref()
                 .is_none_or(|expr| expr_is_safe(expr, target, saw_target)),
             Stmt::Expr(expr) | Stmt::Throw(expr) => expr_is_safe(expr, target, saw_target),
-            Stmt::Return(value) => value
+            Stmt::Return(value, _) => value
                 .as_ref()
                 .is_none_or(|expr| expr_is_safe(expr, target, saw_target)),
             Stmt::If {
@@ -324,8 +324,8 @@ fn inline_functions_inner(
                         f(e);
                     }
                 }
-                Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => f(e),
-                Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
+                Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => f(e),
+                Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => {}
                 Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
                 Stmt::If {
                     condition,

@@ -384,7 +384,7 @@ pub fn lower_fn_decl(ctx: &mut LoweringContext, fn_decl: &ast::FnDecl) -> Result
         }
     }
 
-    Ok(Function {
+    Ok(Function { byte_offset: fn_decl.function.span.lo.0,
         id: func_id,
         name,
         type_params,

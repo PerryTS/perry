@@ -527,8 +527,8 @@ fn writes_in_stmt<'a>(s: &'a Stmt, id: u32, out: &mut Vec<Step<'a>>) -> bool {
         // A second binding of the counter is a write this proof does not read.
         Stmt::Let { id: i, .. } if *i == id => false,
         Stmt::Let { init, .. } => init.as_ref().is_none_or(|e| writes_in_expr(e, id, out)),
-        Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => writes_in_expr(e, id, out),
-        Stmt::Return(None)
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => writes_in_expr(e, id, out),
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)

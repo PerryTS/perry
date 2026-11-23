@@ -240,7 +240,7 @@ fn walk_stmt_exprs(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         Stmt::Let { init: Some(e), .. }
         | Stmt::Expr(e)
         | Stmt::Throw(e)
-        | Stmt::Return(Some(e)) => f(e),
+        | Stmt::Return(Some(e), _) => f(e),
         Stmt::If {
             condition,
             then_branch,

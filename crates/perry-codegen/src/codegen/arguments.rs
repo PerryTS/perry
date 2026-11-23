@@ -165,7 +165,7 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32, defer_apply: bool) -
                     }
                 }
                 Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => FALLTHROUGH,
-                Stmt::Return(expr) => {
+                Stmt::Return(expr, _) => {
                     if expr.as_ref().is_some_and(|expr| observes(expr, id)) {
                         0
                     } else {

@@ -970,11 +970,11 @@ pub(crate) fn guarded_undefined_method_candidate(
                 body_has_loop_guard(std::slice::from_ref(body.as_ref()), id, in_loop)
             }
             Stmt::Expr(expr) | Stmt::Throw(expr) => in_loop && expr_has_guard(expr, id),
-            Stmt::Return(Some(expr)) => in_loop && expr_has_guard(expr, id),
+            Stmt::Return(Some(expr), _) => in_loop && expr_has_guard(expr, id),
             Stmt::Let {
                 init: Some(expr), ..
             } => in_loop && expr_has_guard(expr, id),
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Let { init: None, .. }
             | Stmt::Break
             | Stmt::Continue
@@ -1143,13 +1143,13 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
             Stmt::Labeled { body, .. } => {
                 scan_only_direct_conditions(std::slice::from_ref(body.as_ref()), id, guards)
             }
-            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
                 !expr_contains_local_get(expr, id)
             }
             Stmt::Let {
                 init: Some(expr), ..
             } => !expr_contains_local_get(expr, id),
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Let { init: None, .. }
             | Stmt::Break
             | Stmt::Continue
@@ -1219,7 +1219,7 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
 /// enclosing function.
 pub(crate) fn body_contains_await(stmts: &[perry_hir::Stmt]) -> bool {
     fn expr_contains_await(expr: &perry_hir::Expr) -> bool {
-        if matches!(expr, perry_hir::Expr::Await(_)) {
+        if matches!(expr, perry_hir::Expr::Await(_, _)) {
             return true;
         }
         let mut found = false;
@@ -1231,7 +1231,7 @@ pub(crate) fn body_contains_await(stmts: &[perry_hir::Stmt]) -> bool {
 
     stmts.iter().any(|stmt| match stmt {
         perry_hir::Stmt::Expr(expr) | perry_hir::Stmt::Throw(expr) => expr_contains_await(expr),
-        perry_hir::Stmt::Return(Some(expr)) => expr_contains_await(expr),
+        perry_hir::Stmt::Return(Some(expr), _) => expr_contains_await(expr),
         perry_hir::Stmt::Let {
             init: Some(expr), ..
         } => expr_contains_await(expr),

@@ -121,7 +121,7 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, cx: &DefaultFill) {
             }
         }
         Stmt::Expr(expr) => fill_defaults_in_expr(expr, cx),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(e) = expr {
                 fill_defaults_in_expr(e, cx);
             }
@@ -333,7 +333,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
         Expr::PropertyUpdate { object, .. } => {
             fill_defaults_in_expr(object, cx);
         }
-        Expr::Await(inner) => {
+        Expr::Await(inner, _) => {
             fill_defaults_in_expr(inner, cx);
         }
         Expr::TypeOf(inner) => {

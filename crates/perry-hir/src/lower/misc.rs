@@ -222,7 +222,7 @@ fn expr_reads_local(expr: &Expr) -> bool {
 /// `Expr::ClassRef` (directly or as the last element of an `Expr::Sequence`).
 fn trailing_return_classref(body: &[Stmt]) -> Option<String> {
     for stmt in body.iter().rev() {
-        if let Stmt::Return(Some(expr)) = stmt {
+        if let Stmt::Return(Some(expr), _) = stmt {
             return classref_name(expr);
         }
     }

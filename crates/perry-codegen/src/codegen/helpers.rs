@@ -27,7 +27,7 @@ pub(crate) use perry_hir::fn_proto::{
 /// instance to the function's prototype itself.
 pub(crate) fn function_body_is_fixed_state_generator(body: &[perry_hir::Stmt]) -> bool {
     body.iter().any(
-        |stmt| matches!(stmt, perry_hir::Stmt::Return(Some(e)) if is_record_generator_birth(e)),
+        |stmt| matches!(stmt, perry_hir::Stmt::Return(Some(e), _) if is_record_generator_birth(e)),
     )
 }
 
@@ -762,7 +762,7 @@ pub(super) fn collect_return_class(
             return;
         }
         match stmt {
-            Stmt::Return(Some(expr)) => {
+            Stmt::Return(Some(expr), _) => {
                 let resolved = resolve_class(expr, func_returns_class);
                 match resolved {
                     Some(name) => match produced {
@@ -778,7 +778,7 @@ pub(super) fn collect_return_class(
                     }
                 }
             }
-            Stmt::Return(None) => {
+            Stmt::Return(None, _) => {
                 // Returning undefined — disqualify (caller can't
                 // depend on the receiver being a class).
                 *disqualified = true;

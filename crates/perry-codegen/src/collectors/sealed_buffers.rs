@@ -186,14 +186,14 @@ impl Probe<'_> {
                     self.expr(e);
                 }
             }
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => self.expr(e),
+            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => self.expr(e),
             Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
                 if ids.contains(&self.id) {
                     self.found = true;
                 }
             }
             Stmt::ReleaseBoxes(_)
-            | Stmt::Return(None)
+            | Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -504,7 +504,7 @@ impl<'a> Scan<'a> {
                     }
                 }
             }
-            Stmt::Return(Some(e)) => {
+            Stmt::Return(Some(e), _) => {
                 if let Some((f, body)) = self.cur_fn {
                     if body == self.body {
                         self.returns.entry(f).or_default().push(e);
@@ -517,7 +517,7 @@ impl<'a> Scan<'a> {
                 self.boxed.extend(ids.iter().copied());
             }
             Stmt::ReleaseBoxes(_)
-            | Stmt::Return(None)
+            | Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)

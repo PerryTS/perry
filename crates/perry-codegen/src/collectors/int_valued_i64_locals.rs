@@ -172,7 +172,7 @@ impl Walk {
                     }
                 }
                 Stmt::Expr(e) | Stmt::Throw(e) => self.seed_expr(e),
-                Stmt::Return(opt) => {
+                Stmt::Return(opt, _) => {
                     if let Some(e) = opt {
                         self.seed_expr(e);
                     }
@@ -266,7 +266,7 @@ impl Walk {
                     }
                 }
                 Stmt::Expr(e) | Stmt::Throw(e) => self.judge_expr(e),
-                Stmt::Return(opt) => {
+                Stmt::Return(opt, _) => {
                     if let Some(e) = opt {
                         self.judge_expr(e);
                     }
@@ -425,7 +425,7 @@ fn collect_written_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
                         }
                     }
                     Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
-                    Stmt::Return(opt) => {
+                    Stmt::Return(opt, _) => {
                         if let Some(e) = opt {
                             self.expr(e);
                         }

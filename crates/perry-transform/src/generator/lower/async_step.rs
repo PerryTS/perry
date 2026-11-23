@@ -198,7 +198,7 @@ pub fn build_async_step_driver_direct(
         let mut stmts = build_box_release_stmts(release_ids);
         stmts.push(Stmt::Return(Some(promise_reject(Expr::LocalGet(
             catch_e_id,
-        )))));
+        ))), 0 /*HPOS*/));
         stmts
     };
     let resolve_arm: Vec<Stmt> = {
@@ -212,7 +212,7 @@ pub fn build_async_step_driver_direct(
         stmts.push(Stmt::Return(Some(Expr::AsyncStepDone {
             value: Box::new(Expr::IterResultGetValue),
             step_closure: Box::new(Expr::LocalGet(step_self_id)),
-        })));
+        }), 0 /*HPOS*/));
         stmts
     };
 
@@ -251,7 +251,7 @@ pub fn build_async_step_driver_direct(
             then_branch: vec![Stmt::Return(Some(Expr::AsyncStepChain {
                 value: Box::new(Expr::LocalGet(awaited_id)),
                 step_closure: Box::new(Expr::LocalGet(step_self_id)),
-            }))],
+            }), 0 /*HPOS*/)],
             else_branch: Some(vec![
                 Stmt::Expr(Expr::LocalSet(
                     value_param_id,
@@ -284,7 +284,7 @@ pub fn build_async_step_driver_direct(
                         args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
                         type_args: vec![],
                         byte_offset: 0,
-                    })),
+                    }), 0 /*HPOS*/),
                 ],
             }),
             finally: None,
@@ -321,7 +321,7 @@ pub fn build_async_step_driver_direct(
     step_captures.dedup();
     let step_mut_captures: Vec<LocalId> = next_mutable_captures;
 
-    let step_closure = Expr::Closure {
+    let step_closure = Expr::Closure { byte_offset: 0 /*HPOS*/,
         func_id: step_func_id,
         params: vec![
             perry_hir::Param {
@@ -372,7 +372,7 @@ pub fn build_async_step_driver_direct(
         },
         Stmt::Return(Some(Expr::AsyncFirstCall {
             step_closure: Box::new(Expr::LocalGet(step_id)),
-        })),
+        }), 0 /*HPOS*/),
     ]);
     wrapper
 }

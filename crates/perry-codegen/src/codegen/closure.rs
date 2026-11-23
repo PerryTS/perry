@@ -381,7 +381,7 @@ fn returned_capture(
     ctx: &FnCtx<'_>,
     body: &[perry_hir::Stmt],
 ) -> Option<crate::fn_info::ReturnedCapture> {
-    let [perry_hir::Stmt::Return(Some(perry_hir::Expr::LocalGet(id)))] = body else {
+    let [perry_hir::Stmt::Return(Some(perry_hir::Expr::LocalGet(id)), _)] = body else {
         return None;
     };
     let &index = ctx.closure_captures.get(id)?;

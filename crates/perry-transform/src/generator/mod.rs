@@ -342,7 +342,7 @@ fn transform_generator_closures_in_stmts(
                     Stmt::Let { init: Some(e), .. }
                     | Stmt::Expr(e)
                     | Stmt::Throw(e)
-                    | Stmt::Return(Some(e)) => push_expr(&mut stack, e),
+                    | Stmt::Return(Some(e), _) => push_expr(&mut stack, e),
                     Stmt::If {
                         condition,
                         then_branch,
@@ -458,7 +458,7 @@ fn transform_generator_closures_in_stmts(
                         // transforms (the synthetic body fn); lowering recorded
                         // it under the original closure func_id. Alias it across.
                         alias_prologue_len(*func_id, synth_id);
-                        let mut synth = Function {
+                        let mut synth = Function { byte_offset: 0 /*HPOS*/,
                             id: synth_id,
                             name: "__gen_closure_body".to_string(),
                             type_params: Vec::new(),
@@ -533,7 +533,7 @@ pub fn transform_plain_async_closure_body(
         *next_func_id += 1;
         id
     };
-    let mut synth = Function {
+    let mut synth = Function { byte_offset: 0 /*HPOS*/,
         id: synth_func_id,
         name: "__async_closure_body".to_string(),
         type_params: Vec::new(),

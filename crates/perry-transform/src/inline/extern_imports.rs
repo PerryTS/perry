@@ -193,8 +193,8 @@ fn visit_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
                 visit_expr(expr, out);
             }
         }
-        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => visit_expr(expr, out),
-        Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
+        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => visit_expr(expr, out),
+        Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => {}
         Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
         Stmt::If {
             condition,

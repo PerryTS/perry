@@ -50,7 +50,7 @@ fn collect_used_object_fields_in_stmts(
             Stmt::Expr(expr) | Stmt::Throw(expr) => {
                 collect_used_object_fields_in_expr(expr, non_escaping_object_literals, used);
             }
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     collect_used_object_fields_in_expr(expr, non_escaping_object_literals, used);
                 }
@@ -319,7 +319,7 @@ pub fn check_object_literal_escapes_in_stmts(
             Stmt::Expr(e) | Stmt::Throw(e) => {
                 check_object_literal_escapes_in_expr(e, candidates, escaped);
             }
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     check_object_literal_escapes_in_expr(e, candidates, escaped);
                 }
@@ -554,7 +554,7 @@ pub fn check_object_literal_escapes_in_expr(
             check_object_literal_escapes_in_expr(right, candidates, escaped);
         }
         Expr::Unary { operand, .. } | Expr::Void(operand) | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::StringCoerce(operand) | Expr::TemplateStringCoerce(operand) | Expr::ObjectCoerce(operand) | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) | Expr::IsFinite(operand)
         | Expr::IsNaN(operand) | Expr::NumberIsNaN(operand)

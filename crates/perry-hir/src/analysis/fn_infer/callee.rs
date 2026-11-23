@@ -157,7 +157,7 @@ fn round(st: &St, m: &Module, units: &[Unit<'_>], anon: &HashMap<&str, Vec<&str>
             Stmt::Let {
                 id, init: Some(e), ..
             } => sets.push((*id, val(e, st))),
-            Stmt::Return(Some(e)) => rets = rets.join(&val(e, st)),
+            Stmt::Return(Some(e), _) => rets = rets.join(&val(e, st)),
             _ => {}
         };
         let mut esets: Vec<(LocalId, Callees)> = Vec::new();

@@ -292,7 +292,7 @@ pub(super) fn reads_in_stmt(ctx: &FnCtx<'_>, s: &Stmt, out: &mut Vec<Read>) {
     match s {
         Stmt::Expr(e)
         | Stmt::Throw(e)
-        | Stmt::Return(Some(e))
+        | Stmt::Return(Some(e), _)
         | Stmt::Let { init: Some(e), .. } => reads_in_expr(ctx, e, out),
         Stmt::If {
             condition,
@@ -445,7 +445,7 @@ fn stmt_read(s: &Stmt, trusted: &dyn Fn(&Expr) -> bool) -> Paths {
             }
         }
         // Leaves the loop: no latch on this path.
-        Stmt::Return(_) | Stmt::Throw(_) | Stmt::Break => Paths::READ,
+        Stmt::Return(_, _) | Stmt::Throw(_) | Stmt::Break => Paths::READ,
         Stmt::Continue => Paths::LATCH,
         // A labeled jump may land anywhere, the latch included.
         Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => Paths::LATCH,

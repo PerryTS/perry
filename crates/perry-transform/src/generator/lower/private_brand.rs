@@ -489,7 +489,7 @@ mod tests {
 }
 
 fn pop_before_return(stmt: &mut Stmt, next_local_id: &mut u32) {
-    if let Stmt::Return(value) = stmt {
+    if let Stmt::Return(value, off) = stmt {
         let mut sequence = Vec::new();
         let result = value.take().map(|value| {
             let id = alloc_local(next_local_id);
@@ -503,7 +503,7 @@ fn pop_before_return(stmt: &mut Stmt, next_local_id: &mut u32) {
             Expr::LocalGet(id)
         });
         sequence.push(Stmt::Expr(Expr::PrivateLexicalBrandPop));
-        sequence.push(Stmt::Return(result));
+        sequence.push(Stmt::Return(result, *off));
         *stmt = Stmt::If {
             condition: Expr::Bool(true),
             then_branch: sequence,

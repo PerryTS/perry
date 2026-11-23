@@ -195,7 +195,7 @@ pub fn substitute_this_in_stmts(stmts: &mut Vec<Stmt>, obj_id: LocalId) {
             } => {
                 substitute_this(expr, obj_id);
             }
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 substitute_this(expr, obj_id);
             }
             Stmt::If {
@@ -342,7 +342,7 @@ fn substitute_locals_in_stmts_inner(
                     substitute_locals_inner(expr, param_map, next_local_id);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 substitute_locals_inner(expr, param_map, next_local_id);
             }
             Stmt::If {

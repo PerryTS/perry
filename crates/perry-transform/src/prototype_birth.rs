@@ -86,7 +86,7 @@ fn pretenure_literal_seed(expr: &mut Expr) {
         Expr::Call { callee, args, .. } if args.len() == 1 => {
             if let Expr::Closure { params, body, .. } = callee.as_ref() {
                 if params.len() == 1
-                    && matches!(body.last(), Some(Stmt::Return(Some(Expr::LocalGet(id))))
+                    && matches!(body.last(), Some(Stmt::Return(Some(Expr::LocalGet(id)), _))
                         if *id == params[0].id)
                 {
                     pretenure_literal_seed(&mut args[0]);

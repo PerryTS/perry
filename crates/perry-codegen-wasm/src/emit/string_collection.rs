@@ -465,7 +465,7 @@ impl WasmModuleEmitter {
                 }
             }
             Stmt::Expr(e) => self.collect_strings_in_expr(e),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.collect_strings_in_expr(e);
                 }
@@ -682,7 +682,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(value);
                 self.collect_strings_in_expr(receiver);
             }
-            Expr::Await(e) | Expr::TypeOf(e) | Expr::Void(e) => {
+            Expr::Await(e, _) | Expr::TypeOf(e) | Expr::Void(e) => {
                 self.collect_strings_in_expr(e);
             }
             Expr::New { args, .. } => {

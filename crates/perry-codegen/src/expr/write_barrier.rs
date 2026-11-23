@@ -150,8 +150,8 @@ fn function_returns_static(ctx: &FnCtx<'_>, id: u32) -> bool {
     }
     fn returns_ok(stmts: &[Stmt]) -> bool {
         stmts.iter().all(|s| match s {
-            Stmt::Return(Some(e)) => literal(e),
-            Stmt::Return(None) => true,
+            Stmt::Return(Some(e), _) => literal(e),
+            Stmt::Return(None, _) => true,
             Stmt::If {
                 then_branch,
                 else_branch,

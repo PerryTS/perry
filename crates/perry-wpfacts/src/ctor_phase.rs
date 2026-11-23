@@ -236,7 +236,7 @@ fn own_callees(c: &Class) -> BTreeMap<String, &perry_hir::Function> {
 /// expressions).
 pub(crate) fn has_return(ss: &[Stmt]) -> bool {
     ss.iter().any(|s| match s {
-        Stmt::Return(_) => true,
+        Stmt::Return(_, _) => true,
         Stmt::If {
             then_branch,
             else_branch,
@@ -774,7 +774,7 @@ impl<'a> W<'a> {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr(st, e),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.expr(st, e);
                 }
@@ -1337,7 +1337,7 @@ pub(crate) fn literal_defines<'e>(
 /// then bind `this` to another object (ECMA-262 10.2.2 step 10-12).
 pub(crate) fn returns_value(ss: &[Stmt]) -> bool {
     ss.iter().any(|s| match s {
-        Stmt::Return(e) => e.is_some(),
+        Stmt::Return(e, _) => e.is_some(),
         Stmt::If {
             then_branch,
             else_branch,
@@ -1386,7 +1386,7 @@ fn case_exit(ss: &[Stmt]) -> Option<CaseEnd> {
     }
     Some(match last {
         Stmt::Break | Stmt::LabeledBreak(_) => CaseEnd::Exits,
-        Stmt::Return(_) | Stmt::Throw(_) | Stmt::Continue | Stmt::LabeledContinue(_) => {
+        Stmt::Return(_, _) | Stmt::Throw(_) | Stmt::Continue | Stmt::LabeledContinue(_) => {
             CaseEnd::Leaves
         }
         s if jumps(std::slice::from_ref(s)) => return None,
@@ -1505,7 +1505,7 @@ fn literal_builder_parts(e: &Expr) -> Option<Vec<&Expr>> {
     let o = params[0].id;
     let is_o = |x: &Expr| matches!(x, Expr::LocalGet(id) if *id == o);
     let (last, init) = body.split_last()?;
-    if !matches!(last, Stmt::Return(Some(x)) if is_o(x)) {
+    if !matches!(last, Stmt::Return(Some(x), _) if is_o(x)) {
         return None;
     }
     let mut values = Vec::new();

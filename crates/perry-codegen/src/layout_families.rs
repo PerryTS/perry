@@ -372,7 +372,7 @@ fn visit_stmt<'a>(
 ) {
     on_stmt(s);
     match s {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 visit_expr(e, on_stmt, on_expr);
             }
@@ -568,7 +568,7 @@ fn before_super_free(s: &Stmt) -> bool {
     let free = std::cell::Cell::new(true);
     visit_stmt(
         s,
-        &mut |t| free.set(free.get() && !matches!(t, Stmt::Return(_))),
+        &mut |t| free.set(free.get() && !matches!(t, Stmt::Return(_, _))),
         &mut |e| free.set(free.get() && !names_receiver(e)),
     );
     free.get()

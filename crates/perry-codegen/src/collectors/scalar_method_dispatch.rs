@@ -939,7 +939,7 @@ pub(crate) fn for_each_expr_in_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&Expr)) {
 fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
     match stmt {
         Stmt::Expr(expr) | Stmt::Throw(expr) => for_each_expr(expr, f),
-        Stmt::Return(Some(expr)) => for_each_expr(expr, f),
+        Stmt::Return(Some(expr), _) => for_each_expr(expr, f),
         Stmt::Let {
             init: Some(expr), ..
         } => for_each_expr(expr, f),
@@ -1002,7 +1002,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             }
         }
         Stmt::Labeled { body, .. } => for_each_expr_in_stmt(body, f),
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Let { init: None, .. }
         | Stmt::Break
         | Stmt::Continue

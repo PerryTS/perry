@@ -83,7 +83,7 @@ fn collect_length_only_indices_in_stmts(
             Stmt::Expr(expr) | Stmt::Throw(expr) => {
                 collect_length_only_indices_in_expr(expr, non_escaping_arrays, uses);
             }
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     collect_length_only_indices_in_expr(expr, non_escaping_arrays, uses);
                 }
@@ -229,7 +229,7 @@ fn collect_used_array_indices_in_stmts(
             Stmt::Expr(expr) | Stmt::Throw(expr) => {
                 collect_used_array_indices_in_expr(expr, non_escaping_arrays, used);
             }
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     collect_used_array_indices_in_expr(expr, non_escaping_arrays, used);
                 }
@@ -430,7 +430,7 @@ pub fn check_array_escapes_in_stmts(
     for s in stmts {
         match s {
             Stmt::Expr(e) | Stmt::Throw(e) => check_array_escapes_in_expr(e, candidates, escaped),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     check_array_escapes_in_expr(e, candidates, escaped);
                 }
@@ -717,7 +717,7 @@ pub fn check_array_escapes_in_expr(
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)

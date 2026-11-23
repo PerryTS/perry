@@ -152,7 +152,7 @@ pub(crate) fn module_uses_media(module: &Module) -> bool {
     }
     fn stmt_uses(stmt: &Stmt) -> bool {
         match stmt {
-            Stmt::Expr(e) | Stmt::Return(Some(e)) => expr_uses(e),
+            Stmt::Expr(e) | Stmt::Return(Some(e), _) => expr_uses(e),
             Stmt::Let { init: Some(e), .. } => expr_uses(e),
             Stmt::If {
                 condition,

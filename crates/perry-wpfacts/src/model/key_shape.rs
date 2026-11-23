@@ -144,7 +144,7 @@ impl KeyShape {
         let mut globs = vec![vec!["undefined".to_string()]];
         let mut ok = true;
         perry_hir::tdz_check::for_each_stmt_shallow(&f.body, &mut |s| {
-            if let Stmt::Return(r) = s {
+            if let Stmt::Return(r, _) = s {
                 match r.as_ref().map(KeyShape::of) {
                     None => {}
                     Some(Some(k)) => globs.extend(k.globs),

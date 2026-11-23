@@ -65,7 +65,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         //     %value = call js_promise_value(%promise)
         //
         // Returns %value as a NaN-boxed double.
-        Expr::Await(operand) => {
+        Expr::Await(operand, _) => {
             let raw_operand = lower_expr(ctx, operand)?;
 
             // Issue #586: ECMAScript thenable assimilation. Before the

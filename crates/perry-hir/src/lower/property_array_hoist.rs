@@ -286,7 +286,7 @@ fn stmt_is_hoist_safe(stmt: &Stmt, scan: &Scan<'_>) -> bool {
         // Leaving the loop early is fine: the hoisted `Let` is evaluated
         // before the loop either way, and the property read it replaces was
         // never reached on this path.
-        Stmt::Return(value) => value.as_ref().is_none_or(|e| expr_is_hoist_safe(e, scan)),
+        Stmt::Return(value, _) => value.as_ref().is_none_or(|e| expr_is_hoist_safe(e, scan)),
         Stmt::Throw(value) => expr_is_hoist_safe(value, scan),
         Stmt::Break | Stmt::Continue => true,
         Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
@@ -399,7 +399,7 @@ fn stmt_reads_property(stmt: &Stmt, recv: Recv, property: &str) -> bool {
                 || body.iter().any(|s| stmt_reads_property(s, recv, property))
         }
         Stmt::Labeled { body, .. } => stmt_reads_property(body, recv, property),
-        Stmt::Return(value) => value
+        Stmt::Return(value, _) => value
             .as_ref()
             .is_some_and(|e| expr_reads_property(e, recv, property)),
         Stmt::Throw(value) => expr_reads_property(value, recv, property),
@@ -535,11 +535,11 @@ fn rewrite_stmt(stmt: &Stmt, recv: Recv, property: &str, hoist_id: u32) -> Stmt 
             label: label.clone(),
             body: Box::new(rewrite_stmt(body, recv, property, hoist_id)),
         },
-        Stmt::Return(value) => Stmt::Return(
+        Stmt::Return(value, off) => Stmt::Return(
             value
                 .as_ref()
                 .map(|e| rewrite_expr(e, recv, property, hoist_id)),
-        ),
+                    *off,),
         Stmt::Throw(value) => Stmt::Throw(rewrite_expr(value, recv, property, hoist_id)),
         other => other.clone(),
     }
@@ -714,7 +714,7 @@ pub(crate) fn hoist_this_array_fields(
         .filter(|m| !m.is_async && !m.is_generator && !accessor_or_field(&m.name))
         .filter(|m| m.params.iter().all(|p| p.default.is_none() && !p.is_rest))
         .filter_map(|m| match m.body.as_slice() {
-            [Stmt::Return(Some(e))] if expr_is_hoist_safe(e, &pure_scan) && !expr_has_set(e) => {
+            [Stmt::Return(Some(e), _)] if expr_is_hoist_safe(e, &pure_scan) && !expr_has_set(e) => {
                 Some((
                     m.name.clone(),
                     Inlinable {
@@ -999,7 +999,7 @@ fn inline_this_calls_stmt(s: &Stmt, class: &ThisClass<'_>, used: &mut Vec<String
                     .collect()
             }),
         },
-        Stmt::Return(v) => Stmt::Return(v.as_ref().map(|e| inline_this_calls(e, class, used))),
+        Stmt::Return(v, off) => Stmt::Return(v.as_ref().map(|e| inline_this_calls(e, class, used)), *off),
         other => other.clone(),
     }
 }

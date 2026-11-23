@@ -108,7 +108,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
     match stmt {
         ast::Stmt::Return(ret) => {
             let value = ret.arg.as_ref().map(|e| lower_expr(ctx, e)).transpose()?;
-            result.push(Stmt::Return(value));
+            result.push(Stmt::Return(value, ret.span.lo.0));
         }
         ast::Stmt::If(if_stmt) => {
             result.extend(predeclare_implicit_assignment_targets(ctx, &if_stmt.test));
@@ -1349,7 +1349,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                             object: Some(Box::new(Expr::LocalGet(reader_id))),
                             method: "read".to_string(),
                             args: vec![],
-                        }))
+                        }), for_of_stmt.span.lo.0)
                     };
                     result.push(Stmt::Let {
                         id: res_id,
@@ -1586,7 +1586,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     byte_offset: 0,
                 };
                 let next_call = if needs_await {
-                    Expr::Await(Box::new(raw_next_call))
+                    Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0)
                 } else {
                     raw_next_call
                 };
@@ -1680,6 +1680,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         result_id,
                         next_call,
                         body_stmts,
+                        for_of_stmt.span.lo.0,
                     );
                 } else {
                     let mut loop_body = Vec::new();
@@ -2112,7 +2113,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                 Box::new(Expr::LocalGet(arr_id)),
                                 Box::new(Expr::LocalGet(idx_id)),
                             );
-                            Expr::Await(Box::new(raw_item_expr))
+                            Expr::Await(Box::new(raw_item_expr), for_of_stmt.span.lo.0)
                         } else {
                             if let Some(id) = binding_value {
                                 Expr::LocalGet(id)
@@ -2251,7 +2252,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id)
                     };
                     if for_of_stmt.is_await && !use_lazy_iter {
-                        source = Expr::Await(Box::new(source));
+                        source = Expr::Await(Box::new(source), for_of_stmt.span.lo.0);
                     }
                     crate::lower::for_head_binding_stmts(
                         ctx,

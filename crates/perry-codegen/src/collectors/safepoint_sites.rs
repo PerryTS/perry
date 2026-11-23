@@ -65,7 +65,7 @@ fn is_safepoint(e: &Expr) -> bool {
             | Expr::New { .. }
             | Expr::NewDynamic { .. }
             | Expr::NewDynamicSpread { .. }
-            | Expr::Await(_)
+            | Expr::Await(_, _)
             | Expr::Yield { .. }
             | Expr::AsyncFirstCall { .. }
             // #8583 (unit-4 / `__33499`): object and array literals allocate via
@@ -117,8 +117,8 @@ fn count_in_stmt(s: &Stmt, n: &mut usize, all: bool) {
         Stmt::Let { init: Some(e), .. }
         | Stmt::Expr(e)
         | Stmt::Throw(e)
-        | Stmt::Return(Some(e)) => count_in_expr(e, n, all),
-        Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+        | Stmt::Return(Some(e), _) => count_in_expr(e, n, all),
+        Stmt::Let { init: None, .. } | Stmt::Return(None, _) => {}
         Stmt::If {
             condition,
             then_branch,

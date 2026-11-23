@@ -686,14 +686,14 @@ impl<'e> Walk<'_, 'e> {
 
     fn stmt(&mut self, stmt: &'e Stmt) {
         match stmt {
-            Stmt::Return(Some(e)) => match self.slot(e) {
+            Stmt::Return(Some(e), _) => match self.slot(e) {
                 Some(s) => self.raise(s, Fate::Returned, Proof::Proven),
                 None => {
                     self.at("Return");
                     self.expr(e)
                 }
             },
-            Stmt::Return(None) => {}
+            Stmt::Return(None, _) => {}
             // A copy's declaration: the copy is the parameter.
             Stmt::Let {
                 id,

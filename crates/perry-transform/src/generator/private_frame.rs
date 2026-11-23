@@ -363,7 +363,7 @@ pub(super) fn run(module: &mut Module) {
         !f.is_exported && f.params.iter().all(|p| !p.is_rest && p.default.is_none() && p.arguments_object.is_none())
         && f.body.iter().all(|s| !matches!(s, Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) if !ids.is_empty()))
         && matches!(f.body.last(), Some(Stmt::Return(Some(Expr::LinkGeneratorPrototype {
-            fixed_state: true, is_async: false, obj, .. }))) if matches!(obj.as_ref(), Expr::Closure {
+            fixed_state: true, is_async: false, obj, .. }), _)) if matches!(obj.as_ref(), Expr::Closure {
                 mutable_captures, body, captures_this: false, captures_new_target: false, enclosing_class: None, .. } if mutable_captures.is_empty() && !nested_closure(body)))
     }).map(|f| (f.id, f.clone())).collect();
     let mut next_local = compute_max_local_id(module) + 1;
@@ -481,7 +481,7 @@ fn lower_list(
             continue;
         }
         let mut setup = f.body.clone();
-        let Some(Stmt::Return(Some(link))) = setup.pop() else {
+        let Some(Stmt::Return(Some(link), _)) = setup.pop() else {
             unreachable!()
         };
         let Expr::LinkGeneratorPrototype { obj, .. } = &link else {
@@ -678,7 +678,7 @@ fn lower_list(
                     then_branch: vec![
                         Stmt::Expr(Expr::LocalSet(done, Box::new(Expr::Bool(true)))),
                         Stmt::Expr(Expr::LocalSet(step, Box::new(Expr::Number(1.0)))),
-                        Stmt::Return(Some(Expr::LocalGet(arg))),
+                        Stmt::Return(Some(Expr::LocalGet(arg)), 0 /*HPOS*/),
                     ],
                     else_branch: None,
                 },
@@ -689,7 +689,7 @@ fn lower_list(
                 condition: Expr::LocalGet(done),
                 then_branch: vec![
                     Stmt::Expr(Expr::LocalSet(step, Box::new(Expr::Number(1.0)))),
-                    Stmt::Return(Some(Expr::Undefined)),
+                    Stmt::Return(Some(Expr::Undefined), 0 /*HPOS*/),
                 ],
                 else_branch: None,
             },
@@ -880,7 +880,7 @@ fn lower_owned_resume(
     }
     if f.was_plain_async {
         let step = match f.body.last() {
-            Some(Stmt::Return(Some(Expr::AsyncFirstCall { step_closure }))) => {
+            Some(Stmt::Return(Some(Expr::AsyncFirstCall { step_closure }), _)) => {
                 match step_closure.as_ref() {
                     Expr::LocalGet(id) => Some(*id),
                     _ => None,
@@ -919,7 +919,7 @@ fn lower_owned_resume(
         fixed_state: true,
         is_async: false,
         ..
-    }))) = f.body.last_mut()
+    }), _)) = f.body.last_mut()
     {
         body(obj, templates, uses, next_local, next_func);
     }

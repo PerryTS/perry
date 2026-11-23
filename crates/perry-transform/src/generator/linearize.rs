@@ -90,7 +90,7 @@ impl DelegationRoute {
 
     pub fn await_result(&self, call: Expr) -> Expr {
         if self.is_async {
-            Expr::Await(Box::new(call))
+            Expr::Await(Box::new(call), 0 /*HPOS*/)
         } else {
             call
         }
@@ -105,7 +105,7 @@ impl DelegationRoute {
 const YIELD_RESULT_MARKER: &str = "__perry_generator_yield_inner_result";
 
 fn passthrough_yield(result_id: LocalId, kind_id: LocalId) -> Expr {
-    Expr::Yield {
+    Expr::Yield { byte_offset: 0 /*HPOS*/,
         value: Some(Box::new(Expr::Call {
             byte_end: 0,
             callee: Box::new(Expr::ExternFuncRef {
@@ -155,7 +155,7 @@ fn delegate_get_iterator(inner: Expr) -> Expr {
 /// iter-result directly.
 fn delegate_await(call: Expr) -> Expr {
     if linearize_async_generator() {
-        Expr::Await(Box::new(call))
+        Expr::Await(Box::new(call), 0 /*HPOS*/)
     } else {
         call
     }
@@ -390,7 +390,7 @@ fn emit_yield_star_loop(
     // #1832: in-loop pull forwards the outer resume value (`outer.next(v)` →
     // `sent_id`) into the delegated iterator's `next(v)`.
     let reyield = match del_kind_id {
-        None => Stmt::Expr(Expr::Yield {
+        None => Stmt::Expr(Expr::Yield { byte_offset: 0 /*HPOS*/,
             value: Some(Box::new(Expr::PropertyGet {
                 byte_end: 0,
                 byte_offset: 0,
@@ -525,6 +525,9 @@ pub enum StateExit {
         value: Expr,
         next_state: u32,
         passthrough: Option<LocalId>,
+        /// Source offset of the yield expression the state ends at; the
+        /// dispatch scaffolding that yields stands there.
+        byte_offset: u32,
     },
     /// #6709: async-generator `await` suspend point. Distinct from `Yield`:
     /// the value is awaited on the microtask queue (via `AsyncStepChain`) and
@@ -532,7 +535,7 @@ pub enum StateExit {
     /// consumer — the enclosing `.next()`/`.throw()` result Promise stays
     /// pending until a real consumer `Yield` or completion is reached. Only
     /// produced when linearizing an `async function*` body.
-    Await { value: Expr, next_state: u32 },
+    Await { value: Expr, next_state: u32, byte_offset: u32 },
     /// Goto another state (non-yielding transition)
     Goto(u32),
     /// Function is done
@@ -651,7 +654,7 @@ pub fn linearize_body(
             // yield* delegation: iterate the inner iterator and yield each value
             Stmt::Expr(Expr::Yield {
                 value: Some(inner),
-                delegate: true,
+                delegate: true, ..
             }) => {
                 // Desugar `yield* inner` into a drive loop:
                 //   let __del_iter = GetIterator(inner);
@@ -678,9 +681,9 @@ pub fn linearize_body(
             // yield expr at statement level (non-delegate)
             Stmt::Expr(Expr::Yield {
                 value,
-                delegate: false,
+                delegate: false, byte_offset, ..
             })
-            | Stmt::Expr(Expr::Yield { value, .. }) => {
+            | Stmt::Expr(Expr::Yield { value, byte_offset, .. }) => {
                 let yield_val = value
                     .as_ref()
                     .map(|v| *v.clone())
@@ -694,7 +697,7 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Yield {
+                    exit: StateExit::Yield { byte_offset: *byte_offset,
                         value: yield_val,
                         next_state: *state_num,
                         passthrough,
@@ -713,14 +716,14 @@ pub fn linearize_body(
             // channel. Only fires for async generators (`Expr::Await` never
             // reaches the linearizer otherwise — plain async fns rewrite
             // `await`→`yield` upstream, sync generators have no `await`).
-            Stmt::Expr(Expr::Await(inner)) if linearize_async_generator() => {
+            Stmt::Expr(Expr::Await(inner, off)) if linearize_async_generator() => {
                 let await_val = (**inner).clone();
                 let this_state = *state_num;
                 *state_num += 1;
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Await {
+                    exit: StateExit::Await { byte_offset: *off,
                         value: await_val,
                         next_state: *state_num,
                     },
@@ -733,9 +736,9 @@ pub fn linearize_body(
             // too; left inline it lowered to the busy-wait await, which never
             // settles under an embedder's event loop.
             Stmt::Expr(Expr::LocalSet(id, value))
-                if linearize_async_generator() && matches!(value.as_ref(), Expr::Await(_)) =>
+                if linearize_async_generator() && matches!(value.as_ref(), Expr::Await(_, _)) =>
             {
-                let Expr::Await(inner) = value.as_ref() else {
+                let Expr::Await(inner, off) = value.as_ref() else {
                     unreachable!()
                 };
                 let await_val = (**inner).clone();
@@ -744,7 +747,7 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Await {
+                    exit: StateExit::Await { byte_offset: *off,
                         value: await_val,
                         next_state: *state_num,
                     },
@@ -756,7 +759,7 @@ pub fn linearize_body(
             }
             Stmt::Let {
                 id,
-                init: Some(Expr::Await(inner)),
+                init: Some(Expr::Await(inner, off)),
                 mutable,
                 ty,
                 name,
@@ -767,7 +770,7 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Await {
+                    exit: StateExit::Await { byte_offset: *off,
                         value: await_val,
                         next_state: *state_num,
                     },
@@ -781,14 +784,14 @@ pub fn linearize_body(
                     name: name.clone(),
                 });
             }
-            Stmt::Return(Some(Expr::Await(inner))) if linearize_async_generator() => {
+            Stmt::Return(Some(Expr::Await(inner, off)), roff) if linearize_async_generator() => {
                 let await_val = (**inner).clone();
                 let this_state = *state_num;
                 *state_num += 1;
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Await {
+                    exit: StateExit::Await { byte_offset: *off,
                         value: await_val,
                         next_state: *state_num,
                     },
@@ -797,7 +800,7 @@ pub fn linearize_body(
                 current.push(Stmt::Return(Some(make_iter_result(
                     Expr::LocalGet(sent_id),
                     true,
-                ))));
+                )), *roff));
                 let cont_state = *state_num;
                 *state_num += 1;
                 states.push(State {
@@ -806,14 +809,14 @@ pub fn linearize_body(
                     exit: StateExit::Done,
                 });
             }
-            Stmt::Throw(Expr::Await(inner)) if linearize_async_generator() => {
+            Stmt::Throw(Expr::Await(inner, off)) if linearize_async_generator() => {
                 let await_val = (**inner).clone();
                 let this_state = *state_num;
                 *state_num += 1;
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Await {
+                    exit: StateExit::Await { byte_offset: *off,
                         value: await_val,
                         next_state: *state_num,
                     },
@@ -836,8 +839,8 @@ pub fn linearize_body(
             // completion value becomes the generator's return value.
             Stmt::Return(Some(Expr::Yield {
                 value: Some(inner),
-                delegate: true,
-            })) => {
+                delegate: true, ..
+            }), roff) => {
                 let del_value_id = emit_yield_star_loop(
                     inner,
                     states,
@@ -857,7 +860,7 @@ pub fn linearize_body(
                 current.push(Stmt::Return(Some(make_iter_result(
                     Expr::LocalGet(del_value_id),
                     true,
-                ))));
+                )), *roff));
                 let cont_state = *state_num;
                 *state_num += 1;
                 states.push(State {
@@ -871,7 +874,7 @@ pub fn linearize_body(
             // The yield must be emitted as a real yield state so the async-step driver can
             // await the expression; the continuation state then returns {value: __sent, done: true}
             // where __sent is the resolved value delivered back by the step driver.
-            Stmt::Return(Some(yield_expr @ Expr::Yield { .. })) => {
+            Stmt::Return(Some(yield_expr @ Expr::Yield { byte_offset, .. }), roff) => {
                 let yield_val = if let Expr::Yield { value, .. } = yield_expr {
                     value
                         .as_ref()
@@ -886,7 +889,7 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Yield {
+                    exit: StateExit::Yield { byte_offset: *byte_offset,
                         value: yield_val,
                         next_state: *state_num,
                         passthrough: None,
@@ -896,7 +899,7 @@ pub fn linearize_body(
                 current.push(Stmt::Return(Some(make_iter_result(
                     Expr::LocalGet(sent_id),
                     true,
-                ))));
+                )), *roff));
                 let cont_state = *state_num;
                 *state_num += 1;
                 states.push(State {
@@ -907,10 +910,10 @@ pub fn linearize_body(
             }
 
             // return expr (terminal - ends the generator)
-            Stmt::Return(val) => {
+            Stmt::Return(val, roff) => {
                 // Add the return with {value: expr, done: true} wrapping
                 let return_val = val.clone().unwrap_or(Expr::Undefined);
-                current.push(Stmt::Return(Some(make_iter_result(return_val, true))));
+                current.push(Stmt::Return(Some(make_iter_result(return_val, true)), *roff));
                 // Flush current as a terminal state
                 let this_state = *state_num;
                 *state_num += 1;
@@ -1757,7 +1760,7 @@ pub fn linearize_body(
                 init:
                     Some(Expr::Yield {
                         value: Some(inner),
-                        delegate: true,
+                        delegate: true, ..
                     }),
                 mutable,
                 ty,
@@ -1791,7 +1794,7 @@ pub fn linearize_body(
             // which is stored in __sent by the next() closure preamble.
             Stmt::Let {
                 id,
-                init: Some(Expr::Yield { value, .. }),
+                init: Some(Expr::Yield { value, byte_offset, .. }),
                 mutable,
                 ty,
                 name,
@@ -1805,7 +1808,7 @@ pub fn linearize_body(
                 states.push(State {
                     num: this_state,
                     body: std::mem::take(current),
-                    exit: StateExit::Yield {
+                    exit: StateExit::Yield { byte_offset: *byte_offset,
                         value: yield_val,
                         next_state: *state_num,
                         passthrough: None,

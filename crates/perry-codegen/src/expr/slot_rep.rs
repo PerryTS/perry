@@ -787,7 +787,7 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                     }
                 }
                 Stmt::Expr(_)
-                | Stmt::Return(_)
+                | Stmt::Return(_, _)
                 | Stmt::Throw(_)
                 | Stmt::Break
                 | Stmt::Continue
@@ -899,7 +899,7 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
         fn stmt(&mut self, s: &Stmt) {
             match s {
                 Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
-                Stmt::Return(Some(e)) => self.expr(e),
+                Stmt::Return(Some(e), _) => self.expr(e),
                 Stmt::Let { init: Some(e), .. } => self.expr(e),
                 Stmt::If {
                     condition,
@@ -963,7 +963,7 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                         self.stmts(&c.body);
                     }
                 }
-                Stmt::Return(None)
+                Stmt::Return(None, _)
                 | Stmt::Let { init: None, .. }
                 | Stmt::Break
                 | Stmt::Continue

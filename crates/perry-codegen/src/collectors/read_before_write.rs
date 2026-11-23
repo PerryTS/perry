@@ -478,7 +478,7 @@ impl Walk<'_> {
                 self.expr(e, st);
                 st.live = false;
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.expr(e, st);
                 }

@@ -175,7 +175,7 @@ fn collect_used_new_fields_in_stmts(
             Stmt::Expr(e) | Stmt::Throw(e) => {
                 collect_used_new_fields_in_expr(e, non_escaping_news, used)
             }
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     collect_used_new_fields_in_expr(e, non_escaping_news, used);
                 }
@@ -356,7 +356,7 @@ fn collect_used_new_fields_in_expr(
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
