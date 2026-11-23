@@ -1,0 +1,1 @@
+On `--target web`, a `perry/thread` callback (`parallelMap`, `parallelFilter`, `spawn`) that declares more parameters than it is passed receives `undefined` in the rest instead of throwing `Cannot convert undefined to a BigInt`.
