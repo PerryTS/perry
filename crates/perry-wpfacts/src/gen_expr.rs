@@ -1394,13 +1394,11 @@ impl<'a> Gen<'a> {
                 let dst = self.private_getter_or_load(mi, object, o, a);
                 // S8: on the global sentinel a name the main realm does not
                 // declare is [[Get]] on the global object (`loads::tok_load`);
-                // in a module a Worker may run, the Worker global's own
-                // native of that name (perry-stdlib worker_threads
-                // worker_surface.rs: `postMessage`, `addEventListener`, …)
-                // may be the value as well: unknown to the model.
+                // in a module a Worker may run, also what the Worker global's
+                // own member of that name holds, as the realm declares it
+                // (`builtins::worker_global_member`).
                 if self.bare_user_global(mi, object, property) && self.m.worker_side_module(mi) {
-                    self.m.add_top(dst, |_| format!("Worker global {property}"));
-                    self.m.add_prim(dst, prim::ALL);
+                    crate::builtins::worker_global_member(&mut self.m, property, dst);
                 }
                 self.field_reads.push(dst);
                 if *byte_offset != 0 {

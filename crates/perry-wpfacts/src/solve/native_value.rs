@@ -27,6 +27,15 @@ impl Model {
         let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] else {
             return false;
         };
+        // The Worker global's own native (`builtins::worker_global_call`),
+        // whatever `this`.
+        if let Some(n) = identity.strip_prefix(builtins::WORKER_GLOBAL_PREFIX) {
+            if self.bind_done.insert((call, t, u32::MAX - 7)) {
+                self.diagnostic_callee(call, t);
+                self.with_native(call, |m, call| builtins::worker_global_call(m, n, call));
+            }
+            return true;
+        }
         // A module member whose effects the runtime declares at the body
         // its dispatch arm calls: the declaration runs, whatever `this`.
         if let Some(e) = builtins::declared_member(identity) {

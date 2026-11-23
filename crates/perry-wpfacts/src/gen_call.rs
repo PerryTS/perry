@@ -228,20 +228,24 @@ impl<'a> Gen<'a> {
                 let private = self.private_method_callee(fx.module, object);
                 let a = self.member_atom(object, property);
                 // S8: a bare call of a name the main realm declares neither
-                // on the global object nor on its chain, in a module no
-                // Worker runs (`Model::worker_side`), calls the value of
+                // on the global object nor on its chain calls the value of
                 // [[Get]](globalThis, name) (`loads::tok_load`, rule G) with
                 // `this` undefined (ECMA-262 13.3.6.1 EvaluateCall: the
                 // reference's base is an environment record, WithBaseObject
                 // undefined; 9.1.1.4.6 GetBindingValue): this call, bound to
                 // that value. Absent: the runtime's ReferenceError, nothing
-                // is called. A module a Worker may run keeps the member call:
-                // the Worker global's native of that name may be the callee.
-                let global_get = private.is_none()
-                    && self.bare_user_global(fx.module, object, property)
-                    && !self.m.worker_side_module(fx.module);
+                // is called. In a module a Worker may run (`Model::
+                // worker_side`) the value is also the Worker global's own
+                // member of that name, as the bare read has it
+                // (`builtins::worker_global_member`).
+                let global_get =
+                    private.is_none() && self.bare_user_global(fx.module, object, property);
                 let callee_v = if global_get {
-                    Some(self.load(o, Key::Named(a)))
+                    let v = self.load(o, Key::Named(a));
+                    if self.m.worker_side_module(fx.module) {
+                        crate::builtins::worker_global_member(&mut self.m, property, v);
+                    }
+                    Some(v)
                 } else {
                     private
                 };

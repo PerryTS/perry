@@ -133,3 +133,28 @@ fn wgpost_named_store_is_called() {
     assert!(!held, "{tops:?}");
     assert!(ps.len() == 1 && ps[0] > 0, "the stored function gets the message: {ps:?}");
 }
+
+// REALMVAL5: a bare read in a module a Worker runs is the Worker global's
+// own member as the realm declares it (`%WorkerGlobal%.<name>`): `self` the
+// global object, the handlers `null`, the natives their function values.
+#[test]
+fn worker_global_bare_reads_are_the_declared_members() {
+    let w = "const s: any = self; const h: any = onmessage; const p: any = postMessage;\n\
+        console.log(s === globalThis, h === null, typeof p);\nexport {};\n";
+    let (tops, held, side, _) = solve(&[("main", B_MAIN), ("w", w)], &["w.ts"], &["./w.ts"]);
+    assert_eq!(side, vec![false, true]);
+    assert!(!has(&tops, "Worker global"), "{tops:?}");
+    assert!(!held, "the realm is not held: {tops:?}");
+}
+
+// The natives read as values are called as the bare call calls them: the
+// clone for `postMessage`; `close` and `removeEventListener` call nothing.
+#[test]
+fn worker_global_native_values_run_their_models() {
+    let w = "const p: any = postMessage; p({ a: 1 });\n\
+        close(); removeEventListener(\"message\", () => {});\n\
+        const c: any = close; c();\nexport {};\n";
+    let (tops, held, _, _) = solve(&[("main", B_MAIN), ("w", w)], &["w.ts"], &["./w.ts"]);
+    assert!(!has(&tops, "Other.close") && !has(&tops, "Other.removeEventListener"), "{tops:?}");
+    assert!(!held, "the realm is not held: {tops:?}");
+}

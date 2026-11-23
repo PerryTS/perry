@@ -2112,6 +2112,57 @@ fn hostval_member(
     true
 }
 
+/// The realm's name of a member the Worker global holds beside the main
+/// realm's global members (`%WorkerGlobal%.<name>`, perry-stdlib
+/// worker_threads/worker_surface.rs `install_web_worker_globals`).
+pub const WORKER_GLOBAL_PREFIX: &str = "%WorkerGlobal%.";
+
+/// S8 in a module a Worker may run: what the Worker global's own member
+/// `n` holds, beside [[Get]] on the main realm's global object (the caller's
+/// load). The realm declares each member the runtime installs on the
+/// Worker's global object, by its full name: a native (`postMessage`,
+/// `addEventListener`, `removeEventListener`, `close`: that function
+/// value, `Native::Member` of its realm name), `self` (an alias of the
+/// global object itself) and the handlers' first value (`onmessage`:
+/// `null`). A name it does not declare adds nothing: the Worker global is
+/// the main realm's global object there. A write under the key by code
+/// the model does not see (now, or later in the solve: the replay) is the
+/// opaque member instead; a program store is read by the caller's load.
+pub fn worker_global_member(m: &mut Model, n: &str, dst: NodeId) {
+    use perry_hir::realm_manifest::RealmKind as K;
+    let Some(e) = members::realm_entry(&format!("{WORKER_GLOBAL_PREFIX}{n}")) else {
+        return;
+    };
+    let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+    let a = m.atom(n);
+    if opaque_written(m, g, a, NativeMiss::Load(dst)) {
+        opaque_member(m, dst);
+        return;
+    }
+    match (e.kind, e.value) {
+        (K::Function | K::Method, _) => {
+            let t = m.tok(TokKind::BuiltinFn(Native::Member {
+                identity: e.name,
+                holder: None,
+            }));
+            m.add_tok(dst, t);
+        }
+        (K::Alias, _) if e.births == ["%Global%"] => m.add_tok(dst, g),
+        (K::Constant, Some(v)) => {
+            let own = perry_hir::realm_manifest::RealmOwn {
+                key: e.name,
+                symbol: false,
+                value: v,
+            };
+            match realm_prim(&own) {
+                Some(p) => m.add_prim(dst, p),
+                None => unreachable!("REALMVAL: {} holds no primitive ({v:?})", e.name),
+            }
+        }
+        _ => unreachable!("REALMVAL: Worker global member {} has no modelled value", e.name),
+    }
+}
+
 /// The value of a realm object's [[Prototype]] named `proto` (a realm
 /// entry name: `Object.prototype`, `EventEmitter.prototype`): that
 /// builtin's prototype object as the model holds it (the tokens of

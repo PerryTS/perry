@@ -267,6 +267,10 @@ pub struct RealmEntry {
     /// Its [[Prototype]] (`RealmDeclaration::prototype`): the declaration a
     /// lookup past `own` continues on; `None` ends the chain (`null`).
     pub proto: Option<&'static str>,
+    /// The value a constant declaration holds (`RealmDeclaration::value`,
+    /// `%WorkerGlobal%.onmessage`: `null`), its kind as an own property's;
+    /// `None` for a declaration without one.
+    pub value: Option<RealmOwnValue>,
 }
 
 /// An own property of a declaration in the generated compiler table.
@@ -299,27 +303,35 @@ pub enum RealmOwnValue {
     Other,
 }
 
+impl RealmValue {
+    /// The `RealmOwnValue` variant (const Rust, without its path) of a
+    /// property or a constant declaration holding this value.
+    pub fn emit_own_value(&self) -> String {
+        match self {
+            RealmValue::Undefined => "Undefined".into(),
+            RealmValue::Null => "Null".into(),
+            RealmValue::Boolean(_) => "Boolean".into(),
+            RealmValue::NumberBits(_) => "Number".into(),
+            RealmValue::String(_) => "String".into(),
+            RealmValue::Symbol(_) => "Symbol".into(),
+            RealmValue::Reference(r) => format!("Reference({r:?})"),
+            // A constructor identity capture (`realm_facts.rs`): a
+            // runtime-internal 0x7FFE word, never a JS Number (P3 B4a).
+            RealmValue::Int32(_)
+            | RealmValue::RawReference(_)
+            | RealmValue::Bytes(_)
+            | RealmValue::RawWord(_)
+            | RealmValue::Dynamic(_) => "Other".into(),
+        }
+    }
+}
+
 impl RealmProperty {
     /// Const Rust for this property's `RealmOwn` in the generated table;
     /// `p` is the path prefix of the schema module.
     pub fn emit_own(&self, p: &str) -> String {
         let value = match (&self.get, &self.set, &self.value) {
-            (None, None, Some(v)) => match v {
-                RealmValue::Undefined => "Undefined".into(),
-                RealmValue::Null => "Null".into(),
-                RealmValue::Boolean(_) => "Boolean".into(),
-                RealmValue::NumberBits(_) => "Number".into(),
-                RealmValue::String(_) => "String".into(),
-                RealmValue::Symbol(_) => "Symbol".into(),
-                RealmValue::Reference(r) => format!("Reference({r:?})"),
-                // A constructor identity capture (`realm_facts.rs`): a
-                // runtime-internal 0x7FFE word, never a JS Number (P3 B4a).
-                RealmValue::Int32(_)
-                | RealmValue::RawReference(_)
-                | RealmValue::Bytes(_)
-                | RealmValue::RawWord(_)
-                | RealmValue::Dynamic(_) => "Other".into(),
-            },
+            (None, None, Some(v)) => v.emit_own_value(),
             (None, None, None) => "Undefined".into(),
             (get, set, _) => format!("Accessor {{ get: {get:?}, set: {set:?} }}"),
         };
