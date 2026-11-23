@@ -181,7 +181,7 @@ pub(super) fn try_global_builtins(
                     class_name: "Array".to_string(),
                     args,
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: call.span.lo.0,
                     cap_args_appended: 0,
                 }));
             }
@@ -897,6 +897,7 @@ pub(super) fn try_global_builtins(
                     if let Some(expr) = super::crypto::lower_crypto_passthrough(
                         func_name,
                         std::mem::take(&mut args),
+                        call.span.lo.0,
                     ) {
                         return Ok(Ok(expr));
                     }
@@ -929,7 +930,7 @@ pub(super) fn try_global_builtins(
                             }),
                             args: new_args,
                             type_args: vec![],
-                            byte_offset: 0,
+                            byte_offset: call.span.lo.0,
                         }));
                     }
                     // #3927: `generateKeySync(alg, options)` from a named import.
@@ -952,7 +953,7 @@ pub(super) fn try_global_builtins(
                             }),
                             args: vec![alg_arg, options_arg],
                             type_args: vec![],
-                            byte_offset: 0,
+                            byte_offset: call.span.lo.0,
                         }));
                     }
                     _ => {} // Fall through

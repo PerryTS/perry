@@ -76,7 +76,7 @@ pub fn build_async_step_driver_direct(
         }),
         args: vec![arg],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: fn_offset,
     };
     let promise_reject = |arg: Expr| Expr::Call {
         byte_end: 0,
@@ -88,7 +88,7 @@ pub fn build_async_step_driver_direct(
         }),
         args: vec![arg],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: fn_offset,
     };
 
     // Rewrite every Return inside next_body to LabeledBreak(__step_done)
@@ -285,7 +285,7 @@ pub fn build_async_step_driver_direct(
                         callee: Box::new(Expr::LocalGet(step_self_id)),
                         args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
                         type_args: vec![],
-                        byte_offset: 0,
+                        byte_offset: fn_offset,
                     }), fn_offset),
                 ],
             }),

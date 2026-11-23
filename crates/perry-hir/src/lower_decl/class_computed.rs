@@ -2,6 +2,7 @@
 //! declared inside a function body. Extracted from `body_stmt.rs` to keep that
 //! file under the source-size gate.
 
+use swc_common::Spanned;
 use anyhow::Result;
 use swc_ecma_ast as ast;
 
@@ -82,7 +83,7 @@ pub(crate) fn prepare_ordered_class_computed_names(
                 byte_end: 0,
                 object: Box::new(Expr::ClassRef(registration_class_name.to_string())),
                 property: name,
-                byte_offset: 0,
+                byte_offset: byte_offset,
             },
         ));
     }
@@ -97,7 +98,7 @@ pub(crate) fn prepare_ordered_class_computed_names(
             }),
             args: vec![member.key_expr.clone()],
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset: member.function.byte_offset,
         };
         let mut resolved = member.clone();
         resolved.key_expr = to_property_key;
@@ -198,7 +199,7 @@ pub(crate) fn push_deduped_class_computed_keys(
                 }),
                 args: vec![lowered],
                 type_args: Vec::new(),
-                byte_offset: 0,
+                byte_offset: key_ast.span().lo.0,
             }));
         }
     }

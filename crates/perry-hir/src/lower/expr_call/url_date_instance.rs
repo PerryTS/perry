@@ -177,7 +177,7 @@ pub(super) fn try_url_date_weakref_instance(
                         }),
                         args,
                         type_args: vec![],
-                        byte_offset: 0,
+                        byte_offset: call.span.lo.0,
                     }));
                 }
                 cached_recv = Some(recv_expr);

@@ -12,6 +12,7 @@ pub(super) fn init_named_cell(
     source: &str,
     imported: &str,
     method: Option<&String>,
+    byte_offset: u32,
 ) {
     if (method.is_none() && imported == "default")
         || !perry_api_manifest::is_node_core_module(source)
@@ -32,7 +33,7 @@ pub(super) fn init_named_cell(
                 Expr::String(imported.to_string()),
             ],
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset,
         }),
     );
 }

@@ -235,6 +235,6 @@ pub(crate) fn try_desugar_reactive_text(
         callee: Box::new(outer_closure),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: call.span.lo.0,
     }))
 }

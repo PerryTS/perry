@@ -89,7 +89,7 @@ pub(super) fn try_module_class_static(
                                 }),
                                 args: call_args,
                                 type_args: Vec::new(),
-                                byte_offset: 0,
+                                byte_offset: call.span.lo.0,
                             }));
                         }
                         // Unimplemented-API gate (#463) for the chained

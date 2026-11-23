@@ -36,7 +36,7 @@ pub const TDZ_CHECK_THEN: &str = "js_tdz_check_binding_then";
 /// The unconditional throw a read that always runs in the dead zone becomes.
 pub const TDZ_THROW: &str = "js_throw_reference_error_tdz";
 
-fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
+fn extern_call(name: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -46,30 +46,32 @@ fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
         }),
         args,
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
 /// `check(id)`: throws while `id` is uninitialized.
-pub fn check(id: LocalId, name: &str) -> Expr {
+pub fn check(id: LocalId, name: &str, byte_offset: u32) -> Expr {
     extern_call(
         TDZ_CHECK,
         vec![Expr::LocalGet(id), Expr::String(name.to_string())],
+        byte_offset,
     )
 }
 
 /// `check_then(id, value)`: evaluates `value`, then throws while `id` is
 /// uninitialized, else yields `value`.
-pub fn check_then(id: LocalId, name: &str, value: Expr) -> Expr {
+pub fn check_then(id: LocalId, name: &str, value: Expr, byte_offset: u32) -> Expr {
     extern_call(
         TDZ_CHECK_THEN,
         vec![Expr::LocalGet(id), Expr::String(name.to_string()), value],
+        byte_offset,
     )
 }
 
 /// The ReferenceError a dead-zone access throws.
-pub fn throw(name: &str) -> Expr {
-    extern_call(TDZ_THROW, vec![Expr::String(name.to_string())])
+pub fn throw(name: &str, byte_offset: u32) -> Expr {
+    extern_call(TDZ_THROW, vec![Expr::String(name.to_string())], byte_offset)
 }
 
 /// The binding a check expression tests, when `expr` is one.

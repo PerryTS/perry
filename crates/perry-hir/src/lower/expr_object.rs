@@ -874,7 +874,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             class_name,
             args: Vec::new(),
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset: obj.span.lo.0,
             cap_args_appended: 0,
         });
     }
@@ -955,7 +955,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             Type::Any,
                         )
                     } else if ctx.lookup_class(&name).is_some() {
-                        (class_binding_read(ctx, &name), Type::Any)
+                        (class_binding_read(ctx, &name, ident.span.lo.0), Type::Any)
                     } else if ctx.lookup_native_module(&name).is_some() {
                         // #5242: a native-module-bound name (`import { relative }
                         // from 'path'`) used as a shorthand property. Resolve it to
@@ -1008,7 +1008,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 class_name,
                 args,
                 type_args: Vec::new(),
-                byte_offset: 0,
+                byte_offset: obj.span.lo.0,
                 cap_args_appended: 0,
             });
         }
@@ -1190,7 +1190,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                                 return_type,
                             }
                         } else if ctx.lookup_class(&name).is_some() {
-                            class_binding_read(ctx, &name)
+                            class_binding_read(ctx, &name, ident.span.lo.0)
                         } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                             value
                         } else {
@@ -1411,7 +1411,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                     class_name,
                     args: names.iter().map(|_| Expr::Undefined).collect(),
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: obj.span.lo.0,
                     cap_args_appended: 0,
                 }
             })
@@ -1431,7 +1431,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             }),
             args,
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset: obj.span.lo.0,
         };
         let mut body: Vec<Stmt> = Vec::with_capacity(ops.len() * 4 + 1);
         let mut inner_local_ids = vec![param_id];
@@ -1560,7 +1560,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             callee: Box::new(closure),
             args: vec![static_shape_seed.unwrap_or_else(|| Expr::Object(Vec::new()))],
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset: obj.span.lo.0,
         });
     }
     let mut props = Vec::new();
@@ -1609,7 +1609,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             return_type,
                         }
                     } else if ctx.lookup_class(&name).is_some() {
-                        class_binding_read(ctx, &name)
+                        class_binding_read(ctx, &name, ident.span.lo.0)
                     } else if ctx.lookup_native_module(&name).is_some() {
                         // #5242: native-module-bound shorthand (`{ relative }` from
                         // `import { relative } from 'path'`). Resolve to the builtin
@@ -1691,7 +1691,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         }),
         args,
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset: obj.span.lo.0,
     };
     for init in computed_post_init {
         match init {
@@ -1779,7 +1779,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         callee: Box::new(closure),
         args: vec![static_obj],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: obj.span.lo.0,
     })
 }
 

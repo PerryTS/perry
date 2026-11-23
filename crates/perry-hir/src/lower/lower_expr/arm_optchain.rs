@@ -547,7 +547,7 @@ pub(crate) fn lower_opt_chain_expr(
                         callee: Box::new(fixed_callee.clone()),
                         args,
                         type_args: Vec::new(),
-                        byte_offset: 0,
+                        byte_offset: opt_chain.span.lo.0,
                     };
                     // For `foo?.bar?.(args)` the function value (`bar` on the
                     // un-short-circuited receiver) must itself be null-checked
@@ -672,7 +672,7 @@ pub(crate) fn lower_opt_chain_expr(
                     callee: Box::new(callee_expr),
                     args,
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: opt_chain.span.lo.0,
                 })
             };
 

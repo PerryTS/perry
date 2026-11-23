@@ -914,6 +914,7 @@ pub(super) fn try_module_static_methods(
                         if let Some(expr) = super::crypto::lower_crypto_passthrough(
                             method_name,
                             std::mem::take(&mut args),
+                            call.span.lo.0,
                         ) {
                             return Ok(Ok(expr));
                         }
@@ -1146,7 +1147,7 @@ pub(super) fn try_module_static_methods(
                                 }),
                                 args: vec![b],
                                 type_args: vec![],
-                                byte_offset: 0,
+                                byte_offset: call.span.lo.0,
                             }));
                         }
                         _ => {} // Fall through to generic handling

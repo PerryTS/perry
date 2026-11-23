@@ -989,7 +989,7 @@ pub(crate) fn lower_member_tail(
                     }),
                     args: vec![*index],
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: member.span.lo.0,
                 });
             }
             Ok(Expr::IndexGet {

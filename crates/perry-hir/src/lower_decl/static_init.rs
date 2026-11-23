@@ -6,7 +6,7 @@ use swc_ecma_ast as ast;
 
 use crate::ir::*;
 
-fn to_property_key(key: Expr) -> Expr {
+fn to_property_key(key: Expr, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -16,7 +16,7 @@ fn to_property_key(key: Expr) -> Expr {
         }),
         args: vec![key],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -60,7 +60,7 @@ pub(crate) fn computed_field_key_initializers_with_order(
                         result.push((
                             source_order,
                             field.name.clone(),
-                            to_property_key(key.clone()),
+                            to_property_key(key.clone(), field.byte_offset),
                             field.byte_offset,
                         ));
                     }

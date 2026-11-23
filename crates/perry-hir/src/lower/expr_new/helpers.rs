@@ -118,7 +118,7 @@ pub(crate) fn peel_new_callee(mut expr: &ast::Expr) -> &ast::Expr {
     }
 }
 
-pub(crate) fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>) -> Expr {
+pub(crate) fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>, byte_offset: u32) -> Expr {
     let helper = match name {
         "Symbol" => "js_throw_symbol_constructor_type_error",
         "BigInt" => "js_throw_bigint_constructor_type_error",
@@ -135,7 +135,7 @@ pub(crate) fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr
         }),
         args: Vec::new(),
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     };
 
     if args.is_empty() {

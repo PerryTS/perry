@@ -159,7 +159,7 @@ pub(crate) fn lower_new_non_ident(
         if is_global_object_expr(ctx, object.as_ref())
             && matches!(property.as_str(), "Symbol" | "BigInt" | "Math")
         {
-            return Ok(nonconstructable_builtin_throw_expr(property, args));
+            return Ok(nonconstructable_builtin_throw_expr(property, args, new_expr.span.lo.0));
         }
         if is_global_object_expr(ctx, object.as_ref())
             && matches!(
