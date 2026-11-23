@@ -58,6 +58,7 @@ function wrapWidget(h) {
         fillRect(x, y, w, ht) { perry_ui_canvas_fill_rect(h, x, y, w, ht); },
         strokeRect(x, y, w, ht) { perry_ui_canvas_stroke_rect(h, x, y, w, ht); },
         clearRect(x, y, w, ht) { perry_ui_canvas_clear_rect(h, x, y, w, ht); },
+        fillGradient(r1, g1, b1, a1, r2, g2, b2, a2, dir) { perry_ui_canvas_fill_gradient(h, r1, g1, b1, a1, r2, g2, b2, a2, dir); },
         setFillColor(r, g, b, a) { perry_ui_canvas_set_fill_color(h, r, g, b, a); },
         setStrokeColor(r, g, b, a) { perry_ui_canvas_set_stroke_color(h, r, g, b, a); },
         beginPath() { perry_ui_canvas_begin_path(h); },

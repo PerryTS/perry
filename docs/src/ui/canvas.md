@@ -48,6 +48,19 @@ are method calls on the returned handle.
 {{#include ../../examples/ui/canvas/snippets.ts:arcs}}
 ```
 
+### Gradients
+
+```typescript
+{{#include ../../examples/ui/canvas/snippets.ts:gradient}}
+```
+
+`fillGradient` fills the area between the current path and the bottom edge
+with a linear gradient between two RGBA colors that spans the canvas;
+`direction` `0` runs top to bottom and `1` left to right. That area-chart
+shape holds on macOS, iOS, tvOS, visionOS and Linux. Android fills the path
+closed on itself (it needs three points), WASM fills the current path, and
+Windows and the web backend fill the whole canvas.
+
 ### Text
 
 ```typescript
