@@ -1,0 +1,1 @@
+Internal: the four needless `unsafe` blocks in typed-array transforms are gone, `layout_probe` and the wasm emit tests are split under the file-size cap, and the stale size exemptions are re-recorded. No behavior change.
