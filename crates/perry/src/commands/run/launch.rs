@@ -296,9 +296,17 @@ pub fn launch_ios_device(
 
 /// The `PERRY_*` variables of this process, sorted. Only this prefix is
 /// forwarded: the app runs in its own sandbox with its own PATH and HOME.
+/// `vars_os`, because `vars` panics on any non-UTF-8 entry, PERRY_ or not.
 fn perry_env() -> Vec<(String, String)> {
-    let mut vars: Vec<_> = std::env::vars()
-        .filter(|(k, _)| k.starts_with("PERRY_"))
+    let mut vars: Vec<_> = std::env::vars_os()
+        .filter(|(k, _)| k.as_encoded_bytes().starts_with(b"PERRY_"))
+        .filter_map(|(k, v)| match (k.into_string(), v.into_string()) {
+            (Ok(k), Ok(v)) => Some((k, v)),
+            (k, _) => {
+                eprintln!("warning: not forwarding non-UTF-8 variable {k:?} to the app");
+                None
+            }
+        })
         .collect();
     vars.sort();
     vars
