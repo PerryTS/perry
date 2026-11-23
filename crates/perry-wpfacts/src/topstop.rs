@@ -242,23 +242,10 @@ pub(crate) fn variant(e: &impl std::fmt::Debug, pre: &str) -> &'static str {
     n
 }
 
-/// The byte offset an expression carries (perry-hir records one on calls,
-/// `new`, property and index accesses).
+/// The byte offset an expression carries (0: built by the compiler with
+/// no source position).
 pub(crate) fn expr_offset(e: &perry_hir::Expr) -> Option<u32> {
-    use perry_hir::Expr as E;
-    let o = match e {
-        E::Call { byte_offset, .. }
-        | E::CallSpread { byte_offset, .. }
-        | E::New { byte_offset, .. }
-        | E::PropertyGet { byte_offset, .. }
-        | E::PropertySet { byte_offset, .. }
-        | E::PropertyUpdate { byte_offset, .. }
-        | E::IndexGet { byte_offset, .. }
-        | E::IndexSet { byte_offset, .. }
-        | E::IndexUpdate { byte_offset, .. } => *byte_offset,
-        _ => return None,
-    };
-    (o != 0).then_some(o)
+    e.byte_offset().filter(|&o| o != 0)
 }
 
 impl Model {
