@@ -14,8 +14,9 @@ use super::*;
 /// `h[name] = 1` may write any key of `Object.prototype` (node: `hostFn`
 /// returns `Object.prototype`).
 const CST: &str = r#"
+        declare function external(x?: unknown): any;
     declare const name: string;
-    const h: any = (globalThis as any).hostFn();
+    const h: any = external();
     h[name] = 1;
 "#;
 
@@ -23,9 +24,10 @@ const CST: &str = r#"
 /// builtin prototype's key holder (the E6 shape of TypeScript's
 /// `createNodeArray`, debug.ts `Object.setPrototypeOf(array, proto)`).
 const NOG: &str = r#"
+        declare function external(x?: unknown): any;
     declare const name: string;
     const p = { tag: 7 };
-    const q: any = (globalThis as any).hostFn();
+    const q: any = external();
     Object.setPrototypeOf(q, p);
 "#;
 
@@ -91,7 +93,7 @@ fn a_define_property_through_top_after_the_call_revokes_the_shadow() {
                 const factory = {{
                     flags,
                     createIdentifier(text: string) {{
-                        return {{ kind: 80, text, host: (globalThis as any).hostGet() }};
+                        return {{ kind: 80, text, host: external() }};
                     }},
                 }};
                 return factory;
@@ -191,7 +193,7 @@ fn a_delete_on_the_literal_after_the_call_revokes_the_shadow() {
 /// (ECMA-262 10.1.8.1 OrdinaryGet), so the calls stay proven.
 #[test]
 fn a_named_define_through_top_after_the_call_keeps_the_literal_key() {
-    let more = "host: (globalThis as any).hostGet()";
+    let more = "host: external()";
     assert_eq!(
         revoked_calls(more, "console.log(r.host);"),
         vec!["proven", "proven"]
@@ -222,8 +224,8 @@ fn a_key_added_after_birth_does_not_shadow_for_a_call() {
 #[test]
 fn an_escaped_literal_with_a_delete_through_top_stays_unproven() {
     let src = format!(
-        "{CST}{FACTORY}(globalThis as any).hostFn(factory); \
-         delete (globalThis as any).hostGet()[name]; {USE}"
+        "{CST}{FACTORY}external(factory); \
+         delete external()[name]; {USE}"
     );
     assert!(!whole(&src).0);
 }

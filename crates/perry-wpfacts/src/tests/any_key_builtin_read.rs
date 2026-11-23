@@ -17,7 +17,8 @@ use super::*;
 fn escapes(body: &str) -> bool {
     let src = format!(
         r#"
-        class Svc {{ size = 3; leak() {{ (globalThis as any).hostTake(this); }} }}
+        declare function external(x?: unknown): any;
+        class Svc {{ size = 3; leak() {{ external(this); }} }}
         function g(a: any) {{ return a.size; }}
         const k: any = process.argv[2];
         const k2: any = process.argv[3];
@@ -169,12 +170,12 @@ case!(
 case!(
     control_host_receiver_stays_unknown,
     true,
-    "const ab: any = (globalThis as any).hostGive(); const r: any = ab[k]; r(o);"
+    "const ab: any = external(); const r: any = ab[k]; r(o);"
 );
 case!(
     control_prototype_store_is_read,
     true,
-    "(ArrayBuffer.prototype as any).zz = (globalThis as any).hostGive(); const ab: any = new ArrayBuffer(8); const r: any = ab[k]; r(o);"
+    "(ArrayBuffer.prototype as any).zz = external(); const ab: any = new ArrayBuffer(8); const r: any = ab[k]; r(o);"
 );
 case!(
     control_expando_is_read,
@@ -197,5 +198,5 @@ case!(
 top_case!(
     control_host_value_read_holds_top,
     true,
-    "let x: any = (globalThis as any).hostGive(); x = x[k];"
+    "let x: any = external(); x = x[k];"
 );
