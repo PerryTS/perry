@@ -39,6 +39,7 @@ type CGFloat = f64;
 
 extern "C" {
     fn CGContextSaveGState(c: CGContextRef);
+    fn CGContextClearRect(c: CGContextRef, rect: CGRect);
     fn CGContextRestoreGState(c: CGContextRef);
     fn CGContextClip(c: CGContextRef);
     fn CGContextSetLineCap(c: CGContextRef, cap: i32);
@@ -123,6 +124,12 @@ enum DrawCommand {
         w: f64,
         h: f64,
     },
+    ClearRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
     DrawImage {
         image: i64,
         sx: f64,
@@ -153,6 +160,7 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
                 | DrawCommand::FillPath
                 | DrawCommand::FillRect { .. }
                 | DrawCommand::StrokeRect { .. }
+                | DrawCommand::ClearRect { .. }
         )
     })
 }
@@ -412,6 +420,12 @@ define_class!(
                                     srgb::set_fill_color(ctx, cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
                                     CGContextFillRect(ctx, CGRect::new(CGPoint::new(*x, flipped_y), CGSize::new(*w, *h)));
                                     CGContextRestoreGState(ctx);
+                                }
+                            }
+                            DrawCommand::ClearRect { x, y, w, h } => {
+                                let flipped_y = canvas_h - y - h;
+                                unsafe {
+                                    CGContextClearRect(ctx, CGRect::new(CGPoint::new(*x, flipped_y), CGSize::new(*w, *h)));
                                 }
                             }
                             DrawCommand::StrokeRect { x, y, w, h } => {
@@ -715,6 +729,12 @@ pub fn fill_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
     redraw(handle);
 }
 
+/// Clear a rectangle to transparent, keeping what earlier commands drew outside it.
+pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCommand::ClearRect { x, y, w, h });
+    redraw(handle);
+}
+
 pub fn stroke_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
     push_cmd(handle, DrawCommand::StrokeRect { x, y, w, h });
     redraw(handle);
@@ -826,4 +846,34 @@ pub fn draw_image(
         },
     );
     redraw(handle);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use objc2_app_kit::NSApplication;
+    use perry_runtime as _;
+
+    #[test]
+    fn clear_rect_records_its_rect_after_earlier_commands() {
+        let mtm =
+            MainThreadMarker::new().expect("panic-abort tests run on the process main thread");
+        let _app = NSApplication::sharedApplication(mtm);
+        let canvas = create(100.0, 100.0);
+        fill_rect(canvas, 0.0, 0.0, 100.0, 100.0);
+        crate::lib_ffi::style_and_canvas::perry_ui_canvas_clear_rect(
+            canvas, 10.0, 20.0, 30.0, 40.0,
+        );
+        let key = get_canvas_key(canvas).unwrap();
+        let commands = CANVAS_COMMANDS.with(|cmds| cmds.borrow()[&key].clone());
+        assert!(
+            matches!(
+                commands.as_slice(),
+                [DrawCommand::FillRect { .. }, DrawCommand::ClearRect { x, y, w, h }]
+                    if (*x, *y, *w, *h) == (10.0, 20.0, 30.0, 40.0)
+            ),
+            "clearRect must append its rect and keep the earlier fillRect"
+        );
+        assert!(command_batch_renders(&commands[1..]));
+    }
 }

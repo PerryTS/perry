@@ -29,6 +29,7 @@ pub enum DrawCmd {
     DrawImage(i64, f64, f64, f64, f64, f64, f64, f64, f64),
     // image, sx, sy, sw, sh, dx, dy, dw, dh
     Clear,
+    ClearRect(f64, f64, f64, f64), // x, y, w, h
 }
 
 fn command_batch_renders(commands: &[DrawCmd]) -> bool {
@@ -39,6 +40,7 @@ fn command_batch_renders(commands: &[DrawCmd]) -> bool {
                 | DrawCmd::Stroke(..)
                 | DrawCmd::FillGradient(..)
                 | DrawCmd::DrawImage(..)
+                | DrawCmd::ClearRect(..)
         )
     })
 }
@@ -173,6 +175,16 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                     DrawCmd::Clear => {
                         let mut rect = RECT::default();
                         let _ = GetClientRect(hwnd, &mut rect);
+                        let brush = GetStockObject(WHITE_BRUSH);
+                        let _ = FillRect(hdc, &rect, HBRUSH(brush.0));
+                    }
+                    DrawCmd::ClearRect(x, y, w, h) => {
+                        let rect = RECT {
+                            left: x as i32,
+                            top: y as i32,
+                            right: (x + w) as i32,
+                            bottom: (y + h) as i32,
+                        };
                         let brush = GetStockObject(WHITE_BRUSH);
                         let _ = FillRect(hdc, &rect, HBRUSH(brush.0));
                     }
@@ -407,6 +419,12 @@ pub fn clear(handle: i64) {
             list.clear();
         }
     });
+    invalidate(handle);
+}
+
+/// Clear a rectangle to the background, keeping what earlier commands drew outside it.
+pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCmd::ClearRect(x, y, w, h));
     invalidate(handle);
 }
 

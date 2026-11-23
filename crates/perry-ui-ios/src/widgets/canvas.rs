@@ -43,6 +43,7 @@ extern "C" {
     fn CGContextSetRGBFillColor(c: CGContextRef, r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat);
     fn CGContextFillPath(c: CGContextRef);
     fn CGContextFillRect(c: CGContextRef, rect: CGRect);
+    fn CGContextClearRect(c: CGContextRef, rect: CGRect);
     fn CGContextStrokeRect(c: CGContextRef, rect: CGRect);
     fn CGContextDrawImage(c: CGContextRef, rect: CGRect, image: CGImageRef);
     fn CFDataCreate(allocator: *const c_void, bytes: *const u8, length: isize) -> CFDataRef;
@@ -139,6 +140,12 @@ enum DrawCommand {
         w: f64,
         h: f64,
     },
+    ClearRect {
+        x: f64,
+        y: f64,
+        w: f64,
+        h: f64,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -159,6 +166,7 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
                 | DrawCommand::FillPath
                 | DrawCommand::FillRect { .. }
                 | DrawCommand::StrokeRect { .. }
+                | DrawCommand::ClearRect { .. }
         )
     })
 }
@@ -470,6 +478,9 @@ define_class!(
                                     CGContextRestoreGState(ctx);
                                 }
                             }
+                            DrawCommand::ClearRect { x, y, w, h } => unsafe {
+                                CGContextClearRect(ctx, CGRect::new(CGPoint::new(*x, *y), CGSize::new(*w, *h)));
+                            },
                             DrawCommand::StrokeRect { x, y, w, h } => {
                                 unsafe {
                                     CGContextSaveGState(ctx);
@@ -714,6 +725,12 @@ pub fn fill(handle: i64) {
 
 pub fn fill_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
     push_cmd(handle, DrawCommand::FillRect { x, y, w, h });
+    redraw(handle);
+}
+
+/// Clear a rectangle to transparent, keeping what earlier commands drew outside it.
+pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(handle, DrawCommand::ClearRect { x, y, w, h });
     redraw(handle);
 }
 
