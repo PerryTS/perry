@@ -14,8 +14,8 @@ pub(crate) struct IteratorRecordPlan {
     byte_offset: u32,
 }
 
-fn runtime(method: &str, args: Vec<Expr>) -> Expr {
-    Expr::NativeMethodCall {
+fn runtime(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
+    Expr::NativeMethodCall { byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -83,7 +83,7 @@ impl IteratorRecordPlan {
                     args.push(Expr::Bool(true));
                 }
                 args
-            }),
+            }, byte_offset),
         );
         // The source already owns the record. Reusing its actual Any value
         // keeps indexed property lowering on runtime facts rather than an
@@ -96,7 +96,7 @@ impl IteratorRecordPlan {
             out,
             Type::Number,
             true,
-            runtime("arrayRecordIndex", vec![Expr::Integer(0)]),
+            runtime("arrayRecordIndex", vec![Expr::Integer(0)], byte_offset),
         );
         Self {
             use_iter,
@@ -139,7 +139,7 @@ impl IteratorRecordPlan {
             name,
             ty: Type::Boolean,
             mutable: false,
-            init: Some(runtime("arrayRecordNeedsIterator", vec![])),
+            init: Some(runtime("arrayRecordNeedsIterator", vec![], byte_offset)),
         });
         let source = ctx.fresh_local();
         let name = format!("__iterator_record_{source}");
@@ -158,6 +158,7 @@ impl IteratorRecordPlan {
                 then_expr: Box::new(runtime(
                     "arrayRecordLiteral",
                     scalars.iter().map(|id| Expr::LocalGet(*id)).collect(),
+                    byte_offset,
                 )),
                 else_expr: Box::new(Expr::Undefined),
             }),
@@ -170,7 +171,7 @@ impl IteratorRecordPlan {
             name,
             ty: Type::Number,
             mutable: true,
-            init: Some(runtime("arrayRecordIndex", vec![Expr::Integer(0)])),
+            init: Some(runtime("arrayRecordIndex", vec![Expr::Integer(0)], byte_offset)),
         });
         Self {
             use_iter,
@@ -185,7 +186,7 @@ impl IteratorRecordPlan {
     fn length(&self) -> Expr {
         match &self.scalars {
             Some(values) => Expr::Integer(values.len() as i64),
-            None => runtime("arrayRecordLength", vec![Expr::LocalGet(self.array)]),
+            None => runtime("arrayRecordLength", vec![Expr::LocalGet(self.array)], self.byte_offset),
         }
     }
 
@@ -216,6 +217,7 @@ impl IteratorRecordPlan {
             index: Box::new(runtime(
                 "arrayRecordIndex",
                 vec![Expr::LocalGet(self.index)],
+                self.byte_offset,
             )),
         }
     }
@@ -225,11 +227,12 @@ impl IteratorRecordPlan {
             // Close may expose the original built-in iterator, even when next
             // was replaced after entry. Materialize only for an observable return.
             return Expr::Conditional {
-                condition: Box::new(runtime("arrayRecordCloseAbsent", vec![])),
+                condition: Box::new(runtime("arrayRecordCloseAbsent", vec![], self.byte_offset)),
                 then_expr: Box::new(Expr::Undefined),
                 else_expr: Box::new(runtime(
                     "arrayRecordLiteral",
                     values.iter().map(|id| Expr::LocalGet(*id)).collect(),
+                    self.byte_offset,
                 )),
             };
         }
@@ -278,13 +281,14 @@ impl IteratorRecordPlan {
                 Expr::LocalSet(payload, Box::new(value)),
                 Expr::LocalSet(self.source, Box::new(Expr::Undefined)),
             ],
+            self.byte_offset,
         )
     }
 
     pub(crate) fn next_init(&self, iter_id: LocalId) -> Expr {
         Expr::Conditional {
             condition: Box::new(self.iterator_mode()),
-            then_expr: Box::new(crate::lower::iterator_next_method_call(iter_id)),
+            then_expr: Box::new(crate::lower::iterator_next_method_call(iter_id, self.byte_offset)),
             else_expr: Box::new(Expr::Undefined),
         }
     }
@@ -418,6 +422,7 @@ impl IteratorRecordPlan {
                                 },
                                 Expr::Bool(throwing),
                             ],
+                            plan.byte_offset,
                         );
                         *expr = Expr::Conditional {
                             condition: Box::new(plan.iterator_mode()),
@@ -495,9 +500,10 @@ impl IteratorRecordPlan {
                 self.iterator_mode(),
                 self.length(),
                 Expr::LocalGet(self.index),
-                crate::lower::iterator_step_call(iter_id, next, value_id),
+                crate::lower::iterator_step_call(iter_id, next, value_id, self.byte_offset),
                 Expr::LocalSet(state, Box::new(Expr::Number(2.0))),
             ],
+            self.byte_offset,
         );
         let mut stepped_body = vec![
             Stmt::Expr(Expr::LocalSet(
@@ -509,6 +515,7 @@ impl IteratorRecordPlan {
                         Expr::LocalGet(value_id),
                         self.element(),
                     ],
+                    self.byte_offset,
                 )),
             )),
             Stmt::Expr(Expr::LocalSet(state, Box::new(Expr::Number(0.0)))),
@@ -547,7 +554,7 @@ impl IteratorRecordPlan {
                         name: format!("__idx_{}", self.index),
                         ty: Type::Number,
                         mutable: true,
-                        init: Some(runtime("arrayRecordIndex", vec![Expr::Integer(0)])),
+                        init: Some(runtime("arrayRecordIndex", vec![Expr::Integer(0)], self.byte_offset)),
                     })),
                     condition: Some(Expr::Compare { byte_offset: self.byte_offset,
                         op: CompareOp::Lt,
@@ -564,6 +571,7 @@ impl IteratorRecordPlan {
                                 prefix: false,
                             },
                         ],
+                        self.byte_offset,
                     )),
                     body: stepped_body,
                 }],

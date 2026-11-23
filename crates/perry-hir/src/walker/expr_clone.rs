@@ -320,8 +320,8 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             class_name,
             object,
             method,
-            args,
-        } => Expr::NativeMethodCall {
+            args, byte_offset,
+        } => Expr::NativeMethodCall { byte_offset: *byte_offset,
             module: module.clone(),
             class_name: class_name.clone(),
             object: Shallow::shallow(object, n),

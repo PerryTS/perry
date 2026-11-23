@@ -75,6 +75,7 @@ pub(super) fn try_imported_module_dispatch(
                         submodule,
                         &method_name,
                         args,
+                        call.span.lo.0,
                     ) {
                         Ok(expr) => Ok(expr),
                         Err(args) => Err(args),
@@ -95,7 +96,7 @@ pub(super) fn try_imported_module_dispatch(
                     "hasOwnProperty" | "propertyIsEnumerable" | "isPrototypeOf"
                 ) && perry_api_manifest::module_has_symbol(module_name, method_name).is_none()
                 {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                         module: module_name.to_string(),
                         class_name: None,
                         object: None,
@@ -191,7 +192,7 @@ pub(super) fn try_imported_module_dispatch(
                     && matches!(imported_method, Some("default"))
                     && is_cluster_default_event_emitter_method(&method_name)
                 {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                         module: module_name.to_string(),
                         class_name: None,
                         object: None,
@@ -359,7 +360,7 @@ pub(super) fn try_imported_module_dispatch(
                 } else {
                     None
                 };
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: module_name.to_string(),
                     class_name,
                     object: None, // Static call on module itself

@@ -418,8 +418,8 @@ pub(super) fn lower_meta_prop(
                 ("main".to_string(), Expr::Bool(ctx.is_entry_module)),
                 ("dirname".to_string(), Expr::String(dirname)),
                 ("filename".to_string(), Expr::String(filename)),
-                ("require".to_string(), import_meta_require_value(ctx)),
-                ("resolve".to_string(), import_meta_resolve_value(ctx)),
+                ("require".to_string(), import_meta_require_value(ctx, meta_prop.span.lo.0)),
+                ("resolve".to_string(), import_meta_resolve_value(ctx, meta_prop.span.lo.0)),
             ]))
         }
         ast::MetaPropKind::NewTarget => {
@@ -457,21 +457,21 @@ pub(super) fn lower_meta_prop(
 
 /// Reuse one module-owned loader for first-class `import.meta.require` reads.
 /// Its initializer is prepended after lowering has discovered every use.
-pub(crate) fn import_meta_require_value(ctx: &mut LoweringContext) -> Expr {
+pub(crate) fn import_meta_require_value(ctx: &mut LoweringContext, byte_offset: u32) -> Expr {
     let id = match ctx.import_meta_require_local {
-        Some(id) => id,
+        Some((id, _)) => id,
         None => {
             let id = ctx.next_local_id;
             ctx.next_local_id += 1;
-            ctx.import_meta_require_local = Some(id);
+            ctx.import_meta_require_local = Some((id, byte_offset));
             id
         }
     };
     Expr::LocalGet(id)
 }
 
-pub(crate) fn import_meta_resolve_value(ctx: &LoweringContext) -> Expr {
-    Expr::NativeMethodCall {
+pub(crate) fn import_meta_resolve_value(ctx: &LoweringContext, byte_offset: u32) -> Expr {
+    Expr::NativeMethodCall { byte_offset: byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,

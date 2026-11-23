@@ -110,8 +110,8 @@ fn admitted_binding(stmt: &ast::ForOfStmt) -> Option<(&ast::VarDecl, &ast::Bindi
     (!labeled.0).then_some((var_decl.as_ref(), binding))
 }
 
-fn runtime(method: &str, args: Vec<Expr>) -> Expr {
-    Expr::NativeMethodCall {
+fn runtime(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
+    Expr::NativeMethodCall { byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -155,7 +155,7 @@ pub(crate) fn admitted_typed_array_holder(
     Expr::Conditional {
         condition: Box::new(Expr::Compare { byte_offset,
             op: CompareOp::Eq,
-            left: Box::new(runtime("typedArrayForOfAdmits", vec![Expr::LocalGet(id)])),
+            left: Box::new(runtime("typedArrayForOfAdmits", vec![Expr::LocalGet(id)], byte_offset)),
             right: Box::new(Expr::Bool(true)),
         }),
         then_expr: Box::new(Expr::LocalGet(id)),
@@ -402,13 +402,14 @@ fn source_for_of(
                 left: Box::new(runtime(
                     "typedArrayForOfAdmits",
                     vec![Expr::LocalGet(source)],
+                    stmt.span.lo.0,
                 )),
                 right: Box::new(Expr::Bool(true)),
             }
         } else {
             Expr::Compare { byte_offset: stmt.span.lo.0,
                 op: CompareOp::Eq,
-                left: Box::new(runtime("arrayRecordNeedsIterator", entry_args)),
+                left: Box::new(runtime("arrayRecordNeedsIterator", entry_args, stmt.span.lo.0)),
                 right: Box::new(Expr::Bool(false)),
             }
         };

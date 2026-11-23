@@ -165,7 +165,7 @@ pub(crate) fn try_desugar_reactive_animate(
         for a in &call.args {
             args.push(lower_expr(ctx, &a.expr)?);
         }
-        return Ok(Some(Expr::NativeMethodCall {
+        return Ok(Some(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
             module: "perry/ui".to_string(),
             method: method_name.to_string(),
             object: None,
@@ -197,7 +197,7 @@ pub(crate) fn try_desugar_reactive_animate(
     for a in &call.args {
         initial_args.push(lower_expr(ctx, &a.expr)?);
     }
-    outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
+    outer_body.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
         module: "perry/ui".to_string(),
         method: method_name.to_string(),
         object: None,
@@ -228,7 +228,7 @@ pub(crate) fn try_desugar_reactive_animate(
         for a in &call.args {
             fresh_args.push(lower_expr(ctx, &a.expr)?);
         }
-        let animate_call = Expr::NativeMethodCall {
+        let animate_call = Expr::NativeMethodCall { byte_offset: call.span.lo.0,
             module: "perry/ui".to_string(),
             method: method_name.to_string(),
             object: None,
@@ -268,7 +268,7 @@ pub(crate) fn try_desugar_reactive_animate(
             is_strict: ctx.current_strict,
         };
 
-        outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
+        outer_body.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
             module: "perry/ui".to_string(),
             method: "stateOnChange".to_string(),
             object: None,

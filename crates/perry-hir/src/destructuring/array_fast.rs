@@ -21,9 +21,9 @@ impl ArraySource {
         }
     }
 
-    pub(crate) fn next_init(&self, iter_id: LocalId) -> Expr {
+    pub(crate) fn next_init(&self, iter_id: LocalId, byte_offset: u32) -> Expr {
         match self {
-            Self::Iterator(_) => crate::lower::iterator_next_method_call(iter_id),
+            Self::Iterator(_) => crate::lower::iterator_next_method_call(iter_id, byte_offset),
             Self::Guarded(plan) => plan.next_init(iter_id),
         }
     }
@@ -65,7 +65,7 @@ impl ArraySource {
                 name,
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::NativeMethodCall {
+                init: Some(Expr::NativeMethodCall { byte_offset,
                     module: "__perry_runtime".into(),
                     class_name: None,
                     object: None,
@@ -115,11 +115,11 @@ impl ArraySource {
                 else_branch: Some(vec![Stmt::While {
                     condition: Expr::Bool(true),
                     body: vec![Stmt::If {
-                        condition: plan.step(crate::lower::iterator_step_call(iter, next, value)),
+                        condition: plan.step(crate::lower::iterator_step_call(iter, next, value, byte_offset)),
                         then_branch: vec![Stmt::Break],
                         else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
                             id,
-                            Box::new(Expr::NativeMethodCall {
+                            Box::new(Expr::NativeMethodCall { byte_offset,
                                 module: "__perry_runtime".into(),
                                 class_name: None,
                                 object: None,

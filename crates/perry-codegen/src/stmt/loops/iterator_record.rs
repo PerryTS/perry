@@ -27,7 +27,7 @@ pub(super) fn lower(
         class_name: None,
         object: None,
         method,
-        args,
+        args, ..
     } = right.as_ref()
     else {
         return Ok(false);

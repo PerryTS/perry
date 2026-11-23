@@ -1001,7 +1001,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 class_name: None,
                 object: None,
                 method,
-                args,
+                args, ..
             } = index.as_ref()
             {
                 if module == "__perry_runtime" && method == "arrayRecordIndex" {

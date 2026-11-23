@@ -281,7 +281,7 @@ pub(super) fn try_global_builtins(
                 } else {
                     Expr::Undefined
                 };
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -302,7 +302,7 @@ pub(super) fn try_global_builtins(
                 } else {
                     Expr::Undefined
                 };
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -323,7 +323,7 @@ pub(super) fn try_global_builtins(
                         Expr::Undefined
                     });
                 }
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -370,7 +370,7 @@ pub(super) fn try_global_builtins(
                         Expr::Undefined
                     });
                 }
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -385,7 +385,7 @@ pub(super) fn try_global_builtins(
                 } else {
                     Expr::Undefined
                 };
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -406,7 +406,7 @@ pub(super) fn try_global_builtins(
                 } else {
                     Expr::Undefined
                 };
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -422,7 +422,7 @@ pub(super) fn try_global_builtins(
                 } else {
                     Expr::Undefined
                 };
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -440,7 +440,7 @@ pub(super) fn try_global_builtins(
                 } else {
                     Expr::Undefined
                 };
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -462,7 +462,7 @@ pub(super) fn try_global_builtins(
                 } else {
                     Expr::Undefined
                 };
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -471,7 +471,7 @@ pub(super) fn try_global_builtins(
                 }));
             }
             "__perry_cjs_open" => {
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -487,7 +487,7 @@ pub(super) fn try_global_builtins(
                 } else {
                     Expr::Undefined
                 };
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -997,7 +997,7 @@ pub(super) fn try_global_builtins(
         // e.g., uuid() where import { v4 as uuid } from 'uuid'
         if let Some((module_name, Some(method_name))) = ctx.lookup_native_module(func_name) {
             if module_name == "inspector/promises" && method_name == "Session" {
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: module_name.to_string(),
                     class_name: None,
                     object: None,
@@ -1026,7 +1026,7 @@ pub(super) fn try_global_builtins(
                     "networkInterfaces" => return Ok(Ok(Expr::OsNetworkInterfaces)),
                     "userInfo" => return Ok(Ok(user_info_expr_for_call(call, args))),
                     "getPriority" | "setPriority" => {
-                        return Ok(Ok(Expr::NativeMethodCall {
+                        return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                             module: "os".to_string(),
                             class_name: None,
                             object: None,
@@ -1037,7 +1037,7 @@ pub(super) fn try_global_builtins(
                     _ => {}
                 }
             }
-            return Ok(Ok(Expr::NativeMethodCall {
+            return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                 module: module_name.to_string(),
                 class_name: None,
                 object: None,
@@ -1049,7 +1049,7 @@ pub(super) fn try_global_builtins(
         // Check if this is a call on a default import from a native module
         // e.g., Fastify() where import Fastify from 'fastify'
         if let Some((module_name, None)) = ctx.lookup_native_module(func_name) {
-            return Ok(Ok(Expr::NativeMethodCall {
+            return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                 module: module_name.to_string(),
                 class_name: None,
                 object: None,

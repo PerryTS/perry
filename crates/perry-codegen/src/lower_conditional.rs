@@ -358,7 +358,7 @@ pub(crate) fn lower_conditional(
     if let Some(args) = array_record::finish_args(condition, then_expr, else_expr) {
         return lower_expr(
             ctx,
-            &Expr::NativeMethodCall {
+            &Expr::NativeMethodCall { byte_offset: 0 /*HPOS*/,
                 module: "__perry_runtime".into(),
                 class_name: None,
                 object: None,

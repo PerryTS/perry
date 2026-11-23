@@ -119,7 +119,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             ctx.lookup_native_module(callee_ident.sym.as_ref()),
             Some(("bun", Some("Terminal")))
         ) {
-            return Ok(Expr::NativeMethodCall {
+            return Ok(Expr::NativeMethodCall { byte_offset: new_expr.span.lo.0,
                 module: "bun".to_string(),
                 class_name: None,
                 object: None,
@@ -187,7 +187,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 })
                 .transpose()?
                 .unwrap_or_default();
-            return Ok(Expr::NativeMethodCall {
+            return Ok(Expr::NativeMethodCall { byte_offset: new_expr.span.lo.0,
                 module: "module".to_string(),
                 class_name: None,
                 object: None,
@@ -539,7 +539,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 ctx.lookup_native_module(&class_name),
                 Some(("url", Some("Url")))
             ) {
-                return Ok(Expr::NativeMethodCall {
+                return Ok(Expr::NativeMethodCall { byte_offset: new_expr.span.lo.0,
                     module: "url".to_string(),
                     class_name: None,
                     object: None,
@@ -614,7 +614,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     });
             if let Some((module_name, export_name)) = construct_fold {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
-                return Ok(Expr::NativeMethodCall {
+                return Ok(Expr::NativeMethodCall { byte_offset: new_expr.span.lo.0,
                     module: module_name,
                     class_name: None,
                     object: None,
@@ -691,7 +691,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     });
             if let Some(agent_module) = http_agent_module {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
-                return Ok(Expr::NativeMethodCall {
+                return Ok(Expr::NativeMethodCall { byte_offset: new_expr.span.lo.0,
                     module: agent_module,
                     class_name: None,
                     object: None,
@@ -749,7 +749,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                             })
                             .transpose()?
                             .unwrap_or_default();
-                        return Ok(Expr::NativeMethodCall {
+                        return Ok(Expr::NativeMethodCall { byte_offset: new_expr.span.lo.0,
                             module: module_name,
                             class_name: None,
                             object: None,
@@ -765,7 +765,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 // client. Preserve that explicit return instead of letting
                 // generic `new` manufacture a blank ObjectHeader instance.
                 if module_name == "bun" && method_name == Some("SQL") {
-                    return Ok(Expr::NativeMethodCall {
+                    return Ok(Expr::NativeMethodCall { byte_offset: new_expr.span.lo.0,
                         module: "bun".to_string(),
                         class_name: None,
                         object: None,
@@ -783,7 +783,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     && matches!(method_name, Some("JSCallback") | Some("CFunction"))
                 {
                     let method = method_name.unwrap_or("JSCallback").to_string();
-                    return Ok(Expr::NativeMethodCall {
+                    return Ok(Expr::NativeMethodCall { byte_offset: new_expr.span.lo.0,
                         module: "bun:ffi".to_string(),
                         class_name: None,
                         object: None,
@@ -796,7 +796,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 {
                     let method = method_name.unwrap_or("Module").to_string();
                     let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
-                    return Ok(Expr::NativeMethodCall {
+                    return Ok(Expr::NativeMethodCall { byte_offset: new_expr.span.lo.0,
                         module: "module".to_string(),
                         class_name: None,
                         object: None,
@@ -1740,7 +1740,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     && callee_local_at_entry.is_none()
                     && ctx.lookup_local(&class_name).is_none()
                 {
-                    return Ok(Expr::NativeMethodCall {
+                    return Ok(Expr::NativeMethodCall { byte_offset: new_expr.span.lo.0,
                         module: "net".to_string(),
                         class_name: None,
                         object: None,

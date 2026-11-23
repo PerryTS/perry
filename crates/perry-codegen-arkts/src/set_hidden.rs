@@ -82,6 +82,7 @@ pub(crate) fn rewrite_set_hidden_in_expr(
         method,
         args,
         object: None,
+        byte_offset,
         ..
     } = e
     {
@@ -98,7 +99,7 @@ pub(crate) fn rewrite_set_hidden_in_expr(
                         Expr::Integer(n) => Expr::Bool(*n != 0),
                         other => other.clone(),
                     };
-                    *e = Expr::NativeMethodCall {
+                    *e = Expr::NativeMethodCall { byte_offset: *byte_offset,
                         module: "perry/arkts".to_string(),
                         class_name: None,
                         object: None,

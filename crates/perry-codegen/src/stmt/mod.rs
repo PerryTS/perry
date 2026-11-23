@@ -996,8 +996,9 @@ fn lower_stmt_inner(ctx: &mut FnCtx<'_>, stmt: &Stmt) -> Result<()> {
             body,
             catch,
             finally,
+            byte_offset,
             ..
-        } => lower_try(ctx, body, catch.as_ref(), finally.as_deref()),
+        } => lower_try(ctx, body, catch.as_ref(), finally.as_deref(), *byte_offset),
 
         // Issue #569: pre-allocate slot+box for hoisted FnDecl ids and any
         // function-body let/const captured by a hoisted closure. Each id

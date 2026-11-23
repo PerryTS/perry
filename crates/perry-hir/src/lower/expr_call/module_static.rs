@@ -94,7 +94,7 @@ pub(super) fn try_module_static_methods(
                             | "pathToFileURL"
                             | "fileURLToPath"
                     ) {
-                        return Ok(Ok(Expr::NativeMethodCall {
+                        return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                             module: "bun".to_string(),
                             class_name: None,
                             object: None,
@@ -104,7 +104,7 @@ pub(super) fn try_module_static_methods(
                     }
 
                     let mut sequence = args;
-                    sequence.push(Expr::NativeMethodCall {
+                    sequence.push(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                         module: "bun".to_string(),
                         class_name: None,
                         object: None,
@@ -531,7 +531,7 @@ pub(super) fn try_module_static_methods(
                             | "markResourceTiming"
                             | "timerify"
                     ) {
-                        return Ok(Ok(Expr::NativeMethodCall {
+                        return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                             module: "perf_hooks".to_string(),
                             class_name: None,
                             object: None,
@@ -569,7 +569,7 @@ pub(super) fn try_module_static_methods(
                             | "getEventListeners"
                             | "addAbortListener"
                     ) {
-                        return Ok(Ok(Expr::NativeMethodCall {
+                        return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                             module: "events".to_string(),
                             class_name: None,
                             object: None,
@@ -588,7 +588,7 @@ pub(super) fn try_module_static_methods(
                     match method_name {
                         "json" | "redirect" | "error" => {
                             ctx.uses_fetch = true;
-                            return Ok(Ok(Expr::NativeMethodCall {
+                            return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                                 module: "fetch".to_string(),
                                 class_name: Some("Response".to_string()),
                                 object: None,
@@ -707,7 +707,7 @@ pub(super) fn try_module_static_methods(
                 if let Some(method_name) = super::static_call_prop_name(&member.prop) {
                     if method_name == "isView" {
                         let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
-                        return Ok(Ok(Expr::NativeMethodCall {
+                        return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                             module: "util/types".to_string(),
                             class_name: None,
                             object: None,
@@ -736,7 +736,7 @@ pub(super) fn try_module_static_methods(
                         let mut it = args.into_iter();
                         let bits = it.next().unwrap_or(Expr::Undefined);
                         let value = it.next().unwrap_or(Expr::Undefined);
-                        return Ok(Ok(Expr::NativeMethodCall {
+                        return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                             module: "bigint".to_string(),
                             class_name: None,
                             object: None,
@@ -1010,7 +1010,7 @@ pub(super) fn try_module_static_methods(
                             return Ok(Ok(user_info_expr_for_call(call, args)));
                         }
                         "getPriority" | "setPriority" => {
-                            return Ok(Ok(Expr::NativeMethodCall {
+                            return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                                 module: "os".to_string(),
                                 class_name: None,
                                 object: None,
@@ -1074,7 +1074,7 @@ pub(super) fn try_module_static_methods(
                             ))));
                         }
                         "allocUnsafeSlow" => {
-                            return Ok(Ok(Expr::NativeMethodCall {
+                            return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                                 module: "buffer".to_string(),
                                 class_name: None,
                                 object: None,
@@ -1094,7 +1094,7 @@ pub(super) fn try_module_static_methods(
                             return Ok(Ok(Expr::BufferConcat(Box::new(list))));
                         }
                         "copyBytesFrom" => {
-                            return Ok(Ok(Expr::NativeMethodCall {
+                            return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                                 module: "buffer".to_string(),
                                 class_name: None,
                                 object: None,
@@ -1162,7 +1162,7 @@ pub(super) fn try_module_static_methods(
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     let method_name = method_ident.sym.as_ref();
                     if matches!(method_name, "fromBase64" | "fromHex") {
-                        return Ok(Ok(Expr::NativeMethodCall {
+                        return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                             module: "buffer".to_string(),
                             class_name: None,
                             object: None,
@@ -1432,7 +1432,7 @@ pub(super) fn try_module_static_methods(
                     // `NativeMethodCall { module: "url" }` so the
                     // native dispatch table picks them up.
                     if method_name == "createObjectURL" {
-                        return Ok(Ok(Expr::NativeMethodCall {
+                        return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                             module: "url".to_string(),
                             class_name: None,
                             object: None,
@@ -1441,7 +1441,7 @@ pub(super) fn try_module_static_methods(
                         }));
                     }
                     if method_name == "revokeObjectURL" {
-                        return Ok(Ok(Expr::NativeMethodCall {
+                        return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                             module: "url".to_string(),
                             class_name: None,
                             object: None,

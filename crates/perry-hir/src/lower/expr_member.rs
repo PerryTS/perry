@@ -274,8 +274,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "main" => Expr::Bool(ctx.is_entry_module),
                     "dirname" => Expr::String(dirname),
                     "filename" => Expr::String(filename),
-                    "require" => super::expr_misc::import_meta_require_value(ctx),
-                    "resolve" => super::expr_misc::import_meta_resolve_value(ctx),
+                    "require" => super::expr_misc::import_meta_require_value(ctx, member.span.lo.0),
+                    "resolve" => super::expr_misc::import_meta_resolve_value(ctx, member.span.lo.0),
                     // Unknown property — undefined matches the spec'd
                     // "missing property on a frozen object" behavior of
                     // import.meta in Node / Bun.
@@ -478,7 +478,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // holds and toggles are observable. Lower to a 0-arg
                     // native getter that reads the runtime flag.
                     "sourceMapsEnabled" => {
-                        return Ok(Expr::NativeMethodCall {
+                        return Ok(Expr::NativeMethodCall { byte_offset: member.span.lo.0,
                             module: "process".to_string(),
                             class_name: None,
                             object: None,
@@ -658,7 +658,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "features" => return Ok(process_features_literal()),
                     // #3108: live boolean toggle — see the matching arm above.
                     "sourceMapsEnabled" => {
-                        return Ok(Expr::NativeMethodCall {
+                        return Ok(Expr::NativeMethodCall { byte_offset: member.span.lo.0,
                             module: "process".to_string(),
                             class_name: None,
                             object: None,
@@ -1748,7 +1748,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // For properties that map to FFI functions, generate a NativeMethodCall
                     // with no args (property getter)
                     let object_expr = lower_expr(ctx, &member.obj)?;
-                    return Ok(Expr::NativeMethodCall {
+                    return Ok(Expr::NativeMethodCall { byte_offset: member.span.lo.0,
                         module: module_name,
                         class_name: class_filter,
                         object: Some(Box::new(object_expr)),

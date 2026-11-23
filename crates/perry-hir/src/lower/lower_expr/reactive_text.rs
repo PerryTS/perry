@@ -111,7 +111,7 @@ pub(crate) fn try_desugar_reactive_text(
     let widget_id = ctx.define_local("__perry_reactive_text_h".to_string(), Type::Any);
 
     let initial_concat = lower_tpl_to_concat(ctx, tpl)?;
-    let text_call = Expr::NativeMethodCall {
+    let text_call = Expr::NativeMethodCall { byte_offset: call.span.lo.0,
         module: "perry/ui".to_string(),
         method: "Text".to_string(),
         object: None,
@@ -150,7 +150,7 @@ pub(crate) fn try_desugar_reactive_text(
             arguments_object: None,
         };
         let fresh_concat = lower_tpl_to_concat(ctx, tpl)?;
-        let set_text_call = Expr::NativeMethodCall {
+        let set_text_call = Expr::NativeMethodCall { byte_offset: call.span.lo.0,
             module: "perry/ui".to_string(),
             method: "textSetString".to_string(),
             object: None,
@@ -190,7 +190,7 @@ pub(crate) fn try_desugar_reactive_text(
             is_strict: ctx.current_strict,
         };
 
-        outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
+        outer_body.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
             module: "perry/ui".to_string(),
             method: "stateOnChange".to_string(),
             object: None,

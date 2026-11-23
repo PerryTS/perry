@@ -262,12 +262,14 @@ pub(super) fn lower(f: &mut Function, controls: (Vec<LocalId>, Vec<LocalId>)) {
         captures_this: false,
         captures_new_target: false,
         construct_only: false,
+        byte_offset,
         enclosing_class: None,
         ..
     } = closure
     else {
         return;
     };
+    let frame_offset = *byte_offset;
     if captures.iter().any(|id| !declared.contains(id)) {
         return;
     }
@@ -287,7 +289,7 @@ pub(super) fn lower(f: &mut Function, controls: (Vec<LocalId>, Vec<LocalId>)) {
         releases(body, &slots);
     }
     let owner = std::mem::replace(closure, Expr::Undefined);
-    *closure = Expr::NativeMethodCall {
+    *closure = Expr::NativeMethodCall { byte_offset: frame_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
