@@ -31,10 +31,9 @@ fn settle_string(promise: JsPromise, outcome: pool::Outcome<Result<String, Strin
     }
 }
 
-/// `bcrypt.hash(password, saltRounds) -> Promise<string>` — hash a
-/// password with the requested cost factor. Spawns the actual
-/// hashing onto Perry's shared blocking pool so the main thread
-/// stays responsive.
+/// `bcrypt.hash(password, saltOrRounds) -> Promise<string>`, with the same
+/// argument handling as [`js_bcrypt_hash_sync`]. The hashing runs on Perry's
+/// shared blocking pool so the main thread stays responsive.
 ///
 /// # Safety
 ///
@@ -43,7 +42,7 @@ fn settle_string(promise: JsPromise, outcome: pool::Outcome<Result<String, Strin
 #[no_mangle]
 pub unsafe extern "C" fn js_bcrypt_hash(
     password_ptr: *const StringHeader,
-    salt_rounds: f64,
+    salt_or_rounds: i64,
 ) -> *mut Promise {
     let promise = JsPromise::new();
     let raw = promise.as_raw();
@@ -54,9 +53,12 @@ pub unsafe extern "C" fn js_bcrypt_hash(
         return raw;
     };
 
-    let cost = salt_rounds as u32;
+    let Some(salt_or_rounds) = SaltOrRounds::read(salt_or_rounds) else {
+        promise.reject_string("data and salt arguments required");
+        return raw;
+    };
     pool::submit_or_run_inline(
-        move || bcrypt::hash(&password, cost).map_err(|e| format!("Bcrypt error: {}", e)),
+        move || salt_or_rounds.hash(&password).ok_or_else(|| "Invalid salt".to_string()),
         move |outcome| settle_string(promise, outcome, "bcrypt.hash"),
     );
     raw
@@ -135,6 +137,34 @@ fn hash_with_salt_string(password: &str, salt: &str) -> Option<String> {
         .map(|hash| hash.format_for_version(version))
 }
 
+/// A `hash`/`hashSync` second argument: a salt string, or a cost that gets a
+/// fresh salt.
+enum SaltOrRounds {
+    Salt(String),
+    Rounds(u32),
+}
+
+impl SaltOrRounds {
+    /// Reads the argument's NaN-boxed bits (`NA_JSV`); `None` for any other type.
+    fn read(bits: i64) -> Option<Self> {
+        let value = JsValue::from_bits(bits as u64);
+        if value.is_any_string() {
+            value.to_owned_string().map(Self::Salt)
+        } else if value.is_number() {
+            Some(Self::Rounds(rounds_or_default(value.to_number())))
+        } else {
+            None
+        }
+    }
+
+    fn hash(&self, password: &str) -> Option<String> {
+        match self {
+            Self::Salt(salt) => hash_with_salt_string(password, salt),
+            Self::Rounds(cost) => bcrypt::hash(password, *cost).ok(),
+        }
+    }
+}
+
 /// `bcrypt.genSalt(rounds?) -> Promise<string>`.
 #[no_mangle]
 pub extern "C" fn js_bcrypt_gen_salt(rounds: f64) -> *mut Promise {
@@ -176,17 +206,7 @@ pub unsafe extern "C" fn js_bcrypt_hash_sync(
     let Some(password) = read_string(handle) else {
         return std::ptr::null_mut();
     };
-    let salt_or_rounds = JsValue::from_bits(salt_or_rounds as u64);
-    let hash = if salt_or_rounds.is_any_string() {
-        salt_or_rounds
-            .to_owned_string()
-            .and_then(|salt| hash_with_salt_string(password, &salt))
-    } else if salt_or_rounds.is_number() {
-        bcrypt::hash(password, rounds_or_default(salt_or_rounds.to_number())).ok()
-    } else {
-        None
-    };
-    match hash {
+    match SaltOrRounds::read(salt_or_rounds).and_then(|arg| arg.hash(password)) {
         Some(hash) => alloc_string(&hash).as_raw(),
         None => std::ptr::null_mut(),
     }
