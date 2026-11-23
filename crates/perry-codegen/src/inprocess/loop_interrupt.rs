@@ -129,7 +129,24 @@ pub(super) fn place(module: &Module<'_>, tm: &TargetMachine) -> Result<()> {
         // Every use was inlined; the definition itself is dead.
         unsafe { function.delete() };
     }
+    require_unwind_tables(module);
     Ok(())
+}
+
+/// `js_loop_interrupt` unwinds from the poll to the worker's base trap, so
+/// every frame between them needs an unwind table entry. The optimizer has
+/// already marked call-free bodies `nounwind`, and LLVM emits no ELF FDE for
+/// a `nounwind` function without `uwtable` (#14788). Every defined body gets
+/// it, not only polled ones, because the frames above a poll are walked too.
+fn require_unwind_tables(module: &Module<'_>) {
+    let kind = inkwell::attributes::Attribute::get_named_enum_kind_id("uwtable");
+    // 1 = synchronous tables, matching `-Z use-sync-unwind` on the runtime.
+    let uwtable = module.get_context().create_enum_attribute(kind, 1);
+    for function in module.get_functions() {
+        if function.count_basic_blocks() != 0 {
+            function.add_attribute(inkwell::attributes::AttributeLoc::Function, uwtable);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -232,6 +249,24 @@ entry:
             !body(&ir, "straight").contains("PERRY_LOOP_INTERRUPT_ARMED"),
             "no entry polls:\n{ir}"
         );
+    }
+
+    #[test]
+    fn a_polled_module_has_unwind_tables_on_every_body() {
+        let ir = polled(SPIN);
+        for name in ["spin", "straight"] {
+            let start = ir.find(&format!("@{name}(")).unwrap();
+            let header = &ir[start..start + ir[start..].find('{').unwrap()];
+            let group = header
+                .split_whitespace()
+                .find(|word| word.starts_with('#'))
+                .unwrap_or_else(|| panic!("{name} has no attribute group:\n{ir}"));
+            let attrs = ir
+                .lines()
+                .find(|line| line.starts_with(&format!("attributes {group} =")))
+                .unwrap();
+            assert!(attrs.contains("uwtable"), "{name}: {attrs}\n{ir}");
+        }
     }
 
     #[test]
