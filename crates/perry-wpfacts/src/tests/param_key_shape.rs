@@ -21,6 +21,7 @@ use super::*;
 fn program(decls: &str, calls: &str) -> String {
     format!(
         r#"
+        declare function external(x?: unknown): any;
         class V {{ k = 1; len() {{ return this.k; }} }}
         const obj = new V();
         const plain: any = {{ x: 1 }};
@@ -115,7 +116,7 @@ fn a_call_passing_an_unknown_string_gives_the_prototype() {
 #[test]
 fn an_escaped_function_has_no_parameter_shape() {
     let p = program(
-        "(globalThis as any).hook = setCached;",
+        "external(setCached);",
         "setCached(got, \"iterB\", cached);",
     );
     assert!(!len_proven(&unseen(&p)));
