@@ -12,6 +12,7 @@ use std::ffi::c_void;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use super::register_widget;
+use perry_ui::canvas_font::{parse_canvas_font, CanvasFont};
 
 /// Drawing commands stored in command buffer.
 #[derive(Clone)]
@@ -43,6 +44,18 @@ enum DrawCommand {
         w: f64,
         h: f64,
     },
+    SetFillColor {
+        r: f64,
+        g: f64,
+        b: f64,
+        a: f64,
+    },
+    SetFont(CanvasFont),
+    FillText {
+        text: String,
+        x: f64,
+        y: f64,
+    },
     DrawImage {
         image: i64,
         sx: f64,
@@ -64,6 +77,7 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
                 | DrawCommand::FillGradient { .. }
                 | DrawCommand::DrawImage { .. }
                 | DrawCommand::ClearRect { .. }
+                | DrawCommand::FillText { .. }
         )
     })
 }
@@ -169,6 +183,8 @@ pub fn create(width: f64, height: f64) -> i64 {
         if let Some(commands) = commands {
             // Track current path points for gradient fill
             let mut path_points: Vec<(f64, f64)> = Vec::new();
+            let mut cur_fill = (0.0, 0.0, 0.0, 1.0);
+            let mut cur_font = CanvasFont::default();
 
             for cmd in commands.iter() {
                 match cmd {
@@ -248,6 +264,39 @@ pub fn create(width: f64, height: f64) -> i64 {
 
                             cr.restore().ok();
                         }
+                    }
+                    DrawCommand::SetFillColor { r, g, b, a } => {
+                        cur_fill = (*r, *g, *b, *a);
+                    }
+                    DrawCommand::SetFont(font) => {
+                        cur_font = font.clone();
+                    }
+                    DrawCommand::FillText { text, x, y } => {
+                        cr.save().ok();
+                        cr.set_source_rgba(cur_fill.0, cur_fill.1, cur_fill.2, cur_fill.3);
+                        // Cairo's toy API takes one family; fontconfig substitutes a missing one.
+                        let family = match cur_font.families[0].to_ascii_lowercase().as_str() {
+                            "system-ui" => "sans-serif".to_string(),
+                            _ => cur_font.families[0].clone(),
+                        };
+                        cr.select_font_face(
+                            &family,
+                            if cur_font.italic {
+                                gtk4::cairo::FontSlant::Italic
+                            } else {
+                                gtk4::cairo::FontSlant::Normal
+                            },
+                            if cur_font.bold {
+                                gtk4::cairo::FontWeight::Bold
+                            } else {
+                                gtk4::cairo::FontWeight::Normal
+                            },
+                        );
+                        cr.set_font_size(cur_font.size);
+                        // show_text starts at the current point, on the alphabetic baseline.
+                        cr.move_to(*x, *y);
+                        cr.show_text(text).ok();
+                        cr.restore().ok();
                     }
                     DrawCommand::ClearRect { x, y, w, h } => {
                         cr.save().ok();
@@ -390,6 +439,39 @@ pub fn clear_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
             commands.push(DrawCommand::ClearRect { x, y, w, h });
         }
     });
+    if let Some(widget) = super::get_widget(handle) {
+        if let Some(area) = widget.downcast_ref::<DrawingArea>() {
+            area.queue_draw();
+        }
+    }
+}
+
+fn push_cmd(handle: i64, cmd: DrawCommand) {
+    CANVAS_COMMANDS.with(|cmds| {
+        if let Some(commands) = cmds.borrow_mut().get_mut(&handle) {
+            commands.push(cmd);
+        }
+    });
+}
+
+pub fn set_fill_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    push_cmd(handle, DrawCommand::SetFillColor { r, g, b, a });
+}
+
+/// An invalid font spec keeps the previous font, as HTML canvas does.
+pub fn set_font(handle: i64, spec_ptr: *const u8) {
+    let spec = unsafe { crate::widgets::image::str_from_header(spec_ptr) };
+    if let Some(font) = parse_canvas_font(&spec) {
+        push_cmd(handle, DrawCommand::SetFont(font));
+    }
+}
+
+pub fn fill_text(handle: i64, text_ptr: *const u8, x: f64, y: f64) {
+    if !(x.is_finite() && y.is_finite()) {
+        return;
+    }
+    let text = unsafe { crate::widgets::image::str_from_header(text_ptr) };
+    push_cmd(handle, DrawCommand::FillText { text, x, y });
     if let Some(widget) = super::get_widget(handle) {
         if let Some(area) = widget.downcast_ref::<DrawingArea>() {
             area.queue_draw();

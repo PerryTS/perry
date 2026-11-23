@@ -101,9 +101,13 @@ pub extern "C" fn perry_ui_canvas_stroke_path(h: i64) {
     widgets::canvas::stroke_path(h);
 }
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_fill_text(_h: i64, _ptr: i64, _x: f64, _y: f64) {}
+pub extern "C" fn perry_ui_canvas_fill_text(h: i64, ptr: i64, x: f64, y: f64) {
+    widgets::canvas::fill_text(h, ptr as *const u8, x, y);
+}
 #[no_mangle]
-pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
+pub extern "C" fn perry_ui_canvas_set_font(h: i64, ptr: i64) {
+    widgets::canvas::set_font(h, ptr as *const u8);
+}
 
 // =============================================================================
 // Picker

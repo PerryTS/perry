@@ -4,6 +4,7 @@ use crate::jni_bridge;
 use crate::jni_bridge::GlobalRef;
 use jni::objects::JObject;
 use jni::JValue;
+use perry_ui::canvas_font::{parse_canvas_font, CanvasFont};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicI64, Ordering};
@@ -41,6 +42,9 @@ pub enum DrawCmd {
     Arc(f32, f32, f32, f32, f32), // cx, cy, r, start_rad, end_rad
     FillPath,
     StrokePath,
+    /// Sizes stay in CSS pixels; replay scales them by the density.
+    SetFont(CanvasFont),
+    FillText(String, f32, f32),
 }
 
 /// Path segment recorded during replay for the stateful fill()/stroke().
@@ -109,6 +113,7 @@ fn command_batch_renders(commands: &[DrawCmd]) -> bool {
                 | DrawCmd::FillPath
                 | DrawCmd::StrokePath
                 | DrawCmd::DrawImage { .. }
+                | DrawCmd::FillText(..)
         )
     })
 }
@@ -405,6 +410,44 @@ fn build_path<'local>(env: &mut jni::Env<'local>, segs: &[PathSeg]) -> Option<JO
     Some(path)
 }
 
+fn create_typeface<'local>(
+    env: &mut jni::Env<'local>,
+    family: &JObject,
+    style: i32,
+) -> Option<JObject<'local>> {
+    env.call_static_method(
+        jni::jni_str!("android/graphics/Typeface"),
+        jni::jni_str!("create"),
+        jni::jni_sig!("(Ljava/lang/String;I)Landroid/graphics/Typeface;"),
+        &[JValue::Object(family), JValue::Int(style)],
+    )
+    .ok()?
+    .l()
+    .ok()
+}
+
+/// The first family Android has, generics included, else the default typeface.
+fn typeface<'local>(env: &mut jni::Env<'local>, font: &CanvasFont) -> Option<JObject<'local>> {
+    // Typeface.NORMAL = 0, BOLD = 1, ITALIC = 2, BOLD_ITALIC = 3.
+    let style = font.bold as i32 | (font.italic as i32) << 1;
+    // An unknown family resolves to the same cached object as the default typeface.
+    let fallback = create_typeface(env, &JObject::null(), style)?;
+    for family in &font.families {
+        let lower = family.to_ascii_lowercase();
+        let (name, generic) = match lower.as_str() {
+            "sans-serif" | "system-ui" => ("sans-serif", true),
+            "serif" | "monospace" => (lower.as_str(), true),
+            _ => (family.as_str(), false),
+        };
+        let jname = env.new_string(name).ok()?;
+        let typeface = create_typeface(env, &jname, style)?;
+        if generic || !env.is_same_object(&typeface, &fallback).unwrap_or(true) {
+            return Some(typeface);
+        }
+    }
+    Some(fallback)
+}
+
 fn repaint(handle: i64) {
     let cmds = {
         let mut states = CANVAS_STATES.lock().unwrap();
@@ -416,11 +459,11 @@ fn repaint(handle: i64) {
                 st.last_cmds = cmds.clone();
                 cmds
             };
-            (st.width, st.height, cmds)
+            (st.width, st.height, st.density, cmds)
         })
     };
 
-    if let Some((w, h, cmds)) = cmds {
+    if let Some((w, h, density, cmds)) = cmds {
         if let Some(view_ref) = super::get_widget(handle) {
             jni_bridge::with_env(|env| {
                 let _ = jni_bridge::push_local_frame(env, 64);
@@ -485,6 +528,7 @@ fn repaint(handle: i64) {
                 let mut cur_fill: i32 = 0xFF00_0000u32 as i32;
                 let mut cur_stroke: i32 = 0xFF00_0000u32 as i32;
                 let mut cur_width: f32 = 1.0;
+                let mut cur_font = CanvasFont::default();
 
                 for cmd in &cmds {
                     match cmd {
@@ -554,6 +598,46 @@ fn repaint(handle: i64) {
                             segs.push(PathSeg::Line(*x, *y));
                         }
                         DrawCmd::SetFillColor(c) => cur_fill = *c,
+                        DrawCmd::SetFont(font) => cur_font = font.clone(),
+                        DrawCmd::FillText(text, x, y) => {
+                            let _ = jni_bridge::push_local_frame(env, 16);
+                            paint_set_color_width(env, &paint, cur_fill, cur_width);
+                            paint_set_style(env, &paint, true);
+                            let _ = env.call_method(
+                                &paint,
+                                jni::jni_str!("setTextSize"),
+                                jni::jni_sig!("(F)V"),
+                                &[JValue::Float(cur_font.size as f32 * density)],
+                            );
+                            if let Some(typeface) = typeface(env, &cur_font) {
+                                let _ = env.call_method(
+                                    &paint,
+                                    jni::jni_str!("setTypeface"),
+                                    jni::jni_sig!(
+                                        "(Landroid/graphics/Typeface;)Landroid/graphics/Typeface;"
+                                    ),
+                                    &[JValue::Object(&typeface)],
+                                );
+                            }
+                            if let Ok(jtext) = env.new_string(text) {
+                                let _ = env.call_method(
+                                    &canvas,
+                                    jni::jni_str!("drawText"),
+                                    jni::jni_sig!(
+                                        "(Ljava/lang/String;FFLandroid/graphics/Paint;)V"
+                                    ),
+                                    &[
+                                        JValue::Object(&jtext),
+                                        JValue::Float(*x),
+                                        JValue::Float(*y),
+                                        JValue::Object(&paint),
+                                    ],
+                                );
+                            }
+                            unsafe {
+                                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+                            }
+                        }
                         DrawCmd::SetStrokeColor(c) => cur_stroke = *c,
                         DrawCmd::SetLineWidth(w) => cur_width = *w,
                         DrawCmd::ClosePath => segs.push(PathSeg::Close),
@@ -1183,4 +1267,24 @@ pub fn fill(handle: i64) {
 
 pub fn stroke_path(handle: i64) {
     push_cmd(handle, |_| DrawCmd::StrokePath, true);
+}
+
+/// An invalid font spec keeps the previous font, as HTML canvas does.
+pub fn set_font(handle: i64, spec_ptr: *const u8) {
+    let spec = unsafe { crate::app::str_from_header(spec_ptr) };
+    if let Some(font) = parse_canvas_font(&spec) {
+        push_cmd(handle, |_| DrawCmd::SetFont(font), false);
+    }
+}
+
+pub fn fill_text(handle: i64, text_ptr: *const u8, x: f64, y: f64) {
+    if !(x.is_finite() && y.is_finite()) {
+        return;
+    }
+    let text = unsafe { crate::app::str_from_header(text_ptr) };
+    push_cmd(
+        handle,
+        |d| DrawCmd::FillText(text, x as f32 * d, y as f32 * d),
+        true,
+    );
 }

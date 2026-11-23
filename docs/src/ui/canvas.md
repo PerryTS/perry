@@ -80,8 +80,10 @@ Windows and the web backend fill the whole canvas.
 | Android | Canvas/Bitmap | Partial infrastructure; stateful API incomplete |
 
 The native parity matrix currently marks `setFillColor`, `setStrokeColor`,
-`setLineWidth`, `fillRect`, `strokeRect`, `arc`, `closePath`, `fill`,
-stateful `stroke`, `setFont`, and `fillText` unsupported. `Canvas()` creation,
+`setLineWidth`, `fillRect`, `strokeRect`, `arc`, `closePath`, `fill`, and
+stateful `stroke` unsupported. `setFont` and `fillText` draw text natively on
+macOS, iOS, tvOS, visionOS, Android, Linux and Windows, in the current fill
+color with `y` on the alphabetic baseline; watchOS ignores them. `Canvas()` creation,
 clear/begin/move/line primitives, the lower-level colored stroke and gradient
 entries, and image drawing have native implementations, but that lower-level
 surface does not make the HTML-style examples above fully functional.
