@@ -202,11 +202,11 @@ impl Model {
             forwarded: false,
             ret_param: None,
         });
-        let r = self.writer_reason("passed to an unknown function");
+        let r = self.reason("passed to an unknown function");
         self.sink_node(args_all, r);
         self.add_top(ret, |_| "result of an unknown function".to_string());
         self.add_prim(ret, prim::ALL);
-        let rt = self.writer_reason("receiver of a call of an unknown function value");
+        let rt = self.reason("receiver of a call of an unknown function value");
         self.cons(
             this,
             Cons::OverrideThis {

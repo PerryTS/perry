@@ -3185,7 +3185,9 @@ fn host_call(
 /// under any key of the stream ends this (`host_call`'s `STAR_KEY` gate).
 fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
     let c = m.calls[call as usize].clone();
-    let r = m.reason(&format!(
+    // The stream's contract: it keeps the chunk and the callback, and the
+    // program reads them back; no one writes them under any key.
+    let r = m.contract_reason(&format!(
         "argument of host {h:?}.write (kept by the stream)"
     ));
     for &a in c.args.iter().chain(c.spread.iter()) {

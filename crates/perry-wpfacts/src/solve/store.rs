@@ -776,7 +776,7 @@ impl Model {
             if self.rooted_store(t, key, src, site) {
                 return;
             }
-            let r = self.writer_reason("stored into a value from unmodeled code");
+            let r = self.reason("stored into a value from unmodeled code");
             // `hold_ledger`: what the store sinks belongs to the receiver's
             // ⊤ root, not to a root of its own.
             let origin = match self.ledger {

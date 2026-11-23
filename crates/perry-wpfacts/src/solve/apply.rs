@@ -1319,7 +1319,7 @@ impl Model {
                             d.store_top.entry(src).or_insert(pn);
                         }
                     }
-                    let r = self.writer_reason("store through an unknown prototype chain");
+                    let r = self.reason("store through an unknown prototype chain");
                     self.sink_node(src, r);
                     self.escape(origin, r);
                 }
@@ -1584,7 +1584,7 @@ impl Model {
                         // value stored there is (`store_into`): every read
                         // of the key there, by compiled code or by the
                         // runtime, may call it with any receiver.
-                        let r = self.writer_reason("accessor installed on a value from unmodeled code");
+                        let r = self.reason("accessor installed on a value from unmodeled code");
                         self.escape(f, r);
                         continue;
                     }

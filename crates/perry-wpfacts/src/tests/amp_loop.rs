@@ -187,3 +187,31 @@ fn k2d_keep_top_callee_changes_the_layout() {
     let v = site_after(&src, "/*A*/", "m", false);
     assert!(v.starts_with("No("), "a ⊤ callee's argument kept o's layout: {v}");
 }
+
+/// K2 keep: only an escape a builtin contract states keeps the layout
+/// (`Model::contract_reason`). `instanceof` with an unknown right-hand side
+/// hands the value to that ⊤'s `Symbol.hasInstance`: code the analysis
+/// does not model, so the layout is open.
+#[test]
+fn k2d_keep_an_escape_no_contract_states_changes_the_layout() {
+    let src = format!("{DECL}{OBJ}const F: any = get();
+console.log(o instanceof F);
+const x = /*A*/ o.m;
+console.log(x);
+");
+    let v = site_after(&src, "/*A*/", "m", false);
+    assert!(v.starts_with("No("), "an unknown Symbol.hasInstance kept o's layout: {v}");
+}
+
+/// Own data or absent of a `JSON.parse` object (`own_data_or_absent_why`'s
+/// escape check; a JSON value is no contracted token, so every escape of it
+/// is writer level): handed to a ⊤ callee, that code may define an accessor
+/// under the key, so the read is not proven.
+#[test]
+fn k2d_keep_a_json_object_given_to_a_top_callee_is_not_own_data() {
+    let src = format!(
+        "{DECL}const j: any = JSON.parse(\"{{\\\"n\\\": 1}}\");\nconst f = get();\nf(j);\nconst x = /*A*/ j.n;\nconsole.log(x);\n"
+    );
+    let v = site_after(&src, "/*A*/", "n", false);
+    assert!(v.starts_with("No("), "a ⊤ callee's JSON argument kept own data: {v}");
+}

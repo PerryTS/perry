@@ -370,22 +370,24 @@ impl Model {
         self.unit_mode || self.unseen_module_runs || self.interp_runs
     }
 
-    /// An escape reason whose holder is code the analysis does not model
-    /// and no builtin contract describes: a ⊤ or opaque callee, `new` of
-    /// one, a store, spread or accessor into ⊤ or through an unknown chain,
-    /// an unmodeled construct or runtime entry. What it is handed may be
-    /// written under any key (until AMP-RESOLVE resolves those callees and
-    /// receivers to their candidates).
-    pub fn writer_reason(&mut self, s: &str) -> u32 {
+    /// An escape reason a builtin contract states: the builtin that holds
+    /// the value acts on it only as its declaration says (owner premise
+    /// Phase B, 2026-11-23), and the solve models those acts. Every other
+    /// escape hands the value to code the analysis does not model (a ⊤ or
+    /// opaque callee, an unknown setter or getter, `instanceof` with an
+    /// unknown right-hand side, a Proxy handler, code no declaration
+    /// describes, ...): what it is handed may be written under any key.
+    pub fn contract_reason(&mut self, s: &str) -> u32 {
         let r = self.reason(s);
-        self.writer_reasons.insert(r);
+        self.contract_reasons.insert(r);
         r
     }
 
     /// Does an escape with `reason` hand the value to code that may write
-    /// it beyond a contract? Every escape does beside foreign code.
+    /// it beyond a contract? Every escape whose reason no builtin contract
+    /// states (`contract_reason`) does, and every escape beside foreign code.
     pub(crate) fn writes_any(&self, reason: u32) -> bool {
-        self.foreign_code() || self.writer_reasons.contains(&reason)
+        self.foreign_code() || !self.contract_reasons.contains(&reason)
     }
 
     /// `t` escaped to code that may write it under any key.

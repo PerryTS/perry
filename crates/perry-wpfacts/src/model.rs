@@ -2397,9 +2397,9 @@ pub struct Model {
     /// The nodes sunk with a writer reason (`Model::writes_any`): a node
     /// sunk with a contract reason first is sunk again at that level.
     pub sunk_writer_nodes: crate::pts::FxHashSet<NodeId>,
-    /// The escape reasons whose holder may write a handed value beyond any
-    /// builtin contract (`Model::writer_reason`).
-    pub writer_reasons: crate::pts::FxHashSet<u32>,
+    /// The escape reasons a builtin contract states (`Model::contract_reason`):
+    /// their holder writes a handed value only as that contract says.
+    pub contract_reasons: crate::pts::FxHashSet<u32>,
     /// The escaped tokens such code holds (`escaped_beside_top`): unknown
     /// code may write any key of them, so beside ⊤ they are that ⊤.
     pub esc_writer_bits: Vec<u64>,
