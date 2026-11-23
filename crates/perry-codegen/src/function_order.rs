@@ -72,6 +72,18 @@ pub const JS_FN_SECTION_PREFIX: &str = "perry_js_text.fn.";
 /// two small functions every two-phase program runs once, in the 64 KiB
 /// window the end of the JS text (the entry's `main`) maps anyway. An output
 /// section with no input (the program links none of it) is not emitted.
+/// The `INSERT` that closes a GNU ld rule defining `.text` itself: after the
+/// output section the default script puts right in front of `.text`
+/// (`.plt.sec` on x86-64, `.plt` on AArch64). Binutils 2.35, the glibc 2.31
+/// release builders' linker, rejects `INSERT BEFORE .text` from a script that
+/// defines `.text` ("`.text` not found for insert"); newer releases lay both
+/// forms out identically.
+pub const GNU_TEXT_INSERT: &str = if cfg!(target_arch = "x86_64") {
+    "} INSERT AFTER .plt.sec;\n"
+} else {
+    "} INSERT AFTER .plt;\n"
+};
+
 pub const JS_TEXT_LINK_RULE: &str =
     "SECTIONS {\n perry_js_text : ALIGN(16) {\n  *(perry_js_text perry_js_text.fn.*)\n }\n .perry_tail : ALIGN(16) {\n  *(.perry_tail_head.*)\n  *(.perry_tail .perry_tail.*)\n }\n} INSERT AFTER .text;\n";
 
@@ -159,8 +171,9 @@ impl FunctionOrder {
             ));
         }
         out.push_str(
-            "  __perry_hot_text_end = .;\n  __perry_hot_text_limit = __perry_hot_text_end;\n  *(.text.unlikely .text.*_unlikely .text.unlikely.*)\n  *(.text.exit .text.exit.*)\n  *(.text.startup .text.startup.*)\n  *(.text.hot .text.hot.*)\n  *(SORT(.text.sorted.*))\n  *(.text .stub .text.* .gnu.linkonce.t.*)\n }\n} INSERT BEFORE .text;\n",
+            "  __perry_hot_text_end = .;\n  __perry_hot_text_limit = __perry_hot_text_end;\n  *(.text.unlikely .text.*_unlikely .text.unlikely.*)\n  *(.text.exit .text.exit.*)\n  *(.text.startup .text.startup.*)\n  *(.text.hot .text.hot.*)\n  *(SORT(.text.sorted.*))\n  *(.text .stub .text.* .gnu.linkonce.t.*)\n }\n",
         );
+        out.push_str(GNU_TEXT_INSERT);
         // The JS text section: its ranked functions first (the JS hot run,
         // backed like the runtime's), then the rest. A C-identifier output
         // section name, so the linker defines `__start_`/`__stop_perry_js_text`
