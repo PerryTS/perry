@@ -142,29 +142,45 @@ pub(super) fn lower<T: Sync>(
                 std::thread::Builder::new()
                     .name(format!("perry-lower-{}", handles.len()))
                     .stack_size(64 * 1024 * 1024)
-                    .spawn_scoped(scope, move || -> Result<_> {
+                    .spawn_scoped(scope, move || {
                         state.install();
                         let mut module = input.module();
                         let mut strings = pool.pool();
                         for item in chunk {
-                            lower(&mut module, &mut strings, item)?;
+                            if let Err(e) = lower(&mut module, &mut strings, item) {
+                                // The module fails either way; its unknown perry/ui calls
+                                // still belong in the one combined diagnostic.
+                                return Err((e, crate::unknown_ui_calls::take_callable()));
+                            }
                         }
                         Ok((module.into_callable_output(), strings, Effects::take()))
                     })?,
             ));
         }
         let mut done = 0;
+        let mut failed = None;
+        // Every worker is joined so each one's unknown perry/ui calls reach the
+        // module even after another worker failed.
         for (len, handle) in handles {
-            let (output, pool, effects) = handle
+            match handle
                 .join()
-                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))?;
-            let symbols = strings.merge_callable(pool);
-            module.merge_callable(output, &input, symbols);
-            effects.merge();
-            done += len;
-            progress(done);
+                .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
+            {
+                Ok((output, pool, effects)) if failed.is_none() => {
+                    let symbols = strings.merge_callable(pool);
+                    module.merge_callable(output, &input, symbols);
+                    effects.merge();
+                    done += len;
+                    progress(done);
+                }
+                Ok((_, _, effects)) => crate::unknown_ui_calls::merge_callable(effects.unknown_ui),
+                Err((e, unknown)) => {
+                    crate::unknown_ui_calls::merge_callable(unknown);
+                    failed.get_or_insert(e);
+                }
+            }
         }
-        Ok(())
+        failed.map_or(Ok(()), Err)
     })
 }
 
