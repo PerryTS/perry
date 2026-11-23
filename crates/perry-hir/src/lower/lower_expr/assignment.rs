@@ -17,7 +17,7 @@ pub(crate) fn lower_expr_assignment(
         // shared helper, so the `const`-immutability check can't be bypassed by
         // writing `(c as any) = 9` instead of `c = 9`.
         ast::Expr::Ident(ident) => {
-            crate::lower::expr_assign::lower_ident_assignment(ctx, ident.sym.to_string(), value)
+            crate::lower::expr_assign::lower_ident_assignment(ctx, ident.sym.to_string(), value, byte_offset)
         }
         ast::Expr::Member(member) => {
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
@@ -114,7 +114,7 @@ pub(crate) fn lower_expr_assignment(
                         object,
                         property,
                         value,
-                        byte_offset: 0,
+                        byte_offset,
                         byte_end: 0,
                     }
                 }
