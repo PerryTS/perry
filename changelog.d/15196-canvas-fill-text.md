@@ -1,0 +1,1 @@
+`canvas.setFont(spec)` and `canvas.fillText(text, x, y)` draw text on macOS, iOS, tvOS, visionOS, Android, GTK4 and Windows instead of doing nothing. `setFont` reads the CSS `font` shorthand with `px` or `pt` sizes (default `10px sans-serif`); any other spec leaves the font unchanged. The text uses the current fill color (opaque on Windows) and `y` is the alphabetic baseline.
