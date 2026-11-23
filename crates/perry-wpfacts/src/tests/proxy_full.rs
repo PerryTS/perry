@@ -112,3 +112,74 @@ fn proxy_define_property_computed_key_runs_the_trap() {
     let op = "Object.defineProperty(px, String(Math.random()), { value: 1 });";
     site("{}", DEF_VALUE, op, true).unwrap();
 }
+
+const FN: &str = "function (this: any, x: any) { return 1; }";
+const APPLY_OUT: &str = "apply(t: any, th: any, a: any) { external(payload); return 1; }";
+const APPLY_ARG: &str = "apply(t: any, th: any, a: any) { external(a[0]); return 1; }";
+const APPLY_THIS: &str = "apply(t: any, th: any, a: any) { external(th.q); return 1; }";
+
+/// A call of a callable Proxy runs its `apply` trap (10.5.12).
+#[test]
+fn proxy_call_runs_the_apply_trap() {
+    site(FN, APPLY_OUT, "px();", false).unwrap();
+    site(FN, APPLY_OUT, "", true).unwrap();
+    site(FN, APPLY_ARG, "px(payload);", false).unwrap();
+    site(FN, APPLY_ARG, "px(1);", true).unwrap();
+    site(FN, APPLY_ARG, "px(...[payload]);", false).unwrap();
+    site(FN, APPLY_THIS, "({ m: px, q: payload }).m();", false).unwrap();
+    site(FN, APPLY_THIS, "({ m: px, q: 1 }).m();", true).unwrap();
+}
+
+/// A Proxy whose target is not callable has no [[Call]]: no trap runs.
+#[test]
+fn proxy_call_of_a_non_callable_target_runs_no_trap() {
+    site("{}", APPLY_OUT, "try { px(); } catch (e) {}", true).unwrap();
+}
+
+/// Without an `apply` trap the call forwards to the target with the same
+/// `this` and arguments; its result is the call's.
+#[test]
+fn proxy_call_forwards_to_the_target() {
+    let t = "function (this: any, x: any) { external(x); }";
+    site(t, "", "px(payload);", false).unwrap();
+    site(t, "", "px(1);", true).unwrap();
+    let t = "function (this: any) { external(this.q); }";
+    site(t, "", "({ m: px, q: payload }).m();", false).unwrap();
+    site(t, "", "({ m: px, q: 1 }).m();", true).unwrap();
+    let t = "function () { return payload; }";
+    site(t, "", "external(px());", false).unwrap();
+}
+
+/// `new` of a Proxy runs its `construct` trap (10.5.13); only an object
+/// result is the `new`'s.
+#[test]
+fn proxy_new_runs_the_construct_trap() {
+    let t = "class { constructor(x: any) {} }";
+    let h = "construct(t: any, a: any, nt: any) { external(a[0]); return {}; }";
+    site(t, h, "new px(payload);", false).unwrap();
+    site(t, h, "new px(1);", true).unwrap();
+    let h = "construct(t: any, a: any, nt: any) { return payload; }";
+    site(t, h, "external(new px());", false).unwrap();
+    let h = "construct(t: any, a: any, nt: any) { return { k: 1 }; }";
+    site(t, h, "external(new px());", true).unwrap();
+}
+
+/// Without a `construct` trap `new` forwards to the target.
+#[test]
+fn proxy_new_forwards_to_the_target() {
+    let t = "class { constructor(x: any) { external(x); } }";
+    site(t, "", "new px(payload);", false).unwrap();
+    site(t, "", "new px(1);", true).unwrap();
+}
+
+/// `new` without a `construct` trap: GetPrototypeFromConstructor reads
+/// `prototype` through the Proxy (its get trap); a primitive there gives
+/// the new object the realm's default prototype, `%Object.prototype%`
+/// (10.1.14 step 4), whose program method `f` then runs.
+#[test]
+fn proxy_new_primitive_prototype_gives_the_realm_default() {
+    let t = "(() => { function T(this: any) {} T.prototype = Object.create(null); return T; })()";
+    let f = "(Object.prototype as any).f = function () { external(payload); };\n";
+    let h = "get(t: any, k: any) { return 1; }";
+    site(t, h, &format!("{f}const o: any = new px(); o.f();"), false).unwrap();
+}

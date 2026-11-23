@@ -1148,8 +1148,6 @@ impl<'a> Gen<'a> {
             | Expr::JsNew { .. }
             | Expr::JsNewFromHandle { .. }
             | Expr::JsCreateCallback { .. }
-            | Expr::ProxyApply { .. }
-            | Expr::ProxyConstruct { .. }
             | Expr::ReflectDefineMetadata { .. }
             | Expr::ReflectGetMetadata { .. }
             | Expr::ReflectGetOwnMetadata { .. }
@@ -1296,6 +1294,8 @@ impl<'a> Gen<'a> {
             | Expr::ProxySet { .. }
             | Expr::ProxyHas { .. }
             | Expr::ProxyDelete { .. }
+            | Expr::ProxyApply { .. }
+            | Expr::ProxyConstruct { .. }
             | Expr::ProxyRevocable { .. }
             | Expr::ReflectGet { .. }
             | Expr::ReflectSet { .. }

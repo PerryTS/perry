@@ -795,8 +795,6 @@ impl<'a> Gen<'a> {
             | Expr::ProxySet { .. }
             | Expr::ProxyHas { .. }
             | Expr::ProxyDelete { .. }
-            | Expr::ProxyApply { .. }
-            | Expr::ProxyConstruct { .. }
             | Expr::ReflectDefineMetadata { .. }
             | Expr::ReflectGetMetadata { .. }
             | Expr::ReflectGetOwnMetadata { .. }

@@ -553,6 +553,12 @@ pub(crate) fn trap_descriptor(m: &mut Model, call: CallId, value: NodeId) -> Tok
     t
 }
 
+/// Rule PXAPPLY: the argument list Array a Proxy trap is passed
+/// (CreateArrayFromList, 7.3.16), born at `call`.
+pub(crate) fn trap_args_array(m: &mut Model, call: CallId) -> Tok {
+    site_tmpl_born(m, call, "Array", false, false)
+}
+
 /// The view of `what` born at `call` whose [[ViewedArrayBuffer]] its
 /// birth writes itself (`Cons::ViewedBuffer`).
 fn site_view(m: &mut Model, call: CallId, what: &'static str) -> Tok {

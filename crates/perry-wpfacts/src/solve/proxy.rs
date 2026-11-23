@@ -90,6 +90,12 @@ pub enum ProxyOp {
     AccFwd(Atom, Tok, bool),
     /// Rule PXDEFP: the forward of a hard operation to the target.
     HardFwd(Hard),
+    /// Rule PXAPPLY: the [[Call]] of one call site: its `this` node.
+    Apply(CallId),
+    /// Rule PXAPPLY: the [[Construct]] of one call site (`NewProgram`).
+    Construct(CallId, bool),
+    /// Rule PXAPPLY: the receivers of the `ThisTo` relays.
+    ThisTo,
     /// [[HasProperty]] of `key` (with its key node): trap and forward.
     Has(Key, NodeId),
     /// [[GetOwnProperty]] of `key` (with its key node): trap and forward.
@@ -1116,10 +1122,9 @@ impl Model {
     /// step 2, a TypeError): no trap runs, nothing flows. The decision is
     /// the target node's rule (`Cons::ProxyCallee`), re-made as its tokens
     /// grow; until a callable value reaches it, the call waits.
-    fn proxy_call(&mut self, n: NodeId, c: Cons, p: u32) {
+    pub(crate) fn proxy_call(&mut self, n: NodeId, c: Cons, p: u32) {
         if self.proxies[p as usize].callable {
-            self.proxy_degrade(p, "call");
-            return self.apply_inner(n, &c, Tokens::Slice(&[TOP]), 0);
+            return self.proxy_call_run(c, p);
         }
         // Array.prototype.toString (23.1.3.36 step 3) on a non-callable
         // `join`: the String of Object.prototype.toString, as for any
@@ -1134,6 +1139,173 @@ impl Model {
         self.proxy_callee_rule(p, p);
     }
 
+    /// Rule PXAPPLY: one call rule `c` of callable Proxy `p`: [[Call]]
+    /// (`proxy_invoke`) with the call's `this` (`Call`: the call site's;
+    /// `CallThis`: the receiver; `CallArgs`: the receivers its relay's
+    /// `ThisTo` gave, `proxy_this_to`), or [[Construct]]
+    /// (`proxy_construct`). `BuiltinCallee` runs a builtin namespace value
+    /// per receiver: a Proxy is none, its call is the `CallArgs` rule.
+    fn proxy_call_run(&mut self, c: Cons, p: u32) {
+        match c {
+            Cons::Call { call } => {
+                let this = self.calls[call as usize].this.clone();
+                self.proxy_invoke(p, call, this);
+            }
+            Cons::CallThis { call, this } => self.proxy_invoke(p, call, ThisArg::Tok(this)),
+            Cons::CallArgs { call } => {
+                let th = self.proxy_this_to(p);
+                self.proxy_invoke(p, call, ThisArg::Node(th));
+            }
+            Cons::ThisTo { origin } => {
+                let th = self.proxy_this_to(p);
+                self.add_tok(th, origin);
+            }
+            Cons::New { call } => self.proxy_construct(p, call, false),
+            Cons::NewProgram { call } => self.proxy_construct(p, call, true),
+            _ => {}
+        }
+    }
+
+    /// Rule PXAPPLY: the receivers the `ThisTo` relays of Proxy `p` bind
+    /// (the `this` of its calls through a receiver's lookup).
+    fn proxy_this_to(&mut self, p: u32) -> NodeId {
+        if let Some(&th) = self.proxies[p as usize].ops.get(&ProxyOp::ThisTo) {
+            return th;
+        }
+        let th = self.node_l("proxy-this-to");
+        self.proxies[p as usize].ops.insert(ProxyOp::ThisTo, th);
+        th
+    }
+
+    /// Rule PXAPPLY: CreateArrayFromList(argumentsList) (7.3.16) of call
+    /// `call`: a new Array per call site whose elements are the arguments
+    /// and the elements of its spread arguments.
+    fn proxy_args_array(&mut self, call: CallId) -> NodeId {
+        let c = self.calls[call as usize].clone();
+        let arr = self.node_l("proxy-args");
+        let at = builtins::trap_args_array(self, call);
+        self.add_tok(arr, at);
+        let fa = self.field_any(at);
+        for &a in &c.args {
+            self.edge(a, fa);
+        }
+        for &s in &c.spread {
+            let key = self.elem_key();
+            self.cons(s, Cons::Load { key, dst: fa });
+        }
+        arr
+    }
+
+    /// A call site the solver makes for a forward of `call`: its
+    /// arguments, `this` and result `ret`.
+    fn proxy_fwd_call(&mut self, call: CallId, this: ThisArg, ret: NodeId) -> CallId {
+        let c = self.calls[call as usize].clone();
+        let call2 = self.calls.len() as CallId;
+        self.calls.push(CallSite {
+            first_arg_fixed: c.first_arg_fixed,
+            this,
+            args: c.args,
+            spread: c.spread,
+            ret,
+            site: c.site,
+            region: c.region,
+        });
+        self.why_mint(call2, None, u32::MAX);
+        call2
+    }
+
+    /// Rule PXAPPLY: p.[[Call]](thisArgument, argumentsList) (10.5.12) of
+    /// call `call`: trap `apply( target, thisArg, argArray )` with `this` =
+    /// the handler (step 7, argArray = CreateArrayFromList, a new Array),
+    /// its result the call's, its throw the call's region; without a trap
+    /// (step 6) Call(target, thisArgument, argumentsList), the forward: a
+    /// call of the target with the same `this`, arguments and result.
+    /// One class per call (`ProxyOp::Apply`: its `this` node, which every
+    /// `this` the call binds joins).
+    fn proxy_invoke(&mut self, p: u32, call: CallId, this: ThisArg) {
+        let th = match self.proxies[p as usize].ops.get(&ProxyOp::Apply(call)) {
+            Some(&th) => th,
+            None => {
+                let th = self.node_l("proxy-apply-this");
+                self.proxies[p as usize].ops.insert(ProxyOp::Apply(call), th);
+                let t = self.proxies[p as usize].target;
+                let (ret, region) = (self.calls[call as usize].ret, self.calls[call as usize].region);
+                let arr = self.proxy_args_array(call);
+                self.proxy_trap_in(p, "apply", None, vec![t, th, arr], ret, region);
+                let call2 = self.proxy_fwd_call(call, ThisArg::Node(th), ret);
+                self.cons(t, Cons::Call { call: call2 });
+                th
+            }
+        };
+        match this {
+            ThisArg::Node(n) => self.edge(n, th),
+            ThisArg::Tok(x) => self.add_tok(th, x),
+            ThisArg::Undef => self.add_prim(th, prim::UNDEF),
+        }
+    }
+
+    /// Rule PXAPPLY: p.[[Construct]](argumentsList, newTarget) (10.5.13)
+    /// of `new p( ... )` (newTarget = p): trap `construct( target,
+    /// argArray, newTarget )`; its result is the `new`'s only when it is an
+    /// object (step 11: otherwise a TypeError), `Cons::Objects`. Without a
+    /// trap (step 6) Construct(target, argumentsList, newTarget): the
+    /// target's [[Construct]], whose new object's [[Prototype]] is
+    /// Get(newTarget, "prototype") (10.1.13 GetPrototypeFromConstructor):
+    /// p.[[Get]]("prototype"), the get trap and its forward
+    /// (`Cons::ProtoFrom` on the forward's result). A `prototype` that is
+    /// no Object (a primitive; ⊤ or a marker may be one) gives the realm's
+    /// intrinsic default prototype of the constructor's kind (10.1.14 step
+    /// 4: `%Object.prototype%` for an ordinary function, the builtin's own
+    /// for a builtin): `ObjectProto`, which stands for every builtin
+    /// prototype. `program`: the call's `NewProgram` rule
+    /// (`construct_program`). Once per (call, rule).
+    fn proxy_construct(&mut self, p: u32, call: CallId, program: bool) {
+        if self.proxy_made(p, ProxyOp::Construct(call, program)) {
+            return;
+        }
+        let t = self.proxies[p as usize].target;
+        let (ret, region) = (self.calls[call as usize].ret, self.calls[call as usize].region);
+        let arr = self.proxy_args_array(call);
+        let nt = self.node_l("proxy-new-target");
+        let pt = self.tok(TokKind::Proxy(p));
+        self.add_tok(nt, pt);
+        let tr = self.node_l("proxy-construct-ret");
+        self.proxy_trap_in(p, "construct", None, vec![t, arr, nt], tr, region);
+        self.cons(tr, Cons::Objects { dst: ret });
+        let fr = self.node_l("proxy-construct-fwd");
+        let call2 = self.proxy_fwd_call(call, ThisArg::Undef, fr);
+        let rule = match program {
+            true => Cons::NewProgram { call: call2 },
+            false => Cons::New { call: call2 },
+        };
+        self.cons(t, rule);
+        let pa = self.atom("prototype");
+        let pr = self.proxy_get(p, Key::Named(pa), NO_NODE);
+        self.cons(fr, Cons::ProtoFrom { src: pr });
+        let prim_pr = self.node_l("proxy-construct-proto-not-object");
+        self.cons(
+            pr,
+            Cons::TypeIs {
+                mask: prim::ALL,
+                dst: prim_pr,
+            },
+        );
+        let realm = self.node_l("proxy-construct-realm-default-proto");
+        let op = self.tok(TokKind::ObjectProto);
+        self.add_tok(realm, op);
+        let dflt = self.node_l("proxy-construct-default-proto");
+        self.cons(
+            prim_pr,
+            Cons::TopIfAny {
+                dst: dflt,
+                from: realm,
+                reason: None,
+            },
+        );
+        self.cons(fr, Cons::ProtoFrom { src: dflt });
+        self.edge(fr, ret);
+    }
+
     /// Rule PXCALL: the `ProxyCallee` rule of called Proxy `of` on the
     /// target of Proxy `p` (`of` itself, or a Proxy its target holds: a
     /// Proxy is callable when its target is). Once per pair.
@@ -1146,17 +1318,16 @@ impl Model {
 
     /// Rule PXCALL: Proxy `p`'s target may be callable. The Proxy's
     /// [[Call]] is the `apply` trap or the forward (10.5.12), its
-    /// [[Construct]] the `construct` trap or the forward (10.5.13): not
-    /// modeled, today's path (the degrade, and each waiting call of ⊤).
+    /// [[Construct]] the `construct` trap or the forward (10.5.13): each
+    /// waiting call runs (`proxy_call_run`).
     pub(crate) fn proxy_callable(&mut self, p: u32) {
         if self.proxies[p as usize].callable {
             return;
         }
         self.proxies[p as usize].callable = true;
-        self.proxy_degrade(p, "call");
         let calls = std::mem::take(&mut self.proxies[p as usize].calls);
-        for (n, c) in calls {
-            self.apply_inner(n, &c, Tokens::Slice(&[TOP]), 0);
+        for (_, c) in calls {
+            self.proxy_call_run(c, p);
         }
     }
 
@@ -1356,6 +1527,7 @@ impl Model {
             Cons::Call { .. }
             | Cons::CallThis { .. }
             | Cons::New { .. }
+            | Cons::NewProgram { .. }
             // Rule PXCALLR: the relays of a method call that found the
             // Proxy through a receiver (`bind_via`): the `this` it binds
             // (`ThisTo`, the thisArg of the [[Call]]), its arguments and

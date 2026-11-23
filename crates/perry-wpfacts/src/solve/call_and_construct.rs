@@ -142,11 +142,15 @@ impl Model {
         }
         match self.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn(_) => unreachable!(),
-            // PROXY2: a call of a Proxy reaches `proxy_apply` (degrade there);
-            // a direct one takes today's path too.
+            // Rule PXAPPLY: a direct call of a Proxy is its [[Call]]
+            // (`proxy_call`: the apply trap or the forward, once its
+            // target is callable).
             TokKind::Proxy(p) => {
-                self.proxy_degrade(p, "call");
-                self.call_tok(call, TOP, this_tok);
+                let c = match this_tok {
+                    Some(this) => Cons::CallThis { call, this },
+                    None => Cons::Call { call },
+                };
+                self.proxy_call(NO_NODE, c, p);
             }
             TokKind::Func(f, _) => {
                 self.bind_args(call, t);
