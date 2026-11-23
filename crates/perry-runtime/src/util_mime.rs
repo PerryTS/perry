@@ -3,9 +3,8 @@
 use crate::array::{js_array_alloc, js_array_get_f64, js_array_length, js_array_push_f64};
 use crate::object::{
     js_object_alloc, js_object_get_field_by_name_f64, js_object_get_field_f64, js_object_keys,
-    js_object_set_field_by_name, js_object_set_field_f64, js_object_set_keys,
-    js_register_class_declaration, js_register_class_id, js_register_class_name,
-    set_builtin_property_attrs, ClassDeclaration, ClassMemberDecl, ObjectHeader, PropertyAttrs,
+    js_object_set_field_by_name, js_object_set_field_f64, js_register_class_declaration,
+    js_register_class_id, js_register_class_name, ClassDeclaration, ClassMemberDecl, ObjectHeader,
 };
 use crate::string::js_string_from_bytes;
 use crate::value::{js_jsvalue_to_string, js_nanbox_pointer, JSValue};
@@ -21,8 +20,8 @@ const MIME_TYPE_ESSENCE: u32 = 2;
 const MIME_TYPE_PARAMS: u32 = 3;
 const MIME_TYPE_FIELD_COUNT: u32 = 4;
 
-const MIME_PARAMS_ENTRIES: u32 = 0;
-const MIME_PARAMS_FIELD_COUNT: u32 = 1;
+/// The `[name, value]` pairs array, a private entry no own-key reader lists.
+const MIME_PARAMS_ENTRIES: &str = "[[MIMEParamsEntries]]";
 
 static INIT_MIME_CLASSES: Once = Once::new();
 
@@ -232,28 +231,22 @@ fn make_entries_array(entries: &[(String, String)]) -> *mut ArrayHeader {
 
 fn create_mime_params_object(entries: Vec<(String, String)>) -> *mut ObjectHeader {
     ensure_mime_classes();
-    let obj = js_object_alloc(CLASS_ID_MIME_PARAMS, MIME_PARAMS_FIELD_COUNT);
-    let mut keys = js_array_alloc(MIME_PARAMS_FIELD_COUNT);
-    keys = js_array_push_f64(keys, string_value("_entries"));
-    js_object_set_keys(obj, keys);
-    set_builtin_property_attrs(
-        obj as usize,
-        "_entries".to_string(),
-        PropertyAttrs::new(true, false, true),
-    );
-    js_object_set_field_f64(
-        obj,
-        MIME_PARAMS_ENTRIES,
-        ptr_value(make_entries_array(&entries)),
-    );
-    obj
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj = scope.root_nanbox_f64(ptr_value(js_object_alloc(CLASS_ID_MIME_PARAMS, 0)));
+    let entries = ptr_value(make_entries_array(&entries));
+    crate::object::intrinsic_private_add(obj.get_nanbox_f64(), MIME_PARAMS_ENTRIES, entries);
+    crate::value::js_nanbox_get_pointer(obj.get_nanbox_f64()) as *mut ObjectHeader
 }
 
 fn get_mime_params_entries(params: *mut ObjectHeader) -> Vec<(String, String)> {
     if params.is_null() {
         return Vec::new();
     }
-    let entries_value = js_object_get_field_f64(params, MIME_PARAMS_ENTRIES);
+    let Some(entries_value) =
+        crate::object::intrinsic_private_get(ptr_value(params), MIME_PARAMS_ENTRIES)
+    else {
+        return Vec::new();
+    };
     let entries = ptr_from_stored_array(entries_value);
     if entries.is_null() {
         return Vec::new();
@@ -276,11 +269,10 @@ fn set_mime_params_entries(params: *mut ObjectHeader, entries: Vec<(String, Stri
     if params.is_null() {
         return;
     }
-    js_object_set_field_f64(
-        params,
-        MIME_PARAMS_ENTRIES,
-        ptr_value(make_entries_array(&entries)),
-    );
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let params = scope.root_nanbox_f64(ptr_value(params));
+    let entries = ptr_value(make_entries_array(&entries));
+    crate::object::intrinsic_private_set(params.get_nanbox_f64(), MIME_PARAMS_ENTRIES, entries);
 }
 
 fn serialize_params(entries: &[(String, String)]) -> String {
