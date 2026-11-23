@@ -3179,8 +3179,9 @@ fn host_call(
 /// A host stream's own `write(chunk, encoding?, cb?)` (node's Writable,
 /// perry's `process_stdout_write_stub`): it returns a boolean and hands its
 /// receiver to no one. It keeps a binary chunk and the callback in the
-/// stream's state, which the program can read back (`writableBuffer`,
-/// `_writableState`), so the arguments reach unknown code. It reads other
+/// stream's state and writes no key of them (`contract_reason`: Phase B,
+/// owner 2026-11-23); beside foreign code they reach code that may write
+/// them (`writes_any`). It reads other
 /// members of its receiver (`_write`, `_writableState`, `emit`, ...): a store
 /// under any key of the stream ends this (`host_call`'s `STAR_KEY` gate).
 fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {

@@ -10,6 +10,10 @@
 use super::*;
 
 const HELD: &str = "declare function sink(x: any): void;\nsink(0);\n";
+/// The realm held by code beside the program: a call of an unknown value
+/// holds it only where such code may name it (owner 2026-11-23, K8), so the
+/// arms that expect a hold run beside an unseen module.
+const FOREIGN: &str = "import { sink } from \"./unseen\";\nsink(0);\n";
 const OBJ: &str = "const o = { m() { return 1; } };\n";
 
 fn one(src: &str) -> ProgramFacts {
@@ -43,7 +47,7 @@ fn check(call: &str) {
     let body = format!("{OBJ}{call};\nconst r = o.m();\n");
     let free = m_calls(&body);
     assert!(mono(&free), "free twin lost the claim: {free:?}");
-    let held = m_calls(&format!("{HELD}{body}"));
+    let held = m_calls(&format!("{FOREIGN}{body}"));
     assert!(
         !mono(&held),
         "held realm: {call} may call unknown code with o: {held:?}"
@@ -67,7 +71,7 @@ fn exact(call: &str) {
 /// keeps its chunk; a native module's argument): exact in both arms.
 fn held_only(call: &str) {
     let body = format!("{OBJ}{call};\nconst r = o.m();\n");
-    let held = m_calls(&format!("{HELD}{body}"));
+    let held = m_calls(&format!("{FOREIGN}{body}"));
     assert!(!mono(&held), "held realm: {call}: {held:?}");
 }
 
