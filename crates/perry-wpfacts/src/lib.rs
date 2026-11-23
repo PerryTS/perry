@@ -17,7 +17,6 @@
 //! `secret-tests/scratchpad/wpfacts-design-20261012.md`.
 
 pub mod bindings;
-pub mod topstop;
 mod booleans;
 mod born_with;
 mod builtins;
@@ -69,6 +68,7 @@ mod solve;
 mod summary;
 #[cfg(test)]
 mod tests;
+pub mod topstop;
 mod units;
 mod unksrc;
 mod zero_sign;
@@ -743,7 +743,11 @@ fn generate<'a>(
     // Each function stands at its declaration (`this`, the result).
     if let Some(s) = g.m.stop_top.as_mut() {
         for (i, fi) in g.m.funcs.iter().enumerate() {
-            let sp = g.modules.get(fi.module as usize).and_then(|(_, m)| m.closure_source_text.get(&fi.func_id)).and_then(|x| x.source_span);
+            let sp = g
+                .modules
+                .get(fi.module as usize)
+                .and_then(|(_, m)| m.closure_source_text.get(&fi.func_id))
+                .and_then(|x| x.source_span);
             if let Some(sp) = sp {
                 s.fn_pos.insert(i as u32, (fi.module, sp.0));
             }

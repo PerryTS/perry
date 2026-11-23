@@ -441,7 +441,10 @@ impl Model {
         {
             let why = format!(
                 "a value is marked escaped ({}): beside ⊤ it is that ⊤ (escaped_beside_top)",
-                self.reasons.get(reason as usize).map_or("?", |s| s.as_str()).replace(['\n', '\r'], " ")
+                self.reasons
+                    .get(reason as usize)
+                    .map_or("?", |s| s.as_str())
+                    .replace(['\n', '\r'], " ")
             );
             self.top_marker_created(t, &why, std::panic::Location::caller());
         }

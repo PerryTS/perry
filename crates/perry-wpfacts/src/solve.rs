@@ -2030,7 +2030,17 @@ impl Model {
                 self.note_nopos(std::panic::Location::caller(), "implicit-request");
             }
             let what = || format!("{proto:?} touch on {}", self.tok_words(t));
-            let w = if self.stop_top.as_ref().unwrap().shared_key.contains_key(&(t, proto)) { String::new() } else { what() };
+            let w = if self
+                .stop_top
+                .as_ref()
+                .unwrap()
+                .shared_key
+                .contains_key(&(t, proto))
+            {
+                String::new()
+            } else {
+                what()
+            };
             let s = self.stop_top.as_mut().unwrap();
             let id = s.shared_call((t, proto), || w, p);
             if !self.implicit_done.contains_key(&(t, proto)) {

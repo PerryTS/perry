@@ -690,7 +690,8 @@ impl<'a> Gen<'a> {
         }
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
-        m.stop_top = crate::topstop::StopTop::from_env(modules.iter().map(|(p, _)| p.to_string()).collect());
+        m.stop_top =
+            crate::topstop::StopTop::from_env(modules.iter().map(|(p, _)| p.to_string()).collect());
         m.rel_phase = b'G';
         // Capture initialization origins too, before any solver propagation.
         // This state exists only for an explicitly requested diagnostic dump.
