@@ -1,7 +1,7 @@
-//! Dead-body removal (`PERRY_FACTS_DCE`) is on by default. An unset switch
-//! and `=1` both emit a body the whole-program reach calls inactive as an
-//! `llvm.trap` entry; only an explicit `=0` keeps the body. Every setting
-//! prints the same output.
+//! Dead-body removal (`PERRY_FACTS_DCE`) is off by default. Only `=1`
+//! emits a body the whole-program reach calls inactive as an `llvm.trap`
+//! entry; an unset switch and `=0` keep every body. Every setting prints the
+//! same output.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -77,17 +77,14 @@ fn compile_and_run(setting: Option<&str>) -> (String, usize) {
 }
 
 #[test]
-fn dead_body_removal_is_on_by_default_and_zero_turns_it_off() {
+fn dead_body_removal_is_off_unless_the_switch_is_one() {
     let (unset, unset_traps) = compile_and_run(None);
     let (one, one_traps) = compile_and_run(Some("1"));
     let (zero, zero_traps) = compile_and_run(Some("0"));
     assert_eq!(unset, "live 2,4,6\n");
     assert_eq!(one, unset);
     assert_eq!(zero, unset);
-    assert!(
-        unset_traps >= 3,
-        "default removes the dead bodies: {unset_traps}"
-    );
-    assert_eq!(one_traps, unset_traps, "=1 is the default spelled out");
+    assert_eq!(unset_traps, 0, "the default keeps every body");
+    assert!(one_traps >= 3, "=1 removes the dead bodies: {one_traps}");
     assert_eq!(zero_traps, 0, "=0 keeps every body");
 }

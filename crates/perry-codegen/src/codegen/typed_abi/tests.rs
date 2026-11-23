@@ -29,6 +29,7 @@ fn function(return_type: Type, params: Vec<Param>, body: Vec<Stmt>) -> Function 
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -184,6 +185,7 @@ fn closure_capture_representations_are_runtime_guard_candidates() {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -219,6 +221,7 @@ fn closure_capture_representations_follow_effective_slot_order() {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,
@@ -312,6 +315,7 @@ fn numeric_captures_share_the_actual_value_ordered_entry_tier() {
         mutable_captures: Vec::new(),
         captures_this: false,
         captures_new_target: false,
+        construct_only: false,
         enclosing_class: None,
         is_arrow: true,
         is_async: false,

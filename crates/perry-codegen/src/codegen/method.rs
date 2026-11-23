@@ -755,6 +755,7 @@ pub(super) fn compile_method(
         inline_ctor_return: Vec::new(),
         recv_run: None,
         recv_run_store_member: false,
+        fn_ctor_run: None,
         new_target_stack: Vec::new(),
         class_stack: vec![class.name.clone()],
         in_static_member: false,
@@ -955,6 +956,10 @@ pub(super) fn compile_method(
         fusible_uppercase_locals: native_facts.fusible_uppercase_locals().clone(),
         suffix_cursor_locals: native_facts.suffix_cursor_locals().clone(),
         suffix_cursors: std::collections::HashMap::new(),
+        utf16_cursors: crate::collectors::unrebound_params(&method.params, method_body)
+            .into_iter()
+            .map(|id| (id, None))
+            .collect(),
         non_escaping_object_literals: native_facts.non_escaping_object_literals().clone(),
         non_escaping_object_literal_used_fields: native_facts
             .non_escaping_object_literal_used_fields()

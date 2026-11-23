@@ -704,6 +704,31 @@ fn macho_alias_attributes_after_the_map_are_carried() {
     assert!(map < alt && alt < assign && assign < tail, "{out}");
 }
 
+/// Windows: LLVM prints the next function's COFF symbol definition
+/// (`.def sym; .scl 2; .type 32; .endef`) inside the stack-map block, ahead
+/// of that function's section switch. It emits no bytes and must be carried,
+/// in order; before it was listed, every Windows module with a method that
+/// followed its stack map was refused (`unrecognised directive .def`).
+#[test]
+fn coff_symbol_definitions_inside_the_block_are_carried() {
+    let asm = x86_64_elf_sample_asm(concat!(
+        "\t.def\tperry_method_m__C__f$pshape;\n",
+        "\t.scl\t2;\n",
+        "\t.type\t32;\n",
+        "\t.endef\n",
+    ));
+    let (out, stats) = compact_stack_map_asm(&asm, "x86_64-pc-windows-msvc")
+        .expect("a stack map followed by a COFF symbol definition must parse")
+        .expect("the stack map must be rewritten");
+    assert_eq!(stats.functions, 1);
+    assert_eq!(stats.roots, 1);
+    let def = out.find("\t.def\tperry_method_m__C__f$pshape;\n").expect(".def carried");
+    let scl = out.find("\t.scl\t2;\n").expect(".scl carried");
+    let ty = out.find("\t.type\t32;\n").expect(".type carried");
+    let end = out.find("\t.endef\n").expect(".endef carried");
+    assert!(def < scl && scl < ty && ty < end, "{out}");
+}
+
 /// Every symbol attribute LLVM can print is zero-width, on every format.
 #[test]
 fn every_symbol_attribute_is_zero_width() {

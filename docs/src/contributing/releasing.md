@@ -345,3 +345,7 @@ a release has been cut is not something a PR author can fix.
   the legacy release-packages distribution legs, dispatch it with
   `existing_tag=vX.Y.Z`; add `publish_npm=true` only when the idempotent npm leg
   itself also needs retrying.
+- **Release assets missing after npm published**: dispatch release-packages with
+  `existing_tag=vX.Y.Z` and `assets_from_run=<run id>` naming the completed
+  release-packages run at that tag. It rebuilds nothing, skips npm, and attaches
+  only the package tarballs whose bytes match the public npm SHA-1.

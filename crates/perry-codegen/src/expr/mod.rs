@@ -1132,6 +1132,9 @@ pub(crate) struct FnCtx<'a> {
     /// The by-name store being lowered was a 2c member of the run
     /// (`layout_read::RunTransparency::Store`).
     pub recv_run_store_member: bool,
+    /// The run of `this` stores in flight in an ordinary function
+    /// constructor's body (`layout_desc::function_families::run_arm`).
+    pub fn_ctor_run: Option<crate::expr::layout_read::FamilyRun>,
 
     /// Cross-module function declarations to add to `LlModule` after
     /// lowering finishes. Each entry is `(llvm_name, return_type, param_types)`.
@@ -1820,6 +1823,10 @@ pub(crate) struct FnCtx<'a> {
     pub suffix_cursor_locals: std::collections::HashSet<u32>,
     /// Stack storage holds byte/UTF-16 offsets only, never a GC pointer.
     pub suffix_cursors: std::collections::HashMap<u32, String>,
+    /// Parameters the body never rebinds, each with its lazily allocated
+    /// `charCodeAt` cursor (`lower_string_method/char_code_at.rs`). The slot
+    /// holds byte/UTF-16 offsets only, never a GC pointer.
+    pub utf16_cursors: std::collections::HashMap<u32, Option<String>>,
 
     /// Non-escaping object literals identified by escape analysis. Maps
     /// local_id → field names (declaration order, deduplicated). Used by
@@ -2937,6 +2944,15 @@ mod inline_cache_name_tests {
 }
 
 impl<'a> FnCtx<'a> {
+    /// Whether the existing i1 `proof` dominates the end of the current
+    /// block, counting the body start's edge its activation adds later
+    /// (`LlFunction::proof_dominates_block_end`).
+    pub(crate) fn proof_dominates_here(&self, proof: &str) -> bool {
+        let pending = self.agent_block.as_ref().map(|a| a.pending_edge());
+        self.func
+            .proof_dominates_block_end(proof, self.current_block, pending)
+    }
+
     /// Is `e` the `this` of a STATIC class member — i.e. a receiver that holds
     /// the class CONSTRUCTOR function object rather than an instance?
     ///

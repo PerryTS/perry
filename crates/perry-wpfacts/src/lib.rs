@@ -106,8 +106,8 @@ pub enum NativeResult {
 pub struct FactsConfig {
     /// Export body classifications for the compiler diagnostic mode only.
     pub verify_facts: bool,
-    /// Export the classified bodies for dead-body removal (`PERRY_FACTS_DCE`,
-    /// on by default; `0` turns it off).
+    /// Export the classified bodies for dead-body removal (`PERRY_FACTS_DCE=1`,
+    /// off by default).
     pub dce_bodies: bool,
     /// Modules the program loads besides the ones no edge enters (worker
     /// entries, bundle extensions): their bodies run whatever imports them.

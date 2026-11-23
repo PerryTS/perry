@@ -83,7 +83,12 @@ fn build_and_run_android_impl(
     // Without this, the app crashes on launch with `UnsatisfiedLinkError:
     // dlopen failed: library "lib….so" not found`. Static-lib companions link
     // directly into libperry_app.so and have no `.so` here, so nothing to copy.
-    let staging_dir = so_path.parent().unwrap_or(Path::new("."));
+    // A bare relative output name (`perry run android` in the project dir)
+    // has an empty parent; read_dir("") fails and nothing was bundled.
+    let staging_dir = so_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
     if let Ok(entries) = std::fs::read_dir(staging_dir) {
         let mut bundled = 0usize;
         for entry in entries.flatten() {

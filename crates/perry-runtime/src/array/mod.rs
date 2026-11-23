@@ -189,11 +189,8 @@ pub use self::from_concat::{
     array_from_full, array_of_full, js_array_concat_variadic, js_array_from_mapped,
     js_array_from_value,
 };
+pub(crate) use self::from_concat::{define_constructed_index, finish_constructed_length};
 pub use self::generic::array_proto_mutator;
-pub(crate) use self::generic::{
-    array_receiver, non_array_object_receiver, object_owns_user_method, plain_object_value,
-    value_is_own_user_method,
-};
 pub use self::generic::{
     dispatch_arraylike_read_method, js_arraylike_at, js_arraylike_every, js_arraylike_filter,
     js_arraylike_find, js_arraylike_findIndex, js_arraylike_findLast, js_arraylike_findLastIndex,
@@ -201,6 +198,10 @@ pub use self::generic::{
     js_arraylike_join, js_arraylike_lastIndexOf, js_arraylike_map, js_arraylike_reduce,
     js_arraylike_reduceRight, js_arraylike_slice, js_arraylike_some, try_array_proto_chain_method,
     try_object_arraylike_mutator,
+};
+pub(crate) use self::generic::{
+    non_array_object_receiver, object_owns_user_method, plain_object_value,
+    value_is_own_user_method,
 };
 pub use self::generic_mutators::{
     js_arraylike_pop, js_arraylike_push, js_arraylike_shift, js_arraylike_unshift,

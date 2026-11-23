@@ -908,6 +908,37 @@ pub extern "C" fn perry_ui_canvas_create(_w: f64, _h: f64) -> i64 {
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_clear(_h: i64) {}
+
+// Stateful Canvas API (setFillColor / fillRect / fill / stroke() / arc ...).
+// watchOS has no Canvas view (SwiftUI tree shell), so these are no-ops like
+// the legacy canvas calls above — but they must exist: without them any
+// program that uses the current Canvas API fails to link for watchOS with
+// undefined `_perry_ui_canvas_*` symbols, even if it never shows a canvas
+// on the watch.
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_fill_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_stroke_color(_h: i64, _r: f64, _g: f64, _b: f64, _a: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_line_width(_h: i64, _w: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_stroke_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_clear_rect(_h: i64, _x: f64, _y: f64, _w: f64, _ht: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_arc(_h: i64, _x: f64, _y: f64, _r: f64, _sa: f64, _ea: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_close_path(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_stroke_path(_h: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_fill_text(_h: i64, _ptr: i64, _x: f64, _y: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_canvas_set_font(_h: i64, _ptr: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_begin_path(_h: i64) {}
 #[no_mangle]
@@ -1429,8 +1460,8 @@ pub extern "C" fn perry_system_app_group_delete(key_ptr: i64) {
 #[no_mangle]
 pub extern "C" fn perry_system_request_location(_cb: f64) {}
 #[no_mangle]
-pub extern "C" fn perry_system_audio_start() -> f64 {
-    audio::start() as f64
+pub extern "C" fn perry_system_audio_start() -> i64 {
+    audio::start()
 }
 #[no_mangle]
 pub extern "C" fn perry_system_audio_stop() {

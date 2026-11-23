@@ -218,6 +218,14 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
     }
     unsafe {
         js_stdlib_process_pending();
+        crate::ws::js_ws_process_pending();
+        // Turn this thread's turnloop: fetch / node:http progress only on a turn.
+        {
+            extern "C" {
+                fn js_loop_turn_nonblocking();
+            }
+            js_loop_turn_nonblocking();
+        }
         js_callback_timer_tick();
         js_interval_timer_tick();
         // Issue #1865: perry/ui `onFrame` display-link callbacks. Real
@@ -233,6 +241,9 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
         // thread mid-interaction.
         js_gc_step_us(2_000, std::ptr::null_mut());
     }
+    // Render each canvas that received draw calls during this tick once —
+    // all canvas calls between two pump ticks form one frame.
+    crate::widgets::canvas::flush_dirty();
     // perry/media (#351) — drive state polling on the UI thread so the
     // PLAYERS thread_local stays consistent with where create_player
     // stored entries. Internally throttled to ~10 Hz.

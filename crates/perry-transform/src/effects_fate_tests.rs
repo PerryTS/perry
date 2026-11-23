@@ -85,6 +85,7 @@ fn func(id: FuncId, params: &[u32], body: Vec<Stmt>) -> Function {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     }
 }
 
@@ -254,6 +255,7 @@ fn c4_capture_keeps() {
         is_async: false,
         is_generator: false,
         is_strict: true,
+        construct_only: false,
     };
     let f1 = func(1, &[10], vec![ret(closure)]);
     let f = fates(&[f1], &TestProof::reading(&[(1, "x"), (2, "x")]));
@@ -446,6 +448,7 @@ fn closure(body: Vec<Stmt>, captures_this: bool) -> Expr {
         is_async: false,
         is_generator: false,
         is_strict: true,
+        construct_only: false,
     }
 }
 

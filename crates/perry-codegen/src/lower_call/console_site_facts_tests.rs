@@ -38,6 +38,7 @@ fn compile_with_site(body: Vec<Stmt>, proven: &[u32], key: &str, flags: u8) -> S
         decorators: Vec::new(),
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let elision = crate::ElisionFacts {
         method_sites: [(

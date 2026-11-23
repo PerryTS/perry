@@ -29,6 +29,26 @@ pub enum DrawCmd {
         dh: f32,
     },
     Clear,
+    // Stateful (HTML-canvas-style) API. Colors are ARGB; coordinates and
+    // widths are already scaled to device pixels.
+    SetFillColor(i32),
+    SetStrokeColor(i32),
+    SetLineWidth(f32),
+    FillRect(f32, f32, f32, f32),
+    StrokeRect(f32, f32, f32, f32),
+    ClosePath,
+    Arc(f32, f32, f32, f32, f32), // cx, cy, r, start_rad, end_rad
+    FillPath,
+    StrokePath,
+}
+
+/// Path segment recorded during replay for the stateful fill()/stroke().
+#[derive(Clone, Copy, Debug)]
+enum PathSeg {
+    Move(f32, f32),
+    Line(f32, f32),
+    Arc(f32, f32, f32, f32, f32),
+    Close,
 }
 
 struct CanvasState {
@@ -79,7 +99,14 @@ fn command_batch_renders(commands: &[DrawCmd]) -> bool {
     commands.iter().any(|cmd| {
         matches!(
             cmd,
-            DrawCmd::Clear | DrawCmd::Stroke(..) | DrawCmd::FillGradient(..)
+            DrawCmd::Clear
+                | DrawCmd::Stroke(..)
+                | DrawCmd::FillGradient(..)
+                | DrawCmd::FillRect(..)
+                | DrawCmd::StrokeRect(..)
+                | DrawCmd::FillPath
+                | DrawCmd::StrokePath
+                | DrawCmd::DrawImage { .. }
         )
     })
 }
@@ -227,6 +254,155 @@ fn create_and_set_bitmap(env: &mut jni::Env, image_view: &JObject, w: i32, h: i3
     );
 }
 
+/// Canvases with commands queued since the last flush. Drawing calls only
+/// mark a canvas dirty; `flush_dirty()` (called once per UI pump tick, after
+/// JS timers ran) renders each dirty canvas once. This makes every call
+/// between two ticks one frame — the same model as iOS/macOS, where
+/// `drawRect:` drains the pending batch. Previously each `stroke()` /
+/// `fillGradient()` repainted immediately into a fresh bitmap, so only the
+/// last draw call of a frame survived (e.g. a filled area followed by its
+/// outline showed only the outline).
+static DIRTY: LazyLock<Mutex<Vec<i64>>> = LazyLock::new(|| Mutex::new(Vec::new()));
+
+fn mark_dirty(handle: i64) {
+    let mut dirty = DIRTY.lock().unwrap();
+    if !dirty.contains(&handle) {
+        dirty.push(handle);
+    }
+}
+
+/// Render every canvas that received commands since the last call.
+pub fn flush_dirty() {
+    let handles = std::mem::take(&mut *DIRTY.lock().unwrap());
+    for handle in handles {
+        repaint(handle);
+    }
+}
+
+fn paint_set_style(env: &mut jni::Env, paint: &JObject, fill: bool) {
+    let Ok(style_class) = env.find_class(jni::jni_str!("android/graphics/Paint$Style")) else {
+        return;
+    };
+    let style = if fill {
+        env.get_static_field(
+            &style_class,
+            jni::jni_str!("FILL"),
+            jni::jni_sig!("Landroid/graphics/Paint$Style;"),
+        )
+    } else {
+        env.get_static_field(
+            &style_class,
+            jni::jni_str!("STROKE"),
+            jni::jni_sig!("Landroid/graphics/Paint$Style;"),
+        )
+    };
+    if let Ok(style) = style.and_then(|v| v.l()) {
+        let _ = env.call_method(
+            paint,
+            jni::jni_str!("setStyle"),
+            jni::jni_sig!("(Landroid/graphics/Paint$Style;)V"),
+            &[JValue::Object(&style)],
+        );
+    }
+}
+
+fn paint_set_color_width(env: &mut jni::Env, paint: &JObject, color: i32, width: f32) {
+    let _ = env.call_method(
+        paint,
+        jni::jni_str!("setColor"),
+        jni::jni_sig!("(I)V"),
+        &[JValue::Int(color)],
+    );
+    let _ = env.call_method(
+        paint,
+        jni::jni_str!("setStrokeWidth"),
+        jni::jni_sig!("(F)V"),
+        &[JValue::Float(width)],
+    );
+}
+
+/// Build an `android.graphics.Path` from recorded segments.
+fn build_path<'local>(env: &mut jni::Env<'local>, segs: &[PathSeg]) -> Option<JObject<'local>> {
+    let path = env
+        .new_object(
+            jni::jni_str!("android/graphics/Path"),
+            jni::jni_sig!("()V"),
+            &[],
+        )
+        .ok()?;
+    for seg in segs {
+        match *seg {
+            PathSeg::Move(x, y) => {
+                let _ = env.call_method(
+                    &path,
+                    jni::jni_str!("moveTo"),
+                    jni::jni_sig!("(FF)V"),
+                    &[JValue::Float(x), JValue::Float(y)],
+                );
+            }
+            PathSeg::Line(x, y) => {
+                let _ = env.call_method(
+                    &path,
+                    jni::jni_str!("lineTo"),
+                    jni::jni_sig!("(FF)V"),
+                    &[JValue::Float(x), JValue::Float(y)],
+                );
+            }
+            PathSeg::Close => {
+                let _ = env.call_method(&path, jni::jni_str!("close"), jni::jni_sig!("()V"), &[]);
+            }
+            PathSeg::Arc(cx, cy, r, start, end) => {
+                let sweep = (end - start).to_degrees();
+                if sweep.abs() >= 359.99 {
+                    if let Ok(dir_class) =
+                        env.find_class(jni::jni_str!("android/graphics/Path$Direction"))
+                    {
+                        if let Ok(cw) = env
+                            .get_static_field(
+                                &dir_class,
+                                jni::jni_str!("CW"),
+                                jni::jni_sig!("Landroid/graphics/Path$Direction;"),
+                            )
+                            .and_then(|v| v.l())
+                        {
+                            let _ = env.call_method(
+                                &path,
+                                jni::jni_str!("addCircle"),
+                                jni::jni_sig!("(FFFLandroid/graphics/Path$Direction;)V"),
+                                &[
+                                    JValue::Float(cx),
+                                    JValue::Float(cy),
+                                    JValue::Float(r),
+                                    JValue::Object(&cw),
+                                ],
+                            );
+                        }
+                    }
+                } else {
+                    // Canvas arcs connect from the current point, as arcTo
+                    // with forceMoveTo=false does.
+                    let _ = env.call_method(
+                        &path,
+                        jni::jni_str!("arcTo"),
+                        jni::jni_sig!("(FFFFFFZ)V"),
+                        &[
+                            JValue::Float(cx - r),
+                            JValue::Float(cy - r),
+                            JValue::Float(cx + r),
+                            JValue::Float(cy + r),
+                            JValue::Float(start.to_degrees()),
+                            JValue::Float(sweep),
+                            JValue::Bool(false),
+                        ],
+                    );
+                }
+            }
+        }
+    }
+    let _ = env.exception_clear();
+    Some(path)
+}
+
 fn repaint(handle: i64) {
     let cmds = {
         let mut states = CANVAS_STATES.lock().unwrap();
@@ -302,6 +478,11 @@ fn repaint(handle: i64) {
 
                 // Replay commands
                 let mut path_points: Vec<(f32, f32)> = Vec::new();
+                let mut segs: Vec<PathSeg> = Vec::new();
+                // Stateful API current values (canvas defaults: black, 1px).
+                let mut cur_fill: i32 = 0xFF00_0000u32 as i32;
+                let mut cur_stroke: i32 = 0xFF00_0000u32 as i32;
+                let mut cur_width: f32 = 1.0;
 
                 for cmd in &cmds {
                     match cmd {
@@ -329,12 +510,59 @@ fn repaint(handle: i64) {
                         }
                         DrawCmd::BeginPath => {
                             path_points.clear();
+                            segs.clear();
                         }
                         DrawCmd::MoveTo(x, y) => {
                             path_points.push((*x, *y));
+                            segs.push(PathSeg::Move(*x, *y));
                         }
                         DrawCmd::LineTo(x, y) => {
                             path_points.push((*x, *y));
+                            segs.push(PathSeg::Line(*x, *y));
+                        }
+                        DrawCmd::SetFillColor(c) => cur_fill = *c,
+                        DrawCmd::SetStrokeColor(c) => cur_stroke = *c,
+                        DrawCmd::SetLineWidth(w) => cur_width = *w,
+                        DrawCmd::ClosePath => segs.push(PathSeg::Close),
+                        DrawCmd::Arc(cx, cy, r, sa, ea) => {
+                            segs.push(PathSeg::Arc(*cx, *cy, *r, *sa, *ea));
+                        }
+                        DrawCmd::FillRect(x, y, w, h) | DrawCmd::StrokeRect(x, y, w, h) => {
+                            let fill = matches!(cmd, DrawCmd::FillRect(..));
+                            let color = if fill { cur_fill } else { cur_stroke };
+                            paint_set_color_width(env, &paint, color, cur_width);
+                            paint_set_style(env, &paint, fill);
+                            let _ = env.call_method(
+                                &canvas,
+                                jni::jni_str!("drawRect"),
+                                jni::jni_sig!("(FFFFLandroid/graphics/Paint;)V"),
+                                &[
+                                    JValue::Float(*x),
+                                    JValue::Float(*y),
+                                    JValue::Float(*x + *w),
+                                    JValue::Float(*y + *h),
+                                    JValue::Object(&paint),
+                                ],
+                            );
+                        }
+                        DrawCmd::FillPath | DrawCmd::StrokePath => {
+                            let fill = matches!(cmd, DrawCmd::FillPath);
+                            if segs.is_empty() {
+                                continue;
+                            }
+                            if let Some(path) = build_path(env, &segs) {
+                                let color = if fill { cur_fill } else { cur_stroke };
+                                paint_set_color_width(env, &paint, color, cur_width);
+                                paint_set_style(env, &paint, fill);
+                                let _ = env.call_method(
+                                    &canvas,
+                                    jni::jni_str!("drawPath"),
+                                    jni::jni_sig!(
+                                        "(Landroid/graphics/Path;Landroid/graphics/Paint;)V"
+                                    ),
+                                    &[JValue::Object(&path), JValue::Object(&paint)],
+                                );
+                            }
                         }
                         DrawCmd::Stroke(color, line_width) => {
                             let _ = env.call_method(
@@ -613,7 +841,7 @@ pub fn clear(handle: i64) {
             state.cmds.push(DrawCmd::Clear);
         }
     }
-    repaint(handle);
+    mark_dirty(handle);
 }
 
 pub fn begin_path(handle: i64) {
@@ -661,7 +889,7 @@ pub fn stroke(handle: i64, r: f64, g: f64, b: f64, a: f64, line_width: f64) {
                 .push(DrawCmd::Stroke(color, line_width as f32 * d));
         }
     }
-    repaint(handle);
+    mark_dirty(handle);
 }
 
 pub fn fill_gradient(
@@ -685,7 +913,7 @@ pub fn fill_gradient(
             state.cmds.push(DrawCmd::FillGradient(c1, c2, direction));
         }
     }
-    repaint(handle);
+    mark_dirty(handle);
 }
 
 fn argb(a: f64, r: f64, g: f64, b: f64) -> i32 {
@@ -834,5 +1062,80 @@ pub fn draw_image(
             });
         }
     }
-    repaint(handle);
+    mark_dirty(handle);
+}
+
+// =============================================================================
+// Stateful canvas API (setFillColor / fillRect / fill / stroke / arc ...)
+// =============================================================================
+
+fn push_cmd(handle: i64, make: impl FnOnce(f32) -> DrawCmd, renders: bool) {
+    {
+        let mut states = CANVAS_STATES.lock().unwrap();
+        if let Some(state) = states.get_mut(&handle) {
+            let d = state.density;
+            state.cmds.push(make(d));
+        } else {
+            return;
+        }
+    }
+    if renders {
+        mark_dirty(handle);
+    }
+}
+
+pub fn set_fill_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    push_cmd(handle, |_| DrawCmd::SetFillColor(argb(a, r, g, b)), false);
+}
+
+pub fn set_stroke_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
+    push_cmd(handle, |_| DrawCmd::SetStrokeColor(argb(a, r, g, b)), false);
+}
+
+pub fn set_line_width(handle: i64, width: f64) {
+    push_cmd(handle, |d| DrawCmd::SetLineWidth(width as f32 * d), false);
+}
+
+pub fn fill_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(
+        handle,
+        |d| DrawCmd::FillRect(x as f32 * d, y as f32 * d, w as f32 * d, h as f32 * d),
+        true,
+    );
+}
+
+pub fn stroke_rect(handle: i64, x: f64, y: f64, w: f64, h: f64) {
+    push_cmd(
+        handle,
+        |d| DrawCmd::StrokeRect(x as f32 * d, y as f32 * d, w as f32 * d, h as f32 * d),
+        true,
+    );
+}
+
+pub fn arc(handle: i64, x: f64, y: f64, r: f64, start: f64, end: f64) {
+    push_cmd(
+        handle,
+        |d| {
+            DrawCmd::Arc(
+                x as f32 * d,
+                y as f32 * d,
+                r as f32 * d,
+                start as f32,
+                end as f32,
+            )
+        },
+        false,
+    );
+}
+
+pub fn close_path(handle: i64) {
+    push_cmd(handle, |_| DrawCmd::ClosePath, false);
+}
+
+pub fn fill(handle: i64) {
+    push_cmd(handle, |_| DrawCmd::FillPath, true);
+}
+
+pub fn stroke_path(handle: i64) {
+    push_cmd(handle, |_| DrawCmd::StrokePath, true);
 }

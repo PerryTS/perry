@@ -202,7 +202,10 @@ pub extern "C" fn perry_ui_screenshot_capture(out_len: *mut usize) -> *mut u8 {
                 return None;
             }
 
-            let byte_array: jni::objects::JByteArray = byte_array_obj.into();
+            // jni 0.22 has no From<JObject> for typed arrays; cast instead.
+            let byte_array = env
+                .cast_local::<jni::objects::JByteArray>(byte_array_obj)
+                .ok()?;
             let data = env.convert_byte_array(byte_array).ok()?;
 
             // Recycle the bitmap to free native memory

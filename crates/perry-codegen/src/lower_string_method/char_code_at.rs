@@ -310,7 +310,47 @@ fn lower_inline(
     let is_ascii = ctx.block().and(I1, &same_lengths, &validated);
     let idx_i32 = ctx.block().fptosi(DOUBLE, idx_d, I32);
     let in_bounds = ctx.block().icmp_ult(I32, &idx_i32, &utf16_len);
-    ctx.block().cond_br(&is_ascii, &bounds_label, &slow_label);
+    // A validated non-ASCII payload read through a parameter's cursor
+    // (#14973): an in-range index costs one decode step past the previous
+    // read rather than a walk from byte 0.
+    let cursor = match op {
+        Op::CharCodeAt => utf16_cursor(ctx, object),
+        Op::CharAt => None,
+    };
+    let cursor_blocks = cursor.map(|slot| {
+        let check = ctx.new_block("cca.cursor_check");
+        let read = ctx.new_block("cca.cursor");
+        let hit = ctx.new_block("cca.cursor_hit");
+        (slot, check, read, hit)
+    });
+    let not_ascii_label = match &cursor_blocks {
+        Some((_, check, _, _)) => ctx.block_label(*check),
+        None => slow_label.clone(),
+    };
+    ctx.block()
+        .cond_br(&is_ascii, &bounds_label, &not_ascii_label);
+    let cursor_val = cursor_blocks.map(|(slot, check, read, hit)| {
+        let read_label = ctx.block_label(read);
+        let hit_label = ctx.block_label(hit);
+        ctx.current_block = check;
+        // Equal lengths with an unvalidated payload are not ASCII either;
+        // only a validated payload has the code units the cursor decodes.
+        let ok = ctx.block().and(I1, &validated, &in_bounds);
+        ctx.block().cond_br(&ok, &read_label, &slow_label);
+        ctx.current_block = read;
+        let unit = ctx.block().call(
+            I32,
+            "js_string_utf16_unit_at_cursor",
+            &[(I64, &handle), (I32, &idx_i32), (crate::types::PTR, &slot)],
+        );
+        let found = ctx.block().icmp_sge(I32, &unit, "0");
+        ctx.block().cond_br(&found, &hit_label, &slow_label);
+        ctx.current_block = hit;
+        let value = ctx.block().sitofp(I32, &unit, DOUBLE);
+        let pred = ctx.block().label.clone();
+        ctx.block().br(&merge_label);
+        (value, pred)
+    });
     ctx.current_block = bounds_idx;
     let oob_target = if op == Op::CharAt {
         &slow_label
@@ -372,15 +412,37 @@ fn lower_inline(
     let nan = crate::nanbox::double_literal(f64::NAN);
     // `charAt` sends an out-of-range index to the entry, so its oob block is
     // unreachable; it still branches here and needs its incoming value.
-    Some(ctx.block().phi(
-        DOUBLE,
-        &[
-            (&fast_val, &fast_pred),
-            (&sso_val, &sso_pred),
-            (&nan, &oob_pred),
-            (&slow_val, &slow_pred),
-        ],
-    ))
+    let mut incoming = vec![
+        (fast_val.as_str(), fast_pred.as_str()),
+        (sso_val.as_str(), sso_pred.as_str()),
+        (nan.as_str(), oob_pred.as_str()),
+        (slow_val.as_str(), slow_pred.as_str()),
+    ];
+    if let Some((value, pred)) = &cursor_val {
+        incoming.push((value.as_str(), pred.as_str()));
+    }
+    Some(ctx.block().phi(DOUBLE, &incoming))
+}
+
+/// The `charCodeAt` cursor of a receiver that is a parameter the function
+/// never rebinds, allocated (zeroed at entry) on its first read. Every read
+/// through it names the one string that parameter holds for the whole
+/// invocation, so the cursor's offsets stay valid even when a collection
+/// moves the string. A boxed parameter (captured, or mapped by a sloppy
+/// `arguments`) can change without a visible write, so it has none.
+fn utf16_cursor(ctx: &mut FnCtx<'_>, object: &Expr) -> Option<String> {
+    let Expr::LocalGet(id) = object else {
+        return None;
+    };
+    if ctx.boxed_vars.contains(id) {
+        return None;
+    }
+    if let Some(slot) = ctx.utf16_cursors.get(id)?.clone() {
+        return Some(slot);
+    }
+    let slot = ctx.func.alloca_entry_zeroed("[3 x i32]");
+    ctx.utf16_cursors.insert(*id, Some(slot.clone()));
+    Some(slot)
 }
 
 #[cfg(test)]

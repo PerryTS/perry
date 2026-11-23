@@ -162,6 +162,7 @@ fn ir(op: CompareOp, offset: Expr, other: bool, exposure: u8, recheck: bool) -> 
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     if recheck {
         m.functions.push(Function {
@@ -179,6 +180,7 @@ fn ir(op: CompareOp, offset: Expr, other: bool, exposure: u8, recheck: bool) -> 
             decorators: vec![],
             was_plain_async: false,
             was_unrolled: false,
+            construct_only: false,
         });
     }
     let output = String::from_utf8(
@@ -312,6 +314,7 @@ fn a_typed_annotation_does_not_hoist_a_possible_length_getter() {
         decorators: vec![],
         was_plain_async: false,
         was_unrolled: false,
+        construct_only: false,
     });
     let output = String::from_utf8(
         crate::compile_module(

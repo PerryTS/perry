@@ -35,6 +35,7 @@ pub mod securefield;
 pub mod sheet;
 pub mod slider;
 pub mod spacer;
+pub mod splitview;
 pub mod table;
 pub mod text;
 pub mod text_registry;

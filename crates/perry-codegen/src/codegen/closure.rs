@@ -1220,6 +1220,7 @@ pub(super) fn compile_closure(
         inline_ctor_return: Vec::new(),
         recv_run: None,
         recv_run_store_member: false,
+        fn_ctor_run: None,
         methods,
         module_globals,
         import_function_prefixes,
@@ -1423,6 +1424,10 @@ pub(super) fn compile_closure(
         fusible_uppercase_locals: native_facts.fusible_uppercase_locals().clone(),
         suffix_cursor_locals: native_facts.suffix_cursor_locals().clone(),
         suffix_cursors: std::collections::HashMap::new(),
+        utf16_cursors: crate::collectors::unrebound_params(params, body)
+            .into_iter()
+            .map(|id| (id, None))
+            .collect(),
         non_escaping_object_literals: native_facts.non_escaping_object_literals().clone(),
         non_escaping_object_literal_used_fields: native_facts
             .non_escaping_object_literal_used_fields()

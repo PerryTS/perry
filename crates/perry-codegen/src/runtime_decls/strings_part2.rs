@@ -460,6 +460,7 @@ pub(crate) fn declare_phase_b_strings_part2(module: &mut LlModule) {
     module.declare_function("js_string_from_char_code", I64, &[DOUBLE]);
     module.declare_function("js_string_from_char_code_array", I64, &[DOUBLE]);
     module.declare_function("js_string_char_code_at", DOUBLE, &[I64, I32]);
+    module.declare_function("js_string_utf16_unit_at_cursor", I32, &[I64, I32, PTR]);
     module.declare_function("js_string_last_index_of", I32, &[I64, I64]);
     module.declare_function(
         "js_string_last_index_of_from",

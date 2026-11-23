@@ -185,9 +185,95 @@ pub fn clear_children(handle: i64) {
     }
 }
 
+/// Vertical stacks whose cross-axis alignment is not "fill" (leading / center
+/// / trailing). Like a UIStackView with that alignment, their children keep
+/// their own width instead of being stretched to the stack's width, and the
+/// stack's gravity positions them.
+static NON_FILL_VSTACKS: Mutex<Option<std::collections::HashSet<i64>>> = Mutex::new(None);
+
+fn vstack_fills_width(handle: i64) -> bool {
+    NON_FILL_VSTACKS
+        .lock()
+        .map(|s| !s.as_ref().is_some_and(|set| set.contains(&handle)))
+        .unwrap_or(true)
+}
+
+/// Record a vertical stack's cross-axis alignment (`fill == false` for
+/// leading / center / trailing) and re-apply it to the children it already
+/// has: stack constructors add children before `stackSetAlignment` runs, so
+/// children stretched to MATCH_PARENT by `add_child` go back to WRAP_CONTENT.
+/// Children with an explicit width are left alone.
+pub fn set_vstack_fill(handle: i64, fill: bool) {
+    if let Ok(mut guard) = NON_FILL_VSTACKS.lock() {
+        let set = guard.get_or_insert_with(Default::default);
+        if fill {
+            set.remove(&handle);
+        } else {
+            set.insert(handle);
+        }
+    }
+    let Some(parent_ref) = get_widget(handle) else { return };
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 16);
+        let count = env
+            .call_method(parent_ref.as_obj(), jni::jni_str!("getChildCount"), jni::jni_sig!("()I"), &[])
+            .and_then(|v| v.i())
+            .unwrap_or(0);
+        let (from, to) = if fill { (-2, -1) } else { (-1, -2) };
+        for i in 0..count {
+            let Ok(child) = env
+                .call_method(
+                    parent_ref.as_obj(),
+                    jni::jni_str!("getChildAt"),
+                    jni::jni_sig!("(I)Landroid/view/View;"),
+                    &[JValue::Int(i)],
+                )
+                .and_then(|v| v.l())
+            else {
+                continue;
+            };
+            let Ok(lp_obj) = env
+                .call_method(
+                    &child,
+                    jni::jni_str!("getLayoutParams"),
+                    jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
+                    &[],
+                )
+                .and_then(|v| v.l())
+            else {
+                continue;
+            };
+            if lp_obj.is_null() {
+                continue;
+            }
+            let cur_w = env
+                .get_field(&lp_obj, jni::jni_str!("width"), jni::jni_sig!("I"))
+                .and_then(|v| v.i())
+                .unwrap_or(0);
+            if cur_w == from {
+                let _ = env.set_field(&lp_obj, jni::jni_str!("width"), jni::jni_sig!("I"), JValue::Int(to));
+                let _ = env.call_method(
+                    &child,
+                    jni::jni_str!("setLayoutParams"),
+                    jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
+                    &[JValue::Object(&lp_obj)],
+                );
+            }
+        }
+        if env.exception_check() {
+            let _ = env.exception_clear();
+        }
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+        }
+    })
+}
+
 /// Add a child view to a parent ViewGroup.
-/// For vertical LinearLayout parents (VStack), sets child width to MATCH_PARENT
-/// to match iOS UIStackView fill alignment behavior.
+/// For vertical LinearLayout parents (VStack) with the default fill alignment,
+/// stretches the child's width to MATCH_PARENT to match iOS UIStackView fill
+/// behaviour. An explicit width (`widgetSetWidth` before the add) is kept, and
+/// so is WRAP_CONTENT under a leading/center/trailing-aligned stack.
 pub fn add_child(parent_handle: i64, child_handle: i64) {
     if let (Some(parent_ref), Some(child_ref)) =
         (get_widget(parent_handle), get_widget(child_handle))
@@ -284,14 +370,25 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
                         if let Ok(lp_obj) = lp.l() {
                             if !lp_obj.is_null() {
                                 if orientation == 1 {
-                                    // VERTICAL — stretch children to fill width
-                                    let _ = env.set_field(
-                                        &lp_obj,
-                                        jni::jni_str!("width"),
-                                        jni::jni_sig!("I"),
-                                        JValue::Int(-1),
-                                    );
-                                // MATCH_PARENT
+                                    // VERTICAL — stretch children to fill width,
+                                    // unless the child has an explicit width
+                                    // (> 0) or the stack isn't fill-aligned.
+                                    let cur_w = env
+                                        .get_field(
+                                            &lp_obj,
+                                            jni::jni_str!("width"),
+                                            jni::jni_sig!("I"),
+                                        )
+                                        .map(|v| v.i().unwrap_or(0))
+                                        .unwrap_or(0);
+                                    if cur_w < 0 && vstack_fills_width(parent_handle) {
+                                        let _ = env.set_field(
+                                            &lp_obj,
+                                            jni::jni_str!("width"),
+                                            jni::jni_sig!("I"),
+                                            JValue::Int(-1),
+                                        ); // MATCH_PARENT
+                                    }
                                 } else if orientation == 0 {
                                     // HORIZONTAL — share space equally
                                     // If child has MATCH_PARENT width, convert to weight-based

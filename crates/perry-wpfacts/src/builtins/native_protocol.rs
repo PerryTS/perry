@@ -1276,12 +1276,13 @@ pub fn global_user_method(m: &Model, t: Tok, a: Atom) -> bool {
 /// with no binding; `console` lowers to it too) that is a program-owned key
 /// of the global object (`global_user_key`) and that the sentinel does not
 /// route by name. Codegen lowers the Console methods (lower_call
-/// console_promise.rs; `host_of`) and `resolve` / `reject` (the Promise
-/// statics) on the sentinel itself, whatever the global object holds. Any
-/// other such name is [[Get]](globalThis, name).
+/// console_promise.rs; `host_of`), `resolve` / `reject` (the Promise
+/// statics) and `fromAsync` (`Array.fromAsync`) on the sentinel itself,
+/// whatever the global object holds. Any other such name is
+/// [[Get]](globalThis, name).
 pub fn sentinel_user_global(m: &Model, name: &str) -> bool {
     global_user_key(m, name)
-        && !matches!(name, "resolve" | "reject")
+        && !matches!(name, "resolve" | "reject" | "fromAsync")
         && super::host_of(BuiltinNs::Other, name, true).is_none()
 }
 

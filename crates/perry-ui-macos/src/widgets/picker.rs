@@ -39,17 +39,21 @@ define_class!(
             let handle = self.ivars().handle.get();
             let addr = self as *const Self as usize;
             crate::catch_callback_panic("picker callback", std::panic::AssertUnwindSafe(|| {
-                PICKER_CALLBACKS.with(|cbs| {
-                    if let Some(&callback) = cbs.borrow().get(&addr) {
-                        if let Some(view) = super::get_widget(handle) {
-                            let index: i64 = unsafe { msg_send![&*view, indexOfSelectedItem] };
-                            let closure_ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
-                            unsafe {
-                                js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, index as f64);
-                            }
+                // Copy the closure out and release the borrow before calling
+                // into JS: the callback may create another widget of this kind
+                // (which inserts into this map) or trigger a GC root scan
+                // (which borrows it mutably) — either panicked with
+                // "RefCell already borrowed" while the borrow was held.
+                let callback = PICKER_CALLBACKS.with(|cbs| cbs.borrow().get(&addr).copied());
+                if let Some(callback) = callback {
+                    if let Some(view) = super::get_widget(handle) {
+                        let index: i64 = unsafe { msg_send![&*view, indexOfSelectedItem] };
+                        let closure_ptr = unsafe { js_nanbox_get_pointer(callback) } as *const u8;
+                        unsafe {
+                            js_closure_call1(closure_ptr, perry_ffi::JsThis::UNDEFINED, index as f64);
                         }
                     }
-                });
+                }
             }));
         }
     }

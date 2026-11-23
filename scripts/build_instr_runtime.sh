@@ -15,6 +15,9 @@
 #   scripts/build_instr_runtime.sh x86_64-unknown-linux-gnu prod
 #
 # PERRY_INSTR_PACKAGES=runtime builds only the runtime and stdlib archives.
+# PERRY_INSTR_BUILD_ONLY=1 stops after the Cargo build, with --locked because
+# such a run shares the checkout with other builds (scripts/component_check.sh);
+# a later plain run finds that graph fresh and only copies the archives.
 #
 # The variant is a second Cargo graph (PERRY_RUNTIME_INSTRUMENTS=1 changes the
 # runtime's build-script cfgs, so every crate that bundles the runtime is built
@@ -37,6 +40,7 @@ if [[ -n "$target" ]]; then
   args+=(--target "$target")
   sub="$target/$profile_dir"
 fi
+[[ "${PERRY_INSTR_BUILD_ONLY:-}" == 1 ]] && args+=(--locked)
 unset RUSTFLAGS
 if [[ "${PERRY_INSTR_PACKAGES:-}" == "runtime" ]]; then
   # Runtime and stdlib only (no wrapper archives), for jobs that never route a
@@ -46,6 +50,7 @@ if [[ "${PERRY_INSTR_PACKAGES:-}" == "runtime" ]]; then
 else
   env CARGO_TARGET_DIR="$instr" PERRY_RUNTIME_INSTRUMENTS=1 cargo build-perry-instr "${args[@]}"
 fi
+[[ "${PERRY_INSTR_BUILD_ONLY:-}" == 1 ]] && exit 0
 mkdir -p "$ordinary/$sub"
 copied=0
 for f in "$instr/$sub"/libperry_runtime.a "$instr/$sub"/libperry_stdlib.a "$instr/$sub"/libperry_ext_*.a \

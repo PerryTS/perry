@@ -5,7 +5,10 @@
 //! only for a program that links the wrapper (`feature_hooks`), so outside
 //! such a program nothing reachable references these symbols. ELF and
 //! Mach-O linkers report only references from code they keep; MSVC resolves
-//! every reference of every object it loads. For MSVC each symbol therefore
+//! every reference of every object it loads, and an Android app is an ELF
+//! shared object, where an unresolved reference links fine but makes
+//! `dlopen` fail at launch (every 0.5.1665 Android app: "cannot locate
+//! symbol js_ext_http_native_dispatch"). For MSVC and Android each symbol therefore
 //! has a weak default here, which the wrapper's definition replaces when it
 //! is linked; the default is never reached, because only an installed
 //! adapter calls these, and it aborts if it is.
@@ -13,7 +16,7 @@
 //! Every adapter names these symbols through this module, so each has one
 //! declaration.
 
-#[cfg(not(target_env = "msvc"))]
+#[cfg(not(any(target_env = "msvc", target_os = "android")))]
 macro_rules! wrapper_symbols {
     ($(fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty)?;)*) => {
         #[allow(dead_code, improper_ctypes, clippy::too_many_arguments)]
@@ -23,7 +26,7 @@ macro_rules! wrapper_symbols {
     };
 }
 
-#[cfg(target_env = "msvc")]
+#[cfg(any(target_env = "msvc", target_os = "android"))]
 macro_rules! wrapper_symbols {
     ($(fn $name:ident($($arg:ident: $ty:ty),* $(,)?) $(-> $ret:ty)?;)*) => {
         $(
@@ -37,7 +40,7 @@ macro_rules! wrapper_symbols {
     };
 }
 
-#[cfg(target_env = "msvc")]
+#[cfg(any(target_env = "msvc", target_os = "android"))]
 #[cold]
 fn wrapper_not_linked(symbol: &str) -> ! {
     eprintln!("perry: internal error: {symbol} was called but its wrapper archive is not linked");
