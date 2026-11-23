@@ -609,10 +609,6 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install nightly-2026-10-04 --profile minimal
       - uses: ./.github/actions/setup-llvm22
-      - uses: ./.github/actions/perry-rust-cache
-        with:
-          key: gc-native-roots
-          save: "true"
       - name: Build compiler and static runtime (perry-dev profile)
         run: |
           set -euo pipefail
