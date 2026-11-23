@@ -599,10 +599,6 @@ impl<'a> Gen<'a> {
             | Expr::PathMatchesGlob(..)
             | Expr::PathResolveJoin(..)
             | Expr::PathWin32Join(..)
-            | Expr::ObjectIsFrozen(..)
-            | Expr::ObjectIsSealed(..)
-            | Expr::ObjectIsExtensible(..)
-            | Expr::ReflectIsExtensible(..)
             | Expr::SymbolFor(..)
             | Expr::SymbolKeyFor(..)
             | Expr::SymbolDescription(..)
@@ -657,6 +653,20 @@ impl<'a> Gen<'a> {
             }
             // `Symbol(d)` is a Symbol (ECMA-262 20.4.1.1: ToString of `d`
             // unless undefined).
+            // Rule PXINV: [[IsExtensible]] of the operand (20.1.2.16,
+            // 28.1.10), and for isFrozen / isSealed TestIntegrityLevel
+            // (7.3.16): [[OwnPropertyKeys]] and [[GetOwnProperty]] of each
+            // key. A primitive operand answers without any (Reflect's
+            // throws a TypeError); nothing is converted.
+            Expr::ObjectIsFrozen(x)
+            | Expr::ObjectIsSealed(x)
+            | Expr::ObjectIsExtensible(x)
+            | Expr::ReflectIsExtensible(x) => {
+                let o = self.expr(fx, x);
+                let integrity = matches!(e, Expr::ObjectIsFrozen(..) | Expr::ObjectIsSealed(..));
+                crate::builtins::is_extensible_ops(&mut self.m, o, integrity);
+                self.prim_node(prim::BOOL)
+            }
             Expr::SymbolNew(..) => self.prim_kids(
                 fx,
                 e,

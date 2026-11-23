@@ -102,8 +102,6 @@ pub enum ProxyOp {
     OwnProp(Key, NodeId),
     /// The `deleteProperty` trap call for `key`.
     DelTrap(Atom),
-    /// Rule PXDEL: the `deleteProperty` trap call under a computed key.
-    DelAny,
     /// Rule PXPROTO: the `setPrototypeOf` trap call and the forward of one
     /// prototype value node.
     SetProto(NodeId),
@@ -114,8 +112,21 @@ pub enum ProxyOp {
     /// [[OwnPropertyKeys]] and [[GetOwnProperty]] of every key: the
     /// `ownKeys` / `getOwnPropertyDescriptor` traps and the target's own.
     OwnKeys,
-    /// [[GetPrototypeOf]]: the `getPrototypeOf` trap (a for-in walk).
+    /// [[GetPrototypeOf]] (10.5.1): the `getPrototypeOf` trap and the
+    /// forward, its result node (`proxy_proto_trap`).
     ProtoTrap,
+    /// for-in's walk on from the Proxy's prototype (`proxy_own_keys`).
+    ProtoWalk,
+    /// Rule PXINV: [[IsExtensible]] (10.5.3): the `isExtensible` trap and
+    /// the forward.
+    IsExt,
+    /// Rule PXINV: the invariant checks of one operation class on the
+    /// target (`proxy_inv`): target.[[GetOwnProperty]] of (key, key node)
+    /// and IsExtensible(target).
+    Inv(Key, NodeId, bool),
+    /// Rule PXINV: the `deleteProperty` trap call and the forward of a
+    /// delete under the computed key value `idx` (`Cons::DeleteIdx`).
+    DelIdx(NodeId),
     /// Rule PXCALL: the `ProxyCallee` rule of the called Proxy (the id) on
     /// this Proxy's target: a Proxy is callable when its target is.
     Callee(u32),
@@ -309,6 +320,72 @@ impl Model {
         self.proxies[p as usize].ops.insert(op, NO_NODE).is_some()
     }
 
+    /// Rule PXINV: the internal methods an operation's invariant checks
+    /// (ECMA-262 10.5.x, after the trap returns) call on the target:
+    /// target.[[GetOwnProperty]](P) (`own`: the key and its key node) and
+    /// IsExtensible(target) (`ext`). On an ordinary target they run no code;
+    /// a Proxy target runs its `getOwnPropertyDescriptor` / `isExtensible`
+    /// trap and its own checks (`Cons::OwnProp`, `Cons::Meta`). Once per
+    /// (Proxy, checks).
+    fn proxy_inv(&mut self, p: u32, own: Option<(Key, NodeId)>, ext: bool) {
+        if let Some((key, idx)) = own {
+            if !self.proxy_made(p, ProxyOp::Inv(key, idx, false)) {
+                let t = self.proxies[p as usize].target;
+                self.cons(t, Cons::OwnProp { key, idx });
+            }
+        }
+        if ext && !self.proxy_made(p, ProxyOp::Inv(Key::any(), NO_NODE, true)) {
+            let t = self.proxies[p as usize].target;
+            let reason = self.reason("Proxy invariant check: IsExtensible(target)");
+            self.cons(
+                t,
+                Cons::Meta {
+                    op: MetaOp::IsExtensible,
+                    reason,
+                },
+            );
+        }
+    }
+
+    /// Rule PXINV: p.[[IsExtensible]]() (10.5.3): trap `isExtensible( t )`;
+    /// step 8 IsExtensible(target), which is also the forward (step 6).
+    fn proxy_is_extensible(&mut self, p: u32) {
+        if self.proxy_made(p, ProxyOp::IsExt) {
+            return;
+        }
+        let t = self.proxies[p as usize].target;
+        let ret = self.node_l("proxy-isextensible-ret");
+        self.proxy_trap(p, "isExtensible", None, vec![t], ret);
+        self.proxy_inv(p, None, true);
+    }
+
+    /// p.[[GetPrototypeOf]]() (10.5.1): trap `getPrototypeOf( t )`, whose
+    /// result is an Object or null (step 7: a TypeError otherwise); the
+    /// forward target.[[GetPrototypeOf]]() (step 6), also step 11's check
+    /// on a non-extensible target, and IsExtensible(target) (step 8). The
+    /// result node, made once.
+    fn proxy_proto_trap(&mut self, p: u32) -> NodeId {
+        if let Some(&n) = self.proxies[p as usize].ops.get(&ProxyOp::ProtoTrap) {
+            return n;
+        }
+        let pn = self.node_l("proxy-getprototypeof");
+        self.proxies[p as usize].ops.insert(ProxyOp::ProtoTrap, pn);
+        let t = self.proxies[p as usize].target;
+        let raw = self.node_l("proxy-getprototypeof-ret");
+        self.proxy_trap(p, "getPrototypeOf", None, vec![t], raw);
+        self.cons(raw, Cons::Objects { dst: pn });
+        self.cons(
+            raw,
+            Cons::TypeIs {
+                mask: prim::NULL,
+                dst: pn,
+            },
+        );
+        self.proxy_inv(p, None, true);
+        self.cons(t, Cons::ProtoOf { dst: pn });
+        pn
+    }
+
     /// [[Get]] (10.5.8): trap `get( t, key, receiver )`, and the forward.
     /// The result node of the class (`ProxyOp::Get`): made once, with one
     /// trap call returning into it and one forward read of the target into
@@ -335,6 +412,7 @@ impl Model {
         let k = self.proxy_key_arg(key, idx);
         let r = self.proxy_recv(recv);
         self.proxy_trap(p, "get", Some(key), vec![t, k, r], g);
+        self.proxy_inv(p, Some((key, idx)), false);
         self.cons(
             t,
             Cons::FwdLoad {
@@ -384,6 +462,7 @@ impl Model {
                 let r = self.proxy_recv(recv);
                 let ret = self.node_l("proxy-set-ret");
                 self.proxy_trap_in(p, "set", Some(key), vec![t, k, v, r], ret, throw);
+                self.proxy_inv(p, Some((key, NO_NODE)), false);
                 (v, throw)
             }
         };
@@ -414,6 +493,7 @@ impl Model {
         self.sink_node(ret, r);
         self.proxy_trap(p, "getOwnPropertyDescriptor", Some(key), vec![t, k], ret);
         self.cons(t, Cons::OwnProp { key, idx });
+        self.proxy_inv(p, None, true);
     }
 
     /// Rule PXDEFINE: p.[[DefineOwnProperty]](key, desc) (10.5.6) with a
@@ -455,6 +535,7 @@ impl Model {
                         .insert(ProxyOp::DefineAcc(key, setter), f);
                 }
                 self.cons(t, Cons::OwnProp { key, idx: NO_NODE });
+                self.proxy_inv(p, None, true);
                 self.cons(
                     t,
                     Cons::DefineOwn {
@@ -705,6 +786,7 @@ impl Model {
         let keys = self.node_l("proxy-ownkeys-ret");
         self.proxy_trap(p, "ownKeys", None, vec![target], keys);
         self.proxy_result_reads(keys, &["length"], true, reason);
+        self.proxy_inv(p, None, true);
         self.cons(
             target,
             Cons::Implicit {
@@ -735,6 +817,8 @@ impl Model {
         let t = self.proxies[p as usize].target;
         let ret = self.node_l("proxy-preventextensions-ret");
         self.proxy_trap(p, "preventExtensions", None, vec![t], ret);
+        // Step 8: IsExtensible(target) when the trap answered true.
+        self.proxy_inv(p, None, true);
         if kind != Hard::E8PreventExtensions {
             match kind == Hard::E8Freeze {
                 true => self.proxy_own_props(p, reason),
@@ -763,12 +847,10 @@ impl Model {
     /// own keys are enumerated in turn. Nothing else runs.
     pub(crate) fn proxy_own_keys(&mut self, p: u32, reason: u32) {
         self.proxy_own_props(p, reason);
-        if self.proxy_made(p, ProxyOp::ProtoTrap) {
+        if self.proxy_made(p, ProxyOp::ProtoWalk) {
             return;
         }
-        let target = self.proxies[p as usize].target;
-        let proto = self.node_l("proxy-getprototypeof-ret");
-        self.proxy_trap(p, "getPrototypeOf", None, vec![target], proto);
+        let proto = self.proxy_proto_trap(p);
         self.cons(
             proto,
             Cons::Implicit {
@@ -1457,6 +1539,17 @@ impl Model {
                     let t = self.proxies[p as usize].target;
                     let ret = self.node_l("proxy-setprototypeof-ret");
                     self.proxy_trap(p, "setPrototypeOf", None, vec![t, src], ret);
+                    // Steps 9-ff: IsExtensible(target), then
+                    // target.[[GetPrototypeOf]]() compared with V.
+                    self.proxy_inv(p, None, true);
+                    let r = self.reason("Proxy invariant check: target.[[GetPrototypeOf]]");
+                    self.cons(
+                        t,
+                        Cons::Meta {
+                            op: MetaOp::ProtoOf,
+                            reason: r,
+                        },
+                    );
                     self.cons(t, Cons::ProtoFrom { src });
                 }
             }
@@ -1476,19 +1569,13 @@ impl Model {
                 }
             }
             // Rule PXDEL: a delete under a computed key (E7 on an ordinary
-            // object): [[Delete]] (10.5.10), trap `deleteProperty( t, key )`
-            // under any key (the key a String or a Symbol), and the
-            // forward, the target's E7.
+            // object): the forward, the target's E7. Its [[Delete]] (10.5.10)
+            // trap call is the `Cons::DeleteIdx` beside it, which carries the
+            // key value.
             Cons::Hard {
                 kind: Hard::E7Delete,
                 reason,
             } => {
-                if !self.proxy_made(p, ProxyOp::DelAny) {
-                    let t = self.proxies[p as usize].target;
-                    let k = self.proxy_key_arg(Key::any(), NO_NODE);
-                    let ret = self.node_l("proxy-delete-ret");
-                    self.proxy_trap(p, "deleteProperty", Some(Key::any()), vec![t, k], ret);
-                }
                 if !self.proxy_made(p, ProxyOp::HardFwd(Hard::E7Delete)) {
                     let t = self.proxies[p as usize].target;
                     self.cons(
@@ -1499,6 +1586,34 @@ impl Model {
                         },
                     );
                 }
+            }
+            // Rule PXINV: [[Delete]] (10.5.10) under the key value `idx`:
+            // trap `deleteProperty( t, key )` with the program's key, the
+            // checks target.[[GetOwnProperty]](key) and IsExtensible(target),
+            // and the forward of the key to the target.
+            Cons::DeleteIdx { idx, reason } => {
+                if !self.proxy_made(p, ProxyOp::DelIdx(idx)) {
+                    let t = self.proxies[p as usize].target;
+                    let ret = self.node_l("proxy-delete-ret");
+                    self.proxy_trap(p, "deleteProperty", Some(Key::any()), vec![t, idx], ret);
+                    self.proxy_inv(p, Some((Key::any(), idx)), true);
+                    self.cons(t, Cons::DeleteIdx { idx, reason });
+                }
+            }
+            // Rule PXINV: the internal methods an invariant check or a test
+            // (`Object.isExtensible`) runs on the Proxy.
+            Cons::Meta { op, reason } => match op {
+                MetaOp::IsExtensible => self.proxy_is_extensible(p),
+                MetaOp::ProtoOf => {
+                    self.proxy_proto_trap(p);
+                }
+                MetaOp::OwnKeys => self.proxy_keys_trap(p, reason),
+            },
+            // [[GetPrototypeOf]] (10.5.1): `Object.getPrototypeOf`,
+            // `Reflect.getPrototypeOf`, the prototype a `super` home reads.
+            Cons::ProtoOf { dst } => {
+                let pn = self.proxy_proto_trap(p);
+                self.edge(pn, dst);
             }
             // Rule PXINT: an integrity level (`proxy_integrity`).
             Cons::Hard {
@@ -1555,6 +1670,7 @@ impl Model {
                 let k = self.proxy_key_arg(key, idx);
                 let ret = self.node_l("proxy-has-ret");
                 self.proxy_trap(p, "has", Some(key), vec![t, k], ret);
+                self.proxy_inv(p, Some((key, idx)), true);
                 self.cons(t, Cons::HasProp { key, idx });
             }
             // [[GetOwnProperty]] (10.5.5): trap `getOwnPropertyDescriptor( t,
@@ -1574,6 +1690,7 @@ impl Model {
                     let k = self.proxy_key_arg(Key::Named(key), NO_NODE);
                     let ret = self.node_l("proxy-delete-ret");
                     self.proxy_trap(p, "deleteProperty", Some(Key::Named(key)), vec![t, k], ret);
+                    self.proxy_inv(p, Some((Key::Named(key), NO_NODE)), true);
                 }
                 if !self.proxy_made(p, ProxyOp::DelFwd(key, reason)) {
                     self.cons(t, Cons::DeleteKey { key, reason });

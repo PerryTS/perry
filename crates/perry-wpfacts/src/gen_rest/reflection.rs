@@ -112,6 +112,7 @@ impl<'a> Gen<'a> {
                                 reason: r,
                             },
                         );
+                        self.m.cons(o, Cons::DeleteIdx { idx: kn, reason: r });
                     }
                 }
                 self.raise_on(o);
@@ -269,6 +270,7 @@ impl<'a> Gen<'a> {
                         reason: r,
                     },
                 );
+                self.m.cons(t, Cons::DeleteIdx { idx: k, reason: r });
                 self.prim_node(prim::BOOL)
             }
             Expr::ReflectApply {

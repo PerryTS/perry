@@ -66,6 +66,8 @@ impl Model {
             // `Object.hasOwn(o, k)` and kin: no flow on an ordinary object (a
             // Proxy's `getOwnPropertyDescriptor` trap: `solve/proxy.rs`).
             Cons::OwnProp { .. } => {}
+            // Rule PXINV: only a Proxy acts (`proxy_apply`).
+            Cons::DeleteIdx { .. } | Cons::Meta { .. } => {}
             Cons::Load { key, dst } => {
                 // The token loop (⊤ first) runs before the primitive load, so a ⊤
                 // receiver's read keeps the receiver's own root cause instead of being

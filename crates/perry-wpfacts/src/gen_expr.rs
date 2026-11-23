@@ -1943,6 +1943,7 @@ impl<'a> Gen<'a> {
                                 reason: r,
                             },
                         );
+                        self.m.cons(o, Cons::DeleteIdx { idx: k, reason: r });
                     }
                     other => {
                         let _ = self.expr(fx, other);

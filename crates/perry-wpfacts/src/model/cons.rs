@@ -67,6 +67,17 @@ impl IdentityRoute {
     }
 }
 
+/// Rule PXINV: the internal methods `Cons::Meta` runs (ECMA-262 10.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MetaOp {
+    /// [[IsExtensible]] (10.5.3).
+    IsExtensible,
+    /// [[GetPrototypeOf]] (10.5.1), its result compared, not kept.
+    ProtoOf,
+    /// [[OwnPropertyKeys]] (10.5.11), its list compared, not kept.
+    OwnKeys,
+}
+
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
@@ -404,6 +415,19 @@ pub enum Cons {
     /// `getOwnPropertyDescriptor` trap (`solve/proxy.rs`). `idx`: the key
     /// value, or `NO_NODE` for a named key.
     OwnProp { key: Key, idx: NodeId },
+    /// Rule PXINV: a delete under a computed key (`delete o[k]`,
+    /// `Reflect.deleteProperty`, an Array method's index delete), beside the
+    /// operation's `Hard` E7: `idx` holds the key ToPropertyKey made. No
+    /// flow on an ordinary object; a Proxy passes it to its
+    /// `deleteProperty` trap (10.5.10).
+    DeleteIdx { idx: NodeId, reason: u32 },
+    /// Rule PXINV: an internal method of the node's objects whose result is
+    /// a test, not a value (`MetaOp`): what the 10.5 invariant checks call
+    /// on a Proxy's target, and `Object.isExtensible` / `isFrozen` /
+    /// `isSealed`. No flow on an ordinary object (its own [[IsExtensible]],
+    /// [[GetPrototypeOf]], [[OwnPropertyKeys]] run no code); a Proxy runs
+    /// its trap and its own invariant checks (`solve/proxy.rs`).
+    Meta { op: MetaOp, reason: u32 },
     /// `Object.defineProperty(o, key, desc)` with a constant key (FVA 4.3a).
     /// An accessor descriptor (`data` false) on a literal layout that does
     /// not hold `key` as data: the key becomes an accessor key (the getter
@@ -1178,6 +1202,8 @@ impl Cons {
             Cons::DeleteKey { .. } => "deletekey",
             Cons::HasProp { .. } => "hasprop",
             Cons::OwnProp { .. } => "ownprop",
+            Cons::DeleteIdx { .. } => "deleteidx",
+            Cons::Meta { .. } => "meta",
             Cons::AddsKeys => "addskeys",
             Cons::DefineKey { .. } => "definekey",
             Cons::DefineAll { .. } => "defineall",

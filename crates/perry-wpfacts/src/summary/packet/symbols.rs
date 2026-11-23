@@ -52,6 +52,8 @@ impl Model {
             Cons::OwnProp { key, idx } => {
                 format!("OwnProp key={:?} idx={idx}", self.packet_key(key))
             }
+            Cons::DeleteIdx { idx, reason } => format!("DeleteIdx idx={idx} reason={reason}"),
+            Cons::Meta { op, reason } => format!("Meta {op:?} reason={reason}"),
             Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
             Cons::LenPermuted { t } => format!("LenPermuted {t}"),
             Cons::CjsPublish { dst } => format!("CjsPublish dst={:?}", dst),

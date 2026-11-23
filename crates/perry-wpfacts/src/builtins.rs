@@ -3729,6 +3729,9 @@ fn ns_method_inner(
             ret_prim(m, call, prim::BOOL);
         }
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible") => {
+            if let Some(o) = arg(m, call, 0) {
+                is_extensible_ops(m, o, name != "isExtensible");
+            }
             ret_prim(m, call, prim::BOOL);
         }
         // 20.1.2.13: ToObject(O), ToPropertyKey(P), then O.[[GetOwnProperty]](P):
@@ -4511,4 +4514,36 @@ fn error_tok(m: &mut Model, call: CallId) -> Tok {
 /// past the 285M bound; BATCHB31): the rule waits for that cost's fix.
 fn promise_all_index() -> bool {
     std::env::var("PERRY_FACTS_PROMISE_ALL_INDEX").as_deref() == Ok("1")
+}
+
+/// Rule PXINV: O.[[IsExtensible]]() of what `o` holds (`Object.isExtensible`,
+/// `Reflect.isExtensible`), and with `integrity` TestIntegrityLevel's
+/// (7.3.16) O.[[OwnPropertyKeys]]() and O.[[GetOwnProperty]](k) of each key
+/// (`Object.isFrozen` / `isSealed`). An ordinary object runs no code there;
+/// a Proxy runs its traps (`Cons::Meta`, `Cons::OwnProp`).
+pub(crate) fn is_extensible_ops(m: &mut Model, o: NodeId, integrity: bool) {
+    let reason = m.reason("[[IsExtensible]] / TestIntegrityLevel");
+    m.cons(
+        o,
+        Cons::Meta {
+            op: MetaOp::IsExtensible,
+            reason,
+        },
+    );
+    if integrity {
+        m.cons(
+            o,
+            Cons::Meta {
+                op: MetaOp::OwnKeys,
+                reason,
+            },
+        );
+        m.cons(
+            o,
+            Cons::OwnProp {
+                key: Key::any(),
+                idx: NO_NODE,
+            },
+        );
+    }
 }

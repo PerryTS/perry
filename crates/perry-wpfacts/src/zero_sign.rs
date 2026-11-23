@@ -168,6 +168,8 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::Identity { .. }
         | Cons::HasProp { .. }
         | Cons::OwnProp { .. }
+        | Cons::DeleteIdx { .. }
+        | Cons::Meta { .. }
         | Cons::Hard { .. }
         | Cons::TopIfTop { .. }
         | Cons::OwnTest { .. }

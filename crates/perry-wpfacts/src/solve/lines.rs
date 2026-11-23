@@ -8,6 +8,8 @@ impl Model {
             Cons::Identity { route } => format!("identity {n} {}", route.name()),
             Cons::HasProp { key, idx } => format!("hasprop {n} {key:?} {idx}"),
             Cons::OwnProp { key, idx } => format!("ownprop {n} {key:?} {idx}"),
+            Cons::DeleteIdx { idx, .. } => format!("deleteidx {n} {idx}"),
+            Cons::Meta { op, .. } => format!("meta {n} {op:?}"),
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
             Cons::ProtoKey { key, dst } => {
                 format!("protokey {n} {} {dst}", self.key_name(Key::Named(*key)))

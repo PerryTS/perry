@@ -232,3 +232,89 @@ fn proxy_integrity_levels_run_their_traps() {
     }
     site(t, "", "Object.freeze(px);", true).unwrap();
 }
+
+const IE_OUT: &str = "isExtensible(t: any) { external(payload); return true; }";
+const IE_KEEP: &str = "isExtensible(t: any) { return true; }";
+
+/// `px` over an inner Proxy with handler `h` on `{}`.
+fn inner(h: &str) -> String {
+    format!("new Proxy({{}}, {{ {h} }})")
+}
+
+/// Rule PXINV: the invariant checks of 10.5.x call the target's internal
+/// methods; a Proxy target runs its traps there. preventExtensions (10.5.4
+/// step 8) and ownKeys (10.5.11 step 9) call IsExtensible(target): the
+/// inner `isExtensible` trap.
+#[test]
+fn proxy_invariant_checks_run_the_inner_is_extensible_trap() {
+    let pe = "preventExtensions(t: any) { return true; }";
+    let keys = "ownKeys(t: any) { return []; }";
+    for (h, op) in [
+        (pe, "Object.preventExtensions(px);"),
+        (keys, "Reflect.ownKeys(px);"),
+        ("has(t: any, k: any) { return false; }", "\"a\" in px;"),
+    ] {
+        site(&inner(IE_OUT), h, op, false).unwrap_or_else(|e| panic!("{op}: {e}"));
+        site(&inner(IE_KEEP), h, op, true).unwrap_or_else(|e| panic!("{op}: {e}"));
+    }
+}
+
+/// [[Get]]'s check (10.5.8 step 9) calls target.[[GetOwnProperty]](P): the
+/// inner `getOwnPropertyDescriptor` trap; setPrototypeOf's (10.5.2) calls
+/// target.[[GetPrototypeOf]](): the inner `getPrototypeOf` trap.
+#[test]
+fn proxy_invariant_checks_run_the_inner_descriptor_and_prototype_traps() {
+    let gopd = "getOwnPropertyDescriptor(t: any, k: any) { external(payload); return undefined; }";
+    let gopd_keep = "getOwnPropertyDescriptor(t: any, k: any) { return undefined; }";
+    let get = "get(t: any, k: any) { return 1; }";
+    site(&inner(gopd), get, "px.a;", false).unwrap();
+    site(&inner(gopd_keep), get, "px.a;", true).unwrap();
+    let gpo = "getPrototypeOf(t: any) { external(payload); return null; }";
+    let gpo_keep = "getPrototypeOf(t: any) { return null; }";
+    let spo = "setPrototypeOf(t: any, v: any) { return true; }";
+    let op = "Object.setPrototypeOf(px, {});";
+    site(&inner(gpo), spo, op, false).unwrap();
+    site(&inner(gpo_keep), spo, op, true).unwrap();
+}
+
+/// Object.isExtensible / isFrozen and Reflect.isExtensible run the
+/// `isExtensible` trap (10.5.3); isFrozen also `ownKeys` (7.3.16).
+#[test]
+fn proxy_is_extensible_runs_the_trap() {
+    for op in [
+        "Object.isExtensible(px);",
+        "Reflect.isExtensible(px);",
+        "Object.isFrozen(px);",
+    ] {
+        site("{}", IE_OUT, op, false).unwrap_or_else(|e| panic!("{op}: {e}"));
+        site("{}", IE_KEEP, op, true).unwrap_or_else(|e| panic!("{op}: {e}"));
+    }
+    site("{}", KEYS_TRAP, "Object.isSealed(px);", false).unwrap();
+    site("{}", KEYS_TRAP, "Object.isExtensible(px);", true).unwrap();
+}
+
+/// Object.getPrototypeOf on a Proxy runs its `getPrototypeOf` trap
+/// (10.5.1); the forward gives the target's prototype.
+#[test]
+fn proxy_get_prototype_of_runs_the_trap_and_forwards() {
+    let gpo = "getPrototypeOf(t: any) { external(payload); return null; }";
+    site("{}", gpo, "Object.getPrototypeOf(px);", false).unwrap();
+    site("{}", "getPrototypeOf(t: any) { return null; }", "Object.getPrototypeOf(px);", true).unwrap();
+    let t = "Object.create({ m() { external(payload); } })";
+    site(t, "", "Object.getPrototypeOf(px).m();", false).unwrap();
+    let t = "Object.create({ m() { return 1; } })";
+    site(t, "", "Object.getPrototypeOf(px).m();", true).unwrap();
+}
+
+/// Rule PXINV: a computed-key delete passes the program's key to the
+/// `deleteProperty` trap (10.5.10 step 7), not any String.
+#[test]
+fn proxy_delete_computed_key_passes_the_key() {
+    let h = "deleteProperty(t: any, k: any) { const o: any = { a: payload, b: 1 }; external(o[k]); return true; }";
+    for (key, proven) in [("b", true), ("a", false)] {
+        let op = format!("const kk: string = [\"{key}\"][0]; delete px[kk];");
+        site("{}", h, &op, proven).unwrap_or_else(|e| panic!("{key}: {e}"));
+        let op = format!("const kk: string = [\"{key}\"][0]; Reflect.deleteProperty(px, kk);");
+        site("{}", h, &op, proven).unwrap_or_else(|e| panic!("Reflect {key}: {e}"));
+    }
+}
