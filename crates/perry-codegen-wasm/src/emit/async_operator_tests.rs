@@ -76,3 +76,23 @@ f().then((v) => console.log(v), (e) => console.log("threw " + e.message));
         "w1w3a1b done"
     );
 }
+
+// An async body runs `do...while`, whose body runs once even when the condition starts
+// falsy, and whose condition takes JavaScript truthiness. Expected output is Node's.
+#[test]
+fn async_body_do_while_runs_until_condition_is_falsy() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  let i = 0; do { i++; } while (i < 3);
+  let n = 0; do { n++; } while (0);
+  let s = "ab"; do { s = s.slice(1); } while (s);
+  return i + "," + n + "," + JSON.stringify(s);
+}
+f().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "3,1,\"\""
+    );
+}
