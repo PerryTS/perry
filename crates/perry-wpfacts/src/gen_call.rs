@@ -1427,7 +1427,7 @@ impl<'a> Gen<'a> {
     pub(crate) fn extern_fail(&mut self, name: &str, args: &[NodeId], spread: &[NodeId]) -> NodeId {
         let why = format!("argument of unmodeled runtime entry {name}");
         for a in args.iter().chain(spread.iter()) {
-            self.to_sink(*a, &why);
+            self.to_writer_sink(*a, &why);
         }
         self.m
             .top_val(&format!("result of unmodeled runtime entry {name}"))

@@ -32,6 +32,13 @@ impl<'a> Gen<'a> {
         self.m.sink_node(v, r);
     }
 
+    /// [`Gen::to_sink`] into code no builtin contract describes
+    /// (`Model::writer_reason`).
+    pub(crate) fn to_writer_sink(&mut self, v: NodeId, why: &str) {
+        let r = self.m.writer_reason(why);
+        self.m.sink_node(v, r);
+    }
+
     pub(crate) fn new_call(
         &mut self,
         this: ThisArg,
@@ -291,7 +298,7 @@ impl<'a> Gen<'a> {
         perry_hir::walker::walk_expr_children(e, &mut |c| kids.push(c));
         for c in kids {
             let v = self.expr(fx, c);
-            self.to_sink(v, &why);
+            self.to_writer_sink(v, &why);
         }
         self.m
             .top_val(&format!("result of unmodeled HIR construct {name}"))

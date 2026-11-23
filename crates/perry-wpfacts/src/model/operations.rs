@@ -370,6 +370,32 @@ impl Model {
         self.unit_mode || self.unseen_module_runs || self.interp_runs
     }
 
+    /// An escape reason whose holder is code the analysis does not model
+    /// and no builtin contract describes: a ⊤ or opaque callee, `new` of
+    /// one, a store, spread or accessor into ⊤ or through an unknown chain,
+    /// an unmodeled construct or runtime entry. What it is handed may be
+    /// written under any key (until AMP-RESOLVE resolves those callees and
+    /// receivers to their candidates).
+    pub fn writer_reason(&mut self, s: &str) -> u32 {
+        let r = self.reason(s);
+        self.writer_reasons.insert(r);
+        r
+    }
+
+    /// Does an escape with `reason` hand the value to code that may write
+    /// it beyond a contract? Every escape does beside foreign code.
+    pub(crate) fn writes_any(&self, reason: u32) -> bool {
+        self.foreign_code() || self.writer_reasons.contains(&reason)
+    }
+
+    /// `t` escaped to code that may write it under any key.
+    #[inline]
+    pub fn is_escaped_writer(&self, t: Tok) -> bool {
+        self.esc_writer_bits
+            .get((t >> 6) as usize)
+            .is_some_and(|w| w & (1 << (t & 63)) != 0)
+    }
+
     pub fn reason(&mut self, s: &str) -> u32 {
         if let Some(&r) = self.reason_index.get(s) {
             return r;

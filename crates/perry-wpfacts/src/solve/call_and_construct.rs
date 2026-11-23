@@ -117,13 +117,13 @@ impl Model {
                         if self.protocol_calls.contains(&call) { ", protocol" } else { "" },
                         self.tok_name(x)
                     );
-                    self.reason(&why)
+                    self.writer_reason(&why)
                 } else if self.diagnostic.is_some() {
-                    self.reason(&format!(
+                    self.writer_reason(&format!(
                         "receiver of a call of an unknown function value [call {call}]"
                     ))
                 } else {
-                    self.reason("receiver of a call of an unknown function value")
+                    self.writer_reason("receiver of a call of an unknown function value")
                 };
                 if self.keysnap.is_some() {
                     self.keysnap_note(call, t, x);
@@ -354,18 +354,18 @@ impl Model {
             self.top_calls += 1;
         }
         let r = if t == TOP && self.diagnostic.is_some() {
-            self.reason(&format!(
+            self.writer_reason(&format!(
                 "passed to a call of an unknown function value [call {call}]"
             ))
         } else if t == TOP {
-            self.reason("passed to a call of an unknown function value")
+            self.writer_reason("passed to a call of an unknown function value")
         } else {
             crate::builtins::anyfall(
                 "opaque callee",
                 &self.tok_name(t),
                 &format!("call {call} this {:?}", self.calls[call as usize].this),
             );
-            self.reason("passed to an opaque builtin function value")
+            self.writer_reason("passed to an opaque builtin function value")
         };
         let na = self.calls[call as usize].args.len();
         for i in 0..na {
@@ -1011,7 +1011,7 @@ impl Model {
                     }
                     self.hold_realm(r);
                 }
-                let r = self.reason("passed to `new` of an unknown constructor");
+                let r = self.writer_reason("passed to `new` of an unknown constructor");
                 self.zs_call_args(call);
                 for &a in c.args.iter().chain(c.spread.iter()) {
                     self.sink_node(a, r);

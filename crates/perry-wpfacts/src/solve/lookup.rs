@@ -1780,7 +1780,7 @@ impl Model {
                     if let Some(d) = &mut self.diagnostic {
                         d.store_top.entry(src).or_insert(pn);
                     }
-                    let r = self.reason("store through an unknown prototype chain");
+                    let r = self.writer_reason("store through an unknown prototype chain");
                     self.sink_node(src, r);
                 }
             }
@@ -2538,15 +2538,15 @@ impl Model {
                         self.tok_name(origin),
                         fs.join(", ")
                     );
-                    self.reason(&why)
+                    self.writer_reason(&why)
                 } else if self.diagnostic.is_some() {
                     let cs: Vec<String> = calls.iter().map(|c| c.to_string()).collect();
-                    self.reason(&format!(
+                    self.writer_reason(&format!(
                         "receiver of a call of an unknown function value [call {}]",
                         cs.join(",")
                     ))
                 } else {
-                    self.reason("receiver of a call of an unknown function value")
+                    self.writer_reason("receiver of a call of an unknown function value")
                 };
                 if self.keysnap.is_some() {
                     if let Some(&c) = calls.first() {

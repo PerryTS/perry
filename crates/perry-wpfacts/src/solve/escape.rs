@@ -2,38 +2,11 @@
 
 use super::*;
 
-/// BLASTB: protocol keys the Perry runtime/host reads on a handed program
-/// object (hand-written v0 from perry-runtime: await/Promise, JSON, String/
-/// Number conversion, iteration, events, inspect, errors, Proxy traps).
-pub(crate) const PROTOCOL_KEYS: &[&str] = &[
-    "then", "catch", "finally", "toJSON", "toString", "valueOf", "toLocaleString",
-    "@@iterator", "@@asyncIterator", "@@toPrimitive", "@@toStringTag", "@@hasInstance",
-    "@@species", "@@dispose", "@@asyncDispose", "@@isConcatSpreadable", "@@match", "@@replace",
-    "@@search", "@@split", "next", "return", "throw", "handleEvent", "length", "constructor",
-    "prototype", "__perry_inspect_custom__", "name", "message", "stack", "cause", "errors",
-    "get", "set", "has", "deleteProperty", "apply", "construct", "ownKeys",
-    "getOwnPropertyDescriptor", "defineProperty", "getPrototypeOf", "setPrototypeOf",
-    "isExtensible", "preventExtensions", "done", "value",
-];
-
-pub(crate) fn contracts_bits() -> u32 {
-    static B: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
-    *B.get_or_init(|| {
-        std::env::var("PERRY_FACTS_CONTRACTS")
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(0)
-    })
-}
-
-fn contracts_report() -> bool {
-    static B: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-    *B.get_or_init(|| std::env::var_os("PERRY_FACTS_CONTRACTS_REPORT").is_some())
-}
-
 impl Model {
-    /// BLASTB: a program object, prototype, function or class (not an array,
-    /// not a built-in object): the runtime acts on it only by contract.
+    /// A program object, prototype, function or class (not an array, not a
+    /// built-in object): the runtime acts on it only by its contract
+    /// (owner premise Phase B, 2026-11-23), so handed to a builtin it gets
+    /// no write under any key (`escape_inner`).
     pub(crate) fn contracted_tok(&self, t: Tok) -> bool {
         match self.toks[t as usize] {
             TokKind::Obj(tm, _) => {
@@ -54,6 +27,9 @@ impl Model {
             // The ledger's root set: this root escapes `t` again.
             if let Some(l) = self.ledger.as_mut() {
                 l.again(t, reason, std::panic::Location::caller());
+            }
+            if !self.is_escaped_writer(t) && self.writes_any(reason) {
+                self.escape(t, reason);
             }
             return false;
         }
@@ -231,6 +207,12 @@ impl Model {
                     }
                 }
             }
+            // Handed by contract before, now to code that may write it under
+            // any key: it gets those writes, and what it reaches is held
+            // by that code too (once per token).
+            if !self.is_escaped_writer(t) && self.writes_any(reason) {
+                self.with_s(|m| m.escape_inner(t, reason, true));
+            }
             return;
         }
         // Another unit's class, instance, prototype or function (a
@@ -403,7 +385,7 @@ impl Model {
         if self.rel_phase != b'S' {
             self.rel(|| format!("escapeseed {t} {reason}"));
         }
-        self.with_s(|m| m.escape_inner(t, reason));
+        self.with_s(|m| m.escape_inner(t, reason, false));
         for s in self.wide_sites(t) {
             self.escape(s, reason);
         }
@@ -476,9 +458,27 @@ impl Model {
         }
         let fresh = self.esc_bits[w] & (1 << (t & 63)) == 0;
         self.esc_bits[w] |= 1 << (t & 63);
+        if fresh {
+            self.enum_escaped(t);
+        }
+        if self.writes_any(reason) || !self.contracted_tok(t) {
+            self.mark_writer(t, reason);
+        }
+    }
+
+    /// `t` is held by code that may write it under any key
+    /// (`is_escaped_writer`): beside ⊤ it is that ⊤ from now on.
+    #[track_caller]
+    fn mark_writer(&mut self, t: Tok, reason: u32) {
+        let w = (t >> 6) as usize;
+        if self.esc_writer_bits.len() <= w {
+            self.esc_writer_bits.resize(w + 1, 0);
+        }
+        let fresh = self.esc_writer_bits[w] & (1 << (t & 63)) == 0;
+        self.esc_writer_bits[w] |= 1 << (t & 63);
         if fresh
             && self.stop_top.is_some()
-            && super::escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+            && super::escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t)
         {
             let why = format!(
                 "a value is marked escaped ({}): beside ⊤ it is that ⊤ (escaped_beside_top)",
@@ -488,7 +488,6 @@ impl Model {
         }
         if fresh {
             self.late_esc.push(t);
-            self.enum_escaped(t);
         }
     }
 
@@ -1208,7 +1207,10 @@ impl Model {
         true
     }
 
-    pub(super) fn escape_inner(&mut self, t: Tok, reason: u32) {
+    /// `up`: `t` escaped by contract before and is now handed to code that
+    /// may write it (`writes_any`): only the writes and what carries the
+    /// escape on run again; what the first escape did once stays done.
+    pub(super) fn escape_inner(&mut self, t: Tok, reason: u32, up: bool) {
         // DECISIONS 212: a value that escapes beyond any contract under the
         // publication reason (no stand-in forwarded, no contract function)
         // is held by code no contract describes: what it reaches leaves
@@ -1223,8 +1225,15 @@ impl Model {
             Some(o) => format!("{o} / escape: {}", m.reasons[reason as usize]),
             None => format!("escape: {}", m.reasons[reason as usize]),
         });
-        self.virt_escape(t);
-        self.note_inst(t, false);
+        // Handed by contract (owner premise Phase B, 2026-11-23: the runtime
+        // and host act on a handed value only as the builtin's contract
+        // states): no write under any key, no unknown value stored. Code no
+        // contract describes (`writes_any`) may write it.
+        let wr = self.writes_any(reason) || !self.contracted_tok(t);
+        if !up {
+            self.virt_escape(t);
+            self.note_inst(t, false);
+        }
         if let Some(is) = self.contract_recv.get(&t).cloned() {
             self.recv_log
                 .entry(t)
@@ -1250,16 +1259,18 @@ impl Model {
             self.mark_escaped(t, reason);
             return;
         }
-        if matches!(self.toks[t as usize], TokKind::Proto(_)) {
+        if up {
+            self.mark_writer(t, reason);
+        } else {
+            if matches!(self.toks[t as usize], TokKind::Proto(_)) {
+                self.mark_escaped(t, reason);
+                self.resume_stopped(t);
+            }
             self.mark_escaped(t, reason);
-            self.resume_stopped(t);
+            self.rel(|| format!("escaped {t}"));
         }
-        self.mark_escaped(t, reason);
-        self.rel(|| format!("escaped {t}"));
         // DECISIONS 241: unknown code may store any key of a function.
-        if matches!(self.toks[t as usize], TokKind::Func(..))
-            && !(contracts_bits() & 1 != 0 && self.contracted_tok(t))
-        {
+        if matches!(self.toks[t as usize], TokKind::Func(..)) && wr {
             self.fn_props_top.insert(t);
         }
         // Overlapping abstract native tokens contribute read values, never
@@ -1272,27 +1283,9 @@ impl Model {
             }
             self.sink_node(read, reason);
         }
-        // Unknown code reads every field and can write any key.
-        let cb = contracts_bits();
-        let ct = cb != 0 && self.contracted_tok(t);
-        if contracts_report() {
-            eprintln!(
-                "perry: wpfacts contracts esc {} {} | {}",
-                self.tok_kind_word(t),
-                if ct { "C" } else { "U" },
-                self.reasons[reason as usize].chars().take(90).collect::<String>()
-            );
-        }
-        if ct && cb & 2 != 0 {
-            for k in PROTOCOL_KEYS {
-                let a = self.atom(k);
-                let n = self.field(t, a);
-                self.cons(n, Cons::TopSink { reason });
-            }
-        } else {
-            let all = self.all_fields(t);
-            self.cons(all, Cons::TopSink { reason });
-        }
+        // Unknown code reads every field (and, `wr`, can write any key).
+        let all = self.all_fields(t);
+        self.cons(all, Cons::TopSink { reason });
         // An internal slot is no property (`Model::field`): no key reads it,
         // but the built-in operations unknown code may run on `t` do (the
         // settled value of a promise reaches its reactions, 27.2.5.4
@@ -1325,7 +1318,7 @@ impl Model {
         if matches!(self.toks[t as usize], TokKind::ModNs(_)) {
             return;
         }
-        if !(ct && cb & 1 != 0) {
+        if wr {
             let any = self.any_key_node(t);
             self.add_top_held(any, t, |m| {
                 format!(
@@ -1345,7 +1338,7 @@ impl Model {
             });
             self.cons(v, Cons::TopSink { reason });
         }
-        if let Some(tm) = self.tmpl_of(t) {
+        if let Some(tm) = self.tmpl_of(t).filter(|_| !up) {
             *self.adds_keys.entry(tm).or_default() += 1;
         }
         // Its prototypes are reachable (`Object.getPrototypeOf`).
@@ -1362,7 +1355,7 @@ impl Model {
         // through the setters of its bindings object); and read any key:
         // every getter runs and its result reaches unknown code.
         let w = self.node_l("escaped-store");
-        if !(ct && cb & 1 != 0) {
+        if wr {
             self.add_top_held(w, t, |m| {
                 format!(
                     "stored into an escaped {}: {}",
@@ -1374,20 +1367,18 @@ impl Model {
         }
         self.escaped_accessor_runs(t, w, reason);
         match self.toks[t as usize].clone() {
-            TokKind::Func(f, _) => {
+            TokKind::Func(f, _) if !up => {
                 let fi = self.funcs[f as usize].clone();
                 if !fi.lexical_this {
                     self.escape_this(t, reason);
                 }
                 self.escape_fn_params(t, reason);
-                if !(ct && cb & 8 != 0) {
-                    self.construct_unknown(t, f, reason);
-                }
+                self.construct_unknown(t, f, reason);
             }
             TokKind::ClassObj(tm) => {
                 let p = self.tok(TokKind::Proto(tm));
                 self.escape(p, reason);
-                if (ct && cb & 8 != 0) || !self.unknown_constructible(t) {
+                if up || !self.unknown_constructible(t) {
                     return;
                 }
                 // Unknown code may construct it with unknown arguments.
@@ -1438,7 +1429,7 @@ impl Model {
                 }
             }
             // PROXY2: unknown code may run any operation on a Proxy.
-            TokKind::Proxy(p) => self.proxy_degrade(p, "escape"),
+            TokKind::Proxy(p) if !up => self.proxy_degrade(p, "escape"),
             TokKind::Bound(b) => {
                 let (target, bthis, bargs) = self.bound[b as usize].clone();
                 for n in [target, bthis].into_iter().chain(bargs) {

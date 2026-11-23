@@ -377,7 +377,7 @@ impl Model {
             }
         }
         if d == TOP {
-            let r = self.reason("spread into a value from unmodeled code");
+            let r = self.writer_reason("spread into a value from unmodeled code");
             let all = if s == TOP {
                 self.top_src("spread of ⊤ into ⊤")
             } else if builtins::builtin_function(self, s) {

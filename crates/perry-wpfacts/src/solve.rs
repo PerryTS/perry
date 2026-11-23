@@ -47,9 +47,11 @@ mod virt;
 
 // Property-key ranges come from value deltas, not source annotations. Keep
 // computed reads and calls on the same partition of ToPropertyKey's inputs.
-/// An escaped value (unknown code holds it) that is no parameter or
+/// An escaped value that code no contract describes holds (it may write
+/// any key of it, `Model::is_escaped_writer`) and that is no parameter or
 /// argument marker: beside ⊤ it is that ⊤, since every rule does to ⊤ at
-/// least what it does to the value. The one predicate of the arrival rule
+/// least what it does to the value. A value handed only by contract is not:
+/// a program store through ⊤ beside it must still write it. The one predicate of the arrival rule
 /// (`add_tokens_s`, with the markers that read as ⊤, DECISIONS 42), of ⊤'s
 /// arrival at a node that lists the value, and of a ⊤ node's pop.
 pub(crate) fn escaped_beside_top<V>(
@@ -211,7 +213,7 @@ impl Model {
             // is an escaped value (`Model::top_beside`): unknown code holds
             // it, so beside ⊤ it is that ⊤.
             if marker_top_bit(&self.marker_top, t)
-                || escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                || escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t)
             {
                 later.push(t);
                 continue;
@@ -258,12 +260,12 @@ impl Model {
                     .pts
                     .to_sorted()
                     .into_iter()
-                    .filter(|&t| escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t))
+                    .filter(|&t| escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t))
                     .collect();
                 self.ledger_again_beside_top(n, &gone);
             }
             let node = &mut self.nodes[n as usize];
-            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let (esc, pm, ab) = (&self.esc_writer_bits, &self.param_marker, &self.arg_bits);
             let old = std::mem::take(&mut node.pts);
             let before = old.len();
             node.pts = self
@@ -725,7 +727,7 @@ impl Model {
         for (reason, retained) in sinks {
             let root = l.enter_sink(n);
             for &t in toks {
-                if retained != Some(t) && escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t) {
+                if retained != Some(t) && escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t) {
                     l.again(t, reason, std::panic::Location::caller());
                 }
             }
@@ -1133,7 +1135,7 @@ impl Model {
         self.late_esc_at = self.work.get();
         let mut members = Vec::new();
         for n in 0..self.nodes.len() {
-            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let (esc, pm, ab) = (&self.esc_writer_bits, &self.param_marker, &self.arg_bits);
             let cover = |t: Tok| escaped_beside_top(esc, pm, ab, t);
             let node = &mut self.nodes[n];
             if !node.pts.contains_tok(TOP) {
@@ -1157,7 +1159,7 @@ impl Model {
                 let gone: Vec<Tok> = members.iter().copied().filter(|&t| cover(t)).collect();
                 self.ledger_again_beside_top(n as NodeId, &gone);
             }
-            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let (esc, pm, ab) = (&self.esc_writer_bits, &self.param_marker, &self.arg_bits);
             let cover = |t: Tok| escaped_beside_top(esc, pm, ab, t);
             let node = &mut self.nodes[n];
             let old = std::mem::take(&mut node.pts);
@@ -1953,7 +1955,15 @@ impl Model {
                 self.cons(n, Cons::HandRaise { region });
             }
         }
-        if self.sunk_nodes.insert(n) {
+        // Per level: a node sunk with a contract reason is sunk again with
+        // a writer reason (`Model::writes_any`), never the other way.
+        let first = if self.writes_any(reason) {
+            self.sunk_nodes.insert(n);
+            self.sunk_writer_nodes.insert(n)
+        } else {
+            !self.sunk_writer_nodes.contains(&n) && self.sunk_nodes.insert(n)
+        };
+        if first {
             self.cons(n, Cons::TopSink { reason });
         }
     }

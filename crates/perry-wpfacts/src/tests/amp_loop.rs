@@ -85,3 +85,54 @@ fn k8_unknown_call_holds_no_realm() {
         "⊤ new held the realm"
     );
 }
+
+/// K2: `o` handed to a host contract (the stream keeps the chunk): the
+/// host writes no key of it, so its
+/// field `n` holds only the program's number and `x.toFixed` is proven.
+/// (The sites on `o` itself stay open: derive still reads any escape as a
+/// layout change.)
+#[test]
+fn k2_contract_escape_writes_no_key() {
+    for h in ["process.stdout.write(o as any);"] {
+        let src = format!(
+            "const o = {{ m() {{ return 1; }}, n: 5 }};\n{h}\nconst x = o.n;\nconst r = /*A*/ x.toFixed(1);\nconsole.log(r);\n"
+        );
+        let pf = one(&src);
+        let at = src.find("/*A*/").unwrap() as u32;
+        let s = pf
+            .sites
+            .iter()
+            .filter(|s| s.key == "toFixed" && s.byte_offset >= at)
+            .min_by_key(|s| s.byte_offset)
+            .expect("toFixed site");
+        let v = format!("{:?}", s.verdict);
+        eprintln!("AMP-LOOP {h}: {v}");
+        assert!(!v.starts_with("No("), "a contract hand-off wrote o.n: {h}: {v}");
+    }
+}
+
+/// K2 keep: `o` handed to a ⊤ callee may be written under any key.
+#[test]
+fn k2_keep_top_callee_writes() {
+    let src = format!("{DECL}{OBJ}const f = get();\nf(o);\nconst r = /*A*/ o.m();\nconsole.log(r);\n");
+    assert!(!mono(&m_after(&src, "/*A*/")), "a ⊤ callee's argument kept o.m");
+}
+
+/// K2 keep (upgrade): handed by contract first, then to a ⊤ callee.
+#[test]
+fn k2_keep_contract_then_top_callee() {
+    let src = format!(
+        "{DECL}{OBJ}process.stdout.write(o as any);\nconst f = get();\nf(o);\nconst r = /*A*/ o.m();\nconsole.log(r);\n"
+    );
+    assert!(!mono(&m_after(&src, "/*A*/")), "a ⊤ callee holding p could not write o.m");
+}
+
+/// K2 keep: a program store through `x` ∈ {o, ⊤} writes `o` (o handed by
+/// contract is no ⊤: it stays beside ⊤ and gets the store).
+#[test]
+fn k2_keep_store_through_top_beside_contract_escape() {
+    let src = format!(
+        "{DECL}{OBJ}process.stdout.write(o as any);\nconst x: any = Math.random() > 0.5 ? o : get();\nx.m = () => 2;\nconst r = /*A*/ o.m();\nconsole.log(r);\n"
+    );
+    assert!(!mono(&m_after(&src, "/*A*/")), "the store through x missed o.m");
+}
