@@ -15,7 +15,7 @@ fn verdict(tail: &str) -> Verdict {
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         const s = new Svc();
-        declare const unknown: any;
+        declare function hostValue(): any; const unknown: any = hostValue;
         const take = (x: any) => {{ unknown.take(x); }};
         (function () {{ {tail} }})();
         console.log(g(s));

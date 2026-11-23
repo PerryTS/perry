@@ -26,7 +26,7 @@ fn escape_with_field(pf: &ProgramFacts, key: &str) -> Option<String> {
 
 fn src(tail: &str) -> String {
     format!(
-        "declare const unknown: any;
+        "declare function hostValue(): any; const unknown: any = hostValue;
          class HttpError extends Error {{
            response: any;
            constructor(message: string, response: any) {{ super(message); this.response = response; }}

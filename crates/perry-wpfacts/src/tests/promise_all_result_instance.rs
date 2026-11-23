@@ -17,7 +17,7 @@ fn src(calls: &str) -> String {
         function mkS(): any[] {{ return [new S()]; }}
         function mkA(): any[] {{ return [new A()]; }}
         function dep(xs: any[]): any {{ return Promise.all(xs); }}
-        declare const unknown: any;
+        declare function hostValue(): any; const unknown: any = hostValue;
         const k: any = Number(process.argv[3]);
         {calls}
             .then((d: any) => {{ const s = d[0][k]; unknown.take(d[1]); console.log(s.f); }});

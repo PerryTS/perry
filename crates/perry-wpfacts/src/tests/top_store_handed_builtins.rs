@@ -15,7 +15,7 @@ const PRE: &str = r#"
     class A { zz = 1; }
     class M { m(o: any) { return o.zz; } }
     class N { inner: any = new M(); }
-    declare const unknown: any;
+    declare function hostValue(): any; const unknown: any = hostValue;
     unknown.take(function (arr: any, kk: any) { arr[kk] = 1; });
 "#;
 

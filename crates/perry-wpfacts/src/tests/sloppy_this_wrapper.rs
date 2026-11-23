@@ -36,7 +36,7 @@ fn escape_with_field(pf: &ProgramFacts, key: &str) -> Option<String> {
 
 fn src(body: &str, calls: &str) -> String {
     format!(
-        "declare const unknown: any;
+        "declare function hostValue(): any; const unknown: any = hostValue;
          class A {{ a = 1; }}
          const a = new A();
          function M(this: any) {{ {body} }}

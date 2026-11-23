@@ -26,7 +26,7 @@ fn escape_with_field(pf: &ProgramFacts, key: &str) -> Option<String> {
 /// `init` is the first `array`; two chained copies, then `tail` runs.
 fn src(init: &str, tail: &str) -> String {
     format!(
-        "declare const unknown: any;
+        "declare function hostValue(): any; const unknown: any = hostValue;
          const kept = {{ keptmark: 1 }};
          function copy(dst: any, source: any) {{ dst.array = new source.array.constructor(source.array); }}
          const a: any = {{ array: {init} }};

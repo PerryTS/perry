@@ -27,7 +27,7 @@ fn escape_with_field(pf: &ProgramFacts, key: &str) -> Option<String> {
 
 fn src(tail: &str) -> String {
     format!(
-        "declare const unknown: any;
+        "declare function hostValue(): any; const unknown: any = hostValue;
          const kept = {{ keptmark: 1 }};
          const cb = () => kept;
          const re: any = /a+/g;
