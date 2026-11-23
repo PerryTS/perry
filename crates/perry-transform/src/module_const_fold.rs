@@ -283,7 +283,7 @@ fn walk_stmt_exprs(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for case in cases {

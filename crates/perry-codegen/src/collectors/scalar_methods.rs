@@ -474,7 +474,7 @@ fn stmt_writes_this_property(stmt: &Stmt, property: &str) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             expr_writes_this_property(discriminant, property)
                 || cases.iter().any(|case| {

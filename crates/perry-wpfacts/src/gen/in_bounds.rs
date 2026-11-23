@@ -263,7 +263,7 @@ impl Scan {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(discriminant);
                 for c in cases {

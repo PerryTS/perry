@@ -544,7 +544,7 @@ impl<'a> CensusWalker<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(discriminant, scope, loop_depth);
                 for case in cases {
@@ -682,7 +682,7 @@ fn demote_redeclarations_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             demote_redeclarations_expr(discriminant, ids, seen);
             for case in cases {
@@ -1331,7 +1331,7 @@ fn for_each_top_expr(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for case in cases {
@@ -1508,7 +1508,7 @@ fn rewrite_stmt(stmt: &mut Stmt, shared: &HashSet<LocalId>, index_uses: &HashSet
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             rewrite_expr(discriminant, shared, index_uses);
             for case in cases {

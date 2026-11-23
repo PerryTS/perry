@@ -1792,7 +1792,7 @@ fn split_closures_in(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 split_closures_in_expr(discriminant, names, facts, sh);
                 for c in cases {

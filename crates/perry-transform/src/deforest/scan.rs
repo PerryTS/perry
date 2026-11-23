@@ -113,7 +113,7 @@ fn scan_stmt_call_sites(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             scan_expr_call_sites(discriminant, candidates, out);
             for c in cases {
@@ -244,7 +244,7 @@ fn scan_stmt_for_closures(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             scan_expr_for_closures(discriminant, candidates, out);
             for c in cases {
@@ -416,7 +416,7 @@ impl StmtRefAllWalker<'_> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.visit_expr(discriminant);
                 for c in cases {
@@ -536,7 +536,7 @@ fn scan_stmt_funcrefs(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             scan_expr_funcrefs(discriminant, candidates, out);
             for c in cases {

@@ -182,7 +182,7 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, cx: &DefaultFill) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             fill_defaults_in_expr(discriminant, cx);
             for case in cases {

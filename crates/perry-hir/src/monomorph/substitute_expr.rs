@@ -1199,7 +1199,9 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
         Stmt::Switch {
             discriminant,
             cases,
+            byte_offset,
         } => Stmt::Switch {
+            byte_offset: *byte_offset,
             discriminant: substitute_expr(discriminant, substitutions),
             cases: cases
                 .iter()

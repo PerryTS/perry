@@ -644,7 +644,7 @@ impl<'a> Build<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(cx, discriminant);
                 for c in cases {

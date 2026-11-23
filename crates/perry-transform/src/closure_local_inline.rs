@@ -638,7 +638,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         Stmt::Labeled { body, .. } => for_each_expr_in_stmt(body, f),
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for c in cases {
@@ -692,7 +692,7 @@ pub(crate) fn for_each_expr_in_stmt_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut 
         Stmt::Labeled { body, .. } => for_each_expr_in_stmt_mut(body, f),
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for c in cases {

@@ -359,7 +359,7 @@ fn scan_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 expr(discriminant);
                 for case in cases {

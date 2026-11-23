@@ -197,7 +197,7 @@ fn stmts(body: &mut [Stmt], proven: Arms<'_>) {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 pick(discriminant, proven);
                 for case in cases {

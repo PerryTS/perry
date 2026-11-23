@@ -62,7 +62,7 @@ fn stmt_has_top_level_await(stmt: &Stmt) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             expr_has_top_level_await(discriminant)
                 || cases.iter().any(|c| {

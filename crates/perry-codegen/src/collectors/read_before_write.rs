@@ -588,7 +588,7 @@ impl Walk<'_> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(discriminant, st);
                 // Tests run in order until one matches: a case body is

@@ -76,7 +76,7 @@ pub(crate) fn generator_stmt_uses_call_this(stmt: &Stmt) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             generator_expr_uses_call_this(discriminant)
                 || cases.iter().any(|case| {

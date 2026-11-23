@@ -478,7 +478,7 @@ impl<'a> FuncEmitCtx<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 // Compile switch as cascading if/else blocks
                 // Strategy: store discriminant in a local-like pattern, compare each case

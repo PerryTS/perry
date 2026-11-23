@@ -99,7 +99,7 @@ fn walk_stmt(stmt: &Stmt, visit: &mut impl FnMut(&Expr)) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             walk_expr(discriminant, visit);
             for case in cases {
@@ -378,7 +378,7 @@ pub(crate) fn collect_loop_called_callee_bindings(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 scan_expr(discriminant, loop_depth, out);
                 for case in cases {

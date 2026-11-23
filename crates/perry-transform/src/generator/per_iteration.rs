@@ -328,7 +328,7 @@ fn each_expr<F: FnMut(&Expr)>(stmt: &Stmt, f: &mut F) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for c in cases {
@@ -703,7 +703,7 @@ fn each_expr_mut<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for c in cases {

@@ -812,7 +812,7 @@ fn scan_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 scan_expr(discriminant, depth, "switch discriminant", out);
                 for c in cases {

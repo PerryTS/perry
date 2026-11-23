@@ -141,7 +141,7 @@ pub fn rewrite_stmt(stmt: &mut Stmt) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             rewrite_expr(discriminant);
             for c in cases.iter_mut() {

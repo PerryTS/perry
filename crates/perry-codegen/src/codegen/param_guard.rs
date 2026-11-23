@@ -959,7 +959,7 @@ pub(crate) fn guarded_undefined_method_candidate(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 (in_loop && expr_has_guard(discriminant, id))
                     || cases
@@ -1130,7 +1130,7 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 !expr_contains_local_get(discriminant, id)
                     && cases.iter().all(|case| {
@@ -1274,7 +1274,7 @@ pub(crate) fn body_contains_await(stmts: &[perry_hir::Stmt]) -> bool {
         }
         perry_hir::Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             expr_contains_await(discriminant)
                 || cases.iter().any(|case| {

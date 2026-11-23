@@ -122,7 +122,7 @@ pub fn absorb_writes_into_index_used(stmts: &[perry_hir::Stmt], out: &mut HashSe
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 absorb_writes_in_expr(discriminant, out);
                 for c in cases {
@@ -287,7 +287,7 @@ pub fn walk_index_uses_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 walk_index_uses_in_expr(discriminant, out);
                 for c in cases {

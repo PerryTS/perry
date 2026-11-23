@@ -991,7 +991,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             for_each_expr(discriminant, f);
             for case in cases {

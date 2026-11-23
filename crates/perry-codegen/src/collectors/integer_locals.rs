@@ -854,7 +854,7 @@ impl ProvenanceJudge<'_> {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases,
+                    cases, ..
                 } => {
                     self.walk_expr(discriminant);
                     for c in cases {

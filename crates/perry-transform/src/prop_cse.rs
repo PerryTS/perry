@@ -531,7 +531,7 @@ fn stmt_exprs(s: &Stmt) -> Vec<&Expr> {
         } => condition.iter().chain(update.iter()).collect(),
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => std::iter::once(discriminant)
             .chain(cases.iter().filter_map(|c| c.test.as_ref()))
             .collect(),

@@ -720,7 +720,7 @@ impl<'a> Proof<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(discriminant, f);
                 for c in cases {

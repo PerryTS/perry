@@ -130,7 +130,7 @@ fn closure_free_exprs_of_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             f(discriminant);
             for case in cases {
@@ -250,7 +250,7 @@ fn closure_capture_ids_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<Loc
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             closure_capture_ids_expr(discriminant, out);
             for case in cases {
@@ -1248,7 +1248,7 @@ fn stmt_has_direct_super_call(stmt: &Stmt) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             expr_has_direct_super_call(discriminant)
                 || cases.iter().any(|case| {
@@ -1477,7 +1477,7 @@ pub(crate) fn append_new_args_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             append_new_args_expr(discriminant, class_name, cap_args, skip_if_present);
             for c in cases {
@@ -1612,7 +1612,7 @@ fn stamp_self_new_stmt(stmt: &mut Stmt, class_name: &str, eval_id: LocalId) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             stamp_self_new_expr(discriminant, class_name, eval_id);
             for c in cases {

@@ -1824,6 +1824,7 @@ fn lower_stmt_inner(
                 discriminant = Expr::LocalGet(id);
             }
             module.init.push(Stmt::Switch {
+                byte_offset: switch_stmt.span.lo.0,
                 discriminant,
                 cases,
             });

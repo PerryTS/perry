@@ -659,7 +659,7 @@ fn rw_stmt(stmt: &mut Stmt, rw: &Rw<'_>) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             rw_expr(discriminant, rw);
             for case in cases {

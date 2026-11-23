@@ -528,6 +528,7 @@ fn mark_iterator_completion_on_abrupt(
             Stmt::Switch {
                 discriminant,
                 mut cases,
+                byte_offset,
             } => {
                 let saved_id = iterator_completion_snapshot(ctx, &mut rewritten, state_id);
                 for case in cases.iter_mut() {
@@ -542,6 +543,7 @@ fn mark_iterator_completion_on_abrupt(
                     );
                 }
                 rewritten.push(Stmt::Switch {
+                    byte_offset,
                     discriminant,
                     cases,
                 });

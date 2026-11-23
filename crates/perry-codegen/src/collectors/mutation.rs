@@ -169,7 +169,7 @@ fn flat_const_stmts_are_safe(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 flat_const_expr_is_safe(discriminant, id, row_aliases, FlatConstUse::Value)
                     && cases.iter().all(|case| {
@@ -374,7 +374,7 @@ fn any_top_level_expr(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 if pred(discriminant) {
                     return true;

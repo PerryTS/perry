@@ -117,7 +117,7 @@ pub(super) fn collect_closures_from_stmts(stmts: &[Stmt], out: &mut Vec<Collecte
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 collect_closures_from_expr(discriminant, out);
                 for case in cases {

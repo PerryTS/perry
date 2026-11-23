@@ -149,7 +149,7 @@ fn collect_length_only_indices_in_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 collect_length_only_indices_in_expr(discriminant, non_escaping_arrays, uses);
                 for case in cases {
@@ -297,7 +297,7 @@ fn collect_used_array_indices_in_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 collect_used_array_indices_in_expr(discriminant, non_escaping_arrays, used);
                 for case in cases {
@@ -482,7 +482,7 @@ pub fn check_array_escapes_in_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 check_array_escapes_in_expr(discriminant, candidates, escaped);
                 for case in cases {

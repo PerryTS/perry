@@ -247,7 +247,7 @@ pub fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             scan_expr_for_max_local(discriminant, max_id);
             for case in cases {
@@ -474,7 +474,7 @@ pub fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             scan_expr_for_max_func(discriminant, max_id);
             for case in cases {

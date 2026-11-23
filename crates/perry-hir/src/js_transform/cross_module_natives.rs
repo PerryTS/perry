@@ -719,7 +719,7 @@ pub fn fix_native_instance_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             fix_native_instance_expr(discriminant, native_instances, local_id_instances);
             for case in cases {

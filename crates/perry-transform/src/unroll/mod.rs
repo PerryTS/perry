@@ -615,7 +615,7 @@ fn stmt_is_unrollable(stmt: &Stmt, iv_id: LocalId, loop_depth: u32) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             // Switch case bodies have `break` that targets the switch (not
             // the enclosing for). Counted as depth + 1 to allow them.
@@ -711,7 +711,7 @@ fn substitute_localget_with_int_in_stmt(stmt: &mut Stmt, iv_id: LocalId, value: 
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             substitute_localget_with_int(discriminant, iv_id, value);
             for c in cases {
@@ -913,7 +913,7 @@ fn refresh_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             refresh_in_expr(discriminant, remap, next_id, next_func_id);
             for c in cases {

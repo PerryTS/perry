@@ -427,7 +427,7 @@ fn visit_stmt<'a>(
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             visit_expr(discriminant, on_stmt, on_expr);
             for c in cases {

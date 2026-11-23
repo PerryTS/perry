@@ -208,7 +208,7 @@ impl JsEmitter {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.write_indent();
                 self.output.push_str("switch (");

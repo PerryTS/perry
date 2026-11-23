@@ -1523,7 +1523,7 @@ impl ArrayFactCollector {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.collect_expr(discriminant);
                 for case in cases {

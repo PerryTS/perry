@@ -121,7 +121,7 @@ impl Names {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases,
+                    cases, ..
                 } => {
                     self.expr(discriminant);
                     for case in cases {

@@ -84,7 +84,7 @@ impl Budget {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 self.expr(discriminant)
                     && cases.iter().all(|case| {

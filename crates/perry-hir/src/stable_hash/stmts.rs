@@ -96,7 +96,7 @@ impl SH for Stmt {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 tag(h, 14);
                 discriminant.hash(h);

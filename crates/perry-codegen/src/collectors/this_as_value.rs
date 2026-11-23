@@ -299,7 +299,7 @@ pub fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<Strin
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 expr_uses_this_as_value(discriminant, fields)
                     || cases.iter().any(|c| {

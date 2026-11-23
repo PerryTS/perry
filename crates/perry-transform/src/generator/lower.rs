@@ -210,6 +210,7 @@ fn build_dispatch_while_body(
             body: while_body,
         });
         return vec![Stmt::Switch {
+            byte_offset: fn_offset,
             discriminant: Expr::LocalGet(state_id),
             cases,
         }];

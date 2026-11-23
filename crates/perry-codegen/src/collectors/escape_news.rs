@@ -241,7 +241,7 @@ fn collect_used_new_fields_in_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 collect_used_new_fields_in_expr(discriminant, non_escaping_news, used);
                 for case in cases {

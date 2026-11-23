@@ -198,7 +198,7 @@ impl WasmModuleEmitter {
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 let disc = self.emit_js_expr(discriminant, locals);
                 out.push_str(&format!("{pad}    switch (toJsValue({disc})) {{\n"));

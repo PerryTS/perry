@@ -414,7 +414,7 @@ fn walk_stmt(s: &Stmt, in_loop: bool, scan: &mut HotCalleeScan) {
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             walk_expr(discriminant, in_loop, scan);
             for c in cases {
@@ -689,7 +689,7 @@ fn count_alloc_sites_in_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases,
+                cases, ..
             } => {
                 count_alloc_sites_in_expr(discriminant, closure_id, sites);
                 for case in cases {

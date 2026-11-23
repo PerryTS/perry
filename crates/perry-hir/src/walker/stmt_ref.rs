@@ -52,7 +52,7 @@ pub fn stmt_any_expr<'a>(stmt: &'a Stmt, predicate: &mut impl FnMut(&'a Expr) ->
         }
         Stmt::Switch {
             discriminant,
-            cases,
+            cases, ..
         } => {
             predicate(discriminant)
                 || cases.iter().any(|c| {
