@@ -648,8 +648,8 @@ fn repaint(handle: i64) {
                             }
                         }
                         DrawCmd::FillGradient(color1, color2, direction) => {
-                            if path_points.len() >= 3 {
-                                // Build Android Path from accumulated path_points
+                            // Fills the area between the path and the bottom edge, as an area chart.
+                            if path_points.len() >= 2 {
                                 let path = env
                                     .new_object(
                                         jni::jni_str!("android/graphics/Path"),
@@ -671,6 +671,15 @@ fn repaint(handle: i64) {
                                         jni::jni_str!("lineTo"),
                                         jni::jni_sig!("(FF)V"),
                                         &[JValue::Float(px), JValue::Float(py)],
+                                    );
+                                }
+                                let last_x = path_points[path_points.len() - 1].0;
+                                for x in [last_x, sx] {
+                                    let _ = env.call_method(
+                                        &path,
+                                        jni::jni_str!("lineTo"),
+                                        jni::jni_sig!("(FF)V"),
+                                        &[JValue::Float(x), JValue::Float(h as f32)],
                                     );
                                 }
                                 let _ = env.call_method(
