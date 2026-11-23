@@ -506,6 +506,27 @@ pub enum Cons {
     /// `origin`: a Proxy there is passed `origin` as the receiver of the
     /// traps its chain operations run.
     ChainRecv { origin: Tok },
+    /// Rule PXRECV: the node is a Proxy's target; the Proxy's forward
+    /// target.[[Get]](P, Receiver) (10.5.8 step 6): `dst` ⊇ the value of
+    /// `key` (`idx` `NO_NODE`) or of the key value `idx` read on each
+    /// target, its getters run with `this` = `recv`, the original receiver.
+    FwdLoad {
+        key: Key,
+        idx: NodeId,
+        dst: NodeId,
+        recv: Tok,
+    },
+    /// Rule PXRECV: the node is a Proxy's target; the Proxy's forward
+    /// target.[[Set]](P, V, Receiver) (10.5.9 step 6): the store of `src`
+    /// under `key` into each target (a `Cons::Store`), its setters run with
+    /// `this` = `recv` and a Proxy on its chain is passed `recv`.
+    FwdStore {
+        key: Key,
+        src: NodeId,
+        site: SiteId,
+        region: NodeId,
+        recv: Tok,
+    },
     /// The node is `this`: continue a `super.key` lookup at `start` with
     /// each `this` token as the receiver.
     Super { start: Tok, key: Key, act: ChainAct },
@@ -617,6 +638,9 @@ pub enum Cons {
     /// (`Cons::IdxLoad`'s primitive read, decided by the key's values).
     IdxKey {
         obj: Tok,
+        /// The receiver (`obj` itself, or a Proxy's original receiver,
+        /// `Cons::FwdLoad`): `this` of the getters the read runs.
+        origin: Tok,
         prim: u16,
         dst: NodeId,
         shape: KeyShapeId,
@@ -1167,6 +1191,8 @@ impl Cons {
             Cons::StoreTopProto { .. } => "storetopproto",
             Cons::ChainSet { .. } => "chainset",
             Cons::ChainRecv { .. } => "chainrecv",
+            Cons::FwdLoad { .. } => "fwdload",
+            Cons::FwdStore { .. } => "fwdstore",
             Cons::Super { .. } => "super",
             Cons::SuperFrom { .. } => "super-from",
             Cons::SuperCtor { .. } => "superctor",

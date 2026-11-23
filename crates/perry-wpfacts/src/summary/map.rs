@@ -256,6 +256,30 @@ pub fn map_cons(
             region: n(region),
         },
         ChainRecv { origin } => ChainRecv { origin },
+        FwdLoad {
+            key,
+            idx,
+            dst,
+            recv,
+        } => FwdLoad {
+            key,
+            idx: if idx == NO_NODE { NO_NODE } else { n(idx) },
+            dst: n(dst),
+            recv,
+        },
+        FwdStore {
+            key,
+            src,
+            site,
+            region,
+            recv,
+        } => FwdStore {
+            key,
+            src: n(src),
+            site,
+            region: n(region),
+            recv,
+        },
         Super { start, key, act } => Super {
             start,
             key,
@@ -359,11 +383,13 @@ pub fn map_cons(
         },
         IdxKey {
             obj,
+            origin,
             prim,
             dst,
             shape,
         } => IdxKey {
             obj,
+            origin,
             prim,
             dst: n(dst),
             shape,

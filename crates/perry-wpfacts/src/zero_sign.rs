@@ -213,6 +213,8 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::StoreTopProto { .. }
         | Cons::ChainSet { .. }
         | Cons::ChainRecv { .. }
+        | Cons::FwdLoad { .. }
+        | Cons::FwdStore { .. }
         | Cons::SuperCtor { .. }
         | Cons::SuperCtorParent { .. }
         | Cons::Accessor { .. }

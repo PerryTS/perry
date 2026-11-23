@@ -87,6 +87,23 @@ impl Model {
         enumerable: bool,
         kept: bool,
     ) {
+        self.idx_load_from(t, idx, t, dst, shape, enumerable, kept)
+    }
+
+    /// `idx_load_tok` with receiver `origin` (rule PXRECV: a Proxy's
+    /// forward reads its target with the original receiver): the getters
+    /// the read runs have `this` = `origin`.
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn idx_load_from(
+        &mut self,
+        origin: Tok,
+        idx: NodeId,
+        t: Tok,
+        dst: NodeId,
+        shape: KeyShapeId,
+        enumerable: bool,
+        kept: bool,
+    ) {
         if enumerable
             && t != TOP
             && (self.enum_free(t)
@@ -98,7 +115,7 @@ impl Model {
         }
         // A for-in run's key (FVA 4.3b): `o[k]` reads that one key.
         if let Some(&a) = self.key_nodes.get(&idx) {
-            self.load_from(t, t, Key::Named(a), dst);
+            self.load_from(origin, t, Key::Named(a), dst);
             return;
         }
         if t == TOP {
@@ -160,11 +177,12 @@ impl Model {
                     self.cons(len, c);
                 }
             }
-            self.plain_key(t, ChainAct::Load(dst, self.thrown));
+            self.plain_key_from(origin, t, ChainAct::Load(dst, self.thrown));
             self.cons(
                 idx,
                 Cons::IdxKey {
                     obj: t,
+                    origin,
                     prim: 0,
                     dst,
                     shape,

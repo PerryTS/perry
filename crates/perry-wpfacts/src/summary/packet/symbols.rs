@@ -276,6 +276,27 @@ impl Model {
             Cons::ChainRecv { origin } => {
                 format!("ChainRecv origin={:?}", self.packet_token(origin, packet))
             }
+            Cons::FwdLoad {
+                key,
+                idx,
+                dst,
+                recv,
+            } => format!(
+                "FwdLoad key={:?} idx={idx} dst={dst} recv={:?}",
+                self.packet_key(key),
+                self.packet_token(recv, packet)
+            ),
+            Cons::FwdStore {
+                key,
+                src,
+                region,
+                recv,
+                ..
+            } => format!(
+                "FwdStore key={:?} src={src} region={region} recv={:?}",
+                self.packet_key(key),
+                self.packet_token(recv, packet)
+            ),
             Cons::StoreTopProto { origin, src } => format!(
                 "StoreTopProto origin={:?} src={:?}",
                 self.packet_token(origin, packet),

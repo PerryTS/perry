@@ -169,6 +169,19 @@ impl Model {
                 region,
             } => format!("chainset {n} {origin} {key:?} {src} {region}"),
             Cons::ChainRecv { origin } => format!("chainrecv {n} {origin}"),
+            Cons::FwdLoad {
+                key,
+                idx,
+                dst,
+                recv,
+            } => format!("fwdload {n} {key:?} {idx} {dst} {recv}"),
+            Cons::FwdStore {
+                key,
+                src,
+                region,
+                recv,
+                ..
+            } => format!("fwdstore {n} {key:?} {src} {region} {recv}"),
             Cons::Super { start, key, act } => {
                 format!("super {n} {start} {} {act:?}", self.key_name(*key))
             }

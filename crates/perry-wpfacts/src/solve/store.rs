@@ -665,17 +665,18 @@ impl Model {
                 self.edge(src, f);
                 if !self.define_site(site) {
                     self.accessor_walk(
-                        t,
+                        self.store_recv.unwrap_or(t),
                         t,
                         key,
                         ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
                     );
                     let region = self.store_region.unwrap_or(self.thrown);
-                    self.chain_set_rule(t, key, src, region);
+                    self.chain_set_rule(self.store_recv.unwrap_or(t), t, key, src, region);
                 }
                 let cp = self.cp(t);
-                if self.callthis_done.insert((cp, u32::MAX, t)) {
-                    self.cons(cp, Cons::StoreTopProto { origin: t, src });
+                let origin = self.store_recv.unwrap_or(t);
+                if self.callthis_done.insert((cp, u32::MAX, origin)) {
+                    self.cons(cp, Cons::StoreTopProto { origin, src });
                 }
                 return;
             }
@@ -1177,18 +1178,19 @@ impl Model {
             // A setter a declaration made the receiver with (`onabort`).
             self.with_b(|m| builtins::declared_setter_store(m, t, key, src));
             self.accessor_walk(
-                t,
+                self.store_recv.unwrap_or(t),
                 t,
                 key,
                 ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
             );
             let region = self.store_region.unwrap_or(self.thrown);
-            self.chain_set_rule(t, key, src, region);
+            self.chain_set_rule(self.store_recv.unwrap_or(t), t, key, src, region);
         }
         if !self.is_array_like(t) {
             let cp = self.cp(t);
-            if self.callthis_done.insert((cp, u32::MAX, t)) {
-                self.cons(cp, Cons::StoreTopProto { origin: t, src });
+            let origin = self.store_recv.unwrap_or(t);
+            if self.callthis_done.insert((cp, u32::MAX, origin)) {
+                self.cons(cp, Cons::StoreTopProto { origin, src });
             }
         }
         // A callable namespace's own property is the realm's only under a

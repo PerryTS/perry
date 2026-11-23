@@ -25,6 +25,41 @@ impl Model {
             }
             // Rule PXCHAIN: only a Proxy in the closure acts (`proxy_apply`).
             Cons::ChainSet { .. } | Cons::ChainRecv { .. } => {}
+            // Rule PXRECV: a Proxy's forward to the ordinary objects of its
+            // target, with the original receiver (a Proxy target: `proxy_apply`).
+            Cons::FwdLoad {
+                key,
+                idx,
+                dst,
+                recv,
+            } => {
+                for &q in toks {
+                    self.prov_tok(pv, q);
+                    if idx == NO_NODE {
+                        self.load_from(recv, q, key, dst);
+                    } else {
+                        self.idx_load_from(recv, idx, q, dst, 0, false, false);
+                    }
+                }
+            }
+            Cons::FwdStore {
+                key,
+                src,
+                site,
+                region,
+                recv,
+            } => {
+                self.store_at = Some(n);
+                self.store_region = Some(region);
+                self.store_recv = Some(recv);
+                for &q in toks {
+                    self.prov_tok(pv, q);
+                    self.store_into(q, key, src, site);
+                }
+                self.store_at = None;
+                self.store_region = None;
+                self.store_recv = None;
+            }
             // `Object.hasOwn(o, k)` and kin: no flow on an ordinary object (a
             // Proxy's `getOwnPropertyDescriptor` trap: `solve/proxy.rs`).
             Cons::OwnProp { .. } => {}
@@ -1852,6 +1887,7 @@ impl Model {
                                     idx,
                                     Cons::IdxKey {
                                         obj: TOP,
+                                        origin: TOP,
                                         prim: p,
                                         dst,
                                         shape,
@@ -2011,6 +2047,7 @@ impl Model {
                 prim: recv,
                 dst,
                 shape,
+                ..
             } => {
                 // Rule NUM-KEY-PRIM (ECMA-262 7.3.2 GetV, 7.1.19
                 // ToPropertyKey, 6.1.6.1.20 Number::toString): `p[k]` of a
@@ -2056,7 +2093,11 @@ impl Model {
                 }
             }
             Cons::IdxKey {
-                obj, dst, shape, ..
+                obj,
+                origin,
+                dst,
+                shape,
+                ..
             } => {
                 let named = index_needs_general_key(toks, prim);
                 // Rule M3: a key of string constants and known prefixes
@@ -2104,13 +2145,13 @@ impl Model {
                                     // property "1" (10.1.8.1 OrdinaryGet).
                                     false => Key::Named(a),
                                 };
-                                self.load_from(obj, obj, key, dst);
+                                self.load_from(origin, obj, key, dst);
                             }
                         }
                     }
                     None => {
                         if named && self.idx_done.insert((n, obj, dst, 1)) {
-                            self.load_from(obj, obj, Key::Any(shape), dst);
+                            self.load_from(origin, obj, Key::Any(shape), dst);
                         }
                     }
                 }
@@ -2172,7 +2213,7 @@ impl Model {
                     if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit)) {
                         for k in keys {
                             let a = self.atom(k);
-                            self.load_program_key(obj, a, dst);
+                            self.load_program_key_from(origin, obj, a, dst);
                         }
                     }
                 }

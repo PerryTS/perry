@@ -351,6 +351,8 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::StoreTopProto { .. }
         | Cons::ChainSet { .. }
         | Cons::ChainRecv { .. }
+        | Cons::FwdLoad { .. }
+        | Cons::FwdStore { .. }
         | Cons::HolderStep { .. }
         | Cons::VisitHolders { .. }
         | Cons::VisitStop { .. }
