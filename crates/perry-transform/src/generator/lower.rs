@@ -706,6 +706,7 @@ pub fn transform_generator_function_with_extra_captures(
             pending_value_id,
             disp_err_id,
             &hoisted_ids,
+            fn_offset,
         )
     } else {
         while_body
@@ -722,6 +723,7 @@ pub fn transform_generator_function_with_extra_captures(
             pending_value_id,
             disp_err_id,
             &hoisted_ids,
+            fn_offset,
         )
     } else {
         while_body_for_throw
@@ -741,6 +743,7 @@ pub fn transform_generator_function_with_extra_captures(
             pending_value_id,
             disp_err_id,
             &hoisted_ids,
+            fn_offset,
         )
     } else {
         while_body_for_return
@@ -1692,6 +1695,7 @@ pub fn transform_generator_function_with_extra_captures(
                 executing_id,
                 done_id,
                 completion_catch_id,
+                fn_offset,
             );
             Expr::Closure { byte_offset: fn_offset,
                 func_id: next_func_id_val,

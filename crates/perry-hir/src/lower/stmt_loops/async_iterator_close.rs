@@ -98,6 +98,7 @@ pub(crate) fn emit_driver(
     let error = ctx.fresh_local();
     let ignored = ctx.fresh_local();
     output.push(Stmt::Try {
+            byte_offset,
         body: vec![driver],
         catch: Some(CatchClause {
             param: Some((error, format!("__iterator_error_{error}"))),
@@ -109,6 +110,7 @@ pub(crate) fn emit_driver(
                 condition: Expr::LocalGet(throwing),
                 // A throw completion takes precedence over failure of close.
                 then_branch: vec![Stmt::Try {
+            byte_offset,
                     body: close.clone(),
                     catch: Some(CatchClause {
                         param: Some((ignored, format!("__iterator_ignored_{ignored}"))),

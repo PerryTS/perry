@@ -1703,6 +1703,7 @@ fn lower_stmts_using_aware_inner(
 
                 let finally_stmts = vec![
                     Stmt::Try {
+                byte_offset: using_decl.span.lo.0,
                         body: vec![Stmt::If {
                             condition: null_check,
                             then_branch: vec![Stmt::Expr(call_expr)],
@@ -1743,6 +1744,7 @@ fn lower_stmts_using_aware_inner(
                         init: Some(Expr::Bool(false)),
                     },
                     Stmt::Try {
+                byte_offset: using_decl.span.lo.0,
                         body: wrapped,
                         catch: Some(body_catch),
                         finally: Some(finally_stmts),

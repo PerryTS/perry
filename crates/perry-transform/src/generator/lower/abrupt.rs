@@ -89,12 +89,12 @@ pub(crate) fn catch_route_condition(
     };
     Expr::Logical {
         op: LogicalOp::And,
-        left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+        left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
             op: lower_op,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_start_state as f64)),
         }),
-        right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+        right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
             op: CompareOp::Le,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(upper as f64)),
@@ -118,12 +118,12 @@ pub(crate) fn finally_abrupt_condition(
     };
     Expr::Logical {
         op: LogicalOp::And,
-        left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+        left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
             op: lower_op,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_start_state as f64)),
         }),
-        right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+        right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
             op: CompareOp::Le,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_end_state as f64)),
@@ -182,7 +182,7 @@ pub(crate) fn build_completion_resume_stmts(
     );
     vec![
         Stmt::If {
-            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
+            condition: Expr::Compare { byte_offset: fn_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(pending_type_id)),
                 right: Box::new(Expr::Number(1.0)),
@@ -194,7 +194,7 @@ pub(crate) fn build_completion_resume_stmts(
             else_branch: None,
         },
         Stmt::If {
-            condition: Expr::Compare { byte_offset: 0 /*HPOS*/,
+            condition: Expr::Compare { byte_offset: fn_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(pending_type_id)),
                 right: Box::new(Expr::Number(2.0)),
@@ -328,6 +328,7 @@ pub(crate) fn wrap_dispatch_loop(
     pending_value_id: LocalId,
     err_id: LocalId,
     hoisted_ids: &std::collections::HashSet<LocalId>,
+    fn_offset: u32,
 ) -> Vec<Stmt> {
     let handler = build_dispatch_catch_handler(
         catches,
@@ -340,6 +341,7 @@ pub(crate) fn wrap_dispatch_loop(
         hoisted_ids,
     );
     vec![Stmt::Try {
+        byte_offset: fn_offset,
         body: loop_body,
         catch: Some(CatchClause {
             param: Some((err_id, "__gen_disp_err".to_string())),
@@ -461,7 +463,7 @@ pub(crate) fn finally_route_condition(
 ) -> Expr {
     Expr::Logical {
         op: LogicalOp::And,
-        left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+        left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
             op: if inclusive_lower {
                 CompareOp::Ge
             } else {
@@ -470,7 +472,7 @@ pub(crate) fn finally_route_condition(
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.protected_start_state as f64)),
         }),
-        right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+        right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
             op: CompareOp::Le,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(route.post_finally_state as f64)),
@@ -481,22 +483,22 @@ pub(crate) fn finally_route_condition(
 /// `result === null || (typeof result !== "object" && typeof result !== "function")`
 /// — `Type(result) is not Object`. Used to enforce the spec requirement that a
 /// delegated `return()`/`next()` result be an Object.
-fn not_object_condition(result: Expr) -> Expr {
+fn not_object_condition(result: Expr, byte_offset: u32) -> Expr {
     Expr::Logical {
         op: LogicalOp::Or,
-        left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+        left: Box::new(Expr::Compare { byte_offset,
             op: CompareOp::Eq,
             left: Box::new(result.clone()),
             right: Box::new(Expr::Null),
         }),
         right: Box::new(Expr::Logical {
             op: LogicalOp::And,
-            left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+            left: Box::new(Expr::Compare { byte_offset,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::TypeOf(Box::new(result.clone()))),
                 right: Box::new(Expr::String("object".to_string())),
             }),
-            right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+            right: Box::new(Expr::Compare { byte_offset,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::TypeOf(Box::new(result))),
                 right: Box::new(Expr::String("function".to_string())),
@@ -560,12 +562,12 @@ pub(crate) fn build_yield_star_return_routes(
 
         let in_interval = Expr::Logical {
             op: LogicalOp::And,
-            left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+            left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                 op: CompareOp::Gt,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(route.suspend_state_lo as f64)),
             }),
-            right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+            right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                 op: CompareOp::Le,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(route.suspend_state_hi as f64)),
@@ -580,7 +582,7 @@ pub(crate) fn build_yield_star_return_routes(
             mutable: false,
             init: Some(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: route.byte_offset,
                 object: Box::new(Expr::LocalGet(route.iter_id)),
                 property: "return".to_string(),
             }),
@@ -589,12 +591,12 @@ pub(crate) fn build_yield_star_return_routes(
         let mut no_method = Stmt::If {
             condition: Expr::Logical {
                 op: LogicalOp::Or,
-                left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(m_id)),
                     right: Box::new(Expr::Undefined),
                 }),
-                right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(m_id)),
                     right: Box::new(Expr::Null),
@@ -623,7 +625,7 @@ pub(crate) fn build_yield_star_return_routes(
         };
         // if (Type(__r) is not Object) throw new TypeError(...);
         let obj_check = Stmt::If {
-            condition: not_object_condition(Expr::LocalGet(r_id)),
+            condition: not_object_condition(Expr::LocalGet(r_id), route.byte_offset),
             then_branch: vec![Stmt::Throw(Expr::TypeErrorNew(Box::new(Expr::String(
                 "Iterator result is not an object".to_string(),
             ))))],
@@ -634,7 +636,7 @@ pub(crate) fn build_yield_star_return_routes(
         let mut dispatch_done = Stmt::If {
             condition: Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: route.byte_offset,
                 object: Box::new(Expr::LocalGet(r_id)),
                 property: "done".to_string(),
             },
@@ -643,7 +645,7 @@ pub(crate) fn build_yield_star_return_routes(
                 Stmt::Return(Some(make_iter_result(
                     Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: route.byte_offset,
                         object: Box::new(Expr::LocalGet(r_id)),
                         property: "value".to_string(),
                     },
@@ -653,7 +655,7 @@ pub(crate) fn build_yield_star_return_routes(
             else_branch: Some(vec![Stmt::Return(Some(make_iter_result(
                 Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset: route.byte_offset,
                     object: Box::new(Expr::LocalGet(r_id)),
                     property: "value".to_string(),
                 },
@@ -675,7 +677,7 @@ pub(crate) fn build_yield_star_return_routes(
                     return_param_id,
                     Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: route.byte_offset,
                         object: Box::new(Expr::LocalGet(r_id)),
                         property: "value".to_string(),
                     }),
@@ -698,7 +700,7 @@ pub(crate) fn build_yield_star_return_routes(
                 else_branch,
             } = &mut no_method
             {
-                *condition = Expr::Compare { byte_offset: 0 /*HPOS*/,
+                *condition = Expr::Compare { byte_offset: route.byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(r_id)),
                     right: Box::new(Expr::Undefined),
@@ -731,6 +733,7 @@ pub(crate) fn build_yield_star_return_routes(
                     on_error.push(Stmt::Expr(Expr::LocalSet(id, Box::new(Expr::Bool(true)))));
                 }
                 vec![Stmt::Try {
+                    byte_offset: route.byte_offset,
                     body: vec![call_ret, no_method],
                     catch: Some(CatchClause {
                         param: Some((error_id, "__yield_star_return_e".to_string())),
@@ -813,12 +816,12 @@ pub(crate) fn build_yield_star_throw_routes(
 
         let in_interval = Expr::Logical {
             op: LogicalOp::And,
-            left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+            left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                 op: CompareOp::Gt,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(route.suspend_state_lo as f64)),
             }),
-            right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+            right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                 op: CompareOp::Le,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(route.suspend_state_hi as f64)),
@@ -833,7 +836,7 @@ pub(crate) fn build_yield_star_throw_routes(
             mutable: false,
             init: Some(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: route.byte_offset,
                 object: Box::new(Expr::LocalGet(route.iter_id)),
                 property: "throw".to_string(),
             }),
@@ -854,7 +857,7 @@ pub(crate) fn build_yield_star_throw_routes(
             mutable: false,
             init: Some(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: route.byte_offset,
                 object: Box::new(Expr::LocalGet(route.iter_id)),
                 property: "return".to_string(),
             }),
@@ -862,12 +865,12 @@ pub(crate) fn build_yield_star_throw_routes(
         let close_inner = Stmt::If {
             condition: Expr::Logical {
                 op: LogicalOp::And,
-                left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                     op: CompareOp::Ne,
                     left: Box::new(Expr::LocalGet(ret_m_id)),
                     right: Box::new(Expr::Undefined),
                 }),
-                right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                     op: CompareOp::Ne,
                     left: Box::new(Expr::LocalGet(ret_m_id)),
                     right: Box::new(Expr::Null),
@@ -886,7 +889,7 @@ pub(crate) fn build_yield_star_throw_routes(
                     }),
                 },
                 Stmt::If {
-                    condition: not_object_condition(Expr::LocalGet(ic_id)),
+                    condition: not_object_condition(Expr::LocalGet(ic_id), route.byte_offset),
                     then_branch: vec![Stmt::Throw(Expr::TypeErrorNew(Box::new(Expr::String(
                         "Iterator result is not an object".to_string(),
                     ))))],
@@ -898,12 +901,12 @@ pub(crate) fn build_yield_star_throw_routes(
         let no_method = Stmt::If {
             condition: Expr::Logical {
                 op: LogicalOp::Or,
-                left: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                left: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(m_id)),
                     right: Box::new(Expr::Undefined),
                 }),
-                right: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
+                right: Box::new(Expr::Compare { byte_offset: route.byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(m_id)),
                     right: Box::new(Expr::Null),
@@ -931,7 +934,7 @@ pub(crate) fn build_yield_star_throw_routes(
 
         // if (Type(__del_result) is not Object) throw new TypeError(...);
         let obj_check = Stmt::If {
-            condition: not_object_condition(Expr::LocalGet(route.result_id)),
+            condition: not_object_condition(Expr::LocalGet(route.result_id), route.byte_offset),
             then_branch: vec![Stmt::Throw(Expr::TypeErrorNew(Box::new(Expr::String(
                 "Iterator result is not an object".to_string(),
             ))))],
@@ -950,7 +953,7 @@ pub(crate) fn build_yield_star_throw_routes(
             Stmt::If {
                 condition: Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset: route.byte_offset,
                     object: Box::new(Expr::LocalGet(route.result_id)),
                     property: "done".to_string(),
                 },
@@ -1021,6 +1024,7 @@ pub(crate) fn build_yield_star_throw_routes(
             continue;
         }
         let protocol = Stmt::Try {
+                    byte_offset: route.byte_offset,
             body: protocol_body,
             catch: Some(CatchClause {
                 param: Some((de_id, "__yield_star_throw_e".to_string())),

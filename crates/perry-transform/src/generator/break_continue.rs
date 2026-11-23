@@ -767,7 +767,9 @@ fn rewrite_switch_breaks_in_stmt(s: &Stmt, done_id: LocalId) -> Stmt {
             catch,
             finally,
             forof_completion,
+            byte_offset,
         } => Stmt::Try {
+            byte_offset: *byte_offset,
             body: guarded(body),
             catch: catch.as_ref().map(|c| CatchClause {
                 param: c.param.clone(),
