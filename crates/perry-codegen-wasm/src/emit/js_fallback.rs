@@ -331,27 +331,23 @@ impl WasmModuleEmitter {
             Expr::Binary { op, left, right } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
-                // `bridged`: the operator runs on the decoded JS values; the rest run on the
-                // f64 encodings directly.
-                let (js_op, bridged) = match op {
-                    BinaryOp::Add => ("+", true),
-                    BinaryOp::Sub => ("-", false),
-                    BinaryOp::Mul => ("*", false),
-                    BinaryOp::Div => ("/", false),
-                    BinaryOp::Mod => ("%", false),
-                    BinaryOp::Pow => ("**", true),
-                    BinaryOp::BitAnd => ("&", true),
-                    BinaryOp::BitOr => ("|", true),
-                    BinaryOp::BitXor => ("^", true),
-                    BinaryOp::Shl => ("<<", true),
-                    BinaryOp::Shr => (">>", true),
-                    BinaryOp::UShr => (">>>", true),
+                // The operator runs on the decoded JS values, which applies ToNumber (or
+                // string concatenation for `+`) as the sync path does.
+                let js_op = match op {
+                    BinaryOp::Add => "+",
+                    BinaryOp::Sub => "-",
+                    BinaryOp::Mul => "*",
+                    BinaryOp::Div => "/",
+                    BinaryOp::Mod => "%",
+                    BinaryOp::Pow => "**",
+                    BinaryOp::BitAnd => "&",
+                    BinaryOp::BitOr => "|",
+                    BinaryOp::BitXor => "^",
+                    BinaryOp::Shl => "<<",
+                    BinaryOp::Shr => ">>",
+                    BinaryOp::UShr => ">>>",
                 };
-                if bridged {
-                    format!("fromJsValue(toJsValue({l}) {js_op} toJsValue({r}))")
-                } else {
-                    format!("({l} {js_op} {r})")
-                }
+                format!("fromJsValue(toJsValue({l}) {js_op} toJsValue({r}))")
             }
             // The same bridge as the WASM arm, so `in` agrees between sync and async bodies.
             Expr::In { property, object } => {

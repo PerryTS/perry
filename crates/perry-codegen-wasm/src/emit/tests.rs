@@ -701,6 +701,23 @@ console.log(syncIn());
     );
 }
 
+// An async body converts the operands of `-`, `*`, `/` and `%` with ToNumber, as a
+// synchronous one does. Expected output is Node's.
+#[test]
+fn async_body_arithmetic_converts_operands_to_numbers() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(a: any, b: any): Promise<string> {
+  return ["5" - 2, "6" * "2", "7" / "2", "7" % "4", true * 3, null - 1, a - b, a * b, a / b, a % b].join(",");
+}
+f("9", 4).then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "3,12,3.5,3,3,-1,5,36,2.25,1"
+    );
+}
+
 // `r.run(shadow(r))` looks `run` up before it evaluates the argument: the argument gives
 // the instance an own, non-function `run`, which a lookup made afterwards would find.
 #[test]
