@@ -419,34 +419,11 @@ fn build_path<'local>(env: &mut jni::Env<'local>, segs: &[PathSeg]) -> Option<JO
                     (end - start).rem_euclid(tau)
                 }
                 .to_degrees();
-                if sweep.abs() >= 359.99 {
-                    if let Ok(dir_class) =
-                        env.find_class(jni::jni_str!("android/graphics/Path$Direction"))
-                    {
-                        if let Ok(cw) = env
-                            .get_static_field(
-                                &dir_class,
-                                jni::jni_str!("CW"),
-                                jni::jni_sig!("Landroid/graphics/Path$Direction;"),
-                            )
-                            .and_then(|v| v.l())
-                        {
-                            let _ = env.call_method(
-                                &path,
-                                jni::jni_str!("addCircle"),
-                                jni::jni_sig!("(FFFLandroid/graphics/Path$Direction;)V"),
-                                &[
-                                    JValue::Float(cx),
-                                    JValue::Float(cy),
-                                    JValue::Float(r),
-                                    JValue::Object(&cw),
-                                ],
-                            );
-                        }
-                    }
-                } else {
-                    // Canvas arcs connect from the current point, as arcTo
-                    // with forceMoveTo=false does.
+                // Canvas arcs connect from the current point, as arcTo with forceMoveTo=false
+                // does. arcTo wraps a 360° sweep to nothing, so a full turn is two halves.
+                let parts = if sweep >= 359.99 { 2 } else { 1 };
+                for part in 0..parts {
+                    let part_sweep = sweep / parts as f32;
                     let _ = env.call_method(
                         &path,
                         jni::jni_str!("arcTo"),
@@ -456,8 +433,8 @@ fn build_path<'local>(env: &mut jni::Env<'local>, segs: &[PathSeg]) -> Option<JO
                             JValue::Float(cy - r),
                             JValue::Float(cx + r),
                             JValue::Float(cy + r),
-                            JValue::Float(start.to_degrees()),
-                            JValue::Float(sweep),
+                            JValue::Float(start.to_degrees() + part_sweep * part as f32),
+                            JValue::Float(part_sweep),
                             JValue::Bool(false),
                         ],
                     );
