@@ -360,7 +360,7 @@ pub(crate) unsafe fn leave(obj: *mut ObjectHeader) {
         });
         crate::object::js_object_set_field_by_name(obj, key, f64::from_bits(bits));
     }
-    let obj = obj_h.get_raw_mut_ptr::<ObjectHeader>();
+    let obj = obj_h.with_mut_ptr::<ObjectHeader, _>(|obj_h_ptr| obj_h_ptr);
     crate::object::shapes::store_kind::restamp_object_store_kind(obj);
 }
 

@@ -218,7 +218,7 @@ pub extern "C" fn js_typed_array_fill(
             len
         };
         // The conversions can run user code that detaches or resizes the buffer.
-        let ta = ta_root.get_raw_mut_ptr::<TypedArrayHeader>();
+        let ta = ta_root.with_mut_ptr::<TypedArrayHeader, _>(|ta_root_ptr| ta_root_ptr);
         let v = v_root.get_nanbox_f64();
         validate_fill_receiver(ta);
         let e = (e as usize).min(crate::typedarray::element_length(ta) as usize);

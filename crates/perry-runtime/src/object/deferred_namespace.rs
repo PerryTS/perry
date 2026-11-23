@@ -96,7 +96,7 @@ pub(crate) unsafe fn string_key_target(
     let target = scope.root_nanbox_f64(evaluate(receiver.get_nanbox_f64()));
     Some((
         target.get_nanbox_f64(),
-        key.get_raw_const_ptr::<crate::StringHeader>(),
+        key.with_const_ptr::<crate::StringHeader, _>(|key| key),
     ))
 }
 
@@ -135,7 +135,7 @@ pub(crate) fn enumerable_keys(receiver: f64) -> Option<*mut crate::ArrayHeader> 
             });
             output.set_raw_mut_ptr(next);
         }
-        output.get_raw_mut_ptr::<crate::ArrayHeader>()
+        output.with_mut_ptr::<crate::ArrayHeader, _>(|output| output)
     })
 }
 
@@ -149,15 +149,16 @@ pub extern "C" fn js_create_deferred_namespace(evaluate: i64) -> f64 {
         obj.with_mut_ptr(|obj: *mut ObjectHeader| {
             key_attrs::apply_edits(obj, &[key_attrs::AttrsEdit::Private(EVALUATE_SLOT)]);
         });
-        let current = obj.get_raw_mut_ptr::<ObjectHeader>();
-        let keys = object_keys(current);
-        let pos = keys_find_private_slot_by_bytes(keys.arr(), keys.count(), EVALUATE_SLOT)
-            .expect("new evaluator private slot");
-        let slot = keys.storage_slot(pos);
-        assert!(slot < object_live_slot_count(current));
-        let data = (current as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
-        // GC_STORE_AUDIT(INIT): raw code address has no JS pointer tag.
-        *data.add(slot as usize) = evaluate as u64;
+        obj.with_mut_ptr::<ObjectHeader, _>(|current| {
+            let keys = object_keys(current);
+            let pos = keys_find_private_slot_by_bytes(keys.arr(), keys.count(), EVALUATE_SLOT)
+                .expect("new evaluator private slot");
+            let slot = keys.storage_slot(pos);
+            assert!(slot < object_live_slot_count(current));
+            let data = (current as *mut u8).add(std::mem::size_of::<ObjectHeader>()) as *mut u64;
+            // GC_STORE_AUDIT(INIT): raw code address has no JS pointer tag.
+            *data.add(slot as usize) = evaluate as u64;
+        });
         let tag = scope.root_string_ptr(crate::string::js_string_from_bytes(
             b"Deferred Module".as_ptr(),
             15,
@@ -187,7 +188,7 @@ pub extern "C" fn js_create_deferred_namespace(evaluate: i64) -> f64 {
         // canonical namespace's null-prototype/non-extensibility invariants
         // only after all private and symbol slots have been installed.
         js_finalize_namespace(receiver());
-        (*obj.get_raw_mut_ptr::<ObjectHeader>()).class_id = DEFERRED_NAMESPACE_CLASS_ID;
+        obj.with_mut_ptr::<ObjectHeader, _>(|o| (*o).class_id = DEFERRED_NAMESPACE_CLASS_ID);
         // Existing exotic-read marking invalidates shape-only method and
         // prototype memos, not just the generic property probes.
         obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {

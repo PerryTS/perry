@@ -707,7 +707,7 @@ unsafe fn try_array_store(
         } else {
             return None;
         };
-        let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
+        let bag = bag_root.with_mut_ptr::<ObjectHeader, _>(|bag_root_ptr| bag_root_ptr);
         if super::prototype_chain::object_static_prototype(bag as usize)
             != Some(prototype.to_bits())
         {
@@ -725,8 +725,8 @@ unsafe fn try_array_store(
         // hole (`key_view`): the store is the layout's add, which proves the
         // chain through the edge linked above and fills the slot in order
         // (`layout_desc::family_store`). Any other key is not its add.
-        let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
-        let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
+        let bag = bag_root.with_mut_ptr::<ObjectHeader, _>(|bag_root_ptr| bag_root_ptr);
+        let key = key_root.with_const_ptr::<crate::StringHeader, _>(|key_root_ptr| key_root_ptr);
         let bytes = crate::string::header_str_checked(key)?.as_bytes();
         if super::layout_desc::family_store(
             bag,
@@ -737,8 +737,8 @@ unsafe fn try_array_store(
             return Some(value_root.get_nanbox_f64());
         }
     }
-    let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
-    let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
+    let bag = bag_root.with_mut_ptr::<ObjectHeader, _>(|bag_root_ptr| bag_root_ptr);
+    let key = key_root.with_const_ptr::<crate::StringHeader, _>(|key_root_ptr| key_root_ptr);
     let key_value = crate::value::js_nanbox_string(key as i64);
     let result = try_store_with_refresh(
         crate::value::js_nanbox_pointer(bag as i64),
@@ -752,8 +752,8 @@ unsafe fn try_array_store(
     if !existing {
         // The first transition has no edge yet. A proven chain can create it
         // through the ordinary bag store; later receivers reuse that edge.
-        let bag = bag_root.get_raw_mut_ptr::<ObjectHeader>();
-        let key = key_root.get_raw_const_ptr::<crate::StringHeader>();
+        let bag = bag_root.with_mut_ptr::<ObjectHeader, _>(|bag_root_ptr| bag_root_ptr);
+        let key = key_root.with_const_ptr::<crate::StringHeader, _>(|key_root_ptr| key_root_ptr);
         shapes::object_shape_record(bag)?;
         let bytes = crate::string::header_str_checked(key)?.as_bytes();
         if !array_bag_chain_blocks(bag, bytes) {
@@ -889,8 +889,8 @@ unsafe fn apply_proven_add(
     if super::field_rep_store::constfn_store_info(value.get_nanbox_f64().to_bits()).is_some() {
         return None;
     }
-    let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
-    let key_ptr = key.get_raw_const_ptr::<crate::StringHeader>();
+    let obj = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| owner_ptr);
+    let key_ptr = key.with_const_ptr::<crate::StringHeader, _>(|key_ptr| key_ptr);
     let record = shapes::object_shape_record(obj)?;
     if !record.kind_is(shapes::ShapeObjectKind::Ordinary)
         || record.summary() & super::key_attrs::SUMMARY_PRIVATE != 0
@@ -922,7 +922,7 @@ unsafe fn apply_proven_add(
         if atom.is_null() {
             return None;
         }
-        let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
+        let obj = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| owner_ptr);
         let proof = super::canonical_keys::SharedLayout::of_receiver(obj)?;
         let keys = super::object_keys(obj);
         let parent =
@@ -940,7 +940,7 @@ unsafe fn apply_proven_add(
                 true,
             )
         });
-        let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
+        let obj = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| owner_ptr);
         if super::overflow::has_overflow(obj) {
             return None;
         }
@@ -949,7 +949,7 @@ unsafe fn apply_proven_add(
             slot as u32,
             crate::JSValue::from_bits(value.get_nanbox_f64().to_bits()),
         );
-        let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
+        let obj = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| owner_ptr);
         if let Some(atom) =
             super::store_key::interned_key_for_store(key.with_const_ptr::<crate::StringHeader, _>(
                 |key_ptr| crate::value::js_nanbox_string(key_ptr as i64),
@@ -975,13 +975,13 @@ unsafe fn apply_proven_add(
             )
         })
     });
-    let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
+    let obj = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| owner_ptr);
     // Appending can transfer the list to the receiver's dictionary. That
     // store no longer has a shape-owned slot; the complete setter writes it.
     if super::overflow::has_overflow(obj) {
         return None;
     }
-    let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
+    let obj = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| owner_ptr);
     let bits = value.get_nanbox_f64().to_bits();
     if slot < super::object_inline_capacity(obj) as usize {
         super::js_object_set_field(obj, slot as u32, crate::JSValue::from_bits(bits));

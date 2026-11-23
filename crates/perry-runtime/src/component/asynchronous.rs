@@ -130,9 +130,9 @@ fn submit_kind(
             promise.set_raw_mut_ptr(crate::promise::js_promise_new());
             promise.with_mut_ptr(|promise_ptr| {
                 crate::promise::set_promise_context_snapshot(promise_ptr, unsafe {
-                    (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
-                        .snapshot
-                        .clone()
+                    captured.with_mut_ptr::<crate::async_context::AsyncSnapshotHolder, _>(
+                        |captured_ptr| (*captured_ptr).snapshot.clone(),
+                    )
                 })
             });
         } else {

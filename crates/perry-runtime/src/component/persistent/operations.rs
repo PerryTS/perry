@@ -82,9 +82,9 @@ fn admit_producer(
                 .cast_mut()
         };
         crate::promise::set_promise_context_snapshot(pointer(), unsafe {
-            (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
-                .snapshot
-                .clone()
+            captured.with_mut_ptr::<crate::async_context::AsyncSnapshotHolder, _>(|captured_ptr| {
+                (*captured_ptr).snapshot.clone()
+            })
         });
         let (saved, ids) = callback::saved::capture(promise.get_nanbox_f64());
         let saved = scope.root_nanbox_f64(saved);

@@ -197,11 +197,9 @@ impl<'a> InvocationFrame<'a> {
             Err(error) => Err(error.root(&scope)),
         };
         unsafe {
-            als::restore_context(
-                (*previous.get_raw_mut_ptr::<als::AsyncSnapshotHolder>())
-                    .snapshot
-                    .clone(),
-            );
+            als::restore_context(previous.with_mut_ptr::<als::AsyncSnapshotHolder, _>(
+                |previous_ptr| (*previous_ptr).snapshot.clone(),
+            ));
         }
         match value {
             Err(error) => Err(error.caught()),

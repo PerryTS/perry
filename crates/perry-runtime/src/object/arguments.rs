@@ -571,7 +571,7 @@ fn arguments_object_birth(
         }
         crate::object::rebuild_object_field_layout(obj, slots);
     });
-    obj.get_raw_mut_ptr::<ObjectHeader>()
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| obj_ptr)
 }
 
 /// #10509: `arguments[key]` in a function whose Arguments object codegen

@@ -181,7 +181,7 @@ pub(super) unsafe fn adopt_sparse_indices(arr: *mut ArrayHeader) -> *mut ArrayHe
     let head = scope.root_raw_mut_ptr(arr);
     for index in adopted {
         let key = index.to_string();
-        let arr = head.get_raw_mut_ptr::<ArrayHeader>();
+        let arr = head.with_mut_ptr::<ArrayHeader, _>(|head_ptr| head_ptr);
         if descriptors
             && (crate::object::get_accessor_descriptor(arr as usize, &key).is_some()
                 || crate::object::get_property_attrs(arr as usize, &key).is_some())
@@ -197,5 +197,5 @@ pub(super) unsafe fn adopt_sparse_indices(arr: *mut ArrayHeader) -> *mut ArrayHe
             crate::array::named_props::array_named_property_delete_by_name(head_ptr, &key)
         });
     }
-    head.get_raw_mut_ptr::<ArrayHeader>()
+    head.with_mut_ptr::<ArrayHeader, _>(|head_ptr| head_ptr)
 }

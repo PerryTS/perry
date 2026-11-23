@@ -275,5 +275,5 @@ pub(super) unsafe fn array_own_enumerable(
             emit(name, 0.0);
         }
     }
-    result.get_raw_mut_ptr::<ArrayHeader>()
+    result.with_mut_ptr::<ArrayHeader, _>(|result_ptr| result_ptr)
 }

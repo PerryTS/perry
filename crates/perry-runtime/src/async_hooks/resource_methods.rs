@@ -148,7 +148,7 @@ fn bind_deferred_receiver(receiver: f64, callback: f64, this_arg: f64) -> i64 {
             crate::object::PropertyAttrs::new(false, false, true),
         )
     });
-    closure.get_raw_mut_ptr::<ClosureHeader>() as i64
+    closure.with_mut_ptr::<ClosureHeader, _>(|closure_ptr| closure_ptr) as i64
 }
 
 extern "C" fn deferred_bind_trampoline(

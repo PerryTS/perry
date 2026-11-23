@@ -57,7 +57,7 @@ unsafe fn construct_class_object_entry(
     // Case 2c: a static family's instance takes its whole layout now, before
     // the constructor prologue stores it (`object/layout_desc.rs`) and before
     // the heritage pin below adds its own key (to the family's overflow).
-    let unadopted = inst_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let unadopted = inst_handle.with_mut_ptr::<ObjectHeader, _>(|inst_handle_ptr| inst_handle_ptr);
     let _ = inst_handle.across_mut::<ObjectHeader, _>(|| unsafe {
         crate::object::layout_desc::adopt_family_layout(unadopted)
     });

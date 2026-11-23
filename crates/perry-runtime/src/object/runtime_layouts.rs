@@ -520,7 +520,7 @@ pub unsafe extern "C" fn perry_build_runtime_record(
             )
         });
     }
-    object.get_raw_mut_ptr()
+    object.with_mut_ptr(|object_ptr| object_ptr)
 }
 
 // These C ABI symbols are also referenced by generated code and native UI

@@ -342,7 +342,8 @@ pub unsafe fn dispatch_rest_bundled(
     } else {
         None
     };
-    let closure = closure_handle.get_raw_const_ptr::<ClosureHeader>();
+    let closure =
+        closure_handle.with_const_ptr::<ClosureHeader, _>(|closure_handle_ptr| closure_handle_ptr);
     let this = crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64());
     let rest_double = rest_handle.get_nanbox_f64();
     let all_arguments_double = all_arguments_handle.map(|handle| handle.get_nanbox_f64());

@@ -1721,7 +1721,7 @@ pub(crate) unsafe fn put_own_define_proven(
     if shapes::object_shape_record(bag)?.kind_is(shapes::ShapeObjectKind::OrdinaryUnmarked) {
         crate::object::alloc_plain::mark_object_plain_ordinary(bag);
     }
-    let key_ptr = key_root.get_raw_const_ptr::<crate::StringHeader>();
+    let key_ptr = key_root.with_const_ptr::<crate::StringHeader, _>(|key_root_ptr| key_root_ptr);
     let mut refresh = None;
     if crate::object::object_set_field_by_name_transition_chain_proven_value(
         bag,

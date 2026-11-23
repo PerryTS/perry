@@ -86,15 +86,17 @@ pub extern "C" fn js_component_http_server_new(options: f64) -> f64 {
         ));
         let key =
             scope.root_string_ptr(crate::string::js_string_from_bytes(b"address".as_ptr(), 7));
-        crate::object::define_builtin_data_property(
-            object_pointer(owner.get_nanbox_f64()).unwrap(),
-            key.get_raw_const_ptr(),
-            address.with_const_ptr::<crate::string::StringHeader, _>(|address_ptr| {
-                crate::value::js_nanbox_string(address_ptr as i64)
-            }),
-            "address".to_owned(),
-            crate::object::PropertyAttrs::new(false, true, false),
-        );
+        key.with_const_ptr(|key_ptr| {
+            crate::object::define_builtin_data_property(
+                object_pointer(owner.get_nanbox_f64()).unwrap(),
+                key_ptr,
+                address.with_const_ptr::<crate::string::StringHeader, _>(|address_ptr| {
+                    crate::value::js_nanbox_string(address_ptr as i64)
+                }),
+                "address".to_owned(),
+                crate::object::PropertyAttrs::new(false, true, false),
+            )
+        });
         owner.get_nanbox_f64()
     });
     if result.is_err() {
@@ -136,9 +138,9 @@ pub extern "C" fn js_component_http_handle(server: f64, component: f64, interfac
         promise.set_raw_mut_ptr(crate::promise::js_promise_new());
         promise.with_mut_ptr(|promise_ptr| {
             crate::promise::set_promise_context_snapshot(promise_ptr, unsafe {
-                (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
-                    .snapshot
-                    .clone()
+                captured.with_mut_ptr::<crate::async_context::AsyncSnapshotHolder, _>(
+                    |captured_ptr| (*captured_ptr).snapshot.clone(),
+                )
             })
         });
         owner.set_nanbox_f64(payload::alloc_closed(&OPERATION, &[]));

@@ -175,11 +175,11 @@ fn alloc_stack(class_id: u32) -> *mut ObjectHeader {
     });
     let arr = scope.root_raw_mut_ptr(js_array_alloc(0));
     obj.with_mut_ptr::<ObjectHeader, _>(|ptr| {
-        let arr = arr.get_raw_mut_ptr::<ArrayHeader>();
+        let arr = arr.with_mut_ptr::<ArrayHeader, _>(|arr_ptr| arr_ptr);
         js_object_set_field_f64(ptr, FIELD_DISPOSERS, js_nanbox_pointer(arr as i64));
         js_object_set_field_f64(ptr, FIELD_DISPOSED, bool_f64(false));
     });
-    obj.get_raw_mut_ptr()
+    obj.with_mut_ptr(|obj_ptr| obj_ptr)
 }
 
 /// Resolve a NaN-boxed receiver to a stack `ObjectHeader`, or null.

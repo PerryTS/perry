@@ -93,7 +93,9 @@ impl<'s> CallbackLoop<'s> {
     fn current(&self) -> *const ClosureHeader {
         self.callback
             .as_ref()
-            .map_or(self.unrooted_callback, |root| root.get_raw_const_ptr())
+            .map_or(self.unrooted_callback, |root| {
+                root.with_const_ptr(|root_ptr| root_ptr)
+            })
     }
 
     /// Root `value` until the loop ends.

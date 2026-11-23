@@ -492,7 +492,7 @@ fn concat_parts_general<const M: usize>(
                 continue;
             }
             if let Some(handle) = handles[i] {
-                let piece = handle.get_raw_const_ptr::<StringHeader>();
+                let piece = handle.with_const_ptr::<StringHeader, _>(|handle_ptr| handle_ptr);
                 if is_valid_string_ptr(piece) {
                     ptr::copy_nonoverlapping(string_data(piece), cursor, len);
                     cursor = cursor.add(len);

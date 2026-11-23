@@ -397,7 +397,9 @@ pub(crate) unsafe fn typed_array_define_own_property(
                 } else {
                     crate::closure::clone_closure_rebind_this(set_field.bits(), obj_value)
                 };
-                let owner = owner_root.get_raw_mut_ptr::<TypedArrayHeader>() as usize;
+                let owner = owner_root
+                    .with_mut_ptr::<TypedArrayHeader, _>(|owner_root_ptr| owner_root_ptr)
+                    as usize;
                 crate::object::set_accessor_descriptor(
                     owner,
                     key_name.to_string(),

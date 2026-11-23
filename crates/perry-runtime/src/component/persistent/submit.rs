@@ -171,9 +171,9 @@ pub(super) fn call(
                 .as_pointer::<crate::promise::Promise>()
                 .cast_mut();
             crate::promise::set_promise_context_snapshot(pointer, unsafe {
-                (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
-                    .snapshot
-                    .clone()
+                captured.with_mut_ptr::<crate::async_context::AsyncSnapshotHolder, _>(
+                    |captured_ptr| (*captured_ptr).snapshot.clone(),
+                )
             });
             let (record, ids) = callback::saved::capture(promise.get_nanbox_f64());
             saved.set_nanbox_f64(record);
@@ -323,9 +323,9 @@ pub(in crate::component) fn read(
             .as_pointer::<crate::promise::Promise>()
             .cast_mut();
         crate::promise::set_promise_context_snapshot(pointer, unsafe {
-            (*captured.get_raw_mut_ptr::<crate::async_context::AsyncSnapshotHolder>())
-                .snapshot
-                .clone()
+            captured.with_mut_ptr::<crate::async_context::AsyncSnapshotHolder, _>(|captured_ptr| {
+                (*captured_ptr).snapshot.clone()
+            })
         });
         let (saved, ids) = callback::saved::capture(promise.get_nanbox_f64());
         let saved = scope.root_nanbox_f64(saved);

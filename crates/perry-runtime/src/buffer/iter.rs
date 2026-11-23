@@ -48,7 +48,7 @@ unsafe fn alloc_iterator(buf_ptr: *mut BufferHeader, kind: i32) -> f64 {
     let handles = crate::gc::RuntimeHandleScope::new();
     let buffer = handles.root_raw_mut_ptr(buf_ptr);
     let obj = handles.root_raw_mut_ptr(js_object_alloc(BUFFER_ITERATOR_CLASS_ID, 3));
-    let obj_ptr = || obj.get_raw_mut_ptr::<ObjectHeader>();
+    let obj_ptr = || obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| obj_ptr);
     // Field 0: backing buffer (NaN-boxed pointer).
     let buf_nan =
         buffer.with_mut_ptr::<BufferHeader, _>(|buffer_ptr| js_nanbox_pointer(buffer_ptr as i64));

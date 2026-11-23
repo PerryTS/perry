@@ -792,7 +792,9 @@ pub(crate) unsafe fn apply_property_descriptor(
             let key_str = crate::builtins::js_string_coerce(key_value);
             let obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
 
-            let closure_ptr = closure_handle.get_raw_mut_ptr::<u8>() as usize;
+            let closure_ptr = closure_handle
+                .with_mut_ptr::<u8, _>(|closure_handle_ptr| closure_handle_ptr)
+                as usize;
             if key_str.is_null() {
                 return true;
             }
@@ -816,7 +818,8 @@ pub(crate) unsafe fn apply_property_descriptor(
                 && !crate::closure::props::has_store(closure_ptr)
             {
                 let _ = crate::object::generator_function_prototype_of(closure_ptr);
-                closure_handle.get_raw_mut_ptr::<u8>() as usize
+                closure_handle.with_mut_ptr::<u8, _>(|closure_handle_ptr| closure_handle_ptr)
+                    as usize
             } else {
                 closure_ptr
             };
@@ -979,7 +982,8 @@ pub(crate) unsafe fn apply_property_descriptor(
             let key_str = crate::builtins::js_string_coerce(key_value);
             let obj_value = f64::from_bits(obj_handle.get_nanbox_u64());
 
-            let addr = addr_handle.get_raw_mut_ptr::<u8>() as usize;
+            let addr =
+                addr_handle.with_mut_ptr::<u8, _>(|addr_handle_ptr| addr_handle_ptr) as usize;
             if key_str.is_null() {
                 return true;
             }

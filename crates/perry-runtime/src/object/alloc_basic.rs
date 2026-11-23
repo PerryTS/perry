@@ -172,7 +172,7 @@ pub(crate) fn object_alloc_branded(class_id: u32) -> *mut ObjectHeader {
     let object = object_alloc_unpublished(class_id, 0);
     let scope = crate::gc::RuntimeHandleScope::new();
     let owner = scope.root_raw_mut_ptr(object);
-    let object = owner.get_raw_mut_ptr::<ObjectHeader>();
+    let object = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| owner_ptr);
     unsafe {
         if crate::arena::pointer_in_nursery(object as usize) {
             // GC_STORE_AUDIT(POINTER_FREE): the sole birth publication is a ShapeId.

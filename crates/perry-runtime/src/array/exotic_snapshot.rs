@@ -35,7 +35,7 @@ pub(super) unsafe fn exotic_snapshot(
     let len = (*arr).length;
     let out = scope.root_raw_mut_ptr(js_array_alloc(len));
     {
-        let out = out.get_raw_mut_ptr::<ArrayHeader>();
+        let out = out.with_mut_ptr::<ArrayHeader, _>(|out_ptr| out_ptr);
         if !keep_holes {
             // The fresh store is all holes; an absent index reads `undefined`.
             let slots = array_elements_ptr(out as *const ArrayHeader) as *mut u64;
@@ -88,7 +88,7 @@ pub(super) unsafe fn exotic_snapshot(
             }
         }
     }
-    out.get_raw_mut_ptr::<ArrayHeader>()
+    out.with_mut_ptr::<ArrayHeader, _>(|out_ptr| out_ptr)
 }
 
 /// The own index keys of `arr`'s named layout in `[from, to)`, ascending and

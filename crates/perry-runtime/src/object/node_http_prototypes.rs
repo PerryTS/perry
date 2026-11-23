@@ -191,7 +191,7 @@ fn method_info(name: &str) -> *const crate::closure::JsFunctionInfo {
     // SAFETY: a node prototype descriptor of this runtime.
     let layout = unsafe { layouts::NodePrototype::of(kind.layout()) };
     let proto = scope.root_raw_mut_ptr(unsafe { layout.birth() });
-    let p = || proto.get_raw_mut_ptr::<ObjectHeader>();
+    let p = || proto.with_mut_ptr::<ObjectHeader, _>(|proto_ptr| proto_ptr);
     // SAFETY (every fill below): the fresh prototype born on `layout`, not yet
     // reachable by program code.
     let fill = |name: &str, value: f64| unsafe { layout.data(p(), name.as_bytes(), value) };

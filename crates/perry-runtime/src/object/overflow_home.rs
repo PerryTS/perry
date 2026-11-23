@@ -484,7 +484,8 @@ pub(crate) unsafe fn reserve_in<const META: bool>(owner: usize) -> *mut Table {
     let home = scope.root_raw_mut_ptr(owner as *mut u8);
     let old = scope.root_raw_mut_ptr(t);
     let next = allocate((*t).capacity * 2);
-    let t = old.get_raw_mut_ptr::<Table>();
+    // Read after the allocation, which can move the old table.
+    let t = old.with_mut_ptr::<Table, _>(|t| t);
     let n = (*t).length as usize;
     std::ptr::copy_nonoverlapping(key_at(t, 0), key_at(next, 0), n);
     std::ptr::copy_nonoverlapping(value_at(t, 0), value_at(next, 0), n);
@@ -499,7 +500,7 @@ pub(crate) unsafe fn reserve_in<const META: bool>(owner: usize) -> *mut Table {
     visit_slots(next, |slot| {
         crate::gc::runtime_write_barrier_slot(next as usize, slot as usize, *slot)
     });
-    Home::<META>::install(home.get_raw_mut_ptr::<u8>() as usize, next);
+    Home::<META>::install(home.with_mut_ptr::<u8, _>(|home| home as usize), next);
     next
 }
 
@@ -538,21 +539,26 @@ pub(crate) unsafe fn insert_key_bits_in<const META: bool>(
         // DEC 250: an appended entry is a key add (also the re-add of a
         // deleted layout key, whose fixed slot this entry re-attaches),
         // reported while nothing has changed; an add-locked intrinsic refuses it.
-        Home::<META>::note_add(home.get_raw_mut_ptr::<u8>() as usize, key);
-        let t = Home::<META>::table(home.get_raw_mut_ptr::<u8>() as usize);
+        Home::<META>::note_add(home.with_mut_ptr::<u8, _>(|home| home as usize), key);
+        let t = Home::<META>::table(home.with_mut_ptr::<u8, _>(|home| home as usize));
         *key_at(t, slot) = key;
         *value_at(t, slot) = val.get_nanbox_f64().to_bits();
         *attrs_at(t, slot) = attrs as u64;
         (*t).length += 1;
         place(t, slot);
-        Home::<META>::note_keys_changed(home.get_raw_mut_ptr::<u8>() as usize);
+        Home::<META>::note_keys_changed(home.with_mut_ptr::<u8, _>(|home| home as usize));
     } else if *attrs_at(t, slot) & SLOT_REF != 0 {
         Home::<META>::store_slot_ref(
-            home.get_raw_mut_ptr::<u8>() as usize,
+            home.with_mut_ptr::<u8, _>(|home| home as usize),
             slot,
             val.get_nanbox_f64().to_bits(),
         );
-        Home::<META>::set_entry_attrs(home.get_raw_mut_ptr::<u8>() as usize, t, slot, attrs);
+        Home::<META>::set_entry_attrs(
+            home.with_mut_ptr::<u8, _>(|home| home as usize),
+            t,
+            slot,
+            attrs,
+        );
     } else {
         *value_at(t, slot) = val.get_nanbox_f64().to_bits();
         *attrs_at(t, slot) = attrs as u64;
@@ -590,16 +596,16 @@ pub(crate) unsafe fn delete_present_key_bits_in<const META: bool>(
     }
     if *attrs_at(t, slot) & SLOT_REF != 0 {
         Home::<META>::write_fixed(
-            home.get_raw_mut_ptr::<u8>() as usize,
+            home.with_mut_ptr::<u8, _>(|home| home as usize),
             *value_at(t, slot) as u32,
             TAG_HOLE,
         );
     }
     tombstone(
-        Home::<META>::table(home.get_raw_mut_ptr::<u8>() as usize),
+        Home::<META>::table(home.with_mut_ptr::<u8, _>(|home| home as usize)),
         slot,
     );
-    Home::<META>::note_keys_changed(home.get_raw_mut_ptr::<u8>() as usize);
+    Home::<META>::note_keys_changed(home.with_mut_ptr::<u8, _>(|home| home as usize));
     Some(true)
 }
 
@@ -778,7 +784,7 @@ pub(crate) unsafe fn store_routed_in<const META: bool>(
     let home = scope.root_raw_mut_ptr(owner as *mut u8);
     let val = scope.root_nanbox_f64(value);
     let atom = crate::string::property_atom(key);
-    let owner = home.get_raw_mut_ptr::<u8>() as usize;
+    let owner = home.with_mut_ptr::<u8, _>(|home| home as usize);
     // A fixed-slot hit changes no key the layout does not already name; only
     // an overflow entry shadows (`install` sets the bit).
     if let Some((fixed, live)) = Home::<META>::layout_slot(owner, atom) {
@@ -801,12 +807,12 @@ pub(crate) unsafe fn store_routed_in<const META: bool>(
                     crate::value::TAG_UNDEFINED,
                     0,
                 );
-                let t = Home::<META>::table(home.get_raw_mut_ptr::<u8>() as usize);
+                let t = Home::<META>::table(home.with_mut_ptr::<u8, _>(|home| home as usize));
                 *value_at(t, slot) = crate::value::INTERNAL_WORD_TAG | fixed as u64;
                 *attrs_at(t, slot) |= SLOT_REF;
             }
             Home::<META>::write_fixed(
-                home.get_raw_mut_ptr::<u8>() as usize,
+                home.with_mut_ptr::<u8, _>(|home| home as usize),
                 fixed,
                 val.get_nanbox_f64().to_bits(),
             );
@@ -814,7 +820,7 @@ pub(crate) unsafe fn store_routed_in<const META: bool>(
     } else {
         store_unfixed_in::<META>(owner, atom, val.get_nanbox_f64().to_bits());
     }
-    Home::<META>::note_stamped(home.get_raw_mut_ptr::<u8>() as usize);
+    Home::<META>::note_stamped(home.with_mut_ptr::<u8, _>(|home| home as usize));
 }
 
 /// [`store_routed_in`] for a write whose caller resolved `atom` (a property
@@ -828,5 +834,5 @@ pub(crate) unsafe fn store_unfixed_routed_in<const META: bool>(
     let scope = crate::gc::RuntimeHandleScope::new();
     let home = scope.root_raw_mut_ptr(owner as *mut u8);
     store_unfixed_in::<META>(owner, atom, value.to_bits());
-    Home::<META>::note_stamped(home.get_raw_mut_ptr::<u8>() as usize);
+    Home::<META>::note_stamped(home.with_mut_ptr::<u8, _>(|home| home as usize));
 }
