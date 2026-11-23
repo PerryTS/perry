@@ -58,6 +58,19 @@ impl WasmModuleEmitter {
         locals: &mut BTreeMap<u32, String>,
         indent: usize,
     ) {
+        self.emit_js_labeled_stmt(out, stmt, locals, indent, "");
+    }
+
+    /// `label` is `"name: "` on a loop whose label a `continue` may name; JS accepts
+    /// `continue name` only when `name` labels the iteration statement itself.
+    fn emit_js_labeled_stmt(
+        &self,
+        out: &mut String,
+        stmt: &Stmt,
+        locals: &mut BTreeMap<u32, String>,
+        indent: usize,
+        label: &str,
+    ) {
         let pad = "  ".repeat(indent);
         match stmt {
             // A HIR local lives for the whole function, as a WASM local does: the
@@ -105,7 +118,7 @@ impl WasmModuleEmitter {
             }
             Stmt::While { condition, body } => {
                 let cond = self.emit_js_expr(condition, locals);
-                out.push_str(&format!("{pad}    while (toJsValue({cond})) {{\n"));
+                out.push_str(&format!("{pad}    {label}while (toJsValue({cond})) {{\n"));
                 for s in body {
                     self.emit_js_stmt(out, s, locals, indent + 1);
                 }
@@ -147,7 +160,9 @@ impl WasmModuleEmitter {
                 if release.is_some() {
                     out.push_str(&format!("{pad}      try {{\n"));
                 }
-                out.push_str(&format!("{pad}      for (; toJsValue({cond}); {upd}) {{\n"));
+                out.push_str(&format!(
+                    "{pad}      {label}for (; toJsValue({cond}); {upd}) {{\n"
+                ));
                 for s in body {
                     self.emit_js_stmt(out, s, locals, indent + 2);
                 }
@@ -207,12 +222,20 @@ impl WasmModuleEmitter {
                 out.push_str(&format!("{pad}    continue {};\n", label));
             }
             Stmt::DoWhile { body, condition } => {
-                out.push_str(&format!("{pad}    do {{\n"));
+                out.push_str(&format!("{pad}    {label}do {{\n"));
                 for s in body {
                     self.emit_js_stmt(out, s, locals, indent + 1);
                 }
                 let cond = self.emit_js_expr(condition, locals);
                 out.push_str(&format!("{pad}    }} while (isTruthy({cond}));\n"));
+            }
+            Stmt::Labeled { label: name, body }
+                if matches!(
+                    **body,
+                    Stmt::For { .. } | Stmt::While { .. } | Stmt::DoWhile { .. }
+                ) =>
+            {
+                self.emit_js_labeled_stmt(out, body, locals, indent, &format!("{name}: "));
             }
             Stmt::Labeled { label, body } => {
                 out.push_str(&format!("{pad}    {}: {{\n", label));
