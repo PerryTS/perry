@@ -21,7 +21,7 @@ pub fn expr_contains_local_get(e: &perry_hir::Expr, target_id: u32) -> bool {
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)

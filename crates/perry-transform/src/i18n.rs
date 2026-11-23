@@ -349,7 +349,7 @@ fn collect_keys_from_stmt(
             init: Some(expr), ..
         }
         | Stmt::Expr(expr)
-        | Stmt::Return(Some(expr))
+        | Stmt::Return(Some(expr), _)
         | Stmt::Throw(expr) => {
             collect_keys_from_expr(expr, key_to_idx, keys);
         }
@@ -417,7 +417,7 @@ fn collect_keys_from_stmt(
             }
         }
         Stmt::Let { init: None, .. }
-        | Stmt::Return(None)
+        | Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -540,7 +540,7 @@ fn replace_in_stmt(
             init: Some(expr), ..
         }
         | Stmt::Expr(expr)
-        | Stmt::Return(Some(expr))
+        | Stmt::Return(Some(expr), _)
         | Stmt::Throw(expr) => {
             replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
@@ -670,7 +670,7 @@ fn replace_in_stmt(
             }
         }
         Stmt::Let { init: None, .. }
-        | Stmt::Return(None)
+        | Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)

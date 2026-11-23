@@ -62,7 +62,7 @@ pub(super) fn collect_closures_from_stmts(stmts: &[Stmt], out: &mut Vec<Collecte
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => collect_closures_from_expr(e, out),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     collect_closures_from_expr(e, out);
                 }
@@ -177,7 +177,7 @@ pub(super) fn generator_record_captures(body: &[Stmt]) -> &[LocalId] {
             is_async: false,
             fixed_state: true,
             ..
-        }))) => match obj.as_ref() {
+        }), _)) => match obj.as_ref() {
             Expr::Closure { captures, .. } => captures,
             _ => &[],
         },

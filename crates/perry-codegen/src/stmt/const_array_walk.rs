@@ -199,7 +199,7 @@ fn body_cost(stmts: &[Stmt]) -> usize {
     }
     fn stmt_cost(s: &Stmt) -> usize {
         1 + match s {
-            Stmt::Let { init, .. } | Stmt::Return(init) => opt(init),
+            Stmt::Let { init, .. } | Stmt::Return(init, _) => opt(init),
             Stmt::Expr(e) | Stmt::Throw(e) => expr_cost(e),
             Stmt::If {
                 condition,

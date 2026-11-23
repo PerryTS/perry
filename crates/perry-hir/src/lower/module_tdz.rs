@@ -605,7 +605,7 @@ fn rw_stmt(stmt: &mut Stmt, rw: &Rw<'_>) {
             }
         }
         Stmt::Expr(expr) | Stmt::Throw(expr) => rw_expr(expr, rw),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(expr) = expr {
                 rw_expr(expr, rw);
             }

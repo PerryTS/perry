@@ -1051,7 +1051,7 @@ impl<'a> ArrayWalk<'a> {
                     self.walk_expr(e);
                 }
             }
-            Stmt::Return(Some(e)) => {
+            Stmt::Return(Some(e), _) => {
                 // #7034 §4's terminator exemption, applied to the array.
                 if !self.in_closure {
                     if let Expr::LocalGet(id) = e {
@@ -1062,7 +1062,7 @@ impl<'a> ArrayWalk<'a> {
                 }
                 self.walk_expr(e);
             }
-            Stmt::Return(None) => {}
+            Stmt::Return(None, _) => {}
             Stmt::Expr(e) => self.walk_expr(e),
             Stmt::Throw(e) => self.walk_expr(e),
             Stmt::If {

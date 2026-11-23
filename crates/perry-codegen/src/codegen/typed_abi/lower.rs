@@ -267,7 +267,7 @@ pub(crate) fn lower_typed_f64_body_with_seed_locals_and_reps(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => lower_typed_f64_expr_with_env(blk, expr, &locals, &reps),
+        Stmt::Return(Some(expr), _) => lower_typed_f64_expr_with_env(blk, expr, &locals, &reps),
         _ => anyhow::bail!("typed-f64 clone requires a final return value"),
     }
 }
@@ -316,7 +316,7 @@ pub(crate) fn lower_typed_i32_body_with_seed_locals(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => lower_typed_i32_expr_with_env(blk, expr, &locals),
+        Stmt::Return(Some(expr), _) => lower_typed_i32_expr_with_env(blk, expr, &locals),
         _ => anyhow::bail!("typed-i32 clone requires a final return value"),
     }
 }
@@ -349,7 +349,7 @@ pub(crate) fn lower_typed_string_body_with_seed_locals(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => lower_typed_string_expr_with_env(expr, &locals),
+        Stmt::Return(Some(expr), _) => lower_typed_string_expr_with_env(expr, &locals),
         _ => anyhow::bail!("typed-string clone requires a final return value"),
     }
 }
@@ -491,7 +491,7 @@ pub(crate) fn lower_typed_f64_receiver_body(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => {
+        Stmt::Return(Some(expr), _) => {
             lower_typed_f64_receiver_expr_with_env(blk, expr, &locals, receiver, header_skip)
         }
         _ => anyhow::bail!("typed-f64 receiver clone requires a final return value"),
@@ -553,7 +553,7 @@ pub(crate) fn lower_typed_i1_body_with_seed_locals(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => lower_typed_i1_expr_with_env(blk, expr, &locals, &reps),
+        Stmt::Return(Some(expr), _) => lower_typed_i1_expr_with_env(blk, expr, &locals, &reps),
         _ => anyhow::bail!("typed-i1 clone requires a final return value"),
     }
 }

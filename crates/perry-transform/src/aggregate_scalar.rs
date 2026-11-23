@@ -409,7 +409,7 @@ fn scalarize_stmts(
             Stmt::Labeled { .. }
             | Stmt::Let { .. }
             | Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Throw(_)
             | Stmt::Break
             | Stmt::Continue
@@ -825,7 +825,7 @@ fn return_record_stmts_are_safe(
             Stmt::Let { init, .. } => init
                 .as_ref()
                 .is_none_or(|expr| expr_is_safe(expr, record_id, field_order, allow_reads)),
-            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
                 expr_is_safe(expr, record_id, field_order, allow_reads)
             }
             Stmt::If { condition, .. }
@@ -1026,7 +1026,7 @@ fn rewrite_return_record_stmts(
                     rewrite_return_record_expr(expr, record_id, field_locals);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
                 rewrite_return_record_expr(expr, record_id, field_locals)
             }
             Stmt::If {
@@ -1526,7 +1526,7 @@ fn stmts_are_safe(
                 .as_ref()
                 .is_none_or(|expr| expr_is_safe(expr, array_id, aliases, fields)),
             Stmt::Expr(expr) | Stmt::Throw(expr) => expr_is_safe(expr, array_id, aliases, fields),
-            Stmt::Return(value) => value
+            Stmt::Return(value, _) => value
                 .as_ref()
                 .is_none_or(|expr| expr_is_safe(expr, array_id, aliases, fields)),
             Stmt::If {
@@ -1669,7 +1669,7 @@ fn rewrite_stmts(
                 }
             }
             Stmt::Expr(expr) | Stmt::Throw(expr) => rewrite_expr(expr, array_id, aliases, fields),
-            Stmt::Return(value) => {
+            Stmt::Return(value, _) => {
                 if let Some(value) = value {
                     rewrite_expr(value, array_id, aliases, fields);
                 }

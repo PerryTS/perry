@@ -103,10 +103,10 @@ pub fn find_outer_writes_stmt(
                 find_outer_writes_expr(expr, inner_ids, out);
             }
         }
-        Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => {
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => {
             find_outer_writes_expr(e, inner_ids, out);
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -368,8 +368,8 @@ fn find_thread_hazard_stmt(
     let stmts = |b: &[Stmt]| find_thread_hazard_in_body(b, hazardous_ids, async_step_closures);
     match stmt {
         Stmt::Let { init, .. } => init.as_ref().and_then(expr),
-        Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => expr(e),
-        Stmt::Return(None)
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => expr(e),
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -430,7 +430,7 @@ fn find_thread_hazard_expr(
 ) -> Option<ThreadClosureHazard> {
     use perry_hir::Expr;
     match e {
-        Expr::Await(_) | Expr::ForAwaitToArray(_) => return Some(ThreadClosureHazard::Await),
+        Expr::Await(_, _) | Expr::ForAwaitToArray(_) => return Some(ThreadClosureHazard::Await),
         Expr::Closure {
             func_id,
             is_async,

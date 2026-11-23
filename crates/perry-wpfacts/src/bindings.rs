@@ -1531,7 +1531,7 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
                 continue;
             }
             let params: Vec<_> = f.params.iter().map(|p| p.id).collect();
-            if let [perry_hir::Stmt::Return(Some(e))] = f.body.as_slice() {
+            if let [perry_hir::Stmt::Return(Some(e), _)] = f.body.as_slice() {
                 if pure(e, &params) {
                     out[mi].numeric_functions.push((f.id, params, e.clone()));
                 }

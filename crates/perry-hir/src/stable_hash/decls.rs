@@ -266,7 +266,7 @@ impl SH for Function {
             captures,
             decorators,
             was_plain_async,
-            was_unrolled,
+            was_unrolled, ..
         } = self;
         id.hash(h);
         name.hash(h);

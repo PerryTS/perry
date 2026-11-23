@@ -260,7 +260,7 @@ fn shallow_expr_at(e: &Expr, s: &mut Shallow, read: bool) {
 /// level, in source order.
 fn for_each_stmt_expr<'a>(stmt: &'a Stmt, f: &mut impl FnMut(&'a Expr)) {
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 f(e);
             }
@@ -814,13 +814,13 @@ fn top_level_let_count(stmts: &[&Stmt], id: u32) -> usize {
 /// ...; return a; }())`.
 fn iife_returns_array(m: &Model<'_>, body: &[Stmt]) -> bool {
     let stmts: Vec<&Stmt> = body.iter().collect();
-    let Some(Stmt::Return(Some(_))) = stmts.last() else {
+    let Some(Stmt::Return(Some(_), _)) = stmts.last() else {
         return false;
     };
     for (i, st) in stmts.iter().enumerate() {
         let mut ok = true;
         for_each_stmt(st, &mut |s| {
-            if let Stmt::Return(r) = s {
+            if let Stmt::Return(r, _) = s {
                 ok &= match r {
                     Some(e) if is_array_literal(e) => true,
                     Some(Expr::LocalGet(a)) => array_local_before(m, &stmts, *a, i),
@@ -930,7 +930,7 @@ fn confined(m: &Model<'_>, v: u32, init: &Expr) -> bool {
     let Expr::Closure { func_id, body, .. } = callee.as_ref() else {
         return false;
     };
-    let Some(Stmt::Return(Some(Expr::LocalGet(a)))) = body.last() else {
+    let Some(Stmt::Return(Some(Expr::LocalGet(a)), _)) = body.last() else {
         return false;
     };
     let Some(node) = m.nodes.get(func_id) else {
@@ -953,7 +953,7 @@ fn confined(m: &Model<'_>, v: u32, init: &Expr) -> bool {
     let mut other_returns = false;
     for st in &stmts {
         for_each_stmt(st, &mut |s| {
-            if let Stmt::Return(r) = s {
+            if let Stmt::Return(r, _) = s {
                 match r {
                     Some(Expr::LocalGet(x)) if x == a => returns += 1,
                     _ => other_returns = true,

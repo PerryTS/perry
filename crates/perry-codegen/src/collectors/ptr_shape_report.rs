@@ -756,8 +756,8 @@ fn scan_stmts(
             }
             Stmt::Expr(e) => scan_expr(e, depth, ctx, out),
             Stmt::Throw(e) => scan_expr(e, depth, "throw", out),
-            Stmt::Return(Some(e)) => scan_return(e, depth, out),
-            Stmt::Return(None) => {}
+            Stmt::Return(Some(e), _) => scan_return(e, depth, out),
+            Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,

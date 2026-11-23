@@ -106,7 +106,7 @@ pub(crate) fn generator_executing_guard(executing_id: LocalId, is_async_generato
 
 pub(crate) fn generator_resume_rethrow(value: Expr, is_async_generator: bool) -> Stmt {
     if is_async_generator {
-        Stmt::Return(Some(promise_reject(value)))
+        Stmt::Return(Some(promise_reject(value)), 0 /*HPOS*/)
     } else {
         Stmt::Throw(value)
     }
@@ -176,7 +176,7 @@ pub(crate) fn prepend_executing_clear_before_returns(stmts: &mut Vec<Stmt>, exec
             }
             _ => {}
         }
-        if matches!(stmt, Stmt::Return(_)) {
+        if matches!(stmt, Stmt::Return(_, _)) {
             new_body.push(Stmt::Expr(Expr::LocalSet(
                 executing_id,
                 Box::new(Expr::Bool(false)),

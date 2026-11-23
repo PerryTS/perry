@@ -123,7 +123,7 @@ fn refs_stmts<const FREE: bool>(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
     for s in stmts {
         match s {
             perry_hir::Stmt::Expr(e) | perry_hir::Stmt::Throw(e) => refs_expr::<FREE>(e, out),
-            perry_hir::Stmt::Return(opt) => {
+            perry_hir::Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     refs_expr::<FREE>(e, out);
                 }
@@ -260,7 +260,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)

@@ -221,7 +221,7 @@ fn scan_stmt_handle_uses(stmt: &Stmt, out: &mut HashSet<LocalId>) {
     match stmt {
         Stmt::Let { init: Some(e), .. } => scan_expr_handle_uses(e, out),
         Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_handle_uses(e, out),
-        Stmt::Return(Some(e)) => scan_expr_handle_uses(e, out),
+        Stmt::Return(Some(e), _) => scan_expr_handle_uses(e, out),
         Stmt::If {
             condition,
             then_branch,
@@ -426,7 +426,7 @@ fn rewrite_stmts(
 fn rewrite_stmt(stmt: &mut Stmt, bindings: &HashMap<LocalId, StateBinding>, fresh: &mut FreshIds) {
     match stmt {
         Stmt::Expr(e) => rewrite_expr(e, bindings, fresh),
-        Stmt::Return(Some(e)) => rewrite_expr(e, bindings, fresh),
+        Stmt::Return(Some(e), _) => rewrite_expr(e, bindings, fresh),
         Stmt::Throw(e) => rewrite_expr(e, bindings, fresh),
         Stmt::Let { init: Some(e), .. } => rewrite_expr(e, bindings, fresh),
         Stmt::If {
@@ -650,10 +650,10 @@ fn try_rewrite_foreach(
             Expr::LocalGet(render_id),
         ],
     }));
-    body_stmts.push(Stmt::Return(Some(Expr::LocalGet(host_id))));
+    body_stmts.push(Stmt::Return(Some(Expr::LocalGet(host_id)), 0 /*HPOS*/));
 
     let func_id = fresh.fresh_func();
-    let closure = Expr::Closure {
+    let closure = Expr::Closure { byte_offset: 0 /*HPOS*/,
         func_id,
         params: Vec::<Param>::new(),
         return_type: Type::Any,
@@ -849,10 +849,10 @@ fn try_rewrite_navstack(
             ],
         }));
     }
-    body_stmts.push(Stmt::Return(Some(Expr::LocalGet(host_id))));
+    body_stmts.push(Stmt::Return(Some(Expr::LocalGet(host_id)), 0 /*HPOS*/));
 
     let func_id = fresh.fresh_func();
-    let closure = Expr::Closure {
+    let closure = Expr::Closure { byte_offset: 0 /*HPOS*/,
         func_id,
         params: Vec::<Param>::new(),
         return_type: Type::Any,

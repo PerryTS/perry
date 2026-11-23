@@ -51,7 +51,7 @@ pub(super) fn match_plan(
             {
                 return None
             }
-            Expr::Closure { .. } | Expr::Await(_) | Expr::Yield { .. } => return None,
+            Expr::Closure { .. } | Expr::Await(_, _) | Expr::Yield { .. } => return None,
             _ => {}
         }
         let mut budget = Some(u32::from(
@@ -71,7 +71,7 @@ pub(super) fn match_plan(
                     .as_ref()
                     .map_or(Some(0), |e| expr_budget(e, counter, bound)),
                 Stmt::Expr(e) | Stmt::Throw(e) => expr_budget(e, counter, bound),
-                Stmt::Return(e) => e
+                Stmt::Return(e, _) => e
                     .as_ref()
                     .map_or(Some(0), |e| expr_budget(e, counter, bound)),
                 Stmt::If {

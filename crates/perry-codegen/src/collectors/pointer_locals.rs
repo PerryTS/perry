@@ -503,10 +503,10 @@ fn pointer_locals(
                         writes.entry(*id).or_default().push(LocalWrite::NonPointer);
                     }
                 }
-                Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+                Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                     memo.collect_expr_writes(expr, writes);
                 }
-                Stmt::Return(None)
+                Stmt::Return(None, _)
                 | Stmt::Break
                 | Stmt::Continue
                 | Stmt::LabeledBreak(_)

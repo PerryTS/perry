@@ -16,10 +16,10 @@ use perry_hir::{Expr, Stmt};
 pub(crate) fn await_returned_operands(stmts: &mut [Stmt]) {
     for stmt in stmts {
         match stmt {
-            Stmt::Return(Some(expr)) => {
-                if !matches!(expr, Expr::Await(_) | Expr::Yield { .. }) {
+            Stmt::Return(Some(expr), off) => {
+                if !matches!(expr, Expr::Await(_, _) | Expr::Yield { .. }) {
                     let operand = std::mem::replace(expr, Expr::Undefined);
-                    *expr = Expr::Await(Box::new(operand));
+                    *expr = Expr::Await(Box::new(operand), *off);
                 }
             }
             Stmt::If {

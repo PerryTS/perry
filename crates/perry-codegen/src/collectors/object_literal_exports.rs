@@ -191,7 +191,7 @@ fn capability_from_init(
                     eligible_method(hir, func_names, class, key, value),
                 );
             }
-            Stmt::Return(Some(value)) if local_get_is(value, param.id) && !saw_return => {
+            Stmt::Return(Some(value), _) if local_get_is(value, param.id) && !saw_return => {
                 saw_return = true;
             }
             _ => return None,

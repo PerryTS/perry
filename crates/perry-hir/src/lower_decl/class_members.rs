@@ -312,7 +312,7 @@ fn lower_constructor_in_scope(
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     ctx.in_constructor_class = saved_ctor_class;
 
-    Ok(Function {
+    Ok(Function { byte_offset: ctor.span.lo.0,
         id: ctx.fresh_func(),
         name: format!("{}::constructor", class_name),
         type_params: Vec::new(),
@@ -717,7 +717,7 @@ fn lower_class_method_in_scope(
         }
     }
 
-    Ok(Function {
+    Ok(Function { byte_offset: method.span.lo.0,
         id: func_id,
         name,
         type_params,
@@ -854,7 +854,7 @@ fn lower_getter_method_in_scope(
     let func_id = ctx.fresh_func();
     capture_class_method_source(ctx, func_id, method);
 
-    Ok(Function {
+    Ok(Function { byte_offset: method.span.lo.0,
         id: func_id,
         name,
         type_params: Vec::new(),
@@ -1043,7 +1043,7 @@ fn lower_setter_method_in_scope(
     let func_id = ctx.fresh_func();
     capture_class_method_source(ctx, func_id, method);
 
-    Ok(Function {
+    Ok(Function { byte_offset: method.span.lo.0,
         id: func_id,
         name,
         type_params: Vec::new(),

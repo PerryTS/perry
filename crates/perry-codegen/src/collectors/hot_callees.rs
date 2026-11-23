@@ -360,8 +360,8 @@ fn walk_stmt(s: &Stmt, in_loop: bool, scan: &mut HotCalleeScan) {
         Stmt::Let { init: Some(e), .. } => walk_expr(e, in_loop, scan),
         Stmt::Let { init: None, .. } => {}
         Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, in_loop, scan),
-        Stmt::Return(Some(e)) => walk_expr(e, in_loop, scan),
-        Stmt::Return(None) => {}
+        Stmt::Return(Some(e), _) => walk_expr(e, in_loop, scan),
+        Stmt::Return(None, _) => {}
         Stmt::If {
             condition,
             then_branch,
@@ -479,7 +479,7 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
@@ -632,8 +632,8 @@ fn count_alloc_sites_in_stmts(
             }
             | Stmt::Expr(expr)
             | Stmt::Throw(expr)
-            | Stmt::Return(Some(expr)) => count_alloc_sites_in_expr(expr, closure_id, sites),
-            Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+            | Stmt::Return(Some(expr), _) => count_alloc_sites_in_expr(expr, closure_id, sites),
+            Stmt::Let { init: None, .. } | Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,

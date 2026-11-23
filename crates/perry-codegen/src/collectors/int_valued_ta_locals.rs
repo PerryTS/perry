@@ -505,7 +505,7 @@ fn additive_flow_stmt(
         Stmt::Expr(e) | Stmt::Throw(e) => {
             additive_flow_expr(e, types, ta_lens, numeric_locals, numberish, invalid)
         }
-        Stmt::Return(Some(e)) => {
+        Stmt::Return(Some(e), _) => {
             additive_flow_expr(e, types, ta_lens, numeric_locals, numberish, invalid)
         }
         Stmt::If {
@@ -637,7 +637,7 @@ fn additive_flow_stmt(
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
-        | Stmt::Return(None)
+        | Stmt::Return(None, _)
         | Stmt::PreallocateBoxes(_)
         | Stmt::PreallocateTdzBoxes(_)
         | Stmt::ReleaseBoxes(_) => {}
@@ -935,7 +935,7 @@ fn collect_facts<'a>(
             Stmt::Expr(e) | Stmt::Throw(e) => {
                 collect_facts_expr(e, types, guarded_number_array_params, in_loop, facts)
             }
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     collect_facts_expr(e, types, guarded_number_array_params, in_loop, facts);
                 }
@@ -1251,7 +1251,7 @@ fn collect_closure_refs_stmt(s: &Stmt, out: &mut HashSet<u32>) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => collect_closure_refs(e, out),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 collect_closure_refs(e, out);
             }
@@ -1401,7 +1401,7 @@ fn observe_stmts(
                 }
             }
             Stmt::Throw(e) => observe(e, false, cands, types, additive, exact_i32, disq),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     observe(e, false, cands, types, additive, exact_i32, disq);
                 }

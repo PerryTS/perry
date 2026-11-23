@@ -433,7 +433,7 @@ pub fn body_calls_func(stmts: &[Stmt], target_id: FuncId) -> bool {
             Stmt::Let {
                 init: Some(expr), ..
             } => check_expr(expr, target_id),
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 check_expr(expr, target_id)
             }
             Stmt::If {
@@ -628,8 +628,8 @@ pub fn construction_stmt_can_affect_method_lookup(
             getter_names,
             setter_names,
         ),
-        Stmt::Return(Some(_)) | Stmt::Throw(_) => true,
-        Stmt::Return(None) | Stmt::Break | Stmt::Continue => false,
+        Stmt::Return(Some(_), _) | Stmt::Throw(_) => true,
+        Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => false,
         Stmt::If {
             condition,
             then_branch,

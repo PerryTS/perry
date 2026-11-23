@@ -27,7 +27,7 @@ pub(crate) fn rewrite_set_hidden_in_stmt(
     match stmt {
         Stmt::Expr(e) => rewrite_set_hidden_in_expr(e, bindings),
         Stmt::Let { init: Some(e), .. } => rewrite_set_hidden_in_expr(e, bindings),
-        Stmt::Return(Some(e)) => rewrite_set_hidden_in_expr(e, bindings),
+        Stmt::Return(Some(e), _) => rewrite_set_hidden_in_expr(e, bindings),
         Stmt::If {
             condition,
             then_branch,
@@ -187,7 +187,7 @@ pub(crate) fn rewrite_set_hidden_in_closures_in_stmt(
     bindings: &HashMap<LocalId, VisibilityBinding>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) => {
             rewrite_set_hidden_in_closures_in_expr(e, bindings);
         }
         Stmt::Let { init: Some(e), .. } => {

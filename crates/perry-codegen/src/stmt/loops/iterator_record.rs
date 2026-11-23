@@ -421,7 +421,7 @@ fn substitute_output(stmt: &mut Stmt, output: u32, element: &Expr) -> bool {
         }
     }
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 replace_expr(e, output, element);
             }

@@ -497,8 +497,8 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             receiver_is_brand_owner: receiver_is_brand_owner.clone(),
             object: Shallow::shallow(object, n),
         },
-        Expr::Await(a0) => Expr::Await(Shallow::shallow(a0, n)),
-        Expr::Yield { value, delegate } => Expr::Yield {
+        Expr::Await(a0, off) => Expr::Await(Shallow::shallow(a0, n), *off),
+        Expr::Yield { value, delegate, byte_offset } => Expr::Yield { byte_offset: *byte_offset,
             value: Shallow::shallow(value, n),
             delegate: delegate.clone(),
         },

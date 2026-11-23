@@ -124,7 +124,7 @@ pub(super) fn collect_locals(
                 }
             }
             Stmt::Expr(expr) | Stmt::Throw(expr) => collect_expr_locals(expr, map, count, offset),
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     collect_expr_locals(expr, map, count, offset);
                 }

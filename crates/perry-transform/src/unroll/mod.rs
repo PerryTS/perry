@@ -576,7 +576,7 @@ fn stmt_is_unrollable(stmt: &Stmt, iv_id: LocalId, loop_depth: u32) -> bool {
             init.as_ref().is_none_or(|e| expr_is_unrollable(e, iv_id))
         }
         Stmt::Expr(e) | Stmt::Throw(e) => expr_is_unrollable(e, iv_id),
-        Stmt::Return(opt) => opt.as_ref().is_none_or(|e| expr_is_unrollable(e, iv_id)),
+        Stmt::Return(opt, _) => opt.as_ref().is_none_or(|e| expr_is_unrollable(e, iv_id)),
         Stmt::If {
             condition,
             then_branch,
@@ -664,7 +664,7 @@ fn substitute_localget_with_int_in_stmt(stmt: &mut Stmt, iv_id: LocalId, value: 
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => substitute_localget_with_int(e, iv_id, value),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 substitute_localget_with_int(e, iv_id, value);
             }
@@ -843,7 +843,7 @@ fn refresh_in_stmt(
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => refresh_in_expr(e, remap, next_id, next_func_id),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 refresh_in_expr(e, remap, next_id, next_func_id);
             }

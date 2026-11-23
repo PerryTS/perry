@@ -1600,7 +1600,7 @@ fn receiver_must_eval_once(e: &Expr) -> bool {
             | Expr::StaticMethodCall { .. }
             | Expr::New { .. }
             | Expr::NewDynamic { .. }
-            | Expr::Await(_)
+            | Expr::Await(_, _)
     )
 }
 

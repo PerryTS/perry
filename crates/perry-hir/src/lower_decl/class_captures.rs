@@ -76,7 +76,7 @@ fn closure_free_exprs_of_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e);
             }
@@ -196,7 +196,7 @@ fn closure_capture_ids_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<Loc
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => closure_capture_ids_expr(e, out),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 closure_capture_ids_expr(e, out);
             }
@@ -299,6 +299,9 @@ impl CaptureDefinition {
 pub fn synthesize_class_captures(
     ctx: &mut LoweringContext,
     name: &str,
+    // Source offset of the class construct; a synthesized default
+    // constructor stands there.
+    class_offset: u32,
     extends_name: Option<&str>,
     has_heritage: bool,
     fields: &mut Vec<ClassField>,
@@ -910,7 +913,7 @@ pub fn synthesize_class_captures(
             } else {
                 (Vec::new(), Vec::new())
             };
-            Function {
+            Function { byte_offset: class_offset,
                 id: ctx.fresh_func(),
                 name: format!("{}::constructor", name),
                 type_params: Vec::new(),
@@ -1205,7 +1208,7 @@ fn stmt_has_direct_super_call(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Expr(e) | Stmt::Throw(e) => expr_has_direct_super_call(e),
         Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_has_direct_super_call),
-        Stmt::Return(e) => e.as_ref().is_some_and(expr_has_direct_super_call),
+        Stmt::Return(e, _) => e.as_ref().is_some_and(expr_has_direct_super_call),
         Stmt::If {
             condition,
             then_branch,
@@ -1273,7 +1276,7 @@ fn insert_stashes_before_returns(body: &mut Vec<Stmt>, stashes: &[Stmt]) {
     let mut i = 0;
     while i < body.len() {
         // Check via shared ref first to decide what to do.
-        let is_return = matches!(body[i], Stmt::Return(_));
+        let is_return = matches!(body[i], Stmt::Return(_, _));
         if is_return {
             for (j, s) in stashes.iter().enumerate() {
                 body.insert(i + j, s.clone());
@@ -1405,7 +1408,7 @@ pub(crate) fn append_new_args_stmt(
         Stmt::Expr(e) | Stmt::Throw(e) => {
             append_new_args_expr(e, class_name, cap_args, skip_if_present)
         }
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 append_new_args_expr(e, class_name, cap_args, skip_if_present);
             }
@@ -1542,7 +1545,7 @@ fn stamp_self_new_stmt(stmt: &mut Stmt, class_name: &str, eval_id: LocalId) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => stamp_self_new_expr(e, class_name, eval_id),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 stamp_self_new_expr(e, class_name, eval_id);
             }

@@ -333,7 +333,7 @@ pub(crate) fn collect_literal_finals(
                 }
             }
             match stmt {
-                Stmt::Let { init, .. } | Stmt::Return(init) => {
+                Stmt::Let { init, .. } | Stmt::Return(init, _) => {
                     if let Some(e) = init {
                         expr(e, m, p, r, w, out);
                     }
@@ -508,7 +508,7 @@ impl ObjectSource {
     }
     fn returned(body: &[Stmt]) -> Option<Self> {
         match body.last()? {
-            Stmt::Return(Some(value)) => Self::of(value),
+            Stmt::Return(Some(value), _) => Self::of(value),
             _ => None,
         }
     }

@@ -227,7 +227,7 @@ fn stmt_safe(ctx: &FnCtx<'_>, stmt: &Stmt, sites: &mut BTreeMap<u32, usize>) -> 
         Stmt::Let {
             init: Some(init), ..
         } => expr_safe(ctx, init, sites),
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) => expr_safe(ctx, expr, sites),
+        Stmt::Expr(expr) | Stmt::Return(Some(expr), _) => expr_safe(ctx, expr, sites),
         _ => false,
     }
 }

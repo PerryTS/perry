@@ -1320,7 +1320,7 @@ impl<'a> Gen<'a> {
                 self.raise_on(o);
                 self.prim_node(prim::BOOL)
             }
-            Expr::Await(x) => {
+            Expr::Await(x, _) => {
                 // 27.7.5.3 Await: a rejection resumes the body with a throw
                 // completion at the await, into its region (R-JOBTHROW).
                 let v = self.expr(fx, x);

@@ -160,7 +160,7 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
         self.tick(depth)?;
         let expr = crate::tdz_check::without_checks(expr);
         match expr {
-            Expr::Await(value) => self.resolve(value, depth + 1),
+            Expr::Await(value, _) => self.resolve(value, depth + 1),
             Expr::String(value) => bounded(vec![value.clone()], &mut self.work, self.string_limit),
             Expr::StringCoerce(value) | Expr::TemplateStringCoerce(value) => {
                 self.strings(value, depth + 1).map(PathValues::strings)
@@ -471,7 +471,7 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
         for stmt in body {
             self.tick(depth)?;
             match stmt {
-                Stmt::Return(Some(value)) => {
+                Stmt::Return(Some(value), _) => {
                     match self.resolve(value, depth + 1) {
                         Ok(returned) => {
                             values.is_url |= returned.is_url;

@@ -1284,7 +1284,7 @@ fn collect_owned_buffer_lets(
             }
             Stmt::Let { init: None, .. }
             | Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -1472,7 +1472,7 @@ impl ArrayFactCollector {
                     self.aliases.remove(id);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 self.collect_expr(expr);
             }
             Stmt::If {
@@ -1534,7 +1534,7 @@ impl ArrayFactCollector {
                 }
             }
             Stmt::Labeled { body, .. } => self.collect_stmt(body.as_ref()),
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -1826,7 +1826,7 @@ impl ArrayFactCollector {
                     self.collect_expr(inner);
                 }
             }
-            Expr::Await(operand)
+            Expr::Await(operand, _)
             | Expr::Yield {
                 value: Some(operand),
                 ..

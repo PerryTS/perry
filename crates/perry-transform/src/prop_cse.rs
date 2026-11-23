@@ -171,7 +171,7 @@ fn diverging_guard(stmt: &Stmt) -> Option<&Expr> {
 /// Every path through `stmts` leaves the enclosing statement list.
 fn always_diverges(stmts: &[Stmt]) -> bool {
     match stmts.last() {
-        Some(Stmt::Return(_))
+        Some(Stmt::Return(_, _))
         | Some(Stmt::Throw(_))
         | Some(Stmt::Break)
         | Some(Stmt::Continue)
@@ -522,7 +522,7 @@ fn stmt_exprs(s: &Stmt) -> Vec<&Expr> {
     match s {
         Stmt::Let { init, .. } => init.iter().collect(),
         Stmt::Expr(e) | Stmt::Throw(e) => vec![e],
-        Stmt::Return(e) => e.iter().collect(),
+        Stmt::Return(e, _) => e.iter().collect(),
         Stmt::If { condition, .. }
         | Stmt::While { condition, .. }
         | Stmt::DoWhile { condition, .. } => vec![condition],

@@ -138,10 +138,10 @@ fn visit_stmt(stmt: &Stmt, module_constants: &HashMap<u32, f64>, scan: &mut Scan
                 visit_expr(init, module_constants, scan);
             }
         }
-        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
             visit_expr(e, module_constants, scan)
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)

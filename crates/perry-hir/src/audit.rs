@@ -104,8 +104,8 @@ fn visit_stmt(stmt: &Stmt, out: &mut ModuleAudit) {
                 visit_expr(v, out);
             }
         }
-        Stmt::Return(Some(e)) => visit_expr(e, out),
-        Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
+        Stmt::Return(Some(e), _) => visit_expr(e, out),
+        Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => {}
         Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
         Stmt::Labeled { body, .. } => visit_stmt(body, out),
         Stmt::If {

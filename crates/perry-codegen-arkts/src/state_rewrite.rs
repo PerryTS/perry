@@ -20,7 +20,7 @@ pub(crate) fn rewrite_state_in_stmt(stmt: &mut Stmt, reg: &HashMap<LocalId, Stat
     match stmt {
         Stmt::Expr(e) => rewrite_state_in_expr(e, reg),
         Stmt::Let { init: Some(e), .. } => rewrite_state_in_expr(e, reg),
-        Stmt::Return(Some(e)) => rewrite_state_in_expr(e, reg),
+        Stmt::Return(Some(e), _) => rewrite_state_in_expr(e, reg),
         Stmt::If {
             condition,
             then_branch,

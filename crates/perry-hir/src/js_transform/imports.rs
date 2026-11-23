@@ -268,7 +268,7 @@ pub fn transform_stmt(
             }
         }
         Stmt::Let { init: None, .. } => {}
-        Stmt::Return(Some(expr)) => {
+        Stmt::Return(Some(expr), _) => {
             transform_expr(
                 expr,
                 js_imports,
@@ -277,7 +277,7 @@ pub fn transform_stmt(
                 tracker,
             );
         }
-        Stmt::Return(None) => {}
+        Stmt::Return(None, _) => {}
         Stmt::If {
             condition,
             then_branch,
@@ -852,7 +852,7 @@ pub fn transform_expr(
                 transform_expr(t, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
         }
-        Expr::Await(inner) => {
+        Expr::Await(inner, _) => {
             transform_expr(inner, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         Expr::Closure { body, .. } => {

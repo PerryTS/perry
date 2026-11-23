@@ -34,7 +34,7 @@ fn integer(e: &Expr) -> Option<u32> {
 }
 fn ret(body: &[Stmt]) -> Option<&Expr> {
     match body {
-        [Stmt::Return(Some(e))] => Some(e),
+        [Stmt::Return(Some(e), _)] => Some(e),
         _ => None,
     }
 }
@@ -44,7 +44,7 @@ fn pieces(f: &Function) -> Option<(&Expr, &Expr, &Expr)> {
             condition,
             then_branch,
             else_branch: None,
-        }, Stmt::Return(Some(rest))] => Some((condition, ret(then_branch)?, rest)),
+        }, Stmt::Return(Some(rest), _)] => Some((condition, ret(then_branch)?, rest)),
         [Stmt::If {
             condition,
             then_branch,
@@ -54,7 +54,7 @@ fn pieces(f: &Function) -> Option<(&Expr, &Expr, &Expr)> {
             condition,
             then_expr,
             else_expr,
-        }))] => Some((condition, then_expr, else_expr)),
+        }), _)] => Some((condition, then_expr, else_expr)),
         _ => None,
     }
 }

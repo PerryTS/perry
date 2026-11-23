@@ -145,7 +145,7 @@ pub fn collect_declared_shadow_locals_in_stmt(
             }
         }
         Stmt::Expr(_)
-        | Stmt::Return(_)
+        | Stmt::Return(_, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)

@@ -37,10 +37,10 @@ pub(super) fn can_consume(
 
 fn body(stmts: &[Stmt], method: &Function, reentered: &mut bool) -> bool {
     stmts.iter().all(|stmt| match stmt {
-        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
             value(e, method, reentered).is_some()
         }
-        Stmt::Return(None) => true,
+        Stmt::Return(None, _) => true,
         Stmt::Let { init, .. } => init
             .as_ref()
             .is_none_or(|e| value(e, method, reentered).is_some()),

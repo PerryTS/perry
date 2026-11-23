@@ -180,7 +180,7 @@ fn first_stmts(stmts: &[Stmt], o: &Expr, k: &Expr) -> First {
             Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => First::Pure,
             // A new binding: never `o` or `k`.
             Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } => first(e, o, k),
-            Stmt::Return(Some(e)) => then_stop(first(e, o, k)),
+            Stmt::Return(Some(e), _) => then_stop(first(e, o, k)),
             _ => First::Stop,
         };
         match f {
@@ -240,7 +240,7 @@ impl<'a> Gen<'a> {
         {
             return None;
         }
-        let [Stmt::Return(Some(e))] = body else {
+        let [Stmt::Return(Some(e), _)] = body else {
             return None;
         };
         // Lowering lifts a binding's TDZ check over its member/call. It

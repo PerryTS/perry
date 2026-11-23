@@ -401,7 +401,7 @@ pub(crate) fn collect_written_locals(stmts: &[Stmt], out: &mut HashSet<u32>) {
                     }
                 }
                 Stmt::Expr(e) | Stmt::Throw(e) => in_expr(e, out),
-                Stmt::Return(opt) => {
+                Stmt::Return(opt, _) => {
                     if let Some(e) = opt {
                         in_expr(e, out);
                     }
@@ -487,7 +487,7 @@ fn for_each_let(stmts: &[Stmt], f: &mut dyn FnMut(u32, Option<&Expr>, bool)) {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => for_each_let_in_expr(e, f),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     for_each_let_in_expr(e, f);
                 }
@@ -637,7 +637,7 @@ fn scan_level_writes(stmts: &[Stmt], id: u32, st: &State, f: &mut dyn FnMut(Opti
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => scan_level_writes_in_expr(e, id, st, f),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     scan_level_writes_in_expr(e, id, st, f);
                 }
@@ -851,7 +851,7 @@ fn walk_stmts(stmts: &[Stmt], guard: &HashMap<u32, GuardedLevel>, st: &mut State
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, guard, st),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     walk_expr(e, guard, st);
                 }
@@ -1316,7 +1316,7 @@ fn walk_accumulator_stmts(
                 mode,
                 accumulators,
             ),
-            Stmt::Return(value) => {
+            Stmt::Return(value, _) => {
                 if let Some(value) = value {
                     walk_accumulator_expr(
                         value,

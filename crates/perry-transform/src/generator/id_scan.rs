@@ -175,7 +175,7 @@ pub fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_for_max_local(e, max_id),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 scan_expr_for_max_local(e, max_id);
             }
@@ -413,7 +413,7 @@ pub fn scan_stmts_for_max_func(stmts: &[Stmt], max_id: &mut FuncId) {
 
 pub fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
     match stmt {
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+        Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
             scan_expr_for_max_func(expr, max_id);
         }
         Stmt::Let {

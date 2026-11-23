@@ -578,7 +578,7 @@ impl<'a> Build<'a> {
             Stmt::Expr(e) => {
                 self.expr(cx, e);
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     let v = self.expr(cx, e);
                     if let Some(r) = cx.ret_sink {
@@ -1031,7 +1031,7 @@ impl<'a> Build<'a> {
                 self.expr(cx, x);
                 vec![]
             }
-            Expr::Await(x) => self.expr(cx, x),
+            Expr::Await(x, _) => self.expr(cx, x),
             Expr::Yield { value, .. } => {
                 if let Some(x) = value {
                     let v = self.expr(cx, x);

@@ -55,7 +55,7 @@ pub(super) fn lower_cond(ctx: &mut LoweringContext, cond: &ast::CondExpr) -> Res
 
 pub(super) fn lower_await(ctx: &mut LoweringContext, await_expr: &ast::AwaitExpr) -> Result<Expr> {
     let inner = Box::new(lower_expr(ctx, &await_expr.arg)?);
-    Ok(Expr::Await(inner))
+    Ok(Expr::Await(inner, await_expr.span.lo.0))
 }
 
 pub(super) fn lower_super_prop(
@@ -518,7 +518,7 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext, y: &ast::YieldExpr) -> Resu
         Some(arg) => Some(Box::new(lower_expr(ctx, arg)?)),
         None => None,
     };
-    Ok(Expr::Yield {
+    Ok(Expr::Yield { byte_offset: y.span.lo.0,
         value,
         delegate: y.delegate,
     })

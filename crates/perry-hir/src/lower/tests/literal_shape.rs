@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn literal_shape_proof_rejects_constructor_effects_and_nonliteral_classes() {
     let mut ctx = make_ctx();
-    ctx.synthesize_anon_shape_class(&[("id".into(), Type::Number), ("name".into(), Type::String)]);
+    ctx.synthesize_anon_shape_class(&[("id".into(), Type::Number), ("name".into(), Type::String)], 0);
     let shape = ctx.pending_classes.pop().unwrap();
     assert!(shape.is_literal_shape(), "the actual lowering must qualify");
     let mut changed = shape.clone();

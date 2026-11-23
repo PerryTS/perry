@@ -150,7 +150,7 @@ fn reflect_script_var_initializers(
             }
             Stmt::Let { .. }
             | Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)

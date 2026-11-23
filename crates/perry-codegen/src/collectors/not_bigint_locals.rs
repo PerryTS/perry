@@ -312,7 +312,7 @@ pub(super) fn collect_writes<'a>(
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => collect_writes_expr(e, writes, candidates),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     collect_writes_expr(e, writes, candidates);
                 }

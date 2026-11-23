@@ -338,7 +338,7 @@ fn walk_writes_for_unsigned_i32(
             Stmt::Expr(e) | Stmt::Throw(e) => {
                 walk_writes_in_expr_for_unsigned_i32(e, saw_any, disqualified);
             }
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     walk_writes_in_expr_for_unsigned_i32(e, saw_any, disqualified);
                 }
@@ -492,7 +492,7 @@ pub fn walk_writes_for_strict(
                     out,
                 );
             }
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     walk_writes_in_expr_for_strict(
                         e,
@@ -1015,7 +1015,7 @@ pub fn collect_localset_ids_in_stmts_filtered(
                 flat_row_alias_ids,
                 clamp_fn_ids,
             ),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     collect_localset_ids_in_expr_filtered(
                         e,
@@ -1288,7 +1288,7 @@ pub fn collect_localset_ids_in_expr_filtered(
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)

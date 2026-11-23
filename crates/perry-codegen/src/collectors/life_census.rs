@@ -1024,7 +1024,7 @@ impl Census<'_> {
                 },
             },
             Stmt::Let { init: None, .. } => {}
-            Stmt::Return(Some(e)) => match self.cand(e) {
+            Stmt::Return(Some(e), _) => match self.cand(e) {
                 Some(c) => self.block(c, "returned"),
                 None if birth(e).is_some() => {
                     let side = match self.body {
@@ -1116,7 +1116,7 @@ impl Census<'_> {
                     self.stmts(&c.body);
                 }
             }
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)

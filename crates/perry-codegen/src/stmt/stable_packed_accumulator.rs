@@ -247,7 +247,7 @@ pub(crate) fn collect_local_writes<'a>(
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, out),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     walk_expr(e, out);
                 }

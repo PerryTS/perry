@@ -388,7 +388,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         }
         ast::ArrowFunctionBody::Expr(expr) => {
             let return_expr = lower_expr(ctx, expr)?;
-            vec![Stmt::Return(Some(return_expr))]
+            vec![Stmt::Return(Some(return_expr), expr.span().lo.0)]
         }
     };
     // #6654: block-body entries are drained by
@@ -458,7 +458,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         }
     }
 
-    Ok(Expr::Closure {
+    Ok(Expr::Closure { byte_offset: arrow.span.lo.0,
         func_id,
         params,
         return_type: Type::Any,
@@ -565,14 +565,14 @@ fn lower_named_fn_expr(
             mutable: false,
             init: Some(inner),
         },
-        Stmt::Return(Some(Expr::LocalGet(self_id))),
+        Stmt::Return(Some(Expr::LocalGet(self_id)), fn_expr.function.span.lo.0),
     ];
     let (captures, mutable_captures) = compute_closure_captures(ctx, &body, &outer_local_ids, &[]);
     ctx.exit_scope(wrapper_scope);
 
     Ok(Expr::Call {
         byte_end: 0,
-        callee: Box::new(Expr::Closure {
+        callee: Box::new(Expr::Closure { byte_offset: fn_expr.function.span.lo.0,
             func_id: wrapper_func_id,
             params: Vec::new(),
             return_type: Type::Any,
@@ -1370,7 +1370,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
             // Fallthrough (implicit return at body end). When the body already
             // ends in a `return`, the walk above handled it; otherwise append so
             // a no-early-return fallthrough path also records the final values.
-            if !matches!(body.last(), Some(Stmt::Return(_))) {
+            if !matches!(body.last(), Some(Stmt::Return(_, _))) {
                 body.extend(re_regs.iter().cloned());
             }
             super::class_capture_scope::prune_out_of_scope_capture_refreshes(&mut body);
@@ -1433,7 +1433,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         }
     }
 
-    Ok(Expr::Closure {
+    Ok(Expr::Closure { byte_offset: fn_expr.function.span.lo.0,
         func_id,
         params,
         return_type: Type::Any,
@@ -1461,7 +1461,7 @@ pub(crate) fn insert_class_capture_refresh_before_returns(stmts: &mut Vec<Stmt>,
     let mut i = 0;
     while i < stmts.len() {
         insert_class_capture_refresh_into_stmt(&mut stmts[i], re_regs);
-        if matches!(&stmts[i], Stmt::Return(_)) {
+        if matches!(&stmts[i], Stmt::Return(_, _)) {
             for (j, s) in re_regs.iter().cloned().enumerate() {
                 stmts.insert(i + j, s);
             }
@@ -1701,7 +1701,7 @@ fn insert_class_capture_refresh_inside_expressions(
                 init: Some(expr), ..
             }
             | Stmt::Expr(expr)
-            | Stmt::Return(Some(expr))
+            | Stmt::Return(Some(expr), _)
             | Stmt::Throw(expr) => visit_expr(expr, regs),
             Stmt::If {
                 condition,

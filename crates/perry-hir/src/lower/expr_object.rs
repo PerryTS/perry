@@ -478,7 +478,7 @@ fn lower_method_prop(
         let has_synth_args = params.last().is_some_and(|p| p.arguments_object.is_some());
         ctx.func_defaults
             .push((func_id, defaults, param_ids, rest_idx, has_synth_args));
-        ctx.pending_functions.push(Function {
+        ctx.pending_functions.push(Function { byte_offset: method.function.span.lo.0,
             id: func_id,
             name: func_name,
             type_params: Vec::new(),
@@ -508,7 +508,7 @@ fn lower_method_prop(
             .filter(|id| assigned_set.contains(id) || ctx.var_hoisted_ids.contains(id))
             .copied()
             .collect();
-        Expr::Closure {
+        Expr::Closure { byte_offset: method.function.span.lo.0,
             func_id,
             params,
             return_type,
@@ -543,6 +543,7 @@ fn lower_accessor_prop(
     key: &ast::PropName,
     setter_param: Option<&ast::Pat>,
     body: Option<&ast::FunctionBody>,
+    byte_offset: u32,
 ) -> Result<Option<(MethodKeyKind, Expr)>> {
     let accessor_key = match key {
         ast::PropName::Ident(ident) => MethodKeyKind::Static(ident.sym.to_string()),
@@ -706,7 +707,7 @@ fn lower_accessor_prop(
     // runtime accessor-invocation path binds `this` via IMPLICIT_THIS (the same
     // way `Object.defineProperty(obj, k, { get(){…} })` already worked), so the
     // closure must NOT capture it.
-    let closure = Expr::Closure {
+    let closure = Expr::Closure { byte_offset: byte_offset,
         func_id,
         params,
         return_type: Type::Any,
@@ -1001,7 +1002,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 .iter()
                 .map(|(name, ty, value)| (name.clone(), record_field_type(ty, value)))
                 .collect();
-            let class_name = ctx.synthesize_anon_shape_class(&field_shapes);
+            let class_name = ctx.synthesize_anon_shape_class(&field_shapes, obj.span.lo.0);
             let args: Vec<Expr> = fields.into_iter().map(|(_, _, value)| value).collect();
             return Ok(Expr::New {
                 byte_end: 0,
@@ -1240,6 +1241,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             &getter.key,
                             None,
                             getter.function.body.as_ref(),
+                            getter.span.lo.0,
                         );
                         ctx.object_super_home_stack.pop();
                         if let Some((gkey, closure)) = lowered_getter? {
@@ -1257,6 +1259,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             &setter.key,
                             setter.function.params.first().map(|param| &param.pat),
                             setter.function.body.as_ref(),
+                            setter.span.lo.0,
                         );
                         ctx.object_super_home_stack.pop();
                         if let Some((skey, closure)) = lowered_setter? {
@@ -1403,7 +1406,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             eligible.then(|| {
                 let fields: Vec<(String, Type)> =
                     names.iter().map(|name| (name.clone(), Type::Any)).collect();
-                let class_name = ctx.synthesize_anon_shape_class(&fields);
+                let class_name = ctx.synthesize_anon_shape_class(&fields, obj.span.lo.0);
                 Expr::New {
                     byte_end: 0,
                     class_name,
@@ -1533,12 +1536,12 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 }
             }
         }
-        body.push(Stmt::Return(Some(Expr::LocalGet(param_id))));
+        body.push(Stmt::Return(Some(Expr::LocalGet(param_id)), obj.span.lo.0));
         ctx.exit_scope(scope_mark);
 
         let captures = iife_captures(ctx, &body, &inner_local_ids);
         let body_uses_this = body.iter().any(uses_this_stmt);
-        let closure = Expr::Closure {
+        let closure = Expr::Closure { byte_offset: obj.span.lo.0,
             func_id: iife_func_id,
             params: vec![param],
             return_type: Type::Any,
@@ -1743,7 +1746,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             }
         }
     }
-    body.push(Stmt::Return(Some(Expr::LocalGet(param_id))));
+    body.push(Stmt::Return(Some(Expr::LocalGet(param_id)), obj.span.lo.0));
     ctx.exit_scope(scope_mark);
     let captures = iife_captures(ctx, &body, &inner_local_ids);
     // Refs #488 drizzle-sqlite: when a computed-key object literal
@@ -1758,7 +1761,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     // common non-this-key cases; the scan keeps the existing fast path.
     let body_uses_this = body.iter().any(uses_this_stmt);
     let static_obj = Expr::object_literal(props);
-    let closure = Expr::Closure {
+    let closure = Expr::Closure { byte_offset: obj.span.lo.0,
         func_id: iife_func_id,
         params: vec![param],
         return_type: Type::Any,

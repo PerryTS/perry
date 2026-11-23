@@ -247,7 +247,7 @@ pub fn scan_for_native_func_returns(
             if let Some(init_expr) = init {
                 // Unwrap Await if present
                 let call_expr = match init_expr {
-                    Expr::Await(inner) => inner.as_ref(),
+                    Expr::Await(inner, _) => inner.as_ref(),
                     other => other,
                 };
                 // Check if it's a call to a function that returns a native instance
@@ -283,7 +283,7 @@ pub fn scan_for_native_func_returns(
                 local_id_native_instances,
             );
         }
-        Stmt::Return(Some(e)) => {
+        Stmt::Return(Some(e), _) => {
             scan_expr_for_closure_returns(
                 e,
                 func_return_instances,
@@ -616,7 +616,7 @@ pub fn scan_expr_for_closure_returns(
                 );
             }
         }
-        Expr::Await(inner) => scan_expr_for_closure_returns(
+        Expr::Await(inner, _) => scan_expr_for_closure_returns(
             inner,
             func_return_instances,
             local_native_instances,
@@ -633,7 +633,7 @@ pub fn scan_expr_for_closure_returns(
         // point; LocalId is what `LocalGet`-based dispatch resolves against).
         Expr::LocalSet(id, value) => {
             let call_expr = match value.as_ref() {
-                Expr::Await(inner) => inner.as_ref(),
+                Expr::Await(inner, _) => inner.as_ref(),
                 other => other,
             };
             if let Expr::Call { callee, .. } = call_expr {
@@ -666,8 +666,8 @@ pub fn fix_native_instance_stmt(
                 fix_native_instance_expr(e, native_instances, local_id_instances);
             }
         }
-        Stmt::Return(Some(e)) => fix_native_instance_expr(e, native_instances, local_id_instances),
-        Stmt::Return(None) => {}
+        Stmt::Return(Some(e), _) => fix_native_instance_expr(e, native_instances, local_id_instances),
+        Stmt::Return(None, _) => {}
         Stmt::If {
             condition,
             then_branch,
@@ -897,7 +897,7 @@ pub fn fix_native_instance_expr(
             fix_native_instance_expr(index, native_instances, local_id_instances);
             fix_native_instance_expr(value, native_instances, local_id_instances);
         }
-        Expr::Await(inner) => {
+        Expr::Await(inner, _) => {
             // Handle Await(Call{PropertyGet{obj...}}) pattern for native instances
             if let Expr::Call { callee, args, .. } = inner.as_mut() {
                 if let Expr::PropertyGet {

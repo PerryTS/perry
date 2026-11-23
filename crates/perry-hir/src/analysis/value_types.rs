@@ -471,10 +471,10 @@ impl HirTypeEnv {
                     self.collect_expr_declarations(init);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 self.collect_expr_declarations(expr);
             }
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -660,7 +660,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
             infer_expr_type(else_expr, env),
         ),
         Expr::TypeOf(_) => Type::String,
-        Expr::Await(value) => match infer_expr_type(value, env) {
+        Expr::Await(value, _) => match infer_expr_type(value, env) {
             Type::Promise(inner) => *inner,
             other => other,
         },

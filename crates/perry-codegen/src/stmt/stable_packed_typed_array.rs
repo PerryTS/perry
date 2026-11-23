@@ -102,7 +102,7 @@ fn collect_stmt_uses(stmt: &Stmt, uses: &mut HashMap<u32, LocalUses>) {
             init: Some(expr), ..
         }
         | Stmt::Expr(expr)
-        | Stmt::Return(Some(expr))
+        | Stmt::Return(Some(expr), _)
         | Stmt::Throw(expr) => collect_expr_uses(expr, uses),
         Stmt::If {
             condition,
