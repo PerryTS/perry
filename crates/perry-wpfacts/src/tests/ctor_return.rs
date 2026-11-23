@@ -60,7 +60,12 @@ fn check_two(lib: &str, main: &str, instance: bool) {
         "per unit proves {u} > whole {w}\n{}",
         pu.dump_text()
     );
-    assert_eq!(inst_proven(&pu), instance, "per unit: {u} proven\n{}", pu.dump_text());
+    assert_eq!(
+        inst_proven(&pu),
+        instance,
+        "per unit: {u} proven\n{}",
+        pu.dump_text()
+    );
 }
 
 const MAIN_F: &str = r#"
@@ -221,5 +226,10 @@ fn returning_this_is_still_the_instance() {
 fn check(src: &str, instance: bool) {
     let pw = facts(src);
     let w = proven(&pw, "x");
-    assert_eq!(inst_proven(&pw), instance, "whole: {w} proven\n{}", pw.dump_text());
+    assert_eq!(
+        inst_proven(&pw),
+        instance,
+        "whole: {w} proven\n{}",
+        pw.dump_text()
+    );
 }

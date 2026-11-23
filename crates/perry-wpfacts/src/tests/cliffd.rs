@@ -104,5 +104,8 @@ fn realm_prototype_chains_end() {
             at = by.get(p).copied().flatten();
         }
     }
-    assert!(cycles.is_empty(), "cyclic realm [[Prototype]] chains: {cycles:?}");
+    assert!(
+        cycles.is_empty(),
+        "cyclic realm [[Prototype]] chains: {cycles:?}"
+    );
 }

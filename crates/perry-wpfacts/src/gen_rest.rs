@@ -588,7 +588,9 @@ impl<'a> Gen<'a> {
                     // `readline.createInterface` gives for stdin); the stub
                     // returns `undefined`. The model has no native-handle
                     // value yet (OPAQUE-BUILTIN lane).
-                    _ => self.m.top_val("process.stdin.removeListener result: readline handle"),
+                    _ => self
+                        .m
+                        .top_val("process.stdin.removeListener result: readline handle"),
                 }
             }
             Expr::ProcessUptime

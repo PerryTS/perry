@@ -36,8 +36,8 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_proto_method, declared_static, run_construct,
-    run_function, run_member,
+    declared_construct, declared_member, declared_proto_method, declared_static,
+    declared_super_construct, run_construct, run_function, run_member, run_super_construct,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -2624,6 +2624,12 @@ pub(super) fn family_any(
         Some(_) => {
             let n = chain_any_node(m, fam, what, key);
             m.edge(n, dst);
+            // An accessor's getter runs on the value read (`of`), as its
+            // named read does: its result depends on the receiver, so it
+            // is no part of the shared chain node.
+            for a in chain_accessors(m, fam, what, key) {
+                loads::family_member(m, of, fam, what, a, dst);
+            }
         }
         None => {
             family_ctor(m, fam, dst);
@@ -2677,14 +2683,40 @@ fn chain_any_node(m: &mut Model, fam: Family, what: Option<&'static str>, key: K
             object_method = true;
             continue;
         }
+        if matches!(members::member(fam, name), Some(Mem::Fn)) && realm_accessor(m, fam, what, name)
+        {
+            continue;
+        }
         let a = m.atom(name);
-        loads::family_member(m, fam, what, a, n);
+        loads::family_member(m, None, fam, what, a, n);
     }
     if object_method {
         let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
         m.add_tok(n, f);
     }
     n
+}
+
+/// The accessors of family `fam`'s intrinsic chain (of a value of kind
+/// `what`) whose names computed key `key` may spell: their getters run per
+/// receiver (`family_any`), never in the shared `chain_any_node`.
+fn chain_accessors(m: &mut Model, fam: Family, what: Option<&'static str>, key: Key) -> Vec<Atom> {
+    let mut out = vec![];
+    for name in members::chain_names(fam).into_iter().flatten() {
+        if Model::proto_link(name) || !m.key_may_name_str(key, name) {
+            continue;
+        }
+        if members::own(fam, name).is_none()
+            && matches!(members::member(Family::Object, name), Some(Mem::Fn))
+        {
+            continue;
+        }
+        if matches!(members::member(fam, name), Some(Mem::Fn)) && realm_accessor(m, fam, what, name)
+        {
+            out.push(m.atom(name));
+        }
+    }
+    out
 }
 
 /// The OPTIMISTIC JSON-key read (`Model::json_key_optimistic`) of the

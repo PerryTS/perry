@@ -624,7 +624,7 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
         install_builtin_getter(
             proto_obj,
             "buffer",
-            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.buffer.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_buffer_getter_thunk, 0; with_name("get buffer"), with_declared(0))),
+            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.buffer.<get>", provider = intrinsic_closure, constructible = true, effects = { returns(islot(this, ViewedArrayBuffer)) })] export crate::object::global_this::typed_array::typed_array_buffer_getter_thunk, 0; with_name("get buffer"), with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,

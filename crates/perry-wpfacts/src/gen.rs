@@ -690,7 +690,8 @@ impl<'a> Gen<'a> {
         }
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
-        m.stop_top = crate::topstop::StopTop::from_env(modules.iter().map(|(p, _)| p.to_string()).collect());
+        m.stop_top =
+            crate::topstop::StopTop::from_env(modules.iter().map(|(p, _)| p.to_string()).collect());
         m.rel_phase = b'G';
         // Capture initialization origins too, before any solver propagation.
         // This state exists only for an explicitly requested diagnostic dump.
@@ -1118,8 +1119,11 @@ impl<'a> Gen<'a> {
                         // declares for it (the value of `require(m)`).
                         (ImportSpecifier::Namespace { local }, None)
                             if !self.m.unit_mode
-                                && crate::builtins::builtin_module_tok(&mut self.m, &imp.source)
-                                    .is_some() =>
+                                && crate::builtins::builtin_module_tok(
+                                    &mut self.m,
+                                    &imp.source,
+                                )
+                                .is_some() =>
                         {
                             let v = self
                                 .builtin_module_value(&imp.source)

@@ -1457,7 +1457,33 @@ impl Model {
                         // gives: the model's object stays apart from the
                         // instance (the result is ⊤) and leaves, with what
                         // the construction put into it.
+                        // A realm constructor that declares what it does
+                        // (ECMA-262 10.1.13 OrdinaryCreateFromConstructor):
+                        // its declaration runs on the instance under
+                        // construction, whose prototype chain is NewTarget's.
+                        TokKind::BuiltinFn(Native::Member { identity, .. })
+                            if origin != TOP
+                                && !self.unit_mode
+                                && builtins::declared_super_construct(identity).is_some() =>
+                        {
+                            let e = builtins::declared_super_construct(identity).expect("guarded");
+                            self.with_native(call, |m, call| {
+                                builtins::run_super_construct(m, e, call, origin)
+                            });
+                        }
                         TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
+                            if origin != TOP {
+                                let what = match &self.toks[parent as usize] {
+                                    TokKind::BuiltinFn(Native::Member { identity, .. }) => {
+                                        identity.to_string()
+                                    }
+                                    _ => self.tok_name(parent),
+                                };
+                                let r = self.reason(&format!(
+                                    "E21 realm parent constructor {what} declares no construct effects"
+                                ));
+                                self.mark_hard(origin, Hard::E21NativeParent, r);
+                            }
                             let c = self.calls[call as usize].clone();
                             let made = self.node_l("super-builtin-construct");
                             let key = (crate::summary::MK_SUPER_BUILTIN, parent, 0);

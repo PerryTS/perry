@@ -8,7 +8,9 @@ use crate::model::Model;
 use crate::model::TOP;
 
 fn solved(src: &str) -> Model {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 300_000;
@@ -31,7 +33,9 @@ fn fetch_region_top(m: &Model) -> bool {
         .filter(|&r| r != u32::MAX)
         .collect();
     assert!(!regions.is_empty());
-    regions.iter().any(|&r| m.nodes[r as usize].pts.contains_tok(TOP))
+    regions
+        .iter()
+        .any(|&r| m.nodes[r as usize].pts.contains_tok(TOP))
 }
 
 #[test]

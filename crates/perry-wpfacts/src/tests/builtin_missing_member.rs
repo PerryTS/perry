@@ -364,7 +364,12 @@ fn iteration_callees(iterated: &str) -> Vec<String> {
 /// statics are its realm declaration, which holds no `@@iterator`.
 #[test]
 fn namespace_iteration_call_callee_set() {
-    for ns in ["Object", "Function", "Object.prototype.hasOwnProperty", "RegExp"] {
+    for ns in [
+        "Object",
+        "Function",
+        "Object.prototype.hasOwnProperty",
+        "RegExp",
+    ] {
         let c = iteration_callees(ns);
         assert!(c.is_empty(), "{ns}: {c:?}");
     }

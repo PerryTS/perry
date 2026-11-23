@@ -339,9 +339,9 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
             let cs = &m.nodes[n as usize].cons;
             let binds = rest
                 && cs.iter().any(|c| bound(n, c))
-                && cs
-                    .iter()
-                    .all(|c| bound(n, c) || matches!(c, Cons::Raise { .. } | Cons::HandRaise { .. }));
+                && cs.iter().all(|c| {
+                    bound(n, c) || matches!(c, Cons::Raise { .. } | Cons::HandRaise { .. })
+                });
             binds || cs.iter().all(|c| cache(n, c))
         };
         let mut ok = own.iter().all(|&n| own_cons(n));

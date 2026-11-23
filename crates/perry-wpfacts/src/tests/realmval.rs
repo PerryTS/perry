@@ -19,13 +19,20 @@ fn kinds(prelude: &str, reads: &[String]) -> Vec<crate::derive::KindFact> {
     }
     let pf = facts(&src);
     let t = tmpl(&pf, "H");
-    (0..reads.len()).map(|i| field(t, &format!("k{i}")).kind.clone()).collect()
+    (0..reads.len())
+        .map(|i| field(t, &format!("k{i}")).kind.clone())
+        .collect()
 }
 
 /// The reads of `reads` that hold ⊤.
 fn top_reads(prelude: &str, reads: Vec<String>) -> Vec<String> {
     let ks = kinds(prelude, &reads);
-    reads.into_iter().zip(ks).filter(|(_, k)| k.top).map(|(r, _)| r).collect()
+    reads
+        .into_iter()
+        .zip(ks)
+        .filter(|(_, k)| k.top)
+        .map(|(r, _)| r)
+        .collect()
 }
 
 fn own_keys(owner: &str) -> Vec<&'static str> {
@@ -49,7 +56,12 @@ fn realmval_global_computed_reads_declared_and_program_values() {
         &["(globalThis as any)[k]".to_string()],
     );
     assert!(!ks[0].top, "{:?}", ks[0]);
-    assert_eq!(ks[0].prims & (prim::NUM | prim::UNDEF), prim::NUM | prim::UNDEF, "{:?}", ks[0]);
+    assert_eq!(
+        ks[0].prims & (prim::NUM | prim::UNDEF),
+        prim::NUM | prim::UNDEF,
+        "{:?}",
+        ks[0]
+    );
 }
 
 /// Every member `%Global%` owns reads its declared value, by
@@ -58,8 +70,15 @@ fn realmval_global_computed_reads_declared_and_program_values() {
 fn realmval_every_global_member_has_a_value() {
     let keys = own_keys("%Global%");
     assert!(keys.len() > 100, "{keys:?}");
-    let mut reads: Vec<String> = keys.iter().map(|k| format!("(globalThis as any)[{k:?}]")).collect();
-    reads.extend(keys.iter().filter(|k| !matches!(**k, "eval")).map(|k| format!("(({k}) as any)")));
+    let mut reads: Vec<String> = keys
+        .iter()
+        .map(|k| format!("(globalThis as any)[{k:?}]"))
+        .collect();
+    reads.extend(
+        keys.iter()
+            .filter(|k| !matches!(**k, "eval"))
+            .map(|k| format!("(({k}) as any)")),
+    );
     let tops = top_reads("", reads);
     assert!(tops.is_empty(), "⊤ reads: {tops:?}");
 }
@@ -70,13 +89,20 @@ fn realmval_every_global_member_has_a_value() {
 /// a computed key reads their union.
 #[test]
 fn realmval_every_host_member_has_a_value() {
-    let mut reads: Vec<String> =
-        own_keys("process").iter().map(|k| format!("(process as any)[{k:?}]")).collect();
+    let mut reads: Vec<String> = own_keys("process")
+        .iter()
+        .map(|k| format!("(process as any)[{k:?}]"))
+        .collect();
     reads.push("(process as any)[k]".into());
     let mut prelude = String::from("const k: string = String(Date.now());\n");
     let mods: Vec<&'static str> = crate::native_effects::realm()
         .iter()
-        .filter(|e| e.kind == RealmKind::Namespace && e.name.starts_with("node:") && !e.name.contains(['.', '@', '/']) && !e.name.starts_with("node:__"))
+        .filter(|e| {
+            e.kind == RealmKind::Namespace
+                && e.name.starts_with("node:")
+                && !e.name.contains(['.', '@', '/'])
+                && !e.name.starts_with("node:__")
+        })
         .map(|e| e.name)
         // A module `perry compile` resolves (HIR's builtin module set; an
         // npm-provided namespace such as `node:cheerio` lowers only from its

@@ -82,9 +82,12 @@ const FUNCTION: &[(&str, Mem)] = &[
     ("name", Mem::Prim(prim::STR)),
     ("toString", Mem::Fn),
     (WK_HAS_INSTANCE, Mem::Fn),
-    // Annex B: throwing accessors on %Function.prototype%.
-    ("arguments", Mem::Prim(prim::NULL)),
-    ("caller", Mem::Prim(prim::NULL)),
+    // %Function.prototype%'s `arguments` and `caller` accessors, whose
+    // getter and setter are %ThrowTypeError% (ECMA-262 10.2.4
+    // AddRestrictedFunctionProperties): a getter the model lists as a
+    // method (`loads::family_member` runs its declaration).
+    ("arguments", Mem::Fn),
+    ("caller", Mem::Fn),
 ];
 
 const ARRAY: &[(&str, Mem)] = &[
@@ -1709,7 +1712,10 @@ fn realm_described_statics_are_the_realm_declaration() {
     );
     // Perry's RegExp owns its realm declaration, no legacy accessors.
     assert!(ns_statics(BuiltinNs::RegExp).members.is_some());
-    assert!(matches!(ns_member(BuiltinNs::RegExp, "escape"), Some(Some(_))));
+    assert!(matches!(
+        ns_member(BuiltinNs::RegExp, "escape"),
+        Some(Some(_))
+    ));
     assert_eq!(ns_member(BuiltinNs::RegExp, "$1"), Some(None));
 }
 

@@ -140,9 +140,13 @@ fn process_emit_warning_fixed_op() {
 fn stdout_write_held() {
     held_only("process.stdout.write(o as any)")
 }
+/// `performance.mark` is a member of the realm's `performance` object,
+/// which unknown code holding the realm does not replace (a namespace
+/// member); its declaration only coerces `o` (ToPrimitive), handing it to
+/// no one.
 #[test]
-fn performance_mark_held() {
-    held_only("performance.mark(o as any)")
+fn performance_mark_exact() {
+    exact("performance.mark(o as any)")
 }
 #[test]
 fn math_max_value_call_exact() {

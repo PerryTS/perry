@@ -91,7 +91,8 @@ fn use_of(m: &Model, c: &Cons, reads: &FxHashSet<NodeId>) -> Option<String> {
         Cons::Store { key, site, .. } => matches!(key, Key::Named(_)) && named_store(m, site),
         Cons::MCall { .. }
         | Cons::Identity { .. }
-        | Cons::Raise { .. } | Cons::HandRaise { .. }
+        | Cons::Raise { .. }
+        | Cons::HandRaise { .. }
         | Cons::Guard { .. }
         | Cons::Defined { .. }
         | Cons::NotNullish { .. }

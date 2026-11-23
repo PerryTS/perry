@@ -1116,7 +1116,11 @@ impl InspectAt {
     pub const fn arg(limit: u8) -> InspectAt {
         InspectAt {
             depth: 0,
-            limit: if limit > INSPECT_HARD_CAP { INSPECT_HARD_CAP } else { limit },
+            limit: if limit > INSPECT_HARD_CAP {
+                INSPECT_HARD_CAP
+            } else {
+                limit
+            },
         }
     }
 
@@ -1333,7 +1337,9 @@ impl Protocol {
         match self {
             Protocol::Json => &[Protocol::Json],
             Protocol::Inspect(_) => &[Protocol::InspectShown(InspectAt::DEFAULT_ARG)],
-            Protocol::InspectShown(_) | Protocol::InspectTarget(_) => &[Protocol::InspectShown(InspectAt::DEFAULT_ARG)],
+            Protocol::InspectShown(_) | Protocol::InspectTarget(_) => {
+                &[Protocol::InspectShown(InspectAt::DEFAULT_ARG)]
+            }
             Protocol::Clone => &[Protocol::Clone],
             Protocol::AsyncIterResult => &[Protocol::BufferFrom],
             Protocol::BufferFrom => &[Protocol::ToPrimitive],
@@ -1425,7 +1431,9 @@ impl Protocol {
     /// Where an inspection protocol shows the value (`None`: another protocol).
     pub fn inspect_at(self) -> Option<InspectAt> {
         match self {
-            Protocol::Inspect(at) | Protocol::InspectShown(at) | Protocol::InspectTarget(at) => Some(at),
+            Protocol::Inspect(at) | Protocol::InspectShown(at) | Protocol::InspectTarget(at) => {
+                Some(at)
+            }
             _ => None,
         }
     }
@@ -2494,6 +2502,11 @@ pub struct Model {
     /// Fact units whose keys can disappear (delete, defineProperty, with):
     /// no key of theirs is sure.
     pub keys_unsure: crate::pts::FxHashSet<TmplId>,
+    /// Built-in object templates of a realm prototype that a declared birth
+    /// makes (`effects::Run::fresh`, `fresh(PerformanceMark.prototype,
+    /// fields = {..})`): their `definite` keys are the own data fields every
+    /// declared birth of the template defines (the intersection).
+    pub realm_born: crate::pts::FxHashSet<TmplId>,
     /// DECISIONS 234: keys a `delete`, a `defineProperty` or an accessor
     /// through ⊤ or on a builtin prototype may have removed or redefined
     /// (`reshaped_any`: every key). A builtin prototype redefined under a

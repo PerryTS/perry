@@ -436,7 +436,8 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         | Cons::Range { .. }
         | Cons::Defined { .. }
         | Cons::TopIfTop { .. }
-        | Cons::Raise { .. } | Cons::HandRaise { .. } => Use::Allowed,
+        | Cons::Raise { .. }
+        | Cons::HandRaise { .. } => Use::Allowed,
         Cons::ArgInto { call, .. } | Cons::RetInto { call, .. } => Use::TypedCall(*call),
         Cons::MCall { key, .. } | Cons::Load { key, .. } | Cons::FieldTruthy { key, .. } => {
             op(named(key))
@@ -1372,7 +1373,8 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     | Cons::Guard { .. }
                                     | Cons::Defined { .. }
                                     | Cons::TopIfTop { .. }
-                                    | Cons::Raise { .. } | Cons::HandRaise { .. }
+                                    | Cons::Raise { .. }
+                                    | Cons::HandRaise { .. }
                                     | Cons::BirthField { .. }
                             )
                             || matches!(k, Cons::Implicit { proto, .. } if sanctioned(*proto))
@@ -1942,7 +1944,8 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::Range { .. }
                 | Cons::Defined { .. }
                 | Cons::TopIfTop { .. }
-                | Cons::Raise { .. } | Cons::HandRaise { .. }
+                | Cons::Raise { .. }
+                | Cons::HandRaise { .. }
                 | Cons::ArgInto { .. }
                 | Cons::Arith { .. }
                 | Cons::Plus { .. }

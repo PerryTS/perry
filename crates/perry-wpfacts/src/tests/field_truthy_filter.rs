@@ -236,7 +236,9 @@ fn tests_of_one_read_share_its_node() {
          apply(a, 2);
          console.log(a.w);";
     let src: &'static str = Box::leak(s.to_string().into_boxed_str());
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 5_000_000;
@@ -247,21 +249,37 @@ fn tests_of_one_read_share_its_node() {
     g.m.summarize_and_replay();
     g.m.solve();
     let m = &g.m;
-    let reads = m.labels.iter().filter(|l| **l == "field-truthy-read").count();
+    let reads = m
+        .labels
+        .iter()
+        .filter(|l| **l == "field-truthy-read")
+        .count();
     assert!(!m.ft_reads.is_empty(), "no FieldTruthy test applied");
     assert_eq!(reads, m.ft_reads.len(), "one read node per (token, key)");
     assert!(reads <= 2, "{reads} reads for 2 tokens and one key");
 
     let pf = facts(s);
     let recv = |key: &str| {
-        let site = pf.sites.iter().filter(|s| s.key == key && s.is_call).last().unwrap();
-        let mut r: Vec<String> =
-            site.receivers.iter().map(|r| r.rsplit(':').next().unwrap_or(r).to_string()).collect();
+        let site = pf
+            .sites
+            .iter()
+            .filter(|s| s.key == key && s.is_call)
+            .last()
+            .unwrap();
+        let mut r: Vec<String> = site
+            .receivers
+            .iter()
+            .map(|r| r.rsplit(':').next().unwrap_or(r).to_string())
+            .collect();
         r.sort();
         r.dedup();
         r
     };
     assert_eq!(recv("set"), vec!["Color".to_string()]);
     assert_eq!(recv("add"), vec!["Color".to_string()]);
-    assert!(recv("put").contains(&"Attr".to_string()), "{:?}", recv("put"));
+    assert!(
+        recv("put").contains(&"Attr".to_string()),
+        "{:?}",
+        recv("put")
+    );
 }

@@ -120,7 +120,7 @@ pub(super) fn family_load(
     {
         m.add_prim(dst, prim::UNDEF);
     }
-    family_member(m, fam, what, a, dst);
+    family_member(m, Some(t), fam, what, a, dst);
     // Described or not, a key a store into ⊤ may have written onto the
     // chain reads what was stored, unless the read is final (DEC 250).
     if !intrinsic_unwritten(m, fam, what, a, NativeMiss::Load(dst)) {
@@ -147,9 +147,13 @@ fn regexp_literal_source(m: &mut Model, t: Tok, name: &str) -> Option<StrSet> {
 /// `dst` ⊇ the described member `a` of family `fam`'s intrinsic chain (of a
 /// value of kind `what`), as the realm defines it: the native, the data
 /// kinds, the constructor, the prototype. What a store wrote there is the
-/// caller's (`family_load` per key, `family_any` once for any key).
+/// caller's (`family_load` per key, `family_any` once for any key). An
+/// accessor's getter runs on receiver `t` (its declaration, `getter_load`);
+/// with no receiver (`chain_any_node`: one node for every value of the
+/// family) an accessor reads the undeclared getter's result.
 pub(super) fn family_member(
     m: &mut Model,
+    t: Option<Tok>,
     fam: Family,
     what: Option<&'static str>,
     a: Atom,
@@ -166,7 +170,12 @@ pub(super) fn family_member(
     match members::member(fam, &name) {
         // An accessor of the realm (a getter the model lists as a method):
         // the getter's result, never the getter or a method.
-        Some(Mem::Fn) if realm_accessor(m, fam, what, &name) => undeclared_getter_result(m, dst),
+        Some(Mem::Fn) if realm_accessor(m, fam, what, &name) => {
+            match (t, declared_accessor(m, fam, what, &name)) {
+                (Some(t), Some(e)) => super::effects::getter_load(m, e, t, a, dst),
+                _ => undeclared_getter_result(m, dst),
+            }
+        }
         Some(Mem::Fn) => {
             let bf = match member_native(m, fam, what, &name) {
                 Some(n) => {
@@ -716,7 +725,7 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
         // its [[Prototype]] chain, else `undefined` (ECMA-262 10.1.8.1
         // OrdinaryGet), never a builtin function the realm does not name.
         Some(Mem::Fn) if !m.unit_mode && m.native_shape(t).is_some() => {
-            family_member(m, members::ns_chain(ns), None, a, dst);
+            family_member(m, Some(t), members::ns_chain(ns), None, a, dst);
             m.add_prim(dst, prim::UNDEF);
             if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                 opaque_member(m, dst);
@@ -986,8 +995,7 @@ fn realm_global_object(m: &Model, n: &str) -> bool {
 /// (`%Global%`, the generated table: fetch_globals.rs `realm_decl!`); any
 /// other name is a program key or inherited from `Object.prototype`.
 fn global_own_declared(n: &str) -> bool {
-    members::realm_entry("%Global%")
-        .is_some_and(|e| e.own.iter().any(|p| !p.symbol && p.key == n))
+    members::realm_entry("%Global%").is_some_and(|e| e.own.iter().any(|p| !p.symbol && p.key == n))
 }
 
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
@@ -1153,21 +1161,17 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 // global_this/populate.rs:827), so no store changes them.
                 // globalThis/global name the global object itself, plus what
                 // was stored there (declared_global_load).
-                Some("NaN" | "Infinity") if !m.unit_mode => {
-                    m.add_prim(dst, prim::NUM)
-                }
-                Some("undefined") if !m.unit_mode => {
-                    m.add_prim(dst, prim::UNDEF)
-                }
+                Some("NaN" | "Infinity") if !m.unit_mode => m.add_prim(dst, prim::NUM),
+                Some("undefined") if !m.unit_mode => m.add_prim(dst, prim::UNDEF),
                 Some(n @ ("globalThis" | "global")) if !m.unit_mode => {
                     declared_global_load(m, t, t, n, dst)
                 }
                 Some(n) if hostval_global(m, t, key, n, dst) => {}
                 // REALMVAL: every member %Global% owns has a value side
                 // (RealmManifest::validate) that an arm above reads.
-                Some(n) if !m.unit_mode => unreachable!(
-                    "REALMVAL: %Global% member `{n}` has no modelled value"
-                ),
+                Some(n) if !m.unit_mode => {
+                    unreachable!("REALMVAL: %Global% member `{n}` has no modelled value")
+                }
                 _ => {
                     // A host global, or under a computed key any global: the
                     // Function constructor only under a key that may be
@@ -1457,6 +1461,18 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 };
                 m.add_tok(dst, bf);
                 // Final on a `Function.prototype`-only chain (DEC 250).
+                if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                    opaque_member(m, dst);
+                }
+            }
+            // An accessor the realm declares on `Function.prototype`
+            // (`caller`, `arguments`: %ThrowTypeError%, ECMA-262 10.2.4): no
+            // program function owns the key (17.1: a strict function never
+            // gets one), so the read runs the declared getter on the
+            // function.
+            Some(n) if realm_accessor(m, Family::Function, None, n) => {
+                let Key::Named(a) = key else { unreachable!() };
+                family_member(m, Some(t), Family::Function, None, a, dst);
                 if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                     opaque_member(m, dst);
                 }
@@ -1924,7 +1940,8 @@ pub(crate) fn pn151_note(arm: &str, n: &str) {
     if !pn151_diag() {
         return;
     }
-    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
     let k = format!("{arm} {n}");
     let mut g = SEEN.lock().unwrap();
     if g.get_or_insert_with(Default::default).insert(k.clone()) {
@@ -1980,7 +1997,6 @@ fn pn151_ruleb_load(m: &mut Model, t: Tok, key: Key, name: Option<&str>, dst: No
         }
     }
 }
-
 
 /// HOSTVAL what-if (env PERRY_HOSTVAL=1): a member of a host object the
 /// runtime makes reads the value the runtime's realm declaration gives it

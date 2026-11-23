@@ -26,7 +26,7 @@ extern "C" fn zlib_closed_getter(
     let scope = crate::gc::RuntimeHandleScope::new();
     let proto = scope.root_nanbox_f64(proto);
     let getter = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(
-        crate::fn_info!(#[realm("node:zlib.Deflate.prototype.<prototype>.<prototype>._closed.<get>", constructible = true, spec = {name = "get"}, emit = metadata(realm_zlib_closed_get_name))] export crate::object::native_module::constructor_shapes::zlib_closed_getter, 0; with_declared(0)),
+        crate::fn_info!(#[realm("node:zlib.Deflate.prototype.<prototype>.<prototype>._closed.<get>", constructible = true, spec = {name = "get"}, emit = metadata(realm_zlib_closed_get_name), effects = { returns(prim(bool)) })] export crate::object::native_module::constructor_shapes::zlib_closed_getter, 0; with_declared(0)),
         0,
     ));
     getter.with_mut_ptr(|p| callable_exports::set_bound_native_closure_name(p, realm_zlib_closed_get_name!(name)));
