@@ -54,6 +54,8 @@ accessor	BigUint64Array	caller	Function.prototype.arguments.<get>	Function.proto
 accessor	Blob	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	Blob	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
 accessor	Blob	caller	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
+accessor	Blob.prototype	size	Blob.prototype.size.<get>
+accessor	Blob.prototype	type	Blob.prototype.type.<get>
 accessor	Boolean	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	Boolean	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
 accessor	Boolean	caller	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
@@ -135,6 +137,8 @@ accessor	EventTarget	caller	Function.prototype.arguments.<get>	Function.prototyp
 accessor	File	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	File	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
 accessor	File	caller	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
+accessor	File.prototype	lastModified	File.prototype.lastModified.<get>
+accessor	File.prototype	name	File.prototype.name.<get>
 accessor	FinalizationRegistry	__proto__	Object.prototype.__proto__.<get>	Object.prototype.__proto__.<set>
 accessor	FinalizationRegistry	arguments	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
 accessor	FinalizationRegistry	caller	Function.prototype.arguments.<get>	Function.prototype.arguments.<get>
