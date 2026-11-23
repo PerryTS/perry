@@ -2378,6 +2378,8 @@ const __memDispatch = {
     const obj = Object.create(proto);
     return props === undefined ? obj : Object.defineProperties(obj, __hostDescriptors(props));
   },
+  object_define_property: (obj, key, desc) => Object.defineProperty(obj, key, __hostDescriptor(desc)),
+  object_define_properties: (obj, props) => Object.defineProperties(obj, __hostDescriptors(props)),
   object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
   // `{ a, ...rest } = obj`: a new object with obj's own enumerable keys, symbols
   // included, except the statically named ones (CopyDataProperties). Defined, not
@@ -6081,33 +6083,34 @@ function __constructHostFunction(fn, args) {
 
 const hostCallbacks = new WeakMap();
 
-// A descriptor map whose accessors the host can call. A Perry closure is not callable
-// by the host, so its accessor runs it with the receiver as `this`. Each descriptor is
-// copied, reading its fields once in ToPropertyDescriptor's order, so the caller's map
-// and descriptors stay as they are.
+// A descriptor whose accessors the host can call. A Perry closure is not callable by
+// the host, so its accessor runs it with the receiver as `this`. The descriptor is
+// copied, reading its fields once in ToPropertyDescriptor's order, so the caller's
+// descriptor stays as it is.
+function __hostDescriptor(desc) {
+  if (!__holdsProperties(desc)) return desc;
+  const copy = Object.create(null);
+  for (const field of ['enumerable', 'configurable', 'value', 'writable', 'get', 'set']) {
+    if (!(field in desc)) continue;
+    const v = desc[field];
+    copy[field] = (field === 'get' || field === 'set') && __isPerryClosure(v)
+      ? function (...args) {
+          const result = __callClosureMethod(v, this, args);
+          __memDispatch.propagate_exception(true);
+          return result;
+        }
+      : v;
+  }
+  return copy;
+}
+
+// A descriptor map of `__hostDescriptor` copies; the caller's map stays as it is.
 function __hostDescriptors(props) {
   if (!__holdsProperties(props)) return props;
   const descs = Object.create(null);
   for (const key of Reflect.ownKeys(props)) {
     if (!Object.prototype.propertyIsEnumerable.call(props, key)) continue;
-    const desc = props[key];
-    if (!__holdsProperties(desc)) {
-      descs[key] = desc;
-      continue;
-    }
-    const copy = Object.create(null);
-    for (const field of ['enumerable', 'configurable', 'value', 'writable', 'get', 'set']) {
-      if (!(field in desc)) continue;
-      const v = desc[field];
-      copy[field] = (field === 'get' || field === 'set') && __isPerryClosure(v)
-        ? function (...args) {
-            const result = __callClosureMethod(v, this, args);
-            __memDispatch.propagate_exception(true);
-            return result;
-          }
-        : v;
-    }
-    descs[key] = copy;
+    descs[key] = __hostDescriptor(props[key]);
   }
   return descs;
 }

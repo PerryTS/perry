@@ -54,3 +54,25 @@ inAsync().then((v) => console.log("async " + v));
         "7,9,6,boom,g+q+t,8\nasync 4"
     );
 }
+
+// `Object.defineProperty` and `Object.defineProperties` accessors that are Perry
+// closures run with the receiver as `this`. Expected output is Node's.
+#[test]
+fn define_property_accessor_descriptors_run_closures() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const o: any = {};
+Object.defineProperty(o, "x", { get: () => 7 });
+Object.defineProperty(o, "s", { set: function (this: any, v: number) { this.t = v * 2; } });
+Object.defineProperties(o, { g: { get: function (this: any) { return this.t + 1; } } });
+o.s = 3;
+const later: any = { get: () => 4 };
+async function inAsync() { const a: any = {}; Object.defineProperty(a, "y", later); Object.defineProperties(a, { z: later }); return a.y + a.z; }
+console.log([o.x, o.t, o.g].join(","));
+inAsync().then((v) => console.log("async " + v));
+"#
+        ),
+        "7,6,7\nasync 8"
+    );
+}
