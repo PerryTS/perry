@@ -799,7 +799,10 @@ pub(crate) unsafe fn selected_normalized_constant(
             "constructor" => Some(crate::object::builtin_value_core("SubtleCrypto")),
             _ => None,
         },
-        "crypto.constants" => crypto_const(property),
+        "crypto.constants" => crypto_const(property).or_else(|| {
+            matches!(property, "defaultCoreCipherList" | "defaultCipherList")
+                .then(|| str_val(DEFAULT_CORE_CIPHER_LIST))
+        }),
         "events" => match property {
             "default" if !is_cjs_default_object => cjs_default_export_value("events"),
             "defaultMaxListeners" => Some(10.0),

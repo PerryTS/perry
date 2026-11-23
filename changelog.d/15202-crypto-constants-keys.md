@@ -1,0 +1,1 @@
+`Object.keys(crypto.constants)`, spread and for-in now list Node's 57 OpenSSL constants in Node's order instead of the internal `__module__` key. `crypto.constants.RSA_SSLV23_PADDING` and `crypto.constants.defaultCipherList` now read as they do in Node.
