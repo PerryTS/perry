@@ -79,8 +79,8 @@ fn single_name_target(pat: &ast::Pat) -> Option<String> {
 
 /// Build a call into the runtime iterator-protocol helpers (same dispatch the
 /// assignment-destructuring path uses).
-fn runtime_iterator_call(method: &str, args: Vec<Expr>) -> Expr {
-    Expr::NativeMethodCall {
+fn runtime_iterator_call(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
+    Expr::NativeMethodCall { byte_offset,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,
@@ -128,7 +128,7 @@ fn iterator_next_value_stmts(
                     Expr::LocalGet(next_id),
                     Expr::LocalSet(
                         value_id,
-                        Box::new(Expr::NativeMethodCall {
+                        Box::new(Expr::NativeMethodCall { byte_offset,
                             module: "__perry_runtime".into(),
                             class_name: None,
                             object: None,
@@ -138,6 +138,7 @@ fn iterator_next_value_stmts(
                     ),
                     Expr::Bool(read_value),
                 ],
+                byte_offset,
             )),
         },
         Stmt::If {
@@ -218,7 +219,7 @@ pub(crate) fn lower_array_pattern_binding(
         name: next_name,
         ty: Type::Any,
         mutable: false,
-        init: Some(source.next_init(iter_id)),
+        init: Some(source.next_init(iter_id, arr_pat.span.lo.0)),
     });
     let (done_id, done_name) = fresh_destruct_local(ctx, Type::Boolean);
     result.push(Stmt::Let {
@@ -368,6 +369,7 @@ pub(crate) fn lower_array_pattern_binding(
     let close_stmt = source.close(Stmt::Expr(runtime_iterator_call(
         "iteratorCloseIfNotDone",
         vec![Expr::LocalGet(iter_id), completion_done.clone()],
+        arr_pat.span.lo.0,
     )));
     if !track_step_failure {
         // Every element is a hole or a plain binding identifier (possibly as
@@ -397,6 +399,7 @@ pub(crate) fn lower_array_pattern_binding(
                         completion_done,
                         Expr::LocalGet(exc_id),
                     ],
+                    arr_pat.span.lo.0,
                 ))),
                 Stmt::Throw(Expr::LocalGet(exc_id)),
             ],
@@ -672,6 +675,7 @@ pub(crate) fn lower_pattern_binding_into(
                 init: Some(runtime_iterator_call(
                     "requireObjectCoercible",
                     vec![source, Expr::Number(f64::from(obj_pat.span.lo.0))],
+                    obj_pat.span.lo.0,
                 )),
             });
 

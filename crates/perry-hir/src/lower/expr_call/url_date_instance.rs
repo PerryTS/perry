@@ -36,7 +36,7 @@ fn new_callee_name(ctx: &LoweringContext, new_expr: &ast::NewExpr) -> Option<Str
 
 pub(super) fn try_url_date_weakref_instance(
     ctx: &mut LoweringContext,
-    _call: &ast::CallExpr,
+    call: &ast::CallExpr,
     expr: &ast::Expr,
     mut args: Vec<Expr>,
 ) -> Result<Result<Expr, Vec<Expr>>> {
@@ -122,7 +122,7 @@ pub(super) fn try_url_date_weakref_instance(
                 && matches!(method_name, "exec" | "test")
             {
                 let pattern_expr = lower_expr(ctx, &member.obj)?;
-                return Ok(Ok(Expr::NativeMethodCall {
+                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                     module: "url".to_string(),
                     class_name: Some("URLPattern".to_string()),
                     object: Some(Box::new(pattern_expr)),

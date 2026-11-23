@@ -578,7 +578,7 @@ pub(crate) fn is_intrinsic(method: &str) -> bool {
 }
 
 fn rt(method: &str, args: Vec<Expr>) -> Expr {
-    Expr::NativeMethodCall {
+    Expr::NativeMethodCall { byte_offset: 0 /*HPOS*/,
         module: RT.into(),
         class_name: None,
         object: None,

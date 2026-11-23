@@ -1298,7 +1298,7 @@ pub(super) fn harvest_harmonyos_index_ets(
                         .into_iter()
                         .enumerate()
                         .map(|(idx, closure)| {
-                            perry_hir::ir::Stmt::Expr(perry_hir::ir::Expr::NativeMethodCall {
+                            perry_hir::ir::Stmt::Expr(perry_hir::ir::Expr::NativeMethodCall { byte_offset: 0 /*HPOS accessor: closure offset*/,
                                 module: "perry/arkts".to_string(),
                                 class_name: None,
                                 object: None,

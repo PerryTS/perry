@@ -183,7 +183,7 @@ fn iterator_cleanup_expr(expr: &perry_hir::Expr) -> bool {
             class_name: None,
             object: None,
             method,
-            args,
+            args, ..
         } => {
             module == "__perry_runtime"
                 && (method == "iteratorCloseOnThrow"
@@ -230,6 +230,7 @@ pub(crate) fn lower_try(
     body: &[perry_hir::Stmt],
     catch: Option<&perry_hir::CatchClause>,
     finally: Option<&[perry_hir::Stmt]>,
+    byte_offset: u32,
 ) -> Result<()> {
     // An iterator-cleanup `try` (linux x86_64) catches only to close the
     // iterator and rethrow: its catch reads no frame state, so it does not
@@ -274,7 +275,7 @@ pub(crate) fn lower_try(
     if let Some(args) = outlined {
         lower_expr(
             ctx,
-            &perry_hir::Expr::NativeMethodCall {
+            &perry_hir::Expr::NativeMethodCall { byte_offset,
                 module: "__perry_runtime".into(),
                 class_name: None,
                 object: None,

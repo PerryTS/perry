@@ -319,6 +319,7 @@ pub(super) fn try_util_types_namespace(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
     args: Vec<Expr>,
+    byte_offset: u32,
 ) -> Result<Result<Expr, Vec<Expr>>> {
     if let ast::Expr::Member(outer_member) = expr {
         if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
@@ -373,7 +374,7 @@ pub(super) fn try_util_types_namespace(
                                     }
                                 }
                             }
-                            return Ok(Ok(Expr::NativeMethodCall {
+                            return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                                 module: "util/types".to_string(),
                                 class_name: None,
                                 object: None,
@@ -397,6 +398,7 @@ pub(super) fn try_dns_promises_namespace(
     ctx: &LoweringContext,
     expr: &ast::Expr,
     args: Vec<Expr>,
+    byte_offset: u32,
 ) -> Result<Result<Expr, Vec<Expr>>> {
     if let ast::Expr::Member(outer_member) = expr {
         if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
@@ -417,7 +419,7 @@ pub(super) fn try_dns_promises_namespace(
                             if perry_api_manifest::module_has_symbol("dns/promises", method_name)
                                 .is_some()
                             {
-                                return Ok(Ok(Expr::NativeMethodCall {
+                                return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                                     module: "dns/promises".to_string(),
                                     class_name: None,
                                     object: None,
@@ -444,6 +446,7 @@ pub(super) fn try_punycode_ucs2_namespace(
     ctx: &LoweringContext,
     expr: &ast::Expr,
     args: Vec<Expr>,
+    byte_offset: u32,
 ) -> Result<Result<Expr, Vec<Expr>>> {
     if let ast::Expr::Member(outer_member) = expr {
         if let ast::Expr::Member(inner_member) = outer_member.obj.as_ref() {
@@ -462,7 +465,7 @@ pub(super) fn try_punycode_ucs2_namespace(
                         if namespace.sym.as_ref() == "ucs2"
                             && matches!(method.sym.as_ref(), "decode" | "encode")
                         {
-                            return Ok(Ok(Expr::NativeMethodCall {
+                            return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                                 module: "punycode.ucs2".to_string(),
                                 class_name: None,
                                 object: None,
@@ -520,6 +523,7 @@ pub(super) fn dispatch_path_subnamespace(
     sub: &str,
     method: &str,
     args: Vec<Expr>,
+    byte_offset: u32,
 ) -> Result<Expr, Vec<Expr>> {
     // On Windows-host builds the default `js_path_*` runtime family resolves
     // to win32 semantics (Node: `path === path.win32` on win32). The static
@@ -551,7 +555,7 @@ pub(super) fn dispatch_path_subnamespace(
             if method == "join" && args.is_empty() {
                 return Ok(Expr::String(".".to_string()));
             }
-            return Ok(Expr::NativeMethodCall {
+            return Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
                 module: "path.posix".to_string(),
                 class_name: None,
                 object: None,
@@ -731,6 +735,7 @@ pub(super) fn try_path_subnamespace(
     ctx: &LoweringContext,
     expr: &ast::Expr,
     args: Vec<Expr>,
+    byte_offset: u32,
 ) -> Result<Expr, Vec<Expr>> {
     let ast::Expr::Member(outer_member) = expr else {
         return Err(args);
@@ -748,7 +753,7 @@ pub(super) fn try_path_subnamespace(
                 let sub = sub_prop.sym.as_ref();
                 let root_name = root_ident.sym.as_ref();
                 if is_path_root(ctx, root_name) && (sub == "posix" || sub == "win32") {
-                    return dispatch_path_subnamespace(sub, method, args);
+                    return dispatch_path_subnamespace(sub, method, args, byte_offset);
                 }
                 if let Some((module_name, _)) = ctx.lookup_native_module(root_name) {
                     if let Some(root_sub) = path_submodule_name(
@@ -759,7 +764,7 @@ pub(super) fn try_path_subnamespace(
                             "posix" | "win32" => sub,
                             _ => return Err(args),
                         };
-                        return dispatch_path_subnamespace(sub, method, args);
+                        return dispatch_path_subnamespace(sub, method, args, byte_offset);
                     }
                 }
             }
@@ -772,7 +777,7 @@ pub(super) fn try_path_subnamespace(
         if let Some((root, sub)) = ctx.lookup_subns_path_alias(recv.sym.as_ref()) {
             let (root, sub) = (root.to_string(), sub.to_string());
             if is_path_root(ctx, &root) {
-                return dispatch_path_subnamespace(&sub, method, args);
+                return dispatch_path_subnamespace(&sub, method, args, byte_offset);
             }
         }
     }

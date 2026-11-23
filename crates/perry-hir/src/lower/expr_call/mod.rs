@@ -429,7 +429,7 @@ fn lower_call_inner(
                     if module_name.strip_prefix("node:").unwrap_or(module_name) == "sqlite"
                         && matches!(method_name, "Database" | "DatabaseSync")
                     {
-                        return Ok(Expr::NativeMethodCall {
+                        return Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                             module: "sqlite".to_string(),
                             class_name: None,
                             object: None,
@@ -682,19 +682,19 @@ fn lower_call_inner(
                     Ok(e) => return Ok(e),
                     Err(a) => a,
                 };
-                args = match try_util_types_namespace(ctx, expr, args)? {
+                args = match try_util_types_namespace(ctx, expr, args, call.span.lo.0)? {
                     Ok(e) => return Ok(e),
                     Err(a) => a,
                 };
-                args = match try_dns_promises_namespace(ctx, expr, args)? {
+                args = match try_dns_promises_namespace(ctx, expr, args, call.span.lo.0)? {
                     Ok(e) => return Ok(e),
                     Err(a) => a,
                 };
-                args = match try_punycode_ucs2_namespace(ctx, expr, args)? {
+                args = match try_punycode_ucs2_namespace(ctx, expr, args, call.span.lo.0)? {
                     Ok(e) => return Ok(e),
                     Err(a) => a,
                 };
-                args = match try_path_subnamespace(ctx, expr, args) {
+                args = match try_path_subnamespace(ctx, expr, args, call.span.lo.0) {
                     Ok(e) => return Ok(e),
                     Err(a) => a,
                 };

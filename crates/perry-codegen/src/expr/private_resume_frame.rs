@@ -189,7 +189,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, method: &str, args: &[Expr]) -> Result<
         // private return and hand the original rooted exception back.
         return crate::rooting::with_rooted_group(ctx, 1, |ctx, group| {
             let incoming = group.lower(ctx, &args[3], true)?;
-            let close = Expr::NativeMethodCall {
+            let close = Expr::NativeMethodCall { byte_offset: 0 /*HPOS*/,
                 module: "__perry_runtime".into(),
                 class_name: None,
                 object: None,

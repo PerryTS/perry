@@ -96,7 +96,7 @@ fn entry(cond: &Expr) -> Option<(u32, bool)> {
         class_name: None,
         object: None,
         method,
-        args,
+        args, ..
     } = left.as_ref()
     else {
         return None;

@@ -94,7 +94,7 @@ pub(super) fn try_buffer_uint8array_statics(
                     return Ok(Ok(Expr::BufferAllocUnsafe(Box::new(size))));
                 }
                 "allocUnsafeSlow" => {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                         module: "buffer".to_string(),
                         class_name: None,
                         object: None,
@@ -113,7 +113,7 @@ pub(super) fn try_buffer_uint8array_statics(
                     return Ok(Ok(Expr::BufferConcat(Box::new(list))));
                 }
                 "copyBytesFrom" => {
-                    return Ok(Ok(Expr::NativeMethodCall {
+                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                         module: "buffer".to_string(),
                         class_name: None,
                         object: None,

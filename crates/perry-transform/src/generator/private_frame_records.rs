@@ -12,7 +12,7 @@ fn rt<'a>(e: &'a Expr, method: &str) -> Option<&'a [Expr]> {
             class_name: None,
             object: None,
             method: m,
-            args,
+            args, ..
         } if module == "__perry_runtime" && m == method => Some(args),
         _ => None,
     }

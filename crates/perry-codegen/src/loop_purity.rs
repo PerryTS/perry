@@ -166,7 +166,7 @@ fn expr_alloc_free(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool) -> bool {
             class_name: None,
             object: None,
             method,
-            args,
+            args, ..
         } if module == "__perry_runtime" && method == "arrayRecordForUpdate" => {
             args.iter().all(|a| expr_alloc_free(a, is_inert))
         }

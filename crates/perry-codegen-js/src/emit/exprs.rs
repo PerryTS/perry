@@ -309,7 +309,7 @@ impl JsEmitter {
                 self.output.push_str("undefined");
             }
 
-            Expr::NativeMethodCall { module, class_name, object, method, args } => {
+            Expr::NativeMethodCall { module, class_name, object, method, args, .. } => {
                 self.emit_native_method_call(module, class_name.as_deref(), object.as_deref(), method, args);
             }
 

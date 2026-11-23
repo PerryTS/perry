@@ -164,7 +164,7 @@ fn lower_logical_assignment(
     op: LogicalOp,
 ) -> Result<Expr> {
     let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-    let right = Box::new(lower_assignment_target(ctx, &assign.left, Box::new(rhs))?);
+    let right = Box::new(lower_assignment_target(ctx, &assign.left, Box::new(rhs), assign.span.lo.0)?);
     Ok(Expr::Logical { op, left, right })
 }
 
@@ -479,7 +479,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
           // here — preferable to a silent runtime error path. No catch-all.
     };
 
-    lower_assignment_target(ctx, &assign.left, value)
+    lower_assignment_target(ctx, &assign.left, value, assign.span.lo.0)
 }
 
 /// Lower `<name> = value` where `<name>` is an identifier assignment target.
@@ -689,6 +689,7 @@ fn lower_assignment_target(
     ctx: &mut LoweringContext,
     target: &ast::AssignTarget,
     value: Box<Expr>,
+    byte_offset: u32,
 ) -> Result<Expr> {
     match target {
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
@@ -717,7 +718,7 @@ fn lower_assignment_target(
                             receiver: proxy,
                             strict: ctx.current_strict,
                             element_offset: member.span.lo.0,
-                            byte_offset: 0,
+                            byte_offset,
                             byte_end: 0,
                         });
                     }
@@ -803,7 +804,7 @@ fn lower_assignment_target(
                                 }),
                                 args: vec![*value],
                                 type_args: vec![],
-                                byte_offset: 0,
+                                byte_offset,
                             });
                         }
                     }
@@ -878,7 +879,7 @@ fn lower_assignment_target(
                             };
                             if let Some(method) = setter_method {
                                 let object_expr = lower_expr(ctx, &member.obj)?;
-                                return Ok(Expr::NativeMethodCall {
+                                return Ok(Expr::NativeMethodCall { byte_offset,
                                     module: module_name,
                                     class_name: Some(class_name),
                                     object: Some(Box::new(object_expr)),
@@ -1027,7 +1028,7 @@ fn lower_assignment_target(
                             receiver: object,
                             strict: ctx.current_strict,
                             element_offset: member.span.lo.0,
-                            byte_offset: 0,
+                            byte_offset,
                             byte_end: 0,
                         },
                     ))
@@ -1087,7 +1088,7 @@ fn lower_assignment_target(
                                     receiver: object,
                                     strict: ctx.current_strict,
                                     element_offset: member.span.lo.0,
-                                    byte_offset: 0,
+                                    byte_offset,
                                     byte_end: 0,
                                 },
                             ));

@@ -13,7 +13,7 @@ impl<'a> FuncEmitCtx<'a> {
                 method,
                 object,
                 args,
-                class_name,
+                class_name, ..
             } => {
                 let normalized = module.strip_prefix("node:").unwrap_or(module);
                 match normalized {

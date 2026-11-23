@@ -269,7 +269,7 @@ pub(crate) fn lower_imported_worker_threads_new(
     match export.as_deref() {
         Some("Worker") => lower_worker_new(ctx, new_expr).map(Some),
         Some(name) if is_worker_messaging_constructor_name(name) => {
-            lower_worker_messaging_new(ctx, name, new_expr.args.as_deref()).map(Some)
+            lower_worker_messaging_new(ctx, name, new_expr.args.as_deref(), new_expr.span.lo.0).map(Some)
         }
         _ => Ok(None),
     }
@@ -279,6 +279,7 @@ pub(crate) fn lower_worker_messaging_new(
     ctx: &mut LoweringContext,
     class_name: &str,
     args: Option<&[ast::ExprOrSpread]>,
+    byte_offset: u32,
 ) -> Result<Expr> {
     if class_name == "BroadcastChannel" {
         let callee = Box::new(Expr::PropertyGet {
@@ -302,7 +303,7 @@ pub(crate) fn lower_worker_messaging_new(
             byte_offset: 0,
         });
     }
-    Ok(Expr::NativeMethodCall {
+    Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
         module: "worker_threads".to_string(),
         class_name: None,
         object: None,

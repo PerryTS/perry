@@ -482,7 +482,7 @@ pub fn inline_calls_in_stmts(
                         class_name: None,
                         object: None,
                         method,
-                        args,
+                        args, ..
                     } if module == "__perry_runtime"
                         && method == "requireObjectCoercible"
                         && matches!(
