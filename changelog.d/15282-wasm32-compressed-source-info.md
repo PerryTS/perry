@@ -1,0 +1,1 @@
+Fixed: on WASI targets, calling a function whose source text is long (a callback of a few hundred characters) no longer traps or hangs; its function descriptor kept a misaligned field on 32-bit WebAssembly.
