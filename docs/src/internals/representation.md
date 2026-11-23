@@ -35,7 +35,10 @@ case, and re-boxed at the return. Each local decision is correct. The sum is the
    representation from the whole-program facts: bindings, temporaries, parameters, returns,
    call results, object fields and array elements. Codegen reads it and obeys it. Codegen
    never picks a representation itself: no per-site heuristics, no profitability rule, no
-   local promotion.
+   local promotion. This is the target design. While P5 is partial (§8), codegen still chooses
+   per site in these places: the RFC §5.2 profitability term (`collectors/repsel_benefit.rs`), the
+   `$idx$i32` index-split clones, the `spec_abi` tuples, and the per-function collectors
+   (`facts_int32_locals`) for a local the facts do not cover.
 2. **Representation-typed signatures are the internal ABI.** A function's parameters and
    return are passed in their representations. A boxed adapter exists only for a function
    that escapes to code the analysis cannot see.
@@ -44,7 +47,8 @@ case, and re-boxed at the return. Each local decision is correct. The sum is the
 
 Conversions exist only at **boundaries**: native/FFI calls, the dynamic constructs listed in
 RFC §5.2 (soundness barriers), and ⊤ nodes, meaning nodes whose facts are unknown. Inside proven
-code a value keeps the representation it was given from production to last use.
+code a value keeps the representation it was given from production to last use, except for the
+one exact widening §3 allows: an I32 value copied or joined into an F64 node takes a `sitofp`.
 
 A **conversion** here means re-encoding one value because two pieces of code disagree on its
 representation: box, unbox, tag test, retag. An *operation* whose JavaScript semantics compute
@@ -134,7 +138,7 @@ Boundaries are exactly these:
 - escaping-function adapters (§4)
 
 Every boundary is explicit in the IR, and a per-module dump lists them with their counts
-(§8, P0). A conversion anywhere else is a bug in the facts or a codegen site that is not yet
+(§8, P0). A conversion anywhere else, other than the §3 I32-to-F64 widening, is a bug in the facts or a codegen site that is not yet
 following them; it is never a tuning choice.
 
 The chess benchmark is closed by design: none of these boundaries occurs in its hot paths.

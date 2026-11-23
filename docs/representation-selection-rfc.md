@@ -422,5 +422,6 @@ Measured during the bcryptjs `_encipher` performance investigation (2026-07-27; 
 Accepted 2026-11-08. The design is maintained as current documentation in
 [`docs/src/internals/representation.md`](src/internals/representation.md): wpfacts is the only
 representation authority, representation-typed signatures are the internal ABI, a proven Number
-is a canonical double, and conversions exist only at boundaries. It overrides the conflicting
+is a canonical double, and conversions exist only at boundaries and at the exact I32-to-F64 widening of a join or
+copy. It overrides the conflicting
 parts of §5.2, §5.4 and §6.

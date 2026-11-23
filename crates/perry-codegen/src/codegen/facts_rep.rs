@@ -13,10 +13,10 @@
 //! `PERRY_WP_REP_P1=0` restores the collectors' decision everywhere (their
 //! value proof; the per-body profitability refusal of #7128 is gone, P5).
 //!
-//! Phase P3 (§10.5): a Number is a canonical double, its one encoding. No
+//! Phase P3 (`internals/representation.md` §5): a Number is a canonical double, its one encoding. No
 //! reader tests for another.
 //!
-//! Phase P2 (§10.4), first slice: a parameter is a local like any other, so
+//! Phase P2 (`internals/representation.md` §4), first slice: a parameter is a local like any other, so
 //! one the facts give `I32` takes the canonical-i32 slot at entry
 //! (`bind_params`). Its arguments are already a plain double there, and the I32 interval is
 //! exact, so the slot's value is one `fptosi`. The calling convention does

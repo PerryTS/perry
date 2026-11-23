@@ -1718,8 +1718,8 @@ fn facts_rep(r: perry_wpfacts::Rep) -> perry_codegen::FactsRep {
                 || (a.elem == ElemRep::I32
                     && std::env::var("PERRY_FACTS_SABOTAGE").as_deref() == Ok("restrep")),
         }),
-        // VR-2: codegen lowers records from VR-3; until then a
-        // record is the Boxed word it is today.
+        // A record's lanes reach codegen apart from this rep (`record_locals`,
+        // `record_layouts`, the signatures' record slots); here it is Boxed.
         Rep::Record(_) => FactsRep::Boxed,
     }
 }
