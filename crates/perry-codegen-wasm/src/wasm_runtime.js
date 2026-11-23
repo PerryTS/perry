@@ -1743,6 +1743,22 @@ function __hostAdder(obj, name) {
   if (typeof fn !== 'function') throw new TypeError(`'${String(fn)}' returned for property '${name}' of object '#<${obj.constructor.name}>' is not a function`);
   return (...args) => fn.apply(obj, args);
 }
+// A Map or WeakMap constructor's entries: the adder is read once before the iteration,
+// so a subclass override sees them, and an entry is any object whose keys 0 and 1 are
+// read as property gets, so a compiled getter runs.
+function __addMapEntries(obj, entries) {
+  const set = __hostAdder(obj, 'set');
+  const get = (e, key) => {
+    const v = __memDispatch.class_get_field(e, key);
+    __memDispatch.propagate_exception(true);
+    return v;
+  };
+  for (const e of entries) {
+    if (Object(e) !== e) throw new TypeError(`Iterator value ${String(e)} is not an entry object`);
+    const k = get(e, '0');
+    set(k, get(e, '1'));
+  }
+}
 // The class name, after recording its constructor slot the first time `new` sees it.
 function __classNoteCtorSlot(className, ctorIdx) {
   const cls = String(className);
@@ -2683,20 +2699,13 @@ const __memDispatch = {
     return Object.setPrototypeOf(Reflect.construct(Base, []), __classProto(cls));
   },
   // `super(...args)` into the built-in an instance from class_new_host was made from.
-  // A collection's entries go through the instance's `set`/`add`, read once before the
-  // iteration, so a subclass override sees them, and a Map entry is any object with keys 0 and 1, as the built-in
-  // constructors do. Array elements are own data properties and a Date's time value is
+  // A collection's entries go through the instance's `set`/`add` (see __addMapEntries).
+  // Array elements are own data properties and a Date's time value is
   // set directly, past any accessor or override on the subclass.
   host_super_init: (obj, args) => {
     const a = Array.isArray(args) ? args : [];
     if (obj instanceof Map || obj instanceof WeakMap) {
-      if (a[0] != null) {
-        const set = __hostAdder(obj, 'set');
-        for (const e of a[0]) {
-          if (Object(e) !== e) throw new TypeError(`Iterator value ${String(e)} is not an entry object`);
-          set(e[0], e[1]);
-        }
-      }
+      if (a[0] != null) __addMapEntries(obj, a[0]);
     } else if (obj instanceof Set || obj instanceof WeakSet) {
       if (a[0] != null) {
         const add = __hostAdder(obj, 'add');
@@ -6047,6 +6056,11 @@ function __callHostFunction(fn, args, receiver = undefined) {
 // handling as __callHostFunction.
 function __constructHostFunction(fn, args) {
   try {
+    if ((fn === Map || fn === WeakMap) && args[0] != null) {
+      const m = new fn();
+      __addMapEntries(m, args[0]);
+      return m;
+    }
     return Reflect.construct(fn, __perryClassCtors.has(fn) ? args : args.map(__hostCallback));
   } catch (error) {
     if (tryDepth === 0) throw error;

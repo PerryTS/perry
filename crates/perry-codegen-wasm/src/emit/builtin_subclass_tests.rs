@@ -144,3 +144,24 @@ console.log(new Open([["k", 1]]).size + " " + new Via([["a", 1], ["b", 2]]).size
         "1 0 a1,b2"
     );
 }
+
+// A Map or WeakMap entry's keys 0 and 1 are read as property gets, so compiled getters
+// run, on the plain constructors and a subclass's super(...). Expected output is Node's.
+#[test]
+fn map_entries_read_keys_through_getters() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Entry { get 0() { return "k"; } get 1() { return 7; } }
+const key = {};
+class WeakEntry { get 0() { return key; } get 1() { return 9; } }
+class M extends Map<string, number> {}
+const m = new Map([new Entry() as any]);
+console.log(m.size + " " + m.get("k"));
+console.log(new WeakMap([new WeakEntry() as any]).get(key));
+console.log(new M([new Entry() as any]).get("k"));
+"#
+        ),
+        "1 7\n9\n7"
+    );
+}

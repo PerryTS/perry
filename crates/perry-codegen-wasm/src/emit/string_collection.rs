@@ -202,6 +202,7 @@ impl WasmModuleEmitter {
             "json_parse",
             "json_stringify",
             "map_new",
+            "WeakMap",
             "map_set",
             "map_get",
             "map_has",
