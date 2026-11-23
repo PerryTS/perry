@@ -2058,7 +2058,8 @@ impl<'a> Gen<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                byte_offset,
             } => {
                 let d = self.expr_zs(fx, discriminant);
                 // `===` against case values: no coercion, identity.
@@ -2153,7 +2154,7 @@ impl<'a> Gen<'a> {
                     }
                     // Rule G3: a clause only literal tests select narrows
                     // the host of the discriminant (`Gen::case_narrow`).
-                    let g3 = self.case_narrow(fx, discriminant, cases, i);
+                    let g3 = self.case_narrow(fx, discriminant, cases, i, *byte_offset);
                     self.stmts(fx, &c.body);
                     self.narrow_pop(g3);
                     self.m.clause = clause;
