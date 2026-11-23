@@ -229,7 +229,7 @@ pub(crate) fn lower_new_member_native(
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: new_byte_offset,
                         object: Box::new(Expr::NativeModuleRef("http".to_string())),
                         property: prop_ident.sym.to_string(),
                     }),

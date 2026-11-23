@@ -1384,7 +1384,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         mutable: false,
                         init: Some(Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: for_of_stmt.span.lo.0,
                             object: Box::new(Expr::LocalGet(res_id)),
                             property: "value".to_string(),
                         }),
@@ -1399,7 +1399,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         Stmt::If {
                             condition: Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: for_of_stmt.span.lo.0,
                                 object: Box::new(Expr::LocalGet(res_id)),
                                 property: "done".to_string(),
                             },
@@ -1537,7 +1537,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: for_of_stmt.span.lo.0,
                             object: Box::new(iter_expr_raw),
                             property: "iterator".to_string(),
                         }),
@@ -1579,7 +1579,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: for_of_stmt.span.lo.0,
                         object: Box::new(Expr::LocalGet(iter_id)),
                         property: "next".to_string(),
                     }),
@@ -1611,7 +1611,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 let value_expr = if needs_await {
                     Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: for_of_stmt.span.lo.0,
                         object: Box::new(Expr::LocalGet(result_id)),
                         property: "value".into(),
                     }
@@ -2331,7 +2331,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: for_of_stmt.span.lo.0,
                         object: Box::new(Expr::LocalGet(arr_id)),
                         property: "length".to_string(),
                     }),
@@ -2411,7 +2411,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     op: crate::ir::BinaryOp::BitAnd,
                     left: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: for_in_stmt.span.lo.0,
                         object: Box::new(Expr::LocalGet(keys_id)),
                         property: "length".to_string(),
                     }),

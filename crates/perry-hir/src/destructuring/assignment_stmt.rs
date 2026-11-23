@@ -1,5 +1,6 @@
 //! Lowering of destructuring assignment statements (e.g. `[a, b] = expr` as a statement).
 
+use swc_common::Spanned;
 use super::array_fast::{self, ArraySource};
 use super::*;
 
@@ -372,7 +373,7 @@ fn lower_object_assignment_from_expr(
                     mutable: false,
                     init: Some(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: assign.span.lo.0,
                         object: Box::new(source.clone()),
                         property: name.clone(),
                     }),
@@ -473,7 +474,7 @@ fn object_property_get_expr(
             Vec::new(),
             Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: key.span().lo.0,
                 object: Box::new(source),
                 property: ident.sym.to_string(),
             },
@@ -482,7 +483,7 @@ fn object_property_get_expr(
             Vec::new(),
             Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: key.span().lo.0,
                 object: Box::new(source),
                 property: s.value.as_str().unwrap_or("").to_string(),
             },
@@ -491,7 +492,7 @@ fn object_property_get_expr(
             Vec::new(),
             Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: key.span().lo.0,
                 object: Box::new(source),
                 property: n.value.to_string(),
             },

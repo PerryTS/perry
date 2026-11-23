@@ -79,7 +79,7 @@ impl DelegationRoute {
             byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: self.byte_offset,
                 object: Box::new(Expr::LocalGet(method)),
                 property: "call".to_string(),
             }),
@@ -364,7 +364,7 @@ fn emit_yield_star_loop(
         del_next_id,
         Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: byte_offset,
             object: Box::new(Expr::LocalGet(del_iter_id)),
             property: "next".to_string(),
         }),
@@ -403,7 +403,7 @@ fn emit_yield_star_loop(
         None => Stmt::Expr(Expr::Yield { byte_offset,
             value: Some(Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: byte_offset,
                 object: Box::new(Expr::LocalGet(del_result_id)),
                 property: "value".to_string(),
             })),
@@ -438,7 +438,7 @@ fn emit_yield_star_loop(
         op: UnaryOp::Not,
         operand: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: byte_offset,
             object: Box::new(Expr::LocalGet(del_result_id)),
             property: "done".to_string(),
         }),
@@ -501,7 +501,7 @@ fn emit_yield_star_loop(
     let del_value_id = alloc_local(next_local_id);
     let inner_value = Expr::PropertyGet {
         byte_end: 0,
-        byte_offset: 0,
+        byte_offset: byte_offset,
         object: Box::new(Expr::LocalGet(del_result_id)),
         property: "value".to_string(),
     };

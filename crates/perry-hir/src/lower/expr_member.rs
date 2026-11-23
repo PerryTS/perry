@@ -195,7 +195,7 @@ pub(crate) fn try_fold_symbol_well_known_member(
                     args: vec![
                         Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: obj.span().lo.0,
                             object: Box::new(Expr::GlobalGet(0)),
                             property: "Symbol".to_string(),
                         },
@@ -330,7 +330,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 ) {
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: member.span.lo.0,
                         object: Box::new(Expr::NativeModuleRef("bun".to_string())),
                         property: prop_ident.sym.as_ref().to_string(),
                     });
@@ -358,10 +358,10 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 if crate::analysis::is_builtin_static_function_member("Promise", static_member) {
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: member.span.lo.0,
                         object: Box::new(Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: member.span.lo.0,
                             object: Box::new(Expr::GlobalGet(0)),
                             property: "Promise".to_string(),
                         }),
@@ -594,7 +594,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 ) {
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: member.span.lo.0,
                         object: Box::new(Expr::NativeModuleRef("process".to_string())),
                         property: prop.to_string(),
                     });

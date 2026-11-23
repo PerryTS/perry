@@ -600,7 +600,7 @@ fn lower_runtime_for_await_iterator(
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: for_of_stmt.span.lo.0,
             object: Box::new(Expr::LocalGet(iter_id)),
             property: "next".to_string(),
         }),
@@ -639,7 +639,7 @@ fn lower_runtime_for_await_iterator(
         binding_pat,
         Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: for_of_stmt.span.lo.0,
             object: Box::new(Expr::LocalGet(result_id)),
             property: "value".to_string(),
         },
@@ -811,7 +811,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset: for_of_stmt.span.lo.0,
                     object: Box::new(iter_expr),
                     property: "iterator".to_string(),
                 }),
@@ -860,7 +860,7 @@ pub(super) fn lower_stmt_for_of_inner(
             byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: for_of_stmt.span.lo.0,
                 object: Box::new(Expr::LocalGet(iter_id)),
                 property: "next".to_string(),
             }),
@@ -897,7 +897,7 @@ pub(super) fn lower_stmt_for_of_inner(
         let value_expr = if needs_await {
             Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: for_of_stmt.span.lo.0,
                 object: Box::new(Expr::LocalGet(result_id)),
                 property: "value".into(),
             }
@@ -1146,7 +1146,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 mutable: false,
                 init: Some(Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset: for_of_stmt.span.lo.0,
                     object: Box::new(Expr::LocalGet(res_id)),
                     property: "value".to_string(),
                 }),
@@ -1855,7 +1855,7 @@ pub(super) fn lower_stmt_for_of_inner(
             left: Box::new(Expr::LocalGet(idx_id)),
             right: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: for_of_stmt.span.lo.0,
                 object: Box::new(Expr::LocalGet(arr_id)),
                 property: "length".to_string(),
             }),
@@ -1956,7 +1956,7 @@ pub(crate) fn lower_stmt_for_in(
             op: crate::ir::BinaryOp::BitAnd,
             left: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: for_in_stmt.span.lo.0,
                 object: Box::new(Expr::LocalGet(keys_id)),
                 property: "length".to_string(),
             }),

@@ -1,5 +1,6 @@
 //! Lowering of destructuring assignment expressions (`[a, b] = expr` as a value).
 
+use swc_common::Spanned;
 use super::*;
 
 /// Lower a destructuring assignment expression.
@@ -173,19 +174,19 @@ pub(crate) fn lower_destructuring_assignment(
                         let prop_expr = match &kv.key {
                             ast::PropName::Ident(ident) => Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: kv.key.span().lo.0,
                                 object: value.clone(),
                                 property: ident.sym.to_string(),
                             },
                             ast::PropName::Str(s) => Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: kv.key.span().lo.0,
                                 object: value.clone(),
                                 property: s.value.as_str().unwrap_or("").to_string(),
                             },
                             ast::PropName::Num(n) => Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: kv.key.span().lo.0,
                                 object: value.clone(),
                                 property: n.value.to_string(),
                             },
@@ -245,7 +246,7 @@ pub(crate) fn lower_destructuring_assignment(
                         let name = assign.key.sym.to_string();
                         let prop_expr = Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: assign.span.lo.0,
                             object: value.clone(),
                             property: name.clone(),
                         };

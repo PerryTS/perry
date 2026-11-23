@@ -349,7 +349,7 @@ fn source_for_of(
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(counter)),
                 right: Box::new(Expr::PropertyGet {
-                    byte_offset: 0,
+                    byte_offset: stmt.span.lo.0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(array)),
                     property: "length".into(),

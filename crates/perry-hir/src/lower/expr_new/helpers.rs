@@ -284,7 +284,7 @@ pub(crate) fn lower_worker_messaging_new(
     if class_name == "BroadcastChannel" {
         let callee = Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: byte_offset,
             object: Box::new(Expr::NativeModuleRef("worker_threads".to_string())),
             property: class_name.to_string(),
         });

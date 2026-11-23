@@ -26,7 +26,7 @@ pub(super) fn lower_runtime_for_await_iterator_body(
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: for_of_stmt.span.lo.0,
             object: Box::new(Expr::LocalGet(iter_id)),
             property: "next".to_string(),
         }),
@@ -65,7 +65,7 @@ pub(super) fn lower_runtime_for_await_iterator_body(
         binding_pat,
         Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: for_of_stmt.span.lo.0,
             object: Box::new(Expr::LocalGet(result_id)),
             property: "value".to_string(),
         },

@@ -71,7 +71,7 @@ pub(crate) fn emit_driver(
             mutable: false,
             init: Some(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: byte_offset,
                 object: Box::new(Expr::LocalGet(iter_id)),
                 property: "return".to_string(),
             }),

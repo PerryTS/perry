@@ -157,10 +157,10 @@ fn reflective_object_borrow(
     }
     let source = Expr::PropertyGet {
         byte_end: 0,
-        byte_offset: 0,
+        byte_offset: outer.span.lo.0,
         object: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: outer.span.lo.0,
             object: Box::new(Expr::GlobalThisExpr),
             property: "Object".to_string(),
         }),
