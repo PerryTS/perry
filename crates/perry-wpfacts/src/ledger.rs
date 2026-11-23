@@ -509,6 +509,14 @@ pub(crate) fn hir_kind(e: &Expr) -> Option<&'static str> {
         Expr::IndexSet { .. } => "element-write",
         Expr::PropertyUpdate { .. } => "update",
         Expr::IndexUpdate { .. } => "element-update",
+        // The PutValue store (13.15.2): the analysis walks it as the member
+        // or element write it performs, a copy of this one source operation
+        // (named key: `write`; computed key: `element-write`), which pairs
+        // with it here.
+        Expr::PutValueSet { key, .. } => match key.as_ref() {
+            Expr::String(_) => "write",
+            _ => "element-write",
+        },
         _ => return None,
     })
 }
@@ -566,6 +574,11 @@ fn span(e: &Expr) -> (u32, u32) {
             ..
         }
         | Expr::IndexUpdate {
+            byte_offset,
+            byte_end,
+            ..
+        }
+        | Expr::PutValueSet {
             byte_offset,
             byte_end,
             ..
