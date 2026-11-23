@@ -2026,6 +2026,7 @@ js_literal_shape_initialize	void	f64,ptr,ptr,i32u
 js_load_module	i64	i64,i64
 js_loop_interrupt	void	
 js_loop_settle_once	void	
+js_loop_turn_nonblocking	void	
 js_loose_eq	i64	i64,i64
 js_lt	i64	i64,i64
 js_main_thread_notified	i32s	
@@ -5247,6 +5248,7 @@ perry_geisterhand_request_screenshot	ptr	ptr
 perry_geisterhand_request_tree	ptr	ptr
 perry_geisterhand_request_value	ptr	i64,ptr
 perry_has_work	i32s	
+perry_host_keeps_thread_after_main	void	
 perry_i18n_format_currency	ptr	f64,i32s
 perry_i18n_format_currency_default	ptr	f64
 perry_i18n_format_date	ptr	f64,i32s,i32s

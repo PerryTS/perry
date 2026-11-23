@@ -14,7 +14,7 @@
       "why": "Collection-local queue populated only by discover while marking a live WeakStorage. Ephemerons::absorb takes the queue into collector-owned work; clear_seeds drops residual work at collection/reset boundaries before any storage can be reused. It is metadata rewrite only, never an independent strong owner."
     },
     {
-      "site": "crates/perry-runtime/src/json/mod.rs::scan_parse_roots_mut",
+      "site": "crates/perry-runtime/src/json/mod.rs::scan_parser_roots_mut",
       "table": "PARSE_KEY_RING",
       "death": "key_is_rooted",
       "why": "The same scanner marks the identical StringHeader addresses eight lines earlier through PARSE_KEY_CACHE (visit_tagged_raw_const_ptr_slot with STRING_TAG, json/mod.rs:554-557); the ring is a strict subset, and every cache clear is paired with clear_parse_key_ring."
