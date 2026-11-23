@@ -89,6 +89,14 @@ extern "C" fn url_create_object_url_thunk(
     crate::object::global_fetch::call_url_create_object_url(blob)
 }
 
+extern "C" fn url_revoke_object_url_thunk(
+    _closure: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+    url: f64,
+) -> f64 {
+    crate::object::global_fetch::call_url_revoke_object_url(url)
+}
+
 extern "C" fn url_can_parse_thunk(
     _closure: *const crate::closure::ClosureHeader,
     _this: crate::closure::JsThis,
@@ -1182,18 +1190,23 @@ pub(super) fn web_url_statics(name: &str, s: &mut ConstructorStatics) {
     match name {
         "URL" => {
             s.method(
-                "canParse",
-                crate::fn_info!(#[realm(URL.canParse)] export crate::object::global_this::install_static::url_can_parse_thunk, 2; with_declared(1)),
-                1,
-            );
-            s.method(
                 "parse",
                 crate::fn_info!(#[realm(URL.parse)] export crate::object::global_this::install_static::url_parse_thunk, 2; with_declared(1)),
                 1,
             );
             s.method(
+                "canParse",
+                crate::fn_info!(#[realm(URL.canParse)] export crate::object::global_this::install_static::url_can_parse_thunk, 2; with_declared(1)),
+                1,
+            );
+            s.method(
                 "createObjectURL",
                 crate::fn_info!(#[realm(URL.createObjectURL, births = [TypeError], effects = { reads(arg(0)); coerce(arg(0), ShallowInspect); returns(prim(str)) })] export crate::object::global_this::install_static::url_create_object_url_thunk, 1),
+                1,
+            );
+            s.method(
+                "revokeObjectURL",
+                crate::fn_info!(#[realm(URL.revokeObjectURL, effects = { reads(arg(0)); returns(prim(undefined)) })] export crate::object::global_this::install_static::url_revoke_object_url_thunk, 1),
                 1,
             );
         }
