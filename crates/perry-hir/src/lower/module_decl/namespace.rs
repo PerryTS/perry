@@ -187,7 +187,7 @@ fn namespace_object(
                             byte_end: 0,
                             object: Box::new(Expr::LocalGet(outer.object)),
                             property: name.to_string(),
-                            byte_offset: 0,
+                            byte_offset,
                         };
                         Expr::Logical { byte_offset,
                             op: LogicalOp::Or,
@@ -196,7 +196,7 @@ fn namespace_object(
                                 object: Box::new(Expr::LocalGet(outer.object)),
                                 property: name.to_string(),
                                 value: Box::new(Expr::Object(Vec::new())),
-                                byte_offset: 0,
+                                byte_offset,
                                 byte_end: 0,
                             }),
                         }
@@ -414,12 +414,13 @@ fn lower_namespace_block(
         object: object_id,
         qualified: &qualified,
     });
-    let publish = |module: &mut Module, name: String, value: Expr| {
+    // An export's store onto the namespace object stands at the export.
+    let publish = |module: &mut Module, name: String, value: Expr, byte_offset: u32| {
         module.init.push(Stmt::Expr(Expr::PropertySet {
             object: Box::new(Expr::LocalGet(object_id)),
             property: name,
             value: Box::new(value),
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
         }));
     };
@@ -450,7 +451,7 @@ fn lower_namespace_block(
                         let id = ctx
                             .lookup_func(&name)
                             .expect("namespace function is pre-registered");
-                        publish(module, name, Expr::FuncRef(id));
+                        publish(module, name, Expr::FuncRef(id), export.span.lo.0);
                     }
                     ast::Decl::Class(class_decl) if !class_decl.declare => {
                         let class = lower_class_decl(ctx, class_decl, is_exported)?;
@@ -490,6 +491,7 @@ fn lower_namespace_block(
                             module,
                             class_decl.ident.sym.to_string(),
                             Expr::ClassRef(class_name),
+                            export.span.lo.0,
                         );
                     }
                     ast::Decl::TsEnum(enum_decl) => {
@@ -504,7 +506,7 @@ fn lower_namespace_block(
                             ctx, &name, true, &own, enum_decl,
                         )? {
                             module.init.push(bind);
-                            publish(module, name, Expr::LocalGet(id));
+                            publish(module, name, Expr::LocalGet(id), export.span.lo.0);
                         }
                     }
                     ast::Decl::TsModule(ts_module) => {
