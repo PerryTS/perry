@@ -116,12 +116,25 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
 }
 
 /// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
-/// replays alone and the state lasts until its next setter, as in HTML canvas. Records the
-/// setters in `commands` into `state` for the next batch.
+/// replays alone and the state lasts as in HTML canvas: a setter until the next one, the
+/// current path until the next BeginPath. Records the state `commands` leave into `state`.
 fn carry_state(state: &mut Vec<DrawCommand>, commands: Vec<DrawCommand>) -> Vec<DrawCommand> {
     let mut batch = state.clone();
+    let is_path = |cmd: &DrawCommand| {
+        matches!(
+            cmd,
+            DrawCommand::MoveTo(..)
+                | DrawCommand::LineTo(..)
+                | DrawCommand::Arc { .. }
+                | DrawCommand::ClosePath
+        )
+    };
     for cmd in &commands {
-        if matches!(
+        if matches!(cmd, DrawCommand::BeginPath) {
+            state.retain(|kept| !is_path(kept));
+        } else if is_path(cmd) {
+            state.push(cmd.clone());
+        } else if matches!(
             cmd,
             DrawCommand::SetFillColor { .. }
                 | DrawCommand::SetStrokeColor { .. }
@@ -267,7 +280,17 @@ pub fn create(width: f64, height: f64) -> i64 {
                         path_points.push((*x, *y));
                         path.push(cmd);
                     }
-                    DrawCommand::Arc { .. } | DrawCommand::ClosePath => path.push(cmd),
+                    DrawCommand::Arc {
+                        x,
+                        y,
+                        r,
+                        start,
+                        end,
+                    } => {
+                        path_points.extend(arc_chords(*x, *y, *r, *start, *end));
+                        path.push(cmd);
+                    }
+                    DrawCommand::ClosePath => path.push(cmd),
                     DrawCommand::SetStrokeColor { r, g, b, a } => {
                         cur_stroke = (*r, *g, *b, *a);
                     }
@@ -476,6 +499,18 @@ fn clockwise_end(start: f64, end: f64) -> f64 {
     } else {
         start + (end - start).rem_euclid(tau)
     }
+}
+
+/// The points of an HTML canvas `arc`, as chords of about two units, at least 8 per full turn,
+/// for the point list the colored stroke() and fillGradient read.
+fn arc_chords(x: f64, y: f64, r: f64, start: f64, end: f64) -> impl Iterator<Item = (f64, f64)> {
+    let sweep = clockwise_end(start, end) - start;
+    let min_steps = (8.0 * sweep / std::f64::consts::TAU).ceil().max(1.0) as usize;
+    let steps = ((sweep * r / 2.0).ceil() as usize).clamp(min_steps, 4096);
+    (0..=steps).map(move |i| {
+        let angle = start + sweep * i as f64 / steps as f64;
+        (x + r * angle.cos(), y + r * angle.sin())
+    })
 }
 
 /// Makes `path` cairo's current path. Cairo already treats a line_to with no current point as

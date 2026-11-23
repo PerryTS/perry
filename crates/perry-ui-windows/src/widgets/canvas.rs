@@ -63,12 +63,22 @@ fn command_batch_renders(commands: &[DrawCmd]) -> bool {
 }
 
 /// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
-/// replays alone and the state lasts until its next setter, as in HTML canvas. Records the
-/// setters in `commands` into `state` for the next batch.
+/// replays alone and the state lasts as in HTML canvas: a setter until the next one, the
+/// current path until the next BeginPath. Records the state `commands` leave into `state`.
 fn carry_state(state: &mut Vec<DrawCmd>, commands: Vec<DrawCmd>) -> Vec<DrawCmd> {
     let mut batch = state.clone();
+    let is_path = |cmd: &DrawCmd| {
+        matches!(
+            cmd,
+            DrawCmd::MoveTo(..) | DrawCmd::LineTo(..) | DrawCmd::Arc(..) | DrawCmd::ClosePath
+        )
+    };
     for cmd in &commands {
-        if matches!(
+        if matches!(cmd, DrawCmd::BeginPath) {
+            state.retain(|kept| !is_path(kept));
+        } else if is_path(cmd) {
+            state.push(cmd.clone());
+        } else if matches!(
             cmd,
             DrawCmd::SetFillColor(..)
                 | DrawCmd::SetStrokeColor(..)
@@ -275,7 +285,15 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                         path_points.push((x as i32, y as i32));
                         path.push(DrawCmd::LineTo(x, y));
                     }
-                    cmd @ (DrawCmd::Arc(..) | DrawCmd::ClosePath) => path.push(cmd),
+                    DrawCmd::Arc(x, y, r, start, end) => {
+                        path_points.extend(
+                            arc_chords(x, y, r, start, end)
+                                .into_iter()
+                                .map(|(x, y)| (x as i32, y as i32)),
+                        );
+                        path.push(DrawCmd::Arc(x, y, r, start, end));
+                    }
+                    DrawCmd::ClosePath => path.push(DrawCmd::ClosePath),
                     DrawCmd::SetStrokeColor(r, g, b, _a) => {
                         cur_stroke = (r, g, b);
                     }
@@ -525,6 +543,21 @@ fn clockwise_end(start: f64, end: f64) -> f64 {
     }
 }
 
+/// The points of an HTML canvas `arc`, as chords of about two units, at least 8 per full turn,
+/// for the point list the colored stroke() and fillGradient read.
+#[cfg(any(target_os = "windows", test))]
+fn arc_chords(x: f64, y: f64, r: f64, start: f64, end: f64) -> Vec<(f64, f64)> {
+    let sweep = clockwise_end(start, end) - start;
+    let min_steps = (8.0 * sweep / std::f64::consts::TAU).ceil().max(1.0) as usize;
+    let steps = ((sweep * r / 2.0).ceil() as usize).clamp(min_steps, 1024);
+    (0..=steps)
+        .map(move |i| {
+            let angle = start + sweep * i as f64 / steps as f64;
+            (x + r * angle.cos(), y + r * angle.sin())
+        })
+        .collect()
+}
+
 /// The path's subpaths as point lists, each with whether it is closed, since GDI draws
 /// polylines rather than canvas paths. As on HTML canvas, a LineTo with no current point starts
 /// a subpath, an arc runs clockwise (y down) and joins the current point to its start, and
@@ -543,16 +576,7 @@ fn flatten_path(path: &[DrawCmd]) -> Vec<(Vec<(f64, f64)>, bool)> {
             DrawCmd::MoveTo(x, y) => subpaths.push((vec![(x, y)], false)),
             DrawCmd::LineTo(x, y) => extend(&mut subpaths, vec![(x, y)]),
             DrawCmd::Arc(x, y, r, start, end) => {
-                let sweep = clockwise_end(start, end) - start;
-                // Chords of about two pixels along the arc.
-                let steps = (sweep * r / 2.0).ceil().clamp(1.0, 1024.0) as usize;
-                let points = (0..=steps)
-                    .map(|i| {
-                        let angle = start + sweep * i as f64 / steps as f64;
-                        (x + r * angle.cos(), y + r * angle.sin())
-                    })
-                    .collect();
-                extend(&mut subpaths, points);
+                extend(&mut subpaths, arc_chords(x, y, r, start, end))
             }
             DrawCmd::ClosePath => {
                 if let Some((points, closed)) = subpaths.last_mut() {
@@ -955,6 +979,13 @@ mod tests {
         assert!(close(*first.last().unwrap(), (20.0, 10.0)));
         assert!(first.iter().all(|&(x, _)| x >= 0.0 && x <= 20.0 + 1e-9));
         assert_eq!(subpaths[1], (vec![(0.0, 0.0), (0.0, 30.0)], false));
+    }
+
+    #[test]
+    fn a_small_full_circle_keeps_its_area() {
+        let subpaths = flatten_path(&[DrawCmd::Arc(0.0, 0.0, 0.6, 0.0, TAU)]);
+        assert_eq!(subpaths.len(), 1);
+        assert!(subpaths[0].0.len() >= 9, "at least 8 chords per full turn");
     }
 
     #[test]

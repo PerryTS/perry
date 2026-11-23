@@ -174,12 +174,22 @@ fn command_batch_renders(commands: &[DrawCommand]) -> bool {
 }
 
 /// Prefixes `commands` with the drawing state earlier batches left set, so a saved batch
-/// replays alone and the state lasts until its next setter, as in HTML canvas. Records the
-/// setters in `commands` into `state` for the next batch.
+/// replays alone and the state lasts as in HTML canvas: a setter until the next one, the
+/// current path until the next BeginPath. Records the state `commands` leave into `state`.
 fn carry_state(state: &mut Vec<DrawCommand>, commands: Vec<DrawCommand>) -> Vec<DrawCommand> {
     let mut batch = state.clone();
+    let is_path = |cmd: &DrawCommand| {
+        matches!(
+            cmd,
+            DrawCommand::MoveTo(..) | DrawCommand::LineTo(..) | DrawCommand::ClosePath
+        )
+    };
     for cmd in &commands {
-        if matches!(
+        if matches!(cmd, DrawCommand::BeginPath) {
+            state.retain(|kept| !is_path(kept));
+        } else if is_path(cmd) {
+            state.push(cmd.clone());
+        } else if matches!(
             cmd,
             DrawCommand::SetFillColor { .. }
                 | DrawCommand::SetStrokeColor { .. }
@@ -1139,6 +1149,80 @@ mod tests {
                 ] if *r == 1.0 && font.size == 24.0 && text == "b"
             ),
             "a later batch replays with the fill color and font set before the previous paint"
+        );
+    }
+
+    #[test]
+    fn current_path_carries_until_the_next_begin_path() {
+        let mtm =
+            MainThreadMarker::new().expect("panic-abort tests run on the process main thread");
+        let _app = NSApplication::sharedApplication(mtm);
+        let canvas = create(100.0, 100.0);
+        let key = get_canvas_key(canvas).unwrap();
+        begin_path(canvas);
+        move_to(canvas, 0.0, 0.0);
+        line_to(canvas, 10.0, 10.0);
+        stroke_path(canvas);
+        assert!(take_frame(key).is_some());
+        set_stroke_color(canvas, 1.0, 0.0, 0.0, 1.0);
+        stroke_path(canvas);
+        let batch = take_frame(key).unwrap();
+        assert!(
+            matches!(
+                batch.as_slice(),
+                [
+                    DrawCommand::MoveTo(x0, y0),
+                    DrawCommand::LineTo(x1, y1),
+                    DrawCommand::SetStrokeColor { .. },
+                    DrawCommand::StrokePath,
+                ] if (*x0, *y0, *x1, *y1) == (0.0, 0.0, 10.0, 10.0)
+            ),
+            "stroke() keeps the path, so a later batch strokes it again"
+        );
+        begin_path(canvas);
+        fill_rect(canvas, 0.0, 0.0, 1.0, 1.0);
+        assert!(take_frame(key).is_some());
+        stroke_path(canvas);
+        let batch = take_frame(key).unwrap();
+        assert!(
+            matches!(
+                batch.as_slice(),
+                [DrawCommand::SetStrokeColor { .. }, DrawCommand::StrokePath]
+            ),
+            "beginPath drops the carried path"
+        );
+    }
+
+    #[test]
+    fn invalid_line_width_keeps_the_previous_one() {
+        use crate::lib_ffi::style_and_canvas as ffi;
+        let mtm =
+            MainThreadMarker::new().expect("panic-abort tests run on the process main thread");
+        let _app = NSApplication::sharedApplication(mtm);
+        let canvas = create(100.0, 100.0);
+        for w in [4.0, 0.0, f64::NAN, -1.0, f64::INFINITY] {
+            ffi::perry_ui_canvas_set_line_width(canvas, w);
+        }
+        let key = get_canvas_key(canvas).unwrap();
+        let commands = CANVAS_COMMANDS.with(|cmds| cmds.borrow()[&key].clone());
+        assert!(matches!(commands.as_slice(), [DrawCommand::SetLineWidth(w)] if *w == 4.0));
+    }
+
+    #[test]
+    fn non_finite_rects_record_nothing() {
+        use crate::lib_ffi::style_and_canvas as ffi;
+        let mtm =
+            MainThreadMarker::new().expect("panic-abort tests run on the process main thread");
+        let _app = NSApplication::sharedApplication(mtm);
+        let canvas = create(100.0, 100.0);
+        ffi::perry_ui_canvas_fill_rect(canvas, f64::NAN, 0.0, 10.0, 10.0);
+        ffi::perry_ui_canvas_stroke_rect(canvas, 0.0, 0.0, f64::INFINITY, 10.0);
+        ffi::perry_ui_canvas_fill_rect(canvas, 10.0, 10.0, -5.0, -5.0);
+        let key = get_canvas_key(canvas).unwrap();
+        let commands = CANVAS_COMMANDS.with(|cmds| cmds.borrow()[&key].clone());
+        assert!(
+            matches!(commands.as_slice(), [DrawCommand::FillRect { w, h, .. }] if (*w, *h) == (-5.0, -5.0)),
+            "only the finite rect records, negative sizes included"
         );
     }
 

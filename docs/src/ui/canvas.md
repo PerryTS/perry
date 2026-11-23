@@ -59,7 +59,8 @@ with a linear gradient between two RGBA colors that spans the canvas;
 `direction` `0` runs top to bottom and `1` left to right. The path is
 closed straight down to the bottom edge, so the example above shades the area
 under its line on every backend; a path with fewer than two points fills
-nothing. Only `moveTo`/`lineTo` points shape the area, joined in order into one
+nothing. Only `moveTo`/`lineTo` and `arc` points (an arc as short segments) shape
+the area, joined in order into one
 outline: a later `moveTo` continues it rather than starting a separate area,
 so draw one series per `beginPath`. The fill color set by `setFillColor` is
 unchanged afterwards.
