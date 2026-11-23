@@ -1,0 +1,1 @@
+A Proxy `get`/`set` trap reached through a computed numeric key (`q[k]` with `k: number`) receives the key as its string, as ToPropertyKey gives it; it received the number `0` and read the wrong element.
