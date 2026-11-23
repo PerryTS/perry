@@ -284,7 +284,7 @@ pub(crate) fn lower_jsx_element_name(
             let obj_expr = lower_jsx_object(ctx, &member.obj)?;
             Ok(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: member.span.lo.0,
                 object: Box::new(obj_expr),
                 property: member.prop.sym.to_string(),
             })
@@ -323,7 +323,7 @@ pub(crate) fn lower_jsx_object(ctx: &mut LoweringContext, obj: &ast::JSXObject) 
             let obj_expr = lower_jsx_object(ctx, &member.obj)?;
             Ok(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: member.span.lo.0,
                 object: Box::new(obj_expr),
                 property: member.prop.sym.to_string(),
             })
