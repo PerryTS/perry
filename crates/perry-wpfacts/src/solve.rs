@@ -1544,6 +1544,25 @@ impl Model {
         self.apply_tokens_on(n, c, toks, prim);
     }
     fn apply_tokens_on(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
+        if crate::hold_ledger::blast()
+            && self.ledger.as_ref().is_some_and(|l| l.cur == u32::MAX)
+            && toks.iter().any(|&t| t == crate::model::TOP)
+        {
+            let k = self.top_origin_id(n);
+            let rest: Vec<Tok> = toks.iter().copied().filter(|&t| t != crate::model::TOP).collect();
+            if !rest.is_empty() || prim != 0 {
+                self.apply_tokens_on_b(n, c, Tokens::Slice(&rest), prim);
+            }
+            let saved = self.ledger.as_mut().unwrap().enter_top(k);
+            self.apply_tokens_on_b(n, c, Tokens::Slice(&[crate::model::TOP]), 0);
+            if let Some(l) = self.ledger.as_mut() {
+                l.leave(saved);
+            }
+            return;
+        }
+        self.apply_tokens_on_b(n, c, toks, prim);
+    }
+    fn apply_tokens_on_b(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         if let Some(d) = self.diagnostic.as_mut() {
             let saved = (d.cur_call.take(), d.cause_node.replace(n));
             self.apply_tokens_in(n, c, toks, prim);

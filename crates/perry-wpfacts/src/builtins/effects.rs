@@ -188,7 +188,7 @@ fn names_root(effects: &[RealmEffect], root: RealmSlotRoot) -> bool {
                 .iter()
                 .chain(reject.iter())
                 .any(|v| operand(v, slot, root)),
-            RealmOperand::Native(_) => false,
+            RealmOperand::Native(_) | RealmOperand::Namespace(_) => false,
             RealmOperand::Species { of, args, elems } => {
                 slot(of) || args.iter().any(|a| operand(a, slot, root)) || elems.iter().any(slot)
             }
@@ -403,6 +403,9 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             RealmOperand::Native(path) => {
                 declared_member(path).is_some_and(|e| field || !names_callee(e.effects))
             }
+            // The realm's one namespace object of that path.
+            RealmOperand::Namespace(path) => super::members::realm_entry(path)
+                .is_some_and(|d| d.kind == perry_hir::realm_manifest::RealmKind::Namespace),
             RealmOperand::Species { .. } | RealmOperand::Bound => false,
             RealmOperand::Union(us) => us.iter().all(|u| operand_in(u, field)),
             RealmOperand::Json | RealmOperand::Unknown => true,
@@ -756,6 +759,17 @@ impl Run {
                 m.add_tok(n, p);
                 n
             }
+            // The namespace object the realm declares there: the token every
+            // other reference to it is (`Builtin(Module(name))`).
+            RealmOperand::Namespace(path) => {
+                let name = super::members::realm_entry(path)
+                    .expect("interpretable() takes a declared namespace only")
+                    .name;
+                let t = m.tok(TokKind::Builtin(BuiltinNs::Module(name)));
+                let n = m.node_l("native-namespace");
+                m.add_tok(n, t);
+                n
+            }
             RealmOperand::Native(path) => {
                 let identity = declared_member(path)
                     .expect("interpretable() takes a declared native only")
@@ -817,6 +831,8 @@ impl Run {
     ) -> Tok {
         let what = match proto {
             _ if !fields.is_empty() => "hostrecord",
+            // An ordinary object with no own fields (`navigator.locks`).
+            Cow::Borrowed("Object.prototype") => "hostrecord",
             Cow::Borrowed("Array.prototype") => "Array",
             // The Date object `new Date(t)` makes (constructors.rs).
             Cow::Borrowed("Date.prototype") => "Date",
@@ -951,7 +967,10 @@ impl Run {
                 let p = self.promise(m, value, reject);
                 ret_tok(m, self.call, p);
             }
-            RealmOperand::Native(_) | RealmOperand::Json | RealmOperand::Unknown => {
+            RealmOperand::Native(_)
+            | RealmOperand::Namespace(_)
+            | RealmOperand::Json
+            | RealmOperand::Unknown => {
                 let n = self.operand(m, o);
                 m.edge(n, self.c.ret);
             }

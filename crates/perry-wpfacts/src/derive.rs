@@ -1859,6 +1859,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                     }
                 });
                 ledger_refused.push(crate::hold_ledger::Refused {
+                    site: format!("{path}\t{}\t{key}\t{}", s.byte_offset, store as u8),
                     roots,
                     full,
                     causes,

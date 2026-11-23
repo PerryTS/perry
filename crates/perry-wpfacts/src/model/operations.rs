@@ -110,6 +110,9 @@ impl Model {
         site: Option<SiteId>,
         what: &str,
     ) {
+        if crate::builtins::cliffc_w4() && (t == TOP || what.contains("unmodeled")) {
+            return;
+        }
         if self.array_member_write.is_some() || t == TOP || !self.tok_on_array_chain(t) {
             return;
         }
@@ -230,6 +233,9 @@ impl Model {
     /// ([`Model::fnproto_write`], [`Model::fnproto_borrow_write`]). `key` `None`: an operation whose key the
     /// model does not keep (a definition, a deletion).
     pub fn note_fnproto_write(&mut self, t: Tok, key: Option<Key>, what: &str) {
+        if crate::builtins::cliffc_w4() && (t == TOP || what.contains("unmodeled")) {
+            return;
+        }
         if !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto)) {
             return;
         }

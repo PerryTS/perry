@@ -22,6 +22,7 @@ pub use constructors::{construct_named, new_builtin_ns};
 pub(crate) mod members;
 pub(crate) use members::realm_parent_constructor;
 mod native_protocol;
+pub(crate) use native_protocol::cliffc_w4;
 mod realm_declared;
 pub(crate) mod realm_shapes;
 mod undeclared;

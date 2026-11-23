@@ -139,6 +139,17 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
 
 /// Diagnostic: the reasons of the writes [`native_written`] counts for
 /// `np`'s key `a`, with the written key (`None`: any key).
+/// CLIFFC what-if (env PERRY_CLIFFC_W4=1): a store into TOP or an unmodeled
+/// write is not recorded as a write onto a builtin prototype.
+pub(crate) fn cliffc_w4() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_CLIFFC_W4").is_some_and(|v| v == "1"))
+}
+fn cliffc_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_CLIFFC_DIAG").is_some_and(|v| v == "1"))
+}
+
 pub fn native_writers_why(m: &Model, np: Tok, a: Atom) -> Vec<String> {
     let mut out = Vec::new();
     for (&(t, k), w) in m.native_writes.iter() {
@@ -492,6 +503,9 @@ fn note_write(
     known: Option<(Tok, bool)>,
     value: WriteValue,
 ) {
+    if cliffc_w4() && (t == TOP || what.contains("unmodeled")) {
+        return;
+    }
     if t != TOP
         && !matches!(
             m.toks[t as usize],
@@ -1082,6 +1096,13 @@ fn answer_opaque(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) {
             });
         }
         NativeMiss::Load(dst) => {
+            if cliffc_diag() && !m.shared_replay {
+                static SEEN: std::sync::Mutex<Option<std::collections::HashSet<(u32, u32)>>> = std::sync::Mutex::new(None);
+                let first = SEEN.lock().unwrap().get_or_insert_with(Default::default).insert((np as u32, a as u32));
+                if first {
+                    eprintln!("WHY CLIFFC opaque n{} {}.{} writers={:?}", dst, m.tok_name(np), m.atoms[a as usize], native_writers_why(m, np, a));
+                }
+            }
             m.add_top(dst, |_| {
                 "member of a builtin prototype written through ⊤".into()
             });

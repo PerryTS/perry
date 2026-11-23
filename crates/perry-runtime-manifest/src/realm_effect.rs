@@ -132,6 +132,10 @@ pub enum RealmOperand {
     /// The host function value the realm declares at this path (a closure
     /// the body makes); its own declaration says what calling it does.
     Native(Cow<'static, str>),
+    /// The one host namespace object the realm declares at this path
+    /// (`kind = namespace`), which the body returns on every call
+    /// (`crypto.<get>`: the cached `node:crypto.webcrypto` namespace).
+    Namespace(Cow<'static, str>),
     /// ArraySpeciesCreate on `of`: reads `of.constructor` and its
     /// `@@species`; a program constructor is run as `new C(...args)` and what
     /// it returns is the value, else a fresh Array. `elems` are defined into
@@ -269,6 +273,12 @@ impl RealmOperand {
                     .chain(reject.iter())
                     .try_for_each(|v| v.validate(at, names))
             }
+            Self::Namespace(path) => {
+                if !names(path) {
+                    return Err(format!("{at}: namespace {path} is not a realm node"));
+                }
+                Ok(())
+            }
             Self::Native(path) => {
                 if !names(path) {
                     return Err(format!("{at}: native {path} is not a realm node"));
@@ -334,7 +344,8 @@ pub fn validate_effects(
             | RealmOperand::Bound
             | RealmOperand::Json
             | RealmOperand::Unknown
-            | RealmOperand::Native(_) => {}
+            | RealmOperand::Native(_)
+            | RealmOperand::Namespace(_) => {}
             RealmOperand::Slot(slot) => out.push(slot),
             RealmOperand::Fresh {
                 elems,
@@ -511,6 +522,9 @@ pub mod emit {
             ),
             RealmOperand::Native(path) => {
                 format!("{p}RealmOperand::Native(::std::borrow::Cow::Borrowed({path:?}))")
+            }
+            RealmOperand::Namespace(path) => {
+                format!("{p}RealmOperand::Namespace(::std::borrow::Cow::Borrowed({path:?}))")
             }
             RealmOperand::Species { of, args, elems } => format!(
                 "{p}RealmOperand::Species {{ of: {}, args: {}, elems: {} }}",

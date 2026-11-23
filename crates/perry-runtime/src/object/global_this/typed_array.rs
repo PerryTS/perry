@@ -629,17 +629,17 @@ fn install_typed_array_proto_accessors(proto_obj: *mut ObjectHeader) {
         install_builtin_getter(
             proto_obj,
             "byteLength",
-            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.byteLength.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_byte_length_getter_thunk, 0; with_name("get byteLength"), with_declared(0))),
+            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.byteLength.<get>", effects = { returns(prim(num)) }, provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_byte_length_getter_thunk, 0; with_name("get byteLength"), with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "byteOffset",
-            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.byteOffset.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_byte_offset_getter_thunk, 0; with_name("get byteOffset"), with_declared(0))),
+            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.byteOffset.<get>", effects = { returns(prim(num)) }, provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_byte_offset_getter_thunk, 0; with_name("get byteOffset"), with_declared(0))),
         );
         install_builtin_getter(
             proto_obj,
             "length",
-            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.length.<get>", provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_length_getter_thunk, 0; with_name("get length"), with_declared(0))),
+            mk(crate::fn_info!(#[realm("%TypedArray%.prototype.length.<get>", effects = { returns(prim(num)) }, provider = intrinsic_closure, constructible = true)] export crate::object::global_this::typed_array::typed_array_length_getter_thunk, 0; with_name("get length"), with_declared(0))),
         );
     }
 }

@@ -57,6 +57,8 @@ pub(crate) struct HoldLedger {
     /// `NOV` outside one) and the escape-predecessor edges.
     cause: u64,
     edges: crate::pts::FxHashSet<(u64, u64)>,
+    /// BLAST: the rule (code place, reason) that made each edge first.
+    pub(crate) lab: FxHashMap<(u64, u64), (&'static Location<'static>, u32)>,
     /// ⊤ origin (`top_origin_id`) -> its vertex number.
     top_ids: FxHashMap<(NodeId, u32), u32>,
     /// `PERRY_FACTS_LEDGER_DROP`: roots the solve leaves out (a re-solve
@@ -95,6 +97,43 @@ pub(crate) fn path() -> Option<String> {
     std::env::var("PERRY_FACTS_LEDGER")
         .ok()
         .filter(|v| !v.is_empty())
+}
+
+pub(crate) fn blast() -> bool {
+    static B: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *B.get_or_init(|| std::env::var("PERRY_BLAST").is_ok_and(|v| v == "1"))
+}
+
+/// BLAST: the labelled graph, the roots, the ⊤ origins and every refused
+/// site with its causes (`<path>.blast`).
+fn write_blast(m: &Model, l: &HoldLedger, refused: &[Refused], path: &str) {
+    use std::fmt::Write as _;
+    let rs = |w: u32| m.reasons.get(w as usize).map_or("-".to_string(), |s| s.replace(['\t', '\n', '\r'], " "));
+    let mut o = String::new();
+    for (i, x) in l.roots.iter().enumerate() {
+        let _ = writeln!(o, "R\t{i}\t{}\t{}:{}\t{}\t{}", x.kind, short(x.loc.file()), x.loc.line(), x.at, rs(x.reason));
+    }
+    for (&(n, why), &i) in &l.top_ids {
+        let _ = writeln!(o, "T\t{i}\t{n}\t{}", rs(why));
+    }
+    let mut toks: crate::pts::FxHashSet<u64> = Default::default();
+    for (&(a, b), &(loc, why)) in &l.lab {
+        let _ = writeln!(o, "E\t{a}\t{b}\t{}:{}\t{}", short(loc.file()), loc.line(), rs(why));
+        for v in [a, b] {
+            if v >> 32 == 1 {
+                toks.insert(v);
+            }
+        }
+    }
+    for v in toks {
+        let t = (v & 0xffff_ffff) as Tok;
+        let _ = writeln!(o, "K\t{v}\t{}", m.tok_name(t).replace(['\t', '\n'], " "));
+    }
+    for s in refused {
+        let c: Vec<String> = s.causes.iter().map(|c| c.to_string()).collect();
+        let _ = writeln!(o, "S\t{}\t{}", s.site, c.join(","));
+    }
+    let _ = std::fs::write(format!("{path}.blast"), o);
 }
 
 pub(crate) fn on() -> bool {
@@ -178,9 +217,10 @@ impl HoldLedger {
     }
 
     /// One predecessor edge (LEDG3), once per pair.
-    fn edge(&mut self, from: u64, to: u64) {
+    fn edge(&mut self, from: u64, to: u64, loc: &'static Location<'static>, why: u32) {
         if from != to {
             self.edges.insert((from, to));
+            self.lab.entry((from, to)).or_insert((loc, why));
         }
     }
 
@@ -208,7 +248,7 @@ impl HoldLedger {
         let r = self.root_of(reason, t, true, "escape", loc);
         let saved = self.ctx();
         let p = self.parent(r);
-        self.edge(p, v_tok(t));
+        self.edge(p, v_tok(t), loc, reason);
         self.cur = r;
         self.cause = v_tok(t);
         saved
@@ -218,7 +258,7 @@ impl HoldLedger {
     pub(crate) fn again(&mut self, t: Tok, reason: u32, loc: &'static Location<'static>) {
         let r = self.root_of(reason, t, true, "escape", loc);
         let p = self.parent(r);
-        self.edge(p, v_tok(t));
+        self.edge(p, v_tok(t), loc, reason);
         self.again_root(t, r);
     }
 
@@ -234,25 +274,26 @@ impl HoldLedger {
     pub(crate) fn mark_escaped(&mut self, t: Tok, reason: u32) {
         let r = self.root_of(reason, t, true, "escape", Location::caller());
         let p = self.parent(r);
-        self.edge(p, v_tok(t));
+        self.edge(p, v_tok(t), Location::caller(), reason);
         self.tok_root.entry(t).or_insert(r);
     }
 
     pub(crate) fn sink(&mut self, n: NodeId, reason: u32, loc: &'static Location<'static>) {
         let r = self.root_of(reason, n, false, "sink", loc);
         let p = self.parent(r);
-        self.edge(p, v_node(n));
+        self.edge(p, v_node(n), loc, reason);
         self.sink_root.entry(n).or_insert(r);
     }
 
     /// A TopSink rule is attached to `n` inside a cascade: what it escapes
     /// later (as values reach `n`) belongs to that cascade, `n` its cause.
+    #[track_caller]
     pub(crate) fn sink_rule(&mut self, n: NodeId) {
         if self.cur == NONE {
             return;
         }
         let p = self.parent(self.cur);
-        self.edge(p, v_node(n));
+        self.edge(p, v_node(n), Location::caller(), NONE);
         self.sink_root.entry(n).or_insert(self.cur);
     }
 
@@ -291,7 +332,7 @@ impl HoldLedger {
         let k = self.top_ids.len() as u32;
         let i = *self.top_ids.entry((n, why)).or_insert(k);
         let p = self.parent(r);
-        self.edge(p, v_top(i));
+        self.edge(p, v_top(i), loc, why);
     }
 
     /// The realm would be held for `reason` (`hold_realm`): only recorded.
@@ -413,6 +454,8 @@ pub(crate) struct Refused {
     pub(crate) store: bool,
     /// No root: the site's own refusal (`None` when a root is blamed).
     pub(crate) why: Option<Unattributed>,
+    /// BLAST: module path, offset, key, store.
+    pub(crate) site: String,
 }
 
 /// A refused site no root explains: its verdict and where it is.
@@ -651,6 +694,9 @@ pub(crate) fn write(m: &Model, refused: &[Refused], totals: [[usize; 3]; 2]) {
     let (Some(path), Some(l)) = (path(), m.ledger.as_deref()) else {
         return;
     };
+    if blast() {
+        write_blast(m, l, refused, &path);
+    }
     let t = tally(refused);
     let mut unattributed = [0usize; 3];
     // Per refusal of the unattributed sites: [3 parts], stores.

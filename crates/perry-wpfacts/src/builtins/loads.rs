@@ -1001,6 +1001,26 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
         Key::Any(_) => None,
     };
+    // PN150 what-if (env PERRY_PN150_INSPECT=1): the `[util.inspect.custom]`
+    // hook key on a node module object or `process` reads as INSPECT-REALM
+    // reads it on an undescribed namespace: absent (perry-runtime
+    // formatting.rs inspect_custom_hook: an own Symbol entry or a program
+    // class vtable slot; no realm object has either), opaque once written.
+    if pn150_inspect()
+        && !m.unit_mode
+        && name.as_deref() == Some(crate::model::INSPECT_CUSTOM_METHOD)
+        && matches!(
+            m.toks[t as usize],
+            TokKind::Builtin(BuiltinNs::Module(_) | BuiltinNs::Process)
+        )
+    {
+        let Key::Named(a) = key else { unreachable!() };
+        if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+            return opaque_member(m, dst);
+        }
+        m.add_prim(dst, prim::UNDEF);
+        return;
+    }
     match m.toks[t as usize].clone() {
         TokKind::Builtin(BuiltinNs::Other) => match name.as_deref() {
             Some(n) => {
@@ -1029,6 +1049,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     tok_load(m, g, key, dst);
                 } else {
+                    pn151_note("other-top-arm", n);
                     m.add_top(dst, |_| format!("global {n}"));
                     m.add_prim(dst, prim::ALL);
                 }
@@ -1104,10 +1125,32 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     }
                     ns_load(m, t, BuiltinNs::GlobalThis, a, dst);
                 }
-                None if matches!(key, Key::Any(s) if s != 0) && !m.unit_mode => {
+                // BLASTA what-if (A/B only): an unconstrained computed key
+                // reads the same closed-world union as a shaped one.
+                None if matches!(key, Key::Any(s) if s != 0 || blasta_any_global())
+                    && !m.unit_mode =>
+                {
                     global_shaped_read(m, t, key, dst);
                 }
+                // PN151 what-if (env PERRY_PN151_GLOBVAL=1): the global
+                // object's own value properties (ECMA-262 19.1). NaN and
+                // Infinity are numbers, undefined is undefined; all three are
+                // {writable:false, configurable:false} (perry-runtime
+                // global_this/populate.rs:827), so no store changes them.
+                // globalThis/global name the global object itself, plus what
+                // was stored there (declared_global_load).
+                Some("NaN" | "Infinity") if pn151_globval() && !m.unit_mode => {
+                    m.add_prim(dst, prim::NUM)
+                }
+                Some("undefined") if pn151_globval() && !m.unit_mode => {
+                    m.add_prim(dst, prim::UNDEF)
+                }
+                Some(n @ ("globalThis" | "global")) if pn151_globval() && !m.unit_mode => {
+                    declared_global_load(m, t, t, n, dst)
+                }
+                Some(n) if hostval_global(m, t, key, n, dst) => {}
                 _ => {
+                    pn151_note("globalThis-top-arm", name.as_deref().unwrap_or("[computed]"));
                     // A host global, or under a computed key any global: the
                     // Function constructor only under a key that may be
                     // "Function" (E14, DECISIONS 235). The program stores
@@ -1195,7 +1238,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     let Key::Named(a) = key else { unreachable!() };
                     ns_load(m, t, BuiltinNs::Process, a, dst);
                 }
+                _ if hostval_load(m, t, "process", key, name.as_deref(), dst) => {}
+                _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
                 _ => {
+                    pn151_note("process-top-arm", name.as_deref().unwrap_or("[computed]"));
                     m.add_top(dst, |_| {
                         format!("process.{}", name.as_deref().unwrap_or("[computed]"))
                     });
@@ -1237,7 +1283,10 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 }
                 super::effects::getter_load(m, e, t, a, dst);
             }
+            _ if hostval_load(m, t, module, key, name.as_deref(), dst) => {}
+            _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
             _ => {
+                pn151_note(&format!("module-top-arm {module}"), name.as_deref().unwrap_or("[computed]"));
                 m.add_top(dst, |_| {
                     format!(
                         "native module ref {module}.{}",
@@ -1815,4 +1864,224 @@ pub fn declared_setter_store(m: &mut Model, t: Tok, key: Key, src: NodeId) {
     if let Some(e) = super::effects::declared_setter(what, &name) {
         super::effects::setter_store(m, e, t, src);
     }
+}
+
+/// BLASTA A/B switch: `PERRY_BLASTA_ANYGLOBAL=1` sends a computed read of the
+/// global object under an unconstrained key to `global_shaped_read`.
+fn blasta_any_global() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_BLASTA_ANYGLOBAL").is_some_and(|v| v == "1"))
+}
+
+fn pn150_inspect() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_PN150_INSPECT").is_some_and(|v| v == "1"))
+}
+
+fn pn151_globval() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_PN151_GLOBVAL").is_some_and(|v| v == "1"))
+}
+
+pub(crate) fn pn151_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_PN151_DIAG").is_some_and(|v| v == "1"))
+}
+
+/// PN151 diagnostic: print each (arm, name) once.
+pub(crate) fn pn151_note(arm: &str, n: &str) {
+    if !pn151_diag() {
+        return;
+    }
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+    let k = format!("{arm} {n}");
+    let mut g = SEEN.lock().unwrap();
+    if g.get_or_insert_with(Default::default).insert(k.clone()) {
+        eprintln!("PN151DIAG {k}");
+    }
+}
+
+fn pn151_ruleb() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_PN151_RULEB").is_some_and(|v| v == "1"))
+}
+
+/// PN151 what-if Rule B (env PERRY_PN151_RULEB=1): a node module object or
+/// `process` is described by its realm declaration (realm-v1.json, dumped
+/// from the runtime; its shape lists own and inherited keys). A named key
+/// the declaration lacks is absent: `undefined`, or what a write of the key
+/// stored (`opaque_written`). A computed key reads each declared key it may
+/// spell by name, plus any written key (`STAR_KEY`), plus `undefined`. A key
+/// the declaration has but no arm models stays today's ⊤ (returns false).
+fn pn151_ruleb_load(m: &mut Model, t: Tok, key: Key, name: Option<&str>, dst: NodeId) -> bool {
+    if !pn151_ruleb() || m.unit_mode || m.native_shape(t).is_none() {
+        return false;
+    }
+    match key {
+        Key::Named(a) => {
+            if m.native_property(t, name.expect("named")).is_some() {
+                return false;
+            }
+            if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            } else {
+                m.add_prim(dst, prim::UNDEF);
+            }
+            true
+        }
+        Key::Any(_) => {
+            let names: Vec<String> = m
+                .native_shape(t)
+                .expect("checked")
+                .properties
+                .iter()
+                .map(|p| match p.key.strip_prefix("@@") {
+                    Some(wk) => format!("{WK_PREFIX}{wk}"),
+                    None => p.key.to_string(),
+                })
+                .filter(|n| !Model::proto_link(n) && m.key_may_name_str(key, n))
+                .collect();
+            for n in names {
+                let a = m.atom(&n);
+                tok_load(m, t, Key::Named(a), dst);
+            }
+            let star = m.atom(crate::STAR_KEY);
+            if opaque_written(m, t, star, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            }
+            m.add_prim(dst, prim::UNDEF);
+            true
+        }
+    }
+}
+
+
+fn hostval() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_HOSTVAL").is_some_and(|v| v == "1"))
+}
+
+/// HOSTVAL what-if (env PERRY_HOSTVAL=1): a member of a host object the
+/// runtime makes reads the value the runtime's realm declaration gives it
+/// (realm-v1.json, generated from the `realm_decl!` sites of the runtime
+/// source: `process` at perry-runtime object/native_module.rs:860). A data
+/// member is a primitive of its declared kind, another declared namespace
+/// object (`process.stdout`), or a declared native function; a write of the
+/// key (`opaque_written`) makes the read opaque. On a namespace the model has
+/// no shape for (`process.stdout`, `Temporal.Now`), a key its declaration
+/// chain lacks reads `undefined` (10.1.8.1) and a computed key reads every
+/// declared key it may spell. An accessor without declared effects and a
+/// runtime-computed value (`target(process.arch)`) stay unknown.
+fn hostval_load(
+    m: &mut Model,
+    t: Tok,
+    owner: &str,
+    key: Key,
+    name: Option<&str>,
+    dst: NodeId,
+) -> bool {
+    if !hostval() || m.unit_mode {
+        return false;
+    }
+    let Some(e) = members::realm_entry(owner) else {
+        return false;
+    };
+    let shapeless = m.native_shape(t).is_none();
+    match key {
+        Key::Named(a) => hostval_member(m, t, e, a, name.expect("named"), shapeless, dst),
+        Key::Any(_) if shapeless => {
+            let mut keys = Vec::new();
+            let mut at = Some(e);
+            while let Some(d) = at {
+                for o in d.own {
+                    if !o.symbol && !Model::proto_link(o.key) && m.key_may_name_str(key, o.key) {
+                        keys.push(o.key);
+                    }
+                }
+                at = d.proto.and_then(members::realm_entry);
+            }
+            for k in keys {
+                let a = m.atom(k);
+                tok_load(m, t, Key::Named(a), dst);
+            }
+            let star = m.atom(crate::STAR_KEY);
+            if opaque_written(m, t, star, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            }
+            m.add_prim(dst, prim::UNDEF);
+            true
+        }
+        Key::Any(_) => false,
+    }
+}
+
+fn hostval_member(
+    m: &mut Model,
+    t: Tok,
+    e: &'static perry_hir::realm_manifest::RealmEntry,
+    a: Atom,
+    n: &str,
+    absent_ok: bool,
+    dst: NodeId,
+) -> bool {
+    use perry_hir::realm_manifest::{RealmKind as K, RealmOwnValue as V};
+    let o = match members::realm_chain_find(e, n) {
+        members::RealmFind::Absent if absent_ok => None,
+        members::RealmFind::Absent => return false,
+        members::RealmFind::Own(o, _) => Some(o),
+    };
+    let model: Option<Tok> = match o {
+        None => None,
+        Some(o) if realm_prim(o).is_some() => None,
+        Some(o) => match o.value {
+            V::Reference(r) => match members::realm_entry(r).map(|d| (d.kind, d.name)) {
+                Some((K::Namespace, name)) => {
+                    Some(m.tok(TokKind::Builtin(BuiltinNs::Module(name))))
+                }
+                Some((K::Function | K::Method | K::Constructor, name)) => {
+                    Some(m.tok(TokKind::BuiltinFn(Native::Member {
+                        identity: name,
+                        holder: None,
+                    })))
+                }
+                _ => return false,
+            },
+            _ => return false,
+        },
+    };
+    if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+        opaque_member(m, dst);
+        return true;
+    }
+    pn151_note("hostval", n);
+    match (o, model) {
+        (None, _) => m.add_prim(dst, prim::UNDEF),
+        (Some(_), Some(tok)) => m.add_tok(dst, tok),
+        (Some(o), None) => m.add_prim(dst, realm_prim(o).expect("prim")),
+    }
+    true
+}
+
+/// HOSTVAL on the global object: an own member the `%Global%` declaration
+/// gives a modelled value (`hostval_member`), and `__proto__` (the
+/// `Object.prototype.__proto__` getter, ECMA-262 B.2.2.1.1), which on the
+/// global object reads its [[Prototype]]: `Object.prototype` (realm dump
+/// `$global.prototype`, realm-dumps/full.jsonl), unless written.
+fn hostval_global(m: &mut Model, t: Tok, key: Key, n: &str, dst: NodeId) -> bool {
+    if !hostval() || m.unit_mode {
+        return false;
+    }
+    let Key::Named(a) = key else { return false };
+    if n == "__proto__" {
+        if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+            opaque_member(m, dst);
+        } else {
+            family_proto_value(m, Family::Object, None, dst);
+        }
+        return true;
+    }
+    let Some(e) = members::realm_entry("%Global%") else {
+        return false;
+    };
+    hostval_member(m, t, e, a, n, false, dst)
 }

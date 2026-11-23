@@ -781,7 +781,7 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
     // Accessors, value properties, aliases and the seal: phase A.
     if phases.core() {
         let getter = crate::closure::js_closure_alloc(
-            crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc)] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0)),
+            crate::fn_info!(#[realm("crypto.<get>", provider = closure_alloc, effects = { stores(fresh); returns(namespace("node:crypto.webcrypto")) })] export crate::object::global_this::ctor_thunks::global_this_crypto_getter_thunk, 0; with_declared(0)),
             0,
         );
         let getter_bits = if getter.is_null() {
