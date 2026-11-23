@@ -72,6 +72,8 @@ pub(super) struct WasmModuleEmitter {
     /// Per-module func_map snapshots: FuncRef(id) is only unique within a module,
     /// so each module needs its own FuncId→wasm_idx mapping.
     pub(super) module_func_maps: Vec<BTreeMap<FuncId, u32>>,
+    /// The intrinsic prototype of each function's value, by wasm function index.
+    pub(super) fn_proto_kinds: BTreeMap<u32, FnProtoKind>,
     /// Set of WASM function indices that return void (no return value).
     /// Used to push TAG_UNDEFINED after calling void functions via FuncRef.
     pub(super) void_funcs: std::collections::BTreeSet<u32>,
@@ -111,6 +113,16 @@ pub(super) struct WasmModuleEmitter {
 }
 
 impl WasmModuleEmitter {
+    /// The kind argument of `closure_new` and `function_value`: the function's
+    /// index in the runtime's `__fnKindProtos`.
+    pub(super) fn fn_proto_code(&self, func_idx: u32) -> f64 {
+        match self.fn_proto_kinds.get(&func_idx) {
+            Some(FnProtoKind::Async) => 1.0,
+            Some(FnProtoKind::Generator) => 2.0,
+            Some(FnProtoKind::AsyncGenerator) => 3.0,
+            Some(FnProtoKind::Function) | None => 0.0,
+        }
+    }
     pub(super) fn new() -> Self {
         Self {
             string_table: Vec::new(),
@@ -140,6 +152,7 @@ impl WasmModuleEmitter {
             nan_temp_global: 0, // set during compile()
             async_func_imports: Vec::new(),
             module_func_maps: Vec::new(),
+            fn_proto_kinds: BTreeMap::new(),
             void_funcs: std::collections::BTreeSet::new(),
             func_param_counts: BTreeMap::new(),
             rest_params: BTreeMap::new(),

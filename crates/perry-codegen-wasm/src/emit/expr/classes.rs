@@ -46,12 +46,13 @@ impl<'a> FuncEmitCtx<'a> {
                         .copied()
                         .unwrap_or(func_idx);
                     let this = closure_this(*captures_this, *is_arrow, body);
-                    self.emit_frame_begin(func, 3);
+                    self.emit_frame_begin(func, 4);
                     self.emit_store_const(func, 0, table_idx as f64);
                     self.emit_store_const(func, 1, captures.len() as f64);
                     let receives_this = this == ClosureThis::Receiver;
                     self.emit_store_const(func, 2, f64::from(u8::from(receives_this)));
-                    self.emit_memcall(func, "closure_new", 3);
+                    self.emit_store_const(func, 3, self.emitter.fn_proto_code(func_idx));
+                    self.emit_memcall(func, "closure_new", 4);
                     // Set captures, then the captured `this` (see compile_closure).
                     let local_map = self.local_map;
                     let cap_locals = captures
@@ -140,9 +141,10 @@ impl<'a> FuncEmitCtx<'a> {
                         .get(&func_idx)
                         .copied()
                         .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 1);
+                    self.emit_frame_begin(func, 2);
                     self.emit_store_const(func, 0, table_idx as f64);
-                    self.emit_memcall(func, "function_value", 1);
+                    self.emit_store_const(func, 1, self.emitter.fn_proto_code(func_idx));
+                    self.emit_memcall(func, "function_value", 2);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
@@ -173,9 +175,10 @@ impl<'a> FuncEmitCtx<'a> {
                         .get(&func_idx)
                         .copied()
                         .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 1);
+                    self.emit_frame_begin(func, 2);
                     self.emit_store_const(func, 0, table_idx as f64);
-                    self.emit_memcall(func, "function_value", 1);
+                    self.emit_store_const(func, 1, self.emitter.fn_proto_code(func_idx));
+                    self.emit_memcall(func, "function_value", 2);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }

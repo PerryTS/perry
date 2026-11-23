@@ -39,8 +39,8 @@ pub(super) fn reads_this(expr: &Expr) -> bool {
 }
 
 /// A collected closure: its id, params, body, captures, mutable captures, where its
-/// `this` comes from, and whether it is an arrow (which shares its enclosing
-/// method's `this` and `super`).
+/// `this` comes from, whether it is an arrow (which shares its enclosing
+/// method's `this` and `super`), and its `is_async` / `is_generator` flags.
 pub(super) type CollectedClosure = (
     FuncId,
     Vec<Param>,
@@ -49,6 +49,7 @@ pub(super) type CollectedClosure = (
     Vec<LocalId>,
     ClosureThis,
     bool,
+    (bool, bool),
 );
 
 /// Recursively collect all Expr::Closure nodes from statements
@@ -143,6 +144,8 @@ pub(super) fn collect_closures_from_expr(expr: &Expr, out: &mut Vec<CollectedClo
         mutable_captures,
         captures_this,
         is_arrow,
+        is_async,
+        is_generator,
         ..
     } = expr
     {
@@ -154,6 +157,7 @@ pub(super) fn collect_closures_from_expr(expr: &Expr, out: &mut Vec<CollectedClo
             mutable_captures.clone(),
             closure_this(*captures_this, *is_arrow, body),
             *is_arrow,
+            (*is_async, *is_generator),
         ));
     }
     // A closure's children are its parameter defaults; its body is statements.
