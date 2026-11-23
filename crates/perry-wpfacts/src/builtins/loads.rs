@@ -2026,6 +2026,28 @@ fn hostval_member(
         members::RealmFind::Absent => return false,
         members::RealmFind::Own(o, _) => Some(o),
     };
+    // An accessor the object holds or inherits whose getter the realm
+    // declares with its effects (`process.allowedNodeEnvironmentFlags
+    // .size`: `Set.prototype.size.<get>`, `returns(prim(num))`): the
+    // declared result on this object.
+    if let Some(perry_hir::realm_manifest::RealmOwn {
+        value: V::Accessor { get: Some(g), .. },
+        ..
+    }) = o
+    {
+        let declared = g
+            .strip_suffix(".<get>")
+            .and_then(|g| g.rsplit_once('.'))
+            .and_then(|(proto, k)| super::effects::declared_getter(proto, k));
+        if let Some(getter) = declared {
+            if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            } else {
+                super::effects::getter_load(m, getter, t, a, dst);
+            }
+            return true;
+        }
+    }
     let model: Option<Tok> = match o {
         None => None,
         Some(o) if realm_prim(o).is_some() => None,

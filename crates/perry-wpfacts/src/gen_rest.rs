@@ -102,6 +102,27 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// The value of builtin module `m` (`require(m)`, a namespace import
+    /// of it, HIR's `NativeModuleRef`): the namespace object the realm
+    /// declares. `process` (HIR also names it `process.namespace`) is the
+    /// global process object (node: `require("process") ===
+    /// globalThis.process`). node:module as a value hands out
+    /// `Module._cache`. None: no realm declaration names the module.
+    pub(crate) fn builtin_module_value(&mut self, m: &str) -> Option<NodeId> {
+        let name = m.strip_prefix("node:").unwrap_or(m);
+        let name = if name == "process.namespace" {
+            "process"
+        } else {
+            name
+        };
+        let t = crate::builtins::builtin_module_tok(&mut self.m, name)?;
+        if name == "module" {
+            let cache = self.m.cjs_cache;
+            self.to_sink(cache, "node:module names Module._cache");
+        }
+        Some(self.tok_node(t))
+    }
+
     pub(crate) fn expr_rest(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let mi = fx.module;
         // A folded builtin-method node is the call it folds: the compiled
@@ -111,28 +132,10 @@ impl<'a> Gen<'a> {
             return self.folded_call(fx, e, &call);
         }
         match e {
-            Expr::NativeModuleRef(m) => {
-                let name = m.strip_prefix("node:").unwrap_or(m);
-                // The `process` module is the global process object (node:
-                // `require("process") === globalThis.process`); HIR names
-                // the value of `require("process")` and of a namespace
-                // import `process.namespace`.
-                // node:module as a value hands out `Module._cache`.
-                if name == "module" {
-                    let cache = self.m.cjs_cache;
-                    self.to_sink(cache, "node:module names Module._cache");
-                }
-                // A module the realm declares is its namespace object.
-                let name = if name == "process.namespace" {
-                    "process"
-                } else {
-                    name
-                };
-                if let Some(t) = crate::builtins::builtin_module_tok(&mut self.m, name) {
-                    return self.tok_node(t);
-                }
-                self.m.top_val(&format!("native module ref {m}"))
-            }
+            Expr::NativeModuleRef(m) => match self.builtin_module_value(m) {
+                Some(n) => n,
+                None => self.m.top_val(&format!("native module ref {m}")),
+            },
             Expr::NativeMethodCall {
                 module,
                 object,
@@ -421,13 +424,14 @@ impl<'a> Gen<'a> {
                 let n = self.m.node_l("process.argv");
                 self.m.own(n);
                 let argv = self.m.atom("argv");
-                match self.m.process_arrays.iter().find(|a| a.0 == argv) {
-                    Some(&(_, a, _)) => self.m.edge(a, n),
-                    None => {
-                        self.m.add_top(n, |_| "process.argv".into());
-                        self.m.add_prim(n, prim::ALL);
-                    }
-                }
+                // The realm declares `process.argv` a host array of strings
+                // (os.rs `process.argv`, `elements = string`); the manifest
+                // check (`RealmManifest::validate_namespace_values`) fails
+                // the build otherwise.
+                let Some(&(_, a, _)) = self.m.process_arrays.iter().find(|a| a.0 == argv) else {
+                    unreachable!("process.argv: the realm declares it a host string array")
+                };
+                self.m.edge(a, n);
                 n
             }
             // `process.env`: the one object the realm declares (`values =
@@ -558,7 +562,34 @@ impl<'a> Gen<'a> {
                 let _ = self.expr(fx, event);
                 let h = self.expr(fx, handler);
                 self.to_sink(h, "process event handler (called by the runtime)");
-                self.m.top_val("process event registration result")
+                match e {
+                    // perry-runtime os/os_process_emitter.rs
+                    // `register_process_listener`: every path returns
+                    // `process_namespace_value()`, the process object.
+                    Expr::ProcessOn { .. } | Expr::ProcessOnce { .. } => {
+                        let t = self.m.tok(TokKind::Builtin(BuiltinNs::Process));
+                        self.tok_node(t)
+                    }
+                    // perry-codegen misc_methods.rs: `js_readline_stdin_on`
+                    // is void; the expression is `undefined`.
+                    Expr::ProcessStdinOn { .. } => self.prim_node(prim::UNDEF),
+                    // perry-runtime tty.rs `js_process_stdout_on`: returns
+                    // `js_process_stdout()`: `process.stdout`, or `undefined`
+                    // while no os hook is installed (os_hook_slots.rs).
+                    Expr::ProcessStdoutOn { .. } => {
+                        let t = self.m.tok(TokKind::Builtin(BuiltinNs::Stdout));
+                        let n = self.tok_node(t);
+                        self.m.add_prim(n, prim::UNDEF);
+                        n
+                    }
+                    // perry-stdlib readline `js_readline_stdin_remove_listener`
+                    // returns the stdin readline interface handle
+                    // (`js_nanbox_handle(STDIN_READLINE_HANDLE)`, the value
+                    // `readline.createInterface` gives for stdin); the stub
+                    // returns `undefined`. The model has no native-handle
+                    // value yet (OPAQUE-BUILTIN lane).
+                    _ => self.m.top_val("process.stdin.removeListener result: readline handle"),
+                }
             }
             Expr::ProcessUptime
             | Expr::ProcessCwd

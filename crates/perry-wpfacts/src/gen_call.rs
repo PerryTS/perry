@@ -484,8 +484,16 @@ impl<'a> Gen<'a> {
         // REALMVAL: no binding of the program: [[Get]] of the global object
         // under the name (ECMA-262 9.1.1.4.6), which reads the realm's
         // declared member or the program's store (`loads::tok_load`). A
-        // runtime extern (`js_*`) is no global: its value is EXTERN's.
-        if !self.m.unit_mode && !name.starts_with("js_") {
+        // runtime extern (`js_*`) is no global: its value is EXTERN's; nor
+        // is a body-less `declare function` (`Module::extern_funcs`, an FFI
+        // symbol: native code outside the program, perry-hir
+        // lower_module_fn.rs), whose value stays the extern model.
+        let declared_extern = self.modules[mi as usize]
+            .1
+            .extern_funcs
+            .iter()
+            .any(|(n, _, _)| n == name);
+        if !self.m.unit_mode && !name.starts_with("js_") && !declared_extern {
             let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
             let dst = self.m.node_l("global-function-value");
             let key = Key::Named(self.m.atom(name));

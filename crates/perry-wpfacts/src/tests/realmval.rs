@@ -69,7 +69,6 @@ fn realmval_every_global_member_has_a_value() {
 /// or record, a native function, a namespace, a declared getter's result);
 /// a computed key reads their union.
 #[test]
-#[ignore = "REALMVAL phase 2: the receiver of `(process as any)` and of node:util, node:timers, node:diagnostics_channel is ⊤ (gen_rest.rs:134 native module ref)"]
 fn realmval_every_host_member_has_a_value() {
     let mut reads: Vec<String> =
         own_keys("process").iter().map(|k| format!("(process as any)[{k:?}]")).collect();

@@ -1057,9 +1057,12 @@ impl<'a> Gen<'a> {
                 // may write one (`global_in_top`, as for the global object
                 // given to unknown code). In per-unit mode a missing target
                 // is another unit.
+                // A module the realm declares (`builtin_module_tok`: its
+                // namespace object) is no unseen code either.
                 if target.is_none()
                     && !self.m.unit_mode
                     && !crate::builtins::is_builtin_module(&imp.source)
+                    && crate::builtins::builtin_module_tok(&mut self.m, &imp.source).is_none()
                 {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     let what = format!("module {} runs unseen", imp.source);
@@ -1111,7 +1114,23 @@ impl<'a> Gen<'a> {
                                 .insert((mi, local.clone()), (imp, None));
                             continue;
                         }
-                        // Native / builtin / unresolved modules: ⊤ values.
+                        // A builtin module: the namespace object the realm
+                        // declares for it (the value of `require(m)`).
+                        (ImportSpecifier::Namespace { local }, None)
+                            if !self.m.unit_mode
+                                && crate::builtins::builtin_module_tok(&mut self.m, &imp.source)
+                                    .is_some() =>
+                        {
+                            let v = self
+                                .builtin_module_value(&imp.source)
+                                .expect("declared module");
+                            let n = self
+                                .m
+                                .node_named("ns-import", || format!("ns-import({local})"));
+                            self.m.edge(v, n);
+                            (local.clone(), n)
+                        }
+                        // Native / unresolved modules: ⊤ values.
                         (ImportSpecifier::Namespace { local }, None) => {
                             let why =
                                 format!("import from native/unresolved module {}", imp.source);
