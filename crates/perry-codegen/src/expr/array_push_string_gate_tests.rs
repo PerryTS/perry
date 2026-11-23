@@ -10,7 +10,8 @@ use perry_hir::{Expr, Function, Module as HirModule, Stmt};
 
 fn push_ir(value: Expr) -> String {
     let mut hir = HirModule::new("apush_string_gate_test");
-    hir.functions.push(Function { byte_offset: 0,
+    hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "pushes".to_string(),
         type_params: Vec::new(),

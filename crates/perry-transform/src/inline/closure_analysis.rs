@@ -15,7 +15,8 @@ pub fn body_contains_super_call(stmts: &[Stmt]) -> bool {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => check_expr(condition) || check_expr(then_expr) || check_expr(else_expr),
             Expr::Call { callee, args, .. } => check_expr(callee) || args.iter().any(check_expr),
             Expr::Array(elements, _) => elements.iter().any(check_expr),
@@ -340,7 +341,8 @@ pub fn collect_closure_captured_local_ids(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 visit_expr(discriminant, out);
                 for case in cases {
@@ -452,7 +454,8 @@ pub fn collect_mutated_local_ids(stmts: &[Stmt], out: &mut std::collections::Has
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 visit_expr(discriminant, out);
                 for case in cases {
@@ -525,7 +528,8 @@ pub fn is_pure_function(func: &Function) -> bool {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 expr_is_pure(condition, known)
                     && expr_is_pure(then_expr, known)
@@ -803,7 +807,8 @@ pub fn find_max_local_id(stmts: &[Stmt]) -> LocalId {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 check_expr(discriminant, max_id);
                 for case in cases {
@@ -841,7 +846,8 @@ mod tests {
     use std::collections::HashSet;
 
     fn param(id: LocalId) -> Param {
-        Param { byte_offset: 0,
+        Param {
+            byte_offset: 0,
             id,
             name: format!("p{id}"),
             ty: Type::Any,
@@ -853,7 +859,8 @@ mod tests {
     }
 
     fn capturing_closure(func_id: u32, capture: LocalId, body_param: LocalId) -> Expr {
-        Expr::Closure { byte_offset: 0,
+        Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: vec![param(body_param)],
             return_type: Type::Any,
@@ -886,10 +893,13 @@ mod tests {
         // function f(allCaps) {
         //   return xs.filter((t) => can({ caps: allCaps }, t));  // captures allCaps
         // }
-        let body = vec![Stmt::Return(Some(Expr::ArrayFilter {
-            array: Box::new(Expr::LocalGet(99)),
-            callback: Box::new(capturing_closure(7, 1, 2)),
-        }), 0)];
+        let body = vec![Stmt::Return(
+            Some(Expr::ArrayFilter {
+                array: Box::new(Expr::LocalGet(99)),
+                callback: Box::new(capturing_closure(7, 1, 2)),
+            }),
+            0,
+        )];
         let param_ids: HashSet<LocalId> = [1].into_iter().collect();
         assert!(
             body_contains_closure_capturing(&body, &param_ids),
@@ -900,10 +910,13 @@ mod tests {
     // Same hazard via the other array-iteration node the old walker missed.
     #[test]
     fn detects_capture_inside_array_map_callback() {
-        let body = vec![Stmt::Return(Some(Expr::ArrayMap {
-            array: Box::new(Expr::LocalGet(99)),
-            callback: Box::new(capturing_closure(7, 1, 2)),
-        }), 0)];
+        let body = vec![Stmt::Return(
+            Some(Expr::ArrayMap {
+                array: Box::new(Expr::LocalGet(99)),
+                callback: Box::new(capturing_closure(7, 1, 2)),
+            }),
+            0,
+        )];
         let param_ids: HashSet<LocalId> = [1].into_iter().collect();
         assert!(body_contains_closure_capturing(&body, &param_ids));
     }
@@ -912,11 +925,14 @@ mod tests {
     // param-capture check (avoids over-rejecting inline candidates).
     #[test]
     fn ignores_closure_not_capturing_any_param() {
-        let body = vec![Stmt::Return(Some(Expr::ArrayFilter {
-            array: Box::new(Expr::LocalGet(99)),
-            // Captures id 5, but we only ask about param id 1.
-            callback: Box::new(capturing_closure(7, 5, 2)),
-        }), 0)];
+        let body = vec![Stmt::Return(
+            Some(Expr::ArrayFilter {
+                array: Box::new(Expr::LocalGet(99)),
+                // Captures id 5, but we only ask about param id 1.
+                callback: Box::new(capturing_closure(7, 5, 2)),
+            }),
+            0,
+        )];
         let param_ids: HashSet<LocalId> = [1].into_iter().collect();
         assert!(!body_contains_closure_capturing(&body, &param_ids));
     }
@@ -924,13 +940,16 @@ mod tests {
     // The pre-existing direct-Call path must keep working.
     #[test]
     fn detects_capture_inside_plain_call_arg() {
-        let body = vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::LocalGet(50)),
-            args: vec![capturing_closure(7, 1, 2)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)];
+        let body = vec![Stmt::Return(
+            Some(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(Expr::LocalGet(50)),
+                args: vec![capturing_closure(7, 1, 2)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            0,
+        )];
         let param_ids: HashSet<LocalId> = [1].into_iter().collect();
         assert!(body_contains_closure_capturing(&body, &param_ids));
     }

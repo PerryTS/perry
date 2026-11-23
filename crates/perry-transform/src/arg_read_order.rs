@@ -219,7 +219,8 @@ impl Scan {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 self.expr(condition);
                 self.expr(then_expr);
@@ -233,7 +234,8 @@ impl Scan {
             Expr::Compare {
                 op: CompareOp::Eq | CompareOp::Ne,
                 left,
-                right, ..
+                right,
+                ..
             } => {
                 self.expr(left);
                 self.expr(right);

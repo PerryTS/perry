@@ -23,7 +23,8 @@ fn sym(key: &str) -> Expr {
 }
 
 fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(l),
         right: Box::new(r),

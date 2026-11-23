@@ -96,7 +96,8 @@ pub(crate) fn cloned_bool_select_read<'e>(
     let Expr::Conditional {
         condition,
         then_expr,
-        else_expr, ..
+        else_expr,
+        ..
     } = expr
     else {
         return None;

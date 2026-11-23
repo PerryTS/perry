@@ -26,7 +26,11 @@ pub(crate) fn wrap_generator_resume_body(
                 body: vec![
                     Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
                     Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(false)))),
-                    generator_resume_rethrow(Expr::LocalGet(catch_id), is_async_generator, fn_offset),
+                    generator_resume_rethrow(
+                        Expr::LocalGet(catch_id),
+                        is_async_generator,
+                        fn_offset,
+                    ),
                 ],
             }),
             finally: None,
@@ -115,7 +119,11 @@ pub(crate) fn generator_executing_guard(
     }
 }
 
-pub(crate) fn generator_resume_rethrow(value: Expr, is_async_generator: bool, fn_offset: u32) -> Stmt {
+pub(crate) fn generator_resume_rethrow(
+    value: Expr,
+    is_async_generator: bool,
+    fn_offset: u32,
+) -> Stmt {
     if is_async_generator {
         Stmt::Return(Some(promise_reject(value, fn_offset)), fn_offset)
     } else {

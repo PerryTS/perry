@@ -1223,7 +1223,8 @@ impl<'a> UseWalk<'a> {
                     if let Some(Expr::Conditional {
                         condition,
                         then_expr,
-                        else_expr, ..
+                        else_expr,
+                        ..
                     }) = init.as_ref()
                     {
                         if let (
@@ -1386,7 +1387,8 @@ impl<'a> UseWalk<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.walk_expr(discriminant);
                 for case in cases {

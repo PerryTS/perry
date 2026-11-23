@@ -991,7 +991,8 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             for_each_expr(discriminant, f);
             for case in cases {
@@ -1034,7 +1035,8 @@ mod tests {
             native_extends: None,
             extends_expr: None,
             heritage_lexically_shadowed: false,
-            fields: vec![ClassField { byte_offset: 0,
+            fields: vec![ClassField {
+                byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "value".to_string(),
                 key_expr: None,
@@ -1045,18 +1047,22 @@ mod tests {
                 decorators: Vec::new(),
             }],
             constructor: None,
-            methods: vec![Function { byte_offset: 0,
+            methods: vec![Function {
+                byte_offset: 0,
                 id: 2,
                 name: "getValue".to_string(),
                 type_params: Vec::new(),
                 params: Vec::new(),
                 return_type: Type::Number,
-                body: vec![Stmt::Return(Some(Expr::PropertyGet {
-                    byte_end: 0,
-                    byte_offset: 0,
-                    object: Box::new(Expr::This),
-                    property: "value".to_string(),
-                }), 0)],
+                body: vec![Stmt::Return(
+                    Some(Expr::PropertyGet {
+                        byte_end: 0,
+                        byte_offset: 0,
+                        object: Box::new(Expr::This),
+                        property: "value".to_string(),
+                    }),
+                    0,
+                )],
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -1102,18 +1108,21 @@ mod tests {
     }
 
     fn call_method_stmt(method: &str) -> Stmt {
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(RECEIVER)),
+                    property: method.to_string(),
+                }),
+                args: Vec::new(),
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(Expr::LocalGet(RECEIVER)),
-                property: method.to_string(),
             }),
-            args: Vec::new(),
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)
+            0,
+        )
     }
 
     /// `(obj as any).<key> = () => 99` — lowers to `PutValueSet` since #4126.
@@ -1216,7 +1225,8 @@ mod tests {
     fn prototype_mutation_anywhere_in_the_module_escapes_the_receiver() {
         let class = summarizable_class("C");
         let mut module = Module::new("m.ts");
-        module.functions.push(Function { byte_offset: 0,
+        module.functions.push(Function {
+            byte_offset: 0,
             id: 9,
             name: "mutate".to_string(),
             type_params: Vec::new(),

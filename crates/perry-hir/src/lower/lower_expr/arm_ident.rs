@@ -10,7 +10,11 @@ use swc_ecma_ast as ast;
 /// name goes through here (the identifier arm and a shorthand property
 /// `{ C }`), so a scope-renamed class (`class_renames`) is the class this
 /// scope declared, never an earlier same-named one.
-pub(crate) fn class_binding_read(ctx: &LoweringContext, source_name: &str, byte_offset: u32) -> Expr {
+pub(crate) fn class_binding_read(
+    ctx: &LoweringContext,
+    source_name: &str,
+    byte_offset: u32,
+) -> Expr {
     let class_name = ctx.resolve_class_name(source_name);
     // Keep the normal, overwhelmingly-common class read as a ClassRef
     // immediate. Besides preserving static class recognition downstream, it

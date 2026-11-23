@@ -1149,7 +1149,8 @@ pub fn collect_refs_in_closure_bodies_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             collect_refs_in_closure_bodies_expr(discriminant, out);
             for case in cases {
@@ -1582,14 +1583,17 @@ fn lower_stmts_using_aware_inner(
                         byte_offset: decl.span.lo.0,
                     };
                     result.push(Stmt::If {
-                        condition: Expr::Logical { byte_offset: decl.span.lo.0,
+                        condition: Expr::Logical {
+                            byte_offset: decl.span.lo.0,
                             op: LogicalOp::And,
-                            left: Box::new(Expr::Compare { byte_offset: decl.span.lo.0,
+                            left: Box::new(Expr::Compare {
+                                byte_offset: decl.span.lo.0,
                                 op: CompareOp::Ne,
                                 left: Box::new(Expr::LocalGet(id)),
                                 right: Box::new(Expr::Null),
                             }),
-                            right: Box::new(Expr::Compare { byte_offset: decl.span.lo.0,
+                            right: Box::new(Expr::Compare {
+                                byte_offset: decl.span.lo.0,
                                 op: CompareOp::Ne,
                                 left: Box::new(Expr::LocalGet(id)),
                                 right: Box::new(Expr::Undefined),
@@ -1639,14 +1643,17 @@ fn lower_stmts_using_aware_inner(
                 let dispose_err = ctx.fresh_local();
 
                 // if (id !== null && id !== undefined) [await] id.<method>()
-                let null_check = Expr::Logical { byte_offset: using_decl.span.lo.0,
+                let null_check = Expr::Logical {
+                    byte_offset: using_decl.span.lo.0,
                     op: LogicalOp::And,
-                    left: Box::new(Expr::Compare { byte_offset: using_decl.span.lo.0,
+                    left: Box::new(Expr::Compare {
+                        byte_offset: using_decl.span.lo.0,
                         op: CompareOp::Ne,
                         left: Box::new(Expr::LocalGet(id)),
                         right: Box::new(Expr::Null),
                     }),
-                    right: Box::new(Expr::Compare { byte_offset: using_decl.span.lo.0,
+                    right: Box::new(Expr::Compare {
+                        byte_offset: using_decl.span.lo.0,
                         op: CompareOp::Ne,
                         left: Box::new(Expr::LocalGet(id)),
                         right: Box::new(Expr::Undefined),
@@ -1703,7 +1710,7 @@ fn lower_stmts_using_aware_inner(
 
                 let finally_stmts = vec![
                     Stmt::Try {
-                byte_offset: using_decl.span.lo.0,
+                        byte_offset: using_decl.span.lo.0,
                         body: vec![Stmt::If {
                             condition: null_check,
                             then_branch: vec![Stmt::Expr(call_expr)],
@@ -1744,7 +1751,7 @@ fn lower_stmts_using_aware_inner(
                         init: Some(Expr::Bool(false)),
                     },
                     Stmt::Try {
-                byte_offset: using_decl.span.lo.0,
+                        byte_offset: using_decl.span.lo.0,
                         body: wrapped,
                         catch: Some(body_catch),
                         finally: Some(finally_stmts),

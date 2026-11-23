@@ -48,7 +48,8 @@ pub(super) fn fact_tree_leaves<'e>(
         if let Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right, ..
+            right,
+            ..
         } = e
         {
             leaves(left, out);
@@ -162,7 +163,8 @@ fn condition_number_locals(e: &Expr, out: &mut HashSet<u32>) {
         Expr::Compare {
             op: CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge,
             left,
-            right, ..
+            right,
+            ..
         } => {
             number_operand_locals(left, out);
             number_operand_locals(right, out);
@@ -192,9 +194,9 @@ pub(super) fn prim(e: &Expr) -> bool {
         | Expr::Undefined
         | Expr::Null
         | Expr::TypeOf(_) => true,
-        Expr::Binary { op, left, right, .. } => {
-            !matches!(op, BinaryOp::Add) || (prim(left) && prim(right))
-        }
+        Expr::Binary {
+            op, left, right, ..
+        } => !matches!(op, BinaryOp::Add) || (prim(left) && prim(right)),
         Expr::Compare { .. } => true,
         Expr::Unary { op, operand } => matches!(op, UnaryOp::Not) || prim(operand),
         _ => false,
@@ -535,7 +537,9 @@ impl Planner<'_, '_> {
                 }
                 st
             }
-            Expr::Compare { op, left, right, .. } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 if self.record
                     && matches!(
                         op,
@@ -564,7 +568,8 @@ impl Planner<'_, '_> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 let c = self.expr(condition, st);
                 let t = self.expr(then_expr, c.clone());
@@ -683,7 +688,8 @@ impl Planner<'_, '_> {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 // `break` inside a switch leaves the switch; conservatively
                 // everything after a switch is stale.
@@ -839,7 +845,8 @@ pub(super) fn body_refused(ss: &[Stmt]) -> bool {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 e_bad(discriminant)
                     || cases
@@ -891,7 +898,8 @@ pub(super) fn body_nodes(ss: &[Stmt]) -> usize {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 e_n(discriminant)
                     + cases
@@ -962,7 +970,8 @@ pub(super) fn assigned(ss: &[Stmt], extra: &[&Expr]) -> HashSet<u32> {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 e_walk(discriminant, out);
                 for c in cases {
@@ -1076,7 +1085,8 @@ pub(super) fn accesses(ss: &[Stmt]) -> Vec<(Recv, String, bool, usize, Option<&E
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 e_walk(discriminant, out);
                 for c in cases {

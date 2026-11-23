@@ -12,7 +12,8 @@ fn rt<'a>(e: &'a Expr, method: &str) -> Option<&'a [Expr]> {
             class_name: None,
             object: None,
             method: m,
-            args, ..
+            args,
+            ..
         } if module == "__perry_runtime" && m == method => Some(args),
         _ => None,
     }
@@ -34,7 +35,8 @@ fn payload_shape(e: &Expr, record: u32, flag: u32) -> Option<u32> {
     let Expr::Conditional {
         condition,
         then_expr,
-        else_expr, ..
+        else_expr,
+        ..
     } = value.as_ref()
     else {
         return None;
@@ -167,7 +169,8 @@ pub(super) fn normalize(stmts: &[Stmt], child: u32) -> Vec<Stmt> {
             if let Expr::Compare {
                 op: CompareOp::Eq,
                 left,
-                right, ..
+                right,
+                ..
             } = e
             {
                 if let (Expr::Bool(a), Expr::Bool(b)) = (left.as_ref(), right.as_ref()) {
@@ -178,7 +181,8 @@ pub(super) fn normalize(stmts: &[Stmt], child: u32) -> Vec<Stmt> {
             if let Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } = e
             {
                 if let Expr::Bool(yes) = condition.as_ref() {
@@ -214,7 +218,8 @@ pub(super) fn normalize(stmts: &[Stmt], child: u32) -> Vec<Stmt> {
 mod tests {
     use super::*;
     fn intrinsic(method: &str, args: Vec<Expr>) -> Expr {
-        Expr::NativeMethodCall { byte_offset: 0,
+        Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,
@@ -223,7 +228,8 @@ mod tests {
         }
     }
     fn fixture() -> Vec<Stmt> {
-        let mode = Expr::Compare { byte_offset: 0,
+        let mode = Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(21)),
             right: Box::new(Expr::Bool(true)),
@@ -251,7 +257,8 @@ mod tests {
                         Expr::LocalGet(20),
                         Expr::LocalSet(
                             22,
-                            Box::new(Expr::Conditional { byte_offset: 0,
+                            Box::new(Expr::Conditional {
+                                byte_offset: 0,
                                 condition: Box::new(mode),
                                 then_expr: Box::new(Expr::GetIterator(Box::new(Expr::LocalGet(
                                     20,

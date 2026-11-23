@@ -20,7 +20,8 @@ fn observed(e: &Expr) -> Vec<&Expr> {
         Expr::Binary {
             op: BinaryOp::Div | BinaryOp::Pow,
             left,
-            right, ..
+            right,
+            ..
         } => vec![left.as_ref(), right.as_ref()],
         Expr::Binary {
             op: BinaryOp::Mod,

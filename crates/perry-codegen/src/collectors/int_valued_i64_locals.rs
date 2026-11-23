@@ -229,7 +229,8 @@ impl Walk {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases, ..
+                    cases,
+                    ..
                 } => {
                     self.seed_expr(discriminant);
                     for c in cases {
@@ -319,7 +320,8 @@ impl Walk {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases, ..
+                    cases,
+                    ..
                 } => {
                     self.judge_expr(discriminant);
                     for c in cases {
@@ -386,7 +388,9 @@ fn write_delta(id: u32, rhs: &Expr) -> Option<i64> {
     match rhs {
         // Literal reset.
         Expr::Integer(v) if v.unsigned_abs() <= MAX_LITERAL as u64 => Some(0),
-        Expr::Binary { op, left, right, .. } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let d = match (op, left.as_ref(), right.as_ref()) {
                 // L = L + d   /   L = L - d
                 (BinaryOp::Add | BinaryOp::Sub, Expr::LocalGet(l), Expr::Integer(d))
@@ -478,7 +482,8 @@ fn collect_written_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
                     }
                     Stmt::Switch {
                         discriminant,
-                        cases, ..
+                        cases,
+                        ..
                     } => {
                         self.expr(discriminant);
                         for c in cases {
@@ -527,7 +532,8 @@ mod tests {
     }
 
     fn add(id: u32, d: i64) -> Expr {
-        Expr::Binary { byte_offset: 0,
+        Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(id)),
             right: Box::new(Expr::Integer(d)),
@@ -588,7 +594,8 @@ mod tests {
             let_int(1, 2),
             set(
                 1,
-                Expr::Binary { byte_offset: 0,
+                Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Mul,
                     left: Box::new(Expr::LocalGet(1)),
                     right: Box::new(Expr::Integer(3)),
@@ -608,7 +615,8 @@ mod tests {
             let_int(1, 2),
             set(
                 1,
-                Expr::Binary { byte_offset: 0,
+                Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::Integer(5)),
                     right: Box::new(Expr::LocalGet(1)),
@@ -649,7 +657,8 @@ mod tests {
     fn rejects_closure_written_local() {
         let stmts = vec![
             let_int(1, 0),
-            Stmt::Expr(Expr::Closure { byte_offset: 0,
+            Stmt::Expr(Expr::Closure {
+                byte_offset: 0,
                 func_id: 0,
                 params: vec![],
                 return_type: Type::Void,
@@ -676,7 +685,8 @@ mod tests {
     fn rejects_mutable_capture() {
         let stmts = vec![
             let_int(1, 0),
-            Stmt::Expr(Expr::Closure { byte_offset: 0,
+            Stmt::Expr(Expr::Closure {
+                byte_offset: 0,
                 func_id: 0,
                 params: vec![],
                 return_type: Type::Void,
@@ -722,7 +732,8 @@ mod tests {
                     condition: Expr::Bool(true),
                     then_branch: vec![set(
                         1,
-                        Expr::Binary { byte_offset: 0,
+                        Expr::Binary {
+                            byte_offset: 0,
                             op: BinaryOp::Mul,
                             left: Box::new(Expr::LocalGet(1)),
                             right: Box::new(Expr::Integer(3)),

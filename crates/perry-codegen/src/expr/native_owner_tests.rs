@@ -3,7 +3,8 @@
 use perry_hir::{types::Type, BinaryOp, CompareOp, Expr, Function, Module, Param, Stmt, UpdateOp};
 
 fn param(id: u32, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty,
@@ -32,7 +33,8 @@ fn get(id: u32, index: Expr) -> Expr {
     }
 }
 fn add(left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -41,7 +43,8 @@ fn add(left: Expr, right: Expr) -> Expr {
 fn loop_body(bound: Expr, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
         init: Some(Box::new(local(10, Type::Number, true, Expr::Integer(0)))),
-        condition: Some(Expr::Compare { byte_offset: 0,
+        condition: Some(Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(10)),
             right: Box::new(bound),
@@ -57,7 +60,8 @@ fn loop_body(bound: Expr, body: Vec<Stmt>) -> Stmt {
 fn compile(name: &str, params: Vec<Param>, body: Vec<Stmt>, kind: u8) -> String {
     let argc = params.len();
     let mut m = Module::new(name);
-    m.functions.push(Function { byte_offset: 0,
+    m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: vec![],

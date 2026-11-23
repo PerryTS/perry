@@ -23,7 +23,8 @@ pub fn detect_clamp3(f: &Function) -> Option<(u32, u32, u32)> {
             Expr::Compare {
                 op: perry_hir::CompareOp::Lt,
                 left,
-                right, ..
+                right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -50,7 +51,8 @@ pub fn detect_clamp3(f: &Function) -> Option<(u32, u32, u32)> {
             Expr::Compare {
                 op: perry_hir::CompareOp::Gt,
                 left,
-                right, ..
+                right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -99,7 +101,8 @@ pub fn detect_clamp_u8(f: &Function) -> bool {
             Expr::Compare {
                 op: perry_hir::CompareOp::Lt,
                 left,
-                right, ..
+                right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -125,7 +128,8 @@ pub fn detect_clamp_u8(f: &Function) -> bool {
             Expr::Compare {
                 op: perry_hir::CompareOp::Gt,
                 left,
-                right, ..
+                right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -192,7 +196,8 @@ fn returns_i32_identity_expr(expr: &Expr, param_id: u32) -> bool {
         Expr::Binary {
             op: BinaryOp::BitOr,
             left,
-            right, ..
+            right,
+            ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => {
             returns_i32_identity_expr(left, param_id)
         }

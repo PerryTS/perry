@@ -69,7 +69,8 @@ fn bits(e: &Expr) -> Option<u32> {
 }
 
 fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),

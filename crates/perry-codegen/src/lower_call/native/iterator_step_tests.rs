@@ -4,14 +4,16 @@ use perry_hir::{Expr, Stmt};
 #[test]
 fn native_step_output_is_an_unknown_value_rooted_before_the_body() {
     crate::temp_root_coverage::under_both_lowerings(|mode| {
-        let marker = Expr::NativeMethodCall { byte_offset: 0,
+        let marker = Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,
             method: "iteratorStepOutput".into(),
             args: vec![],
         };
-        let step = Expr::NativeMethodCall { byte_offset: 0,
+        let step = Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,
@@ -95,7 +97,8 @@ fn native_step_output_is_an_unknown_value_rooted_before_the_body() {
 #[test]
 fn array_record_literal_materialization_is_an_outlined_rooted_call() {
     crate::temp_root_coverage::under_both_lowerings(|mode| {
-        let value = Expr::NativeMethodCall { byte_offset: 0,
+        let value = Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,

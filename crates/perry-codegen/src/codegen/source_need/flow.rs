@@ -644,7 +644,8 @@ impl<'a> Build<'a> {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.expr(cx, discriminant);
                 for c in cases {
@@ -995,7 +996,9 @@ impl<'a> Build<'a> {
                 }
                 vec![]
             }
-            Expr::Compare { op, left, right, .. } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 let strict = matches!(op, perry_hir::CompareOp::Eq | perry_hir::CompareOp::Ne);
                 for x in [left, right] {
                     let v = self.expr(cx, x);
@@ -1013,7 +1016,8 @@ impl<'a> Build<'a> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 self.expr(cx, condition);
                 let mut v = self.expr(cx, then_expr);

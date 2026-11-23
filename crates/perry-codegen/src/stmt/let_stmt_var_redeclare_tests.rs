@@ -52,7 +52,8 @@ fn var_redeclared_numeric_array_compare_against_void_stays_boxed() {
                 name: "r".to_string(),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(Expr::Compare { byte_offset: 0,
+                init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::IndexGet {
                         element_offset: 0,
@@ -103,7 +104,8 @@ fn let_numeric_array_compare_against_void_stays_boxed() {
                 name: "r".to_string(),
                 ty: Type::Any,
                 mutable: true,
-                init: Some(Expr::Compare { byte_offset: 0,
+                init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::synthetic_index_get(
                         Box::new(Expr::LocalGet(ARR)),

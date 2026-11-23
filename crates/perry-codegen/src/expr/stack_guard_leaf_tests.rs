@@ -5,7 +5,8 @@ use perry_hir::types::Type;
 use perry_hir::{Expr, Function, Module, ModuleInitKind, Stmt};
 
 fn function(id: u32, name: &str, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -103,7 +104,8 @@ fn a_call_on_one_branch_moves_the_check_in_front_of_its_block() {
             Stmt::Return(Some(Expr::Number(2.0)), 0),
         ],
     );
-    branchy.params = vec![perry_hir::Param { byte_offset: 0,
+    branchy.params = vec![perry_hir::Param {
+        byte_offset: 0,
         id: 10,
         name: "flag".to_string(),
         ty: Type::Boolean,

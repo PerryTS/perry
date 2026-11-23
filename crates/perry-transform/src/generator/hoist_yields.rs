@@ -138,7 +138,8 @@ fn hoist_yields_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             hoist_yields_in_expr_full(discriminant, next_id, hoisted);
             for case in cases.iter_mut() {
@@ -333,7 +334,8 @@ fn lift_conditional_with_yield_branches(
     if let Expr::Conditional {
         mut condition,
         then_expr,
-        else_expr, ..
+        else_expr,
+        ..
     } = owned
     {
         // The condition always runs first; hoist any yields it holds above
@@ -404,14 +406,17 @@ fn lift_logical_with_yield_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: 
                 op: UnaryOp::Not,
                 operand: Box::new(Expr::LocalGet(temp_id)),
             },
-            LogicalOp::Coalesce => Expr::Logical { byte_offset,
+            LogicalOp::Coalesce => Expr::Logical {
+                byte_offset,
                 op: LogicalOp::Or,
-                left: Box::new(Expr::Compare { byte_offset,
+                left: Box::new(Expr::Compare {
+                    byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(temp_id)),
                     right: Box::new(Expr::Null),
                 }),
-                right: Box::new(Expr::Compare { byte_offset,
+                right: Box::new(Expr::Compare {
+                    byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(temp_id)),
                     right: Box::new(Expr::Undefined),
@@ -500,7 +505,8 @@ mod tests {
     #[test]
     fn comma_before_yield_runs_left_operand_first() {
         let side_effect = Expr::LocalSet(5, Box::new(Expr::Integer(1)));
-        let yld = Expr::Yield { byte_offset: 0,
+        let yld = Expr::Yield {
+            byte_offset: 0,
             value: Some(Box::new(Expr::Null)),
             delegate: false,
         };

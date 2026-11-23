@@ -94,7 +94,8 @@ fn native_index_source_local(ctx: &FnCtx<'_>, expr: &Expr) -> Option<u32> {
         Expr::Binary {
             op: BinaryOp::BitOr,
             left,
-            right, ..
+            right,
+            ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => native_index_source_local(ctx, left),
         Expr::Call { callee, args, .. } if args.len() == 1 => {
             let Expr::FuncRef(fid) = callee.as_ref() else {
@@ -462,7 +463,9 @@ fn int_range_expr_inner(
         Expr::IndexGet { object, index, .. } => {
             int_typed_array_load_range(ctx, object, index, seen)
         }
-        Expr::Binary { op, left, right, .. } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             // Result-shape rules that need no range on one (or either)
             // operand. `e & K` with a non-negative i32 constant `K` is
             // `ToInt32(e) & K ∈ [0, K]` for EVERY `e` (NaN, fractional,
@@ -499,7 +502,8 @@ fn int_range_expr_inner(
                     let Expr::Binary {
                         op: BinaryOp::Div,
                         left: dividend,
-                        right: divisor, ..
+                        right: divisor,
+                        ..
                     } = quotient.as_ref()
                     else {
                         continue;
@@ -580,7 +584,8 @@ fn literal_selection_range(ctx: &FnCtx<'_>, expr: &Expr) -> Option<IntRange> {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             // Range consumers can lower an enclosing arithmetic tree natively.
             // Its other operands' facts must survive this condition, so do not
@@ -626,7 +631,9 @@ fn constant_i64_expr(ctx: &FnCtx<'_>, expr: &Expr) -> Option<i64> {
             .get(id)
             .and_then(|value| f64_to_i64_constant(*value))
             .or_else(|| exact_i64_expr(ctx, expr)),
-        Expr::Binary { op, left, right, .. } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let lhs = constant_i64_expr(ctx, left)?;
             let rhs = constant_i64_expr(ctx, right)?;
             if exact_rules() {
@@ -815,22 +822,22 @@ pub(crate) fn record_int_facts_for_update(ctx: &mut FnCtx<'_>, id: u32, op: Upda
 fn index_local_with_addend(expr: &Expr) -> Option<(u32, i64)> {
     match expr {
         Expr::LocalGet(id) => Some((*id, 0)),
-        Expr::Binary { op, left, right, .. } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
-            match (left.as_ref(), right.as_ref()) {
-                (Expr::LocalGet(id), Expr::Integer(addend)) => {
-                    let addend = if matches!(op, BinaryOp::Sub) {
-                        addend.checked_neg()?
-                    } else {
-                        *addend
-                    };
-                    Some((*id, addend))
-                }
-                (Expr::Integer(addend), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => {
-                    Some((*id, *addend))
-                }
-                _ => None,
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => match (left.as_ref(), right.as_ref()) {
+            (Expr::LocalGet(id), Expr::Integer(addend)) => {
+                let addend = if matches!(op, BinaryOp::Sub) {
+                    addend.checked_neg()?
+                } else {
+                    *addend
+                };
+                Some((*id, addend))
             }
-        }
+            (Expr::Integer(addend), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => {
+                Some((*id, *addend))
+            }
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -840,7 +847,10 @@ pub(crate) fn while_condition_range_fact(
     condition: &Expr,
     scope_id: u32,
 ) -> Option<IntRangeFact> {
-    let Expr::Compare { op, left, right, .. } = condition else {
+    let Expr::Compare {
+        op, left, right, ..
+    } = condition
+    else {
         return None;
     };
     if !matches!(op, CompareOp::Lt | CompareOp::Le) {
@@ -1039,13 +1049,16 @@ pub(crate) fn guarded_buffer_indices_for_condition(
         Expr::Logical {
             op: LogicalOp::And,
             left,
-            right, ..
+            right,
+            ..
         } => {
             let mut out = guarded_buffer_indices_for_condition(ctx, left, scope_id);
             out.extend(guarded_buffer_indices_for_condition(ctx, right, scope_id));
             out
         }
-        Expr::Compare { op, left, right, .. } => match op {
+        Expr::Compare {
+            op, left, right, ..
+        } => match op {
             CompareOp::Le => guarded_buffer_indices_from_ordered_cmp(
                 ctx,
                 left,
@@ -1158,22 +1171,22 @@ fn guarded_buffer_index(
 fn index_expr_plus_constant(ctx: &FnCtx<'_>, expr: &Expr) -> Option<(u32, i64)> {
     match expr {
         Expr::LocalGet(id) => Some((resolve_native_i32_alias(ctx, *id), 0)),
-        Expr::Binary { op, left, right, .. } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
-            match (left.as_ref(), right.as_ref()) {
-                (Expr::LocalGet(id), Expr::Integer(addend)) => {
-                    let addend = if matches!(op, BinaryOp::Sub) {
-                        addend.checked_neg()?
-                    } else {
-                        *addend
-                    };
-                    Some((resolve_native_i32_alias(ctx, *id), addend))
-                }
-                (Expr::Integer(addend), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => {
-                    Some((resolve_native_i32_alias(ctx, *id), *addend))
-                }
-                _ => None,
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => match (left.as_ref(), right.as_ref()) {
+            (Expr::LocalGet(id), Expr::Integer(addend)) => {
+                let addend = if matches!(op, BinaryOp::Sub) {
+                    addend.checked_neg()?
+                } else {
+                    *addend
+                };
+                Some((resolve_native_i32_alias(ctx, *id), addend))
             }
-        }
+            (Expr::Integer(addend), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => {
+                Some((resolve_native_i32_alias(ctx, *id), *addend))
+            }
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -1199,7 +1212,8 @@ fn local_buffer_length_minus_constant(ctx: &FnCtx<'_>, expr: &Expr) -> Option<(u
         Expr::Binary {
             op: BinaryOp::Sub,
             left,
-            right, ..
+            right,
+            ..
         } => {
             let id = local_buffer_length_expr(left)?;
             let n = exact_i64_expr(ctx, right)?;

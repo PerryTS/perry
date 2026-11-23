@@ -210,7 +210,9 @@ fn guard_expr_is_analyzable(e: &Expr) -> bool {
         Expr::PropertyGet { object, .. } => matches!(object.as_ref(), Expr::LocalGet(_)),
         // STRICT compares only. `==`/`!=`/`<`/`<=`/`>`/`>=` all coerce, and
         // coercion calls `valueOf`/`toString`.
-        Expr::Compare { op, left, right, .. } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             matches!(op, CompareOp::Eq | CompareOp::Ne)
                 && guard_expr_is_analyzable(left)
                 && guard_expr_is_analyzable(right)
@@ -531,7 +533,8 @@ fn stmt_exprs(s: &Stmt) -> Vec<&Expr> {
         } => condition.iter().chain(update.iter()).collect(),
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => std::iter::once(discriminant)
             .chain(cases.iter().filter_map(|c| c.test.as_ref()))
             .collect(),
@@ -584,7 +587,8 @@ mod tests {
 
     fn guard(prop: &str, lit: &str, body: Vec<Stmt>) -> Stmt {
         Stmt::If {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(read(N, prop)),
                 right: Box::new(Expr::String(lit.to_string())),
@@ -704,7 +708,8 @@ mod tests {
     #[test]
     fn loose_equality_is_not_analyzable() {
         let mk = |lit: &str| Stmt::If {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::LooseEq,
                 left: Box::new(read(N, "kind")),
                 right: Box::new(Expr::String(lit.to_string())),
@@ -722,7 +727,8 @@ mod tests {
     /// Relational compares coerce too.
     #[test]
     fn relational_compare_is_not_analyzable() {
-        assert!(!guard_expr_is_analyzable(&Expr::Compare { byte_offset: 0,
+        assert!(!guard_expr_is_analyzable(&Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(read(N, "kind")),
             right: Box::new(Expr::Integer(1)),
@@ -778,7 +784,8 @@ mod tests {
     fn a_key_first_read_later_is_not_hoisted_above_the_earlier_guards() {
         let other: LocalId = 2;
         let later = |lit: &str| Stmt::If {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(read(other, "y")),
                 right: Box::new(Expr::String(lit.to_string())),
@@ -804,14 +811,17 @@ mod tests {
     fn a_short_circuited_read_is_not_a_candidate() {
         let other: LocalId = 2;
         let g = |lit: &str| Stmt::If {
-            condition: Expr::Logical { byte_offset: 0,
+            condition: Expr::Logical {
+                byte_offset: 0,
                 op: perry_hir::LogicalOp::And,
-                left: Box::new(Expr::Compare { byte_offset: 0,
+                left: Box::new(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(read(N, "kind")),
                     right: Box::new(Expr::String("bin".to_string())),
                 }),
-                right: Box::new(Expr::Compare { byte_offset: 0,
+                right: Box::new(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(read(other, "y")),
                     right: Box::new(Expr::String(lit.to_string())),
@@ -855,7 +865,8 @@ mod tests {
     }
 
     fn fn_with(body: Vec<Stmt>) -> Function {
-        Function { byte_offset: 0,
+        Function {
+            byte_offset: 0,
             id: 1,
             name: "f".to_string(),
             type_params: vec![],

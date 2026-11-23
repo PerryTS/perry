@@ -704,7 +704,8 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::StaticFieldSet {
                 class_name,
                 field_name,
-                value, ..
+                value,
+                ..
             } => {
                 let class_id = self
                     .emitter

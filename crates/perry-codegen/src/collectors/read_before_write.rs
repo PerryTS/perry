@@ -588,7 +588,8 @@ impl Walk<'_> {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.expr(discriminant, st);
                 // Tests run in order until one matches: a case body is
@@ -678,7 +679,8 @@ fn da_expr(e: &Expr, c: &HashSet<u32>, fns: &Fns, da: &mut HashSet<u32>, bad: &m
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             da_expr(condition, c, fns, da, bad);
             let mut t = da.clone();
@@ -742,7 +744,8 @@ mod tests {
     }
 
     fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
-        Expr::Binary { byte_offset: 0,
+        Expr::Binary {
+            byte_offset: 0,
             op,
             left: Box::new(l),
             right: Box::new(r),
@@ -824,7 +827,8 @@ mod tests {
     }
 
     fn switch(cases: Vec<SwitchCase>) -> Stmt {
-        Stmt::Switch { byte_offset: 0,
+        Stmt::Switch {
+            byte_offset: 0,
             discriminant: get(K),
             cases,
         }
@@ -933,7 +937,8 @@ mod tests {
 
     #[test]
     fn a_try_whose_catch_rethrows_continues_only_from_the_block() {
-        let try_ = |catch_body: Vec<Stmt>| Stmt::Try { byte_offset: 0,
+        let try_ = |catch_body: Vec<Stmt>| Stmt::Try {
+            byte_offset: 0,
             body: vec![set(X, Expr::Integer(1))],
             catch: Some(CatchClause {
                 param: None,
@@ -951,7 +956,8 @@ mod tests {
         // A finally that returns: nothing continues past the try.
         assert!(!flags_x(vec![Stmt::If {
             condition: get(K),
-            then_branch: vec![Stmt::Try { byte_offset: 0,
+            then_branch: vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![],
                 catch: None,
                 finally: Some(vec![Stmt::Return(None, 0)]),
@@ -961,7 +967,8 @@ mod tests {
         }]));
         // A finally that completes does not make an unwritten catch path
         // terminate.
-        assert!(flags_x(vec![Stmt::Try { byte_offset: 0,
+        assert!(flags_x(vec![Stmt::Try {
+            byte_offset: 0,
             body: vec![set(X, Expr::Integer(1))],
             catch: Some(CatchClause {
                 param: None,
@@ -971,7 +978,8 @@ mod tests {
             forof_completion: None,
         }]));
         // A finally's write counts after the try ...
-        assert!(!flags_x(vec![Stmt::Try { byte_offset: 0,
+        assert!(!flags_x(vec![Stmt::Try {
+            byte_offset: 0,
             body: vec![],
             catch: None,
             finally: Some(vec![set(X, Expr::Integer(1))]),
@@ -980,7 +988,8 @@ mod tests {
         // ... but a read in it still sees the state before the block.
         let body = vec![
             let_(X, None),
-            Stmt::Try { byte_offset: 0,
+            Stmt::Try {
+                byte_offset: 0,
                 body: vec![set(X, Expr::Integer(1))],
                 catch: None,
                 finally: Some(vec![Stmt::Expr(get(X))]),
@@ -1152,7 +1161,8 @@ mod tests {
     const G: u32 = 11;
 
     fn closure(func_id: u32, captures: Vec<u32>, body: Vec<Stmt>) -> Expr {
-        Expr::Closure { byte_offset: 0,
+        Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: Vec::new(),
             return_type: HirType::Any,
@@ -1269,11 +1279,10 @@ mod tests {
             Some(closure(
                 100,
                 vec![X, G],
-                vec![Stmt::Return(Some(bin(
-                    BinaryOp::Add,
-                    get(X),
-                    call(get(G), vec![]),
-                )), 0)],
+                vec![Stmt::Return(
+                    Some(bin(BinaryOp::Add, get(X), call(get(G), vec![]))),
+                    0,
+                )],
             )),
         );
         let g = let_(

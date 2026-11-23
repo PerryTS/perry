@@ -391,7 +391,8 @@ pub fn transform_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             transform_expr(
                 discriminant,

@@ -59,7 +59,8 @@ const IDX_ID: u32 = 12;
 const VAL_ID: u32 = 13;
 
 fn any_field(name: &str) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -90,11 +91,13 @@ fn any_field(name: &str) -> ClassField {
 /// * `v: Any` is what leaves the stored value's pointer-ness undecidable
 ///   statically and puts the store on the live-test tier at all.
 fn setter() -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 91,
         name: "set".to_string(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: VAL_ID,
             name: "v".to_string(),
             ty: Type::Any,
@@ -112,7 +115,8 @@ fn setter() -> Function {
                 mutable: true,
                 init: Some(Expr::Integer(0)),
             })),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(IDX_ID)),
                 right: Box::new(Expr::Integer(8)),

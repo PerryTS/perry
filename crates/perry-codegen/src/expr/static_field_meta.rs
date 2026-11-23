@@ -216,7 +216,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::StaticFieldSet {
             class_name,
             field_name,
-            value, ..
+            value,
+            ..
         } => {
             let v = lower_expr(ctx, value)?;
             let key = (class_name.clone(), field_name.clone());

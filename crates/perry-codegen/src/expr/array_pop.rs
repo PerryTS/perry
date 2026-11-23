@@ -260,7 +260,8 @@ mod tests {
     use perry_hir::{Class, ClassField, Expr, Function, Module, ModuleInitKind, Stmt};
 
     fn method(body: Vec<Stmt>) -> Function {
-        Function { byte_offset: 0,
+        Function {
+            byte_offset: 0,
             id: 720,
             name: "take".to_string(),
             type_params: Vec::new(),
@@ -283,18 +284,22 @@ mod tests {
     /// erased-field receiver, which the HIR classifies as
     /// `NativeMethodCall { module: "array", method: "pop" }`.
     fn field_pop_module() -> Module {
-        let take = method(vec![Stmt::Return(Some(Expr::NativeMethodCall { byte_offset: 0,
-            module: "array".to_string(),
-            class_name: None,
-            object: Some(Box::new(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::This),
-                property: "items".to_string(),
+        let take = method(vec![Stmt::Return(
+            Some(Expr::NativeMethodCall {
                 byte_offset: 0,
-            })),
-            method: "pop".to_string(),
-            args: Vec::new(),
-        }), 0)]);
+                module: "array".to_string(),
+                class_name: None,
+                object: Some(Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(Expr::This),
+                    property: "items".to_string(),
+                    byte_offset: 0,
+                })),
+                method: "pop".to_string(),
+                args: Vec::new(),
+            }),
+            0,
+        )]);
         let class = Class {
             id: 406,
             name: "Stack".to_string(),
@@ -304,7 +309,8 @@ mod tests {
             native_extends: None,
             extends_expr: None,
             heritage_lexically_shadowed: false,
-            fields: vec![ClassField { byte_offset: 0,
+            fields: vec![ClassField {
+                byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "items".to_string(),
                 key_expr: None,
@@ -350,11 +356,13 @@ mod tests {
     fn param_pop_module() -> Module {
         const XS: u32 = 5;
         let mut m = Module::new("array_pop_inline_param.ts");
-        m.functions = vec![Function { byte_offset: 0,
+        m.functions = vec![Function {
+            byte_offset: 0,
             id: 721,
             name: "take".to_string(),
             type_params: Vec::new(),
-            params: vec![perry_hir::Param { byte_offset: 0,
+            params: vec![perry_hir::Param {
+                byte_offset: 0,
                 id: XS,
                 name: "xs".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -364,18 +372,21 @@ mod tests {
                 arguments_object: None,
             }],
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::PropertyGet {
+            body: vec![Stmt::Return(
+                Some(Expr::Call {
                     byte_end: 0,
-                    object: Box::new(Expr::LocalGet(XS)),
-                    property: "pop".to_string(),
+                    callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
+                        object: Box::new(Expr::LocalGet(XS)),
+                        property: "pop".to_string(),
+                        byte_offset: 0,
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
                     byte_offset: 0,
                 }),
-                args: Vec::new(),
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }), 0)],
+                0,
+            )],
             is_async: false,
             is_generator: false,
             is_strict: false,

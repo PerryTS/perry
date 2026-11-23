@@ -6,11 +6,13 @@ use super::*;
 #[test]
 fn a_last_use_typed_array_is_live_across_the_specialized_call() {
     let mut module = bare_module("last_use_typed_array.ts");
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "consume".to_string(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 10,
             name: "array".to_string(),
             ty: Type::Any,
@@ -25,13 +27,16 @@ fn a_last_use_typed_array_is_live_across_the_specialized_call() {
         // and leaves this test no call to inspect.
         body: std::iter::repeat_with(|| Stmt::Expr(Expr::MapNew))
             .take(400)
-            .chain([Stmt::Return(Some(Expr::IndexGet {
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(10)),
-                index: Box::new(Expr::Integer(0)),
-            }), 0)])
+            .chain([Stmt::Return(
+                Some(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(10)),
+                    index: Box::new(Expr::Integer(0)),
+                }),
+                0,
+            )])
             .collect(),
         is_async: false,
         is_generator: false,

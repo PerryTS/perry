@@ -58,7 +58,8 @@ impl FateProof for TestProof {
 }
 
 fn param(id: u32) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Any,
@@ -70,7 +71,8 @@ fn param(id: u32) -> Param {
 }
 
 fn func(id: FuncId, params: &[u32], body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: format!("f{id}"),
         type_params: vec![],
@@ -123,7 +125,8 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
 }
 
 fn add(l: Expr, r: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(l),
         right: Box::new(r),
@@ -131,7 +134,8 @@ fn add(l: Expr, r: Expr) -> Expr {
 }
 
 fn eq(l: Expr, r: Expr) -> Expr {
-    Expr::Compare { byte_offset: 0,
+    Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Eq,
         left: Box::new(l),
         right: Box::new(r),
@@ -241,7 +245,8 @@ fn c3_store_into_other_parameter_keeps_both() {
 
 #[test]
 fn c4_capture_keeps() {
-    let closure = Expr::Closure { byte_offset: 0,
+    let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 2,
         params: vec![],
         return_type: Type::Any,
@@ -434,7 +439,8 @@ fn this_why(f: &Fates, id: FuncId) -> String {
 }
 
 fn closure(body: Vec<Stmt>, captures_this: bool) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id: 2,
         params: vec![],
         return_type: Type::Any,
@@ -787,7 +793,8 @@ fn arguments_past_the_parameters_reach_arguments() {
 // ─── FATE2 rule b: typeof, truthiness and conversions of a primitive ────
 
 fn logical(op: perry_hir::LogicalOp, l: Expr, r: Expr) -> Expr {
-    Expr::Logical { byte_offset: 0,
+    Expr::Logical {
+        byte_offset: 0,
         op,
         left: Box::new(l),
         right: Box::new(r),
@@ -802,7 +809,8 @@ fn not(e: Expr) -> Expr {
 }
 
 fn cond(c: Expr, t: Expr, e: Expr) -> Expr {
-    Expr::Conditional { byte_offset: 0,
+    Expr::Conditional {
+        byte_offset: 0,
         condition: Box::new(c),
         then_expr: Box::new(t),
         else_expr: Box::new(e),
@@ -888,12 +896,14 @@ fn a_conversion_drops_a_proven_number_only() {
         numbers: [10].into_iter().collect(),
         ..TestProof::default()
     };
-    let lt = |l, r| Expr::Compare { byte_offset: 0,
+    let lt = |l, r| Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Lt,
         left: Box::new(l),
         right: Box::new(r),
     };
-    let loose = |l, r| Expr::Compare { byte_offset: 0,
+    let loose = |l, r| Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::LooseEq,
         left: Box::new(l),
         right: Box::new(r),
@@ -1022,7 +1032,8 @@ fn a_copy_that_keeps_keeps_the_parameter() {
 // ─── FATE2 rule d: a literal shape's constructor stores into the new object
 
 fn shape_class(name: &str, extra: Vec<Stmt>) -> perry_hir::Class {
-    let field = |n: &str| perry_hir::ClassField { byte_offset: 0,
+    let field = |n: &str| perry_hir::ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: n.to_string(),
         key_expr: None,

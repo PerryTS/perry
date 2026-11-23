@@ -230,25 +230,23 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             }
             _ => None,
         },
-        Expr::Binary { op, left, right, .. }
-            if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) =>
-        {
-            matches!(
-                op,
-                BinaryOp::Add
-                    | BinaryOp::Sub
-                    | BinaryOp::Mul
-                    | BinaryOp::Div
-                    | BinaryOp::Mod
-                    | BinaryOp::Pow
-                    | BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::Shl
-                    | BinaryOp::Shr
-            )
-            .then_some(HirType::BigInt)
-        }
+        Expr::Binary {
+            op, left, right, ..
+        } if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) => matches!(
+            op,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Mod
+                | BinaryOp::Pow
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+        )
+        .then_some(HirType::BigInt),
         Expr::Binary { left, right, .. }
             if is_numeric_expr(ctx, left)
                 && is_numeric_expr(ctx, right)
@@ -276,7 +274,8 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right, ..
+            right,
+            ..
         } if [left, right]
             .iter()
             .any(|side| matches!(side.as_ref(), Expr::String(_) | Expr::WtfString(_))) =>

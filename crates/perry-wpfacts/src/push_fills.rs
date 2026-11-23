@@ -139,7 +139,9 @@ fn int_const(e: &Expr) -> Option<i64> {
     match e {
         Expr::Integer(i) => Some(*i),
         Expr::Number(f) if f.fract() == 0.0 && f.abs() < 9.0e15 => Some(*f as i64),
-        Expr::Binary { op, left, right, .. } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let (a, b) = (int_const(left)?, int_const(right)?);
             match op {
                 BinaryOp::Add => a.checked_add(b),
@@ -358,7 +360,10 @@ fn counted(s: &Stmt) -> Option<(i64, &[Stmt])> {
         return None;
     };
     let from = int_const(from)?;
-    let Expr::Compare { op, left, right, .. } = condition else {
+    let Expr::Compare {
+        op, left, right, ..
+    } = condition
+    else {
         return None;
     };
     if !matches!(left.as_ref(), Expr::LocalGet(l) if l == id) {

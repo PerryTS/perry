@@ -113,7 +113,8 @@ fn widen_mutable_captures_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             widen_mutable_captures_expr(discriminant, scope_mutable);
             for case in cases {
@@ -207,7 +208,8 @@ fn widen_mutable_captures_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             widen_mutable_captures_expr(condition, scope_mutable);
             widen_mutable_captures_expr(then_expr, scope_mutable);
@@ -447,7 +449,8 @@ fn collect_closure_assigned_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             collect_closure_assigned_expr(discriminant, out);
             for case in cases {
@@ -522,7 +525,8 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             collect_closure_assigned_expr(condition, out);
             collect_closure_assigned_expr(then_expr, out);
@@ -755,7 +759,8 @@ fn collect_closure_captures_stmt(stmt: &Stmt, out: &mut std::collections::HashSe
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             collect_closure_captures_expr(discriminant, out);
             for case in cases {
@@ -832,7 +837,8 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             collect_closure_captures_expr(condition, out);
             collect_closure_captures_expr(then_expr, out);
@@ -1051,7 +1057,8 @@ fn collect_scope_level_assigns_stmt(stmt: &Stmt, out: &mut std::collections::Has
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             collect_scope_level_assigns_expr(discriminant, out);
             for case in cases {
@@ -1095,7 +1102,8 @@ fn collect_scope_level_assigns_expr(expr: &Expr, out: &mut std::collections::Has
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             collect_scope_level_assigns_expr(condition, out);
             collect_scope_level_assigns_expr(then_expr, out);
@@ -1180,7 +1188,8 @@ fn collect_closure_assigned_in_closure_body_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             collect_closure_assigned_in_body_expr(discriminant, out);
             for case in cases {
@@ -1265,7 +1274,8 @@ fn collect_closure_assigned_in_body_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             collect_closure_assigned_in_body_expr(condition, out);
             collect_closure_assigned_in_body_expr(then_expr, out);

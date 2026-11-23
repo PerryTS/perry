@@ -267,7 +267,8 @@ fn collect_instantiations_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             collect_instantiations_in_expr(discriminant, ctx, module, idx);
             for case in cases {
@@ -455,7 +456,8 @@ fn collect_instantiations_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             collect_instantiations_in_expr(condition, ctx, module, idx);
             collect_instantiations_in_expr(then_expr, ctx, module, idx);

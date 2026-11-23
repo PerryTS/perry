@@ -377,18 +377,21 @@ pub(crate) fn opt_call_func_nullish_guard(
     func_value: Expr,
     byte_offset: u32,
 ) -> Expr {
-    let func_nullish = Expr::Compare { byte_offset,
+    let func_nullish = Expr::Compare {
+        byte_offset,
         op: CompareOp::LooseEq,
         left: Box::new(func_value),
         right: Box::new(Expr::Null),
     };
     if opt_call_receiver_repeatable(receiver) {
-        let not_string = Expr::Compare { byte_offset,
+        let not_string = Expr::Compare {
+            byte_offset,
             op: CompareOp::Ne,
             left: Box::new(Expr::TypeOf(Box::new(receiver.clone()))),
             right: Box::new(Expr::String("string".to_string())),
         };
-        Expr::Logical { byte_offset,
+        Expr::Logical {
+            byte_offset,
             op: LogicalOp::And,
             left: Box::new(func_nullish),
             right: Box::new(not_string),

@@ -245,124 +245,147 @@ pub(crate) fn lower_bin_expr(ctx: &mut LoweringContext, bin: &ast::BinExpr) -> R
                     return Ok(Expr::String(folded));
                 }
             }
-            Ok(Expr::Binary { byte_offset: bin.span.lo.0,
+            Ok(Expr::Binary {
+                byte_offset: bin.span.lo.0,
                 op: BinaryOp::Add,
                 left,
                 right,
             })
         }
-        ast::BinaryOp::Sub => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::Sub => Ok(Expr::Binary {
+            byte_offset: bin.span.lo.0,
             op: BinaryOp::Sub,
             left,
             right,
         }),
-        ast::BinaryOp::Mul => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::Mul => Ok(Expr::Binary {
+            byte_offset: bin.span.lo.0,
             op: BinaryOp::Mul,
             left,
             right,
         }),
-        ast::BinaryOp::Div => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::Div => Ok(Expr::Binary {
+            byte_offset: bin.span.lo.0,
             op: BinaryOp::Div,
             left,
             right,
         }),
-        ast::BinaryOp::Mod => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::Mod => Ok(Expr::Binary {
+            byte_offset: bin.span.lo.0,
             op: BinaryOp::Mod,
             left,
             right,
         }),
-        ast::BinaryOp::Exp => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::Exp => Ok(Expr::Binary {
+            byte_offset: bin.span.lo.0,
             op: BinaryOp::Pow,
             left,
             right,
         }),
 
         // Comparison (treat == same as === for typed code)
-        ast::BinaryOp::EqEq => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::EqEq => Ok(Expr::Compare {
+            byte_offset: bin.span.lo.0,
             op: CompareOp::LooseEq,
             left,
             right,
         }),
-        ast::BinaryOp::EqEqEq => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::EqEqEq => Ok(Expr::Compare {
+            byte_offset: bin.span.lo.0,
             op: CompareOp::Eq,
             left,
             right,
         }),
-        ast::BinaryOp::NotEq => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::NotEq => Ok(Expr::Compare {
+            byte_offset: bin.span.lo.0,
             op: CompareOp::LooseNe,
             left,
             right,
         }),
-        ast::BinaryOp::NotEqEq => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::NotEqEq => Ok(Expr::Compare {
+            byte_offset: bin.span.lo.0,
             op: CompareOp::Ne,
             left,
             right,
         }),
-        ast::BinaryOp::Lt => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::Lt => Ok(Expr::Compare {
+            byte_offset: bin.span.lo.0,
             op: CompareOp::Lt,
             left,
             right,
         }),
-        ast::BinaryOp::LtEq => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::LtEq => Ok(Expr::Compare {
+            byte_offset: bin.span.lo.0,
             op: CompareOp::Le,
             left,
             right,
         }),
-        ast::BinaryOp::Gt => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::Gt => Ok(Expr::Compare {
+            byte_offset: bin.span.lo.0,
             op: CompareOp::Gt,
             left,
             right,
         }),
-        ast::BinaryOp::GtEq => Ok(Expr::Compare { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::GtEq => Ok(Expr::Compare {
+            byte_offset: bin.span.lo.0,
             op: CompareOp::Ge,
             left,
             right,
         }),
 
         // Logical
-        ast::BinaryOp::LogicalAnd => Ok(Expr::Logical { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::LogicalAnd => Ok(Expr::Logical {
+            byte_offset: bin.span.lo.0,
             op: LogicalOp::And,
             left,
             right,
         }),
-        ast::BinaryOp::LogicalOr => Ok(Expr::Logical { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::LogicalOr => Ok(Expr::Logical {
+            byte_offset: bin.span.lo.0,
             op: LogicalOp::Or,
             left,
             right,
         }),
-        ast::BinaryOp::NullishCoalescing => Ok(Expr::Logical { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::NullishCoalescing => Ok(Expr::Logical {
+            byte_offset: bin.span.lo.0,
             op: LogicalOp::Coalesce,
             left,
             right,
         }),
 
         // Bitwise
-        ast::BinaryOp::BitAnd => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::BitAnd => Ok(Expr::Binary {
+            byte_offset: bin.span.lo.0,
             op: BinaryOp::BitAnd,
             left,
             right,
         }),
-        ast::BinaryOp::BitOr => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::BitOr => Ok(Expr::Binary {
+            byte_offset: bin.span.lo.0,
             op: BinaryOp::BitOr,
             left,
             right,
         }),
-        ast::BinaryOp::BitXor => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::BitXor => Ok(Expr::Binary {
+            byte_offset: bin.span.lo.0,
             op: BinaryOp::BitXor,
             left,
             right,
         }),
-        ast::BinaryOp::LShift => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::LShift => Ok(Expr::Binary {
+            byte_offset: bin.span.lo.0,
             op: BinaryOp::Shl,
             left,
             right,
         }),
-        ast::BinaryOp::RShift => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::RShift => Ok(Expr::Binary {
+            byte_offset: bin.span.lo.0,
             op: BinaryOp::Shr,
             left,
             right,
         }),
-        ast::BinaryOp::ZeroFillRShift => Ok(Expr::Binary { byte_offset: bin.span.lo.0,
+        ast::BinaryOp::ZeroFillRShift => Ok(Expr::Binary {
+            byte_offset: bin.span.lo.0,
             op: BinaryOp::UShr,
             left,
             right,

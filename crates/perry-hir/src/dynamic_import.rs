@@ -642,7 +642,8 @@ fn collect_local_candidate_defs_from_frames<'a>(
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases, ..
+                    cases,
+                    ..
                 } => {
                     for case in cases.iter().rev() {
                         push_local_candidate_stmt_slice(stack, &case.body);
@@ -848,7 +849,8 @@ fn collect_param_literal_sets_from_frames(
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases, ..
+                    cases,
+                    ..
                 } => {
                     for case in cases.iter().rev() {
                         push_param_stmt_slice(stack, &case.body);
@@ -994,7 +996,8 @@ fn collect_const_locals_from_frames<'a>(
                     }
                     Stmt::Switch {
                         discriminant,
-                        cases, ..
+                        cases,
+                        ..
                     } => {
                         for case in cases.iter().rev() {
                             push_const_stmt_slice(stack, &case.body);
@@ -1115,7 +1118,8 @@ fn scan_mutations_from_frames(
                     }
                     Stmt::Switch {
                         discriminant,
-                        cases, ..
+                        cases,
+                        ..
                     } => {
                         for case in cases.iter().rev() {
                             push_mutation_stmt_slice(stack, &case.body);
@@ -1749,7 +1753,8 @@ fn flatten_concat<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right, ..
+        right,
+        ..
     } = expr
     {
         flatten_concat(left, out);

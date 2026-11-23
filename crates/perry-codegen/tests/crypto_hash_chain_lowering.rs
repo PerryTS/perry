@@ -93,7 +93,8 @@ fn entry_opts() -> CompileOptions {
 }
 
 fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -139,7 +140,8 @@ fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
 /// Compile `body` as the body of a plain function and return the module IR.
 fn ir_for_fn_body(name: &str, body: Vec<Stmt>) -> String {
     let mut m = module_with_init(name, Vec::new());
-    m.functions.push(perry_hir::Function { byte_offset: 0,
+    m.functions.push(perry_hir::Function {
+        byte_offset: 0,
         id: 7000,
         name: "driver".to_string(),
         type_params: Vec::new(),
@@ -236,7 +238,10 @@ fn block_local_hmac_lowers_to_frame_state_calls() {
             CHAIN_UPDATE,
             vec![Expr::LocalGet(1), s("payload")],
         )),
-        Stmt::Return(Some(call(crypto(), CHAIN_DIGEST, vec![Expr::LocalGet(1)])), 0),
+        Stmt::Return(
+            Some(call(crypto(), CHAIN_DIGEST, vec![Expr::LocalGet(1)])),
+            0,
+        ),
     ];
     let ir = ir_for_fn_body("hmac_local", body);
     assert_handle_free(&ir, "js_crypto_chain_hmac_init");
@@ -265,11 +270,10 @@ fn every_init_site_gets_its_own_slot() {
 /// An escaping hash (left alone by the pass) keeps the registered handle.
 #[test]
 fn escaping_create_hash_still_registers_a_handle() {
-    let body = vec![Stmt::Return(Some(call(
-        crypto(),
-        "createHash",
-        vec![s("sha1")],
-    )), 0)];
+    let body = vec![Stmt::Return(
+        Some(call(crypto(), "createHash", vec![s("sha1")])),
+        0,
+    )];
     let ir = ir_for_fn_body("escaping", body);
     assert!(ir.contains("call double @js_crypto_create_hash("), "{ir}");
     assert!(

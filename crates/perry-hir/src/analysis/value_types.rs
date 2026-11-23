@@ -535,7 +535,8 @@ impl HirTypeEnv {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.collect_expr_declarations(discriminant);
                 for case in cases {
@@ -641,7 +642,9 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
                 }
             }
         },
-        Expr::Binary { op, left, right, .. } => infer_binary_type(*op, left, right, env),
+        Expr::Binary {
+            op, left, right, ..
+        } => infer_binary_type(*op, left, right, env),
         Expr::Compare { .. }
         | Expr::InstanceOf { .. }
         | Expr::In { .. }
@@ -650,7 +653,9 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         | Expr::PrivateLexicalBrandPush(_)
         | Expr::PrivateLexicalBrandPop => Type::Any,
         Expr::PrivateGuard { object, .. } => infer_expr_type(object, env),
-        Expr::Logical { op, left, right, .. } => infer_logical_type(*op, left, right, env),
+        Expr::Logical {
+            op, left, right, ..
+        } => infer_logical_type(*op, left, right, env),
         Expr::Conditional {
             then_expr,
             else_expr,

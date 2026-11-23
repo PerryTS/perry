@@ -171,7 +171,8 @@ fn visit_stmt(stmt: &Stmt, out: &mut ModuleAudit) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             visit_expr(discriminant, out);
             for case in cases {
@@ -344,7 +345,8 @@ mod tests {
     }
 
     fn native_call(module: &str, method: &str) -> Expr {
-        Expr::NativeMethodCall { byte_offset: 0,
+        Expr::NativeMethodCall {
+            byte_offset: 0,
             module: module.to_string(),
             class_name: None,
             object: None,

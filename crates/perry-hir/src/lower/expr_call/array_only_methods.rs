@@ -1414,7 +1414,8 @@ pub(super) fn try_array_only_methods(
                         if !is_user_class_receiver && !recv_is_class {
                             let array_expr = lower_expr(ctx, &member.obj)?;
                             if args.len() <= 1 {
-                                return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                                return Ok(Ok(Expr::NativeMethodCall {
+                                    byte_offset: call.span.lo.0,
                                     module: "array".to_string(),
                                     method: "push_single".to_string(),
                                     class_name: None,

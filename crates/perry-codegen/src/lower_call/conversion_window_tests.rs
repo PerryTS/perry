@@ -29,7 +29,8 @@ fn object(key: &str) -> Expr {
 
 fn compile_stmt(stmt: Expr, opts: CompileOptions) -> String {
     let mut module = Module::new("conversion_window_test.ts");
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
@@ -74,7 +75,8 @@ fn native(
     method: &str,
     args: Vec<Expr>,
 ) -> Expr {
-    Expr::NativeMethodCall { byte_offset: 0,
+    Expr::NativeMethodCall {
+        byte_offset: 0,
         module: module.to_string(),
         class_name: class.map(str::to_string),
         object: object.map(Box::new),

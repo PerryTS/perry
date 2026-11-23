@@ -111,7 +111,8 @@ pub(crate) fn try_desugar_reactive_text(
     let widget_id = ctx.define_local("__perry_reactive_text_h".to_string(), Type::Any);
 
     let initial_concat = lower_tpl_to_concat(ctx, tpl)?;
-    let text_call = Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+    let text_call = Expr::NativeMethodCall {
+        byte_offset: call.span.lo.0,
         module: "perry/ui".to_string(),
         method: "Text".to_string(),
         object: None,
@@ -140,7 +141,8 @@ pub(crate) fn try_desugar_reactive_text(
         let inner_func_id = ctx.fresh_func();
         let inner_scope = ctx.enter_scope();
         let v_param_id = ctx.define_local("__v".to_string(), Type::Any);
-        let v_param = Param { byte_offset: call.span.lo.0,
+        let v_param = Param {
+            byte_offset: call.span.lo.0,
             id: v_param_id,
             name: "__v".to_string(),
             ty: Type::Any,
@@ -150,7 +152,8 @@ pub(crate) fn try_desugar_reactive_text(
             arguments_object: None,
         };
         let fresh_concat = lower_tpl_to_concat(ctx, tpl)?;
-        let set_text_call = Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+        let set_text_call = Expr::NativeMethodCall {
+            byte_offset: call.span.lo.0,
             module: "perry/ui".to_string(),
             method: "textSetString".to_string(),
             object: None,
@@ -173,7 +176,8 @@ pub(crate) fn try_desugar_reactive_text(
         inner_captures.dedup();
         inner_captures = ctx.filter_module_level_captures(inner_captures);
 
-        let inner_closure = Expr::Closure { byte_offset: call.span.lo.0,
+        let inner_closure = Expr::Closure {
+            byte_offset: call.span.lo.0,
             func_id: inner_func_id,
             params: vec![v_param],
             return_type: Type::Any,
@@ -190,7 +194,8 @@ pub(crate) fn try_desugar_reactive_text(
             is_strict: ctx.current_strict,
         };
 
-        outer_body.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+        outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: call.span.lo.0,
             module: "perry/ui".to_string(),
             method: "stateOnChange".to_string(),
             object: None,
@@ -199,7 +204,10 @@ pub(crate) fn try_desugar_reactive_text(
         }));
     }
 
-    outer_body.push(Stmt::Return(Some(Expr::LocalGet(widget_id)), call.span.lo.0));
+    outer_body.push(Stmt::Return(
+        Some(Expr::LocalGet(widget_id)),
+        call.span.lo.0,
+    ));
     ctx.exit_scope(outer_scope);
 
     let mut outer_refs = Vec::new();
@@ -215,7 +223,8 @@ pub(crate) fn try_desugar_reactive_text(
     outer_captures.dedup();
     outer_captures = ctx.filter_module_level_captures(outer_captures);
 
-    let outer_closure = Expr::Closure { byte_offset: call.span.lo.0,
+    let outer_closure = Expr::Closure {
+        byte_offset: call.span.lo.0,
         func_id: outer_func_id,
         params: vec![],
         return_type: Type::Any,

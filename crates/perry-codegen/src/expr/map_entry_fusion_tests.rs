@@ -40,7 +40,8 @@ fn set(m: u32, k: u32, value: Expr) -> Expr {
 }
 
 fn plus_one(e: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(e),
         right: Box::new(Expr::Number(1.0)),
@@ -160,7 +161,8 @@ fn a_call_in_the_value_computation_zeroes_the_slot_before_it() {
     let _g = SWITCH.lock().unwrap_or_else(|e| e.into_inner());
     let mut stmts = prologue();
     let clear = Expr::MapClear(Box::new(Expr::LocalGet(M)));
-    let value = Expr::Binary { byte_offset: 0,
+    let value = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(get(M, K)),
         right: Box::new(Expr::Sequence(vec![clear, Expr::Number(1.0)])),

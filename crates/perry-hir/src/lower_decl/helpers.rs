@@ -164,7 +164,8 @@ pub fn build_default_param_stmts(params: &[Param]) -> Vec<Stmt> {
                 )
         );
         out.push(Stmt::If {
-            condition: Expr::Compare { byte_offset: param.byte_offset,
+            condition: Expr::Compare {
+                byte_offset: param.byte_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(param.id)),
                 right: Box::new(Expr::Undefined),
@@ -646,7 +647,8 @@ pub fn append_synthetic_arguments_param(
         Type::Named("__perry_arguments_object".into()),
     );
     let has_user_rest = params.iter().any(|p| p.is_rest);
-    params.push(Param { byte_offset: byte_offset,
+    params.push(Param {
+        byte_offset: byte_offset,
         id: arguments_id,
         name: "arguments".to_string(),
         ty: Type::Named("__perry_arguments_object".into()),

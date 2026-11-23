@@ -72,7 +72,8 @@ pub fn is_cross_module_safe(body: &[Stmt]) -> bool {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 check_expr(discriminant)
                     && cases.iter().all(|c| {
@@ -538,7 +539,8 @@ fn walk_stmts(stmts: &[Stmt], visit: &mut impl FnMut(&Expr)) {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 visit(discriminant);
                 for case in cases {
@@ -995,7 +997,8 @@ fn walk_stmts_mut(stmts: &mut [Stmt], visit: &mut impl FnMut(&mut Expr)) {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 visit(discriminant);
                 for case in cases {
@@ -1197,7 +1200,9 @@ pub fn is_cross_module_safe_with_externs(body: &[Stmt], extern_names: &mut Vec<S
     fn check_stmt(s: &Stmt, extern_names: &mut Vec<String>) -> bool {
         match s {
             Stmt::Let { init, .. } => init.as_ref().is_none_or(|e| check_expr(e, extern_names)),
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => check_expr(e, extern_names),
+            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
+                check_expr(e, extern_names)
+            }
             Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => true,
             Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
             Stmt::If {
@@ -1230,7 +1235,8 @@ pub fn is_cross_module_safe_with_externs(body: &[Stmt], extern_names: &mut Vec<S
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 check_expr(discriminant, extern_names)
                     && cases.iter().all(|c| {

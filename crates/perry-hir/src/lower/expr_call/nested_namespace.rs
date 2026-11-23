@@ -374,7 +374,8 @@ pub(super) fn try_util_types_namespace(
                                     }
                                 }
                             }
-                            return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                byte_offset: byte_offset,
                                 module: "util/types".to_string(),
                                 class_name: None,
                                 object: None,
@@ -419,7 +420,8 @@ pub(super) fn try_dns_promises_namespace(
                             if perry_api_manifest::module_has_symbol("dns/promises", method_name)
                                 .is_some()
                             {
-                                return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
+                                return Ok(Ok(Expr::NativeMethodCall {
+                                    byte_offset: byte_offset,
                                     module: "dns/promises".to_string(),
                                     class_name: None,
                                     object: None,
@@ -465,7 +467,8 @@ pub(super) fn try_punycode_ucs2_namespace(
                         if namespace.sym.as_ref() == "ucs2"
                             && matches!(method.sym.as_ref(), "decode" | "encode")
                         {
-                            return Ok(Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
+                            return Ok(Ok(Expr::NativeMethodCall {
+                                byte_offset: byte_offset,
                                 module: "punycode.ucs2".to_string(),
                                 class_name: None,
                                 object: None,
@@ -555,7 +558,8 @@ pub(super) fn dispatch_path_subnamespace(
             if method == "join" && args.is_empty() {
                 return Ok(Expr::String(".".to_string()));
             }
-            return Ok(Expr::NativeMethodCall { byte_offset: byte_offset,
+            return Ok(Expr::NativeMethodCall {
+                byte_offset: byte_offset,
                 module: "path.posix".to_string(),
                 class_name: None,
                 object: None,

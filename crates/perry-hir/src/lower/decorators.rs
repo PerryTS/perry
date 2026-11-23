@@ -328,16 +328,19 @@ the decorator running for side effects only."
                 // class decorators); if it's not available, fall back to the
                 // original strict undefined-only check.
                 let ret_get = Expr::LocalGet(ret_id);
-                let ne_undef = Expr::Compare { byte_offset: dec_offset,
+                let ne_undef = Expr::Compare {
+                    byte_offset: dec_offset,
                     op: CompareOp::Ne,
                     left: Box::new(ret_get.clone()),
                     right: Box::new(Expr::Undefined),
                 };
                 let condition = match invocation_args.first() {
-                    Some(target_expr) => Expr::Logical { byte_offset: dec_offset,
+                    Some(target_expr) => Expr::Logical {
+                        byte_offset: dec_offset,
                         op: LogicalOp::And,
                         left: Box::new(ne_undef),
-                        right: Box::new(Expr::Compare { byte_offset: dec_offset,
+                        right: Box::new(Expr::Compare {
+                            byte_offset: dec_offset,
                             op: CompareOp::Ne,
                             left: Box::new(ret_get),
                             right: Box::new(target_expr.clone()),

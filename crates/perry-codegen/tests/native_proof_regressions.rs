@@ -157,7 +157,8 @@ fn module_with_classes_and_params(
     return_type: Type,
     body: Vec<Stmt>,
 ) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -166,7 +167,8 @@ fn module_with_classes_and_params(
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function { byte_offset: 0,
+        functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -258,11 +260,15 @@ fn generic_strict_equality_does_not_read_unverified_pointer_headers() {
         Vec::new(),
         vec![param(1, "left", Type::Any), param(2, "right", Type::Any)],
         Type::Boolean,
-        vec![Stmt::Return(Some(Expr::Compare { byte_offset: 0,
-            op: CompareOp::Eq,
-            left: Box::new(local(1)),
-            right: Box::new(local(2)),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::Compare {
+                byte_offset: 0,
+                op: CompareOp::Eq,
+                left: Box::new(local(1)),
+                right: Box::new(local(2)),
+            }),
+            0,
+        )],
     );
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
 
@@ -326,7 +332,8 @@ fn compile_artifact_json_for_module_with_opts_and_clone_rejections(
 }
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -338,7 +345,8 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 }
 
 fn class_field(name: &str, ty: Type) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -384,7 +392,8 @@ fn class_with_computed_member(id: u32, name: &str, fields: Vec<ClassField>) -> C
     let mut class = class(id, name, fields);
     class.computed_members.push(ClassComputedMember {
         key_expr: Expr::String("dynamicKey".to_string()),
-        function: Function { byte_offset: 0,
+        function: Function {
+            byte_offset: 0,
             id: id + 10_000,
             name: "__computed_dummy".to_string(),
             type_params: Vec::new(),
@@ -414,7 +423,8 @@ fn class_with_computed_member(id: u32, name: &str, fields: Vec<ClassField>) -> C
 fn class_with_evaluated_accessor(id: u32, name: &str, fields: Vec<ClassField>) -> Class {
     let mut class = class_with_computed_member(id, name, fields);
     let member = &mut class.computed_members[0];
-    member.key_expr = Expr::Binary { byte_offset: 0,
+    member.key_expr = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::String("dyn".to_string())),
         right: Box::new(Expr::String("amicKey".to_string())),
@@ -587,7 +597,8 @@ fn uint8array_computed_string_key_uses_complete_set_dispatch() {
             mutable: false,
             init: Some(Expr::Uint8ArraySet {
                 array: Box::new(local(1)),
-                index: Box::new(Expr::Binary { byte_offset: 0,
+                index: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::String("p".to_string())),
                     right: Box::new(local(2)),
@@ -716,7 +727,8 @@ fn u32_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
 }
 
 fn bit_or_zero(value: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitOr,
         left: Box::new(value),
         right: Box::new(int(0)),
@@ -724,7 +736,8 @@ fn bit_or_zero(value: Expr) -> Expr {
 }
 
 fn ushr_zero(value: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::UShr,
         left: Box::new(value),
         right: Box::new(int(0)),
@@ -732,7 +745,8 @@ fn ushr_zero(value: Expr) -> Expr {
 }
 
 fn div(left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Div,
         left: Box::new(left),
         right: Box::new(right),
@@ -740,7 +754,8 @@ fn div(left: Expr, right: Expr) -> Expr {
 }
 
 fn add(left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -792,7 +807,8 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
 }
 
 fn native_module_call(module: &str, method: &str, args: Vec<Expr>) -> Expr {
-    Expr::NativeMethodCall { byte_offset: 0,
+    Expr::NativeMethodCall {
+        byte_offset: 0,
         module: module.to_string(),
         class_name: None,
         object: None,
@@ -890,7 +906,8 @@ fn for_loop_with_op_start_and_update(
 ) -> Stmt {
     Stmt::For {
         init: Some(Box::new(number_let(counter_id, "i", true, start))),
-        condition: Some(Expr::Compare { byte_offset: 0,
+        condition: Some(Expr::Compare {
+            byte_offset: 0,
             op,
             left: Box::new(local(counter_id)),
             right: Box::new(bound),
@@ -911,7 +928,8 @@ fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
 use native_proof_support::assert_buffer_store_uses_dynamic_fallback;
 
 fn truthiness_probe(condition: Expr) -> Stmt {
-    Stmt::Expr(Expr::Conditional { byte_offset: 0,
+    Stmt::Expr(Expr::Conditional {
+        byte_offset: 0,
         condition: Box::new(condition),
         then_expr: Box::new(int(1)),
         else_expr: Box::new(int(0)),
@@ -1095,12 +1113,15 @@ fn artifact_schema_v6_records_c_layout_pod_manifest() {
             byte_offset: 0,
             byte_end: 0,
         }),
-        Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            byte_offset: 0,
-            object: Box::new(local(1)),
-            property: "gain".to_string(),
-        }), 0),
+        Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                byte_offset: 0,
+                object: Box::new(local(1)),
+                property: "gain".to_string(),
+            }),
+            0,
+        ),
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_record.ts", body);
@@ -1207,7 +1228,8 @@ fn pod_layout_metric_expr(ty: Type) -> Expr {
 
 fn pod_layout_specialization_module() -> Module {
     let mut module = Module::new("pod_layout_specialization.ts");
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "layout".to_string(),
         type_params: vec![TypeParam {
@@ -1220,9 +1242,10 @@ fn pod_layout_specialization_module() -> Module {
         }],
         params: vec![],
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(pod_layout_metric_expr(Type::TypeVar(
-            "T".to_string(),
-        ))), 0)],
+        body: vec![Stmt::Return(
+            Some(pod_layout_metric_expr(Type::TypeVar("T".to_string()))),
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -1256,7 +1279,8 @@ fn native_pod_view_specialization_module() -> Module {
         type_args: vec![Type::TypeVar("T".to_string())],
     };
     let mut module = Module::new("native_pod_view_specialization.ts");
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "view".to_string(),
         type_params: vec![TypeParam {
@@ -1266,12 +1290,15 @@ fn native_pod_view_specialization_module() -> Module {
         }],
         params: vec![param(0, "arena", Type::Named("NativeArena".to_string()))],
         return_type: generic_view_ty.clone(),
-        body: vec![Stmt::Return(Some(Expr::NativePodView {
-            owner: Box::new(local(0)),
-            byte_offset: Box::new(int(0)),
-            count: Box::new(int(4)),
-            view_type: Some(generic_view_ty),
-        }), 0)],
+        body: vec![Stmt::Return(
+            Some(Expr::NativePodView {
+                owner: Box::new(local(0)),
+                byte_offset: Box::new(int(0)),
+                count: Box::new(int(4)),
+                view_type: Some(generic_view_ty),
+            }),
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -2001,12 +2028,15 @@ fn artifact_schema_v6_records_pod_dynamic_write_fallback() {
             byte_offset: 0,
             byte_end: 0,
         }),
-        Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            byte_offset: 0,
-            object: Box::new(local(1)),
-            property: "tag".to_string(),
-        }), 0),
+        Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                byte_offset: 0,
+                object: Box::new(local(1)),
+                property: "tag".to_string(),
+            }),
+            0,
+        ),
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_dynamic_write.ts", body);
@@ -2052,16 +2082,20 @@ fn pod_field_read_after_dynamic_materialization_uses_dynamic_numeric_sub() {
             byte_offset: 0,
             byte_end: 0,
         }),
-        Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op: BinaryOp::Sub,
-            left: Box::new(Expr::PropertyGet {
-                byte_end: 0,
+        Stmt::Return(
+            Some(Expr::Binary {
                 byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "tag".to_string(),
+                op: BinaryOp::Sub,
+                left: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "tag".to_string(),
+                }),
+                right: Box::new(int(1)),
             }),
-            right: Box::new(int(1)),
-        }), 0),
+            0,
+        ),
     ];
 
     let ir = compile_ir("pod_dynamic_materialized_read_coerce.ts", body);
@@ -2089,7 +2123,8 @@ fn number_coerce_of_proven_numeric_loop_expression_skips_runtime_call() {
         number_let(1, "sum", true, int(0)),
         Stmt::For {
             init: Some(Box::new(number_let(2, "i", true, int(0)))),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(local(2)),
                 right: Box::new(int(64)),
@@ -2120,9 +2155,13 @@ fn number_coerce_of_numeric_array_fallback_keeps_runtime_call() {
         Vec::new(),
         vec![param(1, "values", Type::Array(Box::new(Type::Number)))],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::NumberCoerce(Box::new(
-            Expr::synthetic_index_get(Box::new(local(1)), Box::new(int(0))),
-        ))), 0)],
+        vec![Stmt::Return(
+            Some(Expr::NumberCoerce(Box::new(Expr::synthetic_index_get(
+                Box::new(local(1)),
+                Box::new(int(0)),
+            )))),
+            0,
+        )],
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
@@ -2206,12 +2245,15 @@ fn scalar_replaced_raw_f64_field_store_keeps_numeric_array_fallback_boxed() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(local(2)),
-                property: "gain".to_string(),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(2)),
+                    property: "gain".to_string(),
+                }),
+                0,
+            ),
         ],
     );
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
@@ -2243,12 +2285,15 @@ fn artifact_schema_v8_rejects_inexact_pod_initializer_values() {
                 ("count", Expr::String("x".to_string())),
             ],
         ),
-        Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            byte_offset: 0,
-            object: Box::new(local(1)),
-            property: "tag".to_string(),
-        }), 0),
+        Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                byte_offset: 0,
+                object: Box::new(local(1)),
+                property: "tag".to_string(),
+            }),
+            0,
+        ),
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_init_reject.ts", body);
@@ -2296,12 +2341,15 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
             invalid_ty,
             vec![("tag", int(7)), ("name", Expr::String("x".to_string()))],
         ),
-        Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            byte_offset: 0,
-            object: Box::new(local(1)),
-            property: "tag".to_string(),
-        }), 0),
+        Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                byte_offset: 0,
+                object: Box::new(local(1)),
+                property: "tag".to_string(),
+            }),
+            0,
+        ),
     ];
 
     let artifact = compile_artifact_json("artifact_c_layout_pod_reject.ts", body);
@@ -2329,7 +2377,10 @@ fn artifact_schema_v6_records_pod_pointerful_field_rejection() {
 
 #[test]
 fn artifact_records_buffer_length_as_buffer_len_and_unsigned_materialization() {
-    let body = vec![buffer_let(1, "buf", int(8)), Stmt::Return(Some(length(1)), 0)];
+    let body = vec![
+        buffer_let(1, "buf", int(8)),
+        Stmt::Return(Some(length(1)), 0),
+    ];
 
     let artifact = compile_artifact_json("artifact_buffer_length.ts", body);
     let records = artifact["records"].as_array().unwrap();
@@ -2378,17 +2429,20 @@ fn artifact_records_buffer_length_as_buffer_len_and_unsigned_materialization() {
 /// `type_analysis/numeric/tests.rs`.
 #[test]
 fn representation_first_numeric_reassignment_keeps_a_by_construction_f64_proof() {
-    let add_total = Expr::Binary { byte_offset: 0,
+    let add_total = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(local(1)),
         right: Box::new(number(2.25)),
     };
-    let scaled = Expr::Binary { byte_offset: 0,
+    let scaled = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Mul,
         left: Box::new(local(1)),
         right: Box::new(number(3.0)),
     };
-    let returned = Expr::Binary { byte_offset: 0,
+    let returned = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Sub,
         left: Box::new(local(2)),
         right: Box::new(number(0.75)),
@@ -2470,12 +2524,14 @@ fn representation_first_boolean_reassignment_drops_local_i1_proof() {
         op: UnaryOp::Not,
         operand: Box::new(local(1)),
     };
-    let numeric_cmp = Expr::Compare { byte_offset: 0,
+    let numeric_cmp = Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Lt,
         left: Box::new(number(1.0)),
         right: Box::new(number(2.0)),
     };
-    let bool_cmp = Expr::Compare { byte_offset: 0,
+    let bool_cmp = Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Eq,
         left: Box::new(local(1)),
         right: Box::new(Expr::Bool(false)),
@@ -2696,11 +2752,14 @@ fn record_has_note(record: &serde_json::Value, expected: &str) -> bool {
 fn artifact_records_native_module_handle_and_promise_boundary_boxing() {
     let body = vec![
         Stmt::Expr(native_module_call("net", "Socket", Vec::new())),
-        Stmt::Return(Some(native_module_call(
-            "perry/ads",
-            "js_ads_interstitial_show",
-            Vec::new(),
-        )), 0),
+        Stmt::Return(
+            Some(native_module_call(
+                "perry/ads",
+                "js_ads_interstitial_show",
+                Vec::new(),
+            )),
+            0,
+        ),
     ];
 
     let artifact = compile_artifact_json("artifact_native_module_abi_boundaries.ts", body);
@@ -2796,9 +2855,10 @@ fn named_import_native_fn_routes_to_runtime_dispatch() {
 
 #[test]
 fn small_bigint_literal_stays_i128_until_js_boundary() {
-    let body = vec![Stmt::Return(Some(Expr::BigInt(
-        "0x7fff_ffff_ffff_ffffn".to_string(),
-    )), 0)];
+    let body = vec![Stmt::Return(
+        Some(Expr::BigInt("0x7fff_ffff_ffff_ffffn".to_string())),
+        0,
+    )];
     let module = module_with_classes_and_params(
         "artifact_small_bigint_literal.ts",
         Vec::new(),
@@ -2853,7 +2913,8 @@ fn bigint_binary_result_live_across_collection_keeps_a_precise_root() {
                 name: "value".to_string(),
                 ty: Type::BigInt,
                 mutable: false,
-                init: Some(Expr::Binary { byte_offset: 0,
+                init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Mul,
                     left: Box::new(Expr::BigInt("1n".to_string())),
                     right: Box::new(Expr::BigInt("2n".to_string())),
@@ -3153,7 +3214,8 @@ fn compound_assign_alias_body_reaches_the_range_tier() {
             untyped_array_let(1, "values", 400),
             Stmt::For {
                 init: Some(Box::new(number_let(4, "i", true, int(0)))),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(local(4)),
                     right: Box::new(int(400)),
@@ -3234,7 +3296,8 @@ fn a_mutable_leading_binding_is_not_folded() {
             untyped_array_let(1, "values", 400),
             Stmt::For {
                 init: Some(Box::new(number_let(4, "i", true, int(0)))),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(local(4)),
                     right: Box::new(int(400)),
@@ -3260,7 +3323,8 @@ fn masked_window_dense_store_inlines_raw_store_without_calls() {
     // could break its all-slots-i32 loading proof), and a fast clone whose
     // store is a bare in-window `store double` with NO per-store runtime
     // call, no value check, no barrier.
-    let bitand = |left: Expr, right: Expr| Expr::Binary { byte_offset: 0,
+    let bitand = |left: Expr, right: Expr| Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitAnd,
         left: Box::new(left),
         right: Box::new(right),
@@ -3340,7 +3404,8 @@ fn masked_window_dense_store_admits_float_arithmetic_rhs() {
     // and the store stays the inline range store. This pins the predicate's
     // central claim — that admitted arithmetic never routes through a
     // boxed-result helper.
-    let bitand = |left: Expr, right: Expr| Expr::Binary { byte_offset: 0,
+    let bitand = |left: Expr, right: Expr| Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitAnd,
         left: Box::new(left),
         right: Box::new(right),
@@ -3417,7 +3482,8 @@ fn masked_window_dense_store_rejects_unproven_rhs() {
     // exits to catch that. The matcher must refuse the store (no
     // masked-store record, no dense store admission); the store keeps a
     // guarded/generic lowering instead.
-    let bitand = |left: Expr, right: Expr| Expr::Binary { byte_offset: 0,
+    let bitand = |left: Expr, right: Expr| Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitAnd,
         left: Box::new(left),
         right: Box::new(right),
@@ -3425,7 +3491,8 @@ fn masked_window_dense_store_rejects_unproven_rhs() {
     let module = module_with_classes_and_params(
         "masked_window_dense_store_reject.ts",
         Vec::new(),
-        vec![Param { byte_offset: 0,
+        vec![Param {
+            byte_offset: 0,
             id: 9,
             name: "v".to_string(),
             ty: Type::Number,
@@ -4049,10 +4116,13 @@ fn map_string_number_set_has_use_string_key_specialization() {
                     map: Box::new(local(1)),
                     key: Box::new(local(2)),
                 },
-                then_branch: vec![Stmt::Return(Some(Expr::MapGet {
-                    map: Box::new(local(1)),
-                    key: Box::new(local(2)),
-                }), 0)],
+                then_branch: vec![Stmt::Return(
+                    Some(Expr::MapGet {
+                        map: Box::new(local(1)),
+                        key: Box::new(local(2)),
+                    }),
+                    0,
+                )],
                 else_branch: Some(vec![Stmt::Return(Some(Expr::Number(0.0)), 0)]),
             },
         ],
@@ -4206,10 +4276,13 @@ fn map_number_key_string_value_set_uses_string_ref_until_slot() {
                 key: Box::new(local(2)),
                 value: Box::new(local(3)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -4298,10 +4371,13 @@ fn map_number_key_string_value_rejects_unproven_value() {
                 key: Box::new(local(2)),
                 value: Box::new(local(3)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -4435,10 +4511,13 @@ fn map_string_boolean_param_without_native_i1_proof_uses_generic_value_helper() 
                 key: Box::new(local(2)),
                 value: Box::new(local(3)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -4479,10 +4558,13 @@ fn map_string_int32_set_uses_typed_i32_value_helper() {
                 key: Box::new(local(2)),
                 value: Box::new(Expr::Integer(42)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -4530,10 +4612,13 @@ fn map_string_int32_param_without_native_i32_proof_uses_f64_helper() {
                 key: Box::new(local(2)),
                 value: Box::new(local(3)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -4596,10 +4681,13 @@ fn map_string_u32_set_uses_typed_u32_value_helper() {
                 key: Box::new(local(2)),
                 value: Box::new(Expr::Integer(4_000_000_000)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -4647,10 +4735,13 @@ fn map_string_u32_param_without_native_u32_proof_uses_generic_value_helper() {
                 key: Box::new(local(2)),
                 value: Box::new(local(3)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -4687,10 +4778,13 @@ fn map_string_f32_set_uses_typed_f32_value_helper() {
                 key: Box::new(local(2)),
                 value: Box::new(Expr::Number(1.5)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -4738,10 +4832,13 @@ fn map_string_f32_param_without_native_f32_proof_uses_generic_value_helper() {
                 key: Box::new(local(2)),
                 value: Box::new(local(3)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -4779,10 +4876,13 @@ fn map_string_string_set_uses_typed_string_value_helper() {
                 key: Box::new(local(2)),
                 value: Box::new(local(3)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -4826,10 +4926,13 @@ fn map_string_any_set_uses_generic_value_string_key_helper() {
                 key: Box::new(local(2)),
                 value: Box::new(local(3)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -5061,10 +5164,13 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
                 key: Box::new(local(2)),
                 value: Box::new(local(3)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
     let boolean_fallback_artifact = compile_artifact_json_for_module(boolean_fallback_module);
@@ -5116,10 +5222,13 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
                 key: Box::new(local(2)),
                 value: Box::new(Expr::Integer(42)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
     let i32_value_artifact = compile_artifact_json_for_module(selected_i32_value_module);
@@ -5178,10 +5287,13 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
                 key: Box::new(local(2)),
                 value: Box::new(Expr::Integer(4_000_000_000)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
     let u32_value_artifact = compile_artifact_json_for_module(selected_u32_value_module);
@@ -5240,10 +5352,13 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
                 key: Box::new(local(2)),
                 value: Box::new(Expr::Number(1.5)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
     let f32_value_artifact = compile_artifact_json_for_module(selected_f32_value_module);
@@ -5303,10 +5418,13 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
                 key: Box::new(local(2)),
                 value: Box::new(local(3)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
     let string_value_artifact = compile_artifact_json_for_module(selected_string_value_module);
@@ -5365,10 +5483,13 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
                 key: Box::new(local(2)),
                 value: Box::new(local(3)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
     let generic_value_artifact = compile_artifact_json_for_module(generic_value_module);
@@ -5409,10 +5530,13 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
                     map: Box::new(local(1)),
                     key: Box::new(local(2)),
                 },
-                then_branch: vec![Stmt::Return(Some(Expr::MapGet {
-                    map: Box::new(local(1)),
-                    key: Box::new(local(2)),
-                }), 0)],
+                then_branch: vec![Stmt::Return(
+                    Some(Expr::MapGet {
+                        map: Box::new(local(1)),
+                        key: Box::new(local(2)),
+                    }),
+                    0,
+                )],
                 else_branch: Some(vec![Stmt::Return(Some(Expr::Number(0.0)), 0)]),
             },
         ],
@@ -5557,10 +5681,13 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
                     map: Box::new(local(1)),
                     key: Box::new(local(2)),
                 },
-                then_branch: vec![Stmt::Return(Some(Expr::MapGet {
-                    map: Box::new(local(1)),
-                    key: Box::new(local(2)),
-                }), 0)],
+                then_branch: vec![Stmt::Return(
+                    Some(Expr::MapGet {
+                        map: Box::new(local(1)),
+                        key: Box::new(local(2)),
+                    }),
+                    0,
+                )],
                 else_branch: Some(vec![Stmt::Return(Some(Expr::Number(0.0)), 0)]),
             },
         ],
@@ -5717,10 +5844,13 @@ fn artifact_records_map_number_key_helper_selection_and_rejection() {
                 key: Box::new(local(2)),
                 value: Box::new(Expr::Bool(true)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(local(1)),
-                key: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(local(1)),
+                    key: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
     let rejected_artifact = compile_artifact_json_for_module(rejected_module);
@@ -5891,10 +6021,13 @@ fn set_number_specialization_rejects_unproven_value() {
                 set_id: 1,
                 value: Box::new(local(2)),
             }),
-            Stmt::Return(Some(Expr::SetHas {
-                set: Box::new(local(1)),
-                value: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -6777,10 +6910,13 @@ fn artifact_records_set_number_value_helper_selection_and_rejection() {
                 set_id: 1,
                 value: Box::new(local(2)),
             }),
-            Stmt::Return(Some(Expr::SetHas {
-                set: Box::new(local(1)),
-                value: Box::new(local(2)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::SetHas {
+                    set: Box::new(local(1)),
+                    value: Box::new(local(2)),
+                }),
+                0,
+            ),
         ],
     );
     let rejected_artifact = compile_artifact_json_for_module(rejected_module);
@@ -7916,7 +8052,8 @@ fn boxed_local_capture_module(name: &str) -> Module {
                 name: "writer".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Closure { byte_offset: 0,
+                init: Some(Expr::Closure {
+                    byte_offset: 0,
                     func_id: 30,
                     params: Vec::new(),
                     return_type: Type::Any,
@@ -7957,7 +8094,8 @@ fn boxed_local_storage_module(name: &str, init: Expr, replacement: Expr) -> Modu
                 name: "writer".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::Closure { byte_offset: 0,
+                init: Some(Expr::Closure {
+                    byte_offset: 0,
                     func_id: 30,
                     params: Vec::new(),
                     return_type: Type::Any,
@@ -7992,7 +8130,8 @@ fn abrupt_derived_classes() -> Vec<Class> {
     // function.
     let mut derived = class(91, "AbruptDerived", Vec::new());
     derived.extends_name = Some("Map".to_string());
-    derived.constructor = Some(Function { byte_offset: 0,
+    derived.constructor = Some(Function {
+        byte_offset: 0,
         id: 92,
         name: "AbruptDerived_constructor".to_string(),
         type_params: Vec::new(),
@@ -8115,7 +8254,8 @@ fn abrupt_constructor_argument_stops_anonymous_object_construction() {
             class_field("stamp", Type::Any),
         ],
     );
-    record.constructor = Some(Function { byte_offset: 0,
+    record.constructor = Some(Function {
+        byte_offset: 0,
         id: 81,
         name: "__AnonShape_abrupt_constructor_arg_constructor".to_string(),
         type_params: Vec::new(),
@@ -8159,14 +8299,17 @@ fn abrupt_constructor_argument_stops_anonymous_object_construction() {
         },
         vec![param(99, "filename", Type::Any)],
         Type::Any,
-        vec![Stmt::Return(Some(Expr::New {
-            byte_end: 0,
-            class_name: "__AnonShape_abrupt_constructor_arg".to_string(),
-            args: vec![abrupt_operand(), Expr::Array(Vec::new(), None)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-            cap_args_appended: 0,
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::New {
+                byte_end: 0,
+                class_name: "__AnonShape_abrupt_constructor_arg".to_string(),
+                args: vec![abrupt_operand(), Expr::Array(Vec::new(), None)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+                cap_args_appended: 0,
+            }),
+            0,
+        )],
     );
     let ir = String::from_utf8(compile_module(&module, empty_opts()).unwrap()).unwrap();
     let body = probe_body(&ir);
@@ -8194,7 +8337,8 @@ fn boxed_param_capture_module(name: &str) -> Module {
         Vec::new(),
         vec![
             param(20, "cell", Type::Any),
-            Param { byte_offset: 0,
+            Param {
+                byte_offset: 0,
                 id: 22,
                 name: "arguments".to_string(),
                 ty: Type::Any,
@@ -8399,10 +8543,13 @@ fn tdz_numeric_const_read_is_not_constant_folded() {
 /// pass the check and see 42.
 #[test]
 fn module_tdz_check_reads_the_sentinel_seeded_global_not_the_folded_constant() {
-    let body = vec![Stmt::Return(Some(Expr::Sequence(vec![
-        perry_hir::tdz_check::check(9, "value", 0),
-        Expr::LocalGet(9),
-    ])), 0)];
+    let body = vec![Stmt::Return(
+        Some(Expr::Sequence(vec![
+            perry_hir::tdz_check::check(9, "value", 0),
+            Expr::LocalGet(9),
+        ])),
+        0,
+    )];
     let mut fixture = module("module_tdz_check.ts", body);
     fixture.init = vec![Stmt::Let {
         id: 9,
@@ -8485,7 +8632,8 @@ fn boxed_param_home_preserves_jsvalue_before_cell_pointer() {
 
 #[test]
 fn boxed_jsvalue_storage_uses_bits_helpers_for_strings_objects_and_tags() {
-    let short_string_expr = Expr::Binary { byte_offset: 0,
+    let short_string_expr = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::String("a".to_string())),
         right: Box::new(Expr::String("b".to_string())),
@@ -8614,7 +8762,8 @@ fn compiler_private_async_control_body() -> Vec<Stmt> {
             init: Some(Expr::Bool(false)),
         },
         Stmt::If {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(10)),
                 right: Box::new(Expr::Number(0.0)),
@@ -8665,18 +8814,23 @@ fn compiler_private_async_iter_result_i1_body() -> Vec<Stmt> {
 fn compiler_private_async_iter_result_i32_body() -> Vec<Stmt> {
     vec![
         Stmt::Expr(Expr::IterResultSet(
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::BitOr,
                 left: Box::new(Expr::Integer(17)),
                 right: Box::new(Expr::Integer(0)),
             }),
             false,
         )),
-        Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op: BinaryOp::BitOr,
-            left: Box::new(Expr::IterResultGetValue),
-            right: Box::new(Expr::Integer(0)),
-        }), 0),
+        Stmt::Return(
+            Some(Expr::Binary {
+                byte_offset: 0,
+                op: BinaryOp::BitOr,
+                left: Box::new(Expr::IterResultGetValue),
+                right: Box::new(Expr::Integer(0)),
+            }),
+            0,
+        ),
     ]
 }
 
@@ -9112,7 +9266,8 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
     } else {
         Type::Number
     };
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "typed_f64_function_abi.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -9122,7 +9277,8 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![
-            Function { byte_offset: 0,
+            Function {
+                byte_offset: 0,
                 id: 1,
                 name: "add".to_string(),
                 type_params: Vec::new(),
@@ -9137,17 +9293,22 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
                         name: "denom".to_string(),
                         ty: Type::Number,
                         mutable: false,
-                        init: Some(Expr::Binary { byte_offset: 0,
+                        init: Some(Expr::Binary {
+                            byte_offset: 0,
                             op: BinaryOp::Add,
                             left: Box::new(local(2)),
                             right: Box::new(number(0.5)),
                         }),
                     },
-                    Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                        op: BinaryOp::Div,
-                        left: Box::new(local(1)),
-                        right: Box::new(local(5)),
-                    }), 0),
+                    Stmt::Return(
+                        Some(Expr::Binary {
+                            byte_offset: 0,
+                            op: BinaryOp::Div,
+                            left: Box::new(local(1)),
+                            right: Box::new(local(5)),
+                        }),
+                        0,
+                    ),
                 ],
                 is_async: false,
                 is_generator: false,
@@ -9159,19 +9320,23 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
                 was_unrolled: false,
                 construct_only: false,
             },
-            Function { byte_offset: 0,
+            Function {
+                byte_offset: 0,
                 id: 2,
                 name: "caller".to_string(),
                 type_params: Vec::new(),
                 params: vec![param(3, "x", Type::Number), param(4, "y", Type::Number)],
                 return_type: Type::Number,
-                body: vec![Stmt::Return(Some(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::FuncRef(1)),
-                    args: vec![local(3), local(4)],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                }), 0)],
+                body: vec![Stmt::Return(
+                    Some(Expr::Call {
+                        byte_end: 0,
+                        callee: Box::new(Expr::FuncRef(1)),
+                        args: vec![local(3), local(4)],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                    0,
+                )],
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -9220,11 +9385,15 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
 /// simplest shape the removed i64 specializer claimed (#7238).
 fn number_add_module() -> Module {
     let mut module = typed_f64_clone_test_module(false);
-    module.functions[0].body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-        op: BinaryOp::Add,
-        left: Box::new(local(1)),
-        right: Box::new(local(2)),
-    }), 0)];
+    module.functions[0].body = vec![Stmt::Return(
+        Some(Expr::Binary {
+            byte_offset: 0,
+            op: BinaryOp::Add,
+            left: Box::new(local(1)),
+            right: Box::new(local(2)),
+        }),
+        0,
+    )];
     module
 }
 
@@ -9246,23 +9415,30 @@ fn typed_f64_mixed_clone_test_module() -> Module {
         param(2, "b", Type::Int32),
         param(6, "flag", Type::Boolean),
     ];
-    module.functions[0].body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-        op: BinaryOp::Add,
-        left: Box::new(local(1)),
-        right: Box::new(local(2)),
-    }), 0)];
+    module.functions[0].body = vec![Stmt::Return(
+        Some(Expr::Binary {
+            byte_offset: 0,
+            op: BinaryOp::Add,
+            left: Box::new(local(1)),
+            right: Box::new(local(2)),
+        }),
+        0,
+    )];
     module.functions[1].params = vec![
         param(3, "x", Type::Number),
         param(4, "y", Type::Int32),
         param(7, "flag", Type::Boolean),
     ];
-    module.functions[1].body = vec![Stmt::Return(Some(Expr::Call {
-        byte_end: 0,
-        callee: Box::new(Expr::FuncRef(1)),
-        args: vec![local(3), local(4), local(7)],
-        type_args: Vec::new(),
-        byte_offset: 0,
-    }), 0)];
+    module.functions[1].body = vec![Stmt::Return(
+        Some(Expr::Call {
+            byte_end: 0,
+            callee: Box::new(Expr::FuncRef(1)),
+            args: vec![local(3), local(4), local(7)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+        0,
+    )];
     module
 }
 
@@ -9276,26 +9452,34 @@ fn typed_f64_i32_local_clone_test_module() -> Module {
             name: "mask".to_string(),
             ty: Type::Int32,
             mutable: false,
-            init: Some(Expr::Binary { byte_offset: 0,
+            init: Some(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::BitOr,
                 left: Box::new(local(2)),
                 right: Box::new(int(1)),
             }),
         },
-        Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op: BinaryOp::Add,
-            left: Box::new(local(1)),
-            right: Box::new(local(5)),
-        }), 0),
+        Stmt::Return(
+            Some(Expr::Binary {
+                byte_offset: 0,
+                op: BinaryOp::Add,
+                left: Box::new(local(1)),
+                right: Box::new(local(5)),
+            }),
+            0,
+        ),
     ];
     module.functions[1].params = vec![param(3, "x", Type::Number), param(4, "y", Type::Int32)];
-    module.functions[1].body = vec![Stmt::Return(Some(Expr::Call {
-        byte_end: 0,
-        callee: Box::new(Expr::FuncRef(1)),
-        args: vec![local(3), local(4)],
-        type_args: Vec::new(),
-        byte_offset: 0,
-    }), 0)];
+    module.functions[1].body = vec![Stmt::Return(
+        Some(Expr::Call {
+            byte_end: 0,
+            callee: Box::new(Expr::FuncRef(1)),
+            args: vec![local(3), local(4)],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+        0,
+    )];
     module
 }
 
@@ -9304,7 +9488,8 @@ fn typed_i1_clone_test_module() -> Module {
 }
 
 fn typed_i1_clone_test_module_named(name: &str) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -9314,7 +9499,8 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![
-            Function { byte_offset: 0,
+            Function {
+                byte_offset: 0,
                 id: 1,
                 name: "both".to_string(),
                 type_params: Vec::new(),
@@ -9331,11 +9517,15 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
                             operand: Box::new(local(2)),
                         }),
                     },
-                    Stmt::Return(Some(Expr::Logical { byte_offset: 0,
-                        op: LogicalOp::And,
-                        left: Box::new(local(1)),
-                        right: Box::new(local(5)),
-                    }), 0),
+                    Stmt::Return(
+                        Some(Expr::Logical {
+                            byte_offset: 0,
+                            op: LogicalOp::And,
+                            left: Box::new(local(1)),
+                            right: Box::new(local(5)),
+                        }),
+                        0,
+                    ),
                 ],
                 is_async: false,
                 is_generator: false,
@@ -9347,19 +9537,23 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
                 was_unrolled: false,
                 construct_only: false,
             },
-            Function { byte_offset: 0,
+            Function {
+                byte_offset: 0,
                 id: 2,
                 name: "caller".to_string(),
                 type_params: Vec::new(),
                 params: vec![param(3, "x", Type::Boolean), param(4, "y", Type::Boolean)],
                 return_type: Type::Boolean,
-                body: vec![Stmt::Return(Some(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::FuncRef(1)),
-                    args: vec![local(3), local(4)],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                }), 0)],
+                body: vec![Stmt::Return(
+                    Some(Expr::Call {
+                        byte_end: 0,
+                        callee: Box::new(Expr::FuncRef(1)),
+                        args: vec![local(3), local(4)],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                    0,
+                )],
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -9415,7 +9609,8 @@ fn typed_i1_rejected_signature_module(case: &str) -> Module {
 }
 
 fn typed_string_clone_test_module(case: &str) -> Module {
-    let mut module = Module { byte_offset: 0,
+    let mut module = Module {
+        byte_offset: 0,
         name: "typed_string_function_abi.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -9425,7 +9620,8 @@ fn typed_string_clone_test_module(case: &str) -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![
-            Function { byte_offset: 0,
+            Function {
+                byte_offset: 0,
                 id: 1,
                 name: "id".to_string(),
                 type_params: Vec::new(),
@@ -9451,19 +9647,23 @@ fn typed_string_clone_test_module(case: &str) -> Module {
                 was_unrolled: false,
                 construct_only: false,
             },
-            Function { byte_offset: 0,
+            Function {
+                byte_offset: 0,
                 id: 2,
                 name: "caller".to_string(),
                 type_params: Vec::new(),
                 params: vec![param(2, "x", Type::String)],
                 return_type: Type::String,
-                body: vec![Stmt::Return(Some(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::FuncRef(1)),
-                    args: vec![local(2)],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                }), 0)],
+                body: vec![Stmt::Return(
+                    Some(Expr::Call {
+                        byte_end: 0,
+                        callee: Box::new(Expr::FuncRef(1)),
+                        args: vec![local(2)],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                    0,
+                )],
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -9515,11 +9715,15 @@ fn typed_string_clone_test_module(case: &str) -> Module {
         }
         "rest_param" => module.functions[0].params[0].is_rest = true,
         "concat_body" => {
-            module.functions[0].body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                op: BinaryOp::Add,
-                left: Box::new(local(1)),
-                right: Box::new(local(1)),
-            }), 0)];
+            module.functions[0].body = vec![Stmt::Return(
+                Some(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::Add,
+                    left: Box::new(local(1)),
+                    right: Box::new(local(1)),
+                }),
+                0,
+            )];
         }
         other => panic!("unknown typed-string fixture case: {other}"),
     }
@@ -9533,7 +9737,8 @@ fn typed_i1_mixed_callsite_module() -> Module {
 }
 
 fn typed_i1_numeric_predicate_module() -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "typed_i1_numeric_predicate.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -9543,7 +9748,8 @@ fn typed_i1_numeric_predicate_module() -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![
-            Function { byte_offset: 0,
+            Function {
+                byte_offset: 0,
                 id: 1,
                 name: "above".to_string(),
                 type_params: Vec::new(),
@@ -9555,17 +9761,22 @@ fn typed_i1_numeric_predicate_module() -> Module {
                         name: "delta".to_string(),
                         ty: Type::Number,
                         mutable: false,
-                        init: Some(Expr::Binary { byte_offset: 0,
+                        init: Some(Expr::Binary {
+                            byte_offset: 0,
                             op: BinaryOp::Sub,
                             left: Box::new(local(1)),
                             right: Box::new(local(2)),
                         }),
                     },
-                    Stmt::Return(Some(Expr::Compare { byte_offset: 0,
-                        op: CompareOp::Gt,
-                        left: Box::new(local(5)),
-                        right: Box::new(number(0.0)),
-                    }), 0),
+                    Stmt::Return(
+                        Some(Expr::Compare {
+                            byte_offset: 0,
+                            op: CompareOp::Gt,
+                            left: Box::new(local(5)),
+                            right: Box::new(number(0.0)),
+                        }),
+                        0,
+                    ),
                 ],
                 is_async: false,
                 is_generator: false,
@@ -9577,19 +9788,23 @@ fn typed_i1_numeric_predicate_module() -> Module {
                 was_unrolled: false,
                 construct_only: false,
             },
-            Function { byte_offset: 0,
+            Function {
+                byte_offset: 0,
                 id: 2,
                 name: "caller".to_string(),
                 type_params: Vec::new(),
                 params: vec![param(3, "x", Type::Number), param(4, "y", Type::Number)],
                 return_type: Type::Boolean,
-                body: vec![Stmt::Return(Some(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::FuncRef(1)),
-                    args: vec![local(3), local(4)],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                }), 0)],
+                body: vec![Stmt::Return(
+                    Some(Expr::Call {
+                        byte_end: 0,
+                        callee: Box::new(Expr::FuncRef(1)),
+                        args: vec![local(3), local(4)],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                    0,
+                )],
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -9635,7 +9850,8 @@ fn typed_i1_numeric_predicate_module() -> Module {
 }
 
 fn typed_i1_i32_predicate_module() -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "typed_i1_i32_predicate.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -9645,17 +9861,22 @@ fn typed_i1_i32_predicate_module() -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![
-            Function { byte_offset: 0,
+            Function {
+                byte_offset: 0,
                 id: 1,
                 name: "above_i32".to_string(),
                 type_params: Vec::new(),
                 params: vec![param(1, "a", Type::Int32), param(2, "b", Type::Int32)],
                 return_type: Type::Boolean,
-                body: vec![Stmt::Return(Some(Expr::Compare { byte_offset: 0,
-                    op: CompareOp::Gt,
-                    left: Box::new(local(1)),
-                    right: Box::new(local(2)),
-                }), 0)],
+                body: vec![Stmt::Return(
+                    Some(Expr::Compare {
+                        byte_offset: 0,
+                        op: CompareOp::Gt,
+                        left: Box::new(local(1)),
+                        right: Box::new(local(2)),
+                    }),
+                    0,
+                )],
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -9666,19 +9887,23 @@ fn typed_i1_i32_predicate_module() -> Module {
                 was_unrolled: false,
                 construct_only: false,
             },
-            Function { byte_offset: 0,
+            Function {
+                byte_offset: 0,
                 id: 2,
                 name: "caller".to_string(),
                 type_params: Vec::new(),
                 params: vec![param(3, "x", Type::Int32), param(4, "y", Type::Int32)],
                 return_type: Type::Boolean,
-                body: vec![Stmt::Return(Some(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::FuncRef(1)),
-                    args: vec![local(3), local(4)],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                }), 0)],
+                body: vec![Stmt::Return(
+                    Some(Expr::Call {
+                        byte_end: 0,
+                        callee: Box::new(Expr::FuncRef(1)),
+                        args: vec![local(3), local(4)],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                    0,
+                )],
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -9734,50 +9959,68 @@ fn typed_i32_return_module(case: &str) -> Module {
                     name: "mixed".to_string(),
                     ty: Type::Int32,
                     mutable: false,
-                    init: Some(Expr::Binary { byte_offset: 0,
+                    init: Some(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::BitXor,
                         left: Box::new(local(1)),
                         right: Box::new(local(2)),
                     }),
                 },
-                Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                    op: BinaryOp::BitOr,
-                    left: Box::new(local(5)),
-                    right: Box::new(Expr::Integer(7)),
-                }), 0),
+                Stmt::Return(
+                    Some(Expr::Binary {
+                        byte_offset: 0,
+                        op: BinaryOp::BitOr,
+                        left: Box::new(local(5)),
+                        right: Box::new(Expr::Integer(7)),
+                    }),
+                    0,
+                ),
             ],
         ),
         "number_param" => (
             vec![param(1, "a", Type::Number), param(2, "b", Type::Int32)],
             Type::Int32,
-            vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                op: BinaryOp::BitXor,
-                left: Box::new(local(1)),
-                right: Box::new(local(2)),
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::BitXor,
+                    left: Box::new(local(1)),
+                    right: Box::new(local(2)),
+                }),
+                0,
+            )],
         ),
         "number_return" => (
             vec![param(1, "a", Type::Int32), param(2, "b", Type::Int32)],
             Type::Number,
-            vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                op: BinaryOp::BitXor,
-                left: Box::new(local(1)),
-                right: Box::new(local(2)),
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::BitXor,
+                    left: Box::new(local(1)),
+                    right: Box::new(local(2)),
+                }),
+                0,
+            )],
         ),
         "unsafe_add" => (
             vec![param(1, "a", Type::Int32), param(2, "b", Type::Int32)],
             Type::Int32,
-            vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                op: BinaryOp::Add,
-                left: Box::new(local(1)),
-                right: Box::new(local(2)),
-            }), 0)],
+            vec![Stmt::Return(
+                Some(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::Add,
+                    left: Box::new(local(1)),
+                    right: Box::new(local(2)),
+                }),
+                0,
+            )],
         ),
         other => panic!("unknown typed-i32 return fixture: {other}"),
     };
 
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: format!("typed_i32_return_{case}.ts"),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -9787,7 +10030,8 @@ fn typed_i32_return_module(case: &str) -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![
-            Function { byte_offset: 0,
+            Function {
+                byte_offset: 0,
                 id: 1,
                 name: "mix_i32".to_string(),
                 type_params: Vec::new(),
@@ -9804,19 +10048,23 @@ fn typed_i32_return_module(case: &str) -> Module {
                 was_unrolled: false,
                 construct_only: false,
             },
-            Function { byte_offset: 0,
+            Function {
+                byte_offset: 0,
                 id: 2,
                 name: "caller".to_string(),
                 type_params: Vec::new(),
                 params: vec![param(3, "x", Type::Int32), param(4, "y", Type::Int32)],
                 return_type: Type::Int32,
-                body: vec![Stmt::Return(Some(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::FuncRef(1)),
-                    args: vec![local(3), local(4)],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                }), 0)],
+                body: vec![Stmt::Return(
+                    Some(Expr::Call {
+                        byte_end: 0,
+                        callee: Box::new(Expr::FuncRef(1)),
+                        args: vec![local(3), local(4)],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                    0,
+                )],
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -9894,11 +10142,14 @@ fn typed_parse_spec_clone_rodata_module() -> Module {
         Vec::new(),
         vec![param(1, "n", Type::Number)],
         return_type.clone(),
-        vec![Stmt::Return(Some(Expr::JsonParseTyped {
-            text: Box::new(Expr::String("[{\"a\":\"x\",\"b\":\"y\"}]".to_string())),
-            ty: return_type,
-            ordered_keys: Some(vec!["a".to_string(), "b".to_string()]),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::JsonParseTyped {
+                text: Box::new(Expr::String("[{\"a\":\"x\",\"b\":\"y\"}]".to_string())),
+                ty: return_type,
+                ordered_keys: Some(vec!["a".to_string(), "b".to_string()]),
+            }),
+            0,
+        )],
     );
     module.functions[0].name = "parse_records".to_string();
     // The integer argument selects a full-body `$spec_i32` entry while the
@@ -9915,7 +10166,8 @@ fn typed_parse_spec_clone_rodata_module() -> Module {
 
 fn typed_f64_method_clone_module() -> Module {
     let mut calc = class(201, "Calc", Vec::new());
-    calc.methods.push(Function { byte_offset: 0,
+    calc.methods.push(Function {
+        byte_offset: 0,
         id: 200,
         name: "mix".to_string(),
         type_params: Vec::new(),
@@ -9927,17 +10179,22 @@ fn typed_f64_method_clone_module() -> Module {
                 name: "denom".to_string(),
                 ty: Type::Number,
                 mutable: false,
-                init: Some(Expr::Binary { byte_offset: 0,
+                init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(local(22)),
                     right: Box::new(number(0.5)),
                 }),
             },
-            Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                op: BinaryOp::Div,
-                left: Box::new(local(21)),
-                right: Box::new(local(25)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::Div,
+                    left: Box::new(local(21)),
+                    right: Box::new(local(25)),
+                }),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -9959,24 +10216,28 @@ fn typed_f64_method_clone_module() -> Module {
             param(3, "y", Type::Number),
         ],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "mix".to_string(),
+                }),
+                args: vec![local(2), local(3)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "mix".to_string(),
             }),
-            args: vec![local(2), local(3)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)],
+            0,
+        )],
     )
 }
 
 fn typed_f64_i32_local_method_clone_module() -> Module {
     let mut calc = class(203, "Calc", Vec::new());
-    calc.methods.push(Function { byte_offset: 0,
+    calc.methods.push(Function {
+        byte_offset: 0,
         id: 204,
         name: "mix".to_string(),
         type_params: Vec::new(),
@@ -9988,17 +10249,22 @@ fn typed_f64_i32_local_method_clone_module() -> Module {
                 name: "mask".to_string(),
                 ty: Type::Int32,
                 mutable: false,
-                init: Some(Expr::Binary { byte_offset: 0,
+                init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::BitOr,
                     left: Box::new(local(22)),
                     right: Box::new(int(1)),
                 }),
             },
-            Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                op: BinaryOp::Add,
-                left: Box::new(local(21)),
-                right: Box::new(local(25)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::Add,
+                    left: Box::new(local(21)),
+                    right: Box::new(local(25)),
+                }),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -10020,29 +10286,36 @@ fn typed_f64_i32_local_method_clone_module() -> Module {
             param(3, "y", Type::Int32),
         ],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "mix".to_string(),
+                }),
+                args: vec![local(2), local(3)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "mix".to_string(),
             }),
-            args: vec![local(2), local(3)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)],
+            0,
+        )],
     )
 }
 
 fn typed_f64_method_negative_module(case: &str) -> Module {
     let mut calc = class(202, "Calc", vec![class_field("x", Type::Number)]);
     let mut params = vec![param(21, "a", Type::Number), param(22, "b", Type::Number)];
-    let mut body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-        op: BinaryOp::Add,
-        left: Box::new(local(21)),
-        right: Box::new(local(22)),
-    }), 0)];
+    let mut body = vec![Stmt::Return(
+        Some(Expr::Binary {
+            byte_offset: 0,
+            op: BinaryOp::Add,
+            left: Box::new(local(21)),
+            right: Box::new(local(22)),
+        }),
+        0,
+    )];
     match case {
         "this" => {
             body = vec![Stmt::Return(Some(Expr::This), 0)];
@@ -10058,7 +10331,8 @@ fn typed_f64_method_negative_module(case: &str) -> Module {
         }
         other => panic!("unknown negative typed-f64 method fixture: {other}"),
     }
-    calc.methods.push(Function { byte_offset: 0,
+    calc.methods.push(Function {
+        byte_offset: 0,
         id: 201,
         name: "mix".to_string(),
         type_params: Vec::new(),
@@ -10085,18 +10359,21 @@ fn typed_f64_method_negative_module(case: &str) -> Module {
             param(3, "y", Type::Number),
         ],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "mix".to_string(),
+                }),
+                args: vec![local(2), local(3)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "mix".to_string(),
             }),
-            args: vec![local(2), local(3)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)],
+            0,
+        )],
     )
 }
 
@@ -10110,7 +10387,8 @@ fn this_field(name: &str) -> Expr {
 }
 
 fn typed_f64_receiver_method_function(id: u32, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: "score".to_string(),
         type_params: Vec::new(),
@@ -10154,17 +10432,22 @@ fn typed_f64_receiver_method_positive_module() -> Module {
                 name: "sum".to_string(),
                 ty: Type::Number,
                 mutable: false,
-                init: Some(Expr::Binary { byte_offset: 0,
+                init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(this_field("x")),
                     right: Box::new(this_field("y")),
                 }),
             },
-            Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                op: BinaryOp::Mul,
-                left: Box::new(local(25)),
-                right: Box::new(local(21)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::Mul,
+                    left: Box::new(local(25)),
+                    right: Box::new(local(21)),
+                }),
+                0,
+            ),
         ],
     ));
 
@@ -10176,18 +10459,21 @@ fn typed_f64_receiver_method_positive_module() -> Module {
             param(2, "scale", Type::Number),
         ],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "score".to_string(),
+                }),
+                args: vec![local(2)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "score".to_string(),
             }),
-            args: vec![local(2)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)],
+            0,
+        )],
     )
 }
 
@@ -10224,18 +10510,21 @@ fn typed_f64_receiver_method_negative_module(case: &str) -> Module {
             ];
         }
         "nested_call" => {
-            method_body = vec![Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::PropertyGet {
+            method_body = vec![Stmt::Return(
+                Some(Expr::Call {
                     byte_end: 0,
+                    callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
+                        byte_offset: 0,
+                        object: Box::new(Expr::This),
+                        property: "other".to_string(),
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
                     byte_offset: 0,
-                    object: Box::new(Expr::This),
-                    property: "other".to_string(),
                 }),
-                args: Vec::new(),
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }), 0)];
+                0,
+            )];
         }
         "computed_member" => {
             point = class_with_computed_member(212, "Point", vec![class_field("x", Type::Number)]);
@@ -10243,7 +10532,8 @@ fn typed_f64_receiver_method_negative_module(case: &str) -> Module {
         "accessor" => {
             point.getters.push((
                 "x".to_string(),
-                Function { byte_offset: 0,
+                Function {
+                    byte_offset: 0,
                     id: 2121,
                     name: "__get_x".to_string(),
                     type_params: Vec::new(),
@@ -10279,18 +10569,21 @@ fn typed_f64_receiver_method_negative_module(case: &str) -> Module {
                     param(2, "scale", Type::Number),
                 ],
                 Type::Number,
-                vec![Stmt::Return(Some(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::PropertyGet {
+                vec![Stmt::Return(
+                    Some(Expr::Call {
                         byte_end: 0,
+                        callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
+                            byte_offset: 0,
+                            object: Box::new(local(1)),
+                            property: "score".to_string(),
+                        }),
+                        args: vec![local(2)],
+                        type_args: Vec::new(),
                         byte_offset: 0,
-                        object: Box::new(local(1)),
-                        property: "score".to_string(),
                     }),
-                    args: vec![local(2)],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                }), 0)],
+                    0,
+                )],
             );
         }
         "non_numeric_field" => {}
@@ -10308,18 +10601,21 @@ fn typed_f64_receiver_method_negative_module(case: &str) -> Module {
             param(2, "scale", Type::Number),
         ],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "score".to_string(),
+                }),
+                args: vec![local(2)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "score".to_string(),
             }),
-            args: vec![local(2)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)],
+            0,
+        )],
     )
 }
 
@@ -10328,7 +10624,8 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
     let mut prefix = Vec::new();
     let mut captures = Vec::new();
     let mut mutable_captures = Vec::new();
-    let mut body_expr = Expr::Binary { byte_offset: 0,
+    let mut body_expr = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(local(31)),
         right: Box::new(local(32)),
@@ -10347,7 +10644,8 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
                 init: Some(number(1.5)),
             });
             captures.push(30);
-            body_expr = Expr::Binary { byte_offset: 0,
+            body_expr = Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(body_expr),
                 right: Box::new(local(30)),
@@ -10363,7 +10661,8 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
             });
             captures.push(30);
             mutable_captures.push(30);
-            body_expr = Expr::Binary { byte_offset: 0,
+            body_expr = Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(body_expr),
                 right: Box::new(local(30)),
@@ -10387,7 +10686,8 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
                 is_generator: false,
             }),
             mutable: false,
-            init: Some(Expr::Closure { byte_offset: 0,
+            init: Some(Expr::Closure {
+                byte_offset: 0,
                 func_id: 300,
                 params,
                 return_type: Type::Number,
@@ -10399,11 +10699,15 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
                         mutable: false,
                         init: Some(body_expr),
                     },
-                    Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                        op: BinaryOp::Mul,
-                        left: Box::new(local(33)),
-                        right: Box::new(number(2.0)),
-                    }), 0),
+                    Stmt::Return(
+                        Some(Expr::Binary {
+                            byte_offset: 0,
+                            op: BinaryOp::Mul,
+                            left: Box::new(local(33)),
+                            right: Box::new(number(2.0)),
+                        }),
+                        0,
+                    ),
                 ],
                 captures,
                 mutable_captures,
@@ -10417,13 +10721,16 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
                 is_strict: false,
             }),
         },
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(local(10)),
-            args: vec![number(2.0), number(3.0)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0),
+        Stmt::Return(
+            Some(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(local(10)),
+                args: vec![number(2.0), number(3.0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            0,
+        ),
     ]);
 
     module("typed_f64_closure_abi.ts", body)
@@ -10445,12 +10752,14 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
     });
     let mut return_type = Type::Int32;
     let mut first_let_ty = Type::Int32;
-    let mut body_expr = Expr::Binary { byte_offset: 0,
+    let mut body_expr = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitXor,
         left: Box::new(local(31)),
         right: Box::new(local(32)),
     };
-    let mut return_expr = Expr::Binary { byte_offset: 0,
+    let mut return_expr = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitOr,
         left: Box::new(local(33)),
         right: Box::new(int(7)),
@@ -10466,7 +10775,8 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
                 init: Some(int(3)),
             });
             captures.push(30);
-            return_expr = Expr::Binary { byte_offset: 0,
+            return_expr = Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::BitAnd,
                 left: Box::new(return_expr),
                 right: Box::new(local(30)),
@@ -10498,7 +10808,8 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
         }
         "unsafe_add" => {
             first_let_ty = Type::Int32;
-            body_expr = Expr::Binary { byte_offset: 0,
+            body_expr = Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(local(31)),
                 right: Box::new(local(32)),
@@ -10514,7 +10825,8 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
             });
             captures.push(30);
             mutable_captures.push(30);
-            return_expr = Expr::Binary { byte_offset: 0,
+            return_expr = Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::BitAnd,
                 left: Box::new(return_expr),
                 right: Box::new(local(30)),
@@ -10533,7 +10845,8 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
             name: "mix_i32".to_string(),
             ty: local_ty,
             mutable: false,
-            init: Some(Expr::Closure { byte_offset: 0,
+            init: Some(Expr::Closure {
+                byte_offset: 0,
                 func_id: 303,
                 params,
                 return_type: return_type.clone(),
@@ -10559,13 +10872,16 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
                 is_strict: false,
             }),
         },
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(local(10)),
-            args: vec![int(11), int(5)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0),
+        Stmt::Return(
+            Some(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(local(10)),
+                args: vec![int(11), int(5)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            0,
+        ),
     ]);
 
     module_with_classes_and_params(
@@ -10594,7 +10910,8 @@ fn typed_i1_method_clone_module(case: &str) -> Module {
         }
         other => panic!("unknown typed-i1 method fixture: {other}"),
     }
-    switch.methods.push(Function { byte_offset: 0,
+    switch.methods.push(Function {
+        byte_offset: 0,
         id: 210,
         name: "check".to_string(),
         type_params: Vec::new(),
@@ -10611,11 +10928,15 @@ fn typed_i1_method_clone_module(case: &str) -> Module {
                     operand: Box::new(local(22)),
                 }),
             },
-            Stmt::Return(Some(Expr::Logical { byte_offset: 0,
-                op: LogicalOp::Or,
-                left: Box::new(local(21)),
-                right: Box::new(local(25)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::Logical {
+                    byte_offset: 0,
+                    op: LogicalOp::Or,
+                    left: Box::new(local(21)),
+                    right: Box::new(local(25)),
+                }),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -10637,18 +10958,21 @@ fn typed_i1_method_clone_module(case: &str) -> Module {
             param(3, "y", Type::Boolean),
         ],
         Type::Boolean,
-        vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "check".to_string(),
+                }),
+                args: vec![local(2), local(3)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "check".to_string(),
             }),
-            args: vec![local(2), local(3)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)],
+            0,
+        )],
     )
 }
 
@@ -10657,12 +10981,14 @@ fn typed_i32_method_clone_module(case: &str) -> Module {
     let mut params = vec![param(21, "a", Type::Int32), param(22, "b", Type::Int32)];
     let mut return_type = Type::Int32;
     let mut first_let_ty = Type::Int32;
-    let mut first_expr = Expr::Binary { byte_offset: 0,
+    let mut first_expr = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitXor,
         left: Box::new(local(21)),
         right: Box::new(local(22)),
     };
-    let mut return_expr = Expr::Binary { byte_offset: 0,
+    let mut return_expr = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitOr,
         left: Box::new(local(25)),
         right: Box::new(int(7)),
@@ -10675,7 +11001,8 @@ fn typed_i32_method_clone_module(case: &str) -> Module {
         "number_return" => {
             return_type = Type::Number;
             first_let_ty = Type::Number;
-            first_expr = Expr::Binary { byte_offset: 0,
+            first_expr = Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(local(21)),
                 right: Box::new(local(22)),
@@ -10683,7 +11010,8 @@ fn typed_i32_method_clone_module(case: &str) -> Module {
             return_expr = local(25);
         }
         "unsafe_add" => {
-            first_expr = Expr::Binary { byte_offset: 0,
+            first_expr = Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(local(21)),
                 right: Box::new(local(22)),
@@ -10691,7 +11019,8 @@ fn typed_i32_method_clone_module(case: &str) -> Module {
         }
         other => panic!("unknown typed-i32 method fixture: {other}"),
     }
-    bits.methods.push(Function { byte_offset: 0,
+    bits.methods.push(Function {
+        byte_offset: 0,
         id: 230,
         name: "mix_i32".to_string(),
         type_params: Vec::new(),
@@ -10736,18 +11065,21 @@ fn typed_i32_method_clone_module(case: &str) -> Module {
         } else {
             Type::Int32
         },
-        vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "mix_i32".to_string(),
+                }),
+                args: vec![local(2), local(3)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "mix_i32".to_string(),
             }),
-            args: vec![local(2), local(3)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)],
+            0,
+        )],
     )
 }
 
@@ -10783,18 +11115,23 @@ fn typed_string_method_clone_module(case: &str) -> Module {
             params[0].is_rest = true;
         }
         "concat_body" => {
-            body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                op: BinaryOp::Add,
-                left: Box::new(local(21)),
-                right: Box::new(local(21)),
-            }), 0)];
+            body = vec![Stmt::Return(
+                Some(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::Add,
+                    left: Box::new(local(21)),
+                    right: Box::new(local(21)),
+                }),
+                0,
+            )];
         }
         "dynamic_receiver" => {
             receiver_ty = Type::Any;
         }
         other => panic!("unknown typed-string method fixture: {other}"),
     }
-    labeler.methods.push(Function { byte_offset: 0,
+    labeler.methods.push(Function {
+        byte_offset: 0,
         id: 240,
         name: "pick".to_string(),
         type_params: Vec::new(),
@@ -10820,24 +11157,28 @@ fn typed_string_method_clone_module(case: &str) -> Module {
             param(2, "x", Type::String),
         ],
         Type::String,
-        vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "pick".to_string(),
+                }),
+                args: vec![local(2)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "pick".to_string(),
             }),
-            args: vec![local(2)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)],
+            0,
+        )],
     )
 }
 
 fn typed_i1_numeric_predicate_method_module() -> Module {
     let mut meter = class(204, "Meter", Vec::new());
-    meter.methods.push(Function { byte_offset: 0,
+    meter.methods.push(Function {
+        byte_offset: 0,
         id: 220,
         name: "above".to_string(),
         type_params: Vec::new(),
@@ -10849,17 +11190,22 @@ fn typed_i1_numeric_predicate_method_module() -> Module {
                 name: "delta".to_string(),
                 ty: Type::Number,
                 mutable: false,
-                init: Some(Expr::Binary { byte_offset: 0,
+                init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(local(21)),
                     right: Box::new(local(22)),
                 }),
             },
-            Stmt::Return(Some(Expr::Compare { byte_offset: 0,
-                op: CompareOp::Gt,
-                left: Box::new(local(25)),
-                right: Box::new(number(0.0)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::Compare {
+                    byte_offset: 0,
+                    op: CompareOp::Gt,
+                    left: Box::new(local(25)),
+                    right: Box::new(number(0.0)),
+                }),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -10881,18 +11227,21 @@ fn typed_i1_numeric_predicate_method_module() -> Module {
             param(3, "y", Type::Number),
         ],
         Type::Boolean,
-        vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "above".to_string(),
+                }),
+                args: vec![local(2), local(3)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "above".to_string(),
             }),
-            args: vec![local(2), local(3)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0)],
+            0,
+        )],
     )
 }
 
@@ -10911,7 +11260,8 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
         is_async: false,
         is_generator: false,
     });
-    let mut body_expr = Expr::Logical { byte_offset: 0,
+    let mut body_expr = Expr::Logical {
+        byte_offset: 0,
         op: LogicalOp::And,
         left: Box::new(local(31)),
         right: Box::new(Expr::Unary {
@@ -10938,9 +11288,11 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
                 is_async: false,
                 is_generator: false,
             });
-            body_expr = Expr::Compare { byte_offset: 0,
+            body_expr = Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Gt,
-                left: Box::new(Expr::Binary { byte_offset: 0,
+                left: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(local(31)),
                     right: Box::new(local(32)),
@@ -10958,7 +11310,8 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
                 init: Some(Expr::Bool(true)),
             });
             captures.push(30);
-            body_expr = Expr::Logical { byte_offset: 0,
+            body_expr = Expr::Logical {
+                byte_offset: 0,
                 op: LogicalOp::And,
                 left: Box::new(body_expr),
                 right: Box::new(local(30)),
@@ -10974,7 +11327,8 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
             });
             captures.push(30);
             mutable_captures.push(30);
-            body_expr = Expr::Logical { byte_offset: 0,
+            body_expr = Expr::Logical {
+                byte_offset: 0,
                 op: LogicalOp::And,
                 left: Box::new(body_expr),
                 right: Box::new(local(30)),
@@ -10993,7 +11347,8 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
             name: "pred".to_string(),
             ty: local_ty,
             mutable: false,
-            init: Some(Expr::Closure { byte_offset: 0,
+            init: Some(Expr::Closure {
+                byte_offset: 0,
                 func_id: 301,
                 params,
                 return_type: Type::Boolean,
@@ -11019,13 +11374,16 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
                 is_strict: false,
             }),
         },
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(local(10)),
-            args: call_args,
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0),
+        Stmt::Return(
+            Some(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(local(10)),
+                args: call_args,
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            0,
+        ),
     ]);
 
     module_with_classes_and_params(
@@ -11090,7 +11448,8 @@ fn typed_string_closure_clone_module(case: &str) -> Module {
             name: "id".to_string(),
             ty: local_ty,
             mutable: false,
-            init: Some(Expr::Closure { byte_offset: 0,
+            init: Some(Expr::Closure {
+                byte_offset: 0,
                 func_id: 302,
                 params,
                 return_type: Type::String,
@@ -11116,13 +11475,16 @@ fn typed_string_closure_clone_module(case: &str) -> Module {
                 is_strict: false,
             }),
         },
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(local(10)),
-            args: vec![Expr::String("input".to_string())],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0),
+        Stmt::Return(
+            Some(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(local(10)),
+                args: vec![Expr::String("input".to_string())],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            0,
+        ),
     ]);
 
     module_with_classes_and_params(
@@ -11143,7 +11505,8 @@ fn scalar_method_summary_module() -> Module {
             class_field("y", Type::Number),
         ],
     );
-    point.constructor = Some(Function { byte_offset: 0,
+    point.constructor = Some(Function {
+        byte_offset: 0,
         id: 100,
         name: "Point_constructor".to_string(),
         type_params: Vec::new(),
@@ -11175,27 +11538,32 @@ fn scalar_method_summary_module() -> Module {
         was_unrolled: false,
         construct_only: false,
     });
-    point.methods.push(Function { byte_offset: 0,
+    point.methods.push(Function {
+        byte_offset: 0,
         id: 101,
         name: "sum".to_string(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op: BinaryOp::Add,
-            left: Box::new(Expr::PropertyGet {
-                byte_end: 0,
+        body: vec![Stmt::Return(
+            Some(Expr::Binary {
                 byte_offset: 0,
-                object: Box::new(Expr::This),
-                property: "x".to_string(),
+                op: BinaryOp::Add,
+                left: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::This),
+                    property: "x".to_string(),
+                }),
+                right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::This),
+                    property: "y".to_string(),
+                }),
             }),
-            right: Box::new(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::This),
-                property: "y".to_string(),
-            }),
-        }), 0)],
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -11227,18 +11595,21 @@ fn scalar_method_summary_module() -> Module {
                     cap_args_appended: 0,
                 }),
             },
-            Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::PropertyGet {
+            Stmt::Return(
+                Some(Expr::Call {
                     byte_end: 0,
+                    callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
+                        byte_offset: 0,
+                        object: Box::new(local(20)),
+                        property: "sum".to_string(),
+                    }),
+                    args: Vec::new(),
+                    type_args: Vec::new(),
                     byte_offset: 0,
-                    object: Box::new(local(20)),
-                    property: "sum".to_string(),
                 }),
-                args: Vec::new(),
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }), 0),
+                0,
+            ),
         ],
     )
 }
@@ -11268,19 +11639,23 @@ fn scalar_field_initializer_module() -> Module {
                     cap_args_appended: 0,
                 }),
             },
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(local(20)),
-                property: "value".to_string(),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(20)),
+                    property: "value".to_string(),
+                }),
+                0,
+            ),
         ],
     )
 }
 
 fn scalar_method_field_write_module() -> Module {
     let mut counter = class(111, "Counter", vec![class_field("value", Type::Number)]);
-    counter.constructor = Some(Function { byte_offset: 0,
+    counter.constructor = Some(Function {
+        byte_offset: 0,
         id: 110,
         name: "Counter_constructor".to_string(),
         type_params: Vec::new(),
@@ -11303,7 +11678,8 @@ fn scalar_method_field_write_module() -> Module {
         was_unrolled: false,
         construct_only: false,
     });
-    counter.methods.push(Function { byte_offset: 0,
+    counter.methods.push(Function {
+        byte_offset: 0,
         id: 111,
         name: "bump".to_string(),
         type_params: Vec::new(),
@@ -11313,7 +11689,8 @@ fn scalar_method_field_write_module() -> Module {
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(Expr::This),
                 property: "value".to_string(),
-                value: Box::new(Expr::Binary { byte_offset: 0,
+                value: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::PropertyGet {
                         byte_end: 0,
@@ -11326,12 +11703,15 @@ fn scalar_method_field_write_module() -> Module {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::This),
-                property: "value".to_string(),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::This),
+                    property: "value".to_string(),
+                }),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -11396,9 +11776,8 @@ fn scalar_method_parameterized_field_write_module() -> Module {
     **right = local(12);
     for stmt in &mut module.functions[0].body {
         let call = match stmt {
-            Stmt::Expr(Expr::Call { args, .. }) | Stmt::Return(Some(Expr::Call { args, .. }), _) => {
-                args
-            }
+            Stmt::Expr(Expr::Call { args, .. })
+            | Stmt::Return(Some(Expr::Call { args, .. }), _) => args,
             _ => continue,
         };
         call.push(number(1.0));
@@ -11419,7 +11798,8 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
     let mut module = scalar_method_summary_module();
     module.name = format!("scalar_method_numeric_local_temp_{case}.ts");
     module.classes[0].methods.clear();
-    module.classes[0].methods.push(Function { byte_offset: 0,
+    module.classes[0].methods.push(Function {
+        byte_offset: 0,
         id: 103,
         name: "weighted".to_string(),
         type_params: Vec::new(),
@@ -11431,7 +11811,8 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
                 name: "shifted".to_string(),
                 ty: Type::Number,
                 mutable: mutable_temp,
-                init: Some(Expr::Binary { byte_offset: 0,
+                init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::PropertyGet {
                         byte_end: 0,
@@ -11447,7 +11828,8 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
                 name: "scaled".to_string(),
                 ty: Type::Number,
                 mutable: false,
-                init: Some(Expr::Binary { byte_offset: 0,
+                init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Mul,
                     left: Box::new(local(130)),
                     right: Box::new(Expr::PropertyGet {
@@ -11485,24 +11867,28 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
                 cap_args_appended: 0,
             }),
         },
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(20)),
+                    property: "weighted".to_string(),
+                }),
+                args: vec![number(3.0)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(local(20)),
-                property: "weighted".to_string(),
             }),
-            args: vec![number(3.0)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0),
+            0,
+        ),
     ];
     module
 }
 
 fn scalar_predicate_method_body(field: &str) -> Expr {
-    Expr::Compare { byte_offset: 0,
+    Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Gt,
         left: Box::new(Expr::PropertyGet {
             byte_end: 0,
@@ -11533,21 +11919,25 @@ fn scalar_method_boolean_predicate_module() -> Module {
                 cap_args_appended: 0,
             }),
         },
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(20)),
+                    property: "isAbove".to_string(),
+                }),
+                args: vec![number(3.0)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(local(20)),
-                property: "isAbove".to_string(),
             }),
-            args: vec![number(3.0)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0),
+            0,
+        ),
     ];
     module.classes[0].methods.clear();
-    module.classes[0].methods.push(Function { byte_offset: 0,
+    module.classes[0].methods.push(Function {
+        byte_offset: 0,
         id: 102,
         name: "isAbove".to_string(),
         type_params: Vec::new(),
@@ -11586,18 +11976,21 @@ fn scalar_method_boolean_public_numeric_arg_module(case: &str, arg_ty: Type) -> 
                 cap_args_appended: 0,
             }),
         },
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(20)),
+                    property: "isAbove".to_string(),
+                }),
+                args: vec![local(70)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(local(20)),
-                property: "isAbove".to_string(),
             }),
-            args: vec![local(70)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0),
+            0,
+        ),
     ];
     module
 }
@@ -11624,26 +12017,31 @@ fn scalar_method_boolean_public_numeric_expr_arg_module() -> Module {
                 cap_args_appended: 0,
             }),
         },
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(local(20)),
-                property: "isAbove".to_string(),
-            }),
-            args: vec![Expr::Binary { byte_offset: 0,
-                op: BinaryOp::Add,
-                left: Box::new(local(70)),
-                right: Box::new(Expr::Binary { byte_offset: 0,
-                    op: BinaryOp::Mul,
-                    left: Box::new(local(71)),
-                    right: Box::new(int(2)),
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(20)),
+                    property: "isAbove".to_string(),
                 }),
-            }],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }), 0),
+                args: vec![Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::Add,
+                    left: Box::new(local(70)),
+                    right: Box::new(Expr::Binary {
+                        byte_offset: 0,
+                        op: BinaryOp::Mul,
+                        left: Box::new(local(71)),
+                        right: Box::new(int(2)),
+                    }),
+                }],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            0,
+        ),
     ];
     module
 }
@@ -11657,7 +12055,8 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
             class_field("salt", field_ty),
         ],
     );
-    flags.constructor = Some(Function { byte_offset: 0,
+    flags.constructor = Some(Function {
+        byte_offset: 0,
         id: 110,
         name: "Flags_constructor".to_string(),
         type_params: Vec::new(),
@@ -11692,35 +12091,42 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
         was_unrolled: false,
         construct_only: false,
     });
-    flags.methods.push(Function { byte_offset: 0,
+    flags.methods.push(Function {
+        byte_offset: 0,
         id: 111,
         name: "mix".to_string(),
         type_params: Vec::new(),
         params: vec![param(12, "extra", arg_ty.clone())],
         return_type: Type::Int32,
-        body: vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op: BinaryOp::BitAnd,
-            left: Box::new(Expr::Binary { byte_offset: 0,
-                op: BinaryOp::BitOr,
-                left: Box::new(Expr::Binary { byte_offset: 0,
-                    op: BinaryOp::BitXor,
-                    left: Box::new(Expr::PropertyGet {
+        body: vec![Stmt::Return(
+            Some(Expr::Binary {
+                byte_offset: 0,
+                op: BinaryOp::BitAnd,
+                left: Box::new(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::BitOr,
+                    left: Box::new(Expr::Binary {
+                        byte_offset: 0,
+                        op: BinaryOp::BitXor,
+                        left: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
+                            byte_offset: 0,
+                            object: Box::new(Expr::This),
+                            property: "mask".to_string(),
+                        }),
+                        right: Box::new(local(12)),
+                    }),
+                    right: Box::new(Expr::PropertyGet {
                         byte_end: 0,
                         byte_offset: 0,
                         object: Box::new(Expr::This),
-                        property: "mask".to_string(),
+                        property: "salt".to_string(),
                     }),
-                    right: Box::new(local(12)),
                 }),
-                right: Box::new(Expr::PropertyGet {
-                    byte_end: 0,
-                    byte_offset: 0,
-                    object: Box::new(Expr::This),
-                    property: "salt".to_string(),
-                }),
+                right: Box::new(int(255)),
             }),
-            right: Box::new(int(255)),
-        }), 0)],
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -11759,18 +12165,21 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
                     cap_args_appended: 0,
                 }),
             },
-            Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::PropertyGet {
+            Stmt::Return(
+                Some(Expr::Call {
                     byte_end: 0,
+                    callee: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
+                        byte_offset: 0,
+                        object: Box::new(local(20)),
+                        property: "mix".to_string(),
+                    }),
+                    args: vec![call_arg],
+                    type_args: Vec::new(),
                     byte_offset: 0,
-                    object: Box::new(local(20)),
-                    property: "mix".to_string(),
                 }),
-                args: vec![call_arg],
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }), 0),
+                0,
+            ),
         ],
     )
 }
@@ -11788,16 +12197,20 @@ fn scalar_method_int32_bitwise_public_arg_module() -> Module {
 
 fn scalar_method_int32_unsigned_shift_module() -> Module {
     let mut module = scalar_method_int32_bitwise_module("unsigned_shift", Type::Int32, Type::Int32);
-    module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-        op: BinaryOp::UShr,
-        left: Box::new(Expr::PropertyGet {
-            byte_end: 0,
+    module.classes[0].methods[0].body = vec![Stmt::Return(
+        Some(Expr::Binary {
             byte_offset: 0,
-            object: Box::new(Expr::This),
-            property: "mask".to_string(),
+            op: BinaryOp::UShr,
+            left: Box::new(Expr::PropertyGet {
+                byte_end: 0,
+                byte_offset: 0,
+                object: Box::new(Expr::This),
+                property: "mask".to_string(),
+            }),
+            right: Box::new(int(0)),
         }),
-        right: Box::new(int(0)),
-    }), 0)];
+        0,
+    )];
     module
 }
 
@@ -11809,7 +12222,8 @@ fn scalar_method_int32_bitwise_local_temp_module() -> Module {
             name: "mixed".to_string(),
             ty: Type::Int32,
             mutable: false,
-            init: Some(Expr::Binary { byte_offset: 0,
+            init: Some(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::BitXor,
                 left: Box::new(Expr::PropertyGet {
                     byte_end: 0,
@@ -11825,22 +12239,27 @@ fn scalar_method_int32_bitwise_local_temp_module() -> Module {
             name: "shifted".to_string(),
             ty: Type::Int32,
             mutable: false,
-            init: Some(Expr::Binary { byte_offset: 0,
+            init: Some(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Shl,
                 left: Box::new(local(130)),
                 right: Box::new(int(1)),
             }),
         },
-        Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op: BinaryOp::BitOr,
-            left: Box::new(local(131)),
-            right: Box::new(Expr::PropertyGet {
-                byte_end: 0,
+        Stmt::Return(
+            Some(Expr::Binary {
                 byte_offset: 0,
-                object: Box::new(Expr::This),
-                property: "salt".to_string(),
+                op: BinaryOp::BitOr,
+                left: Box::new(local(131)),
+                right: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::This),
+                    property: "salt".to_string(),
+                }),
             }),
-        }), 0),
+            0,
+        ),
     ];
     module
 }
@@ -11867,18 +12286,22 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
             ];
         }
         "unknown_call" => {
-            module.classes[0].methods.push(Function { byte_offset: 0,
+            module.classes[0].methods.push(Function {
+                byte_offset: 0,
                 id: 103,
                 name: "readX".to_string(),
                 type_params: Vec::new(),
                 params: Vec::new(),
                 return_type: Type::Number,
-                body: vec![Stmt::Return(Some(Expr::PropertyGet {
-                    byte_end: 0,
-                    byte_offset: 0,
-                    object: Box::new(Expr::This),
-                    property: "x".to_string(),
-                }), 0)],
+                body: vec![Stmt::Return(
+                    Some(Expr::PropertyGet {
+                        byte_end: 0,
+                        byte_offset: 0,
+                        object: Box::new(Expr::This),
+                        property: "x".to_string(),
+                    }),
+                    0,
+                )],
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -11889,38 +12312,46 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                 was_unrolled: false,
                 construct_only: false,
             });
-            module.classes[0].methods[method_idx].body = vec![Stmt::Return(Some(Expr::Compare { byte_offset: 0,
-                op: CompareOp::Gt,
-                left: Box::new(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::PropertyGet {
-                        byte_end: 0,
-                        byte_offset: 0,
-                        object: Box::new(Expr::This),
-                        property: "readX".to_string(),
-                    }),
-                    args: Vec::new(),
-                    type_args: Vec::new(),
+            module.classes[0].methods[method_idx].body = vec![Stmt::Return(
+                Some(Expr::Compare {
                     byte_offset: 0,
+                    op: CompareOp::Gt,
+                    left: Box::new(Expr::Call {
+                        byte_end: 0,
+                        callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
+                            byte_offset: 0,
+                            object: Box::new(Expr::This),
+                            property: "readX".to_string(),
+                        }),
+                        args: Vec::new(),
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                    right: Box::new(local(12)),
                 }),
-                right: Box::new(local(12)),
-            }), 0)];
+                0,
+            )];
         }
         "accessor" => {
             module.classes[0].getters.push((
                 "score".to_string(),
-                Function { byte_offset: 0,
+                Function {
+                    byte_offset: 0,
                     id: 104,
                     name: "get_score".to_string(),
                     type_params: Vec::new(),
                     params: Vec::new(),
                     return_type: Type::Number,
-                    body: vec![Stmt::Return(Some(Expr::PropertyGet {
-                        byte_end: 0,
-                        byte_offset: 0,
-                        object: Box::new(Expr::This),
-                        property: "x".to_string(),
-                    }), 0)],
+                    body: vec![Stmt::Return(
+                        Some(Expr::PropertyGet {
+                            byte_end: 0,
+                            byte_offset: 0,
+                            object: Box::new(Expr::This),
+                            property: "x".to_string(),
+                        }),
+                        0,
+                    )],
                     is_async: false,
                     is_generator: false,
                     is_strict: false,
@@ -11936,21 +12367,26 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                 vec![Stmt::Return(Some(scalar_predicate_method_body("score")), 0)];
         }
         "dynamic_property" => {
-            module.classes[0].methods[method_idx].body = vec![Stmt::Return(Some(Expr::Compare { byte_offset: 0,
-                op: CompareOp::Gt,
-                left: Box::new(Expr::synthetic_index_get(
-                    Box::new(Expr::This),
-                    Box::new(Expr::String("x".to_string())),
-                )),
-                right: Box::new(local(12)),
-            }), 0)];
+            module.classes[0].methods[method_idx].body = vec![Stmt::Return(
+                Some(Expr::Compare {
+                    byte_offset: 0,
+                    op: CompareOp::Gt,
+                    left: Box::new(Expr::synthetic_index_get(
+                        Box::new(Expr::This),
+                        Box::new(Expr::String("x".to_string())),
+                    )),
+                    right: Box::new(local(12)),
+                }),
+                0,
+            )];
         }
         "computed_member_collision" => {
             module.classes[0]
                 .computed_members
                 .push(ClassComputedMember {
                     key_expr: Expr::String("isAbove".to_string()),
-                    function: Function { byte_offset: 0,
+                    function: Function {
+                        byte_offset: 0,
                         id: 105,
                         name: "__computed_isAbove".to_string(),
                         type_params: Vec::new(),
@@ -11994,18 +12430,21 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                         cap_args_appended: 0,
                     }),
                 },
-                Stmt::Return(Some(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::PropertyGet {
+                Stmt::Return(
+                    Some(Expr::Call {
                         byte_end: 0,
+                        callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
+                            byte_offset: 0,
+                            object: Box::new(local(20)),
+                            property: "isAbove".to_string(),
+                        }),
+                        args: vec![local(70)],
+                        type_args: Vec::new(),
                         byte_offset: 0,
-                        object: Box::new(local(20)),
-                        property: "isAbove".to_string(),
                     }),
-                    args: vec![local(70)],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                }), 0),
+                    0,
+                ),
             ];
         }
         "any_arg_expr" => {
@@ -12025,22 +12464,26 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
                         cap_args_appended: 0,
                     }),
                 },
-                Stmt::Return(Some(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::PropertyGet {
+                Stmt::Return(
+                    Some(Expr::Call {
                         byte_end: 0,
+                        callee: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
+                            byte_offset: 0,
+                            object: Box::new(local(20)),
+                            property: "isAbove".to_string(),
+                        }),
+                        args: vec![Expr::Binary {
+                            byte_offset: 0,
+                            op: BinaryOp::Add,
+                            left: Box::new(local(70)),
+                            right: Box::new(int(1)),
+                        }],
+                        type_args: Vec::new(),
                         byte_offset: 0,
-                        object: Box::new(local(20)),
-                        property: "isAbove".to_string(),
                     }),
-                    args: vec![Expr::Binary { byte_offset: 0,
-                        op: BinaryOp::Add,
-                        left: Box::new(local(70)),
-                        right: Box::new(int(1)),
-                    }],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                }), 0),
+                    0,
+                ),
             ];
         }
         other => panic!("unknown scalar method predicate negative fixture: {other}"),
@@ -15675,12 +16118,15 @@ fn static_property_access_on_computed_class_uses_property_id_wrappers() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "score".to_string(),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "score".to_string(),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -15722,12 +16168,15 @@ fn sloppy_static_property_store_on_computed_class_avoids_property_id_setter() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "score".to_string(),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "score".to_string(),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -15762,15 +16211,18 @@ fn static_name_method_fallback_uses_rodata_method_id_wrapper() {
         Vec::new(),
         vec![param(1, "obj", Type::Any), param(2, "arg", Type::Number)],
         Type::Number,
-        vec![Stmt::Return(Some(call(
-            Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "score".to_string(),
-            },
-            vec![local(2)],
-        )), 0)],
+        vec![Stmt::Return(
+            Some(call(
+                Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "score".to_string(),
+                },
+                vec![local(2)],
+            )),
+            0,
+        )],
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
@@ -15805,18 +16257,21 @@ fn static_name_spread_method_fallback_uses_method_id_wrapper() {
             param(2, "args", Type::Array(Box::new(Type::Any))),
         ],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::CallSpread {
-            byte_offset: 0,
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
-                byte_end: 0,
+        vec![Stmt::Return(
+            Some(Expr::CallSpread {
                 byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "score".to_string(),
+                byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "score".to_string(),
+                }),
+                args: vec![CallArg::Spread(local(2))],
+                type_args: Vec::new(),
             }),
-            args: vec![CallArg::Spread(local(2))],
-            type_args: Vec::new(),
-        }), 0)],
+            0,
+        )],
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
@@ -15853,18 +16308,22 @@ fn ir_function_body<'a>(ir: &'a str, marker: &str) -> &'a str {
 #[test]
 fn this_method_value_is_the_canonical_method_not_a_receiver_snapshot() {
     let mut snapshot = class(8955, "Snapshot", Vec::new());
-    snapshot.methods.push(Function { byte_offset: 0,
+    snapshot.methods.push(Function {
+        byte_offset: 0,
         id: 89550,
         name: "capture".to_string(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            byte_offset: 0,
-            object: Box::new(Expr::This),
-            property: "method".to_string(),
-        }), 0)],
+        body: vec![Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                byte_offset: 0,
+                object: Box::new(Expr::This),
+                property: "method".to_string(),
+            }),
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -15875,7 +16334,8 @@ fn this_method_value_is_the_canonical_method_not_a_receiver_snapshot() {
         was_unrolled: false,
         construct_only: false,
     });
-    snapshot.methods.push(Function { byte_offset: 0,
+    snapshot.methods.push(Function {
+        byte_offset: 0,
         id: 89551,
         name: "method".to_string(),
         type_params: Vec::new(),
@@ -15919,7 +16379,8 @@ fn this_method_value_is_the_canonical_method_not_a_receiver_snapshot() {
 #[test]
 fn annotated_class_method_value_uses_generic_lookup() {
     let mut calc = class(209, "Calc", Vec::new());
-    calc.methods.push(Function { byte_offset: 0,
+    calc.methods.push(Function {
+        byte_offset: 0,
         id: 2090,
         name: "score".to_string(),
         type_params: Vec::new(),
@@ -15941,12 +16402,15 @@ fn annotated_class_method_value_uses_generic_lookup() {
         vec![calc],
         vec![param(1, "obj", Type::Named("Calc".to_string()))],
         Type::Any,
-        vec![Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            byte_offset: 0,
-            object: Box::new(local(1)),
-            property: "score".to_string(),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                byte_offset: 0,
+                object: Box::new(local(1)),
+                property: "score".to_string(),
+            }),
+            0,
+        )],
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
@@ -15992,12 +16456,15 @@ fn raw_numeric_class_field_rejects_unknown_or_dynamic_shape_receiver() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "x".to_string(),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "x".to_string(),
+                }),
+                0,
+            ),
         ],
     );
     let computed_shape_module = module_with_classes_and_params(
@@ -16017,12 +16484,15 @@ fn raw_numeric_class_field_rejects_unknown_or_dynamic_shape_receiver() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(local(1)),
-                property: "x".to_string(),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(local(1)),
+                    property: "x".to_string(),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -16094,7 +16564,8 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
                 mutable: true,
                 init: Some(Expr::Integer(0)),
             })),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(i)),
                 right: Box::new(Expr::PropertyGet {
@@ -16112,7 +16583,8 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
             body: vec![Stmt::Expr(Expr::PutValueSet {
                 target: Box::new(Expr::LocalGet(arr)),
                 key: Box::new(Expr::LocalGet(i)),
-                value: Box::new(Expr::Binary { byte_offset: 0,
+                value: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(read_arr_i),
                     right: Box::new(Expr::Integer(1)),
@@ -16182,20 +16654,24 @@ fn static_put_value_uses_write_pic_for_call_free_rhs() {
         vec![
             number_let(left, "left", false, number(1.0)),
             number_let(right, "right", false, number(2.0)),
-            Stmt::Return(Some(Expr::PutValueSet {
-                target: Box::new(Expr::LocalGet(object)),
-                key: Box::new(Expr::String("x".to_string())),
-                value: Box::new(Expr::Binary { byte_offset: 0,
-                    op: BinaryOp::Add,
-                    left: Box::new(Expr::LocalGet(left)),
-                    right: Box::new(Expr::LocalGet(right)),
+            Stmt::Return(
+                Some(Expr::PutValueSet {
+                    target: Box::new(Expr::LocalGet(object)),
+                    key: Box::new(Expr::String("x".to_string())),
+                    value: Box::new(Expr::Binary {
+                        byte_offset: 0,
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::LocalGet(left)),
+                        right: Box::new(Expr::LocalGet(right)),
+                    }),
+                    receiver: Box::new(Expr::LocalGet(object)),
+                    strict: false,
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
                 }),
-                receiver: Box::new(Expr::LocalGet(object)),
-                strict: false,
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-            }), 0),
+                0,
+            ),
         ],
     );
 
@@ -16242,16 +16718,19 @@ fn immutable_string_key_reuses_static_write_pic() {
                 mutable: false,
                 init: Some(Expr::String("x".to_string())),
             },
-            Stmt::Return(Some(Expr::PutValueSet {
-                target: Box::new(Expr::LocalGet(object)),
-                key: Box::new(Expr::LocalGet(key)),
-                value: Box::new(Expr::LocalGet(value)),
-                receiver: Box::new(Expr::LocalGet(object)),
-                strict: false,
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PutValueSet {
+                    target: Box::new(Expr::LocalGet(object)),
+                    key: Box::new(Expr::LocalGet(key)),
+                    value: Box::new(Expr::LocalGet(value)),
+                    receiver: Box::new(Expr::LocalGet(object)),
+                    strict: false,
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                }),
+                0,
+            ),
         ],
     );
 
@@ -16327,16 +16806,19 @@ fn mutable_string_key_rejects_static_write_pic() {
                 mutable: true,
                 init: Some(Expr::String("x".to_string())),
             },
-            Stmt::Return(Some(Expr::PutValueSet {
-                target: Box::new(Expr::LocalGet(object)),
-                key: Box::new(Expr::LocalGet(key)),
-                value: Box::new(Expr::LocalGet(value)),
-                receiver: Box::new(Expr::LocalGet(object)),
-                strict: false,
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-            }), 0),
+            Stmt::Return(
+                Some(Expr::PutValueSet {
+                    target: Box::new(Expr::LocalGet(object)),
+                    key: Box::new(Expr::LocalGet(key)),
+                    value: Box::new(Expr::LocalGet(value)),
+                    receiver: Box::new(Expr::LocalGet(object)),
+                    strict: false,
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                }),
+                0,
+            ),
         ],
     );
 
@@ -16363,16 +16845,19 @@ fn static_put_value_keeps_the_inline_store_when_rhs_can_allocate() {
         Vec::new(),
         vec![param(object, "object", Type::Any)],
         Type::Any,
-        vec![Stmt::Return(Some(Expr::PutValueSet {
-            target: Box::new(Expr::LocalGet(object)),
-            key: Box::new(Expr::String("x".to_string())),
-            value: Box::new(Expr::Object(vec![("value".to_string(), Expr::Integer(1))])),
-            receiver: Box::new(Expr::LocalGet(object)),
-            strict: false,
-            element_offset: 0,
-            byte_offset: 0,
-            byte_end: 0,
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::PutValueSet {
+                target: Box::new(Expr::LocalGet(object)),
+                key: Box::new(Expr::String("x".to_string())),
+                value: Box::new(Expr::Object(vec![("value".to_string(), Expr::Integer(1))])),
+                receiver: Box::new(Expr::LocalGet(object)),
+                strict: false,
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+            }),
+            0,
+        )],
     );
 
     let ir = compile_ir_for_module_with_opts(module, empty_opts()).unwrap();
@@ -16438,7 +16923,8 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
         Stmt::Expr(Expr::PutValueSet {
             target: Box::new(Expr::LocalGet(object)),
             key: Box::new(Expr::String(property.to_string())),
-            value: Box::new(Expr::Binary { byte_offset: 0,
+            value: Box::new(Expr::Binary {
+                byte_offset: 0,
                 op,
                 left: Box::new(Expr::LocalGet(outer)),
                 right: Box::new(Expr::LocalGet(inner)),
@@ -16492,7 +16978,8 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(outer)),
                     right: Box::new(Expr::Integer(20)),
@@ -16510,7 +16997,8 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
                         mutable: true,
                         init: Some(Expr::Integer(0)),
                     })),
-                    condition: Some(Expr::Compare { byte_offset: 0,
+                    condition: Some(Expr::Compare {
+                        byte_offset: 0,
                         op: CompareOp::Lt,
                         left: Box::new(Expr::LocalGet(inner)),
                         right: Box::new(Expr::Integer(10)),
@@ -16725,7 +17213,8 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
     let Stmt::Expr(Expr::PutValueSet { value, .. }) = &mut inner_body[1] else {
         panic!("expected object field write");
     };
-    *value = Box::new(Expr::Binary { byte_offset: 0,
+    *value = Box::new(Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::Number(f64::MAX)),
         right: Box::new(Expr::Number(f64::MAX)),
@@ -17038,7 +17527,8 @@ mod math_mul_fastpath;
 // inline bounds check, exiting to the clone's existing side exit when it fails.
 #[test]
 fn packed_clone_reads_a_foreign_counter_without_the_feedback_call() {
-    let add = |left: Expr, right: Expr| Expr::Binary { byte_offset: 0,
+    let add = |left: Expr, right: Expr| Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -17080,7 +17570,8 @@ fn static_method_shape_guard_retains_canonical_layout_clone() {
     let mut fixture = typed_i32_method_clone_module("eligible");
     fixture.name = "static_certificate.ts".to_string();
     // Receiver-reading body: its exact layout clone must remain reachable.
-    fixture.classes[0].fields.push(ClassField { byte_offset: 0,
+    fixture.classes[0].fields.push(ClassField {
+        byte_offset: 0,
         name: "scale".to_string(),
         ty: Type::Any,
         init: None,
@@ -17090,16 +17581,20 @@ fn static_method_shape_guard_retains_canonical_layout_clone() {
         is_readonly: false,
         decorators: Vec::new(),
     });
-    fixture.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-        op: BinaryOp::Mul,
-        left: Box::new(Expr::PropertyGet {
-            byte_end: 0,
+    fixture.classes[0].methods[0].body = vec![Stmt::Return(
+        Some(Expr::Binary {
             byte_offset: 0,
-            object: Box::new(Expr::This),
-            property: "scale".to_string(),
+            op: BinaryOp::Mul,
+            left: Box::new(Expr::PropertyGet {
+                byte_end: 0,
+                byte_offset: 0,
+                object: Box::new(Expr::This),
+                property: "scale".to_string(),
+            }),
+            right: Box::new(local(21)),
         }),
-        right: Box::new(local(21)),
-    }), 0)];
+        0,
+    )];
     fixture.classes[0].methods[0].return_type = Type::Number;
     let mut derived = fixture.classes[0].clone();
     derived.id = 206;
@@ -17191,15 +17686,20 @@ fn static_method_shape_guard_retains_canonical_layout_clone() {
 /// (statically numeric, but read as a JS value: a loop counter such as `x` in
 /// `x < W`) or an unknown parameter.
 fn literal_compare_materializations(numeric: bool, op: CompareOp) -> Vec<serde_json::Value> {
-    let compare = Stmt::Return(Some(Expr::Compare { byte_offset: 0,
-        op,
-        left: Box::new(local(1)),
-        right: Box::new(int(3840)),
-    }), 0);
+    let compare = Stmt::Return(
+        Some(Expr::Compare {
+            byte_offset: 0,
+            op,
+            left: Box::new(local(1)),
+            right: Box::new(int(3840)),
+        }),
+        0,
+    );
     let (params, body) = if numeric {
         let step = Stmt::Expr(Expr::LocalSet(
             1,
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(local(1)),
                 right: Box::new(int(1)),

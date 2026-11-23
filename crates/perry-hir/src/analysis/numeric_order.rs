@@ -383,7 +383,8 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
             Expr::Binary {
                 op: BinaryOp::Sub,
                 left,
-                right, ..
+                right,
+                ..
             } => {
                 let a = self.expr(left, env)?;
                 let b = self.expr(right, env)?;
@@ -409,7 +410,8 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
             Expr::Binary {
                 op: BinaryOp::Add | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod,
                 left,
-                right, ..
+                right,
+                ..
             } => {
                 let a = self.expr(left, env)?.exact()?;
                 let b = self.expr(right, env)?.exact()?;
@@ -424,7 +426,9 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
                     _ => unreachable!(),
                 }))
             }
-            Expr::Compare { op, left, right, .. } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 let a = self.expr(left, env)?;
                 let b = self.expr(right, env)?;
                 if matches!((&a, &b), (Value::Undefined, _) | (_, Value::Undefined)) {
@@ -521,7 +525,8 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             } => {
                 let v = self.expr(condition, env)?;
                 let b = self.truth(&v)?;
@@ -534,7 +539,8 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
             Expr::Logical {
                 op: LogicalOp::And | LogicalOp::Or,
                 left,
-                right, ..
+                right,
+                ..
             } => {
                 let a = self.expr(left, env)?;
                 let b = self.truth(&a)?;

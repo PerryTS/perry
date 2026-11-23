@@ -34,7 +34,8 @@ fn push_ir(ty: Type, value: Expr) -> String {
 fn push_ir_with(ty: Type, value: Expr, escape: bool) -> String {
     let mut hir = HirModule::new("apush_own_test");
     let mention = escape.then_some(Stmt::Expr(Expr::LocalGet(0)));
-    hir.functions.push(Function { byte_offset: 0,
+    hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "pushes".to_string(),
         type_params: Vec::new(),

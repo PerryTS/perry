@@ -44,7 +44,8 @@ pub(crate) fn lower_new_member_native(
                     "Glob" | "SQL" | "Terminal" | "Transpiler"
                 )
             {
-                return Ok(Some(Expr::NativeMethodCall { byte_offset: new_byte_offset,
+                return Ok(Some(Expr::NativeMethodCall {
+                    byte_offset: new_byte_offset,
                     module: "bun".to_string(),
                     class_name: None,
                     object: None,
@@ -134,7 +135,8 @@ pub(crate) fn lower_new_member_native(
                         module == "bun:ffi" && (export.is_none() || export == Some("default"))
                     });
             if is_bun_ffi_module && matches!(prop_ident.sym.as_ref(), "JSCallback" | "CFunction") {
-                return Ok(Some(Expr::NativeMethodCall { byte_offset: new_byte_offset,
+                return Ok(Some(Expr::NativeMethodCall {
+                    byte_offset: new_byte_offset,
                     module: "bun:ffi".to_string(),
                     class_name: None,
                     object: None,
@@ -166,7 +168,8 @@ pub(crate) fn lower_new_member_native(
                 } else {
                     prop_ident.sym.as_ref()
                 };
-                return Ok(Some(Expr::NativeMethodCall { byte_offset: new_byte_offset,
+                return Ok(Some(Expr::NativeMethodCall {
+                    byte_offset: new_byte_offset,
                     module: "net".to_string(),
                     class_name: None,
                     object: None,
@@ -200,7 +203,8 @@ pub(crate) fn lower_new_member_native(
                     })
                     .transpose()?
                     .unwrap_or_default();
-                return Ok(Some(Expr::NativeMethodCall { byte_offset: new_byte_offset,
+                return Ok(Some(Expr::NativeMethodCall {
+                    byte_offset: new_byte_offset,
                     module: if is_https_module {
                         "https".to_string()
                     } else {
@@ -240,7 +244,8 @@ pub(crate) fn lower_new_member_native(
             let is_url_module =
                 obj_name == "url" || ctx.lookup_builtin_module_alias(obj_name) == Some("url");
             if is_url_module && prop_ident.sym.as_ref() == "Url" {
-                return Ok(Some(Expr::NativeMethodCall { byte_offset: new_byte_offset,
+                return Ok(Some(Expr::NativeMethodCall {
+                    byte_offset: new_byte_offset,
                     module: "url".to_string(),
                     class_name: None,
                     object: None,
@@ -277,7 +282,8 @@ pub(crate) fn lower_new_member_native(
                         })
                         .transpose()?
                         .unwrap_or_default();
-                    return Ok(Some(Expr::NativeMethodCall { byte_offset: new_byte_offset,
+                    return Ok(Some(Expr::NativeMethodCall {
+                        byte_offset: new_byte_offset,
                         module: module_name,
                         class_name: None,
                         object: None,
@@ -303,7 +309,8 @@ pub(crate) fn lower_new_member_native(
                     })
                     .transpose()?
                     .unwrap_or_default();
-                return Ok(Some(Expr::NativeMethodCall { byte_offset: new_byte_offset,
+                return Ok(Some(Expr::NativeMethodCall {
+                    byte_offset: new_byte_offset,
                     module: "module".to_string(),
                     class_name: None,
                     object: None,
@@ -336,7 +343,8 @@ pub(crate) fn lower_new_member_native(
                     })
                     .transpose()?
                     .unwrap_or_default();
-                return Ok(Some(Expr::NativeMethodCall { byte_offset: new_byte_offset,
+                return Ok(Some(Expr::NativeMethodCall {
+                    byte_offset: new_byte_offset,
                     module: "vm".to_string(),
                     class_name: None,
                     object: None,
@@ -405,7 +413,8 @@ pub(crate) fn lower_new_member_native(
                     })
                     .transpose()?
                     .unwrap_or_default();
-                return Ok(Some(Expr::NativeMethodCall { byte_offset: new_byte_offset,
+                return Ok(Some(Expr::NativeMethodCall {
+                    byte_offset: new_byte_offset,
                     module: if obj_name == "sys"
                         || ctx.lookup_builtin_module_alias(obj_name) == Some("sys")
                     {
@@ -446,7 +455,8 @@ pub(crate) fn lower_new_member_native(
                     });
             if let Some(module_name) = construct_fold {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
-                return Ok(Some(Expr::NativeMethodCall { byte_offset: new_byte_offset,
+                return Ok(Some(Expr::NativeMethodCall {
+                    byte_offset: new_byte_offset,
                     module: module_name,
                     class_name: None,
                     object: None,

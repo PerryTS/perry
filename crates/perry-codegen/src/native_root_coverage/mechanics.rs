@@ -18,14 +18,16 @@ fn counted_loop(body: Vec<Stmt>) -> Stmt {
             mutable: true,
             init: Some(Expr::Number(0.0)),
         })),
-        condition: Some(Expr::Compare { byte_offset: 0,
+        condition: Some(Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(90)),
             right: Box::new(Expr::LocalGet(100)),
         }),
         update: Some(Expr::LocalSet(
             90,
-            Box::new(Expr::Binary { byte_offset: 0,
+            Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(90)),
                 right: Box::new(Expr::Number(1.0)),
@@ -556,10 +558,13 @@ fn a_deduplicated_slot_index_still_reaches_the_native_root_set() {
                 let_stmt(2, "later", Expr::MapNew),
                 // Keeps BOTH live across one allocation, so the map has to
                 // report two roots at a single safepoint.
-                Stmt::Return(Some(Expr::Array(
-                    vec![Expr::LocalGet(1), Expr::LocalGet(2)],
-                    None,
-                )), 0),
+                Stmt::Return(
+                    Some(Expr::Array(
+                        vec![Expr::LocalGet(1), Expr::LocalGet(2)],
+                        None,
+                    )),
+                    0,
+                ),
             ],
         );
         let ir = native_ir(&module, target, false);

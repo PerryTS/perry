@@ -76,7 +76,8 @@ fn at_rest_or_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Logical {
             op: LogicalOp::Coalesce,
             left,
-            right, ..
+            right,
+            ..
         } => int32_literal(right) && int32_element(ctx, left, true),
         _ => false,
     }
@@ -171,7 +172,10 @@ fn lower(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<String> {
     if let Some(word) = super::int32_shadow::load(ctx, e) {
         return Ok(word);
     }
-    if let Expr::Binary { op, left, right, .. } = e {
+    if let Expr::Binary {
+        op, left, right, ..
+    } = e
+    {
         if admitted(ctx, *op, left, right) {
             return lower_bitwise(ctx, *op, left, right);
         }

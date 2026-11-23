@@ -95,7 +95,8 @@ fn empty_opts() -> CompileOptions {
 }
 
 fn number_param(id: u32, name: &str) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -108,31 +109,38 @@ fn number_param(id: u32, name: &str) -> Param {
 
 /// `function <name>(n: number): number { return n <= 0 ? <base> : <name>(n - 1); }`
 fn ternary_recursive_fn(id: u32, name: &str, base: Expr) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
         params: vec![number_param(10, "n")],
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Conditional { byte_offset: 0,
-            condition: Box::new(Expr::Compare { byte_offset: 0,
-                op: CompareOp::Le,
-                left: Box::new(Expr::LocalGet(10)),
-                right: Box::new(Expr::Integer(0)),
-            }),
-            then_expr: Box::new(base),
-            else_expr: Box::new(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::FuncRef(id)),
-                args: vec![Expr::Binary { byte_offset: 0,
-                    op: BinaryOp::Sub,
-                    left: Box::new(Expr::LocalGet(10)),
-                    right: Box::new(Expr::Integer(1)),
-                }],
-                type_args: Vec::new(),
+        body: vec![Stmt::Return(
+            Some(Expr::Conditional {
                 byte_offset: 0,
+                condition: Box::new(Expr::Compare {
+                    byte_offset: 0,
+                    op: CompareOp::Le,
+                    left: Box::new(Expr::LocalGet(10)),
+                    right: Box::new(Expr::Integer(0)),
+                }),
+                then_expr: Box::new(base),
+                else_expr: Box::new(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::FuncRef(id)),
+                    args: vec![Expr::Binary {
+                        byte_offset: 0,
+                        op: BinaryOp::Sub,
+                        left: Box::new(Expr::LocalGet(10)),
+                        right: Box::new(Expr::Integer(1)),
+                    }],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
             }),
-        }), 0)],
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -146,7 +154,8 @@ fn ternary_recursive_fn(id: u32, name: &str, base: Expr) -> Function {
 }
 
 fn module_with(functions: Vec<Function>) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: "i64_spec_ternary.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),

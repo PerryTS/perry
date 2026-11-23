@@ -76,7 +76,8 @@ fn module_ir(quiet: bool) -> String {
         mutable: true,
         init: Some(Expr::Integer(0)),
     };
-    let condition = Expr::Compare { byte_offset: 0,
+    let condition = Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Lt,
         left: Box::new(Expr::LocalGet(I)),
         right: Box::new(Expr::PropertyGet {
@@ -101,11 +102,13 @@ fn module_ir(quiet: bool) -> String {
             index: Box::new(Expr::LocalGet(I)),
         }),
     ))];
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: BS,
             name: "bs".to_string(),
             ty: Type::Array(Box::new(Type::Any)),

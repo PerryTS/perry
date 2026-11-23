@@ -255,7 +255,8 @@ impl Analysis<'_> {
             Expr::Binary {
                 op: BinaryOp::Add,
                 left,
-                right, ..
+                right,
+                ..
             } => {
                 let mut s = self.str_const(left)?;
                 s.push_str(&self.str_const(right)?);

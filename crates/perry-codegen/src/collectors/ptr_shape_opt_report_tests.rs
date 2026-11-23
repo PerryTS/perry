@@ -20,7 +20,8 @@ use perry_hir::types::Type;
 use perry_hir::{Class, ClassField, Expr, Stmt};
 
 fn field(name: &str) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -132,11 +133,15 @@ fn contained_local_wins_and_returned_local_is_denied_with_its_rule() {
         store_x(1),
         let_c(2, "escaped"),
         store_x(2),
-        Stmt::Return(Some(Expr::Conditional { byte_offset: 0,
-            condition: Box::new(Expr::Bool(true)),
-            then_expr: Box::new(Expr::LocalGet(2)),
-            else_expr: Box::new(Expr::Undefined),
-        }), 0),
+        Stmt::Return(
+            Some(Expr::Conditional {
+                byte_offset: 0,
+                condition: Box::new(Expr::Bool(true)),
+                then_expr: Box::new(Expr::LocalGet(2)),
+                else_expr: Box::new(Expr::Undefined),
+            }),
+            0,
+        ),
     ];
 
     let session = Session::start();
@@ -186,7 +191,8 @@ fn escape_kinds_are_discriminated() {
 
     let captured = vec![
         let_c(1, "captured"),
-        Stmt::Expr(Expr::Closure { byte_offset: 0,
+        Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 99,
             params: Vec::new(),
             return_type: Type::Any,
@@ -663,14 +669,17 @@ fn only_the_return_position_is_marked_served() {
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
     // `return new C(new C())` — outer is the return, inner is an argument.
-    let stmts = vec![Stmt::Return(Some(Expr::New {
-        byte_end: 0,
-        class_name: "C".to_string(),
-        args: vec![new_c()],
-        type_args: Vec::new(),
-        byte_offset: 0,
-        cap_args_appended: 0,
-    }), 0)];
+    let stmts = vec![Stmt::Return(
+        Some(Expr::New {
+            byte_end: 0,
+            class_name: "C".to_string(),
+            args: vec![new_c()],
+            type_args: Vec::new(),
+            byte_offset: 0,
+            cap_args_appended: 0,
+        }),
+        0,
+    )];
 
     let session = Session::start();
     let _guard = crate::opt_report::enter_function_region("mk", true);
@@ -694,13 +703,16 @@ fn only_the_return_position_is_marked_served() {
     // non-reentrant lock, so opening a second one while the first is alive
     // deadlocks. `entries()` has already drained the sink, so the second phase
     // starts clean.
-    let called = vec![Stmt::Return(Some(Expr::Call {
-        byte_end: 0,
-        callee: Box::new(Expr::FuncRef(9)),
-        args: vec![new_c()],
-        type_args: Vec::new(),
-        byte_offset: 0,
-    }), 0)];
+    let called = vec![Stmt::Return(
+        Some(Expr::Call {
+            byte_end: 0,
+            callee: Box::new(Expr::FuncRef(9)),
+            args: vec![new_c()],
+            type_args: Vec::new(),
+            byte_offset: 0,
+        }),
+        0,
+    )];
 
     let _guard = crate::opt_report::enter_function_region("mk", true);
     let _ = run(&called, &classes);
@@ -794,7 +806,8 @@ fn a_region_lowered_twice_still_collapses_and_says_how_much() {
 // different producer-side guard happens to reject the region.
 
 fn ternary(a: Expr, b: Expr) -> Expr {
-    Expr::Conditional { byte_offset: 0,
+    Expr::Conditional {
+        byte_offset: 0,
         condition: Box::new(Expr::Bool(true)),
         then_expr: Box::new(a),
         else_expr: Box::new(b),
@@ -853,11 +866,15 @@ fn a_conditional_condition_is_not_a_return_shape_source() {
     let c = c_classes();
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(Expr::Conditional { byte_offset: 0,
-        condition: Box::new(new_c()),
-        then_expr: Box::new(new_c()),
-        else_expr: Box::new(new_c()),
-    }), 0)];
+    let stmts = vec![Stmt::Return(
+        Some(Expr::Conditional {
+            byte_offset: 0,
+            condition: Box::new(new_c()),
+            then_expr: Box::new(new_c()),
+            else_expr: Box::new(new_c()),
+        }),
+        0,
+    )];
 
     let entries = run_as_producer(&stmts, &classes);
     let rows = alloc_rows(&entries);
@@ -887,11 +904,15 @@ fn a_logical_result_operand_is_reported_as_served_by_return_shape() {
     let c = c_classes();
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(Expr::Logical { byte_offset: 0,
-        op: perry_hir::LogicalOp::And,
-        left: Box::new(Expr::Bool(true)),
-        right: Box::new(new_c()),
-    }), 0)];
+    let stmts = vec![Stmt::Return(
+        Some(Expr::Logical {
+            byte_offset: 0,
+            op: perry_hir::LogicalOp::And,
+            left: Box::new(Expr::Bool(true)),
+            right: Box::new(new_c()),
+        }),
+        0,
+    )];
 
     let entries = run_as_producer(&stmts, &classes);
     let rows = alloc_rows(&entries);
@@ -919,11 +940,15 @@ fn a_consumed_logical_operand_is_not_a_return_shape_source() {
         byte_offset: 0,
         cap_args_appended: 0,
     };
-    let stmts = vec![Stmt::Return(Some(Expr::Logical { byte_offset: 0,
-        op: perry_hir::LogicalOp::Or,
-        left: Box::new(new_c()),
-        right: Box::new(new_d),
-    }), 0)];
+    let stmts = vec![Stmt::Return(
+        Some(Expr::Logical {
+            byte_offset: 0,
+            op: perry_hir::LogicalOp::Or,
+            left: Box::new(new_c()),
+            right: Box::new(new_d),
+        }),
+        0,
+    )];
 
     let entries = run_as_producer(&stmts, &classes);
     let rows = alloc_rows(&entries);
@@ -965,12 +990,15 @@ fn a_member_base_under_a_return_is_not_a_return_position() {
     let c = c_classes();
     let mut classes = HashMap::new();
     classes.insert("C".to_string(), &c);
-    let stmts = vec![Stmt::Return(Some(Expr::PropertyGet {
-        byte_end: 0,
-        object: Box::new(new_c()),
-        property: "x".to_string(),
-        byte_offset: 0,
-    }), 0)];
+    let stmts = vec![Stmt::Return(
+        Some(Expr::PropertyGet {
+            byte_end: 0,
+            object: Box::new(new_c()),
+            property: "x".to_string(),
+            byte_offset: 0,
+        }),
+        0,
+    )];
 
     let entries = run_as_producer(&stmts, &classes);
     let rows = alloc_rows(&entries);

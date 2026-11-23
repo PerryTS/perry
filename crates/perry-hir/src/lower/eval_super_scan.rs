@@ -197,16 +197,23 @@ pub(crate) fn check_direct_eval_super_private(
             byte_offset,
         ));
     }
-    check_private_refs(&scan, |name| {
-        ctx.private_scopes
-            .iter()
-            .any(|s| s.members.contains_key(name))
-    }, byte_offset)
+    check_private_refs(
+        &scan,
+        |name| {
+            ctx.private_scopes
+                .iter()
+                .any(|s| s.members.contains_key(name))
+        },
+        byte_offset,
+    )
 }
 
 /// Indirect eval: global code — no super of either kind, and private names
 /// must be declared inside the eval source itself.
-pub(crate) fn check_indirect_eval_super_private(stmts: &[ast::Stmt], byte_offset: u32) -> Option<Expr> {
+pub(crate) fn check_indirect_eval_super_private(
+    stmts: &[ast::Stmt],
+    byte_offset: u32,
+) -> Option<Expr> {
     let mut scan = Scan::default();
     for s in stmts {
         scan_stmt(&mut scan, s, true);
@@ -227,12 +234,17 @@ pub(crate) fn check_indirect_eval_super_private(stmts: &[ast::Stmt], byte_offset
     check_private_refs(&scan, |_| false, byte_offset)
 }
 
-fn check_private_refs(scan: &Scan, outer_declares: impl Fn(&str) -> bool, byte_offset: u32) -> Option<Expr> {
+fn check_private_refs(
+    scan: &Scan,
+    outer_declares: impl Fn(&str) -> bool,
+    byte_offset: u32,
+) -> Option<Expr> {
     for name in &scan.private_refs {
         if !scan.private_decls.contains(name) && !outer_declares(name) {
-            return Some(throw_eval_syntax_error_expr(&format!(
-                "Private field '{name}' must be declared in an enclosing class"
-            ), byte_offset));
+            return Some(throw_eval_syntax_error_expr(
+                &format!("Private field '{name}' must be declared in an enclosing class"),
+                byte_offset,
+            ));
         }
     }
     None

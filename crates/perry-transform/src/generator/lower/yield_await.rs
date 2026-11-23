@@ -70,22 +70,28 @@ pub(crate) fn await_async_generator_yield_operands(stmts: &mut Vec<Stmt>, next_i
             Stmt::Expr(Expr::Yield {
                 value,
                 delegate: false,
-                byte_offset, ..
+                byte_offset,
+                ..
             }) => Some((value, *byte_offset)),
             Stmt::Let {
                 init:
                     Some(Expr::Yield {
                         value,
                         delegate: false,
-                byte_offset, ..
+                        byte_offset,
+                        ..
                     }),
                 ..
             } => Some((value, *byte_offset)),
-            Stmt::Return(Some(Expr::Yield {
-                value,
-                delegate: false,
-                byte_offset, ..
-            }), _) => Some((value, *byte_offset)),
+            Stmt::Return(
+                Some(Expr::Yield {
+                    value,
+                    delegate: false,
+                    byte_offset,
+                    ..
+                }),
+                _,
+            ) => Some((value, *byte_offset)),
             _ => None,
         };
         if let Some((value, yield_offset)) = yield_value {

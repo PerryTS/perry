@@ -481,7 +481,8 @@ fn fix_stmts(stmts: &mut [Stmt], table: &AliasTable) {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 fix_expr(discriminant, table);
                 for case in cases {
@@ -825,11 +826,13 @@ mod tests {
             type_args: vec![Type::Any],
         };
         let mut module = Module::new("m");
-        module.functions.push(Function { byte_offset: 0,
+        module.functions.push(Function {
+            byte_offset: 0,
             id: 0,
             name: "f".into(),
             type_params: vec![],
-            params: vec![Param { byte_offset: 0,
+            params: vec![Param {
+                byte_offset: 0,
                 id: 0,
                 name: "id".into(),
                 ty: id_ty.clone(),
@@ -844,7 +847,8 @@ mod tests {
                 name: "x".into(),
                 ty: id_ty.clone(),
                 mutable: false,
-                init: Some(Expr::Closure { byte_offset: 0,
+                init: Some(Expr::Closure {
+                    byte_offset: 0,
                     func_id: 1,
                     params: vec![],
                     return_type: id_ty.clone(),

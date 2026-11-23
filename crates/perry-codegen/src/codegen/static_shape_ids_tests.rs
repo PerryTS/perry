@@ -700,7 +700,8 @@ fn field_class(
     let params: Vec<Param> = fields
         .iter()
         .enumerate()
-        .map(|(i, f)| Param { byte_offset: 0,
+        .map(|(i, f)| Param {
+            byte_offset: 0,
             id: param_base + i as u32,
             name: (*f).to_string(),
             ty: Type::Any,
@@ -733,7 +734,8 @@ fn field_class(
         heritage_lexically_shadowed: false,
         fields: fields
             .iter()
-            .map(|f| ClassField { byte_offset: 0,
+            .map(|f| ClassField {
+                byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: (*f).to_string(),
                 key_expr: None,
@@ -744,7 +746,8 @@ fn field_class(
                 decorators: Vec::new(),
             })
             .collect(),
-        constructor: Some(Function { byte_offset: 0,
+        constructor: Some(Function {
+            byte_offset: 0,
             id: ctor_id,
             name: "constructor".to_string(),
             type_params: Vec::new(),

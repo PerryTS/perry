@@ -16,7 +16,8 @@ use perry_hir::{BinaryOp, Export, Expr, Function, Module, Stmt};
 const PREFIX: &str = "producer_ts";
 
 fn reader(id: u32, name: &str, local: u32) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -49,7 +50,8 @@ fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
 /// function; `shared` is also exported as a value.
 fn producer(reassign: bool) -> Module {
     let mut module = Module::new("producer.ts");
-    let computed = Expr::Binary { byte_offset: 0,
+    let computed = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::String("computed-leaf-".into())),
         right: Box::new(Expr::Number(1.0)),

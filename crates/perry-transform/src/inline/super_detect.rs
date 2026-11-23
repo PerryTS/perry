@@ -158,7 +158,8 @@ fn stmt_contains_lexical_super(stmt: &Stmt) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             expr_contains_lexical_super(discriminant)
                 || cases.iter().any(|case| {

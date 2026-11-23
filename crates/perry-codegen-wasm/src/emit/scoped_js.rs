@@ -76,7 +76,8 @@ pub(super) fn scoped_js_names(stmts: &[Stmt]) -> BTreeSet<String> {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases, ..
+                    cases,
+                    ..
                 } => {
                     expr(discriminant, &mut active, names);
                     for case in cases {

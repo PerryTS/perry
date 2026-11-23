@@ -1727,15 +1727,26 @@ impl<'a> Gen<'a> {
             .copied();
         let prev_first = std::mem::replace(&mut self.m.proto_first_cur, first);
         // A declaration's own operations stand at the declaration.
-        let kind0 = self.m.stop_top.as_mut().map(|st| std::mem::replace(&mut st.gen_kind, crate::topstop::variant(s, "Stmt::")));
+        let kind0 =
+            self.m.stop_top.as_mut().map(|st| {
+                std::mem::replace(&mut st.gen_kind, crate::topstop::variant(s, "Stmt::"))
+            });
         let pos0 = match s {
             Stmt::Let { id, .. } if self.m.stop_top.is_some() => self.modules[fx.module as usize]
                 .1
                 .local_source_spans
                 .get(id)
-                .map(|sp| std::mem::replace(&mut self.m.stop_top.as_mut().unwrap().gen_pos, (fx.module, sp.start))),
+                .map(|sp| {
+                    std::mem::replace(
+                        &mut self.m.stop_top.as_mut().unwrap().gen_pos,
+                        (fx.module, sp.start),
+                    )
+                }),
             Stmt::Let { .. } => None,
-            _ => match (self.m.stop_top.as_mut(), s.byte_offset().filter(|&o| o != 0)) {
+            _ => match (
+                self.m.stop_top.as_mut(),
+                s.byte_offset().filter(|&o| o != 0),
+            ) {
                 (Some(st), Some(o)) => Some(std::mem::replace(&mut st.gen_pos, (fx.module, o))),
                 _ => None,
             },
@@ -2284,7 +2295,8 @@ fn guarded_for_of_walk(s: &Stmt) -> Option<(u32, u32)> {
             Expr::Compare {
                 op: perry_hir::CompareOp::Eq,
                 left,
-                right, ..
+                right,
+                ..
             },
         then_branch,
         ..

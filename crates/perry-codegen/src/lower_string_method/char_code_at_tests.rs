@@ -7,11 +7,13 @@ fn scanner_ir(receiver_type: Type) -> String {
 /// The scanner with `prelude` before its loop.
 fn scanner_ir_with(receiver_type: Type, prelude: Vec<Stmt>) -> String {
     let mut m = Module::new("char_scanner");
-    m.functions.push(Function { byte_offset: 0,
+    m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "scan".into(),
         type_params: vec![],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "s".into(),
             ty: receiver_type,
@@ -31,7 +33,8 @@ fn scanner_ir_with(receiver_type: Type, prelude: Vec<Stmt>) -> String {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::Integer(20)),

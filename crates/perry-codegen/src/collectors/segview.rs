@@ -988,7 +988,8 @@ fn let_any(id: u32, name: &str, init: Expr) -> Stmt {
 
 /// `cur != 0` — the accept test. `open` returns `0.0` when it declines.
 fn cursor_live(cur: u32) -> Expr {
-    Expr::Compare { byte_offset: 0 /*HPOS*/,
+    Expr::Compare {
+        byte_offset: 0, /*HPOS*/
         op: perry_hir::CompareOp::Ne,
         left: Box::new(Expr::LocalGet(cur)),
         right: Box::new(Expr::Number(0.0)),
@@ -996,7 +997,8 @@ fn cursor_live(cur: u32) -> Expr {
 }
 
 fn pick(cur: u32, accept: Expr, decline: Expr) -> Expr {
-    Expr::Conditional { byte_offset: 0 /*HPOS*/,
+    Expr::Conditional {
+        byte_offset: 0, /*HPOS*/
         condition: Box::new(cursor_live(cur)),
         then_expr: Box::new(accept),
         else_expr: Box::new(decline),
@@ -1069,7 +1071,8 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
         // `cur != 0 ? (R == 1) : !R.done`
         *condition = Some(pick(
             cur,
-            Expr::Compare { byte_offset: 0 /*HPOS*/,
+            Expr::Compare {
+                byte_offset: 0, /*HPOS*/
                 op: perry_hir::CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(result_id)),
                 right: Box::new(Expr::Number(1.0)),
@@ -1508,7 +1511,8 @@ struct V2Emission {
 }
 
 fn is_undefined_cmp(id: u32) -> Expr {
-    Expr::Compare { byte_offset: 0 /*HPOS*/,
+    Expr::Compare {
+        byte_offset: 0, /*HPOS*/
         op: perry_hir::CompareOp::Eq,
         left: Box::new(Expr::LocalGet(id)),
         right: Box::new(Expr::Undefined),
@@ -1564,7 +1568,8 @@ fn rewrite_uses_in_expr(e: &mut Expr, seg: u32, cur: u32, fresh: &mut u32, out: 
                             vec![Expr::LocalGet(cur), Expr::LocalGet(t_recv)],
                         )),
                     ),
-                    Expr::Conditional { byte_offset: 0 /*HPOS*/,
+                    Expr::Conditional {
+                        byte_offset: 0, /*HPOS*/
                         condition: Box::new(is_undefined_cmp(t_res)),
                         then_expr: Box::new(Expr::Call {
                             byte_end: 0,

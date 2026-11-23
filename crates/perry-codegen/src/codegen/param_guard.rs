@@ -874,7 +874,8 @@ pub(crate) fn guarded_undefined_method_candidate(
                 Expr::Compare {
                     op: CompareOp::Eq,
                     left,
-                    right, ..
+                    right,
+                    ..
                 },
             then_branch,
             else_branch: None,
@@ -959,7 +960,8 @@ pub(crate) fn guarded_undefined_method_candidate(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 (in_loop && expr_has_guard(discriminant, id))
                     || cases
@@ -1055,7 +1057,8 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
                 Expr::Compare {
                     op: CompareOp::Eq,
                     left,
-                    right, ..
+                    right,
+                    ..
                 },
             then_branch,
             else_branch: None,
@@ -1130,7 +1133,8 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 !expr_contains_local_get(discriminant, id)
                     && cases.iter().all(|case| {
@@ -1274,7 +1278,8 @@ pub(crate) fn body_contains_await(stmts: &[perry_hir::Stmt]) -> bool {
         }
         perry_hir::Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             expr_contains_await(discriminant)
                 || cases.iter().any(|case| {
@@ -1396,7 +1401,8 @@ mod tests {
     }
 
     fn declaration_guard_for(ty: Type, aliases: &HashMap<String, Type>) -> Option<SpecParamGuard> {
-        let params = [perry_hir::Param { byte_offset: 0,
+        let params = [perry_hir::Param {
+            byte_offset: 0,
             id: 1,
             name: "value".to_string(),
             ty,
@@ -1615,12 +1621,17 @@ mod tests {
 
     #[test]
     fn suspension_scan_stays_in_the_current_function_body() {
-        let direct = vec![perry_hir::Stmt::Return(Some(perry_hir::Expr::Await(
-            Box::new(perry_hir::Expr::Undefined),
-         0,)), 0)];
+        let direct = vec![perry_hir::Stmt::Return(
+            Some(perry_hir::Expr::Await(
+                Box::new(perry_hir::Expr::Undefined),
+                0,
+            )),
+            0,
+        )];
         assert!(body_contains_await(&direct));
 
-        let nested = vec![perry_hir::Stmt::Expr(perry_hir::Expr::Closure { byte_offset: 0,
+        let nested = vec![perry_hir::Stmt::Expr(perry_hir::Expr::Closure {
+            byte_offset: 0,
             func_id: 9,
             params: Vec::new(),
             return_type: Type::Void,
@@ -1656,7 +1667,8 @@ mod tests {
             heritage_lexically_shadowed: false,
             fields: fields
                 .into_iter()
-                .map(|(field, ty)| perry_hir::ClassField { byte_offset: 0,
+                .map(|(field, ty)| perry_hir::ClassField {
+                    byte_offset: 0,
                     origin: perry_hir::ClassFieldOrigin::Definition,
                     name: field.to_string(),
                     key_expr: None,
@@ -1926,7 +1938,8 @@ mod tests {
         let mut shadowed = class(6, "Shadowed", None, vec![("value", Type::Number)]);
         shadowed.getters.push((
             "value".to_string(),
-            perry_hir::Function { byte_offset: 0,
+            perry_hir::Function {
+                byte_offset: 0,
                 id: 60,
                 name: "get_value".to_string(),
                 type_params: Vec::new(),

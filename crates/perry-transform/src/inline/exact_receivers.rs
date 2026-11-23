@@ -193,7 +193,8 @@ pub(crate) fn collect_module_prototype_facts(module: &Module) -> ModulePrototype
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 visit_expr(discriminant, facts);
                 for case in cases {
@@ -531,7 +532,8 @@ pub fn collect_exact_receiver_refs_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             collect_exact_receiver_refs_in_expr(discriminant, facts, out);
             for case in cases {

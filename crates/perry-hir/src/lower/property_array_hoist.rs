@@ -347,7 +347,8 @@ fn expr_is_hoist_safe(expr: &Expr, scan: &Scan<'_>) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             expr_is_hoist_safe(condition, scan)
                 && expr_is_hoist_safe(then_expr, scan)
@@ -434,7 +435,8 @@ fn expr_reads_property(expr: &Expr, recv: Recv, property: &str) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             expr_reads_property(condition, recv, property)
                 || expr_reads_property(then_expr, recv, property)
@@ -539,7 +541,8 @@ fn rewrite_stmt(stmt: &Stmt, recv: Recv, property: &str, hoist_id: u32) -> Stmt 
             value
                 .as_ref()
                 .map(|e| rewrite_expr(e, recv, property, hoist_id)),
-                    *off,),
+            *off,
+        ),
         Stmt::Throw(value) => Stmt::Throw(rewrite_expr(value, recv, property, hoist_id)),
         other => other.clone(),
     }
@@ -583,17 +586,35 @@ fn rewrite_expr(expr: &Expr, recv: Recv, property: &str, hoist_id: u32) -> Expr 
             object: rec(object),
             index: rec(index),
         },
-        Expr::Binary { op, left, right, byte_offset } => Expr::Binary { byte_offset: *byte_offset,
+        Expr::Binary {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => Expr::Binary {
+            byte_offset: *byte_offset,
             op: *op,
             left: rec(left),
             right: rec(right),
         },
-        Expr::Logical { op, left, right, byte_offset } => Expr::Logical { byte_offset: *byte_offset,
+        Expr::Logical {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => Expr::Logical {
+            byte_offset: *byte_offset,
             op: *op,
             left: rec(left),
             right: rec(right),
         },
-        Expr::Compare { op, left, right, byte_offset } => Expr::Compare { byte_offset: *byte_offset,
+        Expr::Compare {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => Expr::Compare {
+            byte_offset: *byte_offset,
             op: *op,
             left: rec(left),
             right: rec(right),
@@ -621,8 +642,10 @@ fn rewrite_expr(expr: &Expr, recv: Recv, property: &str, hoist_id: u32) -> Expr 
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
-        } => Expr::Conditional { byte_offset: 0 /*HPOS*/,
+            else_expr,
+            ..
+        } => Expr::Conditional {
+            byte_offset: 0, /*HPOS*/
             condition: rec(condition),
             then_expr: rec(then_expr),
             else_expr: rec(else_expr),
@@ -999,7 +1022,9 @@ fn inline_this_calls_stmt(s: &Stmt, class: &ThisClass<'_>, used: &mut Vec<String
                     .collect()
             }),
         },
-        Stmt::Return(v, off) => Stmt::Return(v.as_ref().map(|e| inline_this_calls(e, class, used)), *off),
+        Stmt::Return(v, off) => {
+            Stmt::Return(v.as_ref().map(|e| inline_this_calls(e, class, used)), *off)
+        }
         other => other.clone(),
     }
 }
@@ -1059,25 +1084,43 @@ fn map_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
                 element_offset: *element_offset,
             }
         }
-        Expr::Binary { op, left, right, byte_offset } => {
+        Expr::Binary {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => {
             let left = r(left, f);
-            Expr::Binary { byte_offset: *byte_offset,
+            Expr::Binary {
+                byte_offset: *byte_offset,
                 op: *op,
                 left,
                 right: r(right, f),
             }
         }
-        Expr::Logical { op, left, right, byte_offset } => {
+        Expr::Logical {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => {
             let left = r(left, f);
-            Expr::Logical { byte_offset: *byte_offset,
+            Expr::Logical {
+                byte_offset: *byte_offset,
                 op: *op,
                 left,
                 right: r(right, f),
             }
         }
-        Expr::Compare { op, left, right, byte_offset } => {
+        Expr::Compare {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => {
             let left = r(left, f);
-            Expr::Compare { byte_offset: *byte_offset,
+            Expr::Compare {
+                byte_offset: *byte_offset,
                 op: *op,
                 left,
                 right: r(right, f),
@@ -1098,7 +1141,8 @@ fn map_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
         } => {
             let condition = r(condition, f);
             let then_expr = r(then_expr, f);
-            Expr::Conditional { byte_offset: *byte_offset,
+            Expr::Conditional {
+                byte_offset: *byte_offset,
                 condition,
                 then_expr,
                 else_expr: r(else_expr, f),

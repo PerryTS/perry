@@ -39,7 +39,9 @@ fn number_coerce_operand_is_already_primitive_number(ctx: &FnCtx<'_>, operand: &
         | Expr::Uint8ArrayLength(_)
         | Expr::BufferLength(_) => true,
         Expr::LocalGet(id) | Expr::Update { id, .. } => ctx.integer_locals.contains(id),
-        Expr::Binary { op, left, right, .. } => match op {
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod => {
                 number_coerce_operand_is_already_primitive_number(ctx, left)
                     && number_coerce_operand_is_already_primitive_number(ctx, right)
@@ -387,7 +389,8 @@ fn can_lower_u32_for_collection_value(ctx: &FnCtx<'_>, value: &Expr) -> bool {
         Expr::Binary {
             op: BinaryOp::UShr,
             left,
-            right, ..
+            right,
+            ..
         } => {
             can_lower_i32_for_collection_value(ctx, left)
                 && can_lower_i32_for_collection_value(ctx, right)

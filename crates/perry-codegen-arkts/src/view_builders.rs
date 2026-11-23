@@ -308,7 +308,10 @@ pub(crate) fn rewrite_view_builder_calls_in_expr(
     // When we hit a closure: prepend a setContentView call for every
     // view-builder funcref called inside the closure's body, then recurse
     // into the body for any nested closures.
-    if let Expr::Closure { body, byte_offset, .. } = e {
+    if let Expr::Closure {
+        body, byte_offset, ..
+    } = e
+    {
         // Collect all view-builder funcrefs called inside this closure.
         let mut called_builders: Vec<&ViewBuilder> = Vec::new();
         let mut seen: std::collections::HashSet<perry_hir::types::FuncId> =
@@ -323,7 +326,8 @@ pub(crate) fn rewrite_view_builder_calls_in_expr(
             let prepends: Vec<Stmt> = sorted
                 .iter()
                 .map(|b| {
-                    Stmt::Expr(Expr::NativeMethodCall { byte_offset: *byte_offset,
+                    Stmt::Expr(Expr::NativeMethodCall {
+                        byte_offset: *byte_offset,
                         module: "perry/arkts".to_string(),
                         class_name: None,
                         object: None,
@@ -364,7 +368,8 @@ pub(crate) fn rewrite_view_builder_calls_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             rewrite_view_builder_calls_in_expr(condition, lookup);
             rewrite_view_builder_calls_in_expr(then_expr, lookup);

@@ -364,7 +364,9 @@ fn additive_write_admissible(
         }
         // Exact ToInt32/ToUint32 producers once the result is not a BigInt
         // (#10418): proven by `not_bigint` or by an admissible operand.
-        Expr::Binary { op, left, right, .. } if is_bitwise_binop(*op) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if is_bitwise_binop(*op) => {
             not_bigint.bitwise_result_is_number(e) || admissible(left) || admissible(right)
         }
         Expr::Unary {
@@ -372,9 +374,9 @@ fn additive_write_admissible(
             operand,
         } => not_bigint.bitwise_result_is_number(e) || admissible(operand),
         Expr::MathImul(_, _) => true,
-        Expr::Binary { op, left, right, .. } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
-            admissible(left) && admissible(right)
-        }
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => admissible(left) && admissible(right),
         _ => false,
     }
 }
@@ -420,7 +422,9 @@ pub(super) fn write_establishes_number(
                 ))
         }
         Expr::LocalGet(id) => numberish.contains(id),
-        Expr::Binary { op, left, right, .. } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
             write_establishes_number(left, types, ta_lens, numberish, numeric_locals)
                 && write_establishes_number(right, types, ta_lens, numberish, numeric_locals)
         }
@@ -435,7 +439,9 @@ pub(super) fn write_establishes_number(
 fn additive_spine_locals_numberish(e: &Expr, numberish: &HashSet<u32>) -> bool {
     match e {
         Expr::LocalGet(id) => numberish.contains(id),
-        Expr::Binary { op, left, right, .. } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
             additive_spine_locals_numberish(left, numberish)
                 && additive_spine_locals_numberish(right, numberish)
         }
@@ -606,7 +612,8 @@ fn additive_flow_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             additive_flow_expr(
                 discriminant,
@@ -1019,7 +1026,8 @@ fn collect_facts<'a>(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 collect_facts_expr(
                     discriminant,
@@ -1325,7 +1333,8 @@ fn collect_closure_refs_stmt(s: &Stmt, out: &mut HashSet<u32>) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             collect_closure_refs(discriminant, out);
             for case in cases {
@@ -1477,7 +1486,8 @@ fn observe_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 observe(discriminant, false, cands, types, additive, exact_i32, disq);
                 for case in cases {
@@ -1515,7 +1525,9 @@ fn observe(
             }
         }
         // Bitwise binary: both operands are `ToInt32`-coerced.
-        Expr::Binary { op, left, right, .. } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let c = is_bitwise_binop(*op);
             observe(left, c, cands, types, additive, exact_i32, disq);
             observe(right, c, cands, types, additive, exact_i32, disq);
@@ -1646,13 +1658,17 @@ fn observe_additive_rhs(
         // Blessed operand read of a candidate (or a plain non-candidate read
         // — no constraint either way).
         Expr::LocalGet(_) | Expr::Integer(_) | Expr::Number(_) => {}
-        Expr::Binary { op, left, right, .. } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
             observe_additive_rhs(left, cands, types, additive, exact_i32, disq);
             observe_additive_rhs(right, cands, types, additive, exact_i32, disq);
         }
         // Bitwise/`~`/`imul` operands are ToInt32/ToUint32-coerced — the
         // strict walk already treats those positions as coercing.
-        Expr::Binary { op, left, right, .. } if is_bitwise_binop(*op) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if is_bitwise_binop(*op) => {
             observe(left, true, cands, types, additive, exact_i32, disq);
             observe(right, true, cands, types, additive, exact_i32, disq);
         }

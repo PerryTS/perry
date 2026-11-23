@@ -104,7 +104,8 @@ pub(crate) fn fix_imported_enums_in_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 fix_imported_enums_in_expr(discriminant, enums);
                 for case in cases {

@@ -18,7 +18,8 @@ fn value_call() -> Expr {
 
 fn module_with_padding_call(call: Expr) -> Module {
     let mut module = Module::new("padding_single_evaluation");
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "next_padding".to_string(),
         type_params: Vec::new(),
@@ -35,7 +36,8 @@ fn module_with_padding_call(call: Expr) -> Module {
         was_unrolled: false,
         construct_only: false,
     });
-    module.functions.push(Function { byte_offset: 0,
+    module.functions.push(Function {
+        byte_offset: 0,
         id: 2,
         name: "apply_padding".to_string(),
         type_params: Vec::new(),
@@ -86,7 +88,8 @@ fn assert_one_value_evaluation(ir: &str) {
 
 #[test]
 fn free_function_uniform_padding_evaluates_value_once() {
-    let ir = compile_ir(Expr::NativeMethodCall { byte_offset: 0,
+    let ir = compile_ir(Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,
@@ -98,7 +101,8 @@ fn free_function_uniform_padding_evaluates_value_once() {
 
 #[test]
 fn instance_uniform_padding_evaluates_value_once() {
-    let ir = compile_ir(Expr::NativeMethodCall { byte_offset: 0,
+    let ir = compile_ir(Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "perry/ui".to_string(),
         class_name: None,
         object: Some(Box::new(Expr::Number(1.0))),

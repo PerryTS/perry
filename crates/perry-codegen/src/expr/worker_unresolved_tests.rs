@@ -34,7 +34,8 @@ fn assert_valid_ir(case: &str, body: Vec<Stmt>) {
         Type::Array(Box::new(Type::Any)),
         Expr::Array(vec![], None),
     )];
-    module.functions.push(perry_hir::Function { byte_offset: 0,
+    module.functions.push(perry_hir::Function {
+        byte_offset: 0,
         id: 2,
         name: "consume".into(),
         type_params: vec![],

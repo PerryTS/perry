@@ -27,7 +27,8 @@ mod tests {
     }
 
     fn closure(body: Vec<Stmt>, captures: Vec<LocalId>) -> Expr {
-        Expr::Closure { byte_offset: 0,
+        Expr::Closure {
+            byte_offset: 0,
             func_id: 900,
             params: Vec::new(),
             return_type: perry_hir::types::Type::Any,
@@ -48,7 +49,8 @@ mod tests {
     // ── End-to-end: the transform emits the complete terminal release set ──
 
     fn async_module(body: Vec<Stmt>) -> Module {
-        let f = Function { byte_offset: 0,
+        let f = Function {
+            byte_offset: 0,
             id: 1,
             name: "f".to_string(),
             type_params: Vec::new(),

@@ -16,7 +16,8 @@ const PLAIN_NUMBER_MAX_I64: &str = "9221401712017801215";
 const MAGNITUDE_MASK_I64: &str = "9223372036854775807";
 
 fn param(id: u32, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -28,7 +29,8 @@ fn param(id: u32, ty: Type) -> Param {
 }
 
 fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.into(),
         type_params: vec![],
@@ -63,7 +65,8 @@ fn ir_of(module: &Module) -> String {
 }
 
 fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -84,11 +87,14 @@ fn number_guard_rejects_the_mirror_of_the_tag_band() {
             param(2, Type::Any),
             param(3, Type::Any),
         ],
-        vec![Stmt::Return(Some(bin(
-            BinaryOp::Add,
-            bin(BinaryOp::Add, Expr::LocalGet(1), Expr::LocalGet(2)),
-            Expr::LocalGet(3),
-        )), 0)],
+        vec![Stmt::Return(
+            Some(bin(
+                BinaryOp::Add,
+                bin(BinaryOp::Add, Expr::LocalGet(1), Expr::LocalGet(2)),
+                Expr::LocalGet(3),
+            )),
+            0,
+        )],
     ));
     let ir = ir_of(&m);
     let masked: Vec<&str> = ir
@@ -181,7 +187,8 @@ fn call0(callee: u32) -> Expr {
 /// call result itself and keeps its slot.
 fn closure_module() -> Module {
     let mut m = Module::new("p6_closure.ts");
-    let closure = Expr::Closure { byte_offset: 0,
+    let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 30,
         params: vec![param(20, Type::Any)],
         return_type: Type::Any,
@@ -205,10 +212,13 @@ fn closure_module() -> Module {
                 Box::new(bin(BinaryOp::BitOr, Expr::LocalGet(21), call0(20))),
             )),
             Stmt::Expr(Expr::LocalSet(22, Box::new(call0(20)))),
-            Stmt::Return(Some(Expr::Array(
-                vec![Expr::LocalGet(21), Expr::LocalGet(22)],
-                None,
-            )), 0),
+            Stmt::Return(
+                Some(Expr::Array(
+                    vec![Expr::LocalGet(21), Expr::LocalGet(22)],
+                    None,
+                )),
+                0,
+            ),
         ],
         captures: vec![],
         mutable_captures: vec![],

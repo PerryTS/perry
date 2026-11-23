@@ -3,7 +3,8 @@ use super::*;
 use perry_hir::{types::Type, Function, Module, Param, UpdateOp};
 
 fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -100,7 +101,8 @@ fn ir(op: CompareOp, offset: Expr, other: bool, exposure: u8, recheck: bool) -> 
     ))];
     if recheck {
         loop_body.push(Stmt::If {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(5)),
                 right: Box::new(Expr::Integer(3)),
@@ -117,7 +119,8 @@ fn ir(op: CompareOp, offset: Expr, other: bool, exposure: u8, recheck: bool) -> 
     }
     body.push(Stmt::For {
         init: Some(Box::new(local(5, true, Expr::Integer(0)))),
-        condition: Some(Expr::Compare { byte_offset: 0,
+        condition: Some(Expr::Compare {
+            byte_offset: 0,
             op,
             left: Box::new(Expr::LocalGet(5)),
             right: Box::new(bin(BinaryOp::Sub, len(if other { 4 } else { 3 }), offset)),
@@ -139,11 +142,13 @@ fn ir(op: CompareOp, offset: Expr, other: bool, exposure: u8, recheck: bool) -> 
     }
     body.push(Stmt::Return(Some(Expr::LocalGet(6)), 0));
     let mut m = Module::new("length_region");
-    m.functions.push(Function { byte_offset: 0,
+    m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: vec![],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "seed".into(),
             ty: Type::Number,
@@ -165,7 +170,8 @@ fn ir(op: CompareOp, offset: Expr, other: bool, exposure: u8, recheck: bool) -> 
         construct_only: false,
     });
     if recheck {
-        m.functions.push(Function { byte_offset: 0,
+        m.functions.push(Function {
+            byte_offset: 0,
             id: 2,
             name: "tick".into(),
             type_params: vec![],
@@ -263,11 +269,13 @@ fn symbolic_bound_retains_subtraction() {
 #[test]
 fn a_typed_annotation_does_not_hoist_a_possible_length_getter() {
     let mut m = Module::new("getter_bound");
-    m.functions.push(Function { byte_offset: 0,
+    m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: vec![],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 3,
             name: "a".into(),
             ty: Type::Named("Float64Array".into()),
@@ -281,7 +289,8 @@ fn a_typed_annotation_does_not_hoist_a_possible_length_getter() {
             local(6, true, Expr::Number(0.0)),
             Stmt::For {
                 init: Some(Box::new(local(5, true, Expr::Integer(0)))),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(5)),
                     right: Box::new(len(3)),

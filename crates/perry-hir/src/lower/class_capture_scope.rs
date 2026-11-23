@@ -239,7 +239,8 @@ impl Pruner {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 self.expr(discriminant);
                 for case in cases {
@@ -269,7 +270,8 @@ impl Pruner {
 /// holds for that capture — or `undefined` when the class was never evaluated
 /// (the refresh is then a no-op, but its captures are still evaluated).
 fn current_capture_slot(class_value: &Expr, index: usize) -> Expr {
-    Expr::Conditional { byte_offset: 0 /*HPOS*/,
+    Expr::Conditional {
+        byte_offset: 0, /*HPOS*/
         condition: Box::new(class_value.clone()),
         then_expr: Box::new(Expr::IndexGet {
             element_offset: 0,

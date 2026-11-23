@@ -4,7 +4,8 @@ use perry_hir::types::Type;
 use perry_hir::{Function, Param};
 
 fn closure(id: u32, this: bool) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id: id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -196,7 +197,8 @@ fn literal_proof_rejects_duplicates_and_rebindable_rest_bodies() {
     assert!(literal_final("p", &[("m".into(), closure(3, true))], 0).is_none());
     let mut rest = safe;
     if let Expr::Closure { params, .. } = &mut rest {
-        params.push(Param { byte_offset: 0,
+        params.push(Param {
+            byte_offset: 0,
             id: 4,
             name: "args".into(),
             ty: Type::Any,
@@ -307,7 +309,8 @@ fn empty_class() -> Class {
 #[test]
 fn anonymous_record_admission_uses_the_full_constructor_proof() {
     let mut class = empty_class();
-    class.constructor = Some(Function { byte_offset: 0,
+    class.constructor = Some(Function {
+        byte_offset: 0,
         id: 8,
         name: "constructor".into(),
         type_params: Vec::new(),
@@ -342,7 +345,8 @@ fn anonymous_record_admission_uses_the_full_constructor_proof() {
 #[test]
 fn closed_literal_constructor_emits_a_separate_final_shape() {
     let mut class = empty_class();
-    class.fields.push(perry_hir::ClassField { byte_offset: 0,
+    class.fields.push(perry_hir::ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: "m".into(),
         key_expr: None,
@@ -352,11 +356,13 @@ fn closed_literal_constructor_emits_a_separate_final_shape() {
         is_readonly: false,
         decorators: Vec::new(),
     });
-    class.constructor = Some(Function { byte_offset: 0,
+    class.constructor = Some(Function {
+        byte_offset: 0,
         id: 8,
         name: "constructor".into(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 9,
             name: "m".into(),
             ty: Type::Any,
@@ -432,7 +438,8 @@ fn user_class(name: &str, id: u32, method_id: u32) -> Class {
     let mut class = empty_class();
     class.name = name.into();
     class.id = id;
-    class.fields.push(perry_hir::ClassField { byte_offset: 0,
+    class.fields.push(perry_hir::ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: format!("m{id}"),
         key_expr: None,
@@ -446,7 +453,8 @@ fn user_class(name: &str, id: u32, method_id: u32) -> Class {
 }
 
 fn constructor(body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 100,
         name: "constructor".into(),
         type_params: Vec::new(),
@@ -472,7 +480,10 @@ fn general_class_proof_covers_local_inheritance_and_declines_uncertain_construct
     let mut child = user_class("Child", 8, 2);
     child.extends = Some(7);
     child.extends_name = Some("Base".into());
-    child.constructor = Some(constructor(vec![Stmt::Expr(Expr::SuperCall(Vec::new(), 0))]));
+    child.constructor = Some(constructor(vec![Stmt::Expr(Expr::SuperCall(
+        Vec::new(),
+        0,
+    ))]));
     let parents = HashMap::from([("Base".into(), &base)]);
     let shape = class_final("p", &child, &parents, 0, 88).unwrap();
     assert_eq!(shape.proto, BirthProto::Class(88));
@@ -492,9 +503,10 @@ fn general_class_proof_covers_local_inheritance_and_declines_uncertain_construct
         class_final("p", &child, &parents, 0, 88).unwrap_err(),
         "constructor control flow or property mutation"
     );
-    child.constructor = Some(constructor(vec![Stmt::Return(Some(Expr::Object(
-        Vec::new(),
-    )), 0)]));
+    child.constructor = Some(constructor(vec![Stmt::Return(
+        Some(Expr::Object(Vec::new())),
+        0,
+    )]));
     assert!(class_final("p", &child, &parents, 0, 88).is_err());
     child.constructor = None;
     child.fields[0].key_expr = Some(Expr::String("m8".into()));
@@ -534,7 +546,8 @@ fn general_class_proof_covers_local_inheritance_and_declines_uncertain_construct
 #[test]
 fn general_class_records_follow_registration_and_finalize_the_completed_result() {
     let mut class = user_class("User", 7, 1);
-    class.fields.push(perry_hir::ClassField { byte_offset: 0,
+    class.fields.push(perry_hir::ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: "effect".into(),
         key_expr: None,
@@ -656,9 +669,10 @@ fn general_class_records_follow_registration_and_finalize_the_completed_result()
 #[test]
 fn class_replacement_returns_never_produce_a_final_record() {
     let mut class = user_class("Replacement", 7, 1);
-    class.constructor = Some(constructor(vec![Stmt::Return(Some(Expr::Object(
-        Vec::new(),
-    )), 0)]));
+    class.constructor = Some(constructor(vec![Stmt::Return(
+        Some(Expr::Object(Vec::new())),
+        0,
+    )]));
     let mut m = Module::new("cf_replacement");
     m.init.push(Stmt::Expr(Expr::Object(vec![(
         "unrelated".into(),

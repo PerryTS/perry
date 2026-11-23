@@ -41,7 +41,8 @@ fn typeof_cmp(op: CompareOp, operand: Expr, literal: &str) -> Stmt {
     let_any(
         R,
         "r",
-        Expr::Compare { byte_offset: 0,
+        Expr::Compare {
+            byte_offset: 0,
             op,
             left: Box::new(Expr::TypeOf(Box::new(operand))),
             right: Box::new(Expr::String(literal.to_string())),
@@ -70,7 +71,8 @@ fn function_slice<'a>(ir: &'a str, symbol: &str) -> &'a str {
 }
 
 fn param(id: u32, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -82,7 +84,8 @@ fn param(id: u32, ty: Type) -> Param {
 }
 
 fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -198,7 +201,8 @@ fn switch_on(discriminant: Expr, tests: Vec<Expr>) -> Stmt {
         test: None,
         body: vec![Stmt::Expr(Expr::LocalSet(R, Box::new(Expr::Number(-1.0))))],
     });
-    Stmt::Switch { byte_offset: 0,
+    Stmt::Switch {
+        byte_offset: 0,
         discriminant,
         cases,
     }
@@ -457,20 +461,27 @@ fn typed_public_entries_guard_inline_and_test_plain_doubles_first() {
         1,
         "add",
         vec![param(10, Type::Number), param(11, Type::Number)],
-        vec![Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-            op: BinaryOp::Add,
-            left: Box::new(Expr::LocalGet(10)),
-            right: Box::new(Expr::LocalGet(11)),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::Binary {
+                byte_offset: 0,
+                op: BinaryOp::Add,
+                left: Box::new(Expr::LocalGet(10)),
+                right: Box::new(Expr::LocalGet(11)),
+            }),
+            0,
+        )],
     );
     let not = function(
         2,
         "not",
         vec![param(20, Type::Boolean)],
-        vec![Stmt::Return(Some(Expr::Unary {
-            op: UnaryOp::Not,
-            operand: Box::new(Expr::LocalGet(20)),
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::Unary {
+                op: UnaryOp::Not,
+                operand: Box::new(Expr::LocalGet(20)),
+            }),
+            0,
+        )],
     );
     let ir = module_ir("typed_entry.ts", vec![add, not]);
     let add_entry = function_slice(&ir, "perry_fn_typed_entry_ts__add");
@@ -540,12 +551,15 @@ fn a_clone_identical_to_its_generic_body_drops_the_entry_guard() {
         1,
         "read",
         vec![param(10, payload)],
-        vec![Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(10)),
-            property: "label".to_string(),
-            byte_offset: 0,
-        }), 0)],
+        vec![Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(10)),
+                property: "label".to_string(),
+                byte_offset: 0,
+            }),
+            0,
+        )],
     );
     let ir = module_ir("vacuous_guard.ts", vec![read]);
     let entry = function_slice(&ir, "perry_fn_vacuous_guard_ts__read");

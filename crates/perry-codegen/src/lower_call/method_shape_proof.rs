@@ -95,7 +95,9 @@ fn value(e: &Expr, method: &Function, reentered: &mut bool) -> Option<bool> {
             *reentered |= *op != UnaryOp::Not && !primitive;
             Some(true)
         }
-        Expr::Compare { op, left, right, .. } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             let a = value(left, method, reentered)?;
             let b = value(right, method, reentered)?;
             *reentered |= !matches!(op, CompareOp::Eq | CompareOp::Ne) && !(a && b);
@@ -109,7 +111,8 @@ fn value(e: &Expr, method: &Function, reentered: &mut bool) -> Option<bool> {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             value(condition, method, reentered)?;
             let a = value(then_expr, method, reentered)?;

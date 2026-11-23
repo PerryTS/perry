@@ -135,7 +135,8 @@ fn lower_guarded_numeric_add(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String>
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right, ..
+        right,
+        ..
     } = expr
     {
         if !add_tree_evaluates_before_it_converts(ctx, expr) {
@@ -494,7 +495,8 @@ fn is_strict_null_defaulted_local(expr: &Expr) -> bool {
     let Expr::Conditional {
         condition,
         then_expr,
-        else_expr, ..
+        else_expr,
+        ..
     } = expr
     else {
         return false;
@@ -505,7 +507,8 @@ fn is_strict_null_defaulted_local(expr: &Expr) -> bool {
     let Expr::Compare {
         op: CompareOp::Eq,
         left,
-        right, ..
+        right,
+        ..
     } = condition.as_ref()
     else {
         return false;
@@ -523,7 +526,8 @@ fn add_tree_leaves<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right, ..
+        right,
+        ..
     } = expr
     {
         add_tree_leaves(left, out);
@@ -614,7 +618,8 @@ fn add_tree_evaluates_before_it_converts(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right, ..
+        right,
+        ..
     } = expr
     else {
         return true;
@@ -704,7 +709,8 @@ fn rebuild_numeric_add_tree(
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right, ..
+        right,
+        ..
     } = expr
     {
         let l = rebuild_numeric_add_tree(ctx, left, values, next_leaf);
@@ -730,7 +736,8 @@ fn rebuild_rooted_dynamic_add_tree(
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right, ..
+        right,
+        ..
     } = expr
     {
         let right_collects = matches!(
@@ -771,7 +778,8 @@ fn dynamic_add_leaf_windows(
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right, ..
+        right,
+        ..
     } = expr
     {
         let l = dynamic_add_leaf_windows(left, called, protect);
@@ -963,7 +971,10 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
     // regardless. `??` keeps its nullish test on the UNCOERCED left value —
     // a coerced hole (NaN) is indistinguishable from a stored NaN, but
     // `NaN ?? x` is NaN while `undefined ?? x` is `x`.
-    if let Expr::Logical { op, left, right, .. } = expr {
+    if let Expr::Logical {
+        op, left, right, ..
+    } = expr
+    {
         if is_numeric_expr(ctx, expr) {
             let value = lower_numeric_logical_for_number_context(ctx, *op, left, right)?;
             return Ok((value, true));
@@ -1353,7 +1364,9 @@ fn try_lower_small_bigint_literal_binary(
 
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     match expr {
-        Expr::Binary { op, left, right, .. } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             // A proven-u31 index turns the canonical 32-bit ECS bitset test
             // into one guarded Uint32Array load. Match before the erased
             // receiver makes the ordinary BitAnd arm choose its fully dynamic
@@ -1853,7 +1866,8 @@ pub(crate) fn lower_boolean_logical_value(
             Expr::Logical {
                 op: LogicalOp::And | LogicalOp::Or,
                 left,
-                right, ..
+                right,
+                ..
             } => boolean(left) && boolean(right),
             _ => false,
         }

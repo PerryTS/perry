@@ -1512,9 +1512,9 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
                 Expr::Integer(_) => true,
                 Expr::Number(n) => n.is_finite(),
                 Expr::LocalGet(id) => params.contains(id),
-                Expr::Binary { op, left, right, .. } if !matches!(op, BinaryOp::Pow) => {
-                    pure(left, params) && pure(right, params)
-                }
+                Expr::Binary {
+                    op, left, right, ..
+                } if !matches!(op, BinaryOp::Pow) => pure(left, params) && pure(right, params),
                 Expr::Unary {
                     op: UnaryOp::Pos | UnaryOp::Neg | UnaryOp::BitNot,
                     operand,

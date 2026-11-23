@@ -778,7 +778,8 @@ fn walk_stmt_exprs<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
         Stmt::Try { .. } => {}
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -819,7 +820,8 @@ mod exit_tests {
     use super::*;
     #[test]
     fn generated_exit_guards_keep_boolean_constructor_evidence() {
-        let mut body = vec![Stmt::Try { byte_offset: 0,
+        let mut body = vec![Stmt::Try {
+            byte_offset: 0,
             body: vec![Stmt::If {
                 condition: Expr::LocalGet(1),
                 then_branch: vec![Stmt::Return(Some(Expr::Number(7.0)), 0)],

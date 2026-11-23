@@ -3,11 +3,13 @@ use perry_hir::types::Type;
 use perry_hir::Param;
 
 fn function(body: Vec<Stmt>, is_async: bool) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 1,
         name: "f".into(),
         type_params: vec![],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "x".into(),
             ty: Type::Any,
@@ -341,7 +343,8 @@ fn update_result_used_as_a_value_escapes() {
 
 #[test]
 fn hash_captured_by_a_closure_escapes() {
-    let closure = Expr::Closure { byte_offset: 0,
+    let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 9,
         params: vec![],
         return_type: Type::Any,
@@ -455,7 +458,8 @@ fn module_init_nested_var_keeps_the_handle() {
 }
 
 fn closure(func_id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
-    Expr::Closure { byte_offset: 0,
+    Expr::Closure {
+        byte_offset: 0,
         func_id,
         params,
         return_type: Type::Any,
@@ -487,7 +491,8 @@ fn plain_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
 /// `var crypto = require('crypto')` inside `__perry_cjs_factory`, and a
 /// signer closure with a hoisted `var hmac`.
 fn cjs_module(factory_name: &str, extra: Vec<Stmt>) -> Vec<Stmt> {
-    let require_param = Param { byte_offset: 0,
+    let require_param = Param {
+        byte_offset: 0,
         id: 30,
         name: "specifier".into(),
         ty: Type::Any,

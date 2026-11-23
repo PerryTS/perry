@@ -454,7 +454,8 @@ pub(crate) fn collect_written_locals(stmts: &[Stmt], out: &mut HashSet<u32>) {
                 }
                 Stmt::Switch {
                     discriminant,
-                    cases, ..
+                    cases,
+                    ..
                 } => {
                     in_expr(discriminant, out);
                     for c in cases {
@@ -540,7 +541,8 @@ fn for_each_let(stmts: &[Stmt], f: &mut dyn FnMut(u32, Option<&Expr>, bool)) {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 for_each_let_in_expr(discriminant, f);
                 for c in cases {
@@ -571,7 +573,10 @@ fn for_each_let_in_expr(e: &Expr, f: &mut dyn FnMut(u32, Option<&Expr>, bool)) {
 
 /// A step write: `(direction, magnitude)`.
 fn classify_step(id: u32, value: &Expr, st: &State) -> Option<(Dir, i64)> {
-    let Expr::Binary { op, left, right, .. } = value else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = value
+    else {
         return None;
     };
     let dir = match op {
@@ -669,7 +674,8 @@ fn scan_level_writes(stmts: &[Stmt], id: u32, st: &State, f: &mut dyn FnMut(Opti
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 scan_level_writes_in_expr(discriminant, id, st, f);
                 for c in cases {
@@ -811,12 +817,15 @@ fn collect_conjunct_guards(e: &Expr, st: &State, out: &mut Vec<(u32, CompareOp, 
         Expr::Logical {
             op: LogicalOp::And,
             left,
-            right, ..
+            right,
+            ..
         } => {
             collect_conjunct_guards(left, st, out);
             collect_conjunct_guards(right, st, out);
         }
-        Expr::Compare { op, left, right, .. } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             if let (Expr::LocalGet(id), Some(bound)) = (left.as_ref(), const_i32_value(right, st)) {
                 out.push((*id, *op, bound));
             } else if let (Some(bound), Expr::LocalGet(id)) =
@@ -915,7 +924,8 @@ fn walk_stmts(stmts: &[Stmt], guard: &HashMap<u32, GuardedLevel>, st: &mut State
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 walk_expr(discriminant, guard, st);
                 for c in cases {
@@ -1177,7 +1187,8 @@ fn accumulator_step_magnitude(
     let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right, ..
+        right,
+        ..
     } = value
     else {
         return None;
@@ -1222,7 +1233,10 @@ fn step_magnitude_bound(
             u128::from(interval.lo.unsigned_abs()).max(u128::from(interval.hi.unsigned_abs())),
         );
     }
-    let Expr::Binary { op, left, right, .. } = e else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = e
+    else {
         return None;
     };
     match op {
@@ -1474,7 +1488,8 @@ fn walk_accumulator_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 walk_accumulator_expr(
                     discriminant,

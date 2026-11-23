@@ -57,7 +57,8 @@ pub fn is_half_extract(e: &Expr, p0: LocalId, p1: LocalId) -> Option<(LocalId, b
         Expr::Binary {
             op: BinaryOp::BitAnd,
             left,
-            right, ..
+            right,
+            ..
         } => {
             if !matches!(right.as_ref(), Expr::Integer(0xffff)) {
                 return None;
@@ -66,7 +67,8 @@ pub fn is_half_extract(e: &Expr, p0: LocalId, p1: LocalId) -> Option<(LocalId, b
                 Expr::Binary {
                     op: BinaryOp::UShr | BinaryOp::Shr,
                     left: inner,
-                    right: shift_amt, ..
+                    right: shift_amt,
+                    ..
                 } => {
                     if !matches!(shift_amt.as_ref(), Expr::Integer(16)) {
                         return None;
@@ -130,7 +132,8 @@ pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             rewrite_imul_calls_in_expr(condition, imul_ids);
             rewrite_imul_calls_in_expr(then_expr, imul_ids);
@@ -215,7 +218,8 @@ mod tests {
                 label: "fnv".to_string(),
                 body: Box::new(counted_loop(vec![imul_call()])),
             },
-            Stmt::Switch { byte_offset: 0,
+            Stmt::Switch {
+                byte_offset: 0,
                 discriminant: Expr::Integer(0),
                 cases: vec![SwitchCase {
                     test: None,

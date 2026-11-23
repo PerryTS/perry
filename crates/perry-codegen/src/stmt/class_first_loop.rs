@@ -154,7 +154,8 @@ fn tail_guard(ctx: &FnCtx<'_>, tail: &[Stmt]) -> Option<(u32, String)> {
             Some(Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr, ..
+                else_expr,
+                ..
             }),
         ..
     }) = tail.first()
@@ -265,7 +266,8 @@ fn guards_outside_loops(stmts: &[Stmt], binding: u32) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             guards(discriminant)
                 || cases.iter().any(|c| {
@@ -487,7 +489,8 @@ fn resolve_guards_in_stmt(stmt: &mut Stmt, binding: u32, is_first: bool) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             exprs(discriminant);
             for case in cases {
@@ -508,7 +511,8 @@ fn resolve_guards_in_expr(expr: &mut Expr, binding: u32, is_first: bool) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } if matches!(
             condition.as_ref(),
             Expr::ClassIsFirstEvaluation { value, .. }

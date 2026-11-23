@@ -200,12 +200,15 @@ fn emit_guarded_length_read() -> String {
             // replacement from folding the length to a literal.
             init: None,
         },
-        Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(11)),
-            property: "length".to_string(),
-            byte_offset: 0,
-        }), 0),
+        Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(11)),
+                property: "length".to_string(),
+                byte_offset: 0,
+            }),
+            0,
+        ),
     ];
     String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
         .expect("LLVM IR should be UTF-8")
@@ -323,12 +326,15 @@ fn typed_array_length_uses_property_semantics_after_define_property() {
             Box::new(Expr::String("length".to_string())),
             Box::new(Expr::Object(vec![])),
         )),
-        Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(20)),
-            property: "length".to_string(),
-            byte_offset: 0,
-        }), 0),
+        Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(20)),
+                property: "length".to_string(),
+                byte_offset: 0,
+            }),
+            0,
+        ),
     ];
     let ir = String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
         .expect("LLVM IR should be UTF-8");
@@ -349,12 +355,15 @@ fn typed_array_length_keeps_native_load_without_shape_barrier() {
             mutable: false,
             init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Number(3.0))))),
         },
-        Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(21)),
-            property: "length".to_string(),
-            byte_offset: 0,
-        }), 0),
+        Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(21)),
+                property: "length".to_string(),
+                byte_offset: 0,
+            }),
+            0,
+        ),
     ];
     let ir = String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
         .expect("LLVM IR should be UTF-8");
@@ -369,12 +378,15 @@ fn typed_array_length_keeps_native_load_without_shape_barrier() {
 #[test]
 fn fs_parent_promises_property_initializes_only_its_child_before_export_read() {
     let mut module = Module::new("fs_parent_promises_property.ts");
-    module.init = vec![Stmt::Return(Some(Expr::PropertyGet {
-        byte_end: 0,
-        object: Box::new(Expr::NativeModuleRef("fs".to_string())),
-        property: "promises".to_string(),
-        byte_offset: 0,
-    }), 0)];
+    module.init = vec![Stmt::Return(
+        Some(Expr::PropertyGet {
+            byte_end: 0,
+            object: Box::new(Expr::NativeModuleRef("fs".to_string())),
+            property: "promises".to_string(),
+            byte_offset: 0,
+        }),
+        0,
+    )];
 
     let ir = String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
         .expect("LLVM IR should be UTF-8");
@@ -401,9 +413,10 @@ fn fs_parent_promises_property_initializes_only_its_child_before_export_read() {
 #[test]
 fn fs_promises_native_module_value_uses_submodule_singleton() {
     let mut module = Module::new("fs_promises_native_module_value.ts");
-    module.init = vec![Stmt::Return(Some(Expr::NativeModuleRef(
-        "fs/promises".to_string(),
-    )), 0)];
+    module.init = vec![Stmt::Return(
+        Some(Expr::NativeModuleRef("fs/promises".to_string())),
+        0,
+    )];
 
     let ir = String::from_utf8(compile_module(&module, ir_opts(false, None)).unwrap())
         .expect("LLVM IR should be UTF-8");

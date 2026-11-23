@@ -92,7 +92,8 @@ fn ir_opts() -> CompileOptions {
 }
 
 fn probe_module(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Module {
-    Module { byte_offset: 0,
+    Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
@@ -103,7 +104,8 @@ fn probe_module(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Module {
         type_aliases: Vec::new(),
         enums: Vec::new(),
         globals: Vec::new(),
-        functions: vec![Function { byte_offset: 0,
+        functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -166,7 +168,8 @@ fn number_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
 }
 
 fn mul(left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Mul,
         left: Box::new(left),
         right: Box::new(right),
@@ -174,7 +177,8 @@ fn mul(left: Expr, right: Expr) -> Expr {
 }
 
 fn length_plus_one(object: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::PropertyGet {
             byte_end: 0,
@@ -284,7 +288,8 @@ fn math_result_multiply_stays_inline_fmul() {
             number_let(3, "iterations", false, Expr::Integer(64)),
             Stmt::For {
                 init: Some(Box::new(number_let(2, "i", true, Expr::Integer(0)))),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::LocalGet(3)),
@@ -296,7 +301,8 @@ fn math_result_multiply_stays_inline_fmul() {
                 }),
                 body: vec![Stmt::Expr(Expr::LocalSet(
                     1,
-                    Box::new(Expr::Binary { byte_offset: 0,
+                    Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(1)),
                         right: Box::new(mul(
@@ -354,7 +360,8 @@ fn mandelbrot_shaped_body(seed_x: Expr, seed_y: Expr) -> Vec<Stmt> {
         number_let(12, "i", true, Expr::Integer(0)),
         number_let(13, "n", false, Expr::Integer(64)),
         Stmt::While {
-            condition: Expr::Compare { byte_offset: 0,
+            condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(12)),
                 right: Box::new(Expr::LocalGet(13)),
@@ -364,7 +371,8 @@ fn mandelbrot_shaped_body(seed_x: Expr, seed_y: Expr) -> Vec<Stmt> {
                     14,
                     "t",
                     false,
-                    Expr::Binary { byte_offset: 0,
+                    Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Sub,
                         left: Box::new(mul(Expr::LocalGet(10), Expr::LocalGet(10))),
                         right: Box::new(mul(Expr::LocalGet(11), Expr::LocalGet(11))),
@@ -423,10 +431,13 @@ fn a_number_local_is_a_canonical_raw_double_at_its_reads() {
     // raw-f64 predicate refused them and the array literal re-tested each
     // element against the lowest NaN-box tag (`0x7FF9 << 48`).
     let mut body = mandelbrot_shaped_body(Expr::Number(0.5), Expr::Number(0.25));
-    *body.last_mut().expect("return") = Stmt::Return(Some(Expr::Array(
-        vec![Expr::LocalGet(10), Expr::LocalGet(11)],
-        None,
-    )), 0);
+    *body.last_mut().expect("return") = Stmt::Return(
+        Some(Expr::Array(
+            vec![Expr::LocalGet(10), Expr::LocalGet(11)],
+            None,
+        )),
+        0,
+    );
     let ir = emitted_ir(probe_module(
         "number_local_raw_f64_unit.ts",
         Vec::new(),
@@ -455,7 +466,8 @@ fn a_reassigned_local_seeded_from_a_parameter_keeps_the_dynamic_helper() {
     // wrong-code shape #7773 shipped.
     let ir = emitted_ir(probe_module(
         "reassigned_from_param_unit.ts",
-        vec![Param { byte_offset: 0,
+        vec![Param {
+            byte_offset: 0,
             id: 2,
             name: "seed".to_string(),
             ty: Type::Any,
@@ -505,7 +517,8 @@ fn dynamic_operand_multiply_keeps_bigint_aware_helper() {
     // through the ToNumeric-running dynamic helper.
     let ir = emitted_ir(probe_module(
         "math_dynamic_operand_multiply_unit.ts",
-        vec![Param { byte_offset: 0,
+        vec![Param {
+            byte_offset: 0,
             id: 2,
             name: "x".to_string(),
             ty: Type::Any,
@@ -514,10 +527,13 @@ fn dynamic_operand_multiply_keeps_bigint_aware_helper() {
             is_rest: false,
             arguments_object: None,
         }],
-        vec![Stmt::Return(Some(mul(
-            Expr::MathSqrt(Box::new(Expr::Integer(4))),
-            Expr::LocalGet(2),
-        )), 0)],
+        vec![Stmt::Return(
+            Some(mul(
+                Expr::MathSqrt(Box::new(Expr::Integer(4))),
+                Expr::LocalGet(2),
+            )),
+            0,
+        )],
     ));
     assert!(
         ir.contains("call double @js_dynamic_mul"),
@@ -537,7 +553,8 @@ fn dynamic_operand_multiply_keeps_bigint_aware_helper() {
 // ---------------------------------------------------------------------------
 
 fn mod_(left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Mod,
         left: Box::new(left),
         right: Box::new(right),
@@ -545,7 +562,8 @@ fn mod_(left: Expr, right: Expr) -> Expr {
 }
 
 fn add(left: Expr, right: Expr) -> Expr {
-    Expr::Binary { byte_offset: 0,
+    Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -567,7 +585,8 @@ fn i64_range_local_reaches_the_integer_modulo_fast_path() {
             number_let(2, "a", true, Expr::Integer(12345678)),
             Stmt::For {
                 init: Some(Box::new(number_let(3, "i", true, Expr::Integer(0)))),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(3)),
                     right: Box::new(Expr::Integer(64)),
@@ -617,7 +636,8 @@ fn i64_range_local_is_refused_as_a_modulo_divisor() {
             number_let(2, "d", true, Expr::Integer(10)),
             Stmt::For {
                 init: Some(Box::new(number_let(3, "i", true, Expr::Integer(0)))),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(3)),
                     right: Box::new(Expr::Integer(64)),
@@ -637,7 +657,8 @@ fn i64_range_local_is_refused_as_a_modulo_divisor() {
                     )),
                     Stmt::Expr(Expr::LocalSet(
                         2,
-                        Box::new(Expr::Binary { byte_offset: 0,
+                        Box::new(Expr::Binary {
+                            byte_offset: 0,
                             op: BinaryOp::Sub,
                             left: Box::new(Expr::LocalGet(2)),
                             right: Box::new(Expr::Integer(1)),
@@ -665,7 +686,8 @@ fn i64_range_local_is_refused_as_a_modulo_divisor() {
 // assertion below pins exactly one of them.
 
 fn typed_param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -715,7 +737,8 @@ fn hash_loop_ir(param_ty: Type) -> String {
         number_let(10, "h", true, Expr::Integer(0)),
         Stmt::For {
             init: Some(Box::new(number_let(11, "i", true, Expr::Integer(0)))),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(11)),
                 right: Box::new(Expr::Integer(64)),
@@ -727,9 +750,11 @@ fn hash_loop_ir(param_ty: Type) -> String {
             }),
             body: vec![Stmt::Expr(Expr::LocalSet(
                 10,
-                Box::new(Expr::Binary { byte_offset: 0,
+                Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::BitOr,
-                    left: Box::new(Expr::Binary { byte_offset: 0,
+                    left: Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::BitXor,
                         left: Box::new(Expr::LocalGet(10)),
                         right: Box::new(char_code_at(recv, Expr::LocalGet(11))),
@@ -898,11 +923,15 @@ mod symbol_keyed_element_reads {
     }
 
     fn truthy_return(local: u32) -> Stmt {
-        Stmt::Return(Some(Expr::Conditional { byte_offset: 0,
-            condition: Box::new(Expr::LocalGet(local)),
-            then_expr: Box::new(Expr::Integer(1)),
-            else_expr: Box::new(Expr::Integer(0)),
-        }), 0)
+        Stmt::Return(
+            Some(Expr::Conditional {
+                byte_offset: 0,
+                condition: Box::new(Expr::LocalGet(local)),
+                then_expr: Box::new(Expr::Integer(1)),
+                else_expr: Box::new(Expr::Integer(0)),
+            }),
+            0,
+        )
     }
 
     #[test]
@@ -1028,7 +1057,8 @@ fn char_code_at_byte_store_ir(ty: Type, init: Expr) -> String {
         },
         Stmt::For {
             init: Some(Box::new(number_let(11, "i", true, Expr::Integer(0)))),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(11)),
                 right: Box::new(Expr::Integer(64)),

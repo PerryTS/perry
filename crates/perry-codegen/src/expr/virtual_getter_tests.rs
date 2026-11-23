@@ -4,7 +4,8 @@ use perry_hir::types::Type;
 use perry_hir::{Class, Expr, Function, Module, Stmt};
 
 fn function(id: u32, name: &str, value: Expr) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),

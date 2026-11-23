@@ -2,7 +2,8 @@ use super::*;
 use perry_hir::{Class, Param};
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
-    Param { byte_offset: 0,
+    Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -14,7 +15,8 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 }
 
 fn function(return_type: Type, params: Vec<Param>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 1,
         name: "mixed".to_string(),
         type_params: Vec::new(),
@@ -88,7 +90,8 @@ fn f64_clone_accepts_mixed_raw_params_when_return_expr_is_numeric_safe() {
             param(11, "i", Type::Int32),
             param(12, "flag", Type::Boolean),
         ],
-        ret(Expr::Binary { byte_offset: 0,
+        ret(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(10)),
             right: Box::new(Expr::LocalGet(11)),
@@ -117,17 +120,22 @@ fn f64_clone_accepts_raw_i32_locals_before_numeric_return() {
                 name: "mask".to_string(),
                 ty: Type::Int32,
                 mutable: false,
-                init: Some(Expr::Binary { byte_offset: 0,
+                init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::BitOr,
                     left: Box::new(Expr::LocalGet(11)),
                     right: Box::new(Expr::Integer(1)),
                 }),
             },
-            Stmt::Return(Some(Expr::Binary { byte_offset: 0,
-                op: BinaryOp::Add,
-                left: Box::new(Expr::LocalGet(10)),
-                right: Box::new(Expr::LocalGet(12)),
-            }), 0),
+            Stmt::Return(
+                Some(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::LocalGet(10)),
+                    right: Box::new(Expr::LocalGet(12)),
+                }),
+                0,
+            ),
         ],
     );
 
@@ -142,7 +150,8 @@ fn f64_clone_rejects_unsafe_mixed_rep_use() {
             param(10, "n", Type::Number),
             param(11, "flag", Type::Boolean),
         ],
-        ret(Expr::Binary { byte_offset: 0,
+        ret(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(10)),
             right: Box::new(Expr::LocalGet(11)),
@@ -172,11 +181,13 @@ fn string_clone_accepts_mixed_params_when_only_string_rep_flows_to_return() {
 
 #[test]
 fn closure_capture_representations_are_runtime_guard_candidates() {
-    let expr = Expr::Closure { byte_offset: 0,
+    let expr = Expr::Closure {
+        byte_offset: 0,
         func_id: 7,
         params: vec![param(20, "scale", Type::Number)],
         return_type: Type::Number,
-        body: ret(Expr::Binary { byte_offset: 0,
+        body: ret(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(20)),
             right: Box::new(Expr::LocalGet(30)),
@@ -206,11 +217,13 @@ fn closure_capture_representations_are_runtime_guard_candidates() {
 
 #[test]
 fn closure_capture_representations_follow_effective_slot_order() {
-    let expr = Expr::Closure { byte_offset: 0,
+    let expr = Expr::Closure {
+        byte_offset: 0,
         func_id: 8,
         params: vec![param(20, "scale", Type::Number)],
         return_type: Type::Number,
-        body: ret(Expr::Binary { byte_offset: 0,
+        body: ret(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(20)),
             // Deliberately absent from the explicit capture list: closure
@@ -250,7 +263,8 @@ fn typed_number_remainder_keeps_integer_check_and_ieee_fallback() {
     let mut block = LlBlock::new("entry", Rc::new(RegCounter::new()));
     // The same lowering serves free functions and captured closure bodies.
     // A raw numeric capture is admitted by its value guard, not its type.
-    let body = ret(Expr::Binary { byte_offset: 0,
+    let body = ret(Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Mod,
         left: Box::new(Expr::LocalGet(10)),
         right: Box::new(Expr::LocalGet(20)),
@@ -279,7 +293,8 @@ fn typed_number_remainder_keeps_integer_check_and_ieee_fallback() {
             index: 0,
         }],
     };
-    let body = ret(Expr::Binary { byte_offset: 0,
+    let body = ret(Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Mod,
         left: Box::new(Expr::LocalGet(10)),
         right: Box::new(Expr::PropertyGet {
@@ -302,11 +317,13 @@ fn typed_number_remainder_keeps_integer_check_and_ieee_fallback() {
 #[test]
 fn numeric_captures_share_the_actual_value_ordered_entry_tier() {
     let mut module = perry_hir::Module::new("numeric_capture_entry");
-    let closure = Expr::Closure { byte_offset: 0,
+    let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 2,
         params: vec![param(30, "x", Type::Number)],
         return_type: Type::Number,
-        body: ret(Expr::Binary { byte_offset: 0,
+        body: ret(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(30)),
             right: Box::new(Expr::LocalGet(20)),

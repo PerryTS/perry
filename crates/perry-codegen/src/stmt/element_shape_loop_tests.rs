@@ -109,7 +109,8 @@ fn node_class(extends_name: Option<&str>) -> Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![
-            ClassField { byte_offset: 0,
+            ClassField {
+                byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "v".to_string(),
                 key_expr: None,
@@ -119,7 +120,8 @@ fn node_class(extends_name: Option<&str>) -> Class {
                 is_readonly: false,
                 decorators: Vec::new(),
             },
-            ClassField { byte_offset: 0,
+            ClassField {
+                byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "w".to_string(),
                 key_expr: None,
@@ -167,7 +169,8 @@ fn assigning_ctor(fields: &[ClassField]) -> perry_hir::Function {
     let params: Vec<perry_hir::Param> = fields
         .iter()
         .enumerate()
-        .map(|(i, f)| perry_hir::Param { byte_offset: 0,
+        .map(|(i, f)| perry_hir::Param {
+            byte_offset: 0,
             id: 9000 + i as u32,
             name: f.name.clone(),
             ty: f.ty.clone(),
@@ -189,7 +192,8 @@ fn assigning_ctor(fields: &[ClassField]) -> perry_hir::Function {
             })
         })
         .collect();
-    perry_hir::Function { byte_offset: 0,
+    perry_hir::Function {
+        byte_offset: 0,
         id: 9000,
         name: "constructor".to_string(),
         type_params: Vec::new(),
@@ -218,7 +222,8 @@ fn anon_shape_class(id: u32, name: &str, fields: &[(&str, Type)]) -> Class {
     class.name = name.to_string();
     class.fields = fields
         .iter()
-        .map(|(field, ty)| ClassField { byte_offset: 0,
+        .map(|(field, ty)| ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: (*field).to_string(),
             key_expr: None,
@@ -276,7 +281,8 @@ fn elem_field(array_id: u32, index: Expr) -> Expr {
 fn accumulate_stmt(sum_id: u32, array_id: u32, index: Expr) -> Stmt {
     Stmt::Expr(Expr::LocalSet(
         sum_id,
-        Box::new(Expr::Binary { byte_offset: 0,
+        Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(sum_id)),
             right: Box::new(elem_field(array_id, index)),
@@ -315,7 +321,8 @@ fn element_shape_module(body: Vec<Stmt>, extends_name: Option<&str>) -> Module {
                 mutable: true,
                 init: Some(Expr::Integer(0)),
             })),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(COUNTER_ID)),
                 right: Box::new(Expr::Integer(1_000_000)),
@@ -392,7 +399,8 @@ fn with_bound(m: &mut Module, bound: Expr) {
     let Some(Stmt::For { condition, .. }) = m.init.get_mut(2) else {
         panic!("element_shape_module's third init statement should be the `For`");
     };
-    *condition = Some(Expr::Compare { byte_offset: 0,
+    *condition = Some(Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Lt,
         left: Box::new(Expr::LocalGet(COUNTER_ID)),
         right: Box::new(bound),
@@ -727,7 +735,8 @@ fn element_shape_versioned_loop_declines_an_offset_index() {
         vec![accumulate_stmt(
             SUM_ID,
             ARRAY_ID,
-            Expr::Binary { byte_offset: 0,
+            Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(COUNTER_ID)),
                 right: Box::new(Expr::Integer(1)),
@@ -766,7 +775,8 @@ fn a_program_with_no_qualifying_loop_pays_nothing() {
                 mutable: true,
                 init: Some(Expr::Integer(0)),
             })),
-            condition: Some(Expr::Compare { byte_offset: 0,
+            condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(COUNTER_ID)),
                 right: Box::new(Expr::Integer(1_000_000)),
@@ -778,7 +788,8 @@ fn a_program_with_no_qualifying_loop_pays_nothing() {
             }),
             body: vec![Stmt::Expr(Expr::LocalSet(
                 SUM_ID,
-                Box::new(Expr::Binary { byte_offset: 0,
+                Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(SUM_ID)),
                     right: Box::new(Expr::Integer(1)),
@@ -1102,7 +1113,8 @@ fn object_literal_element_resolution_does_not_escape_the_clone() {
     // A straight-line read after the loop, at a constant index.
     m.init.push(Stmt::Expr(Expr::LocalSet(
         SUM_ID,
-        Box::new(Expr::Binary { byte_offset: 0,
+        Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(SUM_ID)),
             right: Box::new(elem_field(ARRAY_ID, Expr::Integer(0))),
@@ -1225,7 +1237,8 @@ fn element_shape_versioned_loop_declines_a_foreign_arrays_length_bound() {
     let Some(Stmt::For { condition, .. }) = m.init.get_mut(3) else {
         panic!("the `For` should have shifted to index 3");
     };
-    *condition = Some(Expr::Compare { byte_offset: 0,
+    *condition = Some(Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Lt,
         left: Box::new(Expr::LocalGet(COUNTER_ID)),
         right: Box::new(length_of(OTHER_ARRAY_ID)),
@@ -1419,7 +1432,8 @@ fn binding_stmt(mutable: bool) -> Stmt {
 fn binding_accumulate(value: Expr) -> Stmt {
     Stmt::Expr(Expr::LocalSet(
         SUM_ID,
-        Box::new(Expr::Binary { byte_offset: 0,
+        Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(SUM_ID)),
             right: Box::new(value),
@@ -1480,7 +1494,8 @@ fn element_binding_reads_every_tracked_field_through_the_fact() {
     let ir = emit(&element_shape_module(
         vec![
             binding_stmt(false),
-            binding_accumulate(Expr::Binary { byte_offset: 0,
+            binding_accumulate(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(binding_field("v")),
                 right: Box::new(binding_field("w")),
@@ -1670,11 +1685,13 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
     const F_BINDING_ID: u32 = 24;
     let mut m = Module::new("element_shape_loop.ts");
     m.classes = vec![node_class(None)];
-    m.functions = vec![perry_hir::Function { byte_offset: 0,
+    m.functions = vec![perry_hir::Function {
+        byte_offset: 0,
         id: 900,
         name: "total".to_string(),
         type_params: Vec::new(),
-        params: vec![perry_hir::Param { byte_offset: 0,
+        params: vec![perry_hir::Param {
+            byte_offset: 0,
             id: PS_ID,
             name: "ps".to_string(),
             ty: Type::Array(Box::new(Type::Named("Node".to_string()))),
@@ -1700,7 +1717,8 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
                     mutable: true,
                     init: Some(Expr::Integer(0)),
                 })),
-                condition: Some(Expr::Compare { byte_offset: 0,
+                condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(F_COUNTER_ID)),
                     right: Box::new(Expr::PropertyGet {
@@ -1728,7 +1746,8 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
                     },
                     Stmt::Expr(Expr::LocalSet(
                         F_SUM_ID,
-                        Box::new(Expr::Binary { byte_offset: 0,
+                        Box::new(Expr::Binary {
+                            byte_offset: 0,
                             op: BinaryOp::Add,
                             left: Box::new(Expr::LocalGet(F_SUM_ID)),
                             right: Box::new(Expr::PropertyGet {

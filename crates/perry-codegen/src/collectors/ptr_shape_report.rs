@@ -812,7 +812,8 @@ fn scan_stmts(
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 scan_expr(discriminant, depth, "switch discriminant", out);
                 for c in cases {
@@ -881,7 +882,8 @@ fn scan_return_result(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             scan_expr(condition, depth, RETURNED_OPERAND, out);
             scan_return_result(then_expr, depth, false, sources, out);

@@ -394,7 +394,8 @@ fn sloppy_assignment_expression_targets_global_object_not_a_local() {
     let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right, ..
+        right,
+        ..
     } = top_level_init(&module, "result")
     else {
         panic!("result should lower as addition");
@@ -442,7 +443,8 @@ fn sloppy_assignment_in_if_test_targets_global_object_not_a_local() {
     let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right, ..
+        right,
+        ..
     } = left.as_ref()
     else {
         panic!("comparison lhs should lower as addition, got {left:?}");
@@ -587,7 +589,10 @@ fn logical_property_assignment_short_circuits_the_store_4586() {
                 )
             });
 
-        let Expr::Logical { op, left, right, .. } = logical else {
+        let Expr::Logical {
+            op, left, right, ..
+        } = logical
+        else {
             unreachable!();
         };
         assert_eq!(*op, expected_op, "operator mismatch for `{src}`");

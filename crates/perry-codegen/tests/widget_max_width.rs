@@ -4,7 +4,8 @@ use perry_hir::{Expr, Module, Stmt};
 #[test]
 fn max_width_lowers_to_the_native_widget_abi() {
     let mut module = Module::new("widget_max_width");
-    module.init.push(Stmt::Expr(Expr::NativeMethodCall { byte_offset: 0,
+    module.init.push(Stmt::Expr(Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "perry/ui".into(),
         class_name: None,
         object: None,

@@ -182,7 +182,8 @@ fn count_in_stmt(s: &Stmt, n: &mut usize, all: bool) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             count_in_expr(discriminant, n, all);
             for c in cases {
@@ -222,7 +223,8 @@ mod tests {
     }
 
     fn empty_closure(body: Vec<Stmt>) -> Expr {
-        Expr::Closure { byte_offset: 0,
+        Expr::Closure {
+            byte_offset: 0,
             func_id: 0,
             params: vec![],
             return_type: Type::Any,

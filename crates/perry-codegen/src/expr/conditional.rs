@@ -16,7 +16,8 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             // #12643: a guarded namespace call.
             if let Expr::NamespacePatched(ns) = condition.as_ref() {

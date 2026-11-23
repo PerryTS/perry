@@ -142,7 +142,8 @@ const STORED_ID: u32 = 8;
 const BOXED_ID: u32 = 9;
 
 fn field(name: &str, ty: Type) -> ClassField {
-    ClassField { byte_offset: 0,
+    ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -161,11 +162,13 @@ fn field(name: &str, ty: Type) -> ClassField {
 /// undecidable statically and puts the store on the #7511 live-test tier at
 /// all.
 fn param_prologue_ctor() -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 90,
         name: "constructor".to_string(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: PARAM_ID,
             name: "v".to_string(),
             ty: Type::Any,
@@ -227,11 +230,13 @@ fn boxed_class() -> Class {
 fn probe_module() -> Module {
     let mut m = Module::new("class_field_barrier.ts");
     m.classes = vec![boxed_class()];
-    m.functions = vec![Function { byte_offset: 0,
+    m.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: STORED_ID,
             name: "x".to_string(),
             ty: Type::Any,

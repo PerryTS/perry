@@ -336,7 +336,8 @@ fn stmt_has_closure(stmt: &Stmt) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             expr_has_closure(discriminant)
                 || cases.iter().any(|c| {
@@ -413,7 +414,8 @@ fn stmt_has_super(stmt: &Stmt) -> bool {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             expr_has_super(discriminant)
                 || cases
@@ -528,7 +530,8 @@ fn flag_producer_calls_in_stmt(
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             flag_producer_calls_in_expr(discriminant, candidates, out);
             for c in cases {

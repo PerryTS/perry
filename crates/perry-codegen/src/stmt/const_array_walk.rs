@@ -83,7 +83,8 @@ fn entry(cond: &Expr) -> Option<(u32, bool)> {
     let Expr::Compare {
         op: CompareOp::Eq,
         left,
-        right, ..
+        right,
+        ..
     } = cond
     else {
         return None;
@@ -96,7 +97,8 @@ fn entry(cond: &Expr) -> Option<(u32, bool)> {
         class_name: None,
         object: None,
         method,
-        args, ..
+        args,
+        ..
     } = left.as_ref()
     else {
         return None;
@@ -130,7 +132,8 @@ fn walk<'a>(cond: &Expr, then_branch: &'a [Stmt]) -> Option<Walk<'a>> {
             Some(Expr::Compare {
                 op: CompareOp::Lt,
                 left,
-                right, ..
+                right,
+                ..
             }),
         update:
             Some(Expr::Update {
@@ -242,7 +245,8 @@ fn body_cost(stmts: &[Stmt]) -> usize {
             }
             Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 expr_cost(discriminant)
                     + cases

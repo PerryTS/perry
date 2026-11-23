@@ -120,7 +120,8 @@ pub(crate) fn operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
     if let Expr::Binary {
         op: BinaryOp::Add,
         left,
-        right, ..
+        right,
+        ..
     } = e
     {
         return add_is_number(ctx, left, right).then_some(Operand::Number);
@@ -131,7 +132,8 @@ pub(crate) fn operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
     if let Expr::Binary {
         op: BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div,
         left,
-        right, ..
+        right,
+        ..
     } = e
     {
         if operand(ctx, left).is_some() && operand(ctx, right).is_some() {
@@ -158,7 +160,8 @@ pub(crate) fn kind_number(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Binary {
             op: BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow,
             left,
-            right, ..
+            right,
+            ..
         } => kind_number(ctx, left) && kind_number(ctx, right),
         _ => operand(ctx, e).is_some(),
     }
@@ -172,7 +175,8 @@ pub(crate) fn add_tree_converts_silently(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Binary {
             op: BinaryOp::Add,
             left,
-            right, ..
+            right,
+            ..
         } => add_tree_converts_silently(ctx, left) && add_tree_converts_silently(ctx, right),
         _ => kind_number(ctx, e),
     }
@@ -268,7 +272,10 @@ fn ieee(ctx: &mut FnCtx<'_>, op: BinaryOp, l: &str, r: &str) -> String {
 
 /// The `+ - * /` node `e` this module lowers to one IEEE operation.
 fn nan_tree_node<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<(BinaryOp, &'e Expr, &'e Expr)> {
-    let Expr::Binary { op, left, right, .. } = e else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = e
+    else {
         return None;
     };
     if !matches!(
@@ -592,7 +599,9 @@ fn is_this_field(e: &Expr) -> Option<&str> {
 fn expr_is_number(ctx: &FnCtx<'_>, e: &Expr, cids: &[u32], depth: u8) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) | Expr::NumberCoerce(_) | Expr::DateNow => true,
-        Expr::Binary { op, left, right, .. } => match op {
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
             BinaryOp::Add => {
                 prim_or_number(ctx, left, cids, depth) && prim_or_number(ctx, right, cids, depth)
             }

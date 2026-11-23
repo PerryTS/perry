@@ -375,7 +375,8 @@ fn forward_nested(stmt: &mut Stmt, avail: &mut Avail, cx: &Cx) {
         }
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             forward_expr(discriminant, cx);
             for case in cases {
@@ -456,7 +457,8 @@ fn each_expr<'a>(stmt: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
             .for_each(|s| each_expr(s, f)),
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             f(discriminant);
             for case in cases {
@@ -522,7 +524,8 @@ fn each_expr_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Expr)) {
             .for_each(|s| each_expr_mut(s, f)),
         Stmt::Switch {
             discriminant,
-            cases, ..
+            cases,
+            ..
         } => {
             f(discriminant);
             for case in cases {

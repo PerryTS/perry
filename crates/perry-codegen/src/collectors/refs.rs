@@ -199,7 +199,8 @@ fn refs_stmts<const FREE: bool>(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
             }
             perry_hir::Stmt::Switch {
                 discriminant,
-                cases, ..
+                cases,
+                ..
             } => {
                 refs_expr::<FREE>(discriminant, out);
                 for case in cases {
@@ -380,7 +381,8 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr, ..
+            else_expr,
+            ..
         } => {
             walk(condition, out);
             walk(then_expr, out);

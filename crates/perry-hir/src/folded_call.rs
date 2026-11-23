@@ -835,7 +835,8 @@ mod tests {
     /// `push_single` spelling is left alone: it is not this node's shape.
     #[test]
     fn a_zero_argument_push_is_a_folded_guard_target() {
-        let zero = Expr::NativeMethodCall { byte_offset: 0,
+        let zero = Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "array".to_string(),
             class_name: None,
             object: Some(Box::new(Expr::LocalGet(7))),
@@ -845,7 +846,8 @@ mod tests {
         let call = folded_call(&zero).expect("a zero-argument push is guarded");
         assert_eq!((call.method, call.args.len()), ("push", 0));
         assert!(matches!(call.receiver, Receiver::Expr(Expr::LocalGet(7))));
-        let single = Expr::NativeMethodCall { byte_offset: 0,
+        let single = Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "array".to_string(),
             class_name: None,
             object: Some(Box::new(Expr::LocalGet(7))),
@@ -858,7 +860,8 @@ mod tests {
         let call = native_array_push(&single).expect("a native push is a call of push");
         assert_eq!((call.method, call.args.len()), ("push", 1));
         assert!(matches!(call.receiver, Receiver::Expr(Expr::LocalGet(7))));
-        let spread = Expr::NativeMethodCall { byte_offset: 0,
+        let spread = Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "array".to_string(),
             class_name: None,
             object: Some(Box::new(Expr::LocalGet(7))),

@@ -53,7 +53,8 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
 }
 
 fn product(id: u32) -> Stmt {
-    Stmt::Expr(Expr::Binary { byte_offset: 0,
+    Stmt::Expr(Expr::Binary {
+        byte_offset: 0,
         op: perry_hir::BinaryOp::Mul,
         left: Box::new(get(id, "x")),
         right: Box::new(get(id, "y")),
@@ -61,13 +62,15 @@ fn product(id: u32) -> Stmt {
 }
 
 fn function(id: u32, params: Vec<u32>, body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id,
         name: format!("f{id}"),
         type_params: Vec::new(),
         params: params
             .into_iter()
-            .map(|pid| Param { byte_offset: 0,
+            .map(|pid| Param {
+                byte_offset: 0,
                 id: pid,
                 name: format!("p{pid}"),
                 ty: Type::Any,
@@ -197,7 +200,8 @@ fn a_parameter_needs_a_body_without_unknown_code_or_foreign_stores() {
 
 #[test]
 fn a_closure_write_is_a_write() {
-    let closure = Expr::Closure { byte_offset: 0,
+    let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 50,
         params: Vec::new(),
         return_type: Type::Any,

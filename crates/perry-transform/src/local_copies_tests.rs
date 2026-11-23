@@ -3,11 +3,13 @@ use perry_hir::types::Type;
 use perry_hir::{ArgumentsObjectMeta, Param};
 
 fn function(body: Vec<Stmt>) -> Function {
-    Function { byte_offset: 0,
+    Function {
+        byte_offset: 0,
         id: 1,
         name: "copies".into(),
         type_params: vec![],
-        params: vec![Param { byte_offset: 0,
+        params: vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "x".into(),
             ty: Type::Any,
@@ -217,9 +219,12 @@ fn effectful_use_keeps_evaluation_order_but_loses_the_alias() {
     };
     let f = optimize(function(vec![alias(2, 1), Stmt::Return(Some(call), 0)]));
     assert_eq!(f.body.len(), 1);
-    let Stmt::Return(Some(Expr::Call {
-        args, byte_offset, ..
-    }), _) = &f.body[0]
+    let Stmt::Return(
+        Some(Expr::Call {
+            args, byte_offset, ..
+        }),
+        _,
+    ) = &f.body[0]
     else {
         panic!()
     };

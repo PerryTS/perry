@@ -664,7 +664,9 @@ fn collect_return_outcomes<'a>(
             ..
         } => collect_return_outcomes(then_expr, body, false)
             .merge(collect_return_outcomes(else_expr, body, false)),
-        Expr::Logical { op, left, right, .. } => {
+        Expr::Logical {
+            op, left, right, ..
+        } => {
             let left = collect_return_outcomes(left, body, false);
             match op {
                 LogicalOp::And => {

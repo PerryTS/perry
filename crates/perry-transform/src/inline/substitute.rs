@@ -440,7 +440,8 @@ mod tests {
         let original = Expr::ScopedTemp {
             id: 7,
             value: Box::new(Expr::LocalGet(8)),
-            body: Box::new(Expr::Binary { byte_offset: 0,
+            body: Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: perry_hir::BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(7)),
                 right: Box::new(Expr::LocalGet(8)),

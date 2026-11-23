@@ -189,7 +189,8 @@ fn namespace_object(
                             property: name.to_string(),
                             byte_offset,
                         };
-                        Expr::Logical { byte_offset,
+                        Expr::Logical {
+                            byte_offset,
                             op: LogicalOp::Or,
                             left: Box::new(published()),
                             right: Box::new(Expr::PropertySet {
