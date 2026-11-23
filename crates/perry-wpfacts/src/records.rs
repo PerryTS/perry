@@ -349,6 +349,8 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::NativeParent { .. }
         | Cons::PlainKey { .. }
         | Cons::StoreTopProto { .. }
+        | Cons::ChainSet { .. }
+        | Cons::ChainRecv { .. }
         | Cons::HolderStep { .. }
         | Cons::VisitHolders { .. }
         | Cons::VisitStop { .. }

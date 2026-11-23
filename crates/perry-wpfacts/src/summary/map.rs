@@ -244,6 +244,18 @@ pub fn map_cons(
             origin,
             src: n(src),
         },
+        ChainSet {
+            origin,
+            key,
+            src,
+            region,
+        } => ChainSet {
+            origin,
+            key,
+            src: n(src),
+            region: n(region),
+        },
+        ChainRecv { origin } => ChainRecv { origin },
         Super { start, key, act } => Super {
             start,
             key,

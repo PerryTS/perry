@@ -162,6 +162,13 @@ impl Model {
             Cons::AnyAccessors { origin, act } => format!("anyaccessors {n} {origin} {act:?}"),
             Cons::UnnamedSet { target } => format!("unnamedset {n} {target}"),
             Cons::StoreTopProto { origin, src } => format!("storetopproto {n} {origin} {src}"),
+            Cons::ChainSet {
+                origin,
+                key,
+                src,
+                region,
+            } => format!("chainset {n} {origin} {key:?} {src} {region}"),
+            Cons::ChainRecv { origin } => format!("chainrecv {n} {origin}"),
             Cons::Super { start, key, act } => {
                 format!("super {n} {start} {} {act:?}", self.key_name(*key))
             }

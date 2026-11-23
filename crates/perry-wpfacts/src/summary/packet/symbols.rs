@@ -261,6 +261,21 @@ impl Model {
             Cons::UnnamedSet { target } => {
                 format!("UnnamedSet target={:?}", self.packet_token(target, packet))
             }
+            Cons::ChainSet {
+                origin,
+                key,
+                src,
+                region,
+            } => format!(
+                "ChainSet origin={:?} key={:?} src={:?} region={:?}",
+                self.packet_token(origin, packet),
+                key,
+                src,
+                region
+            ),
+            Cons::ChainRecv { origin } => {
+                format!("ChainRecv origin={:?}", self.packet_token(origin, packet))
+            }
             Cons::StoreTopProto { origin, src } => format!(
                 "StoreTopProto origin={:?} src={:?}",
                 self.packet_token(origin, packet),

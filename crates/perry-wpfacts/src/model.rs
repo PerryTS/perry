@@ -2355,6 +2355,17 @@ pub struct Model {
     /// that made one ordinary, object/⊤ keys that ran the full lookup.
     pub own_read_census: [u64; 3],
     pub callthis_done: crate::pts::FxHashSet<(NodeId, CallId, Tok)>,
+    /// Rule PXCHAIN: (object, key, key node) whose `in` runs on its
+    /// prototype closure, and those closure nodes (`Cons::HasProp`).
+    pub chain_has_done: crate::pts::FxHashSet<(Tok, Key, NodeId)>,
+    pub chain_has_nodes: crate::pts::FxHashSet<NodeId>,
+    /// Rule PXCHAIN: receivers with a `Cons::ChainRecv` on their closure.
+    pub chain_recv_done: crate::pts::FxHashSet<Tok>,
+    /// Rule PXCHAIN: (object, key) of an ordinary [[Set]]: its value and
+    /// throw nodes (`Model::chain_set_rule`); the stores (source, region)
+    /// that wait for a Proxy on the chain, by value node.
+    pub chain_set_nodes: crate::pts::FxHashMap<(Tok, Key), (NodeId, NodeId)>,
+    pub chain_set_pending: crate::pts::FxHashMap<NodeId, Vec<(NodeId, NodeId)>>,
     /// `CallThis` split (see `Model::bind_via`): `ThisTo` per (method node,
     /// receiver), the callee relay per call, the edges into it, and the
     /// (call, receiver) pairs bound through each method node.

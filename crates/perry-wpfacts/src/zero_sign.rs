@@ -211,6 +211,8 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::AnyAccessors { .. }
         | Cons::UnnamedSet { .. }
         | Cons::StoreTopProto { .. }
+        | Cons::ChainSet { .. }
+        | Cons::ChainRecv { .. }
         | Cons::SuperCtor { .. }
         | Cons::SuperCtorParent { .. }
         | Cons::Accessor { .. }

@@ -492,6 +492,20 @@ pub enum Cons {
     /// The node is the prototype closure of `origin`: an unknown (⊤)
     /// prototype may hold a setter, so the stored value and `origin` escape.
     StoreTopProto { origin: Tok, src: NodeId },
+    /// Rule PXCHAIN: the node is the prototype closure of `origin`, which
+    /// stores `src` under `key` (an ordinary [[Set]], throwing into
+    /// `region`): a Proxy there runs its `set` trap with `origin` as the
+    /// receiver (`Model::proxy_chain_set`); other links add nothing.
+    ChainSet {
+        origin: Tok,
+        key: Key,
+        src: NodeId,
+        region: NodeId,
+    },
+    /// Rule PXCHAIN: the node is the prototype closure of receiver
+    /// `origin`: a Proxy there is passed `origin` as the receiver of the
+    /// traps its chain operations run.
+    ChainRecv { origin: Tok },
     /// The node is `this`: continue a `super.key` lookup at `start` with
     /// each `this` token as the receiver.
     Super { start: Tok, key: Key, act: ChainAct },
@@ -1151,6 +1165,8 @@ impl Cons {
             Cons::AnyAccessors { .. } => "anyaccessors",
             Cons::UnnamedSet { .. } => "unnamedset",
             Cons::StoreTopProto { .. } => "storetopproto",
+            Cons::ChainSet { .. } => "chainset",
+            Cons::ChainRecv { .. } => "chainrecv",
             Cons::Super { .. } => "super",
             Cons::SuperFrom { .. } => "super-from",
             Cons::SuperCtor { .. } => "superctor",

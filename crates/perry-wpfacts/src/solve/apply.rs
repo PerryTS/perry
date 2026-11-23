@@ -6,9 +6,25 @@ impl Model {
         match *c {
             // An observation for the value-record derive: no flow.
             Cons::Identity { .. } => {}
-            // `k in o`: no flow on an ordinary object (a Proxy's `has` trap:
-            // `solve/proxy.rs`).
-            Cons::HasProp { .. } => {}
+            // `k in o`: no flow on an ordinary object; OrdinaryHasProperty
+            // (10.1.7.1 step 3) goes on with parent.[[HasProperty]]: the same
+            // rule on the object's prototype closure (once per object, key
+            // and key node), where a Proxy runs its `has` trap (rule
+            // PXCHAIN, `solve/proxy.rs`). The closure holds every link, so
+            // its ordinary links add nothing.
+            Cons::HasProp { key, idx } => {
+                if !self.chain_has_nodes.contains(&n) {
+                    for &t in toks {
+                        if t != TOP && self.chain_has_done.insert((t, key, idx)) {
+                            let cp = self.cp(t);
+                            self.chain_has_nodes.insert(cp);
+                            self.cons(cp, Cons::HasProp { key, idx });
+                        }
+                    }
+                }
+            }
+            // Rule PXCHAIN: only a Proxy in the closure acts (`proxy_apply`).
+            Cons::ChainSet { .. } | Cons::ChainRecv { .. } => {}
             // `Object.hasOwn(o, k)` and kin: no flow on an ordinary object (a
             // Proxy's `getOwnPropertyDescriptor` trap: `solve/proxy.rs`).
             Cons::OwnProp { .. } => {}
@@ -1273,7 +1289,7 @@ impl Model {
                         let v = self.stopped_shared.entry(q).or_default();
                         v.push((key, dst, builtin));
                     } else {
-                        let up = self.cv_of(q, key, builtin);
+                        let up = self.cv_up(q, key, builtin);
                         self.edge(up, dst);
                     }
                 }

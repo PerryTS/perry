@@ -1734,11 +1734,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         }
         TokKind::Top => {}
-        // PROXY2: only `solve/proxy.rs` models a Proxy: today's path.
-        TokKind::Proxy(p) => {
-            m.proxy_degrade(p, "family read");
-            m.add_tok(dst, TOP);
-        }
+        // A read of `key` off the Proxy itself: its [[Get]] (10.5.8, the
+        // `get` trap and the forward), with the Proxy as the receiver.
+        TokKind::Proxy(p) => m.proxy_get_into(p, key, NO_NODE, dst),
     }
 }
 

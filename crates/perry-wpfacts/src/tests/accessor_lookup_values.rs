@@ -499,99 +499,135 @@ console.log(payload.n); // LOOKUP_N
     .unwrap();
 }
 
-/// A Proxy further up an ordinary object's chain runs its traps in the
-/// Annex B loop's [[GetOwnProperty]] / [[GetPrototypeOf]] steps. (Today the
-/// chain step degrades the Proxy, E9: its handler's traps are opaque.)
-#[test]
-fn accessor_lookup_proxy_on_the_chain_runs_its_descriptor_trap() {
-    lookup_site(r#"
+/// Rule PXCHAIN: a Proxy on an ordinary object's chain answers each
+/// operation that reaches it there with its own internal method (its trap,
+/// or the forward to its target), never by an E9 hold: `lookup_site` and no
+/// Proxy part held. (Before PXCHAIN `Object.create(px)` degraded the Proxy.)
+fn chain_site(src: &str, proven: bool) -> Result<(), String> {
+    lookup_site(src, proven)?;
+    let pf = facts(src);
+    let d = pf.dump_text();
+    if d.contains("E9 Proxy") {
+        return Err(format!("a Proxy part is held (E9):\n{d}"));
+    }
+    Ok(())
+}
+
+const CHAIN_PRE: &str = r#"
 declare function external(x: unknown): void;
 class Payload { n = 1; }
 const payload = new Payload();
-const px = new Proxy({}, { getOwnPropertyDescriptor(target, key) { external(payload); return undefined; } });
-const receiver: any = Object.create(px);
-receiver.__lookupGetter__("x");
-console.log(payload.n); // LOOKUP_N
-"#, false).unwrap();
+"#;
+
+/// `px`'s handler `h` and target `t`, `receiver` = `Object.create(px)`, then `op`.
+fn on_chain(t: &str, h: &str, op: &str) -> String {
+    format!(
+        "{CHAIN_PRE}const px = new Proxy({t}, {{ {h} }});\nconst receiver: any = Object.create(px);\n{op}\nconsole.log(payload.n); // LOOKUP_N\n"
+    )
+}
+
+/// The Annex B loop's [[GetOwnProperty]] / [[GetPrototypeOf]] at a Proxy
+/// on the chain run its `getOwnPropertyDescriptor` / `getPrototypeOf` traps
+/// (B.2.2.4 steps 3.a / 3.c, 10.5.5, 10.5.1).
+#[test]
+fn accessor_lookup_proxy_on_the_chain_runs_its_descriptor_trap() {
+    let h = "getOwnPropertyDescriptor(t: any, k: any) { external(payload); return undefined; }";
+    chain_site(&on_chain("{}", h, "receiver.__lookupGetter__(\"x\");"), false).unwrap();
+    // Not looked up: the trap does not run.
+    chain_site(&on_chain("{}", h, ""), true).unwrap();
 }
 
 #[test]
 fn accessor_lookup_proxy_on_the_chain_runs_its_prototype_trap() {
-    lookup_site(
-        r#"
-declare function external(x: unknown): void;
-class Payload { n = 1; }
-const payload = new Payload();
-const px = new Proxy({}, { getPrototypeOf(target) { external(payload); return null; } });
-const receiver: any = Object.create(px);
-receiver.__lookupGetter__("x");
-console.log(payload.n); // LOOKUP_N
-"#,
-        false,
-    )
-    .unwrap();
+    let h = "getPrototypeOf(t: any) { external(payload); return null; }";
+    chain_site(&on_chain("{}", h, "receiver.__lookupGetter__(\"x\");"), false).unwrap();
 }
 
 #[test]
 fn accessor_lookup_proxy_on_the_chain_returns_the_trap_getter() {
-    lookup_site(r#"
-declare function external(x: unknown): void;
-class Payload { n = 1; }
-const payload = new Payload();
-const px = new Proxy({}, { getOwnPropertyDescriptor(target, key) { return { get: () => external(payload), configurable: true }; } });
-const receiver: any = Object.create(px);
-const g = receiver.__lookupGetter__("x");
-g();
-console.log(payload.n); // LOOKUP_N
-"#, false).unwrap();
+    let h = "getOwnPropertyDescriptor(t: any, k: any) { return { get: () => external(payload), configurable: true }; }";
+    chain_site(&on_chain("{}", h, "const g = receiver.__lookupGetter__(\"x\");\ng();"), false).unwrap();
+    // The getter returned, not called: nothing runs.
+    chain_site(&on_chain("{}", h, "receiver.__lookupGetter__(\"x\");"), true).unwrap();
 }
 
 #[test]
 fn accessor_lookup_trapless_proxy_on_the_chain_runs_nothing() {
-    lookup_site(
-        r#"
-declare function external(x: unknown): void;
-class Payload { n = 1; }
-const payload = new Payload();
-const px = new Proxy({}, {});
-const receiver: any = Object.create(px);
-receiver.__lookupGetter__("x");
-console.log(payload.n); // LOOKUP_N
-"#,
-        true,
-    )
-    .unwrap();
+    chain_site(&on_chain("{}", "", "receiver.__lookupGetter__(\"x\");"), true).unwrap();
+}
+
+/// Without a trap the lookup forwards to the target (10.5.5 step 6,
+/// 10.5.1 step 5): the target's own getter is the answer.
+#[test]
+fn accessor_lookup_proxy_on_the_chain_forwards_to_the_target() {
+    let t = "{ get x() { external(payload); return 1; } }";
+    chain_site(&on_chain(t, "", "const g = receiver.__lookupGetter__(\"x\");\ng();"), false).unwrap();
+    chain_site(&on_chain(t, "", "receiver.__lookupGetter__(\"x\");"), true).unwrap();
+}
+
+/// B.2.2.4 runs [[GetOwnProperty]] and [[GetPrototypeOf]] only: a `get`
+/// trap does not run in the loop. (`receiver.__lookupGetter__` itself is a
+/// [[Get]] of `__lookupGetter__` that reaches the trap, so the method is
+/// called off `Object.prototype`.)
+#[test]
+fn accessor_lookup_proxy_on_the_chain_runs_no_get_trap() {
+    let h = "get(t: any, k: any, r: any) { external(payload); return 1; }";
+    let op = "Object.prototype.__lookupGetter__.call(receiver, \"x\");";
+    chain_site(&on_chain("{}", h, op), true).unwrap();
+    // Its descriptor trap does run there. (Its unknown callee holds the
+    // realm, and the realm-function call through `.call` then hands the
+    // receiver, whose chain holds the Proxy, to unknown code: an escape,
+    // not a chain step, so no E9 check here.)
+    let h = "getOwnPropertyDescriptor(t: any, k: any) { external(payload); return undefined; }";
+    lookup_site(&on_chain("{}", h, op), false).unwrap();
 }
 
 /// [[Get]], `in` and [[Set]] reaching a Proxy on the chain run its
-/// get / has / set traps (10.1.8.1 step 3, 10.1.7.1, 10.1.9.2 step 2.b).
+/// get / has / set traps (10.1.8.1 step 3, 10.1.7.1, 10.1.9.2 step 2.b);
+/// without the trap they forward to the target, which runs nothing here.
 #[test]
 fn ordinary_ops_reaching_a_proxy_on_the_chain_run_its_traps() {
     for (op, trap) in [
-        (
-            "receiver.x;",
-            "get(t: any, k: any, r: any) { external(payload); return 1; }",
-        ),
-        (
-            "console.log(\"x\" in receiver);",
-            "has(t: any, k: any) { external(payload); return true; }",
-        ),
-        (
-            "receiver.x = 1;",
-            "set(t: any, k: any, v: any, r: any) { external(payload); return true; }",
-        ),
+        ("receiver.x;", "get(t: any, k: any, r: any) { external(payload); return 1; }"),
+        ("console.log(\"x\" in receiver);", "has(t: any, k: any) { external(payload); return true; }"),
+        ("receiver.x = 1;", "set(t: any, k: any, v: any, r: any) { external(payload); return true; }"),
+        ("const kk = String(Math.random());\nreceiver[kk];", "get(t: any, k: any, r: any) { external(payload); return 1; }"),
+        ("receiver.m();", "get(t: any, k: any, r: any) { return () => external(payload); }"),
     ] {
-        let src = format!(
-            r#"
-declare function external(x: unknown): void;
-class Payload {{ n = 1; }}
-const payload = new Payload();
-const px = new Proxy({{}}, {{ {trap} }});
-const receiver: any = Object.create(px);
-{op}
-console.log(payload.n); // LOOKUP_N
-"#
-        );
-        lookup_site(&src, false).unwrap_or_else(|e| panic!("{op}: {}", &e[..e.len().min(400)]));
+        chain_site(&on_chain("{}", trap, op), false)
+            .unwrap_or_else(|e| panic!("{op}: {}", &e[..e.len().min(400)]));
+        chain_site(&on_chain("{}", "", op), true)
+            .unwrap_or_else(|e| panic!("no trap, {op}: {}", &e[..e.len().min(400)]));
     }
+}
+
+/// The forward of [[Get]] / [[Set]] passes the original receiver
+/// (10.5.8 step 6, 10.5.9 step 6): the target's getter and setter run.
+#[test]
+fn ordinary_ops_reaching_a_trapless_proxy_forward_to_the_target() {
+    let t = "{ get x() { external(payload); return 1; }, set y(v: any) { external(payload); } }";
+    chain_site(&on_chain(t, "", "receiver.x;"), false).unwrap();
+    chain_site(&on_chain(t, "", "receiver.y = 1;"), false).unwrap();
+    chain_site(&on_chain(t, "", "receiver.z = 1;\nreceiver.z;"), true).unwrap();
+}
+
+/// The `receiver` a chain trap is passed is the object the operation
+/// started at (10.1.8.1 step 3: parent.[[Get]](P, Receiver)); the value a
+/// `set` trap is passed is the stored one.
+#[test]
+fn chain_traps_are_passed_the_receiver_and_the_value() {
+    // `receiver` holds `payload`: a trap handing its receiver out hands
+    // `payload` out with it. (`Object.setPrototypeOf(payload, px)` is no
+    // control: a class instance's prototype change is the E6 hold.)
+    let op = "receiver.p = payload;\nreceiver.x;";
+    // The receiver escapes to unknown code, and the Proxy on its chain
+    // with it (unknown code may reach it): no E9 check for this one.
+    let h = "get(t: any, k: any, r: any) { external(r); return 1; }";
+    lookup_site(&on_chain("{}", h, op), false).unwrap();
+    let h = "get(t: any, k: any, r: any) { external(t); return 1; }";
+    chain_site(&on_chain("{}", h, op), true).unwrap();
+    let set = "set(t: any, k: any, v: any, r: any) { external(v); return true; }";
+    chain_site(&on_chain("{}", set, "receiver.x = payload;"), false).unwrap();
+    let keep = "set(t: any, k: any, v: any, r: any) { return true; }";
+    chain_site(&on_chain("{}", keep, "receiver.x = payload;"), true).unwrap();
 }

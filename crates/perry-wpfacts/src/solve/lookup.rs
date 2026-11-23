@@ -1554,6 +1554,13 @@ impl Model {
     /// `cv`, with the builtin prototypes' members or (`builtin` false)
     /// with the program prototypes' values only.
     pub fn cv_of(&mut self, t: Tok, key: Key, builtin: bool) -> NodeId {
+        self.note_chain_recv(t);
+        self.cv_up(t, key, builtin)
+    }
+
+    /// `cv_of` of a prototype `t` on a receiver's chain (the next link of a
+    /// `ChainUnion`): `t` is no receiver of it.
+    pub(super) fn cv_up(&mut self, t: Tok, key: Key, builtin: bool) -> NodeId {
         if let Some(&n) = self.cv_nodes.get(&(t, key, builtin)) {
             return n;
         }
@@ -1840,6 +1847,8 @@ impl Model {
 
     /// `super.key` from receiver `origin`: the lookup starts at `start`.
     pub(super) fn super_lookup(&mut self, origin: Tok, start: Tok, key: Key, act: ChainAct) {
+        // The Receiver of `super.key` is `this` (13.3.7.3 MakeSuperPropertyReference).
+        self.note_chain_recv(origin);
         if start == TOP {
             self.chain_step(0, origin, TOP, key, act);
             return;
@@ -1922,7 +1931,7 @@ impl Model {
         }
         if let Some(v) = self.stopped_shared.remove(&p) {
             for (key, dst, builtin) in v {
-                let up = self.cv_of(p, key, builtin);
+                let up = self.cv_up(p, key, builtin);
                 self.edge(up, dst);
             }
         }

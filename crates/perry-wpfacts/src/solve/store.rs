@@ -670,6 +670,8 @@ impl Model {
                         key,
                         ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
                     );
+                    let region = self.store_region.unwrap_or(self.thrown);
+                    self.chain_set_rule(t, key, src, region);
                 }
                 let cp = self.cp(t);
                 if self.callthis_done.insert((cp, u32::MAX, t)) {
@@ -1180,6 +1182,8 @@ impl Model {
                 key,
                 ChainAct::Store(src, self.store_region.unwrap_or(self.thrown)),
             );
+            let region = self.store_region.unwrap_or(self.thrown);
+            self.chain_set_rule(t, key, src, region);
         }
         if !self.is_array_like(t) {
             let cp = self.cp(t);

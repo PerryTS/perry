@@ -87,6 +87,31 @@ pub enum ProxyOp {
     /// One `__lookupGetter__` / `__lookupSetter__` call on the Proxy
     /// (`proxy_annexb_lookup`): its traps and its forward.
     Lookup(CallId),
+    /// Rule PXCHAIN: the receivers of the operations that reach the Proxy
+    /// on a prototype chain (`Cons::ChainRecv`): its node.
+    ChainRecv,
+    /// Rule PXCHAIN: [[Get]] reaching the Proxy on a chain, the chain value
+    /// node it feeds (`Cons::ChainUnion`): trap and forward.
+    ChainGet(NodeId),
+    /// Rule PXCHAIN: one per-receiver walk (`Cons::Chain`) reaching the
+    /// Proxy: its traps (a lookup) and its forward.
+    ChainWalk(Tok, Key, ChainAct),
+    /// Rule PXCHAIN: an accessor holder walk (`Cons::HolderStep`, its pass
+    /// node) reaching the Proxy: its forward.
+    Holders(Key, NodeId),
+    /// Rule PXCHAIN: a prototype closure (`Cons::ProtoClosure`, its node)
+    /// holding the Proxy: its forward.
+    Closure(NodeId),
+    /// Rule PXCHAIN: the `set` trap call for `key` reached on a chain: the
+    /// node of the values it is passed.
+    ChainSetTrap(Key),
+    /// Rule PXCHAIN: the throw node of that trap call.
+    ChainSetThrow(Key),
+    /// Rule PXCHAIN: one receiver's [[Set]] of `key` reaching the Proxy.
+    ChainSet(Tok, Key),
+    /// Rule PXCHAIN: a receiver's read or call under a computed key that
+    /// may be an index (`Cons::PlainKey`) reaching the Proxy.
+    Plain(Tok, ChainAct),
 }
 
 impl Model {
@@ -282,7 +307,7 @@ impl Model {
     }
 
     /// A [[Get]] of Proxy `p` whose result goes to `dst`.
-    fn proxy_get_into(&mut self, p: u32, key: Key, idx: NodeId, dst: NodeId) {
+    pub(crate) fn proxy_get_into(&mut self, p: u32, key: Key, idx: NodeId, dst: NodeId) {
         let g = self.proxy_get(p, key, idx);
         if g != dst {
             self.edge(g, dst);
@@ -497,6 +522,18 @@ impl Model {
             return;
         }
         let target = self.proxies[p as usize].target;
+        let next = self.proxy_lookup_traps(p, key, ret, setter);
+        self.cons(next, Cons::AnnexBLookup { call, setter });
+        self.cons(target, Cons::AnnexBLookup { call, setter });
+    }
+
+    /// The Annex B loop's two steps at Proxy `p` (`proxy_annexb_lookup`):
+    /// the `getOwnPropertyDescriptor` trap, whose `get` / `set` field goes to
+    /// `ret`, and the `getPrototypeOf` trap; the node of the objects it
+    /// returns (the loop's next O) is the result. The caller puts the next
+    /// step on it and on the target (the forward of both traps).
+    fn proxy_lookup_traps(&mut self, p: u32, key: Key, ret: NodeId, setter: bool) -> NodeId {
+        let target = self.proxies[p as usize].target;
         let reason = self.reason("Annex B __lookupGetter__ / __lookupSetter__ on a Proxy");
         let k = self.proxy_key_arg(key, NO_NODE);
         let desc = self.node_l("proxy-gopd-ret");
@@ -532,8 +569,176 @@ impl Model {
         self.proxy_trap(p, "getPrototypeOf", None, vec![target], proto);
         let next = self.node_l("proxy-lookup-next");
         self.cons(proto, Cons::Objects { dst: next });
-        self.cons(next, Cons::AnnexBLookup { call, setter });
-        self.cons(target, Cons::AnnexBLookup { call, setter });
+        next
+    }
+
+    /// Rule PXCHAIN: the receivers of the chain operations that reach Proxy
+    /// `p` (every object whose prototype closure holds `p`, `ChainRecv`):
+    /// the `receiver` argument of the `get` and `set` traps run there.
+    fn proxy_chain_recv(&mut self, p: u32) -> NodeId {
+        if let Some(&r) = self.proxies[p as usize].ops.get(&ProxyOp::ChainRecv) {
+            return r;
+        }
+        let r = self.node_l("proxy-chain-recv");
+        self.proxies[p as usize].ops.insert(ProxyOp::ChainRecv, r);
+        r
+    }
+
+    /// Rule PXCHAIN [[Get]]: OrdinaryGet (10.1.8.1 step 3) of `of` reaching
+    /// Proxy `p` on its chain is p.[[Get]](key, Receiver) (10.5.8): the trap
+    /// `get( t, key, receiver )` into the chain value `dst`, and the forward
+    /// target.[[Get]](key, Receiver): the same chain union on the target
+    /// (its own value, then its chain), as if the target were the next link.
+    fn proxy_chain_get(&mut self, p: u32, key: Key, dst: NodeId, of: Tok, builtin: bool) {
+        if self.proxy_made(p, ProxyOp::ChainGet(dst)) {
+            return;
+        }
+        let t = self.proxies[p as usize].target;
+        let k = self.proxy_key_arg(key, NO_NODE);
+        let recv = self.proxy_chain_recv(p);
+        self.proxy_trap(p, "get", Some(key), vec![t, k, recv], dst);
+        self.cons(
+            t,
+            Cons::ChainUnion {
+                key,
+                dst,
+                of,
+                builtin,
+            },
+        );
+    }
+
+    /// Rule PXCHAIN: a per-receiver walk of `origin` (`Cons::Chain`)
+    /// reaching Proxy `p`. A lookup (B.2.2.4/5) runs the
+    /// `getOwnPropertyDescriptor` and `getPrototypeOf` traps
+    /// (`proxy_lookup_traps`) and goes on at the objects the latter returns;
+    /// every walk forwards to the target (10.5.5 / 10.5.1 / 10.5.8 / 10.5.9
+    /// without a trap: the target's own, then its chain), whose accessors
+    /// run with `this` = `origin` (the Receiver the forward passes).
+    fn proxy_chain_walk(&mut self, p: u32, origin: Tok, key: Key, act: ChainAct) {
+        if self.proxy_made(p, ProxyOp::ChainWalk(origin, key, act)) {
+            return;
+        }
+        if let ChainAct::Lookup { dst, setter } = act {
+            let next = self.proxy_lookup_traps(p, key, dst, setter);
+            self.cons(next, Cons::Chain { origin, key, act });
+        }
+        let t = self.proxies[p as usize].target;
+        self.cons(t, Cons::Chain { origin, key, act });
+    }
+
+    /// Rule PXCHAIN: the index part of a computed read or call of `origin`
+    /// (`Cons::PlainKey`) reaching Proxy `p` on its chain: p.[[Get]](key,
+    /// Receiver) (10.5.8): the `get` trap with any key (a String), its
+    /// result read (`Load`) or called with `this` = `origin` (`Call`), and
+    /// the forward: the same rule on the target (its index fields).
+    fn proxy_chain_plain(&mut self, p: u32, origin: Tok, act: ChainAct) {
+        if self.proxy_made(p, ProxyOp::Plain(origin, act)) {
+            return;
+        }
+        let t = self.proxies[p as usize].target;
+        let recv = self.proxy_chain_recv(p);
+        self.add_tok(recv, origin);
+        let key = Key::any();
+        let k = self.proxy_key_arg(key, NO_NODE);
+        match act {
+            ChainAct::Load(dst, _) => self.proxy_trap(p, "get", Some(key), vec![t, k, recv], dst),
+            ChainAct::Call(call) => {
+                let g = self.node_l("proxy-chain-get");
+                self.proxy_trap(p, "get", Some(key), vec![t, k, recv], g);
+                self.bind_via(g, call, origin);
+            }
+            // `plain_key` makes neither.
+            ChainAct::Store(..) | ChainAct::Lookup { .. } => {}
+        }
+        self.cons(t, Cons::PlainKey { origin, act });
+    }
+
+    /// Rule PXCHAIN [[Set]]: OrdinarySet (10.1.9.2 step 2.b) of `key` on
+    /// `origin` reaching Proxy `p` on its chain is p.[[Set]](key, V,
+    /// Receiver) (10.5.9): the trap `set( t, key, V, receiver )`, one call
+    /// per key passed every value (`src`: the receiver's stored values) and
+    /// throwing into `region` (the receiver's store regions). The forward
+    /// target.[[Set]](key, V, Receiver) runs the setters of the target's
+    /// chain with `this` = `origin` (the walk's forward,
+    /// `proxy_chain_walk`), a Proxy there (it is in `origin`'s closure,
+    /// `Closure`) in turn, and otherwise defines the key on the receiver:
+    /// the receiver's own store.
+    fn proxy_chain_set(&mut self, p: u32, origin: Tok, key: Key, src: NodeId, region: NodeId) {
+        let recv = self.proxy_chain_recv(p);
+        self.add_tok(recv, origin);
+        if self.proxy_made(p, ProxyOp::ChainSet(origin, key)) {
+            return;
+        }
+        let ops = &self.proxies[p as usize].ops;
+        let made = ops
+            .get(&ProxyOp::ChainSetTrap(key))
+            .zip(ops.get(&ProxyOp::ChainSetThrow(key)));
+        let (v, throw) = match made.map(|(&v, &throw)| (v, throw)) {
+            Some(made) => made,
+            None => {
+                let v = self.node_l("proxy-chain-set-value");
+                let throw = self.node_l("proxy-chain-set-throw");
+                self.proxies[p as usize].ops.insert(ProxyOp::ChainSetTrap(key), v);
+                self.proxies[p as usize].ops.insert(ProxyOp::ChainSetThrow(key), throw);
+                let t = self.proxies[p as usize].target;
+                let k = self.proxy_key_arg(key, NO_NODE);
+                let ret = self.node_l("proxy-set-ret");
+                self.proxy_trap_in(p, "set", Some(key), vec![t, k, v, recv], ret, throw);
+                (v, throw)
+            }
+        };
+        self.edge(src, v);
+        self.edge(throw, region);
+    }
+
+    /// Rule PXCHAIN [[Set]]: the store of `src` under `key` into ordinary
+    /// object `t` (no definition: [[DefineOwnProperty]] walks no chain) in
+    /// `region`. Once per (`t`, `key`): `Cons::ChainSet` on `t`'s prototype
+    /// closure, with one value node and one throw node; each store feeds
+    /// them once a Proxy is met there (until then its sources wait, as a
+    /// store walk's do).
+    pub(crate) fn chain_set_rule(&mut self, t: Tok, key: Key, src: NodeId, region: NodeId) {
+        if t == TOP {
+            return;
+        }
+        let (v, throw) = match self.chain_set_nodes.get(&(t, key)) {
+            Some(&x) => x,
+            None => {
+                let v = self.node_l("chain-set-value");
+                let throw = self.node_l("chain-set-throw");
+                self.chain_set_nodes.insert((t, key), (v, throw));
+                self.chain_set_pending.insert(v, Vec::new());
+                let cp = self.cp(t);
+                self.cons(
+                    cp,
+                    Cons::ChainSet {
+                        origin: t,
+                        key,
+                        src: v,
+                        region: throw,
+                    },
+                );
+                (v, throw)
+            }
+        };
+        match self.chain_set_pending.get_mut(&v) {
+            Some(w) => w.push((src, region)),
+            None => {
+                self.edge(src, v);
+                self.edge(throw, region);
+            }
+        }
+    }
+
+    /// Rule PXCHAIN: `t` is a receiver whose chain operations may reach a
+    /// Proxy (`Cons::ChainRecv` on its prototype closure, once).
+    pub(crate) fn note_chain_recv(&mut self, t: Tok) {
+        if t == TOP || !self.chain_recv_done.insert(t) {
+            return;
+        }
+        let cp = self.cp(t);
+        self.cons(cp, Cons::ChainRecv { origin: t });
     }
 
     /// What the runtime reads off a trap result `r`: HasProperty and [[Get]]
@@ -799,6 +1004,61 @@ impl Model {
                     self.cons(t, Cons::DeleteKey { key, reason });
                 }
             }
+            // Rule PXCHAIN: the Proxy as a link of a prototype chain. Every
+            // operation that reaches it there is its own internal method
+            // with the original receiver (10.1.8.1 step 3, 10.1.7.1 step 3,
+            // 10.1.9.2 step 2.b, B.2.2.4): `HasProp` (above, on the
+            // receiver's closure), `proxy_chain_get`, `proxy_chain_walk`,
+            // `proxy_chain_set`; the forward continues the walk at the target.
+            Cons::ChainUnion {
+                key,
+                dst,
+                of,
+                builtin,
+            } => self.proxy_chain_get(p, key, dst, of, builtin),
+            Cons::Chain { origin, key, act } => self.proxy_chain_walk(p, origin, key, act),
+            Cons::PlainKey { origin, act } => self.proxy_chain_plain(p, origin, act),
+            Cons::ChainSet {
+                origin,
+                key,
+                src,
+                region,
+            } => {
+                if let Some(w) = self.chain_set_pending.remove(&src) {
+                    for (s, r) in w {
+                        self.edge(s, src);
+                        self.edge(region, r);
+                    }
+                }
+                self.proxy_chain_set(p, origin, key, src, region);
+            }
+            Cons::ChainRecv { origin } => {
+                let r = self.proxy_chain_recv(p);
+                self.add_tok(r, origin);
+            }
+            Cons::HolderStep { key, pass, stop } => {
+                if !self.proxy_made(p, ProxyOp::Holders(key, pass)) {
+                    let t = self.proxies[p as usize].target;
+                    self.cons(t, Cons::HolderStep { key, pass, stop });
+                }
+            }
+            // The closure holds the Proxy (the chain operations above find
+            // it there) and what its forwards walk: the target and its own
+            // closure.
+            Cons::ProtoClosure { dst } => {
+                let pt = self.tok(TokKind::Proxy(p));
+                self.add_tok(dst, pt);
+                if !self.proxy_made(p, ProxyOp::Closure(dst)) {
+                    let t = self.proxies[p as usize].target;
+                    self.cons(t, Cons::ProtoClosure { dst });
+                }
+            }
+            // Rules on a prototype closure that read the builtin prototypes
+            // (`ProtoMethods`), the accessors of its holders (`AnyAccessors`)
+            // or ⊤ (`StoreTopProto`): a Proxy is none of them and has no own
+            // accessor; its target and the target's chain are in the closure
+            // (`Closure`) and answer there.
+            Cons::ProtoMethods { .. } | Cons::AnyAccessors { .. } | Cons::StoreTopProto { .. } => {}
             // An observation; a throw region: the trap calls run in the
             // shared cell every catch reads (`proxy_trap`).
             Cons::Identity { .. } | Cons::Raise { .. } | Cons::HandRaise { .. } => {}
@@ -912,7 +1172,19 @@ impl Model {
             | Cons::TopIfAny { .. }
             | Cons::TopIfTop { .. }
             | Cons::ForInMeet { .. }
-            | Cons::ThisInst { .. } => {
+            | Cons::ThisInst { .. }
+            // `Object.create( p )` (20.1.2.2, OrdinaryObjectCreate 10.1.12):
+            // `p` becomes the new object's [[Prototype]]; no internal method
+            // of `p` runs. The operations that later reach it on the chain
+            // run its traps (`proxy_chain_get`, `proxy_chain_has`, ...).
+            | Cons::CreateProto { .. }
+            // A prototype given to `Object.setPrototypeOf`, `__proto__` or
+            // `extends` (`proto_objects`, `ProtoGiven`, `ParentGiven`): a
+            // value test; the [[SetPrototypeOf]] of the receiver runs no
+            // internal method of the new prototype (10.1.2.1).
+            | Cons::ProtoObjects { .. }
+            | Cons::ProtoGiven { .. }
+            | Cons::ParentGiven { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
