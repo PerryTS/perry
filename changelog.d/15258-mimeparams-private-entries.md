@@ -1,0 +1,1 @@
+`util.MIMEParams` keeps its parameter entries in a private intrinsic slot instead of an own `_entries` property, so `Object.getOwnPropertyNames`, `Reflect.ownKeys`, `in` and property reads see no internal state, as in node.
