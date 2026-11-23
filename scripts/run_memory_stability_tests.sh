@@ -830,9 +830,9 @@ run_gc_trace_probe() {
     local compile_output="$TMPDIR/default_copied_minor_churn_compile.$$.$RANDOM"
     LAST_GC_TRACE_FILE=""
 
+    # Allocation pressure, not gc(), drives these cycles: an explicit gc() is a
+    # full mark-sweep unless PERRY_GC_FORCE_EVACUATE is set (manual_gc_collect_now).
     cat >"$ts" <<'EOF'
-declare function gc(): void;
-
 function smallBlob(i: number): string {
   return JSON.stringify({ id: i, name: "small_" + i, value: i * 7 });
 }
@@ -868,13 +868,12 @@ function copiedProbe(i: number): number {
   live.push(i);
   live.push(i + 1);
   live.push(i + 2);
-  gc();
   return i + 3;
 }
 
 function main(): number {
   let checksum = 0;
-  for (let batch = 0; batch < 10; batch++) {
+  for (let batch = 0; batch < 400; batch++) {
     checksum += churnBatch(batch * 64);
     checksum += copiedProbe(batch * 64);
   }
@@ -906,7 +905,7 @@ EOF
         FAIL=$((FAIL + 1))
         return
     fi
-    if ! grep -qF "default_copied_minor_churn:3913788" "$LAST_STDOUT_FILE"; then
+    if ! grep -qF "default_copied_minor_churn:6231896784" "$LAST_STDOUT_FILE"; then
         printf "  FAIL [gc-trace] %-40s stdout mismatch\n" "default copied minor churn"
         sed 's/^/    /' "$LAST_STDOUT_FILE"
         record_gc_trace_evidence \
