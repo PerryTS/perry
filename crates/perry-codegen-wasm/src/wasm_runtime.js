@@ -3166,6 +3166,8 @@ const __memDispatch = {
 
   // Error — args are plain JS values
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
+  error_new_kind: (kind, msg) =>
+    new ([Error, TypeError, RangeError, ReferenceError, SyntaxError][kind] || Error)(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
   // `super(msg)` in a class extending a built-in Error: the instance is a plain
   // object (see __classInstance), so it takes the message the Error constructor would
