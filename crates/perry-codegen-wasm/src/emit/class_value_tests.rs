@@ -280,3 +280,19 @@ console.log(n);
         "200\ntrue"
     );
 }
+
+// #15285: Symbol(), Symbol.keyFor, description and toString. Expected output is Node's.
+#[test]
+fn symbol_constructor_key_for_description_and_to_string_evaluate() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const s = Symbol("k");
+const u = Symbol();
+console.log(typeof s, s.description, s.toString(), Symbol.keyFor(Symbol.for("g")));
+console.log(String(u.description), u.toString(), String(Symbol.keyFor(s)), s === Symbol("k"));
+"#
+        ),
+        "symbol k Symbol(k) g\nundefined Symbol() undefined false"
+    );
+}
