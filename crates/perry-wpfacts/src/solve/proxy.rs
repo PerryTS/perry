@@ -76,6 +76,20 @@ pub enum ProxyOp {
     DefineTrap(Key),
     /// Rule PXDEFINE: its throw region.
     DefineThrow(Key),
+    /// Rule PXDEFINE: the `get` (false) / `set` (true) field of the
+    /// descriptor object that trap call is passed.
+    DefineAcc(Key, bool),
+    /// Rule PXDEFP: the forward of one definition's value (`key`, value
+    /// node, site) to the target: target.[[DefineOwnProperty]].
+    DefineFwd(Key, NodeId, SiteId),
+    /// Rule PXDEFP: the forward of a definition's key class
+    /// (`Cons::DefineKey`: key, data) to the target.
+    DefineKey(Atom, bool),
+    /// Rule PXDEFP: the forward of one accessor a definition installs
+    /// (key, function, setter) to the target.
+    AccFwd(Atom, Tok, bool),
+    /// Rule PXDEFP: the forward of a hard operation to the target.
+    HardFwd(Hard),
     /// [[HasProperty]] of `key` (with its key node): trap and forward.
     Has(Key, NodeId),
     /// [[GetOwnProperty]] of `key` (with its key node): trap and forward.
@@ -420,6 +434,13 @@ impl Model {
                 let call = (self.calls.len() - 1) as CallId;
                 let dt = builtins::trap_descriptor(self, call, v);
                 self.add_tok(d, dt);
+                for (name, setter) in [("get", false), ("set", true)] {
+                    let a = self.atom(name);
+                    let f = self.field(dt, a);
+                    self.proxies[p as usize]
+                        .ops
+                        .insert(ProxyOp::DefineAcc(key, setter), f);
+                }
                 self.cons(t, Cons::OwnProp { key, idx: NO_NODE });
                 self.cons(
                     t,
@@ -432,8 +453,71 @@ impl Model {
                 (v, throw)
             }
         };
-        self.edge(value, v);
+        if value != NO_NODE {
+            self.edge(value, v);
+        }
         self.edge(throw, region);
+    }
+
+    /// Rule PXDEFP: `Object.defineProperty( p, key, desc )`,
+    /// `Reflect.defineProperty`, `Object.defineProperties` (20.1.2.4,
+    /// 28.1.3, 20.1.2.3 -> DefinePropertyOrThrow 7.3.8 / ObjectDefine-
+    /// Properties): ToPropertyDescriptor ran at the call (the descriptor's
+    /// [[Get]]s, `Gen::descriptor_reads`); the definition is
+    /// p.[[DefineOwnProperty]](key, Desc) (10.5.6), never a [[Set]]: no
+    /// `set` trap runs. The trap is passed FromPropertyDescriptor(Desc), a
+    /// new object (`proxy_define`): its `value` is the defined value. The
+    /// forward (step 7) is target.[[DefineOwnProperty]](key, Desc): the
+    /// same definition on the target (its value at the define site, which
+    /// runs no setter, `Model::define_site`).
+    fn proxy_define_value(&mut self, p: u32, key: Key, src: NodeId, site: SiteId, region: NodeId) {
+        self.proxy_define(p, key, src, region);
+        if !self.proxy_made(p, ProxyOp::DefineFwd(key, src, site)) {
+            let t = self.proxies[p as usize].target;
+            self.cons(
+                t,
+                Cons::Store {
+                    key,
+                    src,
+                    site,
+                    region,
+                },
+            );
+        }
+    }
+
+    /// Rule PXDEFP: a definition installs accessor `f` under `key` (`*`: a
+    /// computed key) on Proxy `p`: the trap's descriptor object has `f` as
+    /// its `get` / `set` and no `value` (FromPropertyDescriptor 6.2.6.4:
+    /// an accessor descriptor; the field reads `undefined`), and the
+    /// forward installs it on the target.
+    fn proxy_define_accessor(&mut self, p: u32, key: Atom, f: Tok, setter: bool, from: NodeId) {
+        let star = self.atom(crate::STAR_KEY);
+        let k = match key == star {
+            true => Key::any(),
+            false => Key::Named(key),
+        };
+        let thrown = self.thrown;
+        self.proxy_define(p, k, NO_NODE, thrown);
+        let v = self.proxies[p as usize].ops[&ProxyOp::DefineTrap(k)];
+        self.add_prim(v, prim::UNDEF);
+        let fd = self.proxies[p as usize].ops[&ProxyOp::DefineAcc(k, setter)];
+        match f == TOP {
+            true => self.add_top(fd, |_| "accessor of unknown function value".into()),
+            false => self.add_tok(fd, f),
+        }
+        if !self.proxy_made(p, ProxyOp::AccFwd(key, f, setter)) {
+            let t = self.proxies[p as usize].target;
+            self.cons(
+                t,
+                Cons::AccessorInstall {
+                    key,
+                    f,
+                    setter,
+                    from,
+                },
+            );
+        }
     }
 
     /// A [[Get]] of Proxy `p` whose result goes to `dst`.
@@ -1092,6 +1176,50 @@ impl Model {
                 let t = self.tok(TokKind::Proxy(p));
                 self.cons(f, Cons::CallThis { call, this: t });
             }
+            // Rule PXDEFP: the value of a definition (a define site).
+            Cons::Store {
+                key,
+                src,
+                site,
+                region,
+            } if self.define_site(site) => self.proxy_define_value(p, key, src, site, region),
+            // Rule PXDEFP: the definition's key class, the target's.
+            Cons::DefineKey { key, data, reason } => {
+                if !self.proxy_made(p, ProxyOp::DefineKey(key, data)) {
+                    let t = self.proxies[p as usize].target;
+                    self.cons(t, Cons::DefineKey { key, data, reason });
+                }
+            }
+            // Rule PXDEFP: an accessor the definition installs.
+            Cons::AccessorInstall {
+                key,
+                f,
+                setter,
+                from,
+            } => self.proxy_define_accessor(p, key, f, setter, from),
+            // Rule PXDEFP: a definition under a computed key (E5 on an
+            // ordinary object): the `defineProperty` trap under any key, and
+            // the forward, the target's E5. Its value and accessors are the
+            // definition's own rules (the arms above).
+            Cons::Hard {
+                kind: Hard::E5DefineProperty,
+                reason,
+            } => {
+                let thrown = self.thrown;
+                self.proxy_define(p, Key::any(), NO_NODE, thrown);
+                let v = self.proxies[p as usize].ops[&ProxyOp::DefineTrap(Key::any())];
+                self.add_prim(v, prim::UNDEF);
+                if !self.proxy_made(p, ProxyOp::HardFwd(Hard::E5DefineProperty)) {
+                    let t = self.proxies[p as usize].target;
+                    self.cons(
+                        t,
+                        Cons::Hard {
+                            kind: Hard::E5DefineProperty,
+                            reason,
+                        },
+                    );
+                }
+            }
             // [[Set]] (10.5.9) with the Proxy as the Receiver (`proxy_set`).
             Cons::Store {
                 key,
@@ -1346,7 +1474,15 @@ impl Model {
             // internal method of the new prototype (10.1.2.1).
             | Cons::ProtoObjects { .. }
             | Cons::ProtoGiven { .. }
-            | Cons::ParentGiven { .. } => {
+            | Cons::ParentGiven { .. }
+            // Rule PXDEFP: a definition under a computed key
+            // (`define_computed_key`) decides per receiver; a Proxy there
+            // takes the computed-key path, whose E5, value and accessors are
+            // its arms above. `DefineKeyed` on a key node that holds the
+            // Proxy: an object key is no constant (ToPropertyKey is its own
+            // rule), the computed-key definition.
+            | Cons::DefineAnyKey { .. }
+            | Cons::DefineKeyed { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
