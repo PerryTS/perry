@@ -7,11 +7,11 @@
 const path = require("path");
 const T = path.join(__dirname, "../../../fixtures/programs/cjl2_reload", "t.cjs");
 const first = require("../../../fixtures/programs/cjl2_reload/t.cjs");
-require("./cjl2_reload/t.cjs");
+require("../../../fixtures/programs/cjl2_reload/t.cjs");
 console.log("children:", module.children.length, module.children[0].exports === first, first.parentIsEntry);
 delete require.cache[T];
-const second = require("./cjl2_reload/t.cjs");
+const second = require("../../../fixtures/programs/cjl2_reload/t.cjs");
 console.log("reloaded:", second.loads, second !== first, second.parentIsEntry);
 console.log("after reload:", module.children.length, module.children[1] !== module.children[0], module.children[1].exports === second, module.children[1].parent === module);
-require("./cjl2_reload/t.cjs");
-console.log("repeat:", module.children.length, require("./cjl2_reload/t.cjs") === second);
+require("../../../fixtures/programs/cjl2_reload/t.cjs");
+console.log("repeat:", module.children.length, require("../../../fixtures/programs/cjl2_reload/t.cjs") === second);

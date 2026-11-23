@@ -8,7 +8,7 @@
 console.log("entry: start");
 const a = require("../../../fixtures/programs/cjl_order/a.cjs");
 console.log("entry: a says", a.name);
-const again = require("./cjl_order/a.cjs");
+const again = require("../../../fixtures/programs/cjl_order/a.cjs");
 console.log("entry: same exports", again === a);
 function late() {
   return require("../../../fixtures/programs/cjl_order/b.cjs").name;

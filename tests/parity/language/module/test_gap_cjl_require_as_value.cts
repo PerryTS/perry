@@ -5,5 +5,5 @@ console.log("start");
 const r = require;
 const viaValue = r("../../../fixtures/programs/cjl_value/dep.cjs");
 console.log("value:", viaValue.name);
-console.log("same:", require("./cjl_value/dep.cjs") === viaValue);
-console.log("module.require:", module.require("./cjl_value/dep.cjs") === viaValue);
+console.log("same:", require("../../../fixtures/programs/cjl_value/dep.cjs") === viaValue);
+console.log("module.require:", module.require("../../../fixtures/programs/cjl_value/dep.cjs") === viaValue);

@@ -3,6 +3,6 @@
 import * as ns from "../../../fixtures/programs/cjl_ns/lib.cjs";
 
 console.log(Object.keys(ns).sort().join(","));
-const dynamic = await import("./cjl_ns/lib.cjs");
+const dynamic = await import("../../../fixtures/programs/cjl_ns/lib.cjs");
 console.log(Object.keys(dynamic).sort().join(","));
 console.log(ns.alpha, dynamic.beta());

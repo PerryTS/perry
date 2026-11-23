@@ -5,7 +5,7 @@ function locked(f: () => void) { try { f(); } catch (e) { console.log("DEC 250: 
 // can change prototypes (so each add takes the checked proof), and every
 // change to a prototype of the chain after the births.
 import * as Keys from "../../../fixtures/programs/_helpers/create_family_carried/keys.ts"
-import { TypeId } from "./_helpers/create_family_carried/keys.ts"
+import { TypeId } from "../../../fixtures/programs/_helpers/create_family_carried/keys.ts"
 import { PipeProto, Mutated } from "../../../fixtures/programs/_helpers/create_family_carried/base.ts"
 
 const log: string[] = []
