@@ -116,7 +116,7 @@ fn object_prototype_method_value_runs_on_its_receiver() {
     assert_eq!(d_escape("const t: any = {}; t[k](d);"), None);
     assert_eq!(d_escape("const t: any = {}; t[k]('y', () => d);"), None);
     assert!(
-        d_escape("const t: any = {}; t[k]('y', () => d); (globalThis as any).host(t.y);").is_some()
+        d_escape("const t: any = {}; t[k]('y', () => d); external(t.y);").is_some()
     );
 }
 
