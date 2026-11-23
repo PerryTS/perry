@@ -239,6 +239,63 @@ console.log(payload.n); // LOOKUP_N
 "#, false).unwrap();
 }
 
+/// B.2.2.4: an absent own descriptor goes on with O.[[GetPrototypeOf]](),
+/// on a Proxy its `getPrototypeOf` trap (10.5.1).
+#[test]
+fn accessor_lookup_proxy_prototype_trap_keeps_its_real_effects() {
+    lookup_site(r#"
+declare function external(x: unknown): void;
+class Payload { n = 1; }
+const payload = new Payload();
+const receiver = new Proxy({}, { getPrototypeOf(target) { external(payload); return null; } });
+receiver.__lookupGetter__("x");
+console.log(payload.n); // LOOKUP_N
+"#, false).unwrap();
+}
+
+/// The `set` field of the descriptor the trap returns is what
+/// `__lookupSetter__` returns (B.2.2.5 step 3.b.i).
+#[test]
+fn accessor_lookup_proxy_descriptor_trap_setter_is_returned() {
+    lookup_site(r#"
+declare function external(x: unknown): void;
+class Payload { n = 1; }
+const payload = new Payload();
+const receiver = new Proxy({}, { getOwnPropertyDescriptor(target, key) { return { set: (v: unknown) => external(payload), configurable: true }; } });
+const s = receiver.__lookupSetter__("x");
+s(1);
+console.log(payload.n); // LOOKUP_N
+"#, false).unwrap();
+}
+
+/// Without traps, [[GetOwnProperty]] and [[GetPrototypeOf]] forward to the
+/// target: its own getter is returned, and calling it runs it.
+#[test]
+fn accessor_lookup_proxy_without_traps_returns_the_target_getter() {
+    lookup_site(r#"
+declare function external(x: unknown): void;
+class Payload { n = 1; }
+const payload = new Payload();
+const receiver = new Proxy({ get x() { external(payload); return 0; } }, {});
+const g = receiver.__lookupGetter__("x");
+g();
+console.log(payload.n); // LOOKUP_N
+"#, false).unwrap();
+}
+
+/// Without traps and without a getter on the target's chain, nothing runs.
+#[test]
+fn accessor_lookup_proxy_without_traps_runs_nothing() {
+    lookup_site(r#"
+declare function external(x: unknown): void;
+class Payload { n = 1; }
+const payload = new Payload();
+const receiver = new Proxy({}, {});
+receiver.__lookupGetter__("x");
+console.log(payload.n); // LOOKUP_N
+"#, true).unwrap();
+}
+
 #[test]
 fn accessor_lookup_primitive_key_coercion_keeps_its_real_effects() {
     for receiver in ["1", "true", "'s'"] {

@@ -84,6 +84,9 @@ pub enum ProxyOp {
     /// Rule PXCALL: the `ProxyCallee` rule of the called Proxy (the id) on
     /// this Proxy's target: a Proxy is callable when its target is.
     Callee(u32),
+    /// One `__lookupGetter__` / `__lookupSetter__` call on the Proxy
+    /// (`proxy_annexb_lookup`): its traps and its forward.
+    Lookup(CallId),
 }
 
 impl Model {
@@ -467,6 +470,70 @@ impl Model {
                 region: self.thrown,
             },
         );
+    }
+
+    /// `__lookupGetter__` / `__lookupSetter__` (Annex B.2.2.4 / B.2.2.5) of
+    /// `key` with `this` = Proxy `p`, the result into `ret`. The loop's
+    /// O.[[GetOwnProperty]](key) is 10.5.5: the trap
+    /// `getOwnPropertyDescriptor( t, key )`, whose result ToPropertyDescriptor
+    /// reads (6.2.6.5) and whose `get` / `set` field is what the call returns
+    /// for an accessor descriptor. An absent descriptor goes on with
+    /// O.[[GetPrototypeOf]]() (10.5.1): the trap `getPrototypeOf( t )`; its
+    /// result (an object or null, a TypeError otherwise) is the next O of the
+    /// loop, the same lookup again (`Cons::AnnexBLookup`, which ends at null
+    /// and runs a Proxy's traps in turn). Without a trap each forwards to the
+    /// target: its own descriptor, then its prototype, which is the lookup on
+    /// the target. Trap and forward both run, as for every Proxy operation.
+    /// Once per call.
+    pub(crate) fn proxy_annexb_lookup(
+        &mut self,
+        p: u32,
+        key: Key,
+        call: CallId,
+        ret: NodeId,
+        setter: bool,
+    ) {
+        if self.proxy_made(p, ProxyOp::Lookup(call)) {
+            return;
+        }
+        let target = self.proxies[p as usize].target;
+        let reason = self.reason("Annex B __lookupGetter__ / __lookupSetter__ on a Proxy");
+        let k = self.proxy_key_arg(key, NO_NODE);
+        let desc = self.node_l("proxy-gopd-ret");
+        self.proxy_trap(
+            p,
+            "getOwnPropertyDescriptor",
+            Some(key),
+            vec![target, k],
+            desc,
+        );
+        self.proxy_result_reads(
+            desc,
+            &[
+                "enumerable",
+                "configurable",
+                "value",
+                "writable",
+                "get",
+                "set",
+            ],
+            false,
+            reason,
+        );
+        let field = self.atom(if setter { "set" } else { "get" });
+        self.cons(
+            desc,
+            Cons::Load {
+                key: Key::Named(field),
+                dst: ret,
+            },
+        );
+        let proto = self.node_l("proxy-getprototypeof-ret");
+        self.proxy_trap(p, "getPrototypeOf", None, vec![target], proto);
+        let next = self.node_l("proxy-lookup-next");
+        self.cons(proto, Cons::Objects { dst: next });
+        self.cons(next, Cons::AnnexBLookup { call, setter });
+        self.cons(target, Cons::AnnexBLookup { call, setter });
     }
 
     /// What the runtime reads off a trap result `r`: HasProperty and [[Get]]
