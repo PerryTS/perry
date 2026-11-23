@@ -1219,6 +1219,11 @@ impl<'a> Gen<'a> {
                 .cloned()
                 .collect();
             self.stmts(&fx, &body);
+            // Its normal completion returns `undefined`, which `new` turns
+            // into the this binding (ECMA-262 10.2.2 step 12).
+            if narrow::may_complete(&body) {
+                self.m.add_prim(fx.ret, prim::UNDEF);
+            }
             return;
         }
         let own = self.own_helper_shape(&f.params, &f.body, f.is_async || f.is_generator);
@@ -1229,10 +1234,10 @@ impl<'a> Gen<'a> {
         let clause = self.m.clause.take();
         self.stmts(&fx, &f.body);
         self.m.clause = clause;
-        if ctor_of.is_none() && narrow::may_complete(&f.body) {
-            // The body's normal completion returns `undefined` (a class
-            // constructor's completion is never its result: `new` and
-            // `super()` yield `this`).
+        if narrow::may_complete(&f.body) {
+            // The body's normal completion returns `undefined`; for a
+            // constructor `new` turns it into `this` (ECMA-262 10.2.2 steps
+            // 10-12, `Model::ctor_this_result`).
             self.m.add_prim(fx.ret, prim::UNDEF);
         }
         self.narrow_exit_body(scope);

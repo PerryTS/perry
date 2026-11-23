@@ -14,6 +14,20 @@ fn proven(pf: &ProgramFacts, key: &str) -> usize {
         .count()
 }
 
+/// A proven read of `x` on the instance: proven, and some receiver is not
+/// the returned literal. Since CTOR-RESULT (ECMA-262 10.2.2) a `new` whose
+/// constructor always returns `{ z: 1 }` yields that literal alone, whose
+/// absent `x` is proven too: that read is no instance read.
+fn inst_proven(pf: &ProgramFacts) -> bool {
+    proven(pf, "x") > 0
+        && pf
+            .sites
+            .iter()
+            .filter(|s| s.key == "x")
+            .flat_map(|s| s.receivers.iter())
+            .any(|r| !r.contains("__AnonShape_"))
+}
+
 /// Two modules (`lib` imported by `main`), per unit and whole program.
 fn two(lib: &str, main: &str) -> (ProgramFacts, ProgramFacts) {
     let mods = [("lib", lib), ("main", main)];
@@ -46,7 +60,7 @@ fn check_two(lib: &str, main: &str, instance: bool) {
         "per unit proves {u} > whole {w}\n{}",
         pu.dump_text()
     );
-    assert_eq!(u > 0, instance, "per unit: {u} proven\n{}", pu.dump_text());
+    assert_eq!(inst_proven(&pu), instance, "per unit: {u} proven\n{}", pu.dump_text());
 }
 
 const MAIN_F: &str = r#"
@@ -207,5 +221,5 @@ fn returning_this_is_still_the_instance() {
 fn check(src: &str, instance: bool) {
     let pw = facts(src);
     let w = proven(&pw, "x");
-    assert_eq!(w > 0, instance, "whole: {w} proven\n{}", pw.dump_text());
+    assert_eq!(inst_proven(&pw), instance, "whole: {w} proven\n{}", pw.dump_text());
 }

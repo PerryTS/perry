@@ -1983,7 +1983,7 @@ impl Model {
         if r == NO_NODE {
             return;
         }
-        let cret = self.calls[c].ret;
+        let cret = self.call_result_dst(call, f);
         if self.ret_param_into(call, f) {
             return;
         }
@@ -2038,7 +2038,7 @@ impl Model {
             return false;
         }
         let r = self.run_ret(run);
-        let cret = self.calls[c].ret;
+        let cret = self.call_result_dst(call, self.run_fn(run));
         self.rel(|| format!("copy {r} {cret}"));
         self.cons(r, Cons::RetInto { call, run });
         for i in rel {
@@ -2076,7 +2076,7 @@ impl Model {
     /// this call: for each marker `m` of the call's argument i, the same
     /// token of `m` (`Model::lift`). Every other token arrives as itself.
     pub(crate) fn ret_into(&mut self, call: CallId, run: u32, toks: Tokens<'_>, prim: u16) {
-        let cret = self.calls[call as usize].ret;
+        let cret = self.call_result_dst(call, self.run_fn(run));
         let mut raw: Vec<Tok> = Vec::new();
         let mut lifted: Vec<Tok> = Vec::new();
         let mut args: Vec<Option<Vec<Tok>>> = Vec::new();
@@ -2142,8 +2142,26 @@ impl Model {
                 out.push(self.lift(m, b, t));
             }
         }
-        let cret = self.calls[call as usize].ret;
+        let cret = self.call_result_dst(call, self.run_fn(run));
         self.add(cret, &out, 0);
+    }
+
+    /// Where a run of `f` bound at `call` returns: the call's result, or
+    /// for a `new` of summarized `f` its body-result node (`Model::ctor_body`:
+    /// the [[Call]] result is not the `new` result, ECMA-262 10.2.2).
+    fn call_result_dst(&self, call: CallId, f: FnIdx) -> NodeId {
+        match self.ctor_body.get(&(call, f)) {
+            Some(&b) => b,
+            None => self.calls[call as usize].ret,
+        }
+    }
+
+    /// The function of run `run`.
+    fn run_fn(&self, run: u32) -> FnIdx {
+        match run & FN_RUN {
+            0 => self.sum.insts[(run - 1) as usize].f,
+            _ => run & !FN_RUN,
+        }
     }
 
     /// The parameter of run `run` whose argument marker is `b`.

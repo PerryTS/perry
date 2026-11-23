@@ -971,9 +971,15 @@ impl<'a> Gen<'a> {
         }
         // A superclass can return a replacement object, including a builtin
         // array. Subsequent derived-body this accesses must retain that flow.
-        self.m.edge(ret, fx.this);
-        self.m.edge(ret, fx.ret);
-        ret
+        // SuperCall is Construct(func, args, NewTarget) (ECMA-262 13.3.7.1
+        // step 6): the parent body's result binds `this` only where it is
+        // an Object (10.2.2 step 10); a primitive, the `undefined` of a
+        // completing body included, leaves the this-object (`fx.this`).
+        let objs = self.m.node_named("super-objs", || format!("super-objs({call})"));
+        self.m.cons(ret, Cons::Objects { dst: objs });
+        self.m.edge(objs, fx.this);
+        self.m.edge(objs, fx.ret);
+        fx.this
     }
 
     pub(crate) fn super_method(

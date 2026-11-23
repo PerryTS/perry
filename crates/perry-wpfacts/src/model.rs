@@ -146,6 +146,10 @@ pub mod guard {
     /// (`Cons::NotObjectProto`): any value but the intrinsic constructor (a
     /// program store, ⊤, a primitive) lets every value of `x` through.
     pub const NOT_OBJECT_CTOR: u8 = 22;
+    /// A value that is no Object (ECMA-262 10.2.2 [[Construct]] step 10):
+    /// a constructor body result that makes a base `new` yield its `this`.
+    /// Every primitive; no object or function token.
+    pub const NOT_OBJECT: u8 = 23;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -177,6 +181,7 @@ pub mod guard {
             IS_NULL => p::NULL,
             NOT_NULL => p::ALL & !p::NULL,
             NOT_OBJECT_CTOR => p::ALL,
+            NOT_OBJECT => p::ALL,
             // `0`, `""`, `false`, `0n`, `null`, `undefined`.
             _ => p::NUM | p::STR | p::FALSE | p::BIGINT | p::NULL | p::UNDEF,
         }
@@ -2259,6 +2264,11 @@ pub struct Model {
     /// left-hand side (`Solver::has_instance`).
     pub has_instance_arg: crate::pts::FxHashMap<Tok, NodeId>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
+    /// (`new` call, summarized constructor) -> the node its runs' body
+    /// result reaches instead of the call's result: the `new` result takes
+    /// only its objects, and the this-object while it holds a non-object
+    /// (`Model::ctor_this_result`, ECMA-262 10.2.2 steps 10-12).
+    pub ctor_body: crate::pts::FxHashMap<(CallId, FnIdx), NodeId>,
     /// (key or prototype node, object, dst or call, rule): `IdxLoad` /
     /// `IdxKey` use 0-18; the `IDX_*` rules of DECISIONS 217 the rest.
     pub idx_done: crate::pts::FxHashSet<(NodeId, Tok, NodeId, u16)>,

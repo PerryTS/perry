@@ -154,6 +154,7 @@ impl Model {
             }
         }
         let mut later: Vec<Tok> = Vec::new();
+        let mut ledger_gone: Vec<Tok> = Vec::new();
         // A marker crossing into the node arrives as a member of the node's
         // own marker (MRK, `Model::crosses`; DECISIONS 44 for parameters):
         // the node no longer holds every value of its sources.
@@ -228,6 +229,9 @@ impl Model {
         if !later.is_empty() {
             if top_new || node.pts.contains_tok(TOP) {
                 node.dropped = true;
+                if self.ledger.is_some() {
+                    ledger_gone = std::mem::take(&mut later);
+                }
             } else {
                 for t in later {
                     if !node.pts.contains_tok(t) && !is_fresh(&fresh, &mut seen, t) {
@@ -248,6 +252,16 @@ impl Model {
         // ⊤ arrived: a member listed before it and escaped since is that ⊤
         // now, and leaves the set (rebuilt) and the node's delta.
         if top_new {
+            if self.ledger.is_some() {
+                let gone: Vec<Tok> = self.nodes[n as usize]
+                    .pts
+                    .to_sorted()
+                    .into_iter()
+                    .filter(|&t| escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t))
+                    .collect();
+                self.ledger_again_beside_top(n, &gone);
+            }
+            let node = &mut self.nodes[n as usize];
             let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
             let old = std::mem::take(&mut node.pts);
             let before = old.len();
@@ -260,6 +274,9 @@ impl Model {
                 node.dropped = true;
                 self.charge_work(before as u64);
             }
+        }
+        if !ledger_gone.is_empty() {
+            self.ledger_again_beside_top(n, &ledger_gone);
         }
         if self.prov.is_some() && !fresh.is_empty() {
             let at = std::panic::Location::caller();
@@ -681,6 +698,35 @@ impl Model {
 
     /// Seed a token (an input fact outside the solver rules: logged).
     #[track_caller]
+    /// `hold_ledger` (LEDG3): escaped tokens `toks` leave `n` beside its ⊤
+    /// (`escaped_beside_top`), so `n`'s TopSink rules never see them. Each
+    /// such rule would escape them again (`apply`): the predecessor graph
+    /// records that, so it does not depend on whether ⊤ or the token reached
+    /// `n` first.
+    fn ledger_again_beside_top(&mut self, n: NodeId, toks: &[Tok]) {
+        let sinks: Vec<(u32, Option<Tok>)> = self.nodes[n as usize]
+            .cons
+            .iter()
+            .filter_map(|c| match *c {
+                Cons::TopSink { reason } => Some((reason, None)),
+                Cons::RuntimeStore { reason, retained } => Some((reason, Some(retained))),
+                _ => None,
+            })
+            .collect();
+        let Some(l) = self.ledger.as_mut() else {
+            return;
+        };
+        for (reason, retained) in sinks {
+            let root = l.enter_sink(n);
+            for &t in toks {
+                if retained != Some(t) && escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t) {
+                    l.again(t, reason, std::panic::Location::caller());
+                }
+            }
+            l.leave(root);
+        }
+    }
+
     pub fn add_tok(&mut self, n: NodeId, t: Tok) {
         self.add_tok_arm(n, t, "")
     }
@@ -1060,6 +1106,15 @@ impl Model {
             if !holds {
                 continue;
             }
+            if self.ledger.is_some() {
+                members.clear();
+                node.pts.sorted_into(&mut members);
+                let gone: Vec<Tok> = members.iter().copied().filter(|&t| cover(t)).collect();
+                self.ledger_again_beside_top(n as NodeId, &gone);
+            }
+            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let cover = |t: Tok| escaped_beside_top(esc, pm, ab, t);
+            let node = &mut self.nodes[n];
             let old = std::mem::take(&mut node.pts);
             let before = old.len() as u64;
             node.pts = self.sets.retain(old, |t| !cover(t));

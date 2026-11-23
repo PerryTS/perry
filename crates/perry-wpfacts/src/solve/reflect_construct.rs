@@ -146,7 +146,11 @@ impl Model {
                 TOP
             }
         };
-        self.add_tok(c.ret, inst);
+        match self.toks[target as usize] {
+            TokKind::ClassObj(tm) => self.class_this_result(call, tm, inst, c.ret),
+            TokKind::Func(..) => self.ctor_this_result(call, target, false, inst, c.ret),
+            _ => self.add_tok(c.ret, inst),
+        }
         match self.toks[target as usize] {
             TokKind::ClassObj(tm) => {
                 self.run_ctor_chain(call, tm, inst);

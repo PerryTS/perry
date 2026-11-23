@@ -86,6 +86,7 @@ mod const_key_set_store;
 mod const_numbers;
 mod ctor_observed;
 mod ctor_return;
+mod ctor_returns_object;
 mod data_define_named;
 mod dce_reach;
 mod dead_dynamic_import;

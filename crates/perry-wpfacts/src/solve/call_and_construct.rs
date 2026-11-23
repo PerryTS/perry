@@ -524,6 +524,14 @@ impl Model {
                 self.edge(elems, args_all);
             }
         }
+        // [[Construct]] (ECMA-262 10.2.2 steps 10-12): the `new` result is
+        // the body's object result (`ctor_ret_objects`) or the this-object
+        // (`ctor_this_result`), never the [[Call]] result with its
+        // primitives. A class constructor is only ever constructed (its
+        // [[Call]] throws, 10.2.1 step 2).
+        if self.funcs[f].ctor_of.is_some() || self.construct_done.contains(&(call, t)) {
+            return;
+        }
         let fret = self.funcs[f].ret;
         let cret = self.calls[c].ret;
         if self.ret_param_into(call, f as FnIdx) {
@@ -904,7 +912,7 @@ impl Model {
             TokKind::ClassObj(tm) => {
                 let ctx = self.birth_ctx(call);
                 let inst = self.site_tok(tm, ctx);
-                self.add_tok(c.ret, inst);
+                self.class_this_result(call, tm, inst, c.ret);
                 self.run_ctor_chain(call, tm, inst);
                 // Another unit's constructor up the chain returns an object:
                 // `new` yields that value, which this unit cannot name.
@@ -949,7 +957,7 @@ impl Model {
                 let tm = self.fn_inst_template(f);
                 let ctx = self.birth_ctx(call);
                 let inst = self.site_tok(tm, ctx);
-                self.add_tok(c.ret, inst);
+                self.ctor_this_result(call, t, false, inst, c.ret);
                 self.call_tok(call, t, Some(inst));
                 // E12: a constructor function returning an object.
                 self.ctor_ret_objects(call, t, c.ret);
@@ -1246,17 +1254,72 @@ impl Model {
         }
     }
 
+    /// The `new` result's `this` part for class `tm` (ECMA-262 10.2.2):
+    /// through its own constructor's result (`ctor_this_result`), a derived
+    /// one when the class has heritage. Without an own constructor the
+    /// implicit one completes normally: `this` always.
+    pub(crate) fn class_this_result(&mut self, call: CallId, tm: TmplId, inst: Tok, dst: NodeId) {
+        let t = &self.tmpls[tm as usize];
+        let derived = t.parent.is_some() || t.parent_value.is_some() || t.native_parent.is_some();
+        match t.ctor {
+            Some(ctor) => {
+                let ftok = self.funcs[ctor as usize].token;
+                self.ctor_this_result(call, ftok, derived, inst, dst);
+            }
+            None => self.add_tok(dst, inst),
+        }
+    }
+
+    /// The `this`-object `inst` of `new F(...)` is its result only on a
+    /// path where F's body result is no Object (ECMA-262 10.2.2
+    /// [[Construct]] steps 10-12): for a base constructor any primitive
+    /// (`guard::NOT_OBJECT`), for a derived one `undefined` (`guard::UNDEF`;
+    /// any other primitive throws a TypeError). F's return node holds every
+    /// `return` value and the `undefined` of `return;` and of a body that
+    /// may complete (`gen::walk`), so a body whose every path returns an
+    /// object never lets `inst` reach the result. A summarized or unwalked
+    /// body keeps `inst` (superset).
+    pub(crate) fn ctor_this_result(
+        &mut self,
+        call: CallId,
+        ftok: Tok,
+        derived: bool,
+        inst: Tok,
+        dst: NodeId,
+    ) {
+        let mut r = if self.sum.ready { self.ret_for(call, ftok) } else { NO_NODE };
+        // A summarized body: its runs bound at this call return into a
+        // body-result node (`Model::call_result_dst`), which gives the
+        // `new` result its objects; the guard reads it as F's ret.
+        let f = self.tok_fn(ftok);
+        if r == NO_NODE && self.sum.ready && inst != TOP && self.summarized(f) {
+            r = match self.ctor_body.get(&(call, f)) {
+                Some(&b) => b,
+                None => {
+                    let b = self.node_named("ctor-body", || format!("ctor-body({call},{f})"));
+                    self.ctor_body.insert((call, f), b);
+                    self.ret_objects(b, dst);
+                    b
+                }
+            };
+        }
+        if r == NO_NODE || inst == TOP {
+            self.add_tok(dst, inst);
+            return;
+        }
+        let this = self.node_named("ctor-this", || format!("ctor-this({ftok})"));
+        self.add_tok(this, inst);
+        let test = if derived { guard::UNDEF } else { guard::NOT_OBJECT };
+        self.cons(r, Cons::Guard { test, from: this, dst });
+    }
+
     /// Objects a constructor returns replace `this` as the `new` result.
     pub fn ret_objects(&mut self, ret: NodeId, dst: NodeId) {
-        // Object tokens only (a primitive return is ignored by `new`).
+        // Object tokens only (ECMA-262 10.2.2 step 10: a primitive result,
+        // `undefined` of a completing body included, is not the `new`
+        // result; `ctor_this_result` gives the this-object there).
         let filt = self.node_named("objret", || format!("objret({ret})"));
-        // A body that completes returns `undefined` (`narrow::may_complete`),
-        // which `new` never yields.
-        self.cons(ret, Cons::NotNullish { dst: filt });
-        // `filt` keeps prims; dst gets them too, which is a harmless
-        // over-approximation for kinds only when the ctor returns
-        // primitives — but it would pollute `new` results, so relay
-        // tokens only through a Load-free copy: we accept the prims.
+        self.cons(ret, Cons::Objects { dst: filt });
         self.edge(filt, dst);
     }
 
