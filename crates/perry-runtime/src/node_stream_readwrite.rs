@@ -242,22 +242,26 @@ fn define_internal_field(
     let value = scope.root_nanbox_f64(value);
     // SAFETY: both are rooted; each call re-reads them from the handles.
     unsafe {
-        crate::object::object_ops::ensure_key_in_keys_array_with_entry(
-            obj.get_raw_mut_ptr::<ObjectHeader>(),
-            key.get_raw_const_ptr::<crate::StringHeader>(),
-            entry,
-        );
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                crate::object::object_ops::ensure_key_in_keys_array_with_entry(obj, key, entry)
+            })
+        });
         // The key carries non-default attributes from its definition: the
         // holder publishes the descriptor fact (`OBJ_FLAG_HAS_DESCRIPTORS`)
         // like every other attribute install.
-        crate::object::descriptor_state::note_attrs_born_with_keys(
-            obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
-        );
-        crate::object::object_ops::define_property_force_store_value(
-            obj.get_raw_mut_ptr::<ObjectHeader>(),
-            key.get_raw_const_ptr::<crate::StringHeader>(),
-            value.get_nanbox_f64(),
-        );
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            crate::object::descriptor_state::note_attrs_born_with_keys(obj as usize)
+        });
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj| {
+            key.with_const_ptr::<crate::StringHeader, _>(|key| {
+                crate::object::object_ops::define_property_force_store_value(
+                    obj,
+                    key,
+                    value.get_nanbox_f64(),
+                )
+            })
+        });
     }
 }
 
@@ -1390,7 +1394,7 @@ pub(super) fn invoke_construct_callback(
         std::ptr::null(),
         crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
         event.get_nanbox_f64(),
-        box_pointer(ready.get_raw_mut_ptr::<ClosureHeader>().cast()),
+        ready.with_mut_ptr::<ClosureHeader, _>(|r| box_pointer(r.cast())),
     );
     let tick = js_closure_alloc(crate::fn_info!(construct_tick, 0), 1);
     js_closure_set_capture_f64(tick, 0, stream.get_nanbox_f64());
@@ -1605,7 +1609,7 @@ pub(super) fn uint8array_byte_chunks(raw: usize) -> f64 {
         let grown = out.with_mut_ptr(|arr| crate::array::js_array_push_f64(arr, byte as f64));
         out.set_raw_mut_ptr(grown);
     }
-    box_pointer(out.get_raw_const_ptr())
+    out.with_const_ptr(box_pointer)
 }
 
 fn typed_uint8array_byte_chunks(raw: usize) -> Option<f64> {

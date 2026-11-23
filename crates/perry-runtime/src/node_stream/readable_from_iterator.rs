@@ -58,13 +58,13 @@ pub(super) fn pull(stream: f64) -> bool {
         crate::fn_info!(next_rejected, 1; with_declared(1)),
         1,
     ));
-    js_closure_set_capture_f64(fulfill.get_raw_mut_ptr(), 0, stream.get_nanbox_f64());
-    js_closure_set_capture_f64(reject.get_raw_mut_ptr(), 0, stream.get_nanbox_f64());
-    crate::promise::js_promise_attach_handlers(
-        promise.get_raw_mut_ptr(),
-        fulfill.get_raw_mut_ptr(),
-        reject.get_raw_mut_ptr(),
-    );
+    fulfill.with_mut_ptr(|f| js_closure_set_capture_f64(f, 0, stream.get_nanbox_f64()));
+    reject.with_mut_ptr(|r| js_closure_set_capture_f64(r, 0, stream.get_nanbox_f64()));
+    promise.with_mut_ptr(|p| {
+        fulfill.with_mut_ptr(|f| {
+            reject.with_mut_ptr(|r| crate::promise::js_promise_attach_handlers(p, f, r))
+        })
+    });
     true
 }
 
@@ -118,11 +118,11 @@ extern "C" fn next_fulfilled(
         set_hidden_value(
             stream.get_nanbox_f64(),
             hidden_chunks_key(),
-            box_pointer(chunks.get_raw_const_ptr()),
+            chunks.with_const_ptr(box_pointer),
         );
         initialize_readable_from_buffered_length(
             stream.get_nanbox_f64(),
-            box_pointer(chunks.get_raw_const_ptr()),
+            chunks.with_const_ptr(box_pointer),
         );
     }
     if done && !readable_chunks_nonempty(stream.get_nanbox_f64()) {

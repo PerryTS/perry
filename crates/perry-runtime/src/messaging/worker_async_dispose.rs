@@ -96,11 +96,11 @@ extern "C" fn async_dispose(_closure: *const ClosureHeader, this: JsThis) -> f64
             crate::fn_info!(rejected, 1; with_declared(1), with_flags(crate::closure::FN_NON_CONSTRUCTOR)),
             1, capture.as_ptr(),
         ));
-        promise::js_promise_attach_handlers(
-            promise_ptr(awaited.get_nanbox_f64()),
-            fulfill.get_raw_mut_ptr(),
-            reject.get_raw_mut_ptr(),
-        );
+        fulfill.with_mut_ptr(|f| {
+            reject.with_mut_ptr(|r| {
+                promise::js_promise_attach_handlers(promise_ptr(awaited.get_nanbox_f64()), f, r)
+            })
+        });
     });
     if let Err(reason) = outcome {
         promise::js_promise_reject(promise_ptr(outer.get_nanbox_f64()), reason);
@@ -115,13 +115,13 @@ pub(crate) fn install(prototype: f64) {
         crate::fn_info!(async_dispose, 0; with_declared(0), with_flags(crate::closure::FN_ASYNC | crate::closure::FN_NON_CONSTRUCTOR)),
         0,
     ));
-    object::set_bound_native_closure_name(method.get_raw_mut_ptr(), "[Symbol.asyncDispose]");
+    method.with_mut_ptr(|m| object::set_bound_native_closure_name(m, "[Symbol.asyncDispose]"));
     let symbol = crate::symbol::well_known_symbol("asyncDispose");
     unsafe {
         crate::symbol::define_symbol_data_property(
             prototype.get_nanbox_f64(),
             crate::value::js_nanbox_pointer(symbol as i64),
-            crate::value::js_nanbox_pointer(method.get_raw_mut_ptr::<ClosureHeader>() as i64),
+            method.with_mut_ptr::<ClosureHeader, _>(|m| crate::value::js_nanbox_pointer(m as i64)),
         );
     }
     crate::symbol::set_symbol_property_attrs(

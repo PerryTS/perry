@@ -807,13 +807,14 @@ extern "C" fn ns_readable_iterator_next(
                 1,
             );
             let rejected = scope.root_raw_mut_ptr(rejected);
-            js_closure_set_capture_f64(fulfilled.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
-            js_closure_set_capture_f64(rejected.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
-            return box_pointer(crate::promise::js_promise_then(
-                promise.get_raw_mut_ptr(),
-                fulfilled.get_raw_mut_ptr(),
-                rejected.get_raw_mut_ptr(),
-            ) as *const u8);
+            fulfilled.with_mut_ptr(|f| js_closure_set_capture_f64(f, 0, iterator.get_nanbox_f64()));
+            rejected.with_mut_ptr(|r| js_closure_set_capture_f64(r, 0, iterator.get_nanbox_f64()));
+            let then = promise.with_mut_ptr(|p| {
+                fulfilled.with_mut_ptr(|f| {
+                    rejected.with_mut_ptr(|r| crate::promise::js_promise_then(p, f, r))
+                })
+            });
+            return box_pointer(then as *const u8);
         }
     }
 
@@ -855,9 +856,9 @@ extern "C" fn ns_readable_iterator_next(
     // their own promise (FIFO) — none is overwritten or dropped.
     let promise = crate::promise::js_promise_new();
     let promise = scope.root_raw_mut_ptr(promise);
-    iterator_push_pending(iterator.get_nanbox_f64(), promise.get_raw_mut_ptr());
+    promise.with_mut_ptr(|p| iterator_push_pending(iterator.get_nanbox_f64(), p));
     resume_iterator_source(stream.get_nanbox_f64());
-    box_pointer(promise.get_raw_const_ptr())
+    promise.with_const_ptr(box_pointer)
 }
 
 extern "C" fn ns_readable_iterator_return(
@@ -887,13 +888,17 @@ extern "C" fn ns_readable_iterator_return(
             crate::fn_info!(ns_readable_iterator_return_after_pull, 1; with_declared(1)),
             1,
         ));
-        js_closure_set_capture_f64(continuation.get_raw_mut_ptr(), 0, iterator.get_nanbox_f64());
-        return box_pointer(crate::promise::js_promise_then(
-            crate::value::js_nanbox_get_pointer(last.get_nanbox_f64())
-                as *mut crate::promise::Promise,
-            continuation.get_raw_mut_ptr(),
-            continuation.get_raw_mut_ptr(),
-        ) as *const u8);
+        continuation
+            .with_mut_ptr(|c| js_closure_set_capture_f64(c, 0, iterator.get_nanbox_f64()));
+        let then = continuation.with_mut_ptr(|c| {
+            crate::promise::js_promise_then(
+                crate::value::js_nanbox_get_pointer(last.get_nanbox_f64())
+                    as *mut crate::promise::Promise,
+                c,
+                c,
+            )
+        });
+        return box_pointer(then as *const u8);
     }
     let already_done = iterator_is_done(iterator.get_nanbox_f64());
     let attached = has_truthy_hidden(
