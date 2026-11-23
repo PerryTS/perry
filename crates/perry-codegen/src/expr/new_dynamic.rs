@@ -562,7 +562,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             if let Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } = callee.as_ref()
             {
                 let then_synth = Expr::NewDynamic {

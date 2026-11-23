@@ -250,7 +250,7 @@ fn find_outer_writes_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             find_outer_writes_expr(condition, inner_ids, out);
             find_outer_writes_expr(then_expr, inner_ids, out);

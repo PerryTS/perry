@@ -109,7 +109,7 @@ fn value(e: &Expr, method: &Function, reentered: &mut bool) -> Option<bool> {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             value(condition, method, reentered)?;
             let a = value(then_expr, method, reentered)?;

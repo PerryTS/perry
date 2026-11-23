@@ -130,7 +130,7 @@ pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             rewrite_imul_calls_in_expr(condition, imul_ids);
             rewrite_imul_calls_in_expr(then_expr, imul_ids);

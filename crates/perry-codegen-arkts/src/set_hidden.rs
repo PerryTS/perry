@@ -137,7 +137,7 @@ pub(crate) fn rewrite_set_hidden_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             rewrite_set_hidden_in_expr(condition, bindings);
             rewrite_set_hidden_in_expr(then_expr, bindings);
@@ -269,7 +269,7 @@ pub(crate) fn rewrite_set_hidden_in_closures_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             rewrite_set_hidden_in_closures_in_expr(condition, bindings);
             rewrite_set_hidden_in_closures_in_expr(then_expr, bindings);

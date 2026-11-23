@@ -55,7 +55,7 @@ pub(super) fn selection_bits(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } if pure_test(condition) => Some(bits(then_expr, env)?.max(bits(else_expr, env)?)),
         Expr::MathMin(args) | Expr::MathMax(args) if !args.is_empty() => {
             let mut out = 0;
@@ -90,7 +90,7 @@ pub(super) fn lower_selection(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<St
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             let test = crate::lower_conditional::lower_test(ctx, condition)?;
             let then_b = ctx.new_block("i32sel.then");

@@ -226,7 +226,7 @@ pub(super) fn scalar_loop(
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => expr(ctx, condition, n) && expr(ctx, then_expr, n) && expr(ctx, else_expr, n),
             Expr::Call { callee, args, .. } => {
                 candidate(ctx, callee, args.len()).is_some() && args.iter().all(|a| expr(ctx, a, n))

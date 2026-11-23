@@ -308,7 +308,7 @@ pub(crate) fn emit_widget(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             let folded = evaluate_condition(condition, bindings, &HashMap::new());
             let chosen = match folded {

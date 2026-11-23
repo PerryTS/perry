@@ -1013,7 +1013,7 @@ impl<'a> Build<'a> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 self.expr(cx, condition);
                 let mut v = self.expr(cx, then_expr);

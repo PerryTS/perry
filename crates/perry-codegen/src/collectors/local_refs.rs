@@ -31,7 +31,7 @@ pub fn expr_contains_local_get(e: &perry_hir::Expr, target_id: u32) -> bool {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_contains_local_get(condition, target_id)
                 || expr_contains_local_get(then_expr, target_id)

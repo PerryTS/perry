@@ -1216,7 +1216,7 @@ fn lower_packed_f64_versioned_for_with_protocol(
                     if let perry_hir::Expr::LocalSet(state, _) = &args[4] {
                         lower_expr(
                             ctx,
-                            &perry_hir::Expr::Conditional {
+                            &perry_hir::Expr::Conditional { byte_offset: 0 /*HPOS*/,
                                 condition: Box::new(perry_hir::Expr::Compare { byte_offset: 0 /*HPOS*/,
                                     op: perry_hir::CompareOp::Eq,
                                     left: Box::new(perry_hir::Expr::LocalGet(*state)),
@@ -2788,7 +2788,7 @@ fn masked_window_expression_proof(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             masked_window_expression_proof(ctx, condition, accumulator)?;
             let then_expr = masked_window_expression_proof(ctx, then_expr, accumulator)?;
@@ -2947,7 +2947,7 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             packed_f64_range_loop_pure_expr_collect(
                 condition,
@@ -6332,7 +6332,7 @@ fn expr_is_packed_f64_loop_safe(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_is_packed_f64_loop_safe(ctx, condition, arr_id, counter_id)
                 && expr_is_packed_f64_loop_safe(ctx, then_expr, arr_id, counter_id)
@@ -10110,7 +10110,7 @@ fn expr_array_length_effect(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => first_blocking_loop_effect([walk(condition), walk(then_expr), walk(else_expr)]),
         Expr::PropertyGet { object, .. } => walk(object),
         Expr::PropertySet { .. } => LoopArrayLengthEffect::DynamicPropertyWrite,
@@ -10579,7 +10579,7 @@ pub(crate) fn expr_preserves_array_length(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => walk(condition) && walk(then_expr) && walk(else_expr),
         Expr::PropertyGet { object, .. } => walk(object),
         // A property write can be `arr.length = ...`, can hit a setter, or can

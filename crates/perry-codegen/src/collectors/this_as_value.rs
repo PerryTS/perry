@@ -452,7 +452,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             expr_uses_this_as_value(condition, fields)
                 || expr_uses_this_as_value(then_expr, fields)

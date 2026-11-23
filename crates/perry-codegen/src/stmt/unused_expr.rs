@@ -107,7 +107,7 @@ fn unused_expr_is_pure_nonthrowing(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> b
         perry_hir::Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             unused_expr_is_pure_nonthrowing(ctx, condition)
                 && unused_expr_is_pure_nonthrowing(ctx, then_expr)

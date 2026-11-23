@@ -364,7 +364,7 @@ pub(crate) fn rewrite_view_builder_calls_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             rewrite_view_builder_calls_in_expr(condition, lookup);
             rewrite_view_builder_calls_in_expr(then_expr, lookup);

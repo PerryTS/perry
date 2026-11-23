@@ -384,7 +384,7 @@ fn lower_object_assignment_from_expr(
                     // its value), and an anonymous function takes `name`.
                     let read = Expr::LocalGet(value_id);
                     let assigned = match &assign.value {
-                        Some(init) => Expr::Conditional {
+                        Some(init) => Expr::Conditional { byte_offset: assign.span.lo.0,
                             condition: Box::new(super::pattern_binding::is_strictly_undefined(
                                 read.clone(),
                                 assign.span.lo.0,
@@ -527,11 +527,12 @@ fn object_property_get_expr(
 fn prepare_target_with_default(
     ctx: &mut LoweringContext,
     pat: &ast::Pat,
-) -> Result<(Vec<Stmt>, PreparedTarget, Option<Expr>)> {
+) -> Result<(Vec<Stmt>, PreparedTarget, Option<(Expr, u32)>)> {
     if let ast::Pat::Assign(assign_pat) = pat {
         let (prepare, target, _) = prepare_assignment_target(ctx, &assign_pat.left)?;
         let default_value = lower_expr(ctx, &assign_pat.right)?;
-        return Ok((prepare, target, Some(default_value)));
+        // The default stands at its `target = default` element.
+        return Ok((prepare, target, Some((default_value, assign_pat.span.lo.0))));
     }
     let (prepare, target, default_value) = prepare_assignment_target(ctx, pat)?;
     Ok((prepare, target, default_value))
@@ -540,7 +541,7 @@ fn prepare_target_with_default(
 fn prepare_assignment_target(
     ctx: &mut LoweringContext,
     pat: &ast::Pat,
-) -> Result<(Vec<Stmt>, PreparedTarget, Option<Expr>)> {
+) -> Result<(Vec<Stmt>, PreparedTarget, Option<(Expr, u32)>)> {
     match pat {
         ast::Pat::Ident(ident) => {
             let name = ident.id.sym.to_string();
@@ -636,13 +637,13 @@ fn prepare_assignment_target(
 fn value_with_default(
     _ctx: &mut LoweringContext,
     value: Expr,
-    default_value: Option<Expr>,
+    default_value: Option<(Expr, u32)>,
 ) -> Result<Expr> {
-    let Some(default_value) = default_value else {
+    let Some((default_value, byte_offset)) = default_value else {
         return Ok(value);
     };
 
-    Ok(Expr::Conditional {
+    Ok(Expr::Conditional { byte_offset,
         condition: Box::new(Expr::IsUndefinedOrBareNan(Box::new(value.clone()))),
         then_expr: Box::new(default_value),
         else_expr: Box::new(value),

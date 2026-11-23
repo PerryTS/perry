@@ -1041,7 +1041,7 @@ pub fn inline_calls_in_expr(
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             hoisted.extend(inline_calls_in_expr(
                 condition,

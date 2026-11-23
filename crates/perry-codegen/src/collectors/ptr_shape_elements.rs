@@ -733,7 +733,7 @@ fn record_payload_source(id: u32, init: &Expr) -> Option<(u32, &Expr)> {
     let Expr::Conditional {
         condition,
         then_expr,
-        else_expr,
+        else_expr, ..
     } = value.as_ref()
     else {
         return None;

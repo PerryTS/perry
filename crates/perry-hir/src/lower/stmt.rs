@@ -421,7 +421,7 @@ fn emit_for_of_pattern_binding_indexed(
                         };
                         let init = if let Some(default_expr) = &assign.value {
                             let default_val = lower_expr(ctx, default_expr)?;
-                            Expr::Conditional {
+                            Expr::Conditional { byte_offset: assign.span.lo.0,
                                 condition: Box::new(Expr::Compare { byte_offset: assign.span.lo.0,
                                     op: CompareOp::Ne,
                                     left: Box::new(prop_access.clone()),
@@ -476,7 +476,7 @@ fn emit_for_of_pattern_binding_indexed(
                 init: Some(source),
             });
             let default_val = lower_expr(ctx, &assign_pat.right)?;
-            let with_default = Expr::Conditional {
+            let with_default = Expr::Conditional { byte_offset: assign_pat.span.lo.0,
                 condition: Box::new(Expr::IsUndefinedOrBareNan(Box::new(Expr::LocalGet(tmp_id)))),
                 then_expr: Box::new(default_val),
                 else_expr: Box::new(Expr::LocalGet(tmp_id)),

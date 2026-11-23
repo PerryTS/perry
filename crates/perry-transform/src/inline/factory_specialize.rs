@@ -593,7 +593,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 rewrite_call_init(
                     condition,

@@ -257,7 +257,7 @@ pub(crate) fn copy_lanes(facts: &ElisionFacts, tmpl: u32, e: &Expr) -> Option<Fa
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } if matches!(else_expr.as_ref(), Expr::Undefined) => match condition.as_ref() {
             Expr::LocalGet(p) => (Some(*p), then_expr.as_ref()),
             _ => return None,

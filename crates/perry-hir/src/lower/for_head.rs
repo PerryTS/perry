@@ -240,7 +240,7 @@ pub(crate) fn guard_for_in_body(
     body: Vec<Stmt>,
     byte_offset: u32,
 ) -> Vec<Stmt> {
-    let guard = Expr::Conditional {
+    let guard = Expr::Conditional { byte_offset,
         condition: Box::new(Expr::Compare { byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(obj_id)))),

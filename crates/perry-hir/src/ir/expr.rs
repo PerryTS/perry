@@ -359,6 +359,7 @@ pub enum Expr {
         condition: Box<Expr>,
         then_expr: Box<Expr>,
         else_expr: Box<Expr>,
+        byte_offset: u32,
     },
 
     // Type operations
@@ -3067,6 +3068,7 @@ impl Expr {
             | Expr::NewDynamic { byte_offset, .. }
             | Expr::NewDynamicSpread { byte_offset, .. }
             | Expr::Closure { byte_offset, .. }
+            | Expr::Conditional { byte_offset, .. }
             | Expr::StaticFieldSet { byte_offset, .. }
             | Expr::Logical { byte_offset, .. }
             | Expr::PutValueSet { byte_offset, .. }

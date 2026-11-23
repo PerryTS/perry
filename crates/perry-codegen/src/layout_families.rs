@@ -787,7 +787,7 @@ fn define_call(e: &Expr) -> Option<(DefineCall<'_>, bool)> {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } if matches!(condition.as_ref(), Expr::NamespacePatched(ns) if ns == "Object") => {
             let (call, _) = define_call(else_expr)?;
             // The generic arm must be the same member's call on the same

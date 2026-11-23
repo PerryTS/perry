@@ -145,7 +145,7 @@ fn step_of(c: Local, e: &Expr) -> Option<usize> {
     let Expr::Conditional {
         condition,
         then_expr,
-        else_expr,
+        else_expr, ..
     } = else_expr.as_ref()
     else {
         return None;

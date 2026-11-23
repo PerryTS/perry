@@ -1089,7 +1089,7 @@ fn lift_conditional_with_await_branches(
     if let Expr::Conditional {
         condition,
         then_expr,
-        else_expr,
+        else_expr, ..
     } = owned
     {
         hoisted.push(Stmt::Let {

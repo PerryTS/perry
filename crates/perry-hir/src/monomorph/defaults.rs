@@ -265,7 +265,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             fill_defaults_in_expr(condition, cx);
             fill_defaults_in_expr(then_expr, cx);

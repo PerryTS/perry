@@ -490,7 +490,7 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             walk_expr(condition, in_loop, scan);
             walk_expr(then_expr, in_loop, scan);

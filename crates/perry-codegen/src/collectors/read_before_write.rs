@@ -678,7 +678,7 @@ fn da_expr(e: &Expr, c: &HashSet<u32>, fns: &Fns, da: &mut HashSet<u32>, bad: &m
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             da_expr(condition, c, fns, da, bad);
             let mut t = da.clone();

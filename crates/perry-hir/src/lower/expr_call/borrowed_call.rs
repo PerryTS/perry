@@ -111,7 +111,7 @@ pub(super) fn borrowed_call_folds(
     Ok(Some(Expr::ScopedTemp {
         id,
         value: Box::new(function),
-        body: Box::new(Expr::Conditional {
+        body: Box::new(Expr::Conditional { byte_offset: call.span.lo.0,
             condition: Box::new(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
                 module: "__perry_borrowed_proof".to_string(),
                 class_name: Some("Function.prototype".to_string()),

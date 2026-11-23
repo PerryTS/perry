@@ -119,7 +119,7 @@ fn pick(e: &mut Expr, proven: Arms<'_>) {
     if let Expr::Conditional {
         condition,
         then_expr,
-        else_expr,
+        else_expr, ..
     } = e
     {
         if let Expr::NamespacePatched(ns) = condition.as_ref() {

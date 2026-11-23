@@ -942,7 +942,7 @@ impl Rewriter<'_> {
                 byte_end: 0,
             };
             let v = if rec.track {
-                Expr::Conditional {
+                Expr::Conditional { byte_offset: 0 /*HPOS*/,
                     condition: Box::new(Expr::LocalGet(rec.present)),
                     then_expr: Box::new(read),
                     else_expr: Box::new(self.filler(rec.tmpl, i)),
@@ -1100,7 +1100,7 @@ impl Rewriter<'_> {
                 byte_end: 0,
             };
             let v = if rec.track {
-                Expr::Conditional {
+                Expr::Conditional { byte_offset: 0 /*HPOS*/,
                     condition: Box::new(Expr::LocalGet(rec.present)),
                     then_expr: Box::new(read),
                     else_expr: Box::new(self.filler(rec.tmpl, i)),
@@ -1110,7 +1110,7 @@ impl Rewriter<'_> {
             };
             reads.push(Expr::LocalSet(rec.fields[i], Box::new(v)));
         }
-        list.push(Expr::Conditional {
+        list.push(Expr::Conditional { byte_offset: 0 /*HPOS*/,
             condition: Box::new(Expr::Compare { byte_offset: 0 /*HPOS*/,
                 op: CompareOp::Eq,
                 left: agg(),
@@ -1427,14 +1427,14 @@ impl Rewriter<'_> {
         if let Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } = e
         {
             let mut c = *condition;
             self.cond(&mut c);
             let a = self.assign(u, *then_expr);
             let b = self.assign(u, *else_expr);
-            return vec![Expr::Conditional {
+            return vec![Expr::Conditional { byte_offset: 0 /*HPOS*/,
                 condition: Box::new(c),
                 then_expr: Box::new(seq(a, undefined())),
                 else_expr: Box::new(seq(b, undefined())),
@@ -1464,7 +1464,7 @@ impl Rewriter<'_> {
                 byte_end: 0,
             };
             let v = if rec.track {
-                Expr::Conditional {
+                Expr::Conditional { byte_offset: 0 /*HPOS*/,
                     condition: Box::new(Expr::LocalGet(rec.present)),
                     then_expr: Box::new(read),
                     else_expr: Box::new(self.filler(rec.tmpl, i)),
@@ -1514,7 +1514,7 @@ impl Rewriter<'_> {
             }
         };
         if rec.track {
-            Expr::Conditional {
+            Expr::Conditional { byte_offset: 0 /*HPOS*/,
                 condition: Box::new(Expr::LocalGet(rec.present)),
                 then_expr: Box::new(born),
                 else_expr: Box::new(undefined()),
@@ -1887,7 +1887,7 @@ impl Rewriter<'_> {
                                 byte_offset: *byte_offset,
                                 byte_end: *byte_end,
                             };
-                            Expr::Conditional {
+                            Expr::Conditional { byte_offset: 0 /*HPOS*/,
                                 condition: Box::new(Expr::LocalGet(rec.present)),
                                 then_expr: Box::new(read),
                                 else_expr: Box::new(throw),
@@ -1950,7 +1950,7 @@ impl Rewriter<'_> {
                 let rec = self.recs[&u].clone();
                 let object = Expr::String("object".into());
                 *e = if rec.track {
-                    Expr::Conditional {
+                    Expr::Conditional { byte_offset: 0 /*HPOS*/,
                         condition: Box::new(Expr::LocalGet(rec.present)),
                         then_expr: Box::new(object),
                         else_expr: Box::new(Expr::String("undefined".into())),
@@ -1971,12 +1971,12 @@ impl Rewriter<'_> {
                 let mut r = std::mem::replace(right.as_mut(), undefined());
                 self.expr(&mut r);
                 *e = match op {
-                    LogicalOp::And => Expr::Conditional {
+                    LogicalOp::And => Expr::Conditional { byte_offset: 0 /*HPOS*/,
                         condition: Box::new(present),
                         then_expr: Box::new(r),
                         else_expr: Box::new(undefined()),
                     },
-                    LogicalOp::Or | LogicalOp::Coalesce => Expr::Conditional {
+                    LogicalOp::Or | LogicalOp::Coalesce => Expr::Conditional { byte_offset: 0 /*HPOS*/,
                         condition: Box::new(present),
                         then_expr: Box::new(self.materialize(u)),
                         else_expr: Box::new(r),
@@ -1990,7 +1990,7 @@ impl Rewriter<'_> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 self.cond(condition);
                 self.expr(then_expr);

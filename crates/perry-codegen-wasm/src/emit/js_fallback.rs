@@ -557,7 +557,7 @@ impl WasmModuleEmitter {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 let c = self.emit_js_expr(condition, locals);
                 let t = self.emit_js_expr(then_expr, locals);

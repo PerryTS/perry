@@ -1254,7 +1254,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
         Expr::Conditional {
             condition,
             then_expr,
-            else_expr,
+            else_expr, ..
         } => {
             replace_this_in_expr(condition, this_id);
             replace_this_in_expr(then_expr, this_id);

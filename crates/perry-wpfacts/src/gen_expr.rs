@@ -1226,7 +1226,7 @@ impl<'a> Gen<'a> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } if self.m.ns_pairs && matches!(condition.as_ref(), Expr::NamespacePatched(_)) => {
                 let Expr::NamespacePatched(ns) = condition.as_ref() else {
                     unreachable!()
@@ -1236,7 +1236,7 @@ impl<'a> Gen<'a> {
             Expr::Conditional {
                 condition,
                 then_expr,
-                else_expr,
+                else_expr, ..
             } => {
                 let plan = self.own_guard_plan(condition, crate::gen::Region::Expr(then_expr));
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
