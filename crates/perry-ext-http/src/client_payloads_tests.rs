@@ -234,7 +234,7 @@ fn a_native_closure_capture_names_its_request() {
         unsafe {
             perry_ffi::set_closure_capture_f64(closure, 0, client_payloads::handle_capture(req));
         }
-        let root = scope.root_nanbox_u64(client_payloads::handle_word(0) | closure as u64);
+        let root = scope.root_nanbox_u64(perry_ffi::JsValue::from_object_ptr(closure).bits());
         client_payloads::park_client_exchange(req);
         collect();
         collect();

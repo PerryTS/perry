@@ -1,5 +1,5 @@
 //! A finished client exchange's `ClientRequest` / `IncomingMessage` payloads
-//! belong to the JS values that name them (perry-feather#111).
+//! belong to the JS values that name them.
 //!
 //! Until its exchange ends a request is owned by the native side: the
 //! transport, the agent and the event queue hold its id, and its payload's
@@ -55,7 +55,7 @@ fn address_word(address: i64) -> u64 {
 
 /// The word naming a client payload's id, as the payload is handed to JS.
 pub(crate) fn handle_word(id: Handle) -> u64 {
-    POINTER_TAG | (id as u64 & PTR_MASK)
+    perry_ffi::JsValue::from_handle(id as u64).bits()
 }
 
 /// A native closure capture that names `id` to the trace (a plain Number
