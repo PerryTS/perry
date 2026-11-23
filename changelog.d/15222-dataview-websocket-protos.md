@@ -1,0 +1,1 @@
+`DataView.prototype` lists `getFloat16`/`setFloat16` after the 32-bit integer accessors, and `WebSocket` inherits `EventTarget` (both the prototype and the constructor), matching Node's own-key order and chain.
