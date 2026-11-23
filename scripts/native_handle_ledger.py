@@ -269,6 +269,10 @@ LEDGER_PATH_MOVES = {
     # perry-ext-bun; the Bun transpiler/build registries moved with the file.
     "crates/perry-ext-typescript/src/bun.rs":
         "crates/perry-ext-bun/src/bun.rs",
+    # writeFile's deferred-operation table is recorded under fs/mod.rs's budget,
+    # the module that owns the write_file_input submodule.
+    "crates/perry-runtime/src/fs/stream/write_file_input/deferred.rs":
+        "crates/perry-runtime/src/fs/mod.rs",
 }
 
 
