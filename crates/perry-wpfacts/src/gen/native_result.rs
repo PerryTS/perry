@@ -20,25 +20,6 @@ impl<'a> Gen<'a> {
         })))
     }
 
-    /// The receiver and callee of a receiver-less `NativeMethodCall` the HIR
-    /// folds from a method call on a realm global
-    /// (`perry_hir::folded_call::native_global_method_fold`:
-    /// `performance.mark(name)`): the realm's own global object and the
-    /// function the realm declares as `method` on its chain
-    /// (`Performance.prototype.mark`). `None`: not such a fold, or a realm
-    /// that declares no such function.
-    pub(crate) fn native_global_method(&mut self, module: &str, method: &str) -> Option<(Tok, Tok)> {
-        let global = perry_hir::folded_call::native_global_method_fold(module, method)?;
-        let ns = crate::builtins::ns_by_name(global)?;
-        let identity = self.m.namespace_property(ns, method)?.native?;
-        let recv = self.m.tok(TokKind::Builtin(ns));
-        let f = self.m.tok(TokKind::BuiltinFn(Native::Member {
-            identity,
-            holder: None,
-        }));
-        Some((recv, f))
-    }
-
     pub(crate) fn native_success_result(
         &mut self,
         module: &str,

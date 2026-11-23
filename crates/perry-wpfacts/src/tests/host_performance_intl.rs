@@ -159,14 +159,17 @@ fn mark_detail_still_escapes() {
 }
 
 /// C4: a program write of the global reads what was written: the
-/// program's `mark` runs (it hands its argument to unknown code), not the
-/// declaration.
+/// program's `mark` runs (it hands its argument to unknown code, the
+/// declared `sink`), not the declaration. (A call of an absent global,
+/// `globalThis.zzz(v)`, throws before it hands `v` to anyone: owner
+/// decisions 2026-11-16/18.)
 #[test]
 fn a_written_global_reads_what_was_written() {
     let pf = facts(
         r#"
+        declare function sink(x: any): void;
         class O { x = 1; }
-        (globalThis as any).performance = { mark(v: any) { (globalThis as any).zzz(v); } };
+        (globalThis as any).performance = { mark(v: any) { sink(v); } };
         const o = new O();
         performance.mark(o as any);
         console.log(o.x);

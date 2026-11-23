@@ -353,6 +353,11 @@ pub(crate) unsafe fn attach_perf_hooks_constructor(
                 ),
                 ("timerify", std::ptr::null(), 1, false),
             ];
+            // The two aliases below run through the perf_hooks dispatch
+            // bucket. A program that calls them on the global `performance`
+            // names no perf_hooks module, so codegen installs no bucket for
+            // it: arm it here, with the object whose members need it.
+            crate::object::js_nm_install_perf();
             for (method, thunk, arity, enumerable) in methods {
                 // These two aliases intentionally share the module export's
                 // canonical closure identity; all other prototype methods
