@@ -113,11 +113,16 @@ impl<'a> FuncEmitCtx<'a> {
                 ..
             } => {
                 let method = self.computed_fn_slot(class_name, Some(method_name));
+                let proto_kind = self
+                    .emitter
+                    .class_computed_map
+                    .get(&(class_name.clone(), method_name.clone()))
+                    .map_or(0.0, |&idx| self.emitter.fn_proto_code(idx));
                 self.emit_define_computed(
                     func,
                     class_name,
                     key_expr,
-                    COMPUTED_METHOD,
+                    (COMPUTED_METHOD, proto_kind),
                     *is_static,
                     [method, -1.0],
                 );
@@ -136,7 +141,7 @@ impl<'a> FuncEmitCtx<'a> {
                     func,
                     class_name,
                     key_expr,
-                    COMPUTED_ACCESSOR,
+                    (COMPUTED_ACCESSOR, 0.0),
                     *is_static,
                     [getter, setter],
                 );
@@ -161,13 +166,14 @@ impl<'a> FuncEmitCtx<'a> {
         true
     }
 
-    /// `class_define_computed(class, ctorSlot, key, kind, isStatic, a, b)`.
+    /// `class_define_computed(class, ctorSlot, key, kind, isStatic, a, b, protoKind)`,
+    /// `protoKind` being a method's `fn_proto_code`.
     fn emit_define_computed(
         &mut self,
         func: &mut Function,
         class_name: &str,
         key_expr: &Expr,
-        kind: f64,
+        (kind, proto_kind): (f64, f64),
         is_static: bool,
         slots: [f64; 2],
     ) {
@@ -183,6 +189,7 @@ impl<'a> FuncEmitCtx<'a> {
                 &Expr::Bool(is_static),
                 &Expr::Number(slots[0]),
                 &Expr::Number(slots[1]),
+                &Expr::Number(proto_kind),
             ],
         );
     }

@@ -2091,14 +2091,15 @@ function __classStaticGet(cls, name, receiver, fallback) {
 // A computed member (`RegisterClassComputedMethod` / `...Accessor`). An instance
 // member goes in the template's method table, so every evaluation's instances
 // dispatch it; a static one is a property of the class value.
-function __classDefineComputed(className, ctorIdx, key, kind, isStatic, a, b) {
+function __classDefineComputed(className, ctorIdx, key, kind, isStatic, a, b, protoKind) {
   const evaluation = __classDefiningOf(className);
+  if (protoKind) __methodProtoKinds.set(a, protoKind);
   if (isStatic) {
     const target = evaluation || __classRef(className, ctorIdx);
     if (kind === 0) {
       const fn = function (...args) { return __classMemberCall(a, evaluation, this, args); };
       __classMethodFns.add(fn);
-      __defineHidden(target, key, fn);
+      __defineHidden(target, key, __withKindProto(fn, protoKind));
       return;
     }
     const prev = Object.getOwnPropertyDescriptor(target, key);
@@ -2634,7 +2635,7 @@ const __memDispatch = {
   },
   reflect_apply: (fn, thisArg, args) => {
     const argArr = Array.isArray(args) ? args : args !== null && typeof args === 'object' ? Array.from(args) : [];
-    if (__classMethodFns.has(fn)) return fn.apply(thisArg, argArr);
+    if (__classMethodFns.has(fn)) return Reflect.apply(fn, thisArg, argArr);
     if (typeof fn === 'function') return __callHostFunction(fn, argArr, thisArg);
     return __callClosureMethod(fn, thisArg, argArr);
   },
@@ -2789,8 +2790,8 @@ const __memDispatch = {
     if ((funcIdx | 0) >= 0) __classStaticRun(String(className), __classDefiningTop(), funcIdx | 0);
   },
   class_eval_end: (className) => __classDefining.pop(),
-  class_define_computed: (className, ctorIdx, key, kind, isStatic, a, b) =>
-    __classDefineComputed(String(className), ctorIdx | 0, key, kind | 0, !!isStatic, a | 0, b | 0),
+  class_define_computed: (className, ctorIdx, key, kind, isStatic, a, b, protoKind) =>
+    __classDefineComputed(String(className), ctorIdx | 0, key, kind | 0, !!isStatic, a | 0, b | 0, protoKind | 0),
   // `static [key] = value` of a class declared once.
   class_static_define: (className, ctorIdx, key, value) => {
     const cls = String(className);
@@ -3068,7 +3069,7 @@ const __memDispatch = {
   // Calls what class_super_get read, after the arguments were evaluated. A compiled
   // method gets its arguments as Perry values; a non-callable throws, as in JS.
   class_super_call: (fn, obj, mname, args) => {
-    if (__classMethodFns.has(fn)) return fn.apply(obj, args);
+    if (__classMethodFns.has(fn)) return Reflect.apply(fn, obj, args);
     if (typeof fn === 'function') return __callHostFunction(fn, args, obj);
     if (fn && typeof fn === 'object' && typeof fn.funcIdx !== 'undefined') return __callClosureMethod(fn, obj, args);
     throw new TypeError(`(intermediate value)${mname === undefined ? '' : '.' + String(mname)} is not a function`);
@@ -6302,8 +6303,8 @@ function __jsMethodInvoke(ref, args) {
   }
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
   // A compiled class method takes Perry values, as `reflect_apply` passes them.
-  if (__classMethodFns.has(ref.f)) return ref.f.apply(ref.r, args);
-  return ref.f.apply(ref.r, args.map(__hostCallback));
+  if (__classMethodFns.has(ref.f)) return Reflect.apply(ref.f, ref.r, args);
+  return Reflect.apply(ref.f, ref.r, args.map(__hostCallback));
 }
 
 // Own keys only: `mname in methods` would also find Object.prototype's names.
