@@ -2158,7 +2158,7 @@ pub(crate) unsafe fn key_enum_bits(key: u64, entry: u8) -> u32 {
         if (*p).byte_len == 0 {
             0
         } else {
-            *(p as *const u8).add(std::mem::size_of::<crate::StringHeader>())
+            *crate::string::string_data(p)
         }
     } else {
         return 0;

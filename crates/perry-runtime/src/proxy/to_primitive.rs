@@ -138,7 +138,7 @@ mod tests {
             ));
             let s = crate::builtins::js_string_coerce(proxy.get_nanbox_f64());
             let len = (*s).byte_len as usize;
-            let data = (s as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let data = crate::string::string_data(s);
             assert_eq!(
                 std::slice::from_raw_parts(data, len),
                 b"this=proxy",
