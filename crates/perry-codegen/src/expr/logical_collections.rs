@@ -1382,7 +1382,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::In { property, object }
             if matches!(
                 (property.as_ref(), object.as_ref()),
-                (Expr::IndexGet { element_offset: 0, byte_offset: 0, byte_end: 0, index, object: keys }, Expr::LocalGet(o))
+                (Expr::IndexGet { element_offset: 0, index, object: keys, .. }, Expr::LocalGet(o))
                     if matches!(index.as_ref(), Expr::LocalGet(_))
                         && matches!(keys.as_ref(), Expr::LocalGet(_))
                         && ctx.for_in_facts.contains_key(o)
