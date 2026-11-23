@@ -302,7 +302,10 @@ pub(crate) unsafe fn probe_integer_key(
             let handle = scope.root_raw_mut_ptr(obj);
             let atom = crate::string::js_string_pool_atom(text.as_ptr(), text.len() as u32, hash, 0)
                 as *const crate::StringHeader;
-            (atom, handle.get_raw_mut_ptr::<ObjectHeader>())
+            (
+                atom,
+                handle.with_mut_ptr::<ObjectHeader, _>(|handle_ptr| handle_ptr),
+            )
         }
     };
     let key_bits = crate::value::STRING_TAG | atom as u64;

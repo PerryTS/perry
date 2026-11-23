@@ -20,7 +20,8 @@ fn run(all: bool, s: *const StringHeader, search: f64, replacement: f64) -> *mut
     };
     let scope = RuntimeHandleScope::new();
     let result = scope.root_nanbox_f64(result);
-    crate::string::literal_replace::text(&scope, &result).get_raw_mut_ptr::<StringHeader>()
+    crate::string::literal_replace::text(&scope, &result)
+        .with_mut_ptr::<StringHeader, _>(|text| text)
 }
 macro_rules! string_text {
     ($name:ident, $all:expr) => {

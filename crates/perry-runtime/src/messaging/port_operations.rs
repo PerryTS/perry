@@ -31,11 +31,11 @@ pub fn message_port_object_with_id(id: u64) -> *mut ObjectHeader {
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(object::js_object_alloc(0, 0));
     object::intrinsic_private_add(
-        crate::value::js_nanbox_pointer(object.get_raw_mut_ptr::<ObjectHeader>() as i64),
+        object.with_mut_ptr::<ObjectHeader, _>(|o| crate::value::js_nanbox_pointer(o as i64)),
         "[[MessagePortId]]",
         f64::from_bits(id),
     );
-    object.get_raw_mut_ptr()
+    object.with_mut_ptr(|object| object)
 }
 
 pub fn message_port_id(receiver: f64) -> Option<u64> {

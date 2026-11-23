@@ -420,10 +420,12 @@ fn assertion_error_on(
         };
         let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 8));
         if crate::value::JSValue::from_bits(prototype.get_nanbox_u64()).is_pointer() {
-            super::prototype_chain::object_link_class_default_prototype(
-                obj.get_raw_mut_ptr::<ObjectHeader>() as usize,
-                prototype.get_nanbox_u64(),
-            );
+            obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {
+                super::prototype_chain::object_link_class_default_prototype(
+                    obj_ptr as usize,
+                    prototype.get_nanbox_u64(),
+                )
+            });
         }
         obj
     };
@@ -431,13 +433,15 @@ fn assertion_error_on(
     let define = |key: &str, value: f64, enumerable: bool| {
         let value = scope.root_nanbox_f64(value);
         let key_ptr = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-        super::define_builtin_data_property(
-            obj.get_raw_mut_ptr::<ObjectHeader>(),
-            key_ptr,
-            value.get_nanbox_f64(),
-            key.to_string(),
-            super::PropertyAttrs::new(true, enumerable, true),
-        );
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {
+            super::define_builtin_data_property(
+                obj_ptr,
+                key_ptr,
+                value.get_nanbox_f64(),
+                key.to_string(),
+                super::PropertyAttrs::new(true, enumerable, true),
+            )
+        });
     };
     define("message", string_f64(&message), false);
     define(
@@ -462,7 +466,7 @@ fn assertion_error_on(
         true,
     );
     define("diff", string_f64("simple"), true);
-    crate::value::js_nanbox_pointer(obj.get_raw_mut_ptr::<ObjectHeader>() as i64)
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| crate::value::js_nanbox_pointer(obj_ptr as i64))
 }
 
 /// `AssertionError.prototype.toString`: `${name} [${code}]: ${message}`, read

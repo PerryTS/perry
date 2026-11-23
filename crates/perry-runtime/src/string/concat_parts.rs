@@ -400,7 +400,8 @@ fn concat_parts_rooted_copy<const M: usize>(
                 continue;
             }
             if let Some(handle) = handles[i] {
-                piece_ptrs[i] = string_data(handle.get_raw_const_ptr::<StringHeader>());
+                piece_ptrs[i] =
+                    handle.with_const_ptr::<StringHeader, _>(|handle_ptr| string_data(handle_ptr));
             }
             if piece_ptrs[i].is_null() {
                 write_decimal(cursor, digits[i], len);
@@ -491,7 +492,7 @@ fn concat_parts_general<const M: usize>(
                 continue;
             }
             if let Some(handle) = handles[i] {
-                let piece = handle.get_raw_const_ptr::<StringHeader>();
+                let piece = handle.with_const_ptr::<StringHeader, _>(|handle_ptr| handle_ptr);
                 if is_valid_string_ptr(piece) {
                     ptr::copy_nonoverlapping(string_data(piece), cursor, len);
                     cursor = cursor.add(len);
@@ -553,7 +554,9 @@ pub extern "C" fn js_string_concat_lit_value_box(lit: *const u8, meta: u64, valu
         lit_units(meta),
         STRING_FLAG_WTF8_VALIDATED,
     );
-    let joined = js_string_concat(prefix, value_handle.get_raw_const_ptr::<StringHeader>());
+    let joined = value_handle.with_const_ptr::<StringHeader, _>(|value_handle_ptr| {
+        js_string_concat(prefix, value_handle_ptr)
+    });
     f64::from_bits(crate::value::js_nanbox_string(joined as i64).to_bits())
 }
 

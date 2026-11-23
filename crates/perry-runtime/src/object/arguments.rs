@@ -541,8 +541,10 @@ fn arguments_object_birth(
         fields.add(1).write(pair.as_ref().map_or_else(
             || callee.get_nanbox_f64().to_bits(),
             |pair| {
-                crate::value::js_nanbox_pointer(pair.get_raw_mut_ptr::<ArrayHeader>() as i64)
-                    .to_bits()
+                pair.with_mut_ptr::<ArrayHeader, _>(|pair_ptr| {
+                    crate::value::js_nanbox_pointer(pair_ptr as i64)
+                })
+                .to_bits()
             },
         ));
         fields.add(2).write(values.get_nanbox_f64().to_bits());
@@ -569,7 +571,7 @@ fn arguments_object_birth(
         }
         crate::object::rebuild_object_field_layout(obj, slots);
     });
-    obj.get_raw_mut_ptr::<ObjectHeader>()
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| obj_ptr)
 }
 
 /// #10509: `arguments[key]` in a function whose Arguments object codegen

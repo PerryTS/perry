@@ -411,7 +411,7 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
         crate::meta_obj_runtime_born!(obj),
         super::MetaReason::Overflow,
     );
-    let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
+    let obj = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| owner_ptr);
     let shape = super::shapes::object_shape_descriptor(obj).unwrap();
     let prefix = shape
         .logical_key_count
@@ -421,7 +421,7 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
     let rooted = scope.root_raw_mut_ptr(t);
     let count = shape.logical_key_count;
     for i in 0..count {
-        let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
+        let obj = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| owner_ptr);
         let shape = super::shapes::object_shape_descriptor(obj).unwrap();
         let keys = ObjectKeys::new(shape.keys as usize as *mut ArrayHeader, count);
         let fixed = keys.storage_slot(i);
@@ -433,7 +433,7 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
         // A key whose slot holds the hole (an optional key not written, a
         // tombstone) is a tombstoned entry: no atom, no barrier, no index.
         if adding != Some(i) && slot_holds_hole(obj, fixed, shape.live_inline_slot_count) {
-            let t = rooted.get_raw_mut_ptr::<Table>();
+            let t = rooted.with_mut_ptr::<Table, _>(|rooted_ptr| rooted_ptr);
             *key_at(t, i) = TAG_HOLE;
             *value_at(t, i) = crate::value::INTERNAL_WORD_TAG | fixed as u64;
             *attrs_at(t, i) = attrs as u64 | SLOT_REF;
@@ -449,7 +449,7 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
         } else {
             TAG_HOLE
         };
-        let t = rooted.get_raw_mut_ptr::<Table>();
+        let t = rooted.with_mut_ptr::<Table, _>(|rooted_ptr| rooted_ptr);
         *key_at(t, i) = atom;
         *value_at(t, i) = crate::value::INTERNAL_WORD_TAG | fixed as u64;
         *attrs_at(t, i) = attrs as u64 | SLOT_REF;
@@ -460,7 +460,7 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
     // Slots past the layout's keys hold no key: keyless references to their
     // own slot numbers. The hole is no heap reference, so no barrier and
     // no index entry.
-    let t = rooted.get_raw_mut_ptr::<Table>();
+    let t = rooted.with_mut_ptr::<Table, _>(|rooted_ptr| rooted_ptr);
     // The layout's keys copied above are not decoded: a non-empty prefix may
     // hold a hidden name (no record read here, no per-key decode). The table
     // bits of the copied entries are set once, here.
@@ -473,12 +473,12 @@ pub(crate) unsafe fn ensure_adding(obj: *mut ObjectHeader, adding: Option<u32>) 
         *attrs_at(t, i) = SLOT_REF;
         (*t).length = i + 1;
     }
-    let t = rooted.get_raw_mut_ptr::<Table>();
+    let t = rooted.with_mut_ptr::<Table, _>(|rooted_ptr| rooted_ptr);
     (*t).fixed_prefix = prefix;
     for i in 0..prefix {
         place(t, i);
     }
-    install(owner.get_raw_mut_ptr::<ObjectHeader>(), t);
+    owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| install(owner_ptr, t));
     t
 }
 
@@ -554,12 +554,14 @@ pub(crate) unsafe fn insert(
     let owner = scope.root_raw_mut_ptr(obj);
     let val = scope.root_nanbox_f64(f64::from_bits(value));
     let atom = crate::string::property_atom(key);
-    insert_key_bits(
-        owner.get_raw_mut_ptr::<ObjectHeader>(),
-        crate::JSValue::string_ptr(atom as *mut _).bits(),
-        val.get_nanbox_f64().to_bits(),
-        attrs,
-    )
+    owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+        insert_key_bits(
+            owner_ptr,
+            crate::JSValue::string_ptr(atom as *mut _).bits(),
+            val.get_nanbox_f64().to_bits(),
+            attrs,
+        )
+    })
 }
 
 pub(crate) unsafe fn insert_key_bits(
@@ -773,13 +775,10 @@ pub(crate) unsafe fn append_fixed_ref(obj: *mut ObjectHeader, key: u64, slot: u3
     } else {
         key
     };
-    let entry = insert_key_bits(
-        owner.get_raw_mut_ptr::<ObjectHeader>(),
-        key,
-        crate::value::TAG_UNDEFINED,
-        0,
-    );
-    let t = table(owner.get_raw_mut_ptr::<ObjectHeader>());
+    let entry = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+        insert_key_bits(owner_ptr, key, crate::value::TAG_UNDEFINED, 0)
+    });
+    let t = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| table(owner_ptr));
     *value_at(t, entry) = crate::value::INTERNAL_WORD_TAG | slot as u64;
     *attrs_at(t, entry) |= SLOT_REF;
 }
@@ -1122,10 +1121,12 @@ pub unsafe extern "C" fn perry_overflow_set(
     let key = static_atom_key(atom);
     store_routed(obj, key, f64::from_bits(value));
     if attrs != 0 {
-        let obj = owner.get_raw_mut_ptr::<ObjectHeader>();
+        let obj = owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| owner_ptr);
         let t = ensure(obj);
         if let Some(slot) = find(t, crate::JSValue::string_ptr(key as *mut _).bits()) {
-            set_entry_attrs(owner.get_raw_mut_ptr::<ObjectHeader>(), t, slot, attrs);
+            owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+                set_entry_attrs(owner_ptr, t, slot, attrs)
+            });
         }
     }
 }

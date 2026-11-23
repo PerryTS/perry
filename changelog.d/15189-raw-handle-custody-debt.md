@@ -1,0 +1,1 @@
+Runtime builtins read rooted GC pointers at their use instead of holding raw copies across allocations, which fixes several stale-pointer orderings (console method objects, `Buffer#toJSON`, `MessagePort` birth, class method-value growth, transferred ports in `postMessage`). The raw-handle ratchet drops from 861 to 637 sites.

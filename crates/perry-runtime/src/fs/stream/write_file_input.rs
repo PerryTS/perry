@@ -174,7 +174,8 @@ fn value_has_named_next(value: f64) -> bool {
     let Some(obj) = write_file_object_ptr_from_value(value.get_nanbox_f64()) else {
         return false;
     };
-    let field = crate::object::js_object_get_field_by_name(obj, key.get_raw_const_ptr());
+    let field =
+        key.with_const_ptr(|key_ptr| crate::object::js_object_get_field_by_name(obj, key_ptr));
     is_callable_write_value(f64::from_bits(field.bits()))
 }
 
@@ -271,10 +272,14 @@ fn iterator_result_value_done(result: f64) -> Option<(f64, bool)> {
     let done_key = scope.root_string_ptr(js_string_from_bytes(b"done".as_ptr(), 4));
     let value_key = scope.root_string_ptr(js_string_from_bytes(b"value".as_ptr(), 5));
     let obj = write_file_object_ptr_from_value(result.get_nanbox_f64())?;
-    let done = crate::object::js_object_get_field_by_name(obj, done_key.get_raw_const_ptr());
+    let done = done_key.with_const_ptr(|done_key_ptr| {
+        crate::object::js_object_get_field_by_name(obj, done_key_ptr)
+    });
     let done = scope.root_nanbox_f64(f64::from_bits(done.bits()));
     let obj = write_file_object_ptr_from_value(result.get_nanbox_f64())?;
-    let value = crate::object::js_object_get_field_by_name(obj, value_key.get_raw_const_ptr());
+    let value = value_key.with_const_ptr(|value_key_ptr| {
+        crate::object::js_object_get_field_by_name(obj, value_key_ptr)
+    });
     Some((
         f64::from_bits(value.bits()),
         crate::value::js_is_truthy(done.get_nanbox_f64()) != 0,

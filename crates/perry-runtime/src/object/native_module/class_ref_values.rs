@@ -366,9 +366,9 @@ pub(crate) fn class_method_declaration_value_bytes(
         });
     }
     if intrinsic_name {
-        return crate::value::js_nanbox_pointer(
-            f.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-        );
+        return f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|f_ptr| {
+            crate::value::js_nanbox_pointer(f_ptr as i64)
+        });
     }
     let name_value = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
     let name_value = scope.root_string_ptr(name_value);
@@ -383,7 +383,9 @@ pub(crate) fn class_method_declaration_value_bytes(
             crate::object::PropertyAttrs::new(false, false, true),
         );
     });
-    crate::value::js_nanbox_pointer(f.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64)
+    f.with_mut_ptr::<crate::closure::ClosureHeader, _>(|f_ptr| {
+        crate::value::js_nanbox_pointer(f_ptr as i64)
+    })
 }
 
 pub(crate) fn class_method_entry_declaration_value(class_id: u32, entry: usize, home: f64) -> f64 {

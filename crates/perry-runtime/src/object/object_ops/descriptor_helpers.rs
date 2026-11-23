@@ -346,8 +346,12 @@ pub(crate) unsafe fn decode_property_descriptor<'scope>(
                 name.as_ptr(),
                 name.len() as u32,
             ));
-            let key_value =
-                || f64::from_bits(crate::JSValue::string_ptr(key.get_raw_mut_ptr()).bits());
+            let key_value = || {
+                f64::from_bits(
+                    key.with_mut_ptr(|key_ptr| crate::JSValue::string_ptr(key_ptr))
+                        .bits(),
+                )
+            };
             if crate::object::js_object_has_property(descriptor.get_nanbox_f64(), key_value())
                 .to_bits()
                 != crate::value::TAG_TRUE
@@ -431,8 +435,8 @@ pub(crate) unsafe fn decode_own_descriptor_result<'scope>(
             name.len() as u32,
         ));
         let obj = extract_obj_ptr(record.get_nanbox_f64());
-        if own_key_present(obj, key.get_raw_const_ptr()) {
-            let value = js_object_get_field_by_name(obj, key.get_raw_const_ptr());
+        if key.with_const_ptr(|key_ptr| own_key_present(obj, key_ptr)) {
+            let value = key.with_const_ptr(|key_ptr| js_object_get_field_by_name(obj, key_ptr));
             view.present[index] = true;
             view.handles[index] = Some(scope.root_nanbox_u64(
                 if matches!(index, DESC_ENUMERABLE | DESC_CONFIGURABLE | DESC_WRITABLE) {
@@ -470,14 +474,20 @@ pub(crate) unsafe fn descriptor_object_from_view(
             ));
             // FromPropertyDescriptor uses CreateDataProperty, so inherited
             // setters must not observe or consume the fresh bag fields.
-            define_property_force_store_value(
-                object.get_raw_mut_ptr(),
-                key.get_raw_const_ptr(),
-                f64::from_bits(descriptor.read_named(name).bits()),
-            );
+            object.with_mut_ptr(|object_ptr| {
+                key.with_const_ptr(|key_ptr| {
+                    define_property_force_store_value(
+                        object_ptr,
+                        key_ptr,
+                        f64::from_bits(descriptor.read_named(name).bits()),
+                    )
+                })
+            });
         }
     }
-    crate::value::js_nanbox_pointer(object.get_raw_mut_ptr::<ObjectHeader>() as i64)
+    object.with_mut_ptr::<ObjectHeader, _>(|object_ptr| {
+        crate::value::js_nanbox_pointer(object_ptr as i64)
+    })
 }
 
 #[inline(always)]

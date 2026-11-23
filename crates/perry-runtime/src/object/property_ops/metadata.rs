@@ -150,10 +150,14 @@ fn metadata_keys_for(target: f64, property_key: f64, inherited: bool) -> f64 {
             key.as_ptr(),
             key.len() as u32,
         ));
-        let next = crate::array::js_array_push_f64(array.get_raw_mut_ptr(), key.get_nanbox_f64());
+        let next = array.with_mut_ptr(|array_ptr| {
+            crate::array::js_array_push_f64(array_ptr, key.get_nanbox_f64())
+        });
         array.set_raw_mut_ptr(next);
     }
-    crate::value::js_nanbox_pointer(array.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64)
+    array.with_mut_ptr::<crate::array::ArrayHeader, _>(|array_ptr| {
+        crate::value::js_nanbox_pointer(array_ptr as i64)
+    })
 }
 
 /// Map a metadata `target` to a GC-stable key, folding a class's prototype onto

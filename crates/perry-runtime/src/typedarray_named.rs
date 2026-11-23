@@ -269,11 +269,13 @@ pub(crate) unsafe fn get(receiver: u64, key: *const crate::StringHeader) -> Opti
     };
     let addr = JSValue::from_bits(receiver.get_nanbox_f64().to_bits()).as_pointer::<u8>() as usize;
     Some(
-        crate::object::prototype_chain::resolve_inherited_field_from_prototype(
-            addr,
-            proto.to_bits(),
-            key.get_raw_const_ptr(),
-        )
+        key.with_const_ptr(|key_ptr| {
+            crate::object::prototype_chain::resolve_inherited_field_from_prototype(
+                addr,
+                proto.to_bits(),
+                key_ptr,
+            )
+        })
         .map(|v| f64::from_bits(v.bits()))
         .unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED)),
     )

@@ -559,7 +559,9 @@ pub(crate) unsafe fn try_emit_shape_element(
         // `elem_ptr` is the pre-collection address and there is no reason for a
         // second name for this object to exist (#7268).
         if let Some(to_json_val) =
-            object_get_to_json(elem_handle.get_raw_const_ptr::<crate::ObjectHeader>() as *const u8)
+            elem_handle.with_const_ptr::<crate::ObjectHeader, _>(|elem_handle_ptr| {
+                object_get_to_json(elem_handle_ptr as *const u8)
+            })
         {
             arm_to_json_result_guard(to_json_val);
             stringify_value_depth(to_json_val, TYPE_UNKNOWN, buf, depth + 1);

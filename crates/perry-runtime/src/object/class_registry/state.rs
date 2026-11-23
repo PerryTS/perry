@@ -534,23 +534,26 @@ pub(crate) fn class_declaration_value_store_known(
             let mut arr = crate::array::js_array_alloc(count as u32);
             let arr_h = scope.root_raw_mut_ptr(arr);
             for _ in 0..count {
-                arr = crate::array::js_array_push_f64(
-                    arr_h.get_raw_mut_ptr::<crate::ArrayHeader>(),
-                    f64::from_bits(crate::value::TAG_UNDEFINED),
-                );
+                arr = arr_h.with_mut_ptr::<crate::ArrayHeader, _>(|arr_h_ptr| {
+                    crate::array::js_array_push_f64(
+                        arr_h_ptr,
+                        f64::from_bits(crate::value::TAG_UNDEFINED),
+                    )
+                });
                 arr_h.set_raw_mut_ptr(arr);
             }
-            let arr = arr_h.get_raw_mut_ptr::<crate::ArrayHeader>();
+            let arr = arr_h
+                .with_mut_ptr::<crate::ArrayHeader, _>(|arr| crate::value::js_nanbox_pointer(arr as i64));
             // SAFETY: as above.
             unsafe {
                 crate::closure::props::state_internal_set(
                     holder,
                     // SAFETY: ASCII.
                     std::str::from_utf8_unchecked(METHOD_VALUES_KEY),
-                    crate::value::js_nanbox_pointer(arr as i64),
+                    arr,
                 )
             };
-            arr_h.get_raw_mut_ptr::<crate::ArrayHeader>()
+            arr_h.with_mut_ptr::<crate::ArrayHeader, _>(|arr| arr)
         }
     };
     // A declaration registered again with more members (unit tests extend a
@@ -558,25 +561,32 @@ pub(crate) fn class_declaration_value_store_known(
     let mut values = values;
     if crate::array::js_array_length(values) as usize <= index {
         let arr_h = scope.root_raw_mut_ptr(values);
-        while crate::array::js_array_length(arr_h.get_raw_mut_ptr::<crate::ArrayHeader>()) as usize
+        while arr_h.with_mut_ptr::<crate::ArrayHeader, _>(|arr_h_ptr| {
+            crate::array::js_array_length(arr_h_ptr)
+        }) as usize
             <= index
         {
-            let grown = crate::array::js_array_push_f64(
-                arr_h.get_raw_mut_ptr::<crate::ArrayHeader>(),
-                f64::from_bits(crate::value::TAG_UNDEFINED),
-            );
+            let grown = arr_h.with_mut_ptr::<crate::ArrayHeader, _>(|arr_h_ptr| {
+                crate::array::js_array_push_f64(
+                    arr_h_ptr,
+                    f64::from_bits(crate::value::TAG_UNDEFINED),
+                )
+            });
             arr_h.set_raw_mut_ptr(grown);
         }
-        values = arr_h.get_raw_mut_ptr::<crate::ArrayHeader>();
+        let grown = arr_h
+            .with_mut_ptr::<crate::ArrayHeader, _>(|arr| crate::value::js_nanbox_pointer(arr as i64));
         // SAFETY: as above.
         unsafe {
             crate::closure::props::state_internal_set(
                 holder,
                 // SAFETY: ASCII.
                 std::str::from_utf8_unchecked(METHOD_VALUES_KEY),
-                crate::value::js_nanbox_pointer(values as i64),
+                grown,
             )
         };
+        // The install can allocate: read the array after it.
+        values = arr_h.with_mut_ptr::<crate::ArrayHeader, _>(|arr| arr);
     }
     crate::array::js_array_set_f64(values, index as u32, value.get_nanbox_f64());
 }
@@ -945,8 +955,7 @@ pub(crate) fn class_decl_prototype_object_root_store(class_id: u32, proto_ptr: *
     prototype.with_mut_ptr::<ObjectHeader, _>(|proto| unsafe {
         crate::object::proto_validity::mark_object_as_prototype(proto as usize)
     });
-    let proto_ptr = prototype.get_raw_mut_ptr::<ObjectHeader>();
-    link_decl_prototype_object(class_id, proto_ptr);
+    prototype.with_mut_ptr::<ObjectHeader, _>(|proto| link_decl_prototype_object(class_id, proto));
 }
 
 /// Publish the birth's rooted holder before installing its members: building
@@ -1641,7 +1650,7 @@ pub(crate) fn class_decl_prototype_value_selected(class_id: u32) -> f64 {
         class_id,
         members + 1,
     ));
-    if proto.get_raw_mut_ptr::<ObjectHeader>().is_null() {
+    if proto.with_mut_ptr::<ObjectHeader, _>(|p| p.is_null()) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     // Materializing a declared class's prototype object is not prototype

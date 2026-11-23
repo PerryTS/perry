@@ -549,20 +549,26 @@ pub(super) unsafe fn family_add(obj: *mut ObjectHeader, key_bits: u64, add: Fami
             }
             // The overflow first (its tombstone for this hole), then the
             // dynamic writer appends the key with a reference to its slot.
-            super::super::overflow::ensure(owner.get_raw_mut_ptr::<ObjectHeader>());
-            super::super::overflow::store_routed(
-                owner.get_raw_mut_ptr::<ObjectHeader>(),
-                atom_ptr(),
-                f64::from_bits(val.get_nanbox_u64()),
-            );
+            owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+                super::super::overflow::ensure(owner_ptr)
+            });
+            owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+                super::super::overflow::store_routed(
+                    owner_ptr,
+                    atom_ptr(),
+                    f64::from_bits(val.get_nanbox_u64()),
+                )
+            });
         }
         FamilyAdd::Other => {
             FAMILY_DIAG.other.fetch_add(1, Relaxed);
-            super::super::overflow::store_unfixed_routed(
-                owner.get_raw_mut_ptr::<ObjectHeader>(),
-                atom_ptr(),
-                f64::from_bits(val.get_nanbox_u64()),
-            );
+            owner.with_mut_ptr::<ObjectHeader, _>(|owner_ptr| {
+                super::super::overflow::store_unfixed_routed(
+                    owner_ptr,
+                    atom_ptr(),
+                    f64::from_bits(val.get_nanbox_u64()),
+                )
+            });
         }
     }
 }

@@ -67,8 +67,9 @@ pub(crate) fn set_field_by_name_object_tail(
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let key_handle = scope.root_string_ptr(key);
     let value_handle = scope.root_nanbox_f64(value);
-    let mut obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-    let mut key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+    let mut obj = obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj_handle_ptr| obj_handle_ptr);
+    let mut key =
+        key_handle.with_const_ptr::<crate::StringHeader, _>(|key_handle_ptr| key_handle_ptr);
     let mut value = value_handle.get_nanbox_f64();
     // Safety: obj is a valid heap pointer (> 0x10000) at this point
     unsafe {
@@ -257,7 +258,9 @@ pub(crate) fn set_field_by_name_object_tail(
             key
         };
         let interned_key_handle = scope.root_string_ptr(interned_key);
-        interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+        interned_key = interned_key_handle.with_const_ptr::<crate::StringHeader, _>(
+            |interned_key_handle_ptr| interned_key_handle_ptr,
+        );
 
         // A shape-keyed store verdict proves that the full interception vet
         // (class setters, native probes, actual prototype chain) found no
@@ -413,7 +416,7 @@ pub(crate) fn set_field_by_name_object_tail(
             && crate::object::url_layout::is_url_object_shape(obj)
         {
             let key_str = key_to_str_for_diag(key);
-            let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+            let obj = obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj_handle_ptr| obj_handle_ptr);
             let value = value_handle.get_nanbox_f64();
             match key_str.as_str() {
                 "origin" | "searchParams" => return,
@@ -482,10 +485,13 @@ pub(crate) fn set_field_by_name_object_tail(
                 }
                 return;
             }
-            obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-            key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+            obj = obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj_handle_ptr| obj_handle_ptr);
+            key = key_handle
+                .with_const_ptr::<crate::StringHeader, _>(|key_handle_ptr| key_handle_ptr);
             value = value_handle.get_nanbox_f64();
-            interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+            interned_key = interned_key_handle.with_const_ptr::<crate::StringHeader, _>(
+                |interned_key_handle_ptr| interned_key_handle_ptr,
+            );
         }
         let gc_header = crate::gc::header_from_trusted_user_ptr(obj.cast());
 
@@ -511,10 +517,13 @@ pub(crate) fn set_field_by_name_object_tail(
         // obj/key/value. Rationale in changelog.d/7381-*, 7383-*.
         macro_rules! refresh_roots_after_alloc {
             () => {{
-                obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
-                key = key_handle.get_raw_const_ptr::<crate::StringHeader>();
+                obj = obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj_handle_ptr| obj_handle_ptr);
+                key = key_handle
+                    .with_const_ptr::<crate::StringHeader, _>(|key_handle_ptr| key_handle_ptr);
                 value = value_handle.get_nanbox_f64();
-                interned_key = interned_key_handle.get_raw_const_ptr::<crate::StringHeader>();
+                interned_key = interned_key_handle.with_const_ptr::<crate::StringHeader, _>(
+                    |interned_key_handle_ptr| interned_key_handle_ptr,
+                );
             }};
         }
 

@@ -895,7 +895,7 @@ pub(crate) unsafe fn primitive_builtin_prototype_property(
         let key_root = scope.root_string_ptr(key);
         let receiver_root = scope.root_nanbox_f64(receiver);
         super::super::js_get_global_this();
-        key = key_root.get_raw_const_ptr::<crate::StringHeader>();
+        key = key_root.with_const_ptr::<crate::StringHeader, _>(|key_root_ptr| key_root_ptr);
         receiver = receiver_root.get_nanbox_f64();
         proto_addr = crate::array::primitive_wrapper_prototype_addr(receiver);
     }

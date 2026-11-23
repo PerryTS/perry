@@ -305,20 +305,18 @@ fn async_hooks_static_method_value(
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
     let closure_handle = scope.root_raw_mut_ptr(closure);
-    set_bound_native_closure_name(
-        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>(),
-        name,
-    );
-    set_builtin_closure_length(
-        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-        length,
-    );
-    set_builtin_closure_non_constructable(
-        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-    );
-    crate::value::js_nanbox_pointer(
-        closure_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-    )
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_handle_ptr| {
+        set_bound_native_closure_name(closure_handle_ptr, name)
+    });
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_handle_ptr| {
+        set_builtin_closure_length(closure_handle_ptr as usize, length)
+    });
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_handle_ptr| {
+        set_builtin_closure_non_constructable(closure_handle_ptr as usize)
+    });
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_handle_ptr| {
+        crate::value::js_nanbox_pointer(closure_handle_ptr as i64)
+    })
 }
 
 extern "C" fn fs_namespace_descriptor_getter_thunk(
@@ -878,20 +876,24 @@ fn attach_assertion_error_prototype(constructor_value: f64) {
         return;
     }
     if JSValue::from_bits(error_prototype.get_nanbox_f64().to_bits()).is_pointer() {
-        crate::object::prototype_chain::object_set_static_prototype(
-            proto.get_raw_mut_ptr::<ObjectHeader>() as usize,
-            error_prototype.get_nanbox_u64(),
-        );
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto_ptr| {
+            crate::object::prototype_chain::object_set_static_prototype(
+                proto_ptr as usize,
+                error_prototype.get_nanbox_u64(),
+            )
+        });
     }
     let key = "constructor";
     let constructor_key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    super::define_builtin_data_property(
-        proto.get_raw_mut_ptr::<ObjectHeader>(),
-        constructor_key,
-        constructor.get_nanbox_f64(),
-        key.to_string(),
-        super::PropertyAttrs::new(true, false, true),
-    );
+    proto.with_mut_ptr::<ObjectHeader, _>(|proto_ptr| {
+        super::define_builtin_data_property(
+            proto_ptr,
+            constructor_key,
+            constructor.get_nanbox_f64(),
+            key.to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        )
+    });
     // node: `AssertionError.prototype.toString()` is
     // `${this.name} [${this.code}]: ${this.message}`.
     let to_string = scope.root_nanbox_f64(async_hooks_static_method_value(
@@ -901,15 +903,18 @@ fn attach_assertion_error_prototype(constructor_value: f64) {
     ));
     let key = "toString";
     let to_string_key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    super::define_builtin_data_property(
-        proto.get_raw_mut_ptr::<ObjectHeader>(),
-        to_string_key,
-        to_string.get_nanbox_f64(),
-        key.to_string(),
-        super::PropertyAttrs::new(true, false, true),
-    );
-    let proto_value =
-        crate::value::js_nanbox_pointer(proto.get_raw_mut_ptr::<ObjectHeader>() as i64);
+    proto.with_mut_ptr::<ObjectHeader, _>(|proto_ptr| {
+        super::define_builtin_data_property(
+            proto_ptr,
+            to_string_key,
+            to_string.get_nanbox_f64(),
+            key.to_string(),
+            super::PropertyAttrs::new(true, false, true),
+        )
+    });
+    let proto_value = proto.with_mut_ptr::<ObjectHeader, _>(|proto_ptr| {
+        crate::value::js_nanbox_pointer(proto_ptr as i64)
+    });
     let closure = JSValue::from_bits(constructor.get_nanbox_f64().to_bits())
         .as_pointer::<crate::closure::ClosureHeader>() as usize;
     crate::closure::closure_set_dynamic_prop(closure, "prototype", proto_value);
@@ -1300,26 +1305,34 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
         scope.root_raw_mut_ptr(constructor as *mut crate::closure::ClosureHeader);
     let prototype = crate::realm_decl! { birth js_object_alloc(0, 0); realm { "node:tls.TLSSocket.prototype", extends = "node:net.Socket.prototype", members = { constructor; setKeyCert; getSharedSigalgs; getX509Certificate; getPeerX509Certificate; }; } };
     if prototype.is_null() {
-        return crate::value::js_nanbox_pointer(
-            constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
+        return constructor_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(
+            |constructor_handle_ptr| crate::value::js_nanbox_pointer(constructor_handle_ptr as i64),
         );
     }
     let prototype_handle = scope.root_raw_mut_ptr(prototype);
     let constructor_key =
         crate::string::js_string_from_bytes(b"constructor".as_ptr(), "constructor".len() as u32);
     let constructor_key_handle = scope.root_string_ptr(constructor_key);
-    js_object_set_field_by_name(
-        prototype_handle.get_raw_mut_ptr(),
-        constructor_key_handle.get_raw_mut_ptr(),
-        crate::value::js_nanbox_pointer(
-            constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-        ),
-    );
-    super::super::set_builtin_property_attrs(
-        prototype_handle.get_raw_mut_ptr::<ObjectHeader>() as usize,
-        "constructor".to_string(),
-        super::super::PropertyAttrs::new(true, false, true),
-    );
+    prototype_handle.with_mut_ptr(|prototype_handle_ptr| {
+        constructor_key_handle.with_mut_ptr(|constructor_key_handle_ptr| {
+            js_object_set_field_by_name(
+                prototype_handle_ptr,
+                constructor_key_handle_ptr,
+                constructor_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(
+                    |constructor_handle_ptr| {
+                        crate::value::js_nanbox_pointer(constructor_handle_ptr as i64)
+                    },
+                ),
+            )
+        })
+    });
+    prototype_handle.with_mut_ptr::<ObjectHeader, _>(|prototype_handle_ptr| {
+        super::super::set_builtin_property_attrs(
+            prototype_handle_ptr as usize,
+            "constructor".to_string(),
+            super::super::PropertyAttrs::new(true, false, true),
+        )
+    });
 
     let thunk = crate::fn_info!(#[realm(realm_decl! { "node:tls.TLSSocket.prototype.getPeerX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getSharedSigalgs", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.getX509Certificate", capture = property_key, constructible = true; "node:tls.TLSSocket.prototype.setKeyCert", capture = property_key, constructible = true, spec = {length = 1}, emit = metadata(realm_tls_setkey_public); })] export crate::object::native_module::callable_exports::tls_prototype_method_thunk, 1; with_rest(0));
     for &(name, length) in methods {
@@ -1328,61 +1341,77 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
             continue;
         }
         let method_handle = scope.root_raw_mut_ptr(method);
-        crate::closure::closure_set_capture_word(
-            method_handle.get_raw_mut_ptr(),
-            0,
-            name.as_ptr() as i64,
-        );
-        crate::closure::closure_set_capture_word(
-            method_handle.get_raw_mut_ptr(),
-            1,
-            name.len() as i64,
-        );
+        method_handle.with_mut_ptr(|method_handle_ptr| {
+            crate::closure::closure_set_capture_word(method_handle_ptr, 0, name.as_ptr() as i64)
+        });
+        method_handle.with_mut_ptr(|method_handle_ptr| {
+            crate::closure::closure_set_capture_word(method_handle_ptr, 1, name.len() as i64)
+        });
         let name_string = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
         let name_handle = scope.root_string_ptr(name_string);
-        crate::closure::closure_define_dynamic_prop(
-            method_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-            "name",
-            f64::from_bits(JSValue::string_ptr(name_handle.get_raw_mut_ptr()).bits()),
-        );
-        super::super::set_builtin_property_attrs(
-            method_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-            "name".to_string(),
-            super::super::PropertyAttrs::new(false, false, true),
-        );
-        set_builtin_closure_length(
-            method_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-            length,
-        );
-        js_object_set_field_by_name(
-            prototype_handle.get_raw_mut_ptr(),
-            name_handle.get_raw_mut_ptr(),
-            crate::value::js_nanbox_pointer(
-                method_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-            ),
-        );
-        super::super::set_builtin_property_attrs(
-            prototype_handle.get_raw_mut_ptr::<ObjectHeader>() as usize,
-            name.to_string(),
-            super::super::PropertyAttrs::new(true, false, true),
-        );
+        method_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|method_handle_ptr| {
+            crate::closure::closure_define_dynamic_prop(
+                method_handle_ptr as usize,
+                "name",
+                f64::from_bits(
+                    name_handle
+                        .with_mut_ptr(|name_handle_ptr| JSValue::string_ptr(name_handle_ptr))
+                        .bits(),
+                ),
+            )
+        });
+        method_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|method_handle_ptr| {
+            super::super::set_builtin_property_attrs(
+                method_handle_ptr as usize,
+                "name".to_string(),
+                super::super::PropertyAttrs::new(false, false, true),
+            )
+        });
+        method_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|method_handle_ptr| {
+            set_builtin_closure_length(method_handle_ptr as usize, length)
+        });
+        prototype_handle.with_mut_ptr(|prototype_handle_ptr| {
+            name_handle.with_mut_ptr(|name_handle_ptr| {
+                js_object_set_field_by_name(
+                    prototype_handle_ptr,
+                    name_handle_ptr,
+                    method_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(
+                        |method_handle_ptr| {
+                            crate::value::js_nanbox_pointer(method_handle_ptr as i64)
+                        },
+                    ),
+                )
+            })
+        });
+        prototype_handle.with_mut_ptr::<ObjectHeader, _>(|prototype_handle_ptr| {
+            super::super::set_builtin_property_attrs(
+                prototype_handle_ptr as usize,
+                name.to_string(),
+                super::super::PropertyAttrs::new(true, false, true),
+            )
+        });
     }
 
-    crate::closure::closure_set_dynamic_prop(
-        constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-        "prototype",
-        crate::value::js_nanbox_pointer(prototype_handle.get_raw_mut_ptr::<ObjectHeader>() as i64),
-    );
+    constructor_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|constructor_handle_ptr| {
+        crate::closure::closure_set_dynamic_prop(
+            constructor_handle_ptr as usize,
+            "prototype",
+            prototype_handle.with_mut_ptr::<ObjectHeader, _>(|prototype_handle_ptr| {
+                crate::value::js_nanbox_pointer(prototype_handle_ptr as i64)
+            }),
+        )
+    });
     let parent_kind = match constructor_name {
         "Server" => TLS_PARENT_EVENT_EMITTER,
         "TLSSocket" => TLS_PARENT_DUPLEX,
         _ => 0,
     };
     if parent_kind != 0 {
-        let bits = crate::value::js_nanbox_pointer(
-            prototype_handle.get_raw_mut_ptr::<ObjectHeader>() as i64,
-        )
-        .to_bits();
+        let bits = prototype_handle
+            .with_mut_ptr::<ObjectHeader, _>(|prototype_handle_ptr| {
+                crate::value::js_nanbox_pointer(prototype_handle_ptr as i64)
+            })
+            .to_bits();
         crate::gc::runtime_write_barrier_root_nanbox(bits);
         TLS_DERIVED_PROTOTYPES.with(|prototypes| {
             let mut prototypes = prototypes.borrow_mut();
@@ -1391,14 +1420,16 @@ fn attach_tls_constructor_prototype(constructor_value: f64, constructor_name: &s
             }
         });
     }
-    super::super::set_builtin_property_attrs(
-        constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-        "prototype".to_string(),
-        super::super::PropertyAttrs::new(true, false, false),
-    );
-    crate::value::js_nanbox_pointer(
-        constructor_handle.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-    )
+    constructor_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|constructor_handle_ptr| {
+        super::super::set_builtin_property_attrs(
+            constructor_handle_ptr as usize,
+            "prototype".to_string(),
+            super::super::PropertyAttrs::new(true, false, false),
+        )
+    });
+    constructor_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|constructor_handle_ptr| {
+        crate::value::js_nanbox_pointer(constructor_handle_ptr as i64)
+    })
 }
 
 pub(crate) fn tls_constructor_prototype_is_instance_of(value: f64, parent_name: &str) -> bool {

@@ -69,20 +69,18 @@ pub(super) fn decode(owner: f64, value: &Value, payload: &Value, stream: bool) -
             (b"dispose".as_slice(), crate::fn_info!(dispose, 0)),
         ] {
             let method = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 1));
-            crate::closure::js_closure_set_capture_f64(
-                method.get_raw_mut_ptr(),
-                0,
-                wrapper.get_nanbox_f64(),
-            );
-            crate::object::set_builtin_closure_non_constructable(
-                method.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-            );
+            method.with_mut_ptr(|method_ptr| {
+                crate::closure::js_closure_set_capture_f64(method_ptr, 0, wrapper.get_nanbox_f64())
+            });
+            method.with_mut_ptr::<crate::closure::ClosureHeader, _>(|method_ptr| {
+                crate::object::set_builtin_closure_non_constructable(method_ptr as usize)
+            });
             set_field(
                 wrapper.get_nanbox_f64(),
                 name,
-                crate::value::js_nanbox_pointer(
-                    method.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-                ),
+                method.with_mut_ptr::<crate::closure::ClosureHeader, _>(|method_ptr| {
+                    crate::value::js_nanbox_pointer(method_ptr as i64)
+                }),
             );
         }
         if stream {

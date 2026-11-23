@@ -246,10 +246,12 @@ pub extern "C" fn js_value_length_property_key_f64(
         return length;
     }
     let bits = receiver.get_nanbox_f64().to_bits();
-    crate::object::js_object_get_field_by_name_f64(
-        bits as *const crate::object::ObjectHeader,
-        key.get_raw_const_ptr(),
-    )
+    key.with_const_ptr(|key_ptr| {
+        crate::object::js_object_get_field_by_name_f64(
+            bits as *const crate::object::ObjectHeader,
+            key_ptr,
+        )
+    })
 }
 
 /// `length` of a lazy `JSON.parse` array (`GC_TYPE_LAZY_ARRAY`). It is an

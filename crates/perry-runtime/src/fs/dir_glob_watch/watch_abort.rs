@@ -61,7 +61,9 @@ pub(super) fn abort_promise_watcher(id: usize, reason: f64) -> Vec<*mut crate::p
     remove_abort_listener(signal.get_nanbox_f64(), listener.get_nanbox_f64());
     pending
         .iter()
-        .map(|promise| promise.get_raw_mut_ptr::<crate::promise::Promise>())
+        .map(|promise| {
+            promise.with_mut_ptr::<crate::promise::Promise, _>(|promise_ptr| promise_ptr)
+        })
         .collect()
 }
 
@@ -73,7 +75,7 @@ pub(super) fn settle_watch_error(pending: Vec<*mut crate::promise::Promise>, rea
         .map(|promise| scope.root_raw_mut_ptr(promise))
         .collect();
     for (index, promise) in pending.iter().enumerate() {
-        let promise = promise.get_raw_mut_ptr::<crate::promise::Promise>();
+        let promise = promise.with_mut_ptr::<crate::promise::Promise, _>(|promise_ptr| promise_ptr);
         if index == 0 {
             reject_promise(promise, reason.get_nanbox_f64());
         } else {

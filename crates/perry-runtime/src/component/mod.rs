@@ -72,7 +72,9 @@ fn field(object: f64, name: &[u8]) -> f64 {
     ));
     object_pointer(object.get_nanbox_f64())
         .map(|pointer| {
-            crate::object::js_object_get_field_by_name_f64(pointer, key.get_raw_const_ptr())
+            key.with_const_ptr(|key_ptr| {
+                crate::object::js_object_get_field_by_name_f64(pointer, key_ptr)
+            })
         })
         .unwrap_or_else(undefined)
 }
@@ -84,11 +86,13 @@ fn set_field(object: f64, name: &[u8], value: f64) {
         name.as_ptr(),
         name.len() as u32,
     ));
-    crate::object::js_object_set_field_by_name(
-        object_pointer(object.get_nanbox_f64()).unwrap(),
-        key.get_raw_const_ptr(),
-        value.get_nanbox_f64(),
-    );
+    key.with_const_ptr(|key_ptr| {
+        crate::object::js_object_set_field_by_name(
+            object_pointer(object.get_nanbox_f64()).unwrap(),
+            key_ptr,
+            value.get_nanbox_f64(),
+        )
+    });
 }
 unsafe fn take(buffer: Buffer) -> Vec<u8> {
     let bytes = if buffer.data.is_null() {

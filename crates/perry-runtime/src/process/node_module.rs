@@ -982,11 +982,15 @@ pub extern "C" fn js_module_register_hooks(hooks: f64) -> f64 {
     let handle = _record_roots.root_raw_mut_ptr(handle.finish());
     let proto = module_hooks_deregister_prototype(id);
     let proto_value = module_object_value(proto);
-    crate::object::prototype_chain::object_set_static_prototype(
-        handle.get_raw_mut_ptr::<crate::object::ObjectHeader>() as usize,
-        proto_value.to_bits(),
-    );
-    module_object_value(handle.get_raw_mut_ptr::<crate::object::ObjectHeader>())
+    handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|handle_ptr| {
+        crate::object::prototype_chain::object_set_static_prototype(
+            handle_ptr as usize,
+            proto_value.to_bits(),
+        )
+    });
+    handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|handle_ptr| {
+        module_object_value(handle_ptr)
+    })
 }
 
 extern "C" fn module_loader_next_resolve(

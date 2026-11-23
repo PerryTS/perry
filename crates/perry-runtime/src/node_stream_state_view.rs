@@ -433,7 +433,8 @@ fn install_state_view(stream: f64, kind: usize, property: crate::runtime_state_k
                 .unwrap_or(default_hwm(false)),
             0.0,
             0.0,
-            box_pointer(callback.get_raw_mut_ptr::<ClosureHeader>().cast()),
+            callback
+                .with_mut_ptr::<ClosureHeader, _>(|callback_ptr| box_pointer(callback_ptr.cast())),
             0.0,
             0.0,
             0.0,

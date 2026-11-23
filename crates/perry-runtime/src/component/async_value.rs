@@ -105,20 +105,18 @@ pub(super) fn decode(owner: f64, value: &Value, payload: &Value, stream: bool) -
             (b"dispose".as_slice(), crate::fn_info!(dispose, 0)),
         ] {
             let closure = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 1));
-            crate::closure::js_closure_set_capture_f64(
-                closure.get_raw_mut_ptr(),
-                0,
-                wrapper.get_nanbox_f64(),
-            );
-            crate::object::set_builtin_closure_non_constructable(
-                closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-            );
+            closure.with_mut_ptr(|closure_ptr| {
+                crate::closure::js_closure_set_capture_f64(closure_ptr, 0, wrapper.get_nanbox_f64())
+            });
+            closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_ptr| {
+                crate::object::set_builtin_closure_non_constructable(closure_ptr as usize)
+            });
             set_field(
                 wrapper.get_nanbox_f64(),
                 name,
-                crate::value::js_nanbox_pointer(
-                    closure.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-                ),
+                closure.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure_ptr| {
+                    crate::value::js_nanbox_pointer(closure_ptr as i64)
+                }),
             );
         }
         cleanup::register(
@@ -276,11 +274,13 @@ pub(super) fn chunk(
         let scope = RuntimeHandleScope::new();
         let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(count));
         for index in 0..count {
-            crate::array::js_array_set_f64(array.get_raw_mut_ptr(), index, undefined());
+            array.with_mut_ptr(|array_ptr| {
+                crate::array::js_array_set_f64(array_ptr, index, undefined())
+            });
         }
-        return crate::value::js_nanbox_pointer(
-            array.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64,
-        );
+        return array.with_mut_ptr::<crate::array::ArrayHeader, _>(|array_ptr| {
+            crate::value::js_nanbox_pointer(array_ptr as i64)
+        });
     }
     let schema = if stream {
         serde_json::json!({"kind":"list","value":payload})

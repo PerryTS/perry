@@ -124,12 +124,13 @@ pub(super) extern "C" fn pipe_error_callback(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_const_ptr(closure);
-    let src = scope.root_nanbox_f64(js_closure_get_capture_f64(closure.get_raw_const_ptr(), 0));
-    let dest = scope.root_nanbox_f64(js_closure_get_capture_f64(closure.get_raw_const_ptr(), 1));
+    let capture = |index| closure.with_const_ptr(|c| js_closure_get_capture_f64(c, index));
+    let src = scope.root_nanbox_f64(capture(0));
+    let dest = scope.root_nanbox_f64(capture(1));
     let err = scope.root_nanbox_f64(err);
     let _ = unpipe_destination(src.get_nanbox_f64(), dest.get_nanbox_f64());
     // Foreign destinations own their unpipe event; cleanup is idempotent.
-    cleanup_pipe_listeners_from_closure(closure.get_raw_const_ptr());
+    closure.with_const_ptr(cleanup_pipe_listeners_from_closure);
     if destination_error_listener_count(dest.get_nanbox_f64()) == 0 {
         crate::exception::throw_program_value(err.get_nanbox_f64());
     }
@@ -146,11 +147,12 @@ pub(super) extern "C" fn pipe_close_callback(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_const_ptr(closure);
-    let src = scope.root_nanbox_f64(js_closure_get_capture_f64(closure.get_raw_const_ptr(), 0));
-    let dest = scope.root_nanbox_f64(js_closure_get_capture_f64(closure.get_raw_const_ptr(), 1));
+    let capture = |index| closure.with_const_ptr(|c| js_closure_get_capture_f64(c, index));
+    let src = scope.root_nanbox_f64(capture(0));
+    let dest = scope.root_nanbox_f64(capture(1));
     let _ = unpipe_destination(src.get_nanbox_f64(), dest.get_nanbox_f64());
     // Foreign destinations own their unpipe event; cleanup is idempotent.
-    cleanup_pipe_listeners_from_closure(closure.get_raw_const_ptr());
+    closure.with_const_ptr(cleanup_pipe_listeners_from_closure);
     f64::from_bits(TAG_UNDEFINED)
 }
 
@@ -163,11 +165,12 @@ pub(super) extern "C" fn pipe_finish_callback(
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let closure = scope.root_raw_const_ptr(closure);
-    let src = scope.root_nanbox_f64(js_closure_get_capture_f64(closure.get_raw_const_ptr(), 0));
-    let dest = scope.root_nanbox_f64(js_closure_get_capture_f64(closure.get_raw_const_ptr(), 1));
+    let capture = |index| closure.with_const_ptr(|c| js_closure_get_capture_f64(c, index));
+    let src = scope.root_nanbox_f64(capture(0));
+    let dest = scope.root_nanbox_f64(capture(1));
     let _ = unpipe_destination(src.get_nanbox_f64(), dest.get_nanbox_f64());
     // Foreign destinations own their unpipe event; cleanup is idempotent.
-    cleanup_pipe_listeners_from_closure(closure.get_raw_const_ptr());
+    closure.with_const_ptr(cleanup_pipe_listeners_from_closure);
     f64::from_bits(TAG_UNDEFINED)
 }
 

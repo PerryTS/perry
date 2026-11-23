@@ -169,17 +169,19 @@ pub(crate) fn install_prototype_symbol_member(
     };
     unsafe {
         if member.is_method() {
-            install_symbol_method(
-                proto.get_raw_mut_ptr(),
-                class_id,
-                owner.get_nanbox_f64(),
-                key,
-                member.code as usize,
-                member.param_count,
-                member.has_synthetic_arguments(),
-                member.has_rest(),
-                member.entry as usize,
-            );
+            proto.with_mut_ptr(|proto_ptr| {
+                install_symbol_method(
+                    proto_ptr,
+                    class_id,
+                    owner.get_nanbox_f64(),
+                    key,
+                    member.code as usize,
+                    member.param_count,
+                    member.has_synthetic_arguments(),
+                    member.has_rest(),
+                    member.entry as usize,
+                )
+            });
         } else if member.is_accessor() {
             let getter = member.kind == super::super::declarations::CLASS_MEMBER_GETTER;
             install_symbol_accessor(

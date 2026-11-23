@@ -50,19 +50,19 @@ pub fn broadcast_channel_object_with_id(id: u64, name: f64) -> *mut ObjectHeader
     crate::feature_hooks::js_runtime_install_messaging();
     let object = scope.root_raw_mut_ptr(object::js_object_alloc(0, 0));
     object::intrinsic_private_add(
-        boxed_object(object.get_raw_mut_ptr()),
+        object.with_mut_ptr(boxed_object),
         "[[BroadcastChannelId]]",
         f64::from_bits(id),
     );
     object::intrinsic_private_add(
-        boxed_object(object.get_raw_mut_ptr()),
+        object.with_mut_ptr(boxed_object),
         "[[BroadcastChannelName]]",
         name.get_nanbox_f64(),
     );
     // Only the runtime-only fallback has no provider-owned closed state.
     if id == 0 {
         object::intrinsic_private_add(
-            boxed_object(object.get_raw_mut_ptr()),
+            object.with_mut_ptr(boxed_object),
             "[[BroadcastChannelClosed]]",
             js_bool(false),
         );
@@ -75,9 +75,9 @@ pub fn broadcast_channel_object_with_id(id: u64, name: f64) -> *mut ObjectHeader
         .expect("messaging constructor is published during realm birth"),
     );
     let prototype = object::js_function_prototype_value_for_read(constructor.get_nanbox_f64());
-    set_object_prototype(object.get_raw_mut_ptr(), prototype);
-    crate::event_target_hook_slots::initialize_target(object.get_raw_mut_ptr(), false);
-    object.get_raw_mut_ptr()
+    object.with_mut_ptr(|object| set_object_prototype(object, prototype));
+    object.with_mut_ptr(|object| crate::event_target_hook_slots::initialize_target(object, false));
+    object.with_mut_ptr(|object| object)
 }
 
 fn invalid_receiver() -> ! {

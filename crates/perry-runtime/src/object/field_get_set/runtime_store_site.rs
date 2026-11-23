@@ -43,7 +43,9 @@ impl RuntimeStoreSite {
         let target = target.get_nanbox_f64();
         crate::proxy::js_put_value_set(
             target,
-            crate::value::js_nanbox_string(key.get_raw_const_ptr::<crate::StringHeader>() as i64),
+            key.with_const_ptr::<crate::StringHeader, _>(|key_ptr| {
+                crate::value::js_nanbox_string(key_ptr as i64)
+            }),
             value.get_nanbox_f64(),
             target,
             1,

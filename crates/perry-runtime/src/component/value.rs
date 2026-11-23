@@ -237,17 +237,19 @@ fn decode_at(
             );
             let array = scope.root_raw_mut_ptr(pointer);
             for (i, value) in values.iter().enumerate() {
-                crate::typedarray_hook_slots::js_typed_array_set(
-                    array.get_raw_mut_ptr(),
-                    i as i32,
-                    value
-                        .as_f64()
-                        .unwrap_or_else(|| fail("Invalid component byte")),
-                );
+                array.with_mut_ptr(|array_ptr| {
+                    crate::typedarray_hook_slots::js_typed_array_set(
+                        array_ptr,
+                        i as i32,
+                        value
+                            .as_f64()
+                            .unwrap_or_else(|| fail("Invalid component byte")),
+                    )
+                });
             }
-            crate::value::js_nanbox_pointer(
-                array.get_raw_mut_ptr::<crate::typedarray_hook_slots::TypedArrayHeader>() as i64,
-            )
+            array.with_mut_ptr::<crate::typedarray_hook_slots::TypedArrayHeader, _>(|array_ptr| {
+                crate::value::js_nanbox_pointer(array_ptr as i64)
+            })
         }
         Value::Array(values) => {
             let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(
@@ -263,11 +265,13 @@ fn decode_at(
                     &ty["value"]
                 };
                 let value = decode_at(value, item_type, world, owner, lifetime, depth + 1);
-                crate::array::js_array_set_f64(array.get_raw_mut_ptr(), i as u32, value);
+                array.with_mut_ptr(|array_ptr| {
+                    crate::array::js_array_set_f64(array_ptr, i as u32, value)
+                });
             }
-            crate::value::js_nanbox_pointer(
-                array.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
-            )
+            array.with_mut_ptr::<crate::array::ArrayHeader, _>(|array_ptr| {
+                crate::value::js_nanbox_pointer(array_ptr as i64)
+            })
         }
         Value::Object(object) => {
             if object.contains_key("$future") || object.contains_key("$stream") {

@@ -54,7 +54,8 @@ pub(crate) unsafe fn class_shape_reaches(
     // Only an explicit physical link needs the target's concrete object.
     let mut builtin_target = None;
     for _ in 0..128 {
-        let obj = current.get_raw_mut_ptr::<ObjectHeader>();
+        // Every use below reads the header or the shape and allocates nothing.
+        let obj = current.with_mut_ptr::<ObjectHeader, _>(|obj| obj);
         let Some(header) = crate::value::addr_class::try_read_gc_header(obj as usize) else {
             return false;
         };
@@ -81,7 +82,7 @@ pub(crate) unsafe fn class_shape_reaches(
             if !target.is_null() && next == target {
                 return true;
             }
-            if next == current.get_raw_mut_ptr::<ObjectHeader>() {
+            if current.with_mut_ptr::<ObjectHeader, _>(|current| next == current) {
                 return false;
             }
             current.set_raw_mut_ptr(next);
@@ -145,7 +146,8 @@ pub(crate) unsafe fn class_shape_reaches(
             return false;
         }
         let target = physical_target(&scope, &mut builtin_target, want, build);
-        let obj = current.get_raw_mut_ptr::<ObjectHeader>();
+        // Read after physical_target, which can collect.
+        let obj = current.with_mut_ptr::<ObjectHeader, _>(|obj| obj);
         let bits = shapes::object_prototype_word(obj);
         let v = crate::JSValue::from_bits(bits);
         if !v.is_pointer() {
