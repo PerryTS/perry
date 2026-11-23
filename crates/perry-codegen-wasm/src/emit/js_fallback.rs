@@ -755,6 +755,16 @@ impl WasmModuleEmitter {
                     .collect();
                 format!("fromJsValue([{}])", elems)
             }
+            // `Array.from` calls the bridges its WASM arms call (`emit/expr/arrays.rs`).
+            Expr::ArrayFrom(value, _) => self.emit_js_bridge_call("array_from", &[value], locals),
+            Expr::ArrayFromMapped {
+                iterable,
+                map_fn,
+                this_arg,
+            } => {
+                let this_arg = this_arg.as_deref().unwrap_or(&Expr::Undefined);
+                self.emit_js_bridge_call("array_from_mapped", &[iterable, map_fn, this_arg], locals)
+            }
             Expr::ArrayKeys(a) | Expr::ArrayValues(a) | Expr::ArrayEntries(a) => {
                 let method = match expr {
                     Expr::ArrayKeys(_) => "keys",

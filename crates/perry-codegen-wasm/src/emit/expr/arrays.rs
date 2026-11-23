@@ -358,12 +358,15 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "array_from", 1);
             }
             Expr::ArrayFromMapped {
-                iterable, map_fn, ..
+                iterable,
+                map_fn,
+                this_arg,
             } => {
-                self.emit_frame_begin(func, 2);
+                self.emit_frame_begin(func, 3);
                 self.emit_store_arg(func, 0, iterable);
                 self.emit_store_arg(func, 1, map_fn);
-                self.emit_memcall(func, "array_from_mapped", 2);
+                self.emit_store_arg(func, 2, this_arg.as_deref().unwrap_or(&Expr::Undefined));
+                self.emit_memcall(func, "array_from_mapped", 3);
             }
 
             // --- Array higher-order methods ---
