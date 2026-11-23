@@ -98,6 +98,7 @@ use response_headers::build_response_headers_object;
 mod request_headers;
 use request_headers::headers_from_options;
 
+mod client_payloads;
 mod pending_dispatch;
 mod root_scanner;
 pub use pending_dispatch::js_http_process_pending;
@@ -212,6 +213,10 @@ pub(crate) enum PendingHttpEvent {
     /// after the caller returns instead of invoking listeners from inside
     /// `abort()`; `'close'` follows it in the same queued drain.
     Abort { request_handle: Handle },
+    /// `req.destroy()` while its response was still streaming: the response
+    /// is aborted (Node's `'aborted'`, the request's `'close'`, then the
+    /// response's ECONNRESET `'error'` and `'close'`).
+    ResponseDestroyed { request_handle: Handle },
     /// #4909 — the request body was handed to the transport at `end()`.
     /// Drains the queued `write(chunk, cb)` callbacks, then `'finish'`,
     /// then the `end(..., cb)` callback — Node's flush ordering.
@@ -775,6 +780,7 @@ fn pending_request_handle(event: &PendingHttpEvent) -> Handle {
         | PendingHttpEvent::TransportError { request_handle, .. }
         | PendingHttpEvent::Timeout { request_handle }
         | PendingHttpEvent::Abort { request_handle }
+        | PendingHttpEvent::ResponseDestroyed { request_handle }
         | PendingHttpEvent::Flushed { request_handle }
         | PendingHttpEvent::Continue { request_handle }
         | PendingHttpEvent::DeferredArmContinue { request_handle } => *request_handle,
@@ -792,6 +798,7 @@ fn terminal_http_event(event: &PendingHttpEvent) -> bool {
             | PendingHttpEvent::CodedError { .. }
             | PendingHttpEvent::TransportError { .. }
             | PendingHttpEvent::Abort { .. }
+            | PendingHttpEvent::ResponseDestroyed { .. }
     )
 }
 
@@ -944,15 +951,14 @@ unsafe fn invoke_create_socket(
     if cb.is_null() {
         return;
     }
-    // Capture the ClientRequest handle so the continuation can re-read the
-    // (still-stored) method/url/headers/body and resume dispatch. Stored as an
-    // f64 (a small registry id, not a heap pointer) — pointer-free, so it
-    // needs no GC layout fixup, matching `sqlite_tx_wrapper`'s db-handle slot.
+    // Capture the ClientRequest as a handle word: the continuation re-reads its
+    // method/url/headers/body to resume dispatch, and the word keeps naming the
+    // request to the trace, so its id is not reissued while it may call back.
     let cb_val = scope.root_nanbox(f64::from_bits(
         POINTER_TAG | (cb as usize as u64 & PTR_MASK),
     ));
     let cb = (cb_val.get().to_bits() & PTR_MASK) as *mut perry_ffi::ClosureHeader;
-    perry_ffi::set_closure_capture_f64(cb, 0, request_handle as f64);
+    perry_ffi::set_closure_capture_f64(cb, 0, client_payloads::handle_capture(request_handle));
     let req_val = f64::from_bits(
         perry_ffi::JsValue::from_object_ptr(request_handle as usize as *mut u8).bits(),
     );
@@ -984,7 +990,7 @@ unsafe extern "C" fn http_create_socket_cb(
     err: f64,
     socket: f64,
 ) -> f64 {
-    let request_handle = perry_ffi::closure_capture_f64(closure, 0) as i64 as Handle;
+    let request_handle = client_payloads::capture_handle_at(closure, 0);
 
     // Node calls `cb(err)` on failure, `cb(null, socket)` on success.
     let err_bits = err.to_bits();
