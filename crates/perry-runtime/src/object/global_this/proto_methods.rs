@@ -1497,6 +1497,7 @@ pub(super) fn web_url_proto_methods(builtin_name: &str, proto_obj: *mut ObjectHe
                     super::super::PropertyAttrs::new(false, false, true),
                 );
             }
+            unsafe { install_web_builtin_to_string_tag(proto_obj, "URLPattern") };
         }
         _ => {}
     }
