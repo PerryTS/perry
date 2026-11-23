@@ -1022,6 +1022,8 @@ fn compute_act<'a>(
     #[cfg(test)]
     tests::delivery_boundaries::record(&g.m);
     #[cfg(test)]
+    tests::amp_flow::record(&g);
+    #[cfg(test)]
     tests::computed_key_members::record(&g.m);
     #[cfg(test)]
     tests::box_computed_read::record(&g.m);
