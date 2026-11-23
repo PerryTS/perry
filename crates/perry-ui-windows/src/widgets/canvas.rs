@@ -179,11 +179,13 @@ fn paint_canvas(handle: i64, hwnd: HWND) {
                         let _ = FillRect(hdc, &rect, HBRUSH(brush.0));
                     }
                     DrawCmd::ClearRect(x, y, w, h) => {
+                        // A negative width or height extends the rectangle the other way;
+                        // Win32 needs ordered endpoints.
                         let rect = RECT {
-                            left: x as i32,
-                            top: y as i32,
-                            right: (x + w) as i32,
-                            bottom: (y + h) as i32,
+                            left: x.min(x + w) as i32,
+                            top: y.min(y + h) as i32,
+                            right: x.max(x + w) as i32,
+                            bottom: y.max(y + h) as i32,
                         };
                         let brush = GetStockObject(WHITE_BRUSH);
                         let _ = FillRect(hdc, &rect, HBRUSH(brush.0));

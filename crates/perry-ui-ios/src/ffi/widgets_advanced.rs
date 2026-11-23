@@ -120,6 +120,10 @@ pub extern "C" fn perry_ui_canvas_stroke_rect(h: i64, x: f64, y: f64, w: f64, ht
 }
 #[no_mangle]
 pub extern "C" fn perry_ui_canvas_clear_rect(h: i64, x: f64, y: f64, w: f64, ht: f64) {
+    // HTML canvas ignores a clearRect with any non-finite argument.
+    if !(x.is_finite() && y.is_finite() && w.is_finite() && ht.is_finite()) {
+        return;
+    }
     widgets::canvas::clear_rect(h, x, y, w, ht);
 }
 #[no_mangle]

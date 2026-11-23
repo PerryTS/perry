@@ -875,5 +875,15 @@ mod tests {
             "clearRect must append its rect and keep the earlier fillRect"
         );
         assert!(command_batch_renders(&commands[1..]));
+
+        crate::lib_ffi::style_and_canvas::perry_ui_canvas_clear_rect(
+            canvas,
+            f64::NAN,
+            0.0,
+            f64::INFINITY,
+            10.0,
+        );
+        let after = CANVAS_COMMANDS.with(|cmds| cmds.borrow()[&key].len());
+        assert_eq!(after, 2, "a non-finite clearRect records nothing");
     }
 }
