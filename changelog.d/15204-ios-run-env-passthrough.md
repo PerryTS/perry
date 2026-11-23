@@ -1,0 +1,1 @@
+- **`perry run` forwards `PERRY_*` variables to iOS, visionOS, watchOS and tvOS apps (#15194).** Simulator launches set them as `SIMCTL_CHILD_*` for `simctl`, device launches pass them as one `devicectl --environment-variables` JSON object, so knobs such as `PERRY_UI_TEST_MODE` reach the app. No other variable is forwarded.
