@@ -136,10 +136,12 @@ impl Relocations {
                 i = end;
                 continue;
             }
-            // Metadata numbers are relative only after these named operands.
+            // Metadata numbers are relative only after these named operands;
+            // an inline `!{...}` operand holds no numbered references.
             let metadata = ["!alias.scope !", "!noalias !"]
                 .into_iter()
-                .find(|prefix| text[i..].starts_with(prefix));
+                .find(|prefix| text[i..].starts_with(prefix))
+                .filter(|prefix| bytes.get(i + prefix.len()).is_some_and(u8::is_ascii_digit));
             if let Some(prefix) = metadata {
                 let start = i + prefix.len();
                 let mut end = start;
@@ -176,6 +178,9 @@ mod tests {
         let mut text = "@module_.str.1.handle @module_.str.11.handle c\"@module_.str.1.handle __perry_callable_site_3\" i64 123, !alias.scope !201, !noalias !301 ; λ".to_string();
         r.text(&mut text);
         assert_eq!(text, "@module_.str.10.handle @module_.str.11.handle c\"@module_.str.1.handle __perry_callable_site_3\" i64 123, !alias.scope !208, !noalias !308 ; λ");
+        let mut inline = r#", !alias.scope !{!{!"owner.1", !{!"d"}}}, !noalias !{}"#.to_string();
+        r.text(&mut inline);
+        assert_eq!(inline, r#", !alias.scope !{!{!"owner.1", !{!"d"}}}, !noalias !{}"#);
         let mut site = "__perry_callable_site_3".into();
         r.text(&mut site);
         assert_eq!(site, (r.site_hash | 103).to_string());
