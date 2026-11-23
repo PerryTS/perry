@@ -635,10 +635,9 @@ fn resolve_promise_with_event(
     let event_handle = scope.root_nanbox_f64(event_value);
     let result = iterator_result(event_handle.get_nanbox_f64(), false);
     let result_handle = scope.root_nanbox_f64(result);
-    crate::promise::js_promise_resolve(
-        promise_handle.get_raw_mut_ptr::<crate::promise::Promise>(),
-        result_handle.get_nanbox_f64(),
-    );
+    promise_handle.with_mut_ptr::<crate::promise::Promise, _>(|promise_handle_ptr| {
+        crate::promise::js_promise_resolve(promise_handle_ptr, result_handle.get_nanbox_f64())
+    });
 }
 
 fn resolve_promise_done(promise: *mut crate::promise::Promise) {
@@ -646,20 +645,18 @@ fn resolve_promise_done(promise: *mut crate::promise::Promise) {
     let promise_handle = scope.root_raw_mut_ptr(promise);
     let result = iterator_result(undefined_value(), true);
     let result_handle = scope.root_nanbox_f64(result);
-    crate::promise::js_promise_resolve(
-        promise_handle.get_raw_mut_ptr::<crate::promise::Promise>(),
-        result_handle.get_nanbox_f64(),
-    );
+    promise_handle.with_mut_ptr::<crate::promise::Promise, _>(|promise_handle_ptr| {
+        crate::promise::js_promise_resolve(promise_handle_ptr, result_handle.get_nanbox_f64())
+    });
 }
 
 fn reject_promise(promise: *mut crate::promise::Promise, reason: f64) {
     let scope = crate::gc::RuntimeHandleScope::new();
     let promise_handle = scope.root_raw_mut_ptr(promise);
     let reason_handle = scope.root_nanbox_f64(reason);
-    crate::promise::js_promise_reject(
-        promise_handle.get_raw_mut_ptr::<crate::promise::Promise>(),
-        reason_handle.get_nanbox_f64(),
-    );
+    promise_handle.with_mut_ptr::<crate::promise::Promise, _>(|promise_handle_ptr| {
+        crate::promise::js_promise_reject(promise_handle_ptr, reason_handle.get_nanbox_f64())
+    });
 }
 
 // ============================================================================

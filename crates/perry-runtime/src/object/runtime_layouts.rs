@@ -512,13 +512,15 @@ pub unsafe extern "C" fn perry_build_runtime_record(
     let object = roots.root_raw_mut_ptr(super::layout_desc::perry_alloc_layout(desc));
     for (slot, cell) in cells.iter().enumerate() {
         // The field-store funnel does not allocate or poll the collector.
-        super::js_object_set_field(
-            object.get_raw_mut_ptr(),
-            slot as u32,
-            crate::JSValue::from_bits((*cell.get()).to_bits()),
-        );
+        object.with_mut_ptr(|object_ptr| {
+            super::js_object_set_field(
+                object_ptr,
+                slot as u32,
+                crate::JSValue::from_bits((*cell.get()).to_bits()),
+            )
+        });
     }
-    object.get_raw_mut_ptr()
+    object.with_mut_ptr(|object_ptr| object_ptr)
 }
 
 // These C ABI symbols are also referenced by generated code and native UI
@@ -591,7 +593,9 @@ impl Drop for RuntimeRecordBuilder<'_> {
 /// Initialize a declared slot after the value expression has finished allocating.
 #[inline(never)]
 pub fn init_runtime_field(object: &crate::gc::RuntimeHandle<'_>, slot: u32, value: crate::JSValue) {
-    super::js_object_set_field(object.get_raw_mut_ptr::<super::ObjectHeader>(), slot, value);
+    object.with_mut_ptr::<super::ObjectHeader, _>(|object_ptr| {
+        super::js_object_set_field(object_ptr, slot, value)
+    });
 }
 
 #[used(compiler)]

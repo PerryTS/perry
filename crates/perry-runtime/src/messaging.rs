@@ -332,14 +332,13 @@ fn adopt_runtime_port(lease: port_transport::Lease) -> f64 {
     register_runtime_pump();
     let scope = crate::gc::RuntimeHandleScope::new();
     let object = scope.root_raw_mut_ptr(message_port_object_with_id(0));
-    install_port_methods(object.get_raw_mut_ptr());
-    set_object_prototype(
-        object.get_raw_mut_ptr(),
-        constructor_prototype("MessagePort"),
-    );
+    object.with_mut_ptr(install_port_methods);
+    let prototype = constructor_prototype("MessagePort");
+    object.with_mut_ptr(|object| set_object_prototype(object, prototype));
+    let address = object.with_mut_ptr::<ObjectHeader, _>(|object| object as usize);
     with_port_states(|map| {
         map.insert(
-            object.get_raw_mut_ptr::<ObjectHeader>() as usize,
+            address,
             PortState {
                 lease,
                 owner: crate::agent::current_agent(),
@@ -347,7 +346,7 @@ fn adopt_runtime_port(lease: port_transport::Lease) -> f64 {
             },
         );
     });
-    boxed_object(object.get_raw_mut_ptr())
+    object.with_mut_ptr(boxed_object)
 }
 fn register_runtime_pump() {
     static REGISTER: std::sync::Once = std::sync::Once::new();
@@ -766,9 +765,11 @@ pub extern "C" fn js_broadcast_channel_new(name: f64) -> f64 {
     ] {
         let value = scope.root_nanbox_f64(value);
         let name = key(name);
-        object::js_object_set_field_by_name(object.get_raw_mut_ptr(), name, value.get_nanbox_f64());
+        object.with_mut_ptr(|object| {
+            object::js_object_set_field_by_name(object, name, value.get_nanbox_f64())
+        });
     }
-    boxed_object(object.get_raw_mut_ptr())
+    object.with_mut_ptr(boxed_object)
 }
 
 pub(crate) extern "C" fn js_broadcast_channel_constructor_call_error(

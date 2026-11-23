@@ -718,11 +718,12 @@ unsafe fn table_first_append(
     let owner = scope.root_raw_mut_ptr(obj);
     let value = scope.root_nanbox_f64(value);
     let key = scope.root_nanbox_u64(atom);
-    let t =
-        crate::object::overflow::start_empty(owner.get_raw_mut_ptr::<crate::ObjectHeader>(), live);
+    let t = owner.with_mut_ptr::<crate::ObjectHeader, _>(|owner_ptr| {
+        crate::object::overflow::start_empty(owner_ptr, live)
+    });
     // Direct to the inner install: the out-of-line wrapper (overflow::install)
     // would put a call on this hot first append.
-    let o = owner.get_raw_mut_ptr::<crate::ObjectHeader>();
+    let o = owner.with_mut_ptr::<crate::ObjectHeader, _>(|owner_ptr| owner_ptr);
     let meta = crate::meta_read!(crate::meta_obj_from_storage!(o as *mut _, t));
     crate::object::overflow::home::install_in::<false>(o as usize, meta, t);
     if (*t).length < (*t).capacity {
@@ -734,7 +735,7 @@ unsafe fn table_first_append(
         );
         return value.get_nanbox_f64();
     }
-    let obj = owner.get_raw_mut_ptr::<crate::ObjectHeader>();
+    let obj = owner.with_mut_ptr::<crate::ObjectHeader, _>(|owner_ptr| owner_ptr);
     crate::object::overflow::store_unfixed_routed(
         obj,
         (atom & POINTER_MASK) as *const crate::StringHeader,
@@ -847,7 +848,7 @@ mod tests {
         };
 
         for (handle, value) in [(&first_handle, 11.0), (&second_handle, 29.0)] {
-            let obj = handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            let obj = handle.with_mut_ptr::<crate::ObjectHeader, _>(|handle_ptr| handle_ptr);
             let before = unsafe { crate::object::shapes::object_shape_stamp(obj) };
             assert!(!unsafe { crate::object::overflow::has_overflow(obj) });
             assert_eq!(
@@ -862,7 +863,7 @@ mod tests {
                 },
                 value
             );
-            let obj = handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+            let obj = handle.with_mut_ptr::<crate::ObjectHeader, _>(|handle_ptr| handle_ptr);
             assert!(
                 unsafe { crate::object::overflow::has_overflow(obj) },
                 "the computed key is an overflow entry"
@@ -880,11 +881,13 @@ mod tests {
         assert_eq!(crate::object::shapes::test_cached_transition_stamps(), 0);
         // The first receiver's entry is its own.
         assert_eq!(
-            read(first_handle.get_raw_mut_ptr::<crate::ObjectHeader>()),
+            first_handle
+                .with_mut_ptr::<crate::ObjectHeader, _>(|first_handle_ptr| read(first_handle_ptr)),
             11.0
         );
 
-        let user_class = user_class_handle.get_raw_mut_ptr::<crate::ObjectHeader>();
+        let user_class = user_class_handle
+            .with_mut_ptr::<crate::ObjectHeader, _>(|user_class_handle_ptr| user_class_handle_ptr);
         assert_eq!(
             unsafe {
                 js_put_value_set_dynamic(
@@ -898,7 +901,9 @@ mod tests {
             47.0
         );
         assert_eq!(
-            read(user_class_handle.get_raw_mut_ptr::<crate::ObjectHeader>()),
+            user_class_handle.with_mut_ptr::<crate::ObjectHeader, _>(|user_class_handle_ptr| read(
+                user_class_handle_ptr
+            )),
             47.0
         );
         assert_eq!(crate::object::test_transition_fast_hits(), 0);

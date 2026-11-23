@@ -289,13 +289,16 @@ fn utf8_open_path_result(
                 let key_ptr = js_string_from_bytes(b"recursive".as_ptr(), 9);
                 let key =
                     scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(key_ptr).bits()));
-                crate::object::js_object_set_field_by_name(
-                    options_obj.get_raw_mut_ptr(),
-                    JSValue::from_bits(key.get_nanbox_f64().to_bits()).as_string_ptr(),
-                    bool_value(true),
+                options_obj.with_mut_ptr(|options_obj_ptr| {
+                    crate::object::js_object_set_field_by_name(
+                        options_obj_ptr,
+                        JSValue::from_bits(key.get_nanbox_f64().to_bits()).as_string_ptr(),
+                        bool_value(true),
+                    )
+                });
+                let options_value = scope.root_nanbox_f64(
+                    options_obj.with_mut_ptr(|options_obj_ptr| object_value(options_obj_ptr)),
                 );
-                let options_value =
-                    scope.root_nanbox_f64(object_value(options_obj.get_raw_mut_ptr()));
                 if utf8_call_custom_method(
                     custom_fs.get_nanbox_f64(),
                     b"mkdirSync",
@@ -1632,12 +1635,15 @@ fn utf8_custom_mkdir_then_open(id: usize) -> bool {
     let options_obj = scope.root_raw_mut_ptr(options_obj);
     let key_ptr = js_string_from_bytes(b"recursive".as_ptr(), 9);
     let key = scope.root_nanbox_f64(f64::from_bits(JSValue::string_ptr(key_ptr).bits()));
-    crate::object::js_object_set_field_by_name(
-        options_obj.get_raw_mut_ptr(),
-        JSValue::from_bits(key.get_nanbox_f64().to_bits()).as_string_ptr(),
-        bool_value(true),
-    );
-    let options_value = scope.root_nanbox_f64(object_value(options_obj.get_raw_mut_ptr()));
+    options_obj.with_mut_ptr(|options_obj_ptr| {
+        crate::object::js_object_set_field_by_name(
+            options_obj_ptr,
+            JSValue::from_bits(key.get_nanbox_f64().to_bits()).as_string_ptr(),
+            bool_value(true),
+        )
+    });
+    let options_value = scope
+        .root_nanbox_f64(options_obj.with_mut_ptr(|options_obj_ptr| object_value(options_obj_ptr)));
     let cb = js_closure_alloc(
         crate::fn_info!(utf8_async_mkdir_done_impl, 1; with_declared(1)),
         1,

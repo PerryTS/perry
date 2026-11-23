@@ -238,8 +238,8 @@
     {
       "path": "crates/perry-runtime/src/string/concat_parts.rs",
       "function": "concat_parts_general",
-      "body_sha256": "f8335e9e2b5f7d91a8de1d2b5db51be25c0970633e8e3646e8d81dd45538f1e8",
-      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number arm, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header. Re-audited 2026-11-15 against d0f763f475 (#14658): the INT32 digit arm is deleted (a Number has one encoding); the exact-STRING_TAG arm and the js_jsvalue_to_string fallback are unchanged.",
+      "body_sha256": "0658ecb822e513a89f022ab0fe667f667c01c1cf3380d2f2bfc4a293c6677be2",
+      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number arm, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header. Re-audited 2026-11-15 against d0f763f475 (#14658): the INT32 digit arm is deleted (a Number has one encoding); the exact-STRING_TAG arm and the js_jsvalue_to_string fallback are unchanged. Re-audited 2026-11-23 (raw-handle ratchet): the rooted piece is read through with_const_ptr at its use; the STRING_TAG + is_valid_string_ptr admission and the js_jsvalue_to_string fallback are unchanged.",
       "rule": "mask-cast",
       "support_files": []
     },
@@ -282,32 +282,32 @@
     {
       "path": "crates/perry-runtime/src/object/layout_probe/computed.rs",
       "function": "append_admitted",
-      "body_sha256": "b95bb5ff5e4e9974fae54e5faec44ca6607d59930e2c3bed8a8765300cef3149",
-      "claim": "Reviewed 2026-11-15 (introduced by 4d4391a1b0, #14679): the first statement returns false for every key whose tag is not exactly STRING_TAG (an inline string included) before the header read; false decides nothing and the complete store asks again by name.",
+      "body_sha256": "f24f021cd5a2dadb4a967e7e1ca5ddb4dd32288e90e2b8d832753dd327525a4e",
+      "claim": "Reviewed 2026-11-15 (introduced by 4d4391a1b0, #14679): the first statement returns false for every key whose tag is not exactly STRING_TAG (an inline string included) before the header read; false decides nothing and the complete store asks again by name. Re-audited 2026-11-23 against f8450e5d3d..9a1ed5a85e: the first statement still returns false unless the key's tag is exactly STRING_TAG, before string_data reads the header; the later changes add receiver flag declines only.",
       "rule": "mask-cast",
       "support_files": []
     },
     {
       "path": "crates/perry-runtime/src/object/layout_probe/computed.rs",
       "function": "append_admitted",
-      "body_sha256": "b95bb5ff5e4e9974fae54e5faec44ca6607d59930e2c3bed8a8765300cef3149",
-      "claim": "Reviewed 2026-11-15 (introduced by 4d4391a1b0, #14679): the first statement returns false for every key whose tag is not exactly STRING_TAG (an inline string included) before the header read; false decides nothing and the complete store asks again by name.",
+      "body_sha256": "f24f021cd5a2dadb4a967e7e1ca5ddb4dd32288e90e2b8d832753dd327525a4e",
+      "claim": "Reviewed 2026-11-15 (introduced by 4d4391a1b0, #14679): the first statement returns false for every key whose tag is not exactly STRING_TAG (an inline string included) before the header read; false decides nothing and the complete store asks again by name. Re-audited 2026-11-23 against f8450e5d3d..9a1ed5a85e: the first statement still returns false unless the key's tag is exactly STRING_TAG, before string_data reads the header; the later changes add receiver flag declines only.",
       "rule": "heap-tag-only",
       "support_files": []
     },
     {
       "path": "crates/perry-runtime/src/object/layout_probe/keyed_delete.rs",
       "function": "probe_delete_keyed",
-      "body_sha256": "2d4290159b802e4b89a1e4118881e995a17df962d5b76755a4b5a0cf47afe9d4",
-      "claim": "Reviewed 2026-11-15 (introduced by 4d4391a1b0, #14679): the key is read as a header only after `key & TAG_MASK != STRING_TAG` returned None; an inline string key declines the probe (None) and the complete delete runs.",
+      "body_sha256": "3d415278bd988095ffdc591aed0f32214883cae15ce7985b602e8f8546fe15d5",
+      "claim": "Reviewed 2026-11-15 (introduced by 4d4391a1b0, #14679): the key is read as a header only after `key & TAG_MASK != STRING_TAG` returned None; an inline string key declines the probe (None) and the complete delete runs. Re-audited 2026-11-23 against f8450e5d3d and 6698b83eda: the key is still read through string_data only after `key & TAG_MASK != STRING_TAG` returned None; the changes add the OBJ_FLAG_ARGUMENTS decline and receiver checks before it.",
       "rule": "mask-cast",
       "support_files": []
     },
     {
       "path": "crates/perry-runtime/src/object/layout_probe/keyed_delete.rs",
       "function": "probe_delete_keyed",
-      "body_sha256": "2d4290159b802e4b89a1e4118881e995a17df962d5b76755a4b5a0cf47afe9d4",
-      "claim": "Reviewed 2026-11-15 (introduced by 4d4391a1b0, #14679): the key is read as a header only after `key & TAG_MASK != STRING_TAG` returned None; an inline string key declines the probe (None) and the complete delete runs.",
+      "body_sha256": "3d415278bd988095ffdc591aed0f32214883cae15ce7985b602e8f8546fe15d5",
+      "claim": "Reviewed 2026-11-15 (introduced by 4d4391a1b0, #14679): the key is read as a header only after `key & TAG_MASK != STRING_TAG` returned None; an inline string key declines the probe (None) and the complete delete runs. Re-audited 2026-11-23 against f8450e5d3d and 6698b83eda: the key is still read through string_data only after `key & TAG_MASK != STRING_TAG` returned None; the changes add the OBJ_FLAG_ARGUMENTS decline and receiver checks before it.",
       "rule": "heap-tag-only",
       "support_files": []
     },
@@ -372,20 +372,20 @@
     {
       "path": "crates/perry-runtime/src/string/concat_parts.rs",
       "function": "concat_parts_general",
-      "body_sha256": "f8335e9e2b5f7d91a8de1d2b5db51be25c0970633e8e3646e8d81dd45538f1e8",
-      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number arm, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header. Re-audited 2026-11-15 against d0f763f475 (#14658): the INT32 digit arm is deleted (a Number has one encoding); the exact-STRING_TAG arm and the js_jsvalue_to_string fallback are unchanged.",
+      "body_sha256": "0658ecb822e513a89f022ab0fe667f667c01c1cf3380d2f2bfc4a293c6677be2",
+      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number arm, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header. Re-audited 2026-11-15 against d0f763f475 (#14658): the INT32 digit arm is deleted (a Number has one encoding); the exact-STRING_TAG arm and the js_jsvalue_to_string fallback are unchanged. Re-audited 2026-11-23 (raw-handle ratchet): the rooted piece is read through with_const_ptr at its use; the STRING_TAG + is_valid_string_ptr admission and the js_jsvalue_to_string fallback are unchanged.",
       "rule": "heap-tag-only",
       "support_files": []
     }
   ],
   "support_files": {
-    "crates/perry-runtime/src/node_stream_event_emitter.rs": "ddb10bb241a67790ca53c6d988253225a9e180b0e24c48075c179e98a22cff3f",
-    "crates/perry-runtime/src/string/concat.rs": "673d231bb80bf1a2ed2c94745add8cd5a40332f756562dfd13d14b4aa8102ddc",
+    "crates/perry-runtime/src/node_stream_event_emitter.rs": "9b1b4341af484d21ad59d70c2ec44513821d5b599ebcb681b2d0b0c6061fbeb8",
+    "crates/perry-runtime/src/string/concat.rs": "683973907631c31db97645e9f2428fb6abeec2f569a66941cb83036622964543",
     "crates/perry-runtime/src/object/builtin_proto_entries.rs": "958ee4c11de504d165af8cceedecd3f0fd41f6585cf92645afa3087ecef3edae",
-    "crates/perry-runtime/src/object/property_ops/put_value.rs": "2b9719609a5585df373e05b38fca18772d034cca60c137aefda49c5e8108b9e5",
+    "crates/perry-runtime/src/object/property_ops/put_value.rs": "ff25dbdcced834a1a9704b95b70b1baf7bd018b793d18c789efc1cd328318269",
     "crates/perry-runtime/src/array/join.rs": "c292af7990171f08b140aad3a2c88dd775dd47d098ad5e2f6f1a1e37a5785041",
     "crates/perry-runtime/src/dgram/listeners.rs": "8e447c1cbf5278a055f8770b5415db63d937ff7b4a70705d65253240f071d7dd",
-    "crates/perry-codegen/src/expr/rest_fields.rs": "468046f154fb697ee14d22a61f2028909c52868646c69fcb92638f79d75bece3",
-    "crates/perry-runtime/src/object/layout_probe/computed.rs": "7c8723d6c169665af6aaf8bfdc99afcb4cad053b2533c6f9316ca892cccd434e"
+    "crates/perry-codegen/src/expr/rest_fields.rs": "0abb789418c1fc86124833220846588ed33120c0a66bde5662db41255e608b8d",
+    "crates/perry-runtime/src/object/layout_probe/computed.rs": "661f84bc6bcd4b228c57b611cba3fe1548fb49415142d920036045f34ac89cf0"
   }
 }

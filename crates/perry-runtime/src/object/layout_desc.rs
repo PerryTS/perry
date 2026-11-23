@@ -1642,7 +1642,7 @@ pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectH
         );
         let _ = current;
     }
-    let obj = object.get_raw_mut_ptr::<ObjectHeader>();
+    let obj = object.with_mut_ptr::<ObjectHeader, _>(|object_ptr| object_ptr);
     let fields = crate::meta_slots_of!(crate::meta_obj_runtime_born!(obj));
     for i in 0..d.slot_count as usize {
         // GC_STORE_AUDIT(POINTER_FREE): All three stores write the immediate TAG_HOLE to physical object slots. They introduce no pointer/child edge; allocation or rooted object custody surrounds the fill and shape publication follows.
@@ -1657,7 +1657,7 @@ pub(crate) unsafe fn adopt_family_layout(obj: *mut ObjectHeader) -> *mut ObjectH
     if prototype != 0 {
         super::prototype_chain::object_link_class_evaluation_prototype(obj as usize, prototype);
     }
-    object.get_raw_mut_ptr::<ObjectHeader>()
+    object.with_mut_ptr::<ObjectHeader, _>(|object_ptr| object_ptr)
 }
 
 /// A key publication on a static family object

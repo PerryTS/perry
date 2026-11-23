@@ -814,16 +814,13 @@ pub(crate) unsafe fn build_create_data_descriptor(value: f64) -> f64 {
         (b"configurable".as_slice(), f64::from_bits(TAG_TRUE)),
     ] {
         let key = crate::string::js_string_from_bytes(name.as_ptr(), name.len() as u32);
-        crate::object::js_object_set_field_by_name(
-            desc_handle.get_raw_mut_ptr::<crate::ObjectHeader>(),
-            key,
-            field,
-        );
+        desc_handle.with_mut_ptr::<crate::ObjectHeader, _>(|desc_handle_ptr| {
+            crate::object::js_object_set_field_by_name(desc_handle_ptr, key, field)
+        });
     }
-    f64::from_bits(
-        POINTER_TAG
-            | ((desc_handle.get_raw_mut_ptr::<crate::ObjectHeader>() as u64) & POINTER_MASK),
-    )
+    desc_handle.with_mut_ptr::<crate::ObjectHeader, _>(|desc| {
+        f64::from_bits(POINTER_TAG | ((desc as u64) & POINTER_MASK))
+    })
 }
 
 /// Define a writable, enumerable, configurable own data property using the
@@ -861,15 +858,16 @@ pub(crate) unsafe fn build_value_only_descriptor(value: f64) -> f64 {
     let desc = crate::object::js_object_alloc(0, 1);
     let desc_handle = scope.root_raw_mut_ptr(desc);
     let key = crate::string::js_string_from_bytes(b"value".as_ptr(), 5);
-    crate::object::js_object_set_field_by_name(
-        desc_handle.get_raw_mut_ptr::<crate::ObjectHeader>(),
-        key,
-        value_root.get_nanbox_f64(),
-    );
-    f64::from_bits(
-        POINTER_TAG
-            | ((desc_handle.get_raw_mut_ptr::<crate::ObjectHeader>() as u64) & POINTER_MASK),
-    )
+    desc_handle.with_mut_ptr::<crate::ObjectHeader, _>(|desc_handle_ptr| {
+        crate::object::js_object_set_field_by_name(
+            desc_handle_ptr,
+            key,
+            value_root.get_nanbox_f64(),
+        )
+    });
+    desc_handle.with_mut_ptr::<crate::ObjectHeader, _>(|desc| {
+        f64::from_bits(POINTER_TAG | ((desc as u64) & POINTER_MASK))
+    })
 }
 
 pub(crate) fn create_or_update_receiver_property(receiver: f64, key: f64, value: f64) -> bool {
@@ -1068,7 +1066,7 @@ pub(crate) fn ordinary_set_with_receiver(target: f64, key: f64, value: f64, rece
                             None => value,
                         };
                         let cur_addr = || match &roots {
-                            Some((_, _, a, _)) => a.get_raw_mut_ptr::<u8>() as usize,
+                            Some((_, _, a, _)) => a.with_mut_ptr::<u8, _>(|a| a as usize),
                             None => addr,
                         };
                         let cur_key = || match &roots {

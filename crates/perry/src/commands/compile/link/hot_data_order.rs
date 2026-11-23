@@ -23,7 +23,7 @@
 //!   where it puts them. A key the archives no longer hold matches nothing;
 //!   `scripts/hot_data_order.py check` is the gate.
 //! * GNU ld: the `.rodata` rule must follow the page alignment that starts
-//!   the read-only segment, and an `INSERT BEFORE .rodata` lands in front of
+//!   the read-only segment, and an `INSERT AFTER .fini` lands in front of
 //!   it, so the rule repeats that alignment; the linker's own alignment then
 //!   runs once more behind the rule (at most one page of padding before
 //!   `.eh_frame_hdr`). That alignment exists in x86-64's default script
@@ -322,6 +322,12 @@ fn place<'a>(
 /// The default `.rodata` and `.data.rel.ro` input patterns of GNU ld's script.
 const RODATA_DEFAULT: &str = "  *(.rodata .rodata.* .gnu.linkonce.r.*)\n";
 const RELRO_DEFAULT: &str = "  *(.data.rel.ro.local* .gnu.linkonce.d.rel.ro.local.*)\n  *(.data.rel.ro .data.rel.ro.* .gnu.linkonce.d.rel.ro.*)\n";
+/// GNU ld rules that define `.rodata` or `.data.rel.ro` themselves anchor on
+/// the section the default script puts in front of each: binutils 2.35
+/// rejects an `INSERT BEFORE` the section the script defines (see
+/// `perry_codegen::function_order::GNU_TEXT_INSERT`).
+const GNU_RODATA_INSERT: &str = " }\n} INSERT AFTER .fini;\n";
+const GNU_RELRO_INSERT: &str = " }\n} INSERT AFTER .fini_array;\n";
 /// The page alignment GNU ld's x86-64 script puts in front of `.rodata`.
 const RODATA_SEGMENT_START: &str = " . = ALIGN(CONSTANT (MAXPAGESIZE));\n . = SEGMENT_START(\"rodata-segment\", ALIGN(CONSTANT (MAXPAGESIZE)) + (. & (CONSTANT (MAXPAGESIZE) - 1)));\n";
 
@@ -360,7 +366,7 @@ pub(super) fn rules(placement: &Placement, lld: bool, rodata: bool) -> String {
             out.push_str(" .rodata : {\n");
             run(&mut out, "rodata", &placement.rodata);
             out.push_str(RODATA_DEFAULT);
-            out.push_str(" }\n} INSERT BEFORE .rodata;\n");
+            out.push_str(GNU_RODATA_INSERT);
         }
     }
     if !placement.relro.is_empty() {
@@ -370,7 +376,7 @@ pub(super) fn rules(placement: &Placement, lld: bool, rodata: bool) -> String {
         out.push_str(if lld {
             " }\n} INSERT BEFORE .dynamic;\n"
         } else {
-            " }\n} INSERT BEFORE .data.rel.ro;\n"
+            GNU_RELRO_INSERT
         });
     }
     out
@@ -512,9 +518,9 @@ mod tests {
         assert!(seg < start && start < gnu.find("*(.rodata.b)").unwrap());
         assert!(gnu.find("*(.rodata.c)").unwrap() < gnu.find("__perry_rt_hot_rodata_end").unwrap());
         assert!(gnu.find("__perry_rt_hot_rodata_end").unwrap() < rest);
-        assert!(gnu.contains("} INSERT BEFORE .rodata;\n"));
+        assert!(gnu.contains(GNU_RODATA_INSERT));
         assert!(gnu.contains(RELRO_DEFAULT));
-        assert!(gnu.ends_with("} INSERT BEFORE .data.rel.ro;\n"));
+        assert!(gnu.ends_with(GNU_RELRO_INSERT));
         // lld: the run in its own output section; RELRO before .dynamic.
         let lld = rules(&placement, true, true);
         assert!(lld.contains("SECTIONS {\n .rodata.perry_hot : {\n"));

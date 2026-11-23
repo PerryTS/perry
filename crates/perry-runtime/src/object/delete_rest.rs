@@ -184,7 +184,7 @@ pub extern "C" fn js_object_delete_field(
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let key_h = scope.root_string_ptr(key);
                 let arr = crate::array::clean_arr_ptr_mut(obj as *mut crate::array::ArrayHeader);
-                let key = key_h.get_raw_const_ptr::<crate::StringHeader>();
+                let key = key_h.with_const_ptr::<crate::StringHeader, _>(|key_h_ptr| key_h_ptr);
                 if arr.is_null()
                     || crate::json_tape::is_lazy_array(
                         arr as *const crate::json_tape::LazyArrayHeader,
@@ -1264,7 +1264,7 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
     let scope = crate::gc::RuntimeHandleScope::new();
     let obj_handle = scope.root_raw_mut_ptr(obj);
     let property_key = unsafe { js_to_property_key(key) };
-    let obj = obj_handle.get_raw_mut_ptr::<ObjectHeader>();
+    let obj = obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj_handle_ptr| obj_handle_ptr);
     if unsafe { crate::symbol::js_is_symbol(property_key) } != 0 {
         // Symbol-keyed delete (`delete obj[Symbol.iterator]`). Previously this
         // fell through to the vacuous `return 1`, so the delete *reported*
@@ -1279,10 +1279,9 @@ pub extern "C" fn js_object_delete_dynamic(obj: *mut ObjectHeader, key: f64) -> 
     let property_key_handle = scope.root_nanbox_f64(property_key);
     let key_str = crate::value::js_jsvalue_to_string(property_key_handle.get_nanbox_f64());
     if !key_str.is_null() {
-        return js_object_delete_field(
-            obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
-            key_str as *const crate::StringHeader,
-        );
+        return obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj_handle_ptr| {
+            js_object_delete_field(obj_handle_ptr, key_str as *const crate::StringHeader)
+        });
     }
 
     // For other types, delete succeeds vacuously
@@ -1408,7 +1407,7 @@ unsafe fn exotic_rest(
             )
         });
     }
-    rest_h.get_raw_mut_ptr::<ObjectHeader>()
+    rest_h.with_mut_ptr::<ObjectHeader, _>(|rest_h_ptr| rest_h_ptr)
 }
 
 /// Create a rest object from destructuring: copies all own enumerable

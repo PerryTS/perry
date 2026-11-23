@@ -365,7 +365,10 @@ fn gd_src(body: &str) -> String {
 fn gd_known(pf: &ProgramFacts) -> bool {
     let probe = |key: &str, ns: &str| {
         let ss: Vec<_> = pf.sites.iter().filter(|s| s.key == key).collect();
-        !ss.is_empty() && ss.iter().all(|s| !s.top && s.receivers.iter().all(|r| r == ns))
+        !ss.is_empty()
+            && ss
+                .iter()
+                .all(|s| !s.top && s.receivers.iter().all(|r| r == ns))
     };
     probe("max", "builtin:Math") && probe("keys", "builtin:Object")
 }
@@ -378,7 +381,11 @@ fn gd_known(pf: &ProgramFacts) -> bool {
 fn gd_any_key_delete_through_top_keeps_globals() {
     let src = gd_src("delete u[k];");
     let pf = facts_mods(&[("main", &src)]);
-    assert!(gd_known(&pf), "Math and Object are the intrinsics\n{}", pf.dump_text());
+    assert!(
+        gd_known(&pf),
+        "Math and Object are the intrinsics\n{}",
+        pf.dump_text()
+    );
 }
 
 /// RED: the same delete inside a function unknown code calls.
@@ -386,16 +393,28 @@ fn gd_any_key_delete_through_top_keeps_globals() {
 fn gd_any_key_delete_in_handed_function_keeps_globals() {
     let src = gd_src("unknown.take(function (o: any, kk: any) { delete o[kk]; });");
     let pf = facts_mods(&[("main", &src)]);
-    assert!(gd_known(&pf), "Math and Object are the intrinsics\n{}", pf.dump_text());
+    assert!(
+        gd_known(&pf),
+        "Math and Object are the intrinsics\n{}",
+        pf.dump_text()
+    );
 }
 
 /// KEEP: a store through ⊤ under any key may write `Math`: ⊤ as before.
 #[test]
 fn gd_any_key_store_through_top_still_writes_globals() {
-    for body in ["u[k] = new A();", "delete u[k]; u[k] = new A();", "u[k] = new A(); delete u[k];"] {
+    for body in [
+        "u[k] = new A();",
+        "delete u[k]; u[k] = new A();",
+        "u[k] = new A(); delete u[k];",
+    ] {
         let src = gd_src(body);
         let pf = facts_mods(&[("main", &src)]);
-        assert!(!gd_known(&pf), "{body}: Math may be written\n{}", pf.dump_text());
+        assert!(
+            !gd_known(&pf),
+            "{body}: Math may be written\n{}",
+            pf.dump_text()
+        );
     }
 }
 

@@ -175,11 +175,11 @@ fn alloc_stack(class_id: u32) -> *mut ObjectHeader {
     });
     let arr = scope.root_raw_mut_ptr(js_array_alloc(0));
     obj.with_mut_ptr::<ObjectHeader, _>(|ptr| {
-        let arr = arr.get_raw_mut_ptr::<ArrayHeader>();
+        let arr = arr.with_mut_ptr::<ArrayHeader, _>(|arr_ptr| arr_ptr);
         js_object_set_field_f64(ptr, FIELD_DISPOSERS, js_nanbox_pointer(arr as i64));
         js_object_set_field_f64(ptr, FIELD_DISPOSED, bool_f64(false));
     });
-    obj.get_raw_mut_ptr()
+    obj.with_mut_ptr(|obj_ptr| obj_ptr)
 }
 
 /// Resolve a NaN-boxed receiver to a stack `ObjectHeader`, or null.
@@ -431,15 +431,15 @@ pub extern "C" fn js_disposable_stack_move(stack: *mut ObjectHeader) -> f64 {
     }
     let fresh = scope.root_raw_mut_ptr(fresh);
     // Transfer the disposers array wholesale.
-    let arr = js_object_get_field_f64(obj.get_raw_mut_ptr(), FIELD_DISPOSERS);
-    js_object_set_field_f64(fresh.get_raw_mut_ptr(), FIELD_DISPOSERS, arr);
+    let arr = obj.with_mut_ptr(|obj_ptr| js_object_get_field_f64(obj_ptr, FIELD_DISPOSERS));
+    fresh.with_mut_ptr(|fresh_ptr| js_object_set_field_f64(fresh_ptr, FIELD_DISPOSERS, arr));
     // Empty + mark the source disposed (without running anything).
     let empty = js_array_alloc(0);
     obj.with_mut_ptr::<ObjectHeader, _>(|ptr| {
         js_object_set_field_f64(ptr, FIELD_DISPOSERS, js_nanbox_pointer(empty as i64));
         js_object_set_field_f64(ptr, FIELD_DISPOSED, bool_f64(true));
     });
-    js_nanbox_pointer(fresh.get_raw_mut_ptr::<ObjectHeader>() as i64)
+    fresh.with_mut_ptr::<ObjectHeader, _>(|fresh_ptr| js_nanbox_pointer(fresh_ptr as i64))
 }
 
 /// `asyncStack.disposeAsync()` → Promise<undefined>. Synchronously runs the

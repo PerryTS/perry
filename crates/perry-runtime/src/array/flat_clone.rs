@@ -280,7 +280,11 @@ pub extern "C" fn js_array_flat_depth(arr: *const ArrayHeader, depth: f64) -> *m
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr as *mut ArrayHeader);
     let result = js_array_alloc(0);
-    unsafe { js_array_flat_into(result, arr_handle.get_raw_mut_ptr::<ArrayHeader>(), levels) }
+    unsafe {
+        arr_handle.with_mut_ptr::<ArrayHeader, _>(|arr_handle_ptr| {
+            js_array_flat_into(result, arr_handle_ptr, levels)
+        })
+    }
 }
 
 /// Generic `Array.prototype.flat.call(receiver, depth?)` entry. The receiver is

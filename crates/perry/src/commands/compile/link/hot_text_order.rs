@@ -276,8 +276,9 @@ fn text_rules(placement: &Placement, lld: bool) -> String {
         return out;
     }
     out.push_str(
-        "  __perry_rt_hot_text_end = .;\n  *(.text.unlikely .text.*_unlikely .text.unlikely.*)\n  *(.text.exit .text.exit.*)\n  *(.text.startup .text.startup.*)\n  *(.text.hot .text.hot.*)\n  *(SORT(.text.sorted.*))\n  *(.text .stub .text.* .gnu.linkonce.t.*)\n }\n} INSERT BEFORE .text;\n",
+        "  __perry_rt_hot_text_end = .;\n  *(.text.unlikely .text.*_unlikely .text.unlikely.*)\n  *(.text.exit .text.exit.*)\n  *(.text.startup .text.startup.*)\n  *(.text.hot .text.hot.*)\n  *(SORT(.text.sorted.*))\n  *(.text .stub .text.* .gnu.linkonce.t.*)\n }\n",
     );
+    out.push_str(perry_codegen::function_order::GNU_TEXT_INSERT);
     out
 }
 
@@ -541,7 +542,11 @@ mod tests {
             .find("*(.text .stub .text.* .gnu.linkonce.t.*)")
             .unwrap();
         assert!(script.find("__perry_rt_hot_text_end").unwrap() < rest);
-        assert!(rest < script.find("} INSERT BEFORE .text;").unwrap());
+        assert!(
+            rest < script
+                .find(perry_codegen::function_order::GNU_TEXT_INSERT)
+                .unwrap()
+        );
         let one = script.find("*(.text.js_one)").unwrap();
         let two = script.find("*(.text._RNvNtCsAAAAAAAAAAA_").unwrap();
         assert!(two < one, "{script}");

@@ -25,9 +25,11 @@ pub(super) fn register(wrapper: f64, fields: f64) {
             0,
         ));
         registry.set_nanbox_f64(crate::value::js_nanbox_pointer(
-            crate::weakref::js_finreg_new(crate::value::js_nanbox_pointer(
-                callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-            )) as i64,
+            crate::weakref::js_finreg_new(
+                callback.with_mut_ptr::<crate::closure::ClosureHeader, _>(|callback_ptr| {
+                    crate::value::js_nanbox_pointer(callback_ptr as i64)
+                }),
+            ) as i64,
         ));
         unsafe {
             bag::store(

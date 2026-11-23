@@ -71,19 +71,18 @@ fn collection_keyed_get(raw_ptr: usize, index: f64) -> f64 {
     let key = scope.root_nanbox_f64(unsafe { crate::object::js_to_property_key(index) });
     let key = key.get_nanbox_f64();
     if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
-        let recv_bits = crate::value::js_nanbox_pointer(
-            recv.get_raw_const_ptr::<crate::object::ObjectHeader>() as i64,
-        );
+        let recv_bits = recv.with_const_ptr::<crate::object::ObjectHeader, _>(|recv_ptr| {
+            crate::value::js_nanbox_pointer(recv_ptr as i64)
+        });
         return unsafe { crate::symbol::js_object_get_symbol_property(recv_bits, key) };
     }
     let key_ptr = js_get_string_pointer_unified(key) as *const crate::StringHeader;
     if key_ptr.is_null() {
         return f64::from_bits(TAG_UNDEFINED);
     }
-    crate::object::js_object_get_field_by_name_f64(
-        recv.get_raw_const_ptr::<crate::object::ObjectHeader>(),
-        key_ptr,
-    )
+    recv.with_const_ptr::<crate::object::ObjectHeader, _>(|recv_ptr| {
+        crate::object::js_object_get_field_by_name_f64(recv_ptr, key_ptr)
+    })
 }
 
 #[inline(always)]
@@ -478,9 +477,9 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             let key_h = scope.root_nanbox_f64(key);
             let key = key_h.get_nanbox_f64();
             if unsafe { crate::symbol::js_is_symbol(key) } != 0 {
-                let recv_bits = crate::value::js_nanbox_pointer(
-                    recv.get_raw_const_ptr::<crate::object::ObjectHeader>() as i64,
-                );
+                let recv_bits = recv.with_const_ptr::<crate::object::ObjectHeader, _>(|recv_ptr| {
+                    crate::value::js_nanbox_pointer(recv_ptr as i64)
+                });
                 return unsafe { crate::symbol::js_object_get_symbol_property(recv_bits, key) };
             }
             let key_ptr =
@@ -488,10 +487,9 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             if key_ptr.is_null() {
                 return f64::from_bits(TAG_UNDEFINED);
             }
-            return crate::object::js_object_get_field_by_name_f64(
-                recv.get_raw_const_ptr::<crate::object::ObjectHeader>(),
-                key_ptr,
-            );
+            return recv.with_const_ptr::<crate::object::ObjectHeader, _>(|recv_ptr| {
+                crate::object::js_object_get_field_by_name_f64(recv_ptr, key_ptr)
+            });
         }
     }
     // The element path below takes an i32, so prove an exact non-negative
@@ -596,10 +594,9 @@ pub extern "C" fn js_dyn_index_get(value: f64, index: f64) -> f64 {
             let scope = crate::gc::RuntimeHandleScope::new();
             let recv = scope.root_raw_mut_ptr(raw_ptr as *mut crate::object::ObjectHeader);
             let key = crate::string::js_string_from_bytes(s.as_ptr(), s.len() as u32);
-            let v = crate::object::js_object_get_field_by_name_f64(
-                recv.get_raw_const_ptr::<crate::object::ObjectHeader>(),
-                key,
-            );
+            let v = recv.with_const_ptr::<crate::object::ObjectHeader, _>(|recv_ptr| {
+                crate::object::js_object_get_field_by_name_f64(recv_ptr, key)
+            });
             // An indexed property inherited from the canonical
             // `Object.prototype` (incl. a defineProperty accessor) shows
             // through any object/function receiver — e.g. `Array[1]` after

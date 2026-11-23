@@ -252,7 +252,7 @@ pub extern "C" fn js_array_to_spliced(
             source.across_const::<ArrayHeader, _>(|| crate::builtins::js_number_coerce(start));
         let (delete_count, _) = source
             .across_const::<ArrayHeader, _>(|| crate::builtins::js_number_coerce(delete_count));
-        let arr = source.get_raw_const_ptr::<ArrayHeader>();
+        let arr = source.with_const_ptr::<ArrayHeader, _>(|source_ptr| source_ptr);
         let len = (*arr).length as isize;
 
         // Normalize start index (ECMA ToIntegerOrInfinity). NaN -> 0,

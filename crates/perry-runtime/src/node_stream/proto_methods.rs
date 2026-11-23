@@ -213,7 +213,7 @@ pub(crate) fn build_stream_prototype(constructor: f64, kind: StreamProto) -> f64
     // SAFETY: a node prototype descriptor of this runtime.
     let layout = unsafe { layouts::NodePrototype::of(kind.layout()) };
     let proto = scope.root_raw_mut_ptr(unsafe { layout.birth() });
-    let p = || proto.get_raw_mut_ptr::<ObjectHeader>();
+    let p = || proto.with_mut_ptr::<ObjectHeader, _>(|p| p);
     // SAFETY (every fill below): the fresh prototype born on `layout`, not yet
     // reachable by program code.
     unsafe { layout.data(p(), b"constructor", constructor.get_nanbox_f64()) };
@@ -411,7 +411,7 @@ pub(crate) fn build_passthrough_prototype(constructor: f64) -> f64 {
     // SAFETY: a node prototype descriptor of this runtime.
     let layout = unsafe { layouts::NodePrototype::of(layouts::PASSTHROUGH_PROTOTYPE::desc()) };
     let proto = scope.root_raw_mut_ptr(unsafe { layout.birth() });
-    let p = || proto.get_raw_mut_ptr::<ObjectHeader>();
+    let p = || proto.with_mut_ptr::<ObjectHeader, _>(|p| p);
     let transform = proto_closure(&scope, &NS_PASSTHROUGH_TRANSFORM_INFO);
     // SAFETY: the fresh prototype born on `layout`, not yet reachable by
     // program code; populated before it is sealed.
@@ -574,10 +574,10 @@ extern "C" fn ns_base_write3(
     record.with_mut_ptr::<ObjectHeader, _>(|r| {
         js_object_set_field_by_name(r, hidden_key(b"encoding"), encoding.get_nanbox_f64())
     });
-    let list = crate::array::js_array_push_f64(
-        crate::array::js_array_alloc(0),
-        box_pointer(record.get_raw_mut_ptr::<ObjectHeader>() as *const u8),
-    );
+    let list = crate::array::js_array_alloc(0);
+    // Read after the allocation, which can move the record.
+    let record_value = record.with_mut_ptr::<ObjectHeader, _>(|r| box_pointer(r as *const u8));
+    let list = crate::array::js_array_push_f64(list, record_value);
     let args = [box_pointer(list as *const u8), callback.get_nanbox_f64()];
     unsafe {
         crate::closure::native_call_value_this(
@@ -735,7 +735,7 @@ extern "C" fn ns_transform_write3(
     let args = [
         chunk.get_nanbox_f64(),
         encoding.get_nanbox_f64(),
-        box_pointer(done.get_raw_mut_ptr::<ClosureHeader>() as *const u8),
+        done.with_mut_ptr::<ClosureHeader, _>(|d| box_pointer(d as *const u8)),
     ];
     unsafe {
         crate::closure::native_call_value_this(
@@ -803,7 +803,7 @@ extern "C" fn ns_transform_final1(
         js_closure_set_capture_f64(d, 0, stream.get_nanbox_f64());
         js_closure_set_capture_f64(d, 1, callback.get_nanbox_f64());
     });
-    let done_value = box_pointer(done.get_raw_mut_ptr::<ClosureHeader>() as *const u8);
+    let done_value = done.with_mut_ptr::<ClosureHeader, _>(|d| box_pointer(d as *const u8));
     if is_callable_value(flush.get_nanbox_f64()) && !stream_destroyed(stream.get_nanbox_f64()) {
         unsafe {
             crate::closure::native_call_value_this(
@@ -815,12 +815,14 @@ extern "C" fn ns_transform_final1(
         }
     } else {
         let undefined = f64::from_bits(TAG_UNDEFINED);
-        ns_transform_final_done(
-            done.get_raw_mut_ptr::<ClosureHeader>(),
-            crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
-            undefined,
-            undefined,
-        );
+        done.with_mut_ptr::<ClosureHeader, _>(|d| {
+            ns_transform_final_done(
+                d,
+                crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
+                undefined,
+                undefined,
+            )
+        });
     }
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -980,19 +982,16 @@ fn install_prop(layout: &layouts::NodePrototype, proto: *mut ObjectHeader, name:
         set.with_mut_ptr::<ClosureHeader, _>(|c| {
             js_closure_set_capture_f64(c, 0, prop as u8 as f64)
         });
-        box_pointer(set.get_raw_mut_ptr::<ClosureHeader>().cast()).to_bits()
+        set.with_mut_ptr::<ClosureHeader, _>(|s| box_pointer(s.cast()).to_bits())
     } else {
         0
     };
-    let get_bits = box_pointer(get.get_raw_mut_ptr::<ClosureHeader>().cast()).to_bits();
+    let get_bits = get.with_mut_ptr::<ClosureHeader, _>(|g| box_pointer(g.cast()).to_bits());
     // SAFETY: the fresh prototype born on `layout`; the key is its accessor.
     unsafe {
-        layout.accessor(
-            proto.get_raw_mut_ptr::<ObjectHeader>(),
-            name.as_bytes(),
-            get_bits,
-            set_bits,
-        )
+        proto.with_mut_ptr::<ObjectHeader, _>(|proto| {
+            layout.accessor(proto, name.as_bytes(), get_bits, set_bits)
+        })
     };
 }
 
@@ -1009,7 +1008,7 @@ pub(crate) fn build_legacy_stream_prototype(constructor: f64) -> f64 {
     // SAFETY: a node prototype descriptor of this runtime.
     let layout = unsafe { layouts::NodePrototype::of(layouts::STREAM_PROTOTYPE::desc()) };
     let proto = scope.root_raw_mut_ptr(unsafe { layout.birth() });
-    let p = || proto.get_raw_mut_ptr::<ObjectHeader>();
+    let p = || proto.with_mut_ptr::<ObjectHeader, _>(|p| p);
     let pipe = proto_closure(&scope, &NS_LEGACY_PIPE_INFO);
     let event_names = proto_closure(
         &scope,

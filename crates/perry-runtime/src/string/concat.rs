@@ -712,12 +712,13 @@ fn concat_byte_parts(mut l: ConcatPart, mut r: ConcatPart) -> f64 {
             let scope = crate::gc::RuntimeHandleScope::new();
             let left = scope.root_string_ptr(l.owner);
             let right = scope.root_string_ptr(r.owner);
-            let storage = string_storage_alloc(total_blen);
+            let (storage, left_now) =
+                left.across_const::<StringHeader, _>(|| string_storage_alloc(total_blen));
             if !l.owner.is_null() {
-                l.data = string_data(left.get_raw_const_ptr::<StringHeader>());
+                l.data = string_data(left_now);
             }
             if !r.owner.is_null() {
-                r.data = string_data(right.get_raw_const_ptr::<StringHeader>());
+                r.data = right.with_const_ptr::<StringHeader, _>(|right| string_data(right));
             }
             storage
         }
@@ -810,13 +811,8 @@ pub extern "C" fn js_string_concat(
             let scope = crate::gc::RuntimeHandleScope::new();
             let left = scope.root_string_ptr(a);
             let right = scope.root_string_ptr(b);
-            let (ptr, data) = string_storage_alloc(total_blen);
-            (
-                ptr,
-                data,
-                left.get_raw_const_ptr::<StringHeader>(),
-                right.get_raw_const_ptr::<StringHeader>(),
-            )
+            let ((ptr, data), a) = left.across_const::<StringHeader, _>(|| string_storage_alloc(total_blen));
+            (ptr, data, a, right.with_const_ptr::<StringHeader, _>(|b| b))
         }
     };
 
@@ -902,7 +898,7 @@ pub extern "C" fn js_string_concat_value(
     let scope = crate::gc::RuntimeHandleScope::new();
     let prefix_handle = scope.root_string_ptr(prefix);
     let value_str = crate::value::js_jsvalue_to_string(value);
-    js_string_concat(prefix_handle.get_raw_const_ptr::<StringHeader>(), value_str)
+    prefix_handle.with_const_ptr::<StringHeader, _>(|prefix| js_string_concat(prefix, value_str))
 }
 
 /// Build the heap result from digits already formatted by the caller. The
@@ -986,12 +982,9 @@ fn concat_formatted_number(
             None => {
                 let scope = crate::gc::RuntimeHandleScope::new();
                 let prefix_handle = scope.root_string_ptr(prefix);
-                let (ptr, data_ptr) = string_storage_alloc(total_blen as u32);
-                (
-                    ptr,
-                    data_ptr,
-                    prefix_handle.get_raw_const_ptr::<StringHeader>(),
-                )
+                let ((ptr, data_ptr), prefix) = prefix_handle
+                    .across_const::<StringHeader, _>(|| string_storage_alloc(total_blen as u32));
+                (ptr, data_ptr, prefix)
             }
         };
 
@@ -1515,7 +1508,7 @@ fn concat_primitive_rooted_copy<const MAX_PARTS: usize>(
                 continue;
             }
             if let Some(handle) = handles[i] {
-                piece_ptrs[i] = string_data(handle.get_raw_const_ptr::<StringHeader>());
+                piece_ptrs[i] = handle.with_const_ptr::<StringHeader, _>(|piece| string_data(piece));
             }
             ptr::copy_nonoverlapping(piece_ptrs[i], cursor, len);
             cursor = cursor.add(len);
@@ -1647,11 +1640,12 @@ fn concat_chain_sized<const MAX_PARTS: usize>(parts: *const f64, n: usize) -> *m
                 continue;
             }
             if let Some(handle) = piece_string_handles[i] {
-                let piece = handle.get_raw_const_ptr::<StringHeader>();
-                if is_valid_string_ptr(piece) {
-                    ptr::copy_nonoverlapping(string_data(piece), cursor, l);
-                    cursor = cursor.add(l);
-                }
+                handle.with_const_ptr::<StringHeader, _>(|piece| {
+                    if is_valid_string_ptr(piece) {
+                        ptr::copy_nonoverlapping(string_data(piece), cursor, l);
+                        cursor = cursor.add(l);
+                    }
+                });
             } else if !piece_ptrs[i].is_null() {
                 ptr::copy_nonoverlapping(piece_ptrs[i], cursor, l);
                 cursor = cursor.add(l);
@@ -1759,9 +1753,9 @@ pub extern "C" fn js_value_concat_string(
         let num_len = format_number_into(value, &mut num_buf);
 
         let total_blen = num_len + suffix_blen as usize;
-        let (ptr, data_ptr) = string_storage_alloc(total_blen as u32);
-        // Re-read after the allocation: it can collect and evacuate (#6655).
-        let suffix = suffix_handle.get_raw_const_ptr::<StringHeader>();
+        // The allocation can collect and evacuate (#6655).
+        let ((ptr, data_ptr), suffix) = suffix_handle
+            .across_const::<StringHeader, _>(|| string_storage_alloc(total_blen as u32));
 
         unsafe {
             let flags = if is_valid_string_ptr(suffix) {
@@ -1793,7 +1787,7 @@ pub extern "C" fn js_value_concat_string(
 
     // Reload `suffix` after the user `toString` (#6655).
     let value_str = crate::value::js_jsvalue_to_string(value);
-    js_string_concat(value_str, suffix_handle.get_raw_const_ptr::<StringHeader>())
+    suffix_handle.with_const_ptr::<StringHeader, _>(|suffix| js_string_concat(value_str, suffix))
 }
 
 /// Resolve a value the caller has already established `is_any_string()` to a

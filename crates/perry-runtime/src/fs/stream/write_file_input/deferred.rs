@@ -164,11 +164,17 @@ fn await_result(id: usize, value: f64, returning: bool) {
         rejected.with_mut_ptr(|closure| {
             crate::closure::closure_set_capture_word(closure, 0, id as i64)
         });
-        crate::promise::js_promise_attach_handlers(
-            promise.get_raw_mut_ptr(),
-            fulfilled.get_raw_const_ptr(),
-            rejected.get_raw_const_ptr(),
-        );
+        promise.with_mut_ptr(|promise_ptr| {
+            fulfilled.with_const_ptr(|fulfilled_ptr| {
+                rejected.with_const_ptr(|rejected_ptr| {
+                    crate::promise::js_promise_attach_handlers(
+                        promise_ptr,
+                        fulfilled_ptr,
+                        rejected_ptr,
+                    )
+                })
+            })
+        });
     });
     if let Err(error) = result {
         if returning {
@@ -395,11 +401,15 @@ fn start(id: usize) {
                 roots[SIGNAL].get_nanbox_f64(),
             ) {
                 unsafe {
-                    crate::event_target_hook_slots::js_event_target_add_event_listener(
-                        signal,
-                        event.get_raw_const_ptr(),
-                        listener.get_raw_mut_ptr::<ClosureHeader>() as i64,
-                    );
+                    event.with_const_ptr(|event_ptr| {
+                        listener.with_mut_ptr::<ClosureHeader, _>(|listener_ptr| {
+                            crate::event_target_hook_slots::js_event_target_add_event_listener(
+                                signal,
+                                event_ptr,
+                                listener_ptr as i64,
+                            )
+                        })
+                    });
                 }
             }
             check_write_file_aborted(write_file_signal_from_options(
@@ -413,7 +423,9 @@ fn start(id: usize) {
         closure.with_mut_ptr(|closure| {
             crate::closure::closure_set_capture_word(closure, 0, id as i64)
         });
-        crate::builtins::js_queue_microtask(closure.get_raw_mut_ptr::<ClosureHeader>() as i64);
+        closure.with_mut_ptr::<ClosureHeader, _>(|closure_ptr| {
+            crate::builtins::js_queue_microtask(closure_ptr as i64)
+        });
         Ok(())
     });
     match result {

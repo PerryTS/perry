@@ -69,12 +69,18 @@ unsafe fn root_holder(value_f64: f64) -> f64 {
     let wrapper_handle = scope.root_raw_mut_ptr(wrapper);
     let empty = js_string_from_bytes(b"".as_ptr(), 0);
     let empty_handle = scope.root_string_ptr(empty);
-    crate::object::js_object_set_field_by_name(
-        wrapper_handle.get_raw_mut_ptr::<crate::ObjectHeader>(),
-        empty_handle.get_raw_const_ptr::<StringHeader>(),
-        val_handle.get_nanbox_f64(),
-    );
-    holder_value(wrapper_handle.get_raw_mut_ptr::<crate::ObjectHeader>() as *const u8)
+    empty_handle.with_const_ptr::<StringHeader, _>(|empty_handle_ptr| {
+        wrapper_handle.with_mut_ptr::<crate::ObjectHeader, _>(|wrapper_handle_ptr| {
+            crate::object::js_object_set_field_by_name(
+                wrapper_handle_ptr,
+                empty_handle_ptr,
+                val_handle.get_nanbox_f64(),
+            )
+        })
+    });
+    wrapper_handle.with_mut_ptr::<crate::ObjectHeader, _>(|wrapper_handle_ptr| {
+        holder_value(wrapper_handle_ptr as *const u8)
+    })
 }
 
 /// Resolve `value.toJSON(key)` if `value` is an object with a callable
@@ -459,10 +465,11 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
     for j in 0..actual_fields {
         let f = key_order.as_ref().map_or(j, |order| order[j as usize]);
         let obj = obj_root.get_raw_const_ptr::<crate::ObjectHeader>();
-        let keys_elements = crate::object::keys_array_dense_slots(
-            keys_root.get_raw_const_ptr::<crate::ArrayHeader>(),
-        )
-        .0;
+        let keys_elements = keys_root
+            .with_const_ptr::<crate::ArrayHeader, _>(|keys_root_ptr| {
+                crate::object::keys_array_dense_slots(keys_root_ptr)
+            })
+            .0;
         // A1_UNPROVEN: record-first: no proof of the object form at this slot read (kind-A/B question for S0f).
         let fields_ptr = crate::meta_slots_of!(crate::meta_obj_runtime_born!(
             (obj_root.get_raw_const_ptr::<u8>()) as *mut _
@@ -537,7 +544,7 @@ pub(crate) unsafe fn stringify_object_with_replacer_pretty(
             replacer,
             key_f64_for_replacer,
             field_after_to_json,
-            holder_value(obj_root.get_raw_const_ptr::<u8>()),
+            obj_root.with_const_ptr::<u8, _>(|obj_root_ptr| holder_value(obj_root_ptr)),
         );
         let replaced_bits = replaced.to_bits();
 
@@ -676,7 +683,7 @@ pub(crate) unsafe fn stringify_array_with_replacer_pretty(
             replacer,
             key_f64,
             elem_after_to_json,
-            holder_value(arr_root.get_raw_const_ptr::<u8>()),
+            arr_root.with_const_ptr::<u8, _>(|arr_root_ptr| holder_value(arr_root_ptr)),
         );
         let replaced_bits = replaced.to_bits();
 
@@ -1229,12 +1236,14 @@ unsafe fn stringify_elements_backed_pretty(
         );
         if let Some(r) = &replacer_h {
             let after_to_json = apply_to_json_keyed(value, key_h.get_nanbox_f64());
-            value = call_replacer(
-                r.get_raw_const_ptr::<crate::ClosureHeader>(),
-                key_h.get_nanbox_f64(),
-                after_to_json,
-                obj_h.get_nanbox_f64(),
-            );
+            value = r.with_const_ptr::<crate::ClosureHeader, _>(|r_ptr| {
+                call_replacer(
+                    r_ptr,
+                    key_h.get_nanbox_f64(),
+                    after_to_json,
+                    obj_h.get_nanbox_f64(),
+                )
+            });
         }
         let bits = value.to_bits();
         if bits == TAG_UNDEFINED

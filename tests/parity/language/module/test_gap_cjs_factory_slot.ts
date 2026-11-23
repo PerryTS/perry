@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 const modPath = require.resolve("../../../fixtures/programs/fixtures/cjs_factory_slot/mod.cjs");
-const m = require("./fixtures/cjs_factory_slot/mod.cjs");
+const m = require("../../../fixtures/programs/fixtures/cjs_factory_slot/mod.cjs");
 
 console.log("fn:", m.add.toString());
 console.log("arrow:", String(m.arrow));
@@ -28,7 +28,7 @@ const a = require("../../../fixtures/programs/fixtures/cjs_factory_slot/cycle-a.
 console.log("cycle:", a.fromB, a.a2);
 
 delete require.cache[modPath];
-const m2 = require("./fixtures/cjs_factory_slot/mod.cjs");
+const m2 = require("../../../fixtures/programs/fixtures/cjs_factory_slot/mod.cjs");
 console.log("reload:", m2 !== m, m2.loads, require.cache[modPath]!.exports === m2);
 console.log("reload hides factory:", hidden(require.cache[modPath]!));
 console.log("reload fn:", m2.add.toString() === m.add.toString());

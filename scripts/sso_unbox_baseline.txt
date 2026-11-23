@@ -6,10 +6,10 @@
 heap-tag-only | perry-ext-better-sqlite3 | 1
 heap-tag-only | perry-ext-http | 2
 heap-tag-only | perry-ffi | 2
-heap-tag-only | perry-runtime | 51
-heap-tag-only | perry-stdlib | 3
+heap-tag-only | perry-runtime | 55
+heap-tag-only | perry-stdlib | 2
 mask-cast | perry-ext-http | 2
 mask-cast | perry-ext-ws | 1
 mask-cast | perry-ffi | 1
-mask-cast | perry-runtime | 35
-mask-cast | perry-stdlib | 3
+mask-cast | perry-runtime | 38
+mask-cast | perry-stdlib | 2

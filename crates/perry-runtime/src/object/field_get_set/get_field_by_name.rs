@@ -1618,11 +1618,11 @@ fn get_field_by_name_past_data_probe(
                                 let scope = crate::gc::RuntimeHandleScope::new();
                                 let key_root = scope.root_string_ptr(key);
                                 if let Some(v) =
-                                    crate::object::prototype_chain::resolve_inherited_field_from_prototype(
+                                    key_root.with_const_ptr::<crate::StringHeader, _>(|key_root_ptr| crate::object::prototype_chain::resolve_inherited_field_from_prototype(
                                         addr,
                                         proto.to_bits(),
-                                        key_root.get_raw_const_ptr::<crate::StringHeader>(),
-                                    )
+                                        key_root_ptr,
+                                    ))
                                 {
                                     return v;
                                 }
@@ -1945,7 +1945,7 @@ pub(crate) fn primitive_number_get(number: f64, key: *const crate::StringHeader)
     let bits = number.to_bits();
     if !key.is_null() {
         unsafe {
-            let key_ptr = (key as *const u8).add(std::mem::size_of::<crate::StringHeader>());
+            let key_ptr = crate::string::string_data(key);
             let key_len = (*key).byte_len as usize;
             let key_bytes = std::slice::from_raw_parts(key_ptr, key_len);
             if let Ok(name) = std::str::from_utf8(key_bytes) {

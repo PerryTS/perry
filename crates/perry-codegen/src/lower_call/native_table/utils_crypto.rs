@@ -26,15 +26,15 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
     },
     // ========== bcrypt ==========
     // Same ABI rule as argon2 above: password / hash args are
-    // `*const StringHeader`. The salt-rounds arg of bcrypt.hash is a
-    // genuine f64 number and stays NA_F64.
+    // `*const StringHeader`. `hash` and `hashSync` take their salt-or-rounds
+    // as raw bits (`NA_JSV`) so the binding can tell a salt string from a cost.
     NativeModSig {
         module: "bcrypt",
         has_receiver: false,
         method: "hash",
         class_filter: None,
         runtime: "js_bcrypt_hash",
-        args: &[NA_STR, NA_F64],
+        args: &[NA_STR, NA_JSV],
         ret: NR_GCPTR,
     },
     NativeModSig {
@@ -49,9 +49,7 @@ pub(super) const UTILS_CRYPTO_ROWS: &[NativeModSig] = &[
     // The sync forms return the value itself: a raw `StringHeader` the row
     // boxes (`NR_STR`, null on failure reads as `null`) or a NaN-boxed boolean
     // (`NR_F64`). `genSalt`'s rounds is optional; a missing one arrives as
-    // `undefined` and the binding applies node's default of 10. `hashSync`
-    // takes its salt-or-rounds as raw bits (`NA_JSV`) so the binding can tell
-    // a salt string from a cost.
+    // `undefined` and the binding applies node's default of 10.
     NativeModSig {
         module: "bcrypt",
         has_receiver: false,

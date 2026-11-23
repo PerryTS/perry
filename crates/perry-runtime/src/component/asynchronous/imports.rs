@@ -36,7 +36,9 @@ pub(crate) fn register(owner: f64, request: &str, value: f64, lifetime: f64, ty:
     let result_type = scope.root_nanbox_f64(encoded_type(ty));
     let promise =
         scope.root_raw_mut_ptr(crate::promise::js_promise_resolved(value.get_nanbox_f64()));
-    crate::promise::js_promise_mark_internally_handled(promise.get_raw_mut_ptr());
+    promise.with_mut_ptr(|promise_ptr| {
+        crate::promise::js_promise_mark_internally_handled(promise_ptr)
+    });
     let record = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
         crate::object::js_object_alloc(0, 0) as i64,
     ));
@@ -54,14 +56,16 @@ pub(crate) fn register(owner: f64, request: &str, value: f64, lifetime: f64, ty:
     set_field(
         record.get_nanbox_f64(),
         b"request",
-        crate::value::js_nanbox_string(
-            token.get_raw_const_ptr::<crate::string::StringHeader>() as i64
-        ),
+        token.with_const_ptr::<crate::string::StringHeader, _>(|token_ptr| {
+            crate::value::js_nanbox_string(token_ptr as i64)
+        }),
     );
     set_field(
         record.get_nanbox_f64(),
         b"promise",
-        crate::value::js_nanbox_pointer(promise.get_raw_mut_ptr::<Promise>() as i64),
+        promise.with_mut_ptr::<Promise, _>(|promise_ptr| {
+            crate::value::js_nanbox_pointer(promise_ptr as i64)
+        }),
     );
     set_field(
         record.get_nanbox_f64(),

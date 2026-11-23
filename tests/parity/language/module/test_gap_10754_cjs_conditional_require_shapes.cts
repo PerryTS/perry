@@ -129,7 +129,7 @@ console.log(
 // must not re-run its body and must hand back the same exports.
 console.log('cache:');
 let again: unknown = 'unset';
-on && (again = require('./_helpers/gap10754_on_exp_and.cjs'));
+on && (again = require('../../../fixtures/programs/_helpers/gap10754_on_exp_and.cjs'));
 console.log('cache same=' + (again === expAnd));
 
 console.log('end');

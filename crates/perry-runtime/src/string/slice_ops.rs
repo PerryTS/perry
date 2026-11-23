@@ -133,7 +133,7 @@ pub extern "C" fn js_string_substr(
     let start = start as i32;
     let end = end as i32;
 
-    let s = s_handle.get_raw_const_ptr::<StringHeader>();
+    let s = s_handle.with_const_ptr::<StringHeader, _>(|s_handle_ptr| s_handle_ptr);
     super::slice_range::copy_utf16_range(s, start as u32, end as u32)
 }
 

@@ -443,7 +443,7 @@ js_bcrypt_compare	ptr	ptr,ptr
 js_bcrypt_compare_sync	f64	ptr,ptr
 js_bcrypt_gen_salt	ptr	f64
 js_bcrypt_gen_salt_sync	ptr	f64
-js_bcrypt_hash	ptr	ptr,f64
+js_bcrypt_hash	ptr	ptr,i64
 js_bcrypt_hash_sync	ptr	ptr,i64
 js_bigint_add	ptr	ptr,ptr
 js_bigint_and	ptr	ptr,ptr
@@ -2026,6 +2026,7 @@ js_literal_shape_initialize	void	f64,ptr,ptr,i32u
 js_load_module	i64	i64,i64
 js_loop_interrupt	void	
 js_loop_settle_once	void	
+js_loop_turn_nonblocking	void	
 js_loose_eq	i64	i64,i64
 js_lt	i64	i64,i64
 js_main_thread_notified	i32s	
@@ -3576,7 +3577,7 @@ js_register_jsx_render_stream	void	ptr
 js_register_native_property_bag_dispatch	void	ptr
 js_register_net_socket_handle_probe	void	ptr
 js_register_node_stream_web_adapter_callbacks	void	ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr,ptr
-js_register_object_url_fns	void	ptr,ptr
+js_register_object_url_fns	void	ptr,ptr,ptr
 js_register_path_init	void	ptr,i64,i64
 js_register_path_inits_lazily	void	ptr
 js_register_path_module	void	f64,f64
@@ -5247,6 +5248,7 @@ perry_geisterhand_request_screenshot	ptr	ptr
 perry_geisterhand_request_tree	ptr	ptr
 perry_geisterhand_request_value	ptr	i64,ptr
 perry_has_work	i32s	
+perry_host_keeps_thread_after_main	void	
 perry_i18n_format_currency	ptr	f64,i32s
 perry_i18n_format_currency_default	ptr	f64
 perry_i18n_format_date	ptr	f64,i32s,i32s

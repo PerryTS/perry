@@ -57,11 +57,11 @@ impl WorkerProcessState {
         let array = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len as u32));
         for index in 0..len {
             let item = crate::array::arraylike_get(value.get_nanbox_f64(), index);
-            crate::array::js_array_push_f64(array.get_raw_mut_ptr(), item);
+            array.with_mut_ptr(|array| crate::array::js_array_push_f64(array, item));
         }
         unsafe {
             crate::thread::serialize_message(
-                crate::value::JSValue::pointer(array.get_raw_const_ptr::<u8>()).bits(),
+                array.with_const_ptr::<u8, _>(|array| crate::value::JSValue::pointer(array).bits()),
                 &[],
                 None,
             )
@@ -91,29 +91,24 @@ impl WorkerProcessState {
         let array = scope.root_raw_mut_ptr(crate::os::allocate_process_argv(
             (len as u32).saturating_add(2),
         ));
-        crate::array::js_array_push_f64(
-            array.get_raw_mut_ptr(),
-            crate::array::js_array_get_f64(defaults.get_raw_mut_ptr(), 0),
-        );
+        let first = defaults.with_mut_ptr(|d| crate::array::js_array_get_f64(d, 0));
+        array.with_mut_ptr(|array| crate::array::js_array_push_f64(array, first));
         let entry = match entry {
             Some(entry) => crate::value::js_nanbox_string(crate::string::js_string_from_bytes(
                 entry.as_ptr(),
                 entry.len() as u32,
             ) as i64),
-            None => crate::array::js_array_get_f64(defaults.get_raw_mut_ptr(), 1),
+            None => defaults.with_mut_ptr(|d| crate::array::js_array_get_f64(d, 1)),
         };
-        crate::array::js_array_push_f64(array.get_raw_mut_ptr(), entry);
+        array.with_mut_ptr(|array| crate::array::js_array_push_f64(array, entry));
         for index in 0..len {
             let item = crate::array::arraylike_get(argv.get_nanbox_f64(), index);
-            crate::array::js_array_push_f64(array.get_raw_mut_ptr(), item);
+            array.with_mut_ptr(|array| crate::array::js_array_push_f64(array, item));
         }
-        crate::object::native_namespace_prop_override_store(
-            "process",
-            "argv",
-            crate::value::js_nanbox_pointer(
-                array.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
-            ),
-        );
+        let argv = array.with_mut_ptr::<crate::array::ArrayHeader, _>(|array| {
+            crate::value::js_nanbox_pointer(array as i64)
+        });
+        crate::object::native_namespace_prop_override_store("process", "argv", argv);
     }
 }
 

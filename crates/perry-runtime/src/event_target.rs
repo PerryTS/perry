@@ -766,10 +766,9 @@ pub unsafe extern "C" fn js_event_target_add_event_listener_with_options(
     let once = listener_option_bool(options_h.get_nanbox_f64(), b"once");
     let signal = listener_signal(options_h.get_nanbox_f64());
     let signal_h = signal.map(|signal| scope.root_raw_mut_ptr(signal));
-    if signal_h
-        .as_ref()
-        .is_some_and(|signal| crate::url::js_abort_signal_is_aborted(signal.get_raw_mut_ptr()) != 0)
-    {
+    if signal_h.as_ref().is_some_and(|signal| {
+        signal.with_mut_ptr(|signal_ptr| crate::url::js_abort_signal_is_aborted(signal_ptr)) != 0
+    }) {
         return;
     }
     // Only private storage operations follow; option getters have already run.
@@ -847,12 +846,18 @@ pub unsafe extern "C" fn js_event_target_remove_event_listener_with_options(
     let callback = scope.root_raw_mut_ptr(callback_ptr as *mut crate::closure::ClosureHeader);
     let capture = listener_capture(options);
     let _gc = crate::gc::GcSuppressScope::new();
-    remove_event_listener_with_capture(
-        target.get_raw_mut_ptr(),
-        name.get_raw_const_ptr(),
-        callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-        capture,
-    );
+    target.with_mut_ptr(|target_ptr| {
+        name.with_const_ptr(|name_ptr| {
+            callback.with_mut_ptr::<crate::closure::ClosureHeader, _>(|callback_ptr| {
+                remove_event_listener_with_capture(
+                    target_ptr,
+                    name_ptr,
+                    callback_ptr as i64,
+                    capture,
+                )
+            })
+        })
+    });
 }
 
 fn event_type_ptr(event: f64) -> Option<*const StringHeader> {
@@ -925,7 +930,7 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
     set_event_field(
         crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader,
         state::TARGET,
-        boxed_ptr(target_h.get_raw_mut_ptr::<ObjectHeader>()),
+        target_h.with_mut_ptr::<ObjectHeader, _>(|target_h_ptr| boxed_ptr(target_h_ptr)),
     );
     set_event_field(
         crate::value::js_nanbox_get_pointer(event_h.get_nanbox_f64()) as *mut ObjectHeader,
@@ -939,13 +944,12 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
             let callbacks = {
                 let _gc = crate::gc::GcSuppressScope::new();
                 let mut callbacks = Vec::new();
-                let bag = value_as_ptr::<ObjectHeader>(state::get(
-                    target_h.get_raw_mut_ptr::<ObjectHeader>(),
-                    state::LISTENERS,
+                let bag = value_as_ptr::<ObjectHeader>(target_h.with_mut_ptr::<ObjectHeader, _>(
+                    |target_h_ptr| state::get(target_h_ptr, state::LISTENERS),
                 ));
-                if let Some(arr) =
-                    bag.and_then(|bag| event_array(bag, name_h.get_raw_const_ptr(), false))
-                {
+                if let Some(arr) = bag.and_then(|bag| {
+                    name_h.with_const_ptr(|name_h_ptr| event_array(bag, name_h_ptr, false))
+                }) {
                     for i in 0..js_array_length(arr) {
                         let record = f64::from_bits(js_array_get(arr, i).bits());
                         if !listener_record_removed(record) {
@@ -975,7 +979,9 @@ pub unsafe extern "C" fn js_event_target_dispatch_event(
                     let (function, receiver) = if crate::proxy::is_callable_function(listener) {
                         (
                             listener,
-                            boxed_ptr(target_h.get_raw_mut_ptr::<ObjectHeader>()),
+                            target_h.with_mut_ptr::<ObjectHeader, _>(|target_h_ptr| {
+                                boxed_ptr(target_h_ptr)
+                            }),
                         )
                     } else if value_as_ptr::<ObjectHeader>(listener).is_some() {
                         let name = key(b"handleEvent");

@@ -17,12 +17,14 @@ pub(crate) fn register(promise: *mut Promise, row: f64, slot: u32, owner: f64) {
     let owner = scope.root_nanbox_f64(owner);
     let _publication = crate::gc::GcSuppressScope::new();
     unsafe {
-        owned_state::push_record(
-            promise.get_raw_mut_ptr(),
-            OPERATION,
-            &[row.get_nanbox_f64(), slot as f64, owner.get_nanbox_f64()],
-        );
-        let pointer = promise.get_raw_mut_ptr::<Promise>();
+        promise.with_mut_ptr(|promise_ptr| {
+            owned_state::push_record(
+                promise_ptr,
+                OPERATION,
+                &[row.get_nanbox_f64(), slot as f64, owner.get_nanbox_f64()],
+            )
+        });
+        let pointer = promise.with_mut_ptr::<Promise, _>(|promise_ptr| promise_ptr);
         // An init hook can have attached a reaction before registration.
         if !(*pointer).on_fulfilled.is_null()
             || !(*pointer).on_rejected.is_null()

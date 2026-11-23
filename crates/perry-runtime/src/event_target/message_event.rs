@@ -65,7 +65,7 @@ fn sequence(value: f64) -> f64 {
     let value = scope.root_nanbox_f64(value);
     let output = scope.root_raw_mut_ptr(js_array_alloc(0));
     if is_undefined(value.get_nanbox_f64()) {
-        return crate::object::js_object_freeze(boxed_ptr(output.get_raw_mut_ptr::<ArrayHeader>()));
+        return crate::object::js_object_freeze(output.with_mut_ptr::<ArrayHeader, _>(boxed_ptr));
     }
     if !is_entry_object(value.get_nanbox_f64()) {
         let shown = crate::builtins::format_jsvalue(value.get_nanbox_f64(), 0);
@@ -114,7 +114,7 @@ fn sequence(value: f64) -> f64 {
         });
         index += 1;
     }
-    crate::object::js_object_freeze(boxed_ptr(output.get_raw_mut_ptr::<ArrayHeader>()))
+    crate::object::js_object_freeze(output.with_mut_ptr::<ArrayHeader, _>(boxed_ptr))
 }
 
 fn default_data(data: f64) -> f64 {
@@ -170,9 +170,9 @@ pub(crate) fn construct(args: &[f64]) -> f64 {
     if source.get_nanbox_u64() != TAG_NULL {
         port(source.get_nanbox_f64(), "source");
     }
-    let event = allocate(crate::value::js_nanbox_string(
-        event_type.get_raw_const_ptr::<StringHeader>() as i64,
-    ));
+    let event = allocate(
+        event_type.with_const_ptr::<StringHeader, _>(|t| crate::value::js_nanbox_string(t as i64)),
+    );
     let event = scope.root_raw_mut_ptr(event);
     let set = |slot, value| event.with_mut_ptr(|ptr| state::set(ptr, slot, value));
     set(state::BUBBLES, bool_value(flags[0]));
@@ -181,15 +181,15 @@ pub(crate) fn construct(args: &[f64]) -> f64 {
     set(state::MESSAGE_DATA, data.get_nanbox_f64());
     set(
         state::MESSAGE_ID,
-        crate::value::js_nanbox_string(strings[0].get_raw_const_ptr::<StringHeader>() as i64),
+        strings[0].with_const_ptr::<StringHeader, _>(|s| crate::value::js_nanbox_string(s as i64)),
     );
     set(
         state::MESSAGE_ORIGIN,
-        crate::value::js_nanbox_string(strings[1].get_raw_const_ptr::<StringHeader>() as i64),
+        strings[1].with_const_ptr::<StringHeader, _>(|s| crate::value::js_nanbox_string(s as i64)),
     );
     set(state::MESSAGE_SOURCE, source.get_nanbox_f64());
     set(state::MESSAGE_PORTS, ports.get_nanbox_f64());
-    boxed_ptr(event.get_raw_mut_ptr::<ObjectHeader>())
+    event.with_mut_ptr::<ObjectHeader, _>(boxed_ptr)
 }
 
 fn allocate(event_type: f64) -> *mut ObjectHeader {
@@ -207,7 +207,7 @@ fn allocate(event_type: f64) -> *mut ObjectHeader {
             None,
         )
     });
-    event.get_raw_mut_ptr()
+    event.with_mut_ptr(|event| event)
 }
 
 pub(crate) fn node_delivery(data: f64, ports: Option<f64>) -> f64 {
@@ -241,7 +241,7 @@ pub(crate) fn delivery_with_ports(data: f64, ports: f64) -> f64 {
     }
     event.with_mut_ptr(|ptr| state::set(ptr, state::MESSAGE_SOURCE, null_value()));
     event.with_mut_ptr(|ptr| state::set(ptr, state::MESSAGE_PORTS, ports.get_nanbox_f64()));
-    boxed_ptr(event.get_raw_mut_ptr::<ObjectHeader>())
+    event.with_mut_ptr::<ObjectHeader, _>(boxed_ptr)
 }
 
 pub(crate) fn dispatch_state(event: f64, target: f64, active: bool) -> bool {
@@ -292,7 +292,7 @@ extern "C" fn init(_: *const ClosureHeader, this: JsThis, args: f64) -> f64 {
     }
     construct(&[
         values[0].get_nanbox_f64(),
-        boxed_ptr(options.get_raw_mut_ptr::<ObjectHeader>()),
+        options.with_mut_ptr::<ObjectHeader, _>(boxed_ptr),
     ])
 }
 

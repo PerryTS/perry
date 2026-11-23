@@ -1262,6 +1262,12 @@ fn throw_not_uint8_array(method: &str) -> ! {
 unsafe fn uint8_receiver_or_throw(this: crate::closure::JsThis, method: &str) -> usize {
     match ta_receiver_or_throw(this, method) {
         TypedArrayProtoReceiver::Uint8Buffer(addr) => addr,
+        TypedArrayProtoReceiver::TypedArray(ta)
+            if crate::typedarray_hook_slots::lookup_typed_array_kind(ta as usize)
+                == Some(crate::typedarray::KIND_UINT8) =>
+        {
+            ta as usize
+        }
         TypedArrayProtoReceiver::TypedArray(_) => throw_not_uint8_array(method),
     }
 }

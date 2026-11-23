@@ -85,15 +85,15 @@ pub fn worker_object_with_id(id: u64) -> *mut ObjectHeader {
     ));
     let object = scope.root_raw_mut_ptr(object::js_object_alloc(0, 0));
     object::intrinsic_private_add(
-        boxed_object(object.get_raw_mut_ptr()),
+        object.with_mut_ptr(boxed_object),
         "[[WorkerId]]",
         f64::from_bits(id),
     );
     object::js_object_set_prototype_of(
-        boxed_object(object.get_raw_mut_ptr()),
+        object.with_mut_ptr(boxed_object),
         prototype.get_nanbox_f64(),
     );
-    object.get_raw_mut_ptr()
+    object.with_mut_ptr(|object| object)
 }
 
 extern "C" fn metadata_getter(closure: *const ClosureHeader, this: crate::closure::JsThis) -> f64 {
@@ -122,15 +122,14 @@ pub(crate) fn install_worker_metadata_getters(prototype: f64) {
             1,
             capture.as_ptr(),
         ));
-        object::set_bound_native_closure_name(getter.get_raw_mut_ptr(), &format!("get {name}"));
+        getter.with_mut_ptr(|g| object::set_bound_native_closure_name(g, &format!("get {name}")));
         object::install_fresh_accessor_property(
             crate::value::js_nanbox_get_pointer(prototype.get_nanbox_f64()) as usize,
             name.to_string(),
             object::AccessorDescriptor {
-                get: crate::value::js_nanbox_pointer(
-                    getter.get_raw_mut_ptr::<ClosureHeader>() as i64
-                )
-                .to_bits(),
+                get: getter
+                    .with_mut_ptr::<ClosureHeader, _>(|g| crate::value::js_nanbox_pointer(g as i64))
+                    .to_bits(),
                 set: 0,
             },
             object::PropertyAttrs::new(false, false, true),

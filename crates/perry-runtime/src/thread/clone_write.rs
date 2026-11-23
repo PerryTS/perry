@@ -370,7 +370,7 @@ impl Writer<'_> {
         self.sources
             .get(index)
             .and_then(Option::as_ref)
-            .map_or(fallback, |(h, _)| h.get_raw_const_ptr::<u8>() as usize)
+            .map_or(fallback, |(h, _)| h.with_const_ptr::<u8, _>(|p| p as usize))
     }
 
     #[optimize(size)]
@@ -384,8 +384,9 @@ impl Writer<'_> {
         for (index, source) in self.sources.iter().enumerate() {
             if let Some((handle, low)) = source {
                 self.seen.insert(
-                    crate::value::resolve_forwarding(handle.get_raw_const_ptr::<u8>() as usize)
-                        | low,
+                    handle.with_const_ptr::<u8, _>(|handle_ptr| {
+                        crate::value::resolve_forwarding(handle_ptr as usize)
+                    }) | low,
                     index as u32,
                 );
             }
@@ -394,14 +395,14 @@ impl Writer<'_> {
             .into_iter()
             .map(|((_, count), (index, root))| {
                 (
-                    (root.get_raw_const_ptr::<u8>() as usize, count),
+                    (root.with_const_ptr::<u8, _>(|p| p as usize), count),
                     (index, root),
                 )
             })
             .collect();
         self.strings = std::mem::take(&mut self.strings)
             .into_values()
-            .map(|(index, handle)| (handle.get_raw_const_ptr::<u8>() as usize, (index, handle)))
+            .map(|(index, handle)| (handle.with_const_ptr::<u8, _>(|p| p as usize), (index, handle)))
             .collect();
     }
 

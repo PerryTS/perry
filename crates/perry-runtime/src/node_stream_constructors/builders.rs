@@ -879,23 +879,23 @@ pub extern "C" fn js_node_stream_readable_from_options(iterable: f64, opts: f64)
     stream_birth_field!(
         readable.get_nanbox_f64(),
         crate::runtime_state_key!(b"_read"),
-        box_pointer(read.get_raw_mut_ptr::<ClosureHeader>().cast())
+        read.with_mut_ptr::<ClosureHeader, _>(|c| box_pointer(c.cast()))
     );
     let destroy = scope.root_raw_mut_ptr(js_closure_alloc(crate::fn_info!(from_destroy, 2), 0));
     stream_birth_field!(
         readable.get_nanbox_f64(),
         crate::runtime_state_key!(b"_destroy"),
-        box_pointer(destroy.get_raw_mut_ptr::<ClosureHeader>().cast())
+        destroy.with_mut_ptr::<ClosureHeader, _>(|c| box_pointer(c.cast()))
     );
     set_hidden_value(
         readable.get_nanbox_f64(),
         hidden_read_key(),
-        box_pointer(read.get_raw_mut_ptr::<ClosureHeader>().cast()),
+        read.with_mut_ptr::<ClosureHeader, _>(|c| box_pointer(c.cast())),
     );
     set_hidden_value(
         readable.get_nanbox_f64(),
         STREAM_DESTROY_KEY,
-        box_pointer(destroy.get_raw_mut_ptr::<ClosureHeader>().cast()),
+        destroy.with_mut_ptr::<ClosureHeader, _>(|c| box_pointer(c.cast())),
     );
     set_hidden_value(
         readable.get_nanbox_f64(),

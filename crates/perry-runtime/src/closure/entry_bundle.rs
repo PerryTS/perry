@@ -69,7 +69,9 @@ pub unsafe extern "C" fn js_closure_entry_bundle(
     let rest = if flags & crate::codegen_abi::FN_ARGUMENTS_OBJECT != 0 {
         crate::value::js_nanbox_pointer(crate::object::arguments_object_alloc_rooted(
             &handles,
-            crate::value::js_nanbox_pointer(callee.get_raw_const_ptr::<ClosureHeader>() as i64),
+            callee.with_const_ptr::<ClosureHeader, _>(|callee_ptr| {
+                crate::value::js_nanbox_pointer(callee_ptr as i64)
+            }),
             flags & crate::codegen_abi::FN_ARGUMENTS_RESTRICTED != 0,
             if flags & crate::codegen_abi::FN_ARGUMENTS_MAPPED != 0 {
                 fixed

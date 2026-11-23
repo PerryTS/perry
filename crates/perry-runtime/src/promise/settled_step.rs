@@ -170,7 +170,7 @@ fn notify_published(next: *mut Promise) -> *mut Promise {
     let scope = crate::gc::RuntimeHandleScope::new();
     let result = scope.root_raw_mut_ptr(next);
     crate::event_pump::js_notify_promise_progress();
-    result.get_raw_mut_ptr()
+    result.with_mut_ptr(|result_ptr| result_ptr)
 }
 
 /// The observed and unobserved routes publish the identical scanned Task.

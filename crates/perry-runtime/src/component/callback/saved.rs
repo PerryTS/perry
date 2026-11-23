@@ -25,18 +25,17 @@ pub(in crate::component) fn capture(promise: f64) -> (f64, AsyncResourceIds) {
         crate::promise::context_for_promise(pointer.cast_mut()),
     ));
     let record = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(2));
-    crate::array::js_array_set_f64(
-        record.get_raw_mut_ptr(),
-        0,
-        crate::value::js_nanbox_pointer(
-            snapshot.get_raw_mut_ptr::<als::AsyncSnapshotHolder>() as i64
-        ),
-    );
-    crate::array::js_array_set_f64(record.get_raw_mut_ptr(), 1, metadata.get_nanbox_f64());
+    let holder = snapshot.with_mut_ptr::<als::AsyncSnapshotHolder, _>(|holder| {
+        crate::value::js_nanbox_pointer(holder as i64)
+    });
+    record.with_mut_ptr(|record| crate::array::js_array_set_f64(record, 0, holder));
+    record.with_mut_ptr(|record| {
+        crate::array::js_array_set_f64(record, 1, metadata.get_nanbox_f64())
+    });
     (
-        crate::value::js_nanbox_pointer(
-            record.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
-        ),
+        record.with_mut_ptr::<crate::array::ArrayHeader, _>(|record| {
+            crate::value::js_nanbox_pointer(record as i64)
+        }),
         AsyncResourceIds {
             async_id: crate::async_hooks::resource_state::public_id(native.async_id),
             trigger_async_id: native.trigger_async_id,
@@ -50,13 +49,12 @@ pub(in crate::component) fn current() -> f64 {
     let scope = RuntimeHandleScope::new();
     let snapshot = scope.root_raw_mut_ptr(als::alloc_snapshot_holder(als::capture_context()));
     let record = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(2));
-    crate::array::js_array_set_f64(
-        record.get_raw_mut_ptr(),
-        0,
-        crate::value::js_nanbox_pointer(
-            snapshot.get_raw_mut_ptr::<als::AsyncSnapshotHolder>() as i64
-        ),
-    );
-    crate::array::js_array_set_f64(record.get_raw_mut_ptr(), 1, undefined());
-    crate::value::js_nanbox_pointer(record.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64)
+    let holder = snapshot.with_mut_ptr::<als::AsyncSnapshotHolder, _>(|holder| {
+        crate::value::js_nanbox_pointer(holder as i64)
+    });
+    record.with_mut_ptr(|record| crate::array::js_array_set_f64(record, 0, holder));
+    record.with_mut_ptr(|record| crate::array::js_array_set_f64(record, 1, undefined()));
+    record.with_mut_ptr::<crate::array::ArrayHeader, _>(|record| {
+        crate::value::js_nanbox_pointer(record as i64)
+    })
 }

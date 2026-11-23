@@ -4,7 +4,7 @@
 const path = require("path");
 const p1 = require("../../../fixtures/programs/cjl_children/p1.cjs");
 const p2 = require("../../../fixtures/programs/cjl_children/p2.cjs");
-require("./cjl_children/p1.cjs");
+require("../../../fixtures/programs/cjl_children/p1.cjs");
 console.log("entry:", module.children.map((m) => path.basename(m.id)).join(","));
 console.log("p1:", p1.children().join(","));
 console.log("p2:", p2.children().join(","), p2.name);

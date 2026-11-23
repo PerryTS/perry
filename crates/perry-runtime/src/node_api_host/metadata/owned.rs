@@ -70,9 +70,10 @@ pub(super) fn with_metadata<R>(
 pub(super) fn weak_link(owner: usize) -> Option<u64> {
     let scope = crate::gc::RuntimeHandleScope::new();
     let cell = scope.root_raw_mut_ptr(cell(owner, false)?);
-    let reference = crate::weakref::js_weakref_new(crate::value::js_nanbox_pointer(
-        cell.get_raw_mut_ptr::<NativeHandleHeader>() as i64,
-    ));
+    let reference =
+        crate::weakref::js_weakref_new(cell.with_mut_ptr::<NativeHandleHeader, _>(|cell_ptr| {
+            crate::value::js_nanbox_pointer(cell_ptr as i64)
+        }));
     Some(crate::value::js_nanbox_pointer(reference as i64).to_bits())
 }
 pub(super) fn cancel_link(link: u64, id: u64) {

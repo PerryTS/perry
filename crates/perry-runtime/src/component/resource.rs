@@ -69,18 +69,18 @@ pub(super) fn decode(owner: f64, value: &Value, lifetime: f64) -> f64 {
     let resource = scope.root_nanbox_f64(wrap(owner.get_nanbox_f64(), token, owned));
     if value.get("$borrow").is_some() {
         let state = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(2));
-        crate::array::js_array_set_f64(
-            state.get_raw_mut_ptr(),
-            0,
-            load(resource.get_nanbox_f64(), TOKEN),
-        );
-        crate::array::js_array_set_f64(state.get_raw_mut_ptr(), 1, lifetime.get_nanbox_f64());
+        state.with_mut_ptr(|state_ptr| {
+            crate::array::js_array_set_f64(state_ptr, 0, load(resource.get_nanbox_f64(), TOKEN))
+        });
+        state.with_mut_ptr(|state_ptr| {
+            crate::array::js_array_set_f64(state_ptr, 1, lifetime.get_nanbox_f64())
+        });
         store(
             resource.get_nanbox_f64(),
             BORROW,
-            crate::value::js_nanbox_pointer(
-                state.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64
-            ),
+            state.with_mut_ptr::<crate::array::ArrayHeader, _>(|state_ptr| {
+                crate::value::js_nanbox_pointer(state_ptr as i64)
+            }),
         );
     }
     resource.get_nanbox_f64()
@@ -108,17 +108,19 @@ pub(super) fn wrap(owner: f64, token: &str, owned: bool) -> f64 {
             ("dispose", crate::fn_info!(dispose, 0)),
         ] {
             let function = scope.root_raw_mut_ptr(crate::closure::js_closure_alloc(info, 1));
-            crate::closure::js_closure_set_capture_f64(
-                function.get_raw_mut_ptr(),
-                0,
-                resource.get_nanbox_f64(),
-            );
-            crate::object::set_builtin_closure_non_constructable(
-                function.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as usize,
-            );
-            let value = crate::value::js_nanbox_pointer(
-                function.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-            );
+            function.with_mut_ptr(|function_ptr| {
+                crate::closure::js_closure_set_capture_f64(
+                    function_ptr,
+                    0,
+                    resource.get_nanbox_f64(),
+                )
+            });
+            function.with_mut_ptr::<crate::closure::ClosureHeader, _>(|function_ptr| {
+                crate::object::set_builtin_closure_non_constructable(function_ptr as usize)
+            });
+            let value = function.with_mut_ptr::<crate::closure::ClosureHeader, _>(|function_ptr| {
+                crate::value::js_nanbox_pointer(function_ptr as i64)
+            });
             set_field(resource.get_nanbox_f64(), name.as_bytes(), value);
         }
         cleanup::register(

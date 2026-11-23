@@ -284,9 +284,9 @@ unsafe fn buffer_from_array_like_object(ptr: usize) -> Option<*mut BufferHeader>
             crate::object::js_object_get_index_polymorphic(obj as i64, i as f64)
         });
         let byte = buffer_byte_from_js_value(value);
-        js_buffer_set(result.get_raw_mut_ptr(), i as i32, byte as i32);
+        result.with_mut_ptr(|r| js_buffer_set(r, i as i32, byte as i32));
     }
-    Some(result.get_raw_mut_ptr())
+    Some(result.with_mut_ptr(|r| r))
 }
 
 unsafe fn buffer_from_object_to_primitive(value: f64, encoding: i32) -> Option<*mut BufferHeader> {
@@ -644,17 +644,15 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
                     len,
                     super::store::Init::Uninit,
                 ));
-                super::store::set_length(result.get_raw_mut_ptr::<BufferHeader>() as usize, len);
+                result.with_mut_ptr::<BufferHeader, _>(|r| super::store::set_length(r as usize, len));
                 for i in 0..len as usize {
                     let value = source.with_const_ptr(|src| {
                         crate::typedarray_hook_slots::js_typed_array_get(src, i as i32)
                     });
                     let byte = buffer_byte_from_js_value(value);
-                    js_buffer_set(result.get_raw_mut_ptr(), i as i32, byte as i32);
+                    result.with_mut_ptr(|r| js_buffer_set(r, i as i32, byte as i32));
                 }
-                let dst = result.get_raw_mut_ptr();
-
-                return dst;
+                return result.with_mut_ptr(|r| r);
             }
         }
         // The raw helper requires an actual ArrayHeader layout.
@@ -1115,9 +1113,9 @@ pub extern "C" fn js_buffer_fill_value_range(
         })
     });
     super::bytes::no_gc(|scope| unsafe {
-        let current = target.get_raw_mut_ptr::<BufferHeader>();
-        let Ok(dst) =
-            super::bytes::bytes_mut(crate::value::js_nanbox_pointer(current as i64), scope)
+        let current = target
+            .with_mut_ptr::<BufferHeader, _>(|current| crate::value::js_nanbox_pointer(current as i64));
+        let Ok(dst) = super::bytes::bytes_mut(current, scope)
         else {
             return;
         };
@@ -1147,7 +1145,7 @@ pub extern "C" fn js_buffer_fill_value_range(
             *byte = src[i % src.len()];
         }
     });
-    target.get_raw_mut_ptr()
+    target.with_mut_ptr(|target| target)
 }
 
 /// Allocate an uninitialized buffer
@@ -1271,9 +1269,9 @@ fn js_buffer_concat_impl(
                 super::bytes::bytes_mut(crate::value::js_nanbox_pointer(result as i64), scope)
                     .unwrap();
             dst.fill(0);
-            let arr_data =
-                crate::array::array_elements_ptr(array_root.get_raw_const_ptr::<ArrayHeader>())
-                    as *const f64;
+            let arr_data = array_root
+                .with_const_ptr::<ArrayHeader, _>(|arr| crate::array::array_elements_ptr(arr))
+                as *const f64;
             let mut offset = 0;
             for i in 0..len {
                 let raw = strip_nanbox((*arr_data.add(i)).to_bits());

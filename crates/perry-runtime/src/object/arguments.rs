@@ -541,8 +541,10 @@ fn arguments_object_birth(
         fields.add(1).write(pair.as_ref().map_or_else(
             || callee.get_nanbox_f64().to_bits(),
             |pair| {
-                crate::value::js_nanbox_pointer(pair.get_raw_mut_ptr::<ArrayHeader>() as i64)
-                    .to_bits()
+                pair.with_mut_ptr::<ArrayHeader, _>(|pair_ptr| {
+                    crate::value::js_nanbox_pointer(pair_ptr as i64)
+                })
+                .to_bits()
             },
         ));
         fields.add(2).write(values.get_nanbox_f64().to_bits());
@@ -569,7 +571,7 @@ fn arguments_object_birth(
         }
         crate::object::rebuild_object_field_layout(obj, slots);
     });
-    obj.get_raw_mut_ptr::<ObjectHeader>()
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| obj_ptr)
 }
 
 /// #10509: `arguments[key]` in a function whose Arguments object codegen
@@ -872,22 +874,6 @@ pub(crate) unsafe fn arguments_object_get_field(
         return Some(read_ordinary_own_value(obj, key));
     }
     None
-}
-
-/// The value of own key `key_bits` that an own-slot walk (JSON.stringify)
-/// must read: a mapped index is the parameter's cell, not the slot (the slot
-/// keeps the birth value; the cell is the live binding). `None` for every
-/// other object and key, so the caller keeps its slot value.
-pub(crate) unsafe fn arguments_object_mapped_value(
-    obj: *const ObjectHeader,
-    key_bits: u64,
-) -> Option<f64> {
-    let state = arguments_state(obj)?;
-    let mut sso = [0u8; crate::value::SHORT_STRING_MAX_LEN];
-    let bytes = crate::string::js_string_key_bytes(JSValue::from_bits(key_bits), &mut sso)?;
-    let index = super::canonical_array_index(std::str::from_utf8(bytes).ok()?)?;
-    let cell = state.mapped_box(index)?;
-    Some(crate::r#box::js_box_get(cell))
 }
 
 pub(crate) unsafe fn arguments_object_set_field(

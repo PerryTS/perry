@@ -31,7 +31,7 @@ import {
   originNs,
   cjs,
   starNs,
-} from "./fixtures/issue_11275_reexport_kinds/barrel.ts";
+} from "../../../fixtures/programs/fixtures/issue_11275_reexport_kinds/barrel.ts";
 import { obj as obj1, fn as fn1 } from "../../../fixtures/programs/fixtures/issue_11275_reexport_kinds/mid2.ts";
 import { obj as direct } from "../../../fixtures/programs/fixtures/issue_11275_reexport_kinds/mid.ts";
 import { num as shadowNum, obj as shadowObj } from "../../../fixtures/programs/fixtures/issue_11275_reexport_kinds/shadow.ts";

@@ -46,11 +46,9 @@ pub(crate) fn install_methods_on_existing_object(
         if *name == "addListener" {
             if let Some(val) = &on_method {
                 let key = native_method_key(name.as_bytes());
-                js_object_set_field_by_name(
-                    obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
-                    key,
-                    val.get_nanbox_f64(),
-                );
+                obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj_handle_ptr| {
+                    js_object_set_field_by_name(obj_handle_ptr, key, val.get_nanbox_f64())
+                });
                 continue;
             }
         }
@@ -64,11 +62,9 @@ pub(crate) fn install_methods_on_existing_object(
             JSValue::pointer(closure as *const u8).bits(),
         ));
         let key = native_method_key(name.as_bytes());
-        js_object_set_field_by_name(
-            obj_handle.get_raw_mut_ptr::<ObjectHeader>(),
-            key,
-            val.get_nanbox_f64(),
-        );
+        obj_handle.with_mut_ptr::<ObjectHeader, _>(|obj_handle_ptr| {
+            js_object_set_field_by_name(obj_handle_ptr, key, val.get_nanbox_f64())
+        });
         if *name == "on" {
             on_method = Some(val);
         }

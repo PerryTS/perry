@@ -207,21 +207,38 @@ pub(crate) fn call_global_body_init_ptr(value: f64) -> *const crate::StringHeade
 }
 
 /// The object-URL natives perry-stdlib owns (the Blob registry lives there):
-/// `URL.createObjectURL` and `node:buffer.resolveObjectURL`, reached from the
+/// `URL.createObjectURL`, `URL.revokeObjectURL` and `node:buffer.resolveObjectURL`, reached from the
 /// realm's function values (the `URL` static and the namespace member), which
 /// the runtime cannot link to the stdlib directly.
 type ObjectUrlCreateFn = unsafe extern "C" fn(f64) -> *mut crate::StringHeader;
 type ObjectUrlResolveFn = unsafe extern "C" fn(f64) -> f64;
+type ObjectUrlRevokeFn = unsafe extern "C" fn(f64);
 static OBJECT_URL_CREATE: AtomicPtr<()> = AtomicPtr::new(null_mut());
+static OBJECT_URL_REVOKE: AtomicPtr<()> = AtomicPtr::new(null_mut());
 static OBJECT_URL_RESOLVE: AtomicPtr<()> = AtomicPtr::new(null_mut());
 
 #[no_mangle]
 pub extern "C" fn js_register_object_url_fns(
     create: ObjectUrlCreateFn,
     resolve: ObjectUrlResolveFn,
+    revoke: ObjectUrlRevokeFn,
 ) {
     OBJECT_URL_CREATE.store(create as *mut (), Ordering::Release);
     OBJECT_URL_RESOLVE.store(resolve as *mut (), Ordering::Release);
+    OBJECT_URL_REVOKE.store(revoke as *mut (), Ordering::Release);
+}
+
+/// `URL.revokeObjectURL(url)` through the registered stdlib native.
+pub(crate) fn call_url_revoke_object_url(url: f64) -> f64 {
+    let f = OBJECT_URL_REVOKE.load(Ordering::Acquire);
+    if f.is_null() {
+        crate::stub_diag::perry_stub_warn("js_url_revoke_object_url", FETCH_REASON, None);
+    } else {
+        // NOT-A-JS-BODY: a native Rust helper registered by another crate.
+        let func: ObjectUrlRevokeFn = unsafe { std::mem::transmute(f) };
+        unsafe { func(url) };
+    }
+    f64::from_bits(crate::value::TAG_UNDEFINED)
 }
 
 /// `URL.createObjectURL(blob)` through the registered stdlib native: the URL

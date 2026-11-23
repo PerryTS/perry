@@ -1069,16 +1069,21 @@ fn install_pipe_destination_listeners(src: f64, dest: f64) {
         crate::fn_info!(pipe_finish_callback, 0; with_declared(0)),
         6,
     ));
+    let value = |listener: &crate::gc::RuntimeHandle<'_>| listener.with_const_ptr(pipe_listener_value);
     for listener in [&unpipe, &error, &close, &finish] {
-        set_pipe_listener_captures(
-            listener.get_raw_mut_ptr(),
-            src.get_nanbox_f64(),
-            dest.get_nanbox_f64(),
-            pipe_listener_value(unpipe.get_raw_const_ptr()),
-            pipe_listener_value(error.get_raw_const_ptr()),
-            pipe_listener_value(close.get_raw_const_ptr()),
-            pipe_listener_value(finish.get_raw_const_ptr()),
-        );
+        // Boxing a listener allocates nothing, so the captures name current cells.
+        let values = [value(&unpipe), value(&error), value(&close), value(&finish)];
+        listener.with_mut_ptr(|listener| {
+            set_pipe_listener_captures(
+                listener,
+                src.get_nanbox_f64(),
+                dest.get_nanbox_f64(),
+                values[0],
+                values[1],
+                values[2],
+                values[3],
+            )
+        });
     }
     for (event, listener) in [
         (b"unpipe".as_slice(), &unpipe),
@@ -1086,12 +1091,7 @@ fn install_pipe_destination_listeners(src: f64, dest: f64) {
         (b"close".as_slice(), &close),
         (b"finish".as_slice(), &finish),
     ] {
-        destination_listener(
-            dest.get_nanbox_f64(),
-            event,
-            pipe_listener_value(listener.get_raw_const_ptr()),
-            false,
-        );
+        destination_listener(dest.get_nanbox_f64(), event, value(listener), false);
     }
 }
 
@@ -1103,10 +1103,12 @@ fn add_pipe_drain_listener(src: f64, dest: f64) {
         crate::fn_info!(pipe_drain_callback, 0; with_declared(0)),
         3,
     ));
-    let value = pipe_listener_value(listener.get_raw_const_ptr());
-    js_closure_set_capture_f64(listener.get_raw_mut_ptr(), 0, src.get_nanbox_f64());
-    js_closure_set_capture_f64(listener.get_raw_mut_ptr(), 1, dest.get_nanbox_f64());
-    js_closure_set_capture_f64(listener.get_raw_mut_ptr(), 2, value);
+    let value = listener.with_const_ptr(pipe_listener_value);
+    listener.with_mut_ptr(|listener| {
+        js_closure_set_capture_f64(listener, 0, src.get_nanbox_f64());
+        js_closure_set_capture_f64(listener, 1, dest.get_nanbox_f64());
+        js_closure_set_capture_f64(listener, 2, value);
+    });
     destination_listener(dest.get_nanbox_f64(), b"drain", value, false);
 }
 

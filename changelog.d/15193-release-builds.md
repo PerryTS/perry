@@ -1,0 +1,1 @@
+WASI programs that pass closures to array methods, construct classes or iterate no longer trap with `uninitialized element` (the wasm32 call-entry offset now follows `JsFunctionInfo`'s 64-byte ILP32 size). Linux release links work again on binutils 2.35 (glibc 2.31) hosts, and the musl runtime builds.

@@ -21,15 +21,15 @@ pub(super) fn register(owner: f64, target: f64, request: Value) {
                 crate::fn_info!(collected, 1),
                 1,
             ));
-            crate::closure::js_closure_set_capture_f64(
-                callback.get_raw_mut_ptr(),
-                0,
-                owner.get_nanbox_f64(),
-            );
+            callback.with_mut_ptr(|callback_ptr| {
+                crate::closure::js_closure_set_capture_f64(callback_ptr, 0, owner.get_nanbox_f64())
+            });
             registry.set_nanbox_f64(crate::value::js_nanbox_pointer(
-                crate::weakref::js_finreg_new(crate::value::js_nanbox_pointer(
-                    callback.get_raw_mut_ptr::<crate::closure::ClosureHeader>() as i64,
-                )) as i64,
+                crate::weakref::js_finreg_new(
+                    callback.with_mut_ptr::<crate::closure::ClosureHeader, _>(|callback_ptr| {
+                        crate::value::js_nanbox_pointer(callback_ptr as i64)
+                    }),
+                ) as i64,
             ));
             unsafe {
                 bag::store(

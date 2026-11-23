@@ -267,20 +267,29 @@ pub unsafe extern "C" fn js_json_raw_json(text: f64) -> f64 {
     ));
     let text_str = scope.root_string_ptr(js_string_from_bytes(s.as_ptr(), s.len() as u32));
     let key = raw_json_key();
-    crate::object::js_object_set_field_by_name(
-        obj.get_raw_mut_ptr::<ObjectHeader>(),
-        key,
-        f64::from_bits(
-            JSValue::string_ptr(text_str.get_raw_const_ptr::<StringHeader>() as *mut StringHeader)
-                .bits(),
-        ),
-    );
+    obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| {
+        crate::object::js_object_set_field_by_name(
+            obj_ptr,
+            key,
+            f64::from_bits(
+                text_str
+                    .with_const_ptr::<StringHeader, _>(|text_str_ptr| {
+                        JSValue::string_ptr(text_str_ptr as *mut StringHeader)
+                    })
+                    .bits(),
+            ),
+        )
+    });
     // ECMA-262 JSON.rawJSON step 6: SetIntegrityLevel(internalSlotsList, frozen).
     let wrapper = f64::from_bits(
-        JSValue::object_ptr(obj.get_raw_mut_ptr::<ObjectHeader>() as *mut u8).bits(),
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| JSValue::object_ptr(obj_ptr as *mut u8))
+            .bits(),
     );
     crate::object::js_object_freeze(wrapper);
-    f64::from_bits(JSValue::object_ptr(obj.get_raw_mut_ptr::<ObjectHeader>() as *mut u8).bits())
+    f64::from_bits(
+        obj.with_mut_ptr::<ObjectHeader, _>(|obj_ptr| JSValue::object_ptr(obj_ptr as *mut u8))
+            .bits(),
+    )
 }
 
 /// `JSON.isRawJSON(value)` — returns a NaN-boxed boolean.

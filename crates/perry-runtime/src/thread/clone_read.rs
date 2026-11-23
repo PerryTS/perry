@@ -45,14 +45,17 @@ pub unsafe fn deserialize_message(sv: &SerializedValue, include_ports: bool) -> 
         for index in 0..data.ports.len() {
             let value = reader.port(index);
             if let Some(ports) = &ports {
-                crate::array::js_array_push_f64(ports.get_raw_mut_ptr(), f64::from_bits(value));
+                // The push may reallocate; keep the array it returns.
+                let grown = ports
+                    .with_mut_ptr(|p| crate::array::js_array_push_f64(p, f64::from_bits(value)));
+                ports.set_raw_mut_ptr(grown);
             }
         }
     }
     (
         data.get_nanbox_u64(),
         ports.map_or(TAG_UNDEFINED, |ports| {
-            JSValue::pointer(ports.get_raw_mut_ptr::<u8>()).bits()
+            ports.with_mut_ptr::<u8, _>(|p| JSValue::pointer(p).bits())
         }),
     )
 }
@@ -309,10 +312,12 @@ impl<'s, 'm> Reader<'s, 'm> {
         for shape in &data.shapes {
             let names = &shape.keys;
             let keys = self.keys(names);
-            let seed = crate::object::alloc_plain::alloc_plain_record_with_keys(
-                names.len() as u32,
-                crate::object::ObjectKeys::new(keys.get_raw_mut_ptr(), names.len() as u32),
-            );
+            let seed = keys.with_mut_ptr(|keys| {
+                crate::object::alloc_plain::alloc_plain_record_with_keys(
+                    names.len() as u32,
+                    crate::object::ObjectKeys::new(keys, names.len() as u32),
+                )
+            });
             let id = crate::object::shapes::object_shape_stamp(seed);
             self.shapes.push((self.scope.root_raw_mut_ptr(seed), id.0));
         }
@@ -326,7 +331,7 @@ impl<'s, 'm> Reader<'s, 'm> {
             .root_raw_mut_ptr(crate::array::js_array_alloc(names.len() as u32));
         for (i, name) in names.iter().enumerate() {
             let bits = string_bits(name);
-            store_thread_array_slot(keys.get_raw_mut_ptr(), i, bits);
+            keys.with_mut_ptr(|keys| store_thread_array_slot(keys, i, bits));
         }
         keys
     }
@@ -371,12 +376,13 @@ impl<'s, 'm> Reader<'s, 'm> {
     unsafe fn shape_object(&mut self, slot: usize, shape: usize, start: usize) -> u64 {
         let count = self.message.unwrap().shapes[shape].keys.len();
         let (seed, id) = &self.shapes[shape];
-        let keys = crate::object::object_keys(seed.get_raw_const_ptr()).arr();
-        let obj = crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(
-            count as u32,
-            keys,
-            LayoutWord(*id),
-        );
+        let obj = seed.with_const_ptr(|seed| {
+            crate::object::alloc_plain::alloc_plain_record_inline_keys_stamped(
+                count as u32,
+                crate::object::object_keys(seed).arr(),
+                LayoutWord(*id),
+            )
+        });
         self.fill(slot, JSValue::pointer(obj.cast()).bits(), Made::Value);
         for i in 0..count {
             let bits = self.read_slot(self.message.unwrap().slots[start + i]);
@@ -465,7 +471,7 @@ impl<'s, 'm> Reader<'s, 'm> {
         }
         if let Some(names) = keys {
             let keys = self.keys(names);
-            crate::object::js_object_set_keys(self.ptr(slot), keys.get_raw_mut_ptr());
+            keys.with_mut_ptr(|keys| crate::object::js_object_set_keys(self.ptr(slot), keys));
         }
         if let (Some(facts), Some(names)) = (final_constfn, keys) {
             let obj = super::constfn_transfer::restore(
@@ -661,16 +667,15 @@ impl<'s, 'm> Reader<'s, 'm> {
                 .scope
                 .root_raw_mut_ptr(crate::object::js_object_alloc(0, 0));
             let value_key = heap_string(b"value");
-            crate::object::js_object_set_field_by_name(
-                descriptor.get_raw_mut_ptr(),
-                value_key,
-                undefined,
-            );
+            descriptor.with_mut_ptr(|descriptor| {
+                crate::object::js_object_set_field_by_name(descriptor, value_key, undefined)
+            });
             let stack_key = string_bits(b"stack");
+            let descriptor = descriptor.with_mut_ptr::<u8, _>(|d| JSValue::pointer(d).bits());
             crate::object::js_object_define_property(
                 f64::from_bits(self.get(slot)),
                 f64::from_bits(stack_key),
-                f64::from_bits(JSValue::pointer(descriptor.get_raw_mut_ptr::<u8>()).bits()),
+                f64::from_bits(descriptor),
             );
         }
         if let Some(cause) = cause {

@@ -16,7 +16,7 @@
 // regardless of whether the local and exported names match.
 
 import * as ns from "../../../fixtures/programs/fixtures/issue_5431_pkg/index.ts";
-import { $tag, $constructor } from "./fixtures/issue_5431_pkg/index.ts";
+import { $tag, $constructor } from "../../../fixtures/programs/fixtures/issue_5431_pkg/index.ts";
 
 // Namespace-member call of a `$`-named function returning a value.
 console.log("ns.$tag:", ns.$tag("a"));

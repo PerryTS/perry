@@ -7,12 +7,16 @@ pub(in crate::component) fn new_plan() -> f64 {
     let scope = RuntimeHandleScope::new();
     let list = scope.root_raw_mut_ptr(crate::array::js_array_alloc(0));
     let plan = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(1));
-    crate::array::js_array_set_f64(
-        plan.get_raw_mut_ptr(),
-        0,
-        js_nanbox_pointer(list.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64),
-    );
-    js_nanbox_pointer(plan.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64)
+    plan.with_mut_ptr(|plan_ptr| {
+        crate::array::js_array_set_f64(
+            plan_ptr,
+            0,
+            list.with_mut_ptr::<crate::array::ArrayHeader, _>(|list_ptr| {
+                js_nanbox_pointer(list_ptr as i64)
+            }),
+        )
+    });
+    plan.with_mut_ptr::<crate::array::ArrayHeader, _>(|plan_ptr| js_nanbox_pointer(plan_ptr as i64))
 }
 
 fn list(plan: f64) -> f64 {
@@ -37,14 +41,18 @@ pub(super) fn retain(
             encoded.len() as u32,
         ));
         let pair = scope.root_raw_mut_ptr(crate::array::js_array_alloc_with_length(2));
-        crate::array::js_array_set_f64(pair.get_raw_mut_ptr(), 0, wrapper.get_nanbox_f64());
-        crate::array::js_array_set_f64(
-            pair.get_raw_mut_ptr(),
-            1,
-            crate::value::js_nanbox_string(
-                identity.get_raw_const_ptr::<crate::string::StringHeader>() as i64,
-            ),
-        );
+        pair.with_mut_ptr(|pair_ptr| {
+            crate::array::js_array_set_f64(pair_ptr, 0, wrapper.get_nanbox_f64())
+        });
+        pair.with_mut_ptr(|pair_ptr| {
+            crate::array::js_array_set_f64(
+                pair_ptr,
+                1,
+                identity.with_const_ptr::<crate::string::StringHeader, _>(|identity_ptr| {
+                    crate::value::js_nanbox_string(identity_ptr as i64)
+                }),
+            )
+        });
         let entries = scope.root_nanbox_f64(list(plan.get_nanbox_f64()));
         let pointer = super::super::array_pointer(entries.get_nanbox_f64())
             .expect("private retention entries");
@@ -52,7 +60,9 @@ pub(super) fn retain(
         let grown = crate::array::js_array_set_f64_extend(
             pointer,
             index,
-            js_nanbox_pointer(pair.get_raw_mut_ptr::<crate::array::ArrayHeader>() as i64),
+            pair.with_mut_ptr::<crate::array::ArrayHeader, _>(|pair_ptr| {
+                js_nanbox_pointer(pair_ptr as i64)
+            }),
         );
         crate::array::js_array_set_f64(
             super::super::array_pointer(plan.get_nanbox_f64()).unwrap(),
