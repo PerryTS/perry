@@ -292,6 +292,18 @@ pub(crate) fn add_listener(handle: i64, method: &'static [u8], event: &str, call
     unsafe { perry_ffi::runtime_call(owner.get(), method, &[event.get(), cb.get()]) };
     owner.get()
 }
+/// node's `emitCloseNT`: `'close'` fires once, latched by `_closed`.
+pub(crate) fn emit_close(handle: i64) {
+    if field(handle, b"_closed").is_some_and(truthy) {
+        return;
+    }
+    set_field(handle, b"_closed", bool_value(true));
+    emit(handle, "close");
+}
+/// Whether the response's `'close'` has fired.
+pub(crate) fn close_emitted(handle: i64) -> bool {
+    field(handle, b"_closed").is_some_and(truthy)
+}
 /// `this.emit(event)`, as node's response does.
 pub(crate) fn emit(handle: i64, event: &str) {
     let roots = TransientRootScope::enter();
@@ -411,8 +423,7 @@ extern "C" fn socket_close_relay(
     let roots = TransientRootScope::enter();
     let owner = roots.root_nanbox(unsafe { perry_ffi::closure_capture_f64(closure.cast(), 0) });
     let h = (owner.get().to_bits() & PTR_MASK) as i64;
-    set_field(h, b"_closed", bool_value(true));
-    emit(h, "close");
+    emit_close(h);
     run_end_callbacks((owner.get().to_bits() & PTR_MASK) as i64);
     f64::from_bits(TAG_UNDEFINED)
 }

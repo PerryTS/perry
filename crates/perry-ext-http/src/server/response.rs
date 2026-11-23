@@ -1039,6 +1039,9 @@ pub extern "C" fn js_node_http_res_write(handle: i64, chunk: f64) -> i32 {
         Some(b) => b,
         None => return 1,
     };
+    if response_destroyed(response_root.get()) {
+        return 0;
+    }
     let ended = response_state(response_root.get())
         .map(|sr| sr.writable_ended)
         .unwrap_or(true);
@@ -1903,6 +1906,35 @@ pub(crate) fn response_state_mut(handle: i64) -> Option<&'static mut ResponseSta
     } else {
         unsafe { super::response_payload::state(handle) }
     }
+}
+
+/// node's `onServerResponseClose` for a response whose connection died before
+/// it ended: it is destroyed, and `'close'` fires once.
+pub(crate) fn close_abandoned_response(handle: i64) {
+    if heap::is_response(handle) {
+        if heap::close_emitted(handle) {
+            return;
+        }
+        heap::set_field(handle, b"destroyed", f64::from_bits(TAG_TRUE));
+        heap::emit_close(handle);
+        return;
+    }
+    let Some(state) = response_state_mut(handle) else {
+        return;
+    };
+    if std::mem::replace(&mut state.destroyed, true) {
+        return;
+    }
+    crate::server::request::emit_no_arg_to_listeners(&response_event_listeners(handle, "close"));
+}
+
+/// Whether the response's `'close'` has fired. A numeric response has no
+/// close latch: an ended or destroyed one counts as closed.
+pub(crate) fn response_close_emitted(handle: i64) -> bool {
+    if heap::is_response(handle) {
+        return heap::close_emitted(handle);
+    }
+    response_state(handle).is_none_or(|s| s.writable_ended || s.destroyed)
 }
 
 pub(crate) fn response_destroyed(handle: i64) -> bool {

@@ -643,6 +643,47 @@ pub fn drop_handle_until(handle: Handle, deadline: Instant) -> bool {
     remove_payload(handle, Some(deadline)).is_some()
 }
 
+/// Hand a payload whose remaining owners are JS values to the collector: it
+/// stays readable while any value names `handle`, and is dropped (its id
+/// recycled) once a full trace proves none does. The payload must hold no
+/// heap edge its own registry still roots, or that edge keeps it named.
+pub fn release_handle_when_unreachable(handle: Handle) -> bool {
+    let Some(identity) = REGISTRATIONS.identity(handle) else {
+        return false;
+    };
+    if !HANDLES.contains_key(&handle) {
+        return false;
+    }
+    crate::handle_lifecycle::park_reclaimable(identity, &FFI_PAYLOADS);
+    true
+}
+
+/// This map as the owner of the ids [`release_handle_when_unreachable`] parked.
+struct FfiPayloads;
+
+impl crate::handle_lifecycle::ParkedPayloadOwner for FfiPayloads {
+    fn release(&self, identity: crate::NativeRegistrationIdentity) {
+        // A `drop_handle` after the park retired the id and parked it itself.
+        if !REGISTRATIONS.begin_retirement_of(identity) {
+            return;
+        }
+        let removed = HANDLES
+            .remove(&identity.numeric_id())
+            .map(|(_, record)| record.payload);
+        if let Some(payload) = removed.as_deref() {
+            index_note_removed(payload, identity.numeric_id());
+        }
+        assert!(REGISTRATIONS.finish_retirement_reusable(identity));
+        drop(removed);
+    }
+
+    fn property_bag(&self, id: Handle) -> Option<u64> {
+        native_handle_props(id)
+    }
+}
+
+static FFI_PAYLOADS: FfiPayloads = FfiPayloads;
+
 fn remove_payload(handle: Handle, deadline: Option<Instant>) -> Option<Box<dyn Any + Send + Sync>> {
     let identity = REGISTRATIONS.begin_retirement(handle, NativeRegistrationKind::Payload)?;
     // Retiring blocks acquisition/reuse. Neither payload removal nor its later
@@ -1168,6 +1209,29 @@ mod tests {
         assert!(ids[MIN_TRIGGER..].iter().all(|&h| reissuable(h)));
         collect_unobserved();
         assert_eq!(trace_trigger_for_tests(), (MIN_TRIGGER, 0));
+    }
+
+    #[test]
+    fn a_payload_released_to_the_collector_stays_readable_while_named() {
+        let _serial = recycle_serial();
+        collect_unobserved();
+        let h = register_handle(7_u16);
+        assert!(release_handle_when_unreachable(h));
+        for _ in 0..3 {
+            trace_observing(&[h]);
+            assert_eq!(
+                get_handle::<u16>(h),
+                Some(&7),
+                "a named id keeps its payload"
+            );
+        }
+        collect_unobserved();
+        assert!(
+            get_handle::<u16>(h).is_none(),
+            "an unnamed id drops its payload"
+        );
+        assert!(reissuable(h));
+        assert!(!release_handle_when_unreachable(h));
     }
 
     #[test]

@@ -89,6 +89,9 @@ pub struct IncomingMessage {
     pub signal: f64,
     /// True once `'close'` has fired.
     pub close_emitted: bool,
+    /// The exchange is over and the collector owns the payload: it stores no
+    /// new JS edge, since a listener naming `req` would keep it reachable.
+    pub(crate) retired: bool,
     /// #4904: true for `new http.IncomingMessage(socket)` instances —
     /// standalone messages not attached to any live connection.
     pub standalone: bool,
@@ -142,6 +145,7 @@ impl IncomingMessage {
             signal_controller: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             signal: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             close_emitted: false,
+            retired: false,
             standalone: false,
             socket_value: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             socket_overridden: false,
@@ -744,6 +748,11 @@ pub unsafe extern "C" fn js_node_http_im_on(
                 );
             }
         };
+        if im.retired {
+            return f64::from_bits(
+                perry_ffi::JsValue::from_object_ptr(handle as usize as *mut u8).bits(),
+            );
+        }
         im.listeners
             .entry(event.clone())
             .or_default()
@@ -1159,6 +1168,39 @@ pub(crate) fn close_incoming_message(handle: i64) {
         return;
     }
     emit_no_arg_to_listeners(&close_listeners);
+}
+
+/// The server-attached request `req` names, closed and retired. A standalone
+/// `new IncomingMessage()` belongs to no exchange and is left alone.
+pub(crate) fn end_server_request(req: f64) {
+    let handle = (req.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
+    if !get_handle::<IncomingMessage>(handle).is_some_and(|im| !im.standalone) {
+        return;
+    }
+    close_incoming_message(handle);
+    retire_incoming_message(handle);
+}
+
+/// End the request's exchange: it reads as ended and destroyed, drops its
+/// listeners and buffered body, and the collector releases the payload once
+/// no JS value names it (Node keeps `req` usable for as long as it is held).
+pub(crate) fn retire_incoming_message(handle: i64) {
+    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+        if std::mem::replace(&mut im.retired, true) {
+            return;
+        }
+        im.destroyed = true;
+        if !im.aborted {
+            im.complete = true;
+            im.end_emitted = true;
+        }
+        im.listeners = HashMap::new();
+        im.body_bytes = Vec::new();
+    } else {
+        perry_ffi::drop_handle(handle);
+        return;
+    }
+    perry_ffi::release_handle_when_unreachable(handle);
 }
 
 // ============================================================================
