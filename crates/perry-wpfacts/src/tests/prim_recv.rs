@@ -173,10 +173,13 @@ fn control_unknown_receiver_does_not_throw() {
     }
 }
 
+/// The chain runs in a function body: its `u == null` guard narrows the
+/// body's own local `u` (`narrow_enter_body`; a module's top-level body
+/// has no narrowing hosts), so the guarded member call sees no value.
 #[test]
 fn control_optional_chain_does_not_throw() {
     let pf = one(&format!(
-        "{C}let u: any = undefined;\nconsole.log(u?.view, u?.go(1));\n"
+        "{C}function h() {{\nlet u: any = undefined;\nconsole.log(u?.view, u?.go(1));\n}}\nh();\n"
     ));
     let r = at(&pf, "view", false);
     let k = at(&pf, "go", true);
