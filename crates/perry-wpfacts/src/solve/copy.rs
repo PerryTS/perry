@@ -284,6 +284,11 @@ impl Model {
         if top && self.diagnostic.is_some() {
             self.diagnostic_predecessor(dst, src, self.cur_why);
         }
+        if top && self.stop_top.is_some() {
+            let saved = std::mem::replace(&mut self.cur_src, src);
+            self.top_created(dst, std::panic::Location::caller());
+            self.cur_src = saved;
+        }
         if top && self.explain {
             self.top_pred
                 .entry(dst)

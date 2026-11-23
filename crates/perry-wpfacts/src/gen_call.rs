@@ -494,7 +494,7 @@ impl<'a> Gen<'a> {
     /// A closure expression: register, walk its body, return its token.
     pub(crate) fn closure(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let Expr::Closure { func_id: id, .. } = e else {
-            return self.m.top_tok_node;
+            return self.m.top_src("closure(): not a closure expression");
         };
         let canonical = self.emitted_closure(fx.module, *id).unwrap_or(e);
         self.feed_closure_captures(fx.module, e, canonical);
@@ -507,7 +507,7 @@ impl<'a> Gen<'a> {
             ..
         } = canonical
         else {
-            return self.m.top_tok_node;
+            return self.m.top_src("closure(): canonical body is not a closure");
         };
         let mi = fx.module;
         let name = self.modules[mi as usize]
@@ -1182,7 +1182,7 @@ impl<'a> Gen<'a> {
                 for a in args.iter().skip(1).chain(spread.iter()) {
                     self.m.cons(*a, Cons::TopSink { reason: r });
                 }
-                arg(0).unwrap_or(self.m.top_tok_node)
+                arg(0).unwrap_or_else(|| self.m.top_src("native call without argument 0"))
             }
             "js_object_lookup_getter" | "js_object_lookup_setter" => {
                 let Some(o) = arg(0) else {
