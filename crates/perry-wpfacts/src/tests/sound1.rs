@@ -40,7 +40,7 @@ fn no_escaped_holder_keeps_v_proven() {
 /// `pivot` = a V, so V escapes.
 #[test]
 fn control_escaped_object_reveals_proto_methods() {
-    assert!(v_escapes("(globalThis as any).hostTake({ a: 1 });"));
+    assert!(v_escapes("external({ a: 1 });"));
 }
 
 /// Control (program value really reachable from unknown code): the V is
@@ -48,7 +48,7 @@ fn control_escaped_object_reveals_proto_methods() {
 #[test]
 fn control_store_on_host_held_object() {
     assert!(v_escapes(
-        "const h: any = {}; h.pivot = new V(); (globalThis as any).hostTake(h);"
+        "const h: any = {}; h.pivot = new V(); external(h);"
     ));
 }
 
@@ -80,14 +80,14 @@ fn v_escapes_argv(host: &str) -> bool {
 /// RED: an ordinary object handed to unknown code; its chain is Object.prototype.
 #[test]
 fn red_sound1_plain_object_chain_members_held() {
-    assert!(v_escapes_argv("(globalThis as any).hostTake({ a: 1 });"));
+    assert!(v_escapes_argv("external({ a: 1 });"));
 }
 
 /// RED: Object.prototype itself handed to unknown code.
 #[test]
 fn red_sound1_object_prototype_members_held() {
     assert!(v_escapes_argv(
-        "(globalThis as any).hostTake(Object.prototype);"
+        "external(Object.prototype);"
     ));
 }
 
@@ -95,7 +95,7 @@ fn red_sound1_object_prototype_members_held() {
 /// Function.prototype -> Object.prototype.
 #[test]
 fn red_sound1_function_chain_members_held() {
-    assert!(v_escapes_argv("(globalThis as any).hostTake(() => 1);"));
+    assert!(v_escapes_argv("external(() => 1);"));
 }
 
 /// Control (green): the member itself handed: the hop cache[k] -> member ->
@@ -103,7 +103,7 @@ fn red_sound1_function_chain_members_held() {
 #[test]
 fn control_sound1_member_handed() {
     assert!(v_escapes_argv(
-        "(globalThis as any).hostTake(Object.prototype.toString);"
+        "external(Object.prototype.toString);"
     ));
 }
 
@@ -139,7 +139,7 @@ fn v_escapes_from(host: &str, read: &str) -> bool {
 #[test]
 fn red_heldmem_extends_array_ctor_members_held() {
     assert!(!v_escapes_from(
-        "class A extends Array {} (globalThis as any).hostTake(new A());",
+        "class A extends Array {} external(new A());",
         "Array as any"
     ));
 }
@@ -149,7 +149,7 @@ fn red_heldmem_extends_array_ctor_members_held() {
 #[test]
 fn red_heldmem_extends_array_class_ctor_members_held() {
     assert!(v_escapes_from(
-        "class A extends Array {} (globalThis as any).hostTake(A);",
+        "class A extends Array {} external(A);",
         "Array as any"
     ));
 }
@@ -162,7 +162,7 @@ fn red_heldmem_extends_array_class_ctor_members_held() {
 #[test]
 fn red_heldmem_extends_array_proto_members_held() {
     assert!(!v_escapes_from(
-        "class A extends Array {} (globalThis as any).hostTake(new A());",
+        "class A extends Array {} external(new A());",
         "Array.prototype as any"
     ));
 }
@@ -180,14 +180,14 @@ fn control_heldmem_extends_array_not_given() {
 /// `globalThis.Object.prototype.toString`.
 #[test]
 fn red_heldmem_global_object_members_held() {
-    assert!(v_escapes_argv("(globalThis as any).hostTake(globalThis);"));
+    assert!(v_escapes_argv("external(globalThis);"));
 }
 
 /// HELDMEM 3(c): a Map instance: `Object.getPrototypeOf(m).get.userData = ...`.
 #[test]
 fn red_heldmem_map_proto_members_held() {
     assert!(v_escapes_from(
-        "(globalThis as any).hostTake(new Map());",
+        "external(new Map());",
         "Map.prototype as any"
     ));
 }
@@ -196,7 +196,7 @@ fn red_heldmem_map_proto_members_held() {
 #[test]
 fn red_heldmem_set_proto_members_held() {
     assert!(v_escapes_from(
-        "(globalThis as any).hostTake(new Set());",
+        "external(new Set());",
         "Set.prototype as any"
     ));
 }
@@ -205,7 +205,7 @@ fn red_heldmem_set_proto_members_held() {
 #[test]
 fn red_heldmem_promise_proto_members_held() {
     assert!(v_escapes_from(
-        "(globalThis as any).hostTake(Promise.resolve(1));",
+        "external(Promise.resolve(1));",
         "Promise.prototype as any"
     ));
 }
@@ -225,9 +225,10 @@ fn control_heldmem_map_no_unknown_code() {
 #[test]
 fn control_heldmem_unreached_object_stays_proven() {
     let src = r#"
+        declare function external(x?: unknown): any;
         class V { zz = 1; probe() { return this.zz; } }
         class W { ww = 1; read() { return this.ww; } }
-        (globalThis as any).hostTake({ a: 1 });
+        external({ a: 1 });
         const cache: any = {};
         const node: any = cache[process.argv[2] ?? "x"];
         if (node !== undefined && node.userData !== undefined && node.userData.pivot !== undefined) { node.pivot = new V(); }
@@ -243,7 +244,7 @@ fn control_heldmem_unreached_object_stays_proven() {
 /// (escape.rs "unknown code already holds them"), so V escapes.
 #[test]
 fn red_realm_held_primitive_only() {
-    assert!(v_escapes_argv("(globalThis as any).hostTake(1);"));
+    assert!(v_escapes_argv("external(1);"));
 }
 
 /// HELDMEM2: an unknown-key read of a plain object (an `Object.prototype`
@@ -267,7 +268,7 @@ fn builtin_member_field_top(host: &str) -> bool {
 /// intrinsic function it holds: ⊤.
 #[test]
 fn red_realm_held_primitive_only_member_fields_top() {
-    assert!(builtin_member_field_top("(globalThis as any).hostTake(1);"));
+    assert!(builtin_member_field_top("external(1);"));
 }
 
 /// HELDMEM2 control: no unknown code anywhere: the realm is held by no one,
