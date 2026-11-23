@@ -59,7 +59,7 @@ fn a_static_the_realm_does_not_install_reads_undefined() {
 fn a_value_on_its_chain_is_read() {
     let pf = read(
         "M.sumPrecise",
-        "(Object.prototype as any).sumPrecise = (globalThis as any).hostFn();",
+        "(Object.prototype as any).sumPrecise = (globalThis as any)[process.argv[2]]();",
     );
     assert!(escape(&pf).is_some(), "{}", pf.dump_text());
 }
