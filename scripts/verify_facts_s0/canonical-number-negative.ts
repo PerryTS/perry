@@ -1,4 +1,4 @@
-// P3 B1 (DESIGN-p3 rev 3.1 §5): `Math.round` is a declared-NUM builtin. A
+// P3 B1: `Math.round` is a declared-NUM builtin. A
 // runtime built with PERRY_FACTS_SABOTAGE=canonnum returns an INT32-boxed word
 // from it. The value is stored into an array, and the element read the facts
 // prove a plain Number reaches a compare (C1), an arithmetic leaf (C2) and a

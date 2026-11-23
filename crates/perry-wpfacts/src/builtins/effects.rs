@@ -1117,8 +1117,8 @@ fn run(
             // (`typed_array_elem_prim`, ECMA-262 10.4.5.15) and no [[Set]]
             // runs, so nothing flows; the slot's values are not kept.
             RealmEffect::StoresBytes(_) => {}
-            // The body compares the slot's values by identity (DESIGN-p4l4
-            // §2.2): recorded for the value-record derive only.
+            // The body compares the slot's values by identity:
+            // recorded for the value-record derive only.
             RealmEffect::Identity(s) if m.value_records => {
                 let v = run.slot(m, s);
                 for n in v.nodes {

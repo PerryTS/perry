@@ -119,7 +119,7 @@ pub mod typed_feedback_profile;
 pub(crate) mod typed_shape;
 pub mod types;
 pub mod unit_cache;
-// DESIGN-p4l4 VR-3a: record bindings as their fields, before lowering.
+// VR-3a: record bindings as their fields, before lowering.
 mod value_records;
 #[cfg(feature = "target-wasi")]
 pub mod wasi_toolchain;

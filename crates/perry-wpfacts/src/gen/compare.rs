@@ -1,5 +1,5 @@
 //! Equality and comparison operators (`Expr::Compare`), and where they observe
-//! identity (DESIGN-p4l4 §2.2, `Cons::Identity`).
+//! identity (`Cons::Identity`).
 use super::*;
 use perry_hir::{CompareOp, Expr};
 

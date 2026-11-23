@@ -1,4 +1,4 @@
-//! P3 B1 (DESIGN-p3-canonical-numbers rev 3.1 §2): element reads whose value
+//! P3 B1: element reads whose value
 //! the facts prove a Number, or a Number or `undefined`.
 //!
 //! The fact is the NUM declaration itself (REVIEW-p3 R2): a node holds only

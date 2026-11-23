@@ -1,6 +1,6 @@
 # RFC: Type-Driven Representation Selection — unbox-by-default for statically-typed values
 
-**Status:** Draft / RFC, v2 (2026-07-27)
+**Status:** Draft / RFC, v2 (2026-07-27); §10 (one whole-program representation) accepted 2026-11-08
 **Scope:** all value classes — scalars, strings, objects, typed arrays, closures — not only numeric code.
 **Driving benchmark:** bcryptjs `_encipher` (real, unrolled) — must compile to unboxed native and beat V8.
 
@@ -351,6 +351,8 @@ Unboxed storage extends to heap slots where the *container's* shape is proven an
 
 ## 6. Phasing (one design; each phase sound on its own)
 
+> Superseded for scalars, the ABI and heap slots by §10 (`docs/src/internals/representation.md`, §8: P0–P5).
+
 - **Phase 0** — Representation as a first-class IR property + inference skeleton; `Boxed` default
   everywhere → zero behavior change; scaffolding + tests.
 - **Phase 1** — Canonical unboxed **scalar locals** (typed slots + typed loop phis; drop scalar
@@ -414,3 +416,12 @@ Measured during the bcryptjs `_encipher` performance investigation (2026-07-27; 
   and help *looped, statically-typed* kernels (3541 → 1005 ms on a typed reproduction), but were
   0% on real (untyped-param) bcryptjs and net-negative on unrolled code — the empirical case for a
   structural, rather than incremental, fix.
+
+## 10. Amendment: one whole-program representation
+
+Accepted 2026-11-08. The design is maintained as current documentation in
+[`docs/src/internals/representation.md`](src/internals/representation.md): wpfacts is the only
+representation authority, representation-typed signatures are the internal ABI, a proven Number
+is a canonical double, and conversions exist only at boundaries and at the exact I32-to-F64 widening of a join or
+copy. It overrides the conflicting
+parts of §5.2, §5.4 and §6.

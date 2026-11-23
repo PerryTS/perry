@@ -658,11 +658,11 @@ pub(crate) fn lower_call(ctx: &mut FnCtx<'_>, callee: &Expr, args: &[Expr]) -> R
     if let Some(value) = field_read_call::try_lower(ctx, callee, args)? {
         return Ok(value);
     }
-    // DESIGN-p4l4 VR-3b: a typed call of a record `$sig` (`record_sig`).
+    // VR-3b: a typed call of a record `$sig` (`record_sig`).
     if let Some(value) = crate::codegen::record_sig::try_lower_value_call(ctx, callee, args)? {
         return Ok(value);
     }
-    // P2: a typed method call enters `M$sig` (DESIGN-p2 §2).
+    // P2: a typed method call enters `M$sig`.
     if let Some(value) =
         crate::codegen::signature_entry::try_lower_typed_method_call(ctx, callee, args)?
     {

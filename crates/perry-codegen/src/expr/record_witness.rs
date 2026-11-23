@@ -1,4 +1,4 @@
-//! Check mode for value records (DESIGN-p4l4 B7, L4; VR-2).
+//! Check mode for value records (B7, L4; VR-2).
 //!
 //! Under `PERRY_VERIFY_FACTS=1` the facts' admitted record templates
 //! (`ElisionFacts::record_classes`, filled only with

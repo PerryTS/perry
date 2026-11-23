@@ -130,7 +130,7 @@ fn lower_new_impl(
     heritage_checked: bool,
 ) -> Result<String> {
     let born = lower_new_birth(ctx, class_name, args, cap_args_appended, heritage_checked)?;
-    // Value records' check mode (DESIGN-p4l4 B7): claim an admitted record.
+    // Value records' check mode (B7): claim an admitted record.
     crate::expr::record_witness::claim(ctx, class_name, &born);
     Ok(born)
 }

@@ -129,7 +129,7 @@ pub(crate) fn class_value_get_field(
             return class_value_get_wtf8_field(class_value, class_id, key, &name_bytes);
         }
         if name == "prototype" && class_id != 0 && is_class_id_registered(class_id) {
-            // P3 B2 (DESIGN-p3 rev 3.1 §3, REVIEW-p3 D3): the declaration
+            // P3 B2 (REVIEW-p3 D3): the declaration
             // path is the answer. A declared class builds its prototype
             // lazily on this first read (`class_decl_prototype_value`); an id
             // with no declaration (`!class_identity_has_surface`) has none and

@@ -1,0 +1,1 @@
+The whole-program representation design (wpfacts as the one representation authority, typed signatures, canonical Numbers, I32 at rest) is documented in `docs/src/internals/representation.md`; code comments cite it instead of the RFC's §10 and no longer point at design documents that are not in the repository.

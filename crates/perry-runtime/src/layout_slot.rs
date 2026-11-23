@@ -1,5 +1,5 @@
-//! The layout accessor (I32 at rest, representation RFC §10.7;
-//! DESIGN-n1-at-rest §6): the one place a heap slot's representation is
+//! The layout accessor (I32 at rest, `internals/representation.md` §7): the one
+//! place a heap slot's representation is
 //! decoded to, or encoded from, a JSValue.
 //!
 //! **Elements (PR B).** An Array of an at-rest template (wpfacts
@@ -216,7 +216,7 @@ pub(crate) fn encode(v: u64) -> Option<u64> {
 
 /// The I32 word a field's I32 lane stores for the JS value `v` (PR C): an
 /// int32 Number, and `-0` as the word of 0. A field is I32 while it may hold
-/// `-0` only when no use of it can observe the sign (RFC §10.3, −0
+/// `-0` only when no use of it can observe the sign (`internals/representation.md` §3, −0
 /// tolerance), so the word is exact for every observable value.
 pub(crate) fn encode_lane(v: u64) -> Option<u64> {
     if v == (-0.0f64).to_bits() {

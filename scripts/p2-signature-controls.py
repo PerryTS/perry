@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""P2 typed signatures (DESIGN-p2 rev 2.3 §5): IR assertions for the controls.
+"""P2 typed signatures: IR assertions for the controls.
 
 Compiles tests/parity/language/function/test_p2_signature_{functions,methods}.ts
 with PERRY_SAVE_LL and checks the IR shape each control names: which bodies

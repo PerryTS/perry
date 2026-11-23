@@ -1,4 +1,4 @@
-// P2 (DESIGN-p2 §5): `scale`'s typed call passes fractions, so its parameter
+// P2: `scale`'s typed call passes fractions, so its parameter
 // is F64. Under PERRY_FACTS_SABOTAGE=signature the facts claim I32 for it:
 // the typed-site witness of the signature must report it.
 // A loop bound the compiler cannot fold keeps each call site one HIR call

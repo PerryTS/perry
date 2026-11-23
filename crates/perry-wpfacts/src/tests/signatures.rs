@@ -1,4 +1,4 @@
-//! P2: typed signatures (`signatures`, DESIGN-p2 rev 2.1 §7.1). Each test
+//! P2: typed signatures (`signatures`). Each test
 //! asserts the exact `Signature` the fact computes.
 use super::*;
 use crate::bindings::Rep::{Boxed, F64, I32};

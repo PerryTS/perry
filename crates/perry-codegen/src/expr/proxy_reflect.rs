@@ -952,7 +952,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             element_offset,
             ..
         } => {
-            // Value records' check mode (DESIGN-p4l4 §10.1): a store into a copy.
+            // Value records' check mode: a store into a copy.
             super::record_witness::store_into_copy(ctx, target)?;
             // Check mode: a store the facts took to be in bounds.
             super::index_get::array_rep::witness_in_bounds_store(

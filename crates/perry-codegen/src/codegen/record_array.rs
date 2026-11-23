@@ -1,4 +1,4 @@
-//! Record-array intrinsics (DESIGN-p4l4 §1.4, §5.3, VR-4b).
+//! Record-array intrinsics (VR-4b).
 //!
 //! A record array is a `GC_TYPE_RECORD_ARRAY`: a head with its length, its
 //! capacity and the record's word count, and one edge to a pointer-free

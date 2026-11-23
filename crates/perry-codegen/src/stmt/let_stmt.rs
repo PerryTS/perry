@@ -1185,8 +1185,8 @@ pub(crate) fn lower_let(
     let canonical_safe_local = i32_safe_local
         || ctx.native_facts.int_valued_ta_locals().contains(&id)
         || ctx.native_facts.loop_bounded_i32_locals().contains(&id);
-    // "Should we?" is the whole-program facts' answer (representation RFC
-    // §10.3, P1; `codegen/facts_rep.rs`): a local they cover takes an i32
+    // "Should we?" is the whole-program facts' answer (`internals/representation.md`
+    // §3, P1; `codegen/facts_rep.rs`): a local they cover takes an i32
     // slot exactly when they give it `I32`, which carries int demand (an
     // index, a bitwise operand, `Math.imul` reached along copies). A counter
     // that only feeds double arithmetic (#7128, `15_mandelbrot`) is `F64`
