@@ -709,6 +709,9 @@ RUNTIME_DISCHARGE_HELPERS = {
         "object/mod.rs: fresh-descriptor funnel; replays field barriers"
     ),
     "note_closure_capture_slot": "closure/alloc.rs: capture-slot note + barrier",
+    "publish_newborn_elements": (
+        "array/alloc.rs: one layout decision + runtime_write_barrier_newborn_slots"
+    ),
     "rebuild_closure_layout_and_barriers": (
         "closure/dynamic_props.rs: clone/rebind funnel; replays capture barriers"
     ),

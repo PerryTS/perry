@@ -964,6 +964,7 @@ fn info_own_slots(info: *const crate::closure::JsFunctionInfo) -> usize {
 #[inline(always)]
 unsafe fn hole_own_slots(slots: *mut u64, own: usize) {
     for i in 0..own {
+        // GC_STORE_AUDIT(POINTER_FREE): the hole tag is an immediate, never a heap reference.
         slots.add(i).write(crate::value::TAG_HOLE);
     }
 }
@@ -986,9 +987,8 @@ pub unsafe fn closure_own_slot_count(closure: *const ClosureHeader) -> usize {
     let own = (*info).own_slots as usize;
     debug_assert!(
         own == 0 || {
-            let header =
-                (closure as *const u8).sub(crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader;
-            (*header).size as usize
+            let header = crate::value::addr_class::honest_header(closure as usize);
+            header.size as usize
                 >= crate::gc::GC_HEADER_SIZE
                     + std::mem::size_of::<ClosureHeader>()
                     + (real_capture_count((*closure).capture_count) as usize + own) * 8

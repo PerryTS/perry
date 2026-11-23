@@ -58,8 +58,9 @@ pub fn class_closure_id(ptr: usize) -> Option<u32> {
     }
     // SAFETY: the GC header precedes every heap cell; only a closure cell
     // has an info word (at `ClosureHeader::info`).
-    if unsafe { (*((ptr - crate::gc::GC_HEADER_SIZE) as *const crate::gc::GcHeader)).obj_type }
-        != crate::gc::GC_TYPE_CLOSURE
+    if unsafe { crate::value::addr_class::try_read_gc_header_known_plausible(ptr) }
+        .map(|header| header.obj_type)
+        != Some(crate::gc::GC_TYPE_CLOSURE)
     {
         return None;
     }
