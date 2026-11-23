@@ -130,7 +130,12 @@ impl Model {
                     crate::builtins::WK_ITERATOR | "__proto__" | crate::STAR_KEY
                 ),
             };
-            if hit && !self.array_member_unsure.iter().any(|&(x, s, _)| x == t && s == site) {
+            if hit
+                && !self
+                    .array_member_unsure
+                    .iter()
+                    .any(|&(x, s, _)| x == t && s == site)
+            {
                 let on = self.tok_name(t);
                 let r = self.reason(&format!("{what} on {on}"));
                 self.array_member_unsure.push((t, site, r));
@@ -989,7 +994,10 @@ impl Model {
         if new & MARK_ESCAPE != 0 && !described {
             self.set_marker_top(t, "a marker of another unit's value escapes (its use MARK_ESCAPE, no described contract): it reads as ⊤ from now on (DECISIONS 42)");
             if let Some(&r) = self.marker_reach.get(&t) {
-                self.set_marker_top(r, "the reach marker of an escaped argument marker reads as ⊤ (DECISIONS 42)");
+                self.set_marker_top(
+                    r,
+                    "the reach marker of an escaped argument marker reads as ⊤ (DECISIONS 42)",
+                );
             }
             // What it reaches under a key is what unknown code stored
             // there: no ⊤ beside the marker says so (DECISIONS 119). So is
@@ -1056,7 +1064,10 @@ impl Model {
         self.keyed_reach.entry(t).or_default().push((a, r));
         // An escaped marker's keyed reach reads as ⊤ too (DECISIONS 119).
         if self.marker_is_top(t) {
-            self.set_marker_top(r, "a new keyed reach of a marker that reads as ⊤ reads as ⊤ (DECISIONS 119)");
+            self.set_marker_top(
+                r,
+                "a new keyed reach of a marker that reads as ⊤ reads as ⊤ (DECISIONS 119)",
+            );
         }
         match self.param_marker.get(&t).copied() {
             Some(fi) => {
@@ -1159,7 +1170,10 @@ impl Model {
                 self.path_parent.insert(s, (t, k));
                 self.path_steps.entry(t).or_default().push(s);
                 if self.marker_is_top(t) {
-                    self.set_marker_top(s, "a new path step of a marker that reads as ⊤ reads as ⊤ (DECISIONS 158)");
+                    self.set_marker_top(
+                        s,
+                        "a new path step of a marker that reads as ⊤ reads as ⊤ (DECISIONS 158)",
+                    );
                 }
                 s
             }

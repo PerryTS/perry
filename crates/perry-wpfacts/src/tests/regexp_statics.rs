@@ -7,7 +7,9 @@
 use super::*;
 
 fn held(src: &str) -> bool {
-    let ast = Box::leak(Box::new(perry_parser::parse_typescript(src, "t.ts").unwrap()));
+    let ast = Box::leak(Box::new(
+        perry_parser::parse_typescript(src, "t.ts").unwrap(),
+    ));
     let hir = Box::leak(Box::new(perry_hir::lower_module(ast, "t", "t.ts").unwrap()));
     let mut g = crate::gen::Gen::new(vec![("t.ts", &*hir)], false, false);
     g.m.max_work = 50_000_000;
@@ -29,5 +31,7 @@ fn rxstat_console_log_of_a_regexp_holds_nothing() {
 /// A computed read on RegExp: its declared statics or `Function.prototype`'s.
 #[test]
 fn rxstat_any_key_read_on_regexp_holds_nothing() {
-    assert!(!held("declare const k: string;\nconst v = (RegExp as any)[k];\nv();\n"));
+    assert!(!held(
+        "declare const k: string;\nconst v = (RegExp as any)[k];\nv();\n"
+    ));
 }

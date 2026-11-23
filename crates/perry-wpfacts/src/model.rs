@@ -1111,7 +1111,11 @@ impl InspectAt {
     pub const fn arg(limit: u8) -> InspectAt {
         InspectAt {
             depth: 0,
-            limit: if limit > INSPECT_HARD_CAP { INSPECT_HARD_CAP } else { limit },
+            limit: if limit > INSPECT_HARD_CAP {
+                INSPECT_HARD_CAP
+            } else {
+                limit
+            },
         }
     }
 
@@ -1328,7 +1332,9 @@ impl Protocol {
         match self {
             Protocol::Json => &[Protocol::Json],
             Protocol::Inspect(_) => &[Protocol::InspectShown(InspectAt::DEFAULT_ARG)],
-            Protocol::InspectShown(_) | Protocol::InspectTarget(_) => &[Protocol::InspectShown(InspectAt::DEFAULT_ARG)],
+            Protocol::InspectShown(_) | Protocol::InspectTarget(_) => {
+                &[Protocol::InspectShown(InspectAt::DEFAULT_ARG)]
+            }
             Protocol::Clone => &[Protocol::Clone],
             Protocol::AsyncIterResult => &[Protocol::BufferFrom],
             Protocol::BufferFrom => &[Protocol::ToPrimitive],
@@ -1420,7 +1426,9 @@ impl Protocol {
     /// Where an inspection protocol shows the value (`None`: another protocol).
     pub fn inspect_at(self) -> Option<InspectAt> {
         match self {
-            Protocol::Inspect(at) | Protocol::InspectShown(at) | Protocol::InspectTarget(at) => Some(at),
+            Protocol::Inspect(at) | Protocol::InspectShown(at) | Protocol::InspectTarget(at) => {
+                Some(at)
+            }
             _ => None,
         }
     }

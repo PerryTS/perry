@@ -1104,10 +1104,21 @@ fn answer_opaque(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) {
         }
         NativeMiss::Load(dst) => {
             if cliffc_diag() && !m.shared_replay {
-                static SEEN: std::sync::Mutex<Option<std::collections::HashSet<(u32, u32)>>> = std::sync::Mutex::new(None);
-                let first = SEEN.lock().unwrap().get_or_insert_with(Default::default).insert((np as u32, a as u32));
+                static SEEN: std::sync::Mutex<Option<std::collections::HashSet<(u32, u32)>>> =
+                    std::sync::Mutex::new(None);
+                let first = SEEN
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(Default::default)
+                    .insert((np as u32, a as u32));
                 if first {
-                    eprintln!("WHY CLIFFC opaque n{} {}.{} writers={:?}", dst, m.tok_name(np), m.atoms[a as usize], native_writers_why(m, np, a));
+                    eprintln!(
+                        "WHY CLIFFC opaque n{} {}.{} writers={:?}",
+                        dst,
+                        m.tok_name(np),
+                        m.atoms[a as usize],
+                        native_writers_why(m, np, a)
+                    );
                 }
             }
             m.add_top(dst, |_| {

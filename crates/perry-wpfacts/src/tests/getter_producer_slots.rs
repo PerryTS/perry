@@ -27,7 +27,10 @@ fn abort_event_target_is_the_signal() {
 fn custom_event_detail_is_internal_and_null_when_absent() {
     let k = stored("const e = new CustomEvent(\"x\");", "e.detail");
     assert!(!k.top && k.prims & prim::NULL != 0, "{k:?}");
-    let k = stored("const e = new CustomEvent(\"x\", { detail: new D() });", "e.detail");
+    let k = stored(
+        "const e = new CustomEvent(\"x\", { detail: new D() });",
+        "e.detail",
+    );
     assert!(!k.top && k.objs.iter().any(|o| o.ends_with(":D")), "{k:?}");
 }
 

@@ -13,8 +13,8 @@ mod copy;
 mod define;
 mod lookup;
 pub(crate) mod map_vals;
-mod own_read;
 mod not_error;
+mod own_read;
 mod record_entry;
 
 use crate::builtins;
@@ -258,7 +258,9 @@ impl Model {
                     .pts
                     .to_sorted()
                     .into_iter()
-                    .filter(|&t| escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t))
+                    .filter(|&t| {
+                        escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                    })
                     .collect();
                 self.ledger_again_beside_top(n, &gone);
             }
@@ -360,7 +362,8 @@ impl Model {
     fn may_run_code(c: &Cons) -> bool {
         !matches!(
             c,
-            Cons::Raise { .. } | Cons::HandRaise { .. }
+            Cons::Raise { .. }
+                | Cons::HandRaise { .. }
                 | Cons::Identity { .. }
                 | Cons::Guard { .. }
                 | Cons::Defined { .. }
@@ -725,7 +728,9 @@ impl Model {
         for (reason, retained) in sinks {
             let root = l.enter_sink(n);
             for &t in toks {
-                if retained != Some(t) && escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t) {
+                if retained != Some(t)
+                    && escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                {
                     l.again(t, reason, std::panic::Location::caller());
                 }
             }
@@ -907,7 +912,11 @@ impl Model {
             let p = s.cur_pos();
             let n = self.node_l("TOPVAL");
             let at = std::panic::Location::caller();
-            self.stop_top.as_mut().unwrap().topvals.insert(n, (why.to_string(), at, p));
+            self.stop_top
+                .as_mut()
+                .unwrap()
+                .topvals
+                .insert(n, (why.to_string(), at, p));
             self.add_tok(n, TOP);
             self.add_prim(n, prim::ALL);
             return n;
@@ -1599,7 +1608,11 @@ impl Model {
             && toks.iter().any(|&t| t == crate::model::TOP)
         {
             let k = self.top_origin_id(n);
-            let rest: Vec<Tok> = toks.iter().copied().filter(|&t| t != crate::model::TOP).collect();
+            let rest: Vec<Tok> = toks
+                .iter()
+                .copied()
+                .filter(|&t| t != crate::model::TOP)
+                .collect();
             if !rest.is_empty() || prim != 0 {
                 self.apply_tokens_on_b(n, c, Tokens::Slice(&rest), prim);
             }
@@ -1679,6 +1692,32 @@ impl Model {
                 },
                 _ => None,
             };
+            // One realm constructor (ECMA-262 13.3.7.1): the chain is the
+            // class's prototype, then the realm prototype; `super()` runs
+            // the constructor's declared construct effects on the instance
+            // (`run_super_construct`), else the instance is E21.
+            let realm = match toks.as_slice() {
+                [t] if !null && one.is_none() => match &self.toks[*t as usize] {
+                    TokKind::BuiltinFn(crate::model::Native::Member { identity, .. }) => {
+                        Some(identity.to_string())
+                    }
+                    TokKind::Builtin(_) => Some(self.tok_name(*t)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(identity) = realm {
+                self.parent_unsettled.insert(tm);
+                if self.unit_mode || crate::builtins::declared_super_construct(&identity).is_none()
+                {
+                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                    let r = self.reason(&format!(
+                        "E21 realm parent constructor {identity} declares no construct effects"
+                    ));
+                    self.mark_hard(inst, Hard::E21NativeParent, r);
+                }
+                continue;
+            }
             match one {
                 Some(p) => self.tmpls[tm as usize].parent = Some(p),
                 None => {
@@ -2128,7 +2167,14 @@ impl Model {
         self.console_inspect_at(n, reason, shown, region, limit);
     }
 
-    fn console_inspect_at(&mut self, n: NodeId, reason: u32, shown: bool, region: NodeId, limit: u8) {
+    fn console_inspect_at(
+        &mut self,
+        n: NodeId,
+        reason: u32,
+        shown: bool,
+        region: NodeId,
+        limit: u8,
+    ) {
         let at = InspectAt::arg(limit.max(INSPECT_DEFAULT_LIMIT));
         let proto = if shown {
             Protocol::InspectShown(at)
@@ -2170,7 +2216,9 @@ impl Model {
         if let TokKind::Proxy(p) = self.toks[t as usize] {
             match proto {
                 Protocol::ToPrimitive => return self.proxy_to_primitive(p, reason, region),
-                Protocol::InspectShown(at) => return self.proxy_inspect_shown(p, at, reason, region),
+                Protocol::InspectShown(at) => {
+                    return self.proxy_inspect_shown(p, at, reason, region)
+                }
                 Protocol::Json => return self.proxy_json(p, reason, region),
                 Protocol::Inspect(at) => return self.proxy_inspect(p, at, reason, region),
                 _ => {}

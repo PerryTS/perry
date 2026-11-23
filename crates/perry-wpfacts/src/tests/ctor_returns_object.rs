@@ -29,7 +29,9 @@ fn proven(pf: &ProgramFacts, key: &str) -> usize {
 /// Whether the receivers of `key` hold the this-object of `new <name>`.
 fn holds_this(pf: &ProgramFacts, key: &str, name: &str) -> bool {
     let tag = format!("new {name}");
-    recv(pf, key).iter().any(|r| r.contains(&tag) || r.ends_with(&format!(":{name}")))
+    recv(pf, key)
+        .iter()
+        .any(|r| r.contains(&tag) || r.ends_with(&format!(":{name}")))
 }
 
 /// RED/GREEN: the three.js `WebGLPrograms` shape. `p` is the returned
@@ -43,8 +45,18 @@ fn a_function_constructor_returning_a_literal_is_not_its_this() {
         console.log(p.m());
         "#,
     );
-    assert!(!holds_this(&pf, "m", "F"), "{:?}\n{}", recv(&pf, "m"), pf.dump_text());
-    assert!(proven(&pf, "m") > 0, "{:?}\n{}", recv(&pf, "m"), pf.dump_text());
+    assert!(
+        !holds_this(&pf, "m", "F"),
+        "{:?}\n{}",
+        recv(&pf, "m"),
+        pf.dump_text()
+    );
+    assert!(
+        proven(&pf, "m") > 0,
+        "{:?}\n{}",
+        recv(&pf, "m"),
+        pf.dump_text()
+    );
 }
 
 /// Guard: an object on some paths only; the other path completes, so `new`
@@ -58,7 +70,12 @@ fn a_function_constructor_returning_an_object_sometimes_keeps_its_this() {
         console.log(p.m());
         "#,
     );
-    assert!(holds_this(&pf, "m", "F"), "{:?}\n{}", recv(&pf, "m"), pf.dump_text());
+    assert!(
+        holds_this(&pf, "m", "F"),
+        "{:?}\n{}",
+        recv(&pf, "m"),
+        pf.dump_text()
+    );
 }
 
 /// Guard: a returned value that may be a primitive keeps the this-object.
@@ -71,7 +88,12 @@ fn a_function_constructor_returning_object_or_primitive_keeps_its_this() {
         console.log(p.m());
         "#,
     );
-    assert!(holds_this(&pf, "m", "F"), "{:?}\n{}", recv(&pf, "m"), pf.dump_text());
+    assert!(
+        holds_this(&pf, "m", "F"),
+        "{:?}\n{}",
+        recv(&pf, "m"),
+        pf.dump_text()
+    );
 }
 
 /// Guard: a primitive return is ignored by `new`: the this-object.
@@ -84,8 +106,18 @@ fn a_function_constructor_returning_a_primitive_is_its_this() {
         console.log(p.m());
         "#,
     );
-    assert!(holds_this(&pf, "m", "F"), "{:?}\n{}", recv(&pf, "m"), pf.dump_text());
-    assert!(proven(&pf, "m") > 0, "{:?}\n{}", recv(&pf, "m"), pf.dump_text());
+    assert!(
+        holds_this(&pf, "m", "F"),
+        "{:?}\n{}",
+        recv(&pf, "m"),
+        pf.dump_text()
+    );
+    assert!(
+        proven(&pf, "m") > 0,
+        "{:?}\n{}",
+        recv(&pf, "m"),
+        pf.dump_text()
+    );
 }
 
 /// Guard: `return;` yields the this-object.
@@ -98,7 +130,12 @@ fn a_function_constructor_with_an_empty_return_keeps_its_this() {
         console.log(p.m());
         "#,
     );
-    assert!(holds_this(&pf, "m", "F"), "{:?}\n{}", recv(&pf, "m"), pf.dump_text());
+    assert!(
+        holds_this(&pf, "m", "F"),
+        "{:?}\n{}",
+        recv(&pf, "m"),
+        pf.dump_text()
+    );
 }
 
 /// A class constructor returning an object: the instance is not the result.
@@ -111,8 +148,18 @@ fn a_class_constructor_returning_a_literal_is_not_its_this() {
         console.log(p.m());
         "#,
     );
-    assert!(!holds_this(&pf, "m", "B"), "{:?}\n{}", recv(&pf, "m"), pf.dump_text());
-    assert!(proven(&pf, "m") > 0, "{:?}\n{}", recv(&pf, "m"), pf.dump_text());
+    assert!(
+        !holds_this(&pf, "m", "B"),
+        "{:?}\n{}",
+        recv(&pf, "m"),
+        pf.dump_text()
+    );
+    assert!(
+        proven(&pf, "m") > 0,
+        "{:?}\n{}",
+        recv(&pf, "m"),
+        pf.dump_text()
+    );
 }
 
 /// Guard: a class constructor that may complete keeps the instance.
@@ -125,7 +172,12 @@ fn a_class_constructor_returning_an_object_sometimes_keeps_its_this() {
         console.log(p.m());
         "#,
     );
-    assert!(holds_this(&pf, "m", "B"), "{:?}\n{}", recv(&pf, "m"), pf.dump_text());
+    assert!(
+        holds_this(&pf, "m", "B"),
+        "{:?}\n{}",
+        recv(&pf, "m"),
+        pf.dump_text()
+    );
 }
 
 /// A derived class constructor returning an object: not the instance.
@@ -139,7 +191,12 @@ fn a_derived_class_constructor_returning_a_literal_is_not_its_this() {
         console.log(p.m());
         "#,
     );
-    assert!(!holds_this(&pf, "m", "B"), "{:?}\n{}", recv(&pf, "m"), pf.dump_text());
+    assert!(
+        !holds_this(&pf, "m", "B"),
+        "{:?}\n{}",
+        recv(&pf, "m"),
+        pf.dump_text()
+    );
 }
 
 /// Guard: a derived class constructor that completes keeps the instance.
@@ -153,5 +210,10 @@ fn a_derived_class_constructor_that_completes_keeps_its_this() {
         console.log(p.m());
         "#,
     );
-    assert!(holds_this(&pf, "m", "B"), "{:?}\n{}", recv(&pf, "m"), pf.dump_text());
+    assert!(
+        holds_this(&pf, "m", "B"),
+        "{:?}\n{}",
+        recv(&pf, "m"),
+        pf.dump_text()
+    );
 }

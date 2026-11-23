@@ -72,7 +72,12 @@ fn performance_to_json_value_call_keeps_the_realm() {
 #[test]
 fn handed_builtin_keeps_intrinsic_members() {
     let held = now_keeps_o(&format!("{HELD}sink(performance);"));
-    assert_eq!(held, crate::builtins::cliffd_nointrw(), "arm {}", crate::builtins::cliffd_nointrw());
+    assert_eq!(
+        held,
+        crate::builtins::cliffd_nointrw(),
+        "arm {}",
+        crate::builtins::cliffd_nointrw()
+    );
 }
 
 /// (b, keep) A program store onto the handed builtin is still seen: the
@@ -105,5 +110,8 @@ fn realm_prototype_chains_end() {
             at = by.get(p).copied().flatten();
         }
     }
-    assert!(cycles.is_empty(), "cyclic realm [[Prototype]] chains: {cycles:?}");
+    assert!(
+        cycles.is_empty(),
+        "cyclic realm [[Prototype]] chains: {cycles:?}"
+    );
 }

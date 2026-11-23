@@ -17,7 +17,6 @@
 //! `secret-tests/scratchpad/wpfacts-design-20261012.md`.
 
 pub mod bindings;
-pub mod topstop;
 mod booleans;
 mod born_with;
 mod builtins;
@@ -69,6 +68,7 @@ mod solve;
 mod summary;
 #[cfg(test)]
 mod tests;
+pub mod topstop;
 mod units;
 mod unksrc;
 mod zero_sign;

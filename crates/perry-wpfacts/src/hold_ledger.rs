@@ -108,17 +108,35 @@ pub(crate) fn blast() -> bool {
 /// site with its causes (`<path>.blast`).
 fn write_blast(m: &Model, l: &HoldLedger, refused: &[Refused], path: &str) {
     use std::fmt::Write as _;
-    let rs = |w: u32| m.reasons.get(w as usize).map_or("-".to_string(), |s| s.replace(['\t', '\n', '\r'], " "));
+    let rs = |w: u32| {
+        m.reasons
+            .get(w as usize)
+            .map_or("-".to_string(), |s| s.replace(['\t', '\n', '\r'], " "))
+    };
     let mut o = String::new();
     for (i, x) in l.roots.iter().enumerate() {
-        let _ = writeln!(o, "R\t{i}\t{}\t{}:{}\t{}\t{}", x.kind, short(x.loc.file()), x.loc.line(), x.at, rs(x.reason));
+        let _ = writeln!(
+            o,
+            "R\t{i}\t{}\t{}:{}\t{}\t{}",
+            x.kind,
+            short(x.loc.file()),
+            x.loc.line(),
+            x.at,
+            rs(x.reason)
+        );
     }
     for (&(n, why), &i) in &l.top_ids {
         let _ = writeln!(o, "T\t{i}\t{n}\t{}", rs(why));
     }
     let mut toks: crate::pts::FxHashSet<u64> = Default::default();
     for (&(a, b), &(loc, why)) in &l.lab {
-        let _ = writeln!(o, "E\t{a}\t{b}\t{}:{}\t{}", short(loc.file()), loc.line(), rs(why));
+        let _ = writeln!(
+            o,
+            "E\t{a}\t{b}\t{}:{}\t{}",
+            short(loc.file()),
+            loc.line(),
+            rs(why)
+        );
         for v in [a, b] {
             if v >> 32 == 1 {
                 toks.insert(v);

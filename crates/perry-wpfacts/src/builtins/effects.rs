@@ -140,6 +140,13 @@ pub(crate) fn declared_construct(name: &str) -> Option<&'static RealmEntry> {
         .filter(|e| e.kind == RealmKind::Constructor && !names_callee(e.effects))
 }
 
+/// The declaration `super(...)` into realm constructor `identity` runs
+/// (`run_super_construct`): a module or host constructor's
+/// (`declared_construct`), else the global constructor's (`declared_ctor`).
+pub(crate) fn declared_super_construct(identity: &str) -> Option<&'static RealmEntry> {
+    declared_construct(identity).or_else(|| declared_ctor(identity))
+}
+
 fn by_proto() -> &'static ByProto {
     &index().0
 }
@@ -490,6 +497,11 @@ struct Run {
     c: CallSite,
     recv: Option<NodeId>,
     returned: Vec<NodeId>,
+    /// `super(...)` into this constructor (ECMA-262 13.3.7.1): the instance
+    /// under construction, the object OrdinaryCreateFromConstructor makes
+    /// with NewTarget's prototype (10.1.13). The declared result's `fresh`
+    /// is this object, and `result` names it.
+    new_target: Option<Tok>,
 }
 
 impl Run {
@@ -526,7 +538,14 @@ impl Run {
                     v.nodes.push(spread_elems(m, s));
                 }
             }
-            RealmSlotRoot::Result => v.nodes.push(self.c.ret),
+            RealmSlotRoot::Result => match self.new_target {
+                Some(t) => {
+                    let n = m.node_l("super-construct-result");
+                    m.add_tok(n, t);
+                    v.nodes.push(n);
+                }
+                None => v.nodes.push(self.c.ret),
+            },
             RealmSlotRoot::Returned(n) => v.nodes.extend(self.returned.get(n as usize)),
             RealmSlotRoot::Callee => {
                 let f = self
@@ -625,9 +644,7 @@ impl Run {
                         nodes: vec![],
                         spread: vec![n],
                     },
-                    RealmSlotStep::Iterated
-                    | RealmSlotStep::OwnValues
-                    | RealmSlotStep::Proto => {
+                    RealmSlotStep::Iterated | RealmSlotStep::OwnValues | RealmSlotStep::Proto => {
                         unreachable!("a value step is taken above")
                     }
                     st @ (RealmSlotStep::Field(_)
@@ -1016,6 +1033,31 @@ impl Run {
                 let v = self.slot(m, s);
                 flow(m, &v, self.c.ret);
             }
+            // `super(...)`: the object made is the instance under
+            // construction; the declared fields and slots are its own.
+            RealmOperand::Fresh {
+                elems,
+                fields,
+                slots,
+                ..
+            } if self.new_target.is_some() => {
+                let out = self.new_target.expect("guarded");
+                if !elems.is_empty() {
+                    let ofa = m.field_any(out);
+                    for e in elems.iter() {
+                        let v = self.operand(m, e);
+                        m.edge(v, ofa);
+                    }
+                }
+                for f in fields.iter() {
+                    let key = m.atom(&f.key);
+                    let at = m.field(out, key);
+                    let v = self.held(m, &f.value, out);
+                    m.edge(v, at);
+                }
+                self.slots(m, out, slots);
+                ret_tok(m, self.call, out);
+            }
             RealmOperand::Fresh {
                 proto,
                 elems,
@@ -1128,25 +1170,37 @@ fn flow(m: &mut Model, v: &Vals, dst: NodeId) {
 /// `call` into declared native `entry` with receiver token `t`: each
 /// declared effect, in declaration order.
 pub(crate) fn run_native(m: &mut Model, entry: &'static RealmEntry, t: Tok, call: CallId) {
-    run(m, entry, Some(t), None, call)
+    run(m, entry, Some(t), None, call, None)
 }
 
 /// `call` of declared native function value `f` (`declared_member`):
 /// each declared effect, with `f` as the receiver token and as `callee`.
 pub(crate) fn run_member(m: &mut Model, entry: &'static RealmEntry, f: Tok, call: CallId) {
-    run(m, entry, Some(f), Some(f), call)
+    run(m, entry, Some(f), Some(f), call, None)
 }
 
 /// `new Name(...)` at `call` of a declared global constructor
 /// (`declared_ctor`): each declared effect, with no receiver.
 pub(crate) fn run_construct(m: &mut Model, entry: &'static RealmEntry, call: CallId) {
-    run(m, entry, None, None, call)
+    run(m, entry, None, None, call, None)
 }
 
 /// `call` of a declared global function (`declared_function`): each
 /// declared effect, with no receiver.
 pub(crate) fn run_function(m: &mut Model, entry: &'static RealmEntry, call: CallId) {
-    run(m, entry, None, None, call)
+    run(m, entry, None, None, call, None)
+}
+
+/// `super(...)` at `call` into declared constructor `entry`
+/// (`declared_construct`): each declared effect, with no receiver, the
+/// object it makes being `inst`, the instance under construction.
+pub(crate) fn run_super_construct(
+    m: &mut Model,
+    entry: &'static RealmEntry,
+    call: CallId,
+    inst: Tok,
+) {
+    run(m, entry, None, None, call, Some(inst))
 }
 
 fn run(
@@ -1155,6 +1209,7 @@ fn run(
     t: Option<Tok>,
     callee: Option<Tok>,
     call: CallId,
+    new_target: Option<Tok>,
 ) {
     crate::family_reach::run(m, entry.name);
     if let Some(p) = m.prof.as_mut() {
@@ -1172,6 +1227,7 @@ fn run(
         c: m.calls[call as usize].clone(),
         recv: None,
         returned: Vec::new(),
+        new_target,
     };
     for e in entry.effects.iter() {
         match e {

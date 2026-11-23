@@ -15,7 +15,13 @@ fn stored(prelude: &str, read: &str) -> crate::derive::KindFact {
 #[test]
 fn a_mark_entry_holds_its_declared_fields() {
     let k = stored("const e: any = performance.mark(\"a\");", "e.name");
-    assert!(!k.top && k.prims & prim::STR != 0 && k.prims & !(prim::STR | prim::NUM) == 0 && k.objs.is_empty(), "{k:?}");
+    assert!(
+        !k.top
+            && k.prims & prim::STR != 0
+            && k.prims & !(prim::STR | prim::NUM) == 0
+            && k.objs.is_empty(),
+        "{k:?}"
+    );
     let k = stored("const e: any = performance.measure(\"m\");", "e.duration");
     assert!(!k.top && k.prims == prim::NUM && k.objs.is_empty(), "{k:?}");
     let k = stored("const e: any = performance.mark(\"a\");", "e.name.length");
@@ -24,7 +30,10 @@ fn a_mark_entry_holds_its_declared_fields() {
 
 #[test]
 fn a_mark_field_the_program_rewrites_reads_what_it_stored() {
-    let k = stored("const e: any = performance.mark(\"a\"); e.name = new D();", "e.name");
+    let k = stored(
+        "const e: any = performance.mark(\"a\"); e.name = new D();",
+        "e.name",
+    );
     assert!(!k.top && k.objs.iter().any(|o| o.ends_with(":D")), "{k:?}");
 }
 

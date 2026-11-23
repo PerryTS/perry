@@ -48,7 +48,10 @@ fn a_class_instance_walked_reaches_the_return() {
 #[test]
 fn each_call_of_the_enclosing_function_gets_its_value() {
     let r = zz("function walk(src: any) { let r: any = 0; for (const p in src) { r = src[p]; } return r; }\nconst x = walk({ a: new Mk() }); const y = walk({ b: new Nk() }); console.log(x.zz(), y.zz());\n");
-    assert!(r.contains(&"t.ts:Mk".to_string()) && r.contains(&"t.ts:Nk".to_string()), "{r:?}");
+    assert!(
+        r.contains(&"t.ts:Mk".to_string()) && r.contains(&"t.ts:Nk".to_string()),
+        "{r:?}"
+    );
 }
 
 /// The write inside an `if` of the body reaches the end too.

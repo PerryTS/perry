@@ -37,8 +37,8 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_proto_method, declared_static, run_construct,
-    run_function, run_member,
+    declared_construct, declared_member, declared_proto_method, declared_static,
+    declared_super_construct, run_construct, run_function, run_member, run_super_construct,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -2651,7 +2651,8 @@ fn chain_any_node(m: &mut Model, fam: Family, what: Option<&'static str>, key: K
             object_method = true;
             continue;
         }
-        if matches!(members::member(fam, name), Some(Mem::Fn)) && realm_accessor(m, fam, what, name) {
+        if matches!(members::member(fam, name), Some(Mem::Fn)) && realm_accessor(m, fam, what, name)
+        {
             continue;
         }
         let a = m.atom(name);
@@ -2678,7 +2679,8 @@ fn chain_accessors(m: &mut Model, fam: Family, what: Option<&'static str>, key: 
         {
             continue;
         }
-        if matches!(members::member(fam, name), Some(Mem::Fn)) && realm_accessor(m, fam, what, name) {
+        if matches!(members::member(fam, name), Some(Mem::Fn)) && realm_accessor(m, fam, what, name)
+        {
             out.push(m.atom(name));
         }
     }

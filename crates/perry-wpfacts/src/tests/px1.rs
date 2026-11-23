@@ -821,9 +821,15 @@ function mk(): any {
 const p = mk();
 "#;
 const PXVAL: &[(&str, &str)] = &[
-    ("lenindex", r#"const api = { put: (a: any, i: number) => { a[i] = 1; return a; } };
-console.log(api.put([0, 0], N.length).length, api.put(p, 1).n);"#),
-    ("thisinst", r#"const o = { f(this: any) { return this.n; } }; console.log(o.f.call(N), o.f.call(p));"#),
+    (
+        "lenindex",
+        r#"const api = { put: (a: any, i: number) => { a[i] = 1; return a; } };
+console.log(api.put([0, 0], N.length).length, api.put(p, 1).n);"#,
+    ),
+    (
+        "thisinst",
+        r#"const o = { f(this: any) { return this.n; } }; console.log(o.f.call(N), o.f.call(p));"#,
+    ),
 ];
 
 #[test]
@@ -851,10 +857,22 @@ function mk(): any {
 const p = mk();
 "#;
 const PXSTR: &[(&str, &str)] = &[
-    ("strindex", r#"const api = { ix: (s: string): number => ("ab" + N).indexOf(s) }; console.log(api.ix(N), api.ix(p as any));"#),
-    ("strreplace_search", r#"const api = { r: (s: string): string => ("ab" + N).replace(s, "x") }; console.log(api.r(N), api.r(p as any));"#),
-    ("strreplace_recv", r#"const api = { r: (s: string): string => s.replace("a", "x") }; console.log(api.r(N), api.r(p as any));"#),
-    ("strsubstring", r#"const api = { s: (k: number): string => ("abcdef" + N).substring(k) }; console.log(api.s(1), api.s(p as any));"#),
+    (
+        "strindex",
+        r#"const api = { ix: (s: string): number => ("ab" + N).indexOf(s) }; console.log(api.ix(N), api.ix(p as any));"#,
+    ),
+    (
+        "strreplace_search",
+        r#"const api = { r: (s: string): string => ("ab" + N).replace(s, "x") }; console.log(api.r(N), api.r(p as any));"#,
+    ),
+    (
+        "strreplace_recv",
+        r#"const api = { r: (s: string): string => s.replace("a", "x") }; console.log(api.r(N), api.r(p as any));"#,
+    ),
+    (
+        "strsubstring",
+        r#"const api = { s: (k: number): string => ("abcdef" + N).substring(k) }; console.log(api.s(1), api.s(p as any));"#,
+    ),
 ];
 
 #[test]

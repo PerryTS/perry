@@ -6,14 +6,54 @@ use super::*;
 /// object (hand-written v0 from perry-runtime: await/Promise, JSON, String/
 /// Number conversion, iteration, events, inspect, errors, Proxy traps).
 pub(crate) const PROTOCOL_KEYS: &[&str] = &[
-    "then", "catch", "finally", "toJSON", "toString", "valueOf", "toLocaleString",
-    "@@iterator", "@@asyncIterator", "@@toPrimitive", "@@toStringTag", "@@hasInstance",
-    "@@species", "@@dispose", "@@asyncDispose", "@@isConcatSpreadable", "@@match", "@@replace",
-    "@@search", "@@split", "next", "return", "throw", "handleEvent", "length", "constructor",
-    "prototype", "__perry_inspect_custom__", "name", "message", "stack", "cause", "errors",
-    "get", "set", "has", "deleteProperty", "apply", "construct", "ownKeys",
-    "getOwnPropertyDescriptor", "defineProperty", "getPrototypeOf", "setPrototypeOf",
-    "isExtensible", "preventExtensions", "done", "value",
+    "then",
+    "catch",
+    "finally",
+    "toJSON",
+    "toString",
+    "valueOf",
+    "toLocaleString",
+    "@@iterator",
+    "@@asyncIterator",
+    "@@toPrimitive",
+    "@@toStringTag",
+    "@@hasInstance",
+    "@@species",
+    "@@dispose",
+    "@@asyncDispose",
+    "@@isConcatSpreadable",
+    "@@match",
+    "@@replace",
+    "@@search",
+    "@@split",
+    "next",
+    "return",
+    "throw",
+    "handleEvent",
+    "length",
+    "constructor",
+    "prototype",
+    "__perry_inspect_custom__",
+    "name",
+    "message",
+    "stack",
+    "cause",
+    "errors",
+    "get",
+    "set",
+    "has",
+    "deleteProperty",
+    "apply",
+    "construct",
+    "ownKeys",
+    "getOwnPropertyDescriptor",
+    "defineProperty",
+    "getPrototypeOf",
+    "setPrototypeOf",
+    "isExtensible",
+    "preventExtensions",
+    "done",
+    "value",
 ];
 
 pub(crate) fn contracts_bits() -> u32 {
@@ -484,7 +524,10 @@ impl Model {
         {
             let why = format!(
                 "a value is marked escaped ({}): beside ⊤ it is that ⊤ (escaped_beside_top)",
-                self.reasons.get(reason as usize).map_or("?", |s| s.as_str()).replace(['\n', '\r'], " ")
+                self.reasons
+                    .get(reason as usize)
+                    .map_or("?", |s| s.as_str())
+                    .replace(['\n', '\r'], " ")
             );
             self.top_marker_created(t, &why, std::panic::Location::caller());
         }
@@ -1282,7 +1325,10 @@ impl Model {
                 "perry: wpfacts contracts esc {} {} | {}",
                 self.tok_kind_word(t),
                 if ct { "C" } else { "U" },
-                self.reasons[reason as usize].chars().take(90).collect::<String>()
+                self.reasons[reason as usize]
+                    .chars()
+                    .take(90)
+                    .collect::<String>()
             );
         }
         if ct && cb & 2 != 0 {

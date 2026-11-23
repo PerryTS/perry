@@ -995,8 +995,7 @@ fn realm_global_object(m: &Model, n: &str) -> bool {
 /// (`%Global%`, the generated table: fetch_globals.rs `realm_decl!`); any
 /// other name is a program key or inherited from `Object.prototype`.
 fn global_own_declared(n: &str) -> bool {
-    members::realm_entry("%Global%")
-        .is_some_and(|e| e.own.iter().any(|p| !p.symbol && p.key == n))
+    members::realm_entry("%Global%").is_some_and(|e| e.own.iter().any(|p| !p.symbol && p.key == n))
 }
 
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
@@ -1162,21 +1161,17 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 // global_this/populate.rs:827), so no store changes them.
                 // globalThis/global name the global object itself, plus what
                 // was stored there (declared_global_load).
-                Some("NaN" | "Infinity") if !m.unit_mode => {
-                    m.add_prim(dst, prim::NUM)
-                }
-                Some("undefined") if !m.unit_mode => {
-                    m.add_prim(dst, prim::UNDEF)
-                }
+                Some("NaN" | "Infinity") if !m.unit_mode => m.add_prim(dst, prim::NUM),
+                Some("undefined") if !m.unit_mode => m.add_prim(dst, prim::UNDEF),
                 Some(n @ ("globalThis" | "global")) if !m.unit_mode => {
                     declared_global_load(m, t, t, n, dst)
                 }
                 Some(n) if hostval_global(m, t, key, n, dst) => {}
                 // REALMVAL: every member %Global% owns has a value side
                 // (RealmManifest::validate) that an arm above reads.
-                Some(n) if !m.unit_mode => unreachable!(
-                    "REALMVAL: %Global% member `{n}` has no modelled value"
-                ),
+                Some(n) if !m.unit_mode => {
+                    unreachable!("REALMVAL: %Global% member `{n}` has no modelled value")
+                }
                 _ => {
                     // A host global, or under a computed key any global: the
                     // Function constructor only under a key that may be
@@ -1920,7 +1915,8 @@ pub(crate) fn pn151_note(arm: &str, n: &str) {
     if !pn151_diag() {
         return;
     }
-    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> = std::sync::Mutex::new(None);
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
     let k = format!("{arm} {n}");
     let mut g = SEEN.lock().unwrap();
     if g.get_or_insert_with(Default::default).insert(k.clone()) {
@@ -1976,7 +1972,6 @@ fn pn151_ruleb_load(m: &mut Model, t: Tok, key: Key, name: Option<&str>, dst: No
         }
     }
 }
-
 
 /// HOSTVAL what-if (env PERRY_HOSTVAL=1): a member of a host object the
 /// runtime makes reads the value the runtime's realm declaration gives it

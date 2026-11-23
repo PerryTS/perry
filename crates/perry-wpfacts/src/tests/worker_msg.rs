@@ -120,7 +120,10 @@ fn wgpost_stored_global_is_called() {
         postMessage({ a: 1 });\nexport {};\n";
     let (tops, held, _, ps) = solve(&[("main", B_MAIN), ("w", w)], &["w.ts"], &["./w.ts"]);
     assert!(!held, "{tops:?}");
-    assert!(ps.len() == 1 && ps[0] > 0, "the stored function gets the message: {ps:?}");
+    assert!(
+        ps.len() == 1 && ps[0] > 0,
+        "the stored function gets the message: {ps:?}"
+    );
 }
 
 // The same under the name itself.
@@ -131,5 +134,8 @@ fn wgpost_named_store_is_called() {
         postMessage({ a: 1 });\nexport {};\n";
     let (tops, held, _, ps) = solve(&[("main", B_MAIN), ("w", w)], &["w.ts"], &["./w.ts"]);
     assert!(!held, "{tops:?}");
-    assert!(ps.len() == 1 && ps[0] > 0, "the stored function gets the message: {ps:?}");
+    assert!(
+        ps.len() == 1 && ps[0] > 0,
+        "the stored function gets the message: {ps:?}"
+    );
 }

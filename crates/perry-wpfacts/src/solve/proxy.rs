@@ -418,7 +418,13 @@ impl Model {
         // [[GetOwnProperty]] of each key: the trap, the descriptor read.
         let k = self.proxy_key_arg(Key::any(), NO_NODE);
         let desc = self.node_l("proxy-gopd-ret");
-        self.proxy_trap(p, "getOwnPropertyDescriptor", Some(Key::any()), vec![target, k], desc);
+        self.proxy_trap(
+            p,
+            "getOwnPropertyDescriptor",
+            Some(Key::any()),
+            vec![target, k],
+            desc,
+        );
         self.proxy_result_reads(
             desc,
             &[
@@ -536,7 +542,13 @@ impl Model {
     /// Proxy.
     /// Rule R2 (format_proxy_value, formatting.rs:940): no limit check; the
     /// hook and the target are at the Proxy's own depth `at`.
-    pub(crate) fn proxy_inspect_shown(&mut self, p: u32, at: InspectAt, reason: u32, region: NodeId) {
+    pub(crate) fn proxy_inspect_shown(
+        &mut self,
+        p: u32,
+        at: InspectAt,
+        reason: u32,
+        region: NodeId,
+    ) {
         if at.depth > INSPECT_HARD_CAP {
             return;
         }

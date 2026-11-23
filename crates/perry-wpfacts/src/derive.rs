@@ -1803,7 +1803,8 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                         if m.stop_top.is_some() {
                             // TOPSTOP2: what the unguarded set held (the
                             // site's `top=1` says only "E0 by the guard").
-                            let held: Vec<String> = toks.iter().take(6).map(|&t| m.tok_words(t)).collect();
+                            let held: Vec<String> =
+                                toks.iter().take(6).map(|&t| m.tok_words(t)).collect();
                             eprintln!(
                                 "TOPSTOP e0-guard: {} .{} unguarded top={} {:?}; unguarded receivers [{}] prims {prim:#x}",
                                 m.pos_text((s.module as u32, s.byte_offset as u32)),
