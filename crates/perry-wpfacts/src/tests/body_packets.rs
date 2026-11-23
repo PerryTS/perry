@@ -430,6 +430,7 @@ fn incoming_import_values_cannot_choose_a_body_transfer() {
             new_target: fi.ret,
             fn_ctor: true,
             guard: None,
+            live: None,
         };
         let prior = g.m.packet_body(f);
         g.expr(
@@ -505,6 +506,7 @@ fn class_action_bytes(expr: &perry_hir::Expr, seed: bool, inert: bool) -> String
         new_target: fi.ret,
         fn_ctor: true,
         guard: None,
+        live: None,
     };
     let prior = g.m.packet_body(f);
     g.expr(&fx, expr);
@@ -636,6 +638,7 @@ fn generator_link_bytes(seed: bool, inert: bool, is_async: bool) -> String {
         new_target: fi.ret,
         fn_ctor: true,
         guard: None,
+        live: None,
     };
     let prior = g.m.packet_body(f);
     g.expr(

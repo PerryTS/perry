@@ -113,6 +113,13 @@ impl Lex {
 /// members) reach by copy, every field of a rule on such a node, and the
 /// results of calls with such an operand. Only nodes `f` owns and no
 /// unsummarizable function captured.
+///
+/// A DEADARM guard (one an arm's `live` node holds or fills,
+/// `Model::arm_live`) is control, not data: it adds only `from -> dst`
+/// (its `dst` once its `from` is derived), never its holder's or its
+/// `dst`'s other fields, and the `live` nodes themselves never join. A
+/// parameter-tested arm then derives nothing it would not derive without
+/// the gate; its gated reads of shared sources stay shared.
 fn slice(
     m: &Model,
     ix: &Index,
@@ -123,7 +130,17 @@ fn slice(
 ) -> Vec<NodeId> {
     let fi = &m.funcs[f as usize];
     let ok = |y: NodeId| {
-        y != NO_NODE && m.node_fn[y as usize] == f && y != fi.args_all && !pinned.contains(&y)
+        y != NO_NODE
+            && m.node_fn[y as usize] == f
+            && y != fi.args_all
+            && !pinned.contains(&y)
+            && !m.arm_live.contains(&y)
+    };
+    let dead_arm = |h: NodeId, c: &Cons| match c {
+        Cons::Guard { from, dst, .. } => {
+            (m.arm_live.contains(&h) || m.arm_live.contains(dst)).then_some((*from, *dst))
+        }
+        _ => None,
     };
     let mut seen: FxHashSet<NodeId> = FxHashSet::default();
     let mut d = Vec::new();
@@ -156,6 +173,9 @@ fn slice(
             add(y, &mut d, &mut work);
         }
         for c in &node.cons {
+            if dead_arm(x, c).is_some() {
+                continue;
+            }
             let (ns, ks) = cons_fields(c);
             for y in ns {
                 add(y, &mut d, &mut work);
@@ -166,7 +186,14 @@ fn slice(
         }
         if let Some(rs) = ix.refs.get(&x) {
             for &(h, ci) in rs {
-                let (ns, ks) = cons_fields(&m.nodes[h as usize].cons[ci as usize]);
+                let c = &m.nodes[h as usize].cons[ci as usize];
+                if let Some((from, dst)) = dead_arm(h, c) {
+                    if from == x {
+                        add(dst, &mut d, &mut work);
+                    }
+                    continue;
+                }
+                let (ns, ks) = cons_fields(c);
                 for y in ns {
                     add(y, &mut d, &mut work);
                 }

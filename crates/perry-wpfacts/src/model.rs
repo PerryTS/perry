@@ -1926,6 +1926,10 @@ pub struct Model {
     /// through such a read is a store through the local's name
     /// (`named_lengths`).
     pub name_of: FxHashMap<NodeId, NodeId>,
+    /// DEADARM (`Gen::arm_live`): the `live` node of each `if` arm. Its
+    /// guards are control, not data: summary slices never take it in, and
+    /// a guard it holds or fills adds only `from -> dst` to a slice.
+    pub arm_live: crate::pts::FxHashSet<NodeId>,
     /// Receiver nodes of the index stores' `Cons::LenIndex` rules.
     pub len_index_stores: crate::pts::FxHashSet<NodeId>,
     /// Receiver node of a `pop` or a generic permutation (`Cons::LenIndex`

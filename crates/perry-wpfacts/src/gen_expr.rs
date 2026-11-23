@@ -215,6 +215,56 @@ impl<'a> Gen<'a> {
     }
 
     pub(crate) fn region_read(&mut self, fx: &Fx, n: NodeId) -> NodeId {
+        let n = self.presence_read(fx, n);
+        let g = self.live_gate(fx, n);
+        if g != n {
+            // The gated read is a read of the same name (`Model::name_of`).
+            let name = self.m.name_of.get(&n).copied().unwrap_or(n);
+            self.m.name_of.insert(g, name);
+        }
+        g
+    }
+
+    /// DEADARM (ECMA-262 14.6.2): `n` as seen inside the innermost `if`
+    /// arm, which runs only once its test can select it: its values pass
+    /// once the arm's `live` node holds one (`Fx::live`). The gate opens
+    /// once and stays open (values only grow). `PERRY_FACTS_DEADARM=0`
+    /// turns it off.
+    pub(crate) fn live_gate(&mut self, fx: &Fx, n: NodeId) -> NodeId {
+        let Some(l) = fx.live else {
+            return n;
+        };
+        let g = self.tmp("live-read");
+        self.zs_carrier(g);
+        self.m.cons(
+            l,
+            Cons::Guard {
+                test: crate::model::guard::NOT_UNDEF,
+                from: n,
+                dst: g,
+            },
+        );
+        g
+    }
+
+    /// DEADARM: the `live` node of an `if` arm whose test node is `t` and
+    /// selecting test `test`, inside the arm `fx` (outer `live`, or none:
+    /// a body's own statements always run once the body does).
+    pub(crate) fn arm_live(&mut self, fx: &Fx, t: NodeId, test: u8) -> Option<NodeId> {
+        if !dead_arm_on() {
+            return fx.live;
+        }
+        let from = match fx.live {
+            Some(l) => l,
+            None => self.prim_node(crate::model::prim::TRUE),
+        };
+        let l = self.tmp("arm-live");
+        self.m.arm_live.insert(l);
+        self.m.cons(t, Cons::Guard { test, from, dst: l });
+        Some(l)
+    }
+
+    fn presence_read(&mut self, fx: &Fx, n: NodeId) -> NodeId {
         use crate::model::guard::*;
         let Some((t, test)) = fx.guard else {
             return n;
@@ -850,6 +900,7 @@ impl<'a> Gen<'a> {
                 }
                 let vn = self.expr_zs(fx, v);
                 self.direct_arr = None;
+                let vn = self.live_gate(fx, vn);
                 let l = self.local_write(mi, *id);
                 match fx.guard {
                     Some((t, test)) => self.m.cons(
@@ -2708,6 +2759,11 @@ impl<'a> Gen<'a> {
 }
 
 /// `PERRY_FACTS_GUARD_REGIONS=0`: branch reads are not gated (rule R2 off).
+fn dead_arm_on() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var("PERRY_FACTS_DEADARM").as_deref() != Ok("0"))
+}
+
 fn guard_regions_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var("PERRY_FACTS_GUARD_REGIONS").as_deref() != Ok("0"))

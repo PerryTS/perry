@@ -551,6 +551,7 @@ impl<'a> Gen<'a> {
         let fn_ctor = !*is_arrow;
         let cfx = Fx {
             guard: None,
+            live: None,
             module: mi,
             f,
             this: info.this,

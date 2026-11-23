@@ -452,6 +452,7 @@ impl<'a> Gen<'a> {
         self.m.add_prim(this, prim::UNDEF);
         let fx = Fx {
             guard: None,
+            live: None,
             module: mi,
             f: init_fn,
             this,
@@ -1180,6 +1181,7 @@ impl<'a> Gen<'a> {
         let fn_ctor = class.is_none() && ctor_of.is_none();
         let mut fx = Fx {
             guard: None,
+            live: None,
             module: mi,
             f: fxi,
             this: info.this,
@@ -1366,6 +1368,7 @@ impl<'a> Gen<'a> {
         let fthis = self.m.funcs[fi as usize].this;
         let ffx = Fx {
             guard: None,
+            live: None,
             module: mi,
             f: fi,
             this: fthis,
@@ -1491,6 +1494,7 @@ impl<'a> Gen<'a> {
         let packet_read_start = self.read_sites.len();
         let sfx = Fx {
             guard: None,
+            live: None,
             module: mi,
             f: si,
             this: self.m.funcs[si as usize].this,
@@ -1846,6 +1850,7 @@ impl<'a> Gen<'a> {
             Stmt::Return(e) => {
                 if let Some(e) = e {
                     let v = self.expr_zs(fx, e);
+                    let v = self.live_gate(fx, v);
                     self.m.edge(v, fx.ret);
                 } else {
                     self.m.add_prim(fx.ret, prim::UNDEF);
@@ -1859,8 +1864,14 @@ impl<'a> Gen<'a> {
                 let plan = self.own_guard_plan(condition, Region::Stmts(then_branch));
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
                 let own = self.own_guard_arm(plan, t);
+                // `if (__step_is_error)` / `if (IterResultGetDone)`: plain-async
+                // step arms keep the enclosing arm's `live` (not gated).
+                let special = matches!(condition, Expr::IterResultGetDone)
+                    || matches!(condition, Expr::LocalGet(id) if self.step.by_flag.contains_key(&(fx.module, *id)));
+                let then_live = if special { fx.live } else { self.arm_live(fx, t, then_test) };
                 let then_fx = Fx {
                     guard: Some((t, then_test)),
+                    live: then_live,
                     ..fx.clone()
                 };
                 // A branch that always leaves: its writes reach only where
@@ -1890,8 +1901,10 @@ impl<'a> Gen<'a> {
                 self.narrow_leave(then_branch, pre);
                 self.own_guard_done(own);
                 if let Some(e) = else_branch {
+                    let else_live = if special { fx.live } else { self.arm_live(fx, t, else_test) };
                     let else_fx = Fx {
                         guard: Some((t, else_test)),
+                        live: else_live,
                         ..fx.clone()
                     };
                     let pre = self.narrow_snapshot();

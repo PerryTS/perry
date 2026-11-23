@@ -1778,9 +1778,18 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         if let Verdict::No(_) = verdict {
             let guarded = recvs
                 .iter()
-                .map(|r| match g.param_guard.get(r) {
-                    Some(crate::gen::ParamGuard::Class(tm)) => Some(*tm),
-                    _ => m.this_class.get(r).copied(),
+                .map(|r| {
+                    // DEADARM: a read inside an `if` arm is the arm's gated
+                    // copy of the binding (`Gen::region_read`,
+                    // `Model::name_of`); the entry guard is the binding's.
+                    let r = match m.name_of.get(r) {
+                        Some(b) if m.labels[*r as usize] == "live-read" => b,
+                        _ => r,
+                    };
+                    match g.param_guard.get(r) {
+                        Some(crate::gen::ParamGuard::Class(tm)) => Some(*tm),
+                        _ => m.this_class.get(r).copied(),
+                    }
                 })
                 .collect::<Option<Vec<_>>>();
             if let Some(tm) = guarded

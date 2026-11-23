@@ -89,6 +89,7 @@ mod ctor_return;
 mod ctor_returns_object;
 mod data_define_named;
 mod dce_reach;
+mod dead_arm;
 mod dead_dynamic_import;
 mod dead_fn;
 mod declared_effects;
