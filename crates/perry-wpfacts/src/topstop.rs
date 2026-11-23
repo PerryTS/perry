@@ -88,6 +88,36 @@ pub struct StopTop {
     /// (`cur_src`), the reason named, the rule running, the solver line,
     /// the origin `add_top` names and the escape that runs (if any).
     top_from: FxHashMap<NodeId, (NodeId, u32, Option<(NodeId, Cons)>, &'static Location<'static>, String)>,
+    /// Tests (`tests::amp_flow`): every ⊤ creation is recorded here and the
+    /// solve goes on (nothing printed, no exit).
+    #[cfg(test)]
+    pub(crate) flow: Option<Vec<FlowArrival>>,
+}
+
+/// One ⊤ creation in flow record mode: its class (1 S, 2 A, 4 M), the node
+/// (`NO_NODE` for a marker), the marked token, the rule that ran (its
+/// node and constraint), and the solver line.
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct FlowArrival {
+    pub class: u8,
+    pub node: NodeId,
+    pub tok: Tok,
+    pub rule: Option<(NodeId, Cons)>,
+    pub what: String,
+    pub at: &'static Location<'static>,
+}
+
+#[cfg(test)]
+thread_local! {
+    static FLOW: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Tests: the next solves on this thread record every ⊤ creation
+/// (`StopTop::flow`) instead of stopping.
+#[cfg(test)]
+pub(crate) fn flow_on(on: bool) {
+    FLOW.with(|f| f.set(on));
 }
 
 static CAPTURE: Mutex<Option<Vec<String>>> = Mutex::new(None);
@@ -107,6 +137,18 @@ pub fn take_captured() -> Vec<String> {
 
 impl StopTop {
     pub(crate) fn from_env(paths: Vec<String>) -> Option<Box<StopTop>> {
+        #[cfg(test)]
+        if FLOW.with(|f| f.get()) {
+            return Some(Box::new(StopTop {
+                class: 7,
+                paths,
+                gen_pos: NOPOS,
+                rule_pos: NOPOS,
+                req_pos: NOPOS,
+                flow: Some(Vec::new()),
+                ..Default::default()
+            }));
+        }
         let capture = CAPTURE.lock().unwrap_or_else(|e| e.into_inner()).is_some();
         if !capture && std::env::var("PERRY_FACTS_STOP_ON_TOP").ok().as_deref() != Some("1") {
             return None;
@@ -290,6 +332,15 @@ impl Model {
                 )
             };
         let s = self.stop_top.as_mut().unwrap();
+        #[cfg(test)]
+        if let Some(f) = s.flow.as_mut() {
+            let what = match &trigger {
+                Some(t) => format!("{rule_name} ({t})"),
+                None => rule_name,
+            };
+            f.push(FlowArrival { class, node: n, tok: TOP, rule: rule_any, what, at });
+            return;
+        }
         if s.class & class == 0 {
             return;
         }
@@ -582,6 +633,12 @@ impl Model {
         let Some(s) = self.stop_top.as_mut() else {
             return;
         };
+        #[cfg(test)]
+        if let Some(f) = s.flow.as_mut() {
+            let rule = s.rule;
+            f.push(FlowArrival { class: 4, node: NO_NODE, tok: t, rule, what: what.to_string(), at });
+            return;
+        }
         if s.done || s.class & 4 == 0 {
             return;
         }

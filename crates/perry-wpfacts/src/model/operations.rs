@@ -110,9 +110,6 @@ impl Model {
         site: Option<SiteId>,
         what: &str,
     ) {
-        if crate::builtins::cliffc_w4() && (t == TOP || what.contains("unmodeled")) {
-            return;
-        }
         if self.array_member_write.is_some() || t == TOP || !self.tok_on_array_chain(t) {
             return;
         }
@@ -233,7 +230,8 @@ impl Model {
     /// ([`Model::fnproto_write`], [`Model::fnproto_borrow_write`]). `key` `None`: an operation whose key the
     /// model does not keep (a definition, a deletion).
     pub fn note_fnproto_write(&mut self, t: Tok, key: Option<Key>, what: &str) {
-        if crate::builtins::cliffc_w4() && (t == TOP || what.contains("unmodeled")) {
+        // P-N1: whole program, ⊤ is never `%Object.prototype%`.
+        if t == TOP && !self.foreign_code() {
             return;
         }
         if !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto)) {
@@ -349,6 +347,63 @@ impl Model {
             l.push_str(&line());
             r.push(l);
         }
+    }
+
+    /// Code the analysis does not see may run beside the program: per unit
+    /// (the other units), an unseen module, or the linked interpreter. All
+    /// three are known before the solve. Only then may a value the analysis
+    /// does not model be a built-in prototype, a built-in constructor or the
+    /// global object (premise P-N1, owner 2026-11-23: whole program, the
+    /// program reaches an intrinsic only by its name, by a declared builtin
+    /// result or by modeled reflection).
+    pub(crate) fn foreign_code(&self) -> bool {
+        self.unit_mode || self.unseen_module_runs || self.interp_linked
+    }
+
+    /// Code other than the program and the runtime may name the realm: per
+    /// unit, beside an unseen module, or once interpreted code runs. Only
+    /// then does unknown code hold the realm (`hold_realm`). Whole program
+    /// under the closed world (owner 2026-11-14) and R-GLOBAL (2026-11-18),
+    /// unknown code is the runtime, which names intrinsics only through its
+    /// declared reads: a call or `new` of an unknown value holds nothing.
+    pub(crate) fn realm_nameable(&self) -> bool {
+        self.unit_mode || self.unseen_module_runs || self.interp_runs
+    }
+
+    /// An escape reason a builtin contract states: the builtin that holds
+    /// the value acts on it only as its declaration says (owner premise
+    /// Phase B, 2026-11-23), and the solve models those acts. Every other
+    /// escape hands the value to code the analysis does not model (a ⊤ or
+    /// opaque callee, an unknown setter or getter, `instanceof` with an
+    /// unknown right-hand side, a Proxy handler, code no declaration
+    /// describes, ...): what it is handed may be written under any key.
+    pub fn contract_reason(&mut self, s: &str) -> u32 {
+        let r = self.reason(s);
+        self.contract_reasons.insert(r);
+        r
+    }
+
+    /// Does an escape with `reason` hand the value to code that may write
+    /// it beyond a contract? Every escape whose reason no builtin contract
+    /// states (`contract_reason`) does, and every escape beside foreign code.
+    pub(crate) fn writes_any(&self, reason: u32) -> bool {
+        self.foreign_code() || !self.contract_reasons.contains(&reason)
+    }
+
+    /// `t` escaped to code that may write it under any key.
+    #[inline]
+    pub fn is_escaped_writer(&self, t: Tok) -> bool {
+        self.esc_writer_bits
+            .get((t >> 6) as usize)
+            .is_some_and(|w| w & (1 << (t & 63)) != 0)
+    }
+
+    /// Why `t` is held by code that may write it under any key
+    /// (`is_escaped_writer`), if it is. A value handed only by a builtin
+    /// contract has none: that code writes it only as the contract states
+    /// (Phase B, owner 2026-11-23), and the solve models those writes.
+    pub fn writer_escape_why(&self, t: Tok) -> Option<String> {
+        self.esc_writer_why.get(&t).map(|&r| self.reasons[r as usize].clone())
     }
 
     pub fn reason(&mut self, s: &str) -> u32 {

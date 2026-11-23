@@ -2411,6 +2411,18 @@ pub struct Model {
     pub(crate) fresh: Vec<Tok>,
     pub(crate) fresh_seen: crate::pts::FxHashSet<Tok>,
     pub sunk_nodes: crate::pts::FxHashSet<NodeId>,
+    /// The nodes sunk with a writer reason (`Model::writes_any`): a node
+    /// sunk with a contract reason first is sunk again at that level.
+    pub sunk_writer_nodes: crate::pts::FxHashSet<NodeId>,
+    /// The escape reasons a builtin contract states (`Model::contract_reason`):
+    /// their holder writes a handed value only as that contract says.
+    pub contract_reasons: crate::pts::FxHashSet<u32>,
+    /// The escaped tokens such code holds (`escaped_beside_top`): unknown
+    /// code may write any key of them, so beside ⊤ they are that ⊤.
+    pub esc_writer_bits: Vec<u64>,
+    /// The reason each token of `esc_writer_bits` was first held with:
+    /// what derive names where such code may change the layout.
+    pub esc_writer_why: crate::pts::FxHashMap<Tok, u32>,
     /// The return nodes of escaped functions no summary instances
     /// (`Model::sink_own_return`): the function and the escape reason. An
     /// edge into one is judged as it is made (`edge_impl`).

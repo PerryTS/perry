@@ -313,7 +313,7 @@ impl Model {
     /// the call's own `this` escapes too.
     pub(super) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
         self.diagnostic_callee(call, t);
-        if !self.realm_held && self.prov.is_some() {
+        if !self.realm_held && self.realm_nameable() && self.prov.is_some() {
             self.why_hold(
                 if t == TOP {
                     "callee-top"
@@ -337,8 +337,9 @@ impl Model {
                 crate::unksrc::held(kind, &why, call, f);
             }
         }
-        // Unknown code runs, handed values or not: it holds the realm.
-        if !self.realm_held {
+        // Unknown code runs, handed values or not: it holds the realm where
+        // code beside the program may name it (`realm_nameable`).
+        if !self.realm_held && self.realm_nameable() {
             let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
             if self.keysnap.is_some() {
                 self.keysnap_at(
@@ -1001,7 +1002,7 @@ impl Model {
                         crate::unksrc::held(kind, &why, call, f);
                     }
                 }
-                if !self.realm_held {
+                if !self.realm_held && self.realm_nameable() {
                     let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
                     if self.keysnap.is_some() {
                         self.keysnap_at(

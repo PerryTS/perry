@@ -22,7 +22,6 @@ pub use constructors::{construct_named, new_builtin_ns};
 pub(crate) mod members;
 pub(crate) use members::realm_parent_constructor;
 mod native_protocol;
-pub(crate) use native_protocol::{cliffc_w4, cliffd_nointrw};
 mod realm_declared;
 pub(crate) mod realm_shapes;
 mod undeclared;
@@ -358,8 +357,9 @@ fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize
             crate::unksrc::held("method", why, call, f);
         }
     }
-    // Unknown code runs, handed values or not: it holds the realm.
-    if !m.realm_held {
+    // Unknown code runs, handed values or not: it holds the realm where code
+    // beside the program may name it (`Model::realm_nameable`).
+    if !m.realm_held && m.realm_nameable() {
         let r = m.reason("an intrinsic of the realm: unknown code holds the realm");
         if m.keysnap.is_some() {
             m.keysnap_at(
@@ -3222,13 +3222,16 @@ fn host_call(
 /// A host stream's own `write(chunk, encoding?, cb?)` (node's Writable,
 /// perry's `process_stdout_write_stub`): it returns a boolean and hands its
 /// receiver to no one. It keeps a binary chunk and the callback in the
-/// stream's state, which the program can read back (`writableBuffer`,
-/// `_writableState`), so the arguments reach unknown code. It reads other
+/// stream's state and writes no key of them (`contract_reason`: Phase B,
+/// owner 2026-11-23); beside foreign code they reach code that may write
+/// them (`writes_any`). It reads other
 /// members of its receiver (`_write`, `_writableState`, `emit`, ...): a store
 /// under any key of the stream ends this (`host_call`'s `STAR_KEY` gate).
 fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
     let c = m.calls[call as usize].clone();
-    let r = m.reason(&format!(
+    // The stream's contract: it keeps the chunk and the callback, and the
+    // program reads them back; no one writes them under any key.
+    let r = m.contract_reason(&format!(
         "argument of host {h:?}.write (kept by the stream)"
     ));
     for &a in c.args.iter().chain(c.spread.iter()) {

@@ -103,11 +103,32 @@ fn computed_store_give_names_its_top_receiver() {
     assert!(w.iter().any(|x| x.2 != "null"), "no proto field: {w:?}");
 }
 
-/// F2: `Object.setPrototypeOf(unknown(), v)` gives by call; the write names its (top) target.
+/// F2: `Object.setPrototypeOf(unknown(), v)` gives by call; the write names its (top) target
+/// where code beside the program runs (per unit here). Whole program the target is no
+/// intrinsic (P-N1, owner 2026-11-23; K10): the give records no write onto ⊤ at all.
 #[test]
 fn set_prototype_of_give_names_its_top_target() {
     let src = format!("{HEAD}Object.setPrototypeOf(unknown(), v);\n");
-    let pf = census(&src);
+    let whole = census(&src);
+    let top_writes = whole
+        .diagnostics
+        .iter()
+        .flat_map(|d| d.1.iter())
+        .filter(|l| {
+            (l.starts_with("{\"record\":\"birth-write\"")
+                && field(l, "token").as_deref() == Some("0"))
+                || (l.starts_with("{\"record\":\"birth-opener\"")
+                    && field(l, "holder").as_deref() == Some("0"))
+        })
+        .count();
+    assert_eq!(top_writes, 0, "whole program: no write onto ⊤ (P-N1)");
+    let cfg = FactsConfig {
+        diagnostics: true,
+        birth_census: true,
+        unit: true,
+        ..Default::default()
+    };
+    let pf = facts_with(&src, cfg);
     let w = given_writes(&pf, "TOP");
     assert!(!w.is_empty(), "no any-key write");
     for (source, _, proto) in &w {

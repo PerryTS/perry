@@ -5,8 +5,8 @@
 //! once a store into ⊤ under a computed key may have written every other
 //! builtin prototype; an `Object.groupBy` result has no chain at all. A
 //! `Map.groupBy` result is a Map, read as a Map born from an iterable is.
-//! An undescribed method's result (`primbox`), a given prototype and the
-//! exempt `constructor` keep the opaque answer.
+//! An undescribed method's result (`primbox`) and a given prototype keep
+//! the opaque answer; `constructor` reads nothing of the object (P-N1).
 //! (three.core.js `PropertyBinding.sanitizeNodeName`: `name.replace(..)` on
 //! a GLTF JSON field.)
 
@@ -89,23 +89,37 @@ fn an_object_group_by_result_has_no_chain_a_map_group_by_result_is_a_map() {
     );
 }
 
-/// Controls: what may still be found. `constructor` is the one key the
-/// lock exempts; a prototype given to the object is read before the
-/// intrinsic end.
+/// `constructor` of a `JSON.parse` value, under premise P-N1 (owner
+/// 2026-11-23: whole program, a value the analysis does not model is no
+/// intrinsic, so the store into ⊤ in `held` writes no built-in prototype,
+/// `constructor` included). What `j.constructor` finds is then one of two:
+/// an own JSON value (a primitive, a plain object or an array: Call throws
+/// a TypeError, 7.3.14) or the inherited intrinsic constructor (`Object`,
+/// `Array`, `String`, `Number`, `Boolean`; called with `'x'` it converts
+/// the argument and reads nothing of its `this`). Neither reads `j.held`,
+/// so `a` is proven.
 #[test]
-fn a_json_object_keeps_constructor_and_a_given_prototype() {
-    for body in [
+fn a_json_object_constructor_reads_nothing_of_the_object() {
+    let src = held(
         "const j: any = JSON.parse(process.argv[4] ?? '{}');
          j.held = a;
          try { console.log(j.constructor('x')); } catch (e) { console.log('TypeError'); }",
+    );
+    let pf = facts(&src);
+    assert!(proven(&pf, "a"), "{src}\n{}", pf.dump_text());
+}
+
+/// Control: a prototype given to the object is read before the intrinsic
+/// end, and its method hands `a` to unknown code.
+#[test]
+fn a_json_object_keeps_a_given_prototype() {
+    let src = held(
         "const j: any = JSON.parse(process.argv[4] ?? '{}');
          Object.setPrototypeOf(j, { replace(x: any) { unknown.take(x); return 1; } });
          try { console.log(j.replace(a)); } catch (e) { console.log('TypeError'); }",
-    ] {
-        let src = held(body);
-        let pf = facts(&src);
-        assert!(!proven(&pf, "a"), "{src}\n{}", pf.dump_text());
-    }
+    );
+    let pf = facts(&src);
+    assert!(!proven(&pf, "a"), "{src}\n{}", pf.dump_text());
 }
 
 /// `JSON.parse` called as a namespace member makes arrays as well as

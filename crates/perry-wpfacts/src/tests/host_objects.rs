@@ -160,12 +160,32 @@ fn a_host_stream_write_returns_a_boolean() {
     assert!(native(&pf, "write"), "{:?}", calls(&pf, "write"));
 }
 
-/// Control: the stream keeps its chunk where the program can read it back
-/// (and perry's write runs the chunk's `toString`): an object chunk reaches
-/// unknown code, its custom `toString` included.
+/// The stream keeps its chunk and reads it (perry's write runs the chunk's
+/// `toString`); by its contract it writes no key of it (owner decision
+/// 2026-11-23, Phase B: the runtime and host act on a handed value only as
+/// the builtin's contract states), so the chunk keeps its layout.
 #[test]
 fn a_host_stream_write_keeps_its_chunk() {
     let src = "class C { s = \"c\"; toString() { return this.s; } }\n\
+        const c = new C();\n\
+        process.stdout.write(c as any);\n\
+        console.log(c.s); // SITE\n";
+    let pf = facts(src);
+    let v = site(&pf, src, "s");
+    assert!(
+        v.iter().all(|v| !matches!(v, Verdict::No(_))),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
+}
+
+/// Control: beside an unseen module (foreign code) the stream's chunk
+/// reaches code that may write it under any key.
+#[test]
+fn a_host_stream_write_beside_foreign_code_opens_its_chunk() {
+    let src = "import { sink } from \"./unseen\";\n\
+        sink(0);\n\
+        class C { s = \"c\"; toString() { return this.s; } }\n\
         const c = new C();\n\
         process.stdout.write(c as any);\n\
         console.log(c.s); // SITE\n";

@@ -203,11 +203,12 @@ impl Model {
         }
         // Unknown code can install an own member even when the intrinsic
         // prototype refuses additions. Ordinary reads replay that write.
-        // CLIFFD (env PERRY_CLIFFD_NOINTRW=1, owner premise 2026-11-19):
-        // unknown code never writes an intrinsic it reaches through a
-        // handed value; program stores onto it are recorded where they are
-        // made, and the field sink below still hands their values over.
-        if !builtins::cliffd_nointrw() {
+        // Whole program (owner premise 2026-11-19), unknown code never
+        // writes an intrinsic it reaches through a handed value; program
+        // stores onto it are recorded where they are made, and the field
+        // sink below still hands their values over. Code the analysis does
+        // not see (`foreign_code`) may.
+        if self.foreign_code() {
             builtins::note_native_write(
                 self,
                 holder,
