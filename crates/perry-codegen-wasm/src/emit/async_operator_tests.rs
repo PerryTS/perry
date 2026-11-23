@@ -52,8 +52,8 @@ f("9", 4).then((v) => console.log(v), (e) => console.log("threw " + e.message));
     );
 }
 
-// An async body's labeled `continue` reaches the labeled `for` and `while`, and a
-// labeled block still takes `break`. Expected output is Node's.
+// An async body's labeled `continue` reaches the labeled `for` and `while`, through a
+// chain of labels too, and a labeled block still takes `break`. Expected output is Node's.
 #[test]
 fn async_body_labeled_continue_targets_its_loop() {
     assert_eq!(
@@ -66,12 +66,13 @@ async function f(): Promise<string> {
   }
   let i = 0;
   w: while (i < 3) { i++; for (;;) { if (i === 2) continue w; break; } r += "w" + i; }
+  a: b: for (let k = 0; k < 2; k++) { for (;;) { if (k === 0) continue a; break; } r += "a" + k; }
   blk: { r += "b"; if (i === 3) break blk; r += "x"; }
   return r + " done";
 }
 f().then((v) => console.log(v), (e) => console.log("threw " + e.message));
 "#
         ),
-        "w1w3b done"
+        "w1w3a1b done"
     );
 }
