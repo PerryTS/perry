@@ -870,7 +870,7 @@ fn lower_module(
                     ic.parent_name.clone(),
                     ic.field_names
                         .iter()
-                        .map(|name| perry_hir::ClassField {
+                        .map(|name| perry_hir::ClassField { byte_offset: 0 /*HPOS*/,
                             origin: perry_hir::ClassFieldOrigin::Definition,
                             name: name.clone(),
                             key_expr: None,
@@ -975,7 +975,7 @@ fn lower_module(
                 .field_names
                 .iter()
                 .enumerate()
-                .map(|(i, name)| perry_hir::ClassField {
+                .map(|(i, name)| perry_hir::ClassField { byte_offset: 0 /*HPOS*/,
                     origin: perry_hir::ClassFieldOrigin::Definition,
                     name: name.clone(),
                     key_expr: None,

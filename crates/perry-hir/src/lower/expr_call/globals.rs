@@ -348,13 +348,17 @@ pub(super) fn try_global_builtins(
                     }
                 }
                 let class_name =
-                    ctx.synthesize_declared_keys_class(&keys, func_name == "__perry_declared_keys");
+                    ctx.synthesize_declared_keys_class(
+                    &keys,
+                    func_name == "__perry_declared_keys",
+                    call.span.lo.0,
+                );
                 return Ok(Ok(Expr::New {
                     byte_end: 0,
                     class_name,
                     args: Vec::new(),
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: call.span.lo.0,
                     cap_args_appended: 0,
                 }));
             }

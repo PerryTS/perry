@@ -63,14 +63,14 @@ pub(crate) fn prepare_ordered_class_computed_names(
 ) -> (Vec<Expr>, Vec<(String, Expr)>) {
     let mut ordered: Vec<(usize, Expr)> = Vec::new();
     let mut field_keys = Vec::new();
-    for (source_order, name, value) in super::computed_field_key_initializers_with_order(
+    for (source_order, name, value, byte_offset) in super::computed_field_key_initializers_with_order(
         class_body,
         &class.fields,
         &class.static_fields,
     ) {
         ordered.push((
             source_order,
-            Expr::StaticFieldSet { byte_offset: 0 /*HPOS ClassField*/,
+            Expr::StaticFieldSet { byte_offset,
                 class_name: registration_class_name.to_string(),
                 field_name: name.clone(),
                 value: Box::new(value),

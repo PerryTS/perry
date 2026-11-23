@@ -1126,7 +1126,7 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
             .unwrap_or(Type::Any),
     };
     if super::class_field_assign::assigned_instance_field(ctx, prop) {
-        return Ok(ClassField {
+        return Ok(ClassField { byte_offset: prop.span.lo.0,
             origin: crate::ClassFieldOrigin::ConstructorStore,
             name,
             key_expr,
@@ -1180,7 +1180,7 @@ pub fn lower_class_prop(ctx: &mut LoweringContext, prop: &ast::ClassProp) -> Res
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
     let init = init?;
 
-    Ok(ClassField {
+    Ok(ClassField { byte_offset: prop.span.lo.0,
         origin: crate::ClassFieldOrigin::Definition,
         name,
         key_expr,

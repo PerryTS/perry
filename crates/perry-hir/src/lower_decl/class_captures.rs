@@ -492,7 +492,7 @@ pub fn synthesize_class_captures(
         if env_mode || inherited_cap_ids.contains(&cid) {
             continue;
         }
-        fields.push(ClassField {
+        fields.push(ClassField { byte_offset: class_offset,
             origin: crate::ClassFieldOrigin::Capture,
             name: crate::cap_fields::cap_field_name(cap_salt, cid),
             key_expr: None,
