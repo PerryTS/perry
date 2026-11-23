@@ -1210,7 +1210,7 @@ pub fn fix_native_instance_expr_with_locals(
                 fix_native_instance_expr_with_locals(arg, native_instances, local_id_instances);
             }
         }
-        Expr::New { args, .. } | Expr::SuperCall(args) => {
+        Expr::New { args, .. } | Expr::SuperCall(args, _) => {
             for arg in args {
                 fix_native_instance_expr_with_locals(arg, native_instances, local_id_instances);
             }

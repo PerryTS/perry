@@ -726,7 +726,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
             .static_method_return_type(class_name, method_name)
             .cloned()
             .unwrap_or(Type::Any),
-        Expr::SuperCall(_) | Expr::SuperCallSpread(_) => Type::Void,
+        Expr::SuperCall(_, _) | Expr::SuperCallSpread(_) => Type::Void,
         Expr::SuperMethodCall { method, .. } => {
             env.super_method_return_type(method).unwrap_or(Type::Any)
         }

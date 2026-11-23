@@ -441,7 +441,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             // `ctor_chain_safe` (whole chain). Args must not leak `this`; in
             // constructor context, record them for parent-ctor parameter
             // resolution in the numeric-field proof.
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 if ctx.1 == "constructor" {
                     if let Some(pos) = self.chain.iter().position(|c| c.name == ctx.0) {
                         if let Some(parent) = self.chain.get(pos + 1) {

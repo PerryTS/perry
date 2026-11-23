@@ -841,7 +841,7 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(r, candidates, classes, escaped);
             }
         }
-        Expr::SuperCall(args)
+        Expr::SuperCall(args, _)
         | Expr::StaticMethodCall { args, .. }
         | Expr::SuperMethodCall { args, .. } => {
             for a in args {

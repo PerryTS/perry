@@ -428,7 +428,7 @@ fn stmt_has_super(stmt: &Stmt) -> bool {
 fn expr_has_super(e: &Expr) -> bool {
     if matches!(
         e,
-        Expr::SuperCall(_)
+        Expr::SuperCall(_, _)
             | Expr::SuperCallSpread(_)
             | Expr::SuperMethodCall { .. }
             | Expr::SuperMethodCallSpread { .. }

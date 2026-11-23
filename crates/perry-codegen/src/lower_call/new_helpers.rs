@@ -539,7 +539,7 @@ pub(crate) fn ctor_body_calls_super(body: &[perry_hir::Stmt]) -> bool {
 }
 
 fn expr_calls_super(expr: &Expr) -> bool {
-    if matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_)) {
+    if matches!(expr, Expr::SuperCall(_, _) | Expr::SuperCallSpread(_)) {
         return true;
     }
     let mut found = false;
@@ -569,7 +569,7 @@ pub(crate) fn ctor_body_super_call_forms(body: &[perry_hir::Stmt]) -> (bool, boo
 fn expr_has_super_form(expr: &Expr, spread: bool) -> bool {
     match expr {
         Expr::SuperCallSpread(_) if spread => return true,
-        Expr::SuperCall(_) if !spread => return true,
+        Expr::SuperCall(_, _) if !spread => return true,
         Expr::Closure { body, .. } => {
             return ctor_body_any(
                 body,
@@ -599,7 +599,7 @@ pub(crate) fn ctor_body_closure_calls_super(body: &[perry_hir::Stmt]) -> bool {
 }
 
 fn expr_calls_super_incl_closures(expr: &Expr) -> bool {
-    if matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_)) {
+    if matches!(expr, Expr::SuperCall(_, _) | Expr::SuperCallSpread(_)) {
         return true;
     }
     if let Expr::Closure { body, .. } = expr {

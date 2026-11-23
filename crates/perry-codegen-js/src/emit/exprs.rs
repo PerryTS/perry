@@ -570,7 +570,7 @@ impl JsEmitter {
 
             // --- This / Super ---
             Expr::This => self.output.push_str("this"),
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 self.output.push_str("super(");
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 { self.output.push_str(", "); }

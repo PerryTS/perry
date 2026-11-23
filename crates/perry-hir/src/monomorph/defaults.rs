@@ -442,7 +442,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
                 fill_defaults_in_expr(arg, cx);
             }
         }
-        Expr::SuperCall(args) => {
+        Expr::SuperCall(args, _) => {
             for arg in args {
                 fill_defaults_in_expr(arg, cx);
             }

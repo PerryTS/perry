@@ -92,7 +92,7 @@ pub(crate) fn generator_stmt_uses_call_this(stmt: &Stmt) -> bool {
 pub(crate) fn generator_expr_uses_call_this(expr: &Expr) -> bool {
     match expr {
         Expr::This
-        | Expr::SuperCall(_)
+        | Expr::SuperCall(_, _)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperPropertyGet { .. }
         // A guarded class environment selects its evaluation through the

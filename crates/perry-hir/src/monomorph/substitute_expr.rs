@@ -384,10 +384,11 @@ pub(crate) fn substitute_expr(expr: &Expr, substitutions: &HashMap<String, Type>
 
         // This/Super
         Expr::This => Expr::This,
-        Expr::SuperCall(args) => Expr::SuperCall(
+        Expr::SuperCall(args, byte_offset) => Expr::SuperCall(
             args.iter()
                 .map(|a| substitute_expr(a, substitutions))
                 .collect(),
+            *byte_offset,
         ),
         Expr::SuperMethodCall { method, args } => Expr::SuperMethodCall {
             method: method.clone(),

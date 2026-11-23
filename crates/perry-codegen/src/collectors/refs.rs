@@ -704,7 +704,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(property, out);
             walk(object, out);
         }
-        Expr::SuperCall(args)
+        Expr::SuperCall(args, _)
         | Expr::SuperMethodCall { args, .. }
         | Expr::StaticMethodCall { args, .. } => {
             for a in args {
