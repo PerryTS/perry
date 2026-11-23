@@ -253,17 +253,26 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 1, b);
                 self.emit_memcall(func, "math_imul", 2);
             }
-            // Folding from the identity sends every operand through the bridge, so a lone
-            // argument still gets ToNumber.
+            // A lone argument folds from the identity so the bridge still applies ToNumber;
+            // with more, the first is converted only after the second is evaluated.
             Expr::MathMin(args) | Expr::MathMax(args) => {
                 let (identity, bridge) = if matches!(expr, Expr::MathMin(_)) {
                     (f64::INFINITY, "math_min")
                 } else {
                     (f64::NEG_INFINITY, "math_max")
                 };
-                func.instruction(&f64_const(identity));
-                func.instruction(&Instruction::I64ReinterpretF64);
-                for arg in args {
+                let rest = match args.split_first() {
+                    Some((first, rest)) if !rest.is_empty() => {
+                        self.emit_expr(func, first);
+                        rest
+                    }
+                    _ => {
+                        func.instruction(&f64_const(identity));
+                        func.instruction(&Instruction::I64ReinterpretF64);
+                        &args[..]
+                    }
+                };
+                for arg in rest {
                     self.emit_frame_begin(func, 2);
                     func.instruction(&Instruction::LocalSet(self.temp_local));
                     self.emit_slot_addr(func, 0);
