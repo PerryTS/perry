@@ -75,6 +75,13 @@ fn function_constructor_is_dynamic_code() {
         "const O: any = Object; const c = O.constructor; c(d);"
     ));
     assert!(dynamic("const O: any = Object; O[k](d);"));
+    // PXCHAIN: the value read is the same set as the method form's callee;
+    // closed world, a bare call of each keeps `d` (Function.prototype's
+    // members throw on `this` = undefined, 20.2.3).
+    assert!(dynamic("const O: any = Object; const h = O[k]; h(d);"));
+    assert_eq!(d_escape("const O: any = Object; const h = O[k]; h(d);"), None);
+    assert_eq!(d_escape("const g: any = function () {}; const h = g[k]; h(d);"), None);
+    assert_eq!(d_escape("class A {} const h = (A as any)[k]; h(d);"), None);
     assert!(dynamic(
         "const t: any = { a: 1 }; const c = t[k]; const f = c[k]; f(d);"
     ));

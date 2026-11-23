@@ -1302,6 +1302,16 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         {
             m.add_prim(dst, prim::UNDEF)
         }
+        // `Object.prototype`'s methods are builtin functions (10.3, no
+        // `prototype`): under a computed key, their own data (`name`,
+        // `length`) and the members of `Function.prototype`'s chain the key
+        // may spell, as for a builtin function value.
+        TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_))
+            if name.is_none() =>
+        {
+            m.add_prim(dst, prim::ALL);
+            family_any(m, Some(t), Family::Function, None, key, dst);
+        }
         TokKind::Builtin(ns) => match name.as_deref() {
             Some("@@__perry_wk_species")
                 if matches!(
