@@ -123,12 +123,18 @@ pub struct CatchClause {
 }
 
 impl Stmt {
-    /// Source byte offset of the statement, for the variants that carry one.
+    /// Source byte offset of the statement, for the variants that carry one
+    /// (`if` and loops: their condition's).
     pub fn byte_offset(&self) -> Option<u32> {
         match self {
             Stmt::Return(_, o) => Some(*o),
             Stmt::Try { byte_offset, .. } => Some(*byte_offset),
             Stmt::Switch { byte_offset, .. } => Some(*byte_offset),
+            // A loop or branch stands at its condition.
+            Stmt::If { condition, .. } | Stmt::While { condition, .. } | Stmt::DoWhile { condition, .. } => {
+                condition.byte_offset()
+            }
+            Stmt::For { condition: Some(c), .. } => c.byte_offset(),
             _ => None,
         }
     }
