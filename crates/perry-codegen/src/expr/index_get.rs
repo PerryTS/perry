@@ -2073,8 +2073,7 @@ fn lower_for_in_key(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> 
         object,
         index,
         element_offset: 0,
-        byte_offset: 0,
-        byte_end: 0,
+        ..
     } = expr
     else {
         return Ok(None);
