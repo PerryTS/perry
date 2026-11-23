@@ -49,7 +49,7 @@ canvas.moveTo(0, 200)
 canvas.lineTo(100, 120)
 canvas.lineTo(200, 160)
 canvas.lineTo(400, 60)
-canvas.lineTo(400, 300)  // down to the bottom edge, so every backend fills under the line
+canvas.lineTo(400, 300)  // close along the bottom edge; web and Windows fill the whole canvas anyway
 canvas.lineTo(0, 300)
 // r1, g1, b1, a1, r2, g2, b2, a2, direction (0 = vertical, 1 = horizontal)
 canvas.fillGradient(0.2, 0.4, 1.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0)
