@@ -79,6 +79,8 @@ struct NamespaceUse<'a> {
 impl Visit for NamespaceUse<'_> {
     fn visit_import_decl(&mut self, _: &ast::ImportDecl) {}
     fn visit_binding_ident(&mut self, _: &ast::BindingIdent) {}
+    // A type (`crypto.Hash`, `typeof fs`) is erased: it observes nothing.
+    fn visit_ts_type(&mut self, _: &ast::TsType) {}
     fn visit_ident(&mut self, ident: &ast::Ident) {
         self.observes_object |= ident.sym.as_ref() == self.local;
     }
@@ -208,6 +210,19 @@ mod tests {
         .unwrap();
         assert!(rewrite_static(&ast, directory.path()).unwrap().is_none());
         assert!(!directory.path().join("synthetic-modules").exists());
+    }
+
+    #[test]
+    fn type_references_do_not_observe_the_namespace() {
+        for text in [
+            "import * as crypto from 'crypto'; function f(): crypto.Hash { return crypto.createHash('sha1'); }",
+            "import * as fs from 'fs'; let x: typeof fs.readFileSync = fs.readFileSync;",
+            "import * as fs from 'fs'; const y = fs.readFileSync as unknown as Array<fs.Stats>;",
+        ] {
+            let directory = tempfile::tempdir().unwrap();
+            let ast = perry_parser::parse_typescript(text, "native.ts").unwrap();
+            assert!(rewrite_static(&ast, directory.path()).unwrap().is_none(), "{text}");
+        }
     }
 
     #[test]
