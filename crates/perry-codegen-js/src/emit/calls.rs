@@ -270,6 +270,7 @@ impl JsEmitter {
             "fillRect" | "canvas_fill_rect" => "perry_ui_canvas_fill_rect",
             "strokeRect" | "canvas_stroke_rect" => "perry_ui_canvas_stroke_rect",
             "clearRect" | "canvas_clear_rect" => "perry_ui_canvas_clear_rect",
+            "fillGradient" | "canvas_fill_gradient" => "perry_ui_canvas_fill_gradient",
             "setFillColor" | "canvas_set_fill_color" => "perry_ui_canvas_set_fill_color",
             "setStrokeColor" | "canvas_set_stroke_color" => "perry_ui_canvas_set_stroke_color",
             "beginPath" | "canvas_begin_path" => "perry_ui_canvas_begin_path",
