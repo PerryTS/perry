@@ -902,7 +902,7 @@ impl Model {
         // Explain and the dump name each origin: its own node.
         if let Some(s) = self.stop_top.as_ref() {
             // One holder per creation point, named (`topstop`).
-            let p = s.gen_pos;
+            let p = s.cur_pos();
             let n = self.node_l("TOPVAL");
             let at = std::panic::Location::caller();
             self.stop_top.as_mut().unwrap().topvals.insert(n, (why.to_string(), at, p));
@@ -1033,6 +1033,11 @@ impl Model {
             }
         }
         self.nodes[n as usize].cons.push(c);
+        let ci = self.nodes[n as usize].cons.len() as u32 - 1;
+        if let Some(s) = self.stop_top.as_mut() {
+            let p = s.cur_pos();
+            s.cons_pos.insert((n, ci), p);
+        }
         if let Some(region) = self.gen_region.filter(|_| Self::may_run_code(&c)) {
             let cs = &self.nodes[n as usize].cons;
             let seen = cs
@@ -1053,14 +1058,14 @@ impl Model {
         self.own_refuted_cons(n, c);
         if defer {
             // SKINROOT27: replayed by the draining EnumChain (`Model::chain_q`).
-            self.chain_q.push((n, c));
+            self.chain_q.push((n, c, ci));
             return;
         }
-        self.replay_cons(n, c);
+        self.replay_cons(n, c, ci);
     }
 
     /// Apply the attached constraint `c` of `n` to what `n` holds now.
-    pub(crate) fn replay_cons(&mut self, n: NodeId, c: Cons) {
+    pub(crate) fn replay_cons(&mut self, n: NodeId, c: Cons, ci: u32) {
         let prim = self.nodes[n as usize].prim;
         if self.nodes[n as usize].pts.is_empty() && prim == 0 {
             return;
@@ -1086,10 +1091,10 @@ impl Model {
         } else {
             0
         };
-        let rule0 = self.stop_top.as_mut().map(|s| s.rule.replace((n, c)));
+        let rule0 = self.stop_top.as_mut().map(|s| s.enter_rule(n, c, ci));
         self.with_s(|m| m.apply(n, &c, &toks, prim));
         if let (Some(r0), Some(s)) = (rule0, self.stop_top.as_mut()) {
-            s.rule = r0;
+            (s.rule, s.rule_pos) = r0;
         }
         (self.prov_mode, self.prov_rule) = pv;
         if on {
@@ -1354,10 +1359,10 @@ impl Model {
                     (self.prov_mode, self.prov_rule) = (crate::provenance::PM_RULE, Some((n, c)));
                     self.prov_in_set(0);
                 }
-                let rule0 = self.stop_top.as_mut().map(|s| s.rule.replace((n, c)));
+                let rule0 = self.stop_top.as_mut().map(|s| s.enter_rule(n, c, i as u32));
                 self.apply_tokens(n, &c, Tokens::Pending(&delta), p);
                 if let (Some(r0), Some(s)) = (rule0, self.stop_top.as_mut()) {
-                    s.rule = r0;
+                    (s.rule, s.rule_pos) = r0;
                 }
             }
             delta.clear();
