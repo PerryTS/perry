@@ -8,6 +8,8 @@ impl Model {
             Cons::Identity { route } => format!("identity {n} {}", route.name()),
             Cons::HasProp { key, idx } => format!("hasprop {n} {key:?} {idx}"),
             Cons::OwnProp { key, idx } => format!("ownprop {n} {key:?} {idx}"),
+            Cons::DeleteIdx { idx, .. } => format!("deleteidx {n} {idx}"),
+            Cons::Meta { op, .. } => format!("meta {n} {op:?}"),
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
             Cons::ProtoKey { key, dst } => {
                 format!("protokey {n} {} {dst}", self.key_name(Key::Named(*key)))
@@ -162,6 +164,29 @@ impl Model {
             Cons::AnyAccessors { origin, act } => format!("anyaccessors {n} {origin} {act:?}"),
             Cons::UnnamedSet { target } => format!("unnamedset {n} {target}"),
             Cons::StoreTopProto { origin, src } => format!("storetopproto {n} {origin} {src}"),
+            Cons::ChainSet {
+                origin,
+                key,
+                src,
+                region,
+            } => format!("chainset {n} {origin} {key:?} {src} {region}"),
+            Cons::ChainRecv { origin } => format!("chainrecv {n} {origin}"),
+            Cons::FwdLoad {
+                key,
+                idx,
+                dst,
+                recv,
+            } => format!("fwdload {n} {key:?} {idx} {dst} {recv}"),
+            Cons::FwdStore {
+                key,
+                src,
+                region,
+                recv,
+                ..
+            } => format!("fwdstore {n} {key:?} {src} {region} {recv}"),
+            Cons::DefineOwn { key, value, region } => {
+                format!("defineown {n} {key:?} {value} {region}")
+            }
             Cons::Super { start, key, act } => {
                 format!("super {n} {start} {} {act:?}", self.key_name(*key))
             }

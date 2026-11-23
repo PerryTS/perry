@@ -1610,6 +1610,8 @@ mod shaped_key_proto_methods;
 mod uri_coercion;
 
 mod accessor_lookup_values;
+mod proxy_recv;
+mod proxy_full;
 mod buffer_iterator_absent;
 mod buffer_namespaces;
 mod error_namespaces;

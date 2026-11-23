@@ -168,6 +168,8 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::Identity { .. }
         | Cons::HasProp { .. }
         | Cons::OwnProp { .. }
+        | Cons::DeleteIdx { .. }
+        | Cons::Meta { .. }
         | Cons::Hard { .. }
         | Cons::TopIfTop { .. }
         | Cons::OwnTest { .. }
@@ -211,6 +213,11 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::AnyAccessors { .. }
         | Cons::UnnamedSet { .. }
         | Cons::StoreTopProto { .. }
+        | Cons::ChainSet { .. }
+        | Cons::ChainRecv { .. }
+        | Cons::FwdLoad { .. }
+        | Cons::FwdStore { .. }
+        | Cons::DefineOwn { .. }
         | Cons::SuperCtor { .. }
         | Cons::SuperCtorParent { .. }
         | Cons::Accessor { .. }

@@ -67,6 +67,17 @@ impl IdentityRoute {
     }
 }
 
+/// Rule PXINV: the internal methods `Cons::Meta` runs (ECMA-262 10.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MetaOp {
+    /// [[IsExtensible]] (10.5.3).
+    IsExtensible,
+    /// [[GetPrototypeOf]] (10.5.1), its result compared, not kept.
+    ProtoOf,
+    /// [[OwnPropertyKeys]] (10.5.11), its list compared, not kept.
+    OwnKeys,
+}
+
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
@@ -404,6 +415,19 @@ pub enum Cons {
     /// `getOwnPropertyDescriptor` trap (`solve/proxy.rs`). `idx`: the key
     /// value, or `NO_NODE` for a named key.
     OwnProp { key: Key, idx: NodeId },
+    /// Rule PXINV: a delete under a computed key (`delete o[k]`,
+    /// `Reflect.deleteProperty`, an Array method's index delete), beside the
+    /// operation's `Hard` E7: `idx` holds the key ToPropertyKey made. No
+    /// flow on an ordinary object; a Proxy passes it to its
+    /// `deleteProperty` trap (10.5.10).
+    DeleteIdx { idx: NodeId, reason: u32 },
+    /// Rule PXINV: an internal method of the node's objects whose result is
+    /// a test, not a value (`MetaOp`): what the 10.5 invariant checks call
+    /// on a Proxy's target, and `Object.isExtensible` / `isFrozen` /
+    /// `isSealed`. No flow on an ordinary object (its own [[IsExtensible]],
+    /// [[GetPrototypeOf]], [[OwnPropertyKeys]] run no code); a Proxy runs
+    /// its trap and its own invariant checks (`solve/proxy.rs`).
+    Meta { op: MetaOp, reason: u32 },
     /// `Object.defineProperty(o, key, desc)` with a constant key (FVA 4.3a).
     /// An accessor descriptor (`data` false) on a literal layout that does
     /// not hold `key` as data: the key becomes an accessor key (the getter
@@ -492,6 +516,51 @@ pub enum Cons {
     /// The node is the prototype closure of `origin`: an unknown (⊤)
     /// prototype may hold a setter, so the stored value and `origin` escape.
     StoreTopProto { origin: Tok, src: NodeId },
+    /// Rule PXCHAIN: the node is the prototype closure of `origin`, which
+    /// stores `src` under `key` (an ordinary [[Set]], throwing into
+    /// `region`): a Proxy there runs its `set` trap with `origin` as the
+    /// receiver (`Model::proxy_chain_set`); other links add nothing.
+    ChainSet {
+        origin: Tok,
+        key: Key,
+        src: NodeId,
+        region: NodeId,
+    },
+    /// Rule PXCHAIN: the node is the prototype closure of receiver
+    /// `origin`: a Proxy there is passed `origin` as the receiver of the
+    /// traps its chain operations run.
+    ChainRecv { origin: Tok },
+    /// Rule PXRECV: the node is a Proxy's target; the Proxy's forward
+    /// target.[[Get]](P, Receiver) (10.5.8 step 6): `dst` ⊇ the value of
+    /// `key` (`idx` `NO_NODE`) or of the key value `idx` read on each
+    /// target, its getters run with `this` = `recv`, the original receiver.
+    FwdLoad {
+        key: Key,
+        idx: NodeId,
+        dst: NodeId,
+        recv: Tok,
+    },
+    /// Rule PXRECV: the node is a Proxy's target; the Proxy's forward
+    /// target.[[Set]](P, V, Receiver) (10.5.9 step 6): the store of `src`
+    /// under `key` into each target (a `Cons::Store`), its setters run with
+    /// `this` = `recv` and a Proxy on its chain is passed `recv`.
+    FwdStore {
+        key: Key,
+        src: NodeId,
+        site: SiteId,
+        region: NodeId,
+        recv: Tok,
+    },
+    /// Rule PXDEFINE: [[DefineOwnProperty]] of `key` with a data descriptor
+    /// whose [[Value]] is `value` on each object of the node, throwing into
+    /// `region`. A Proxy runs its `defineProperty` trap and forwards to its
+    /// target (10.5.6); on an ordinary object the definition is the store
+    /// that made it (its own field), so the rule adds nothing there.
+    DefineOwn {
+        key: Key,
+        value: NodeId,
+        region: NodeId,
+    },
     /// The node is `this`: continue a `super.key` lookup at `start` with
     /// each `this` token as the receiver.
     Super { start: Tok, key: Key, act: ChainAct },
@@ -603,6 +672,9 @@ pub enum Cons {
     /// (`Cons::IdxLoad`'s primitive read, decided by the key's values).
     IdxKey {
         obj: Tok,
+        /// The receiver (`obj` itself, or a Proxy's original receiver,
+        /// `Cons::FwdLoad`): `this` of the getters the read runs.
+        origin: Tok,
         prim: u16,
         dst: NodeId,
         shape: KeyShapeId,
@@ -1130,6 +1202,8 @@ impl Cons {
             Cons::DeleteKey { .. } => "deletekey",
             Cons::HasProp { .. } => "hasprop",
             Cons::OwnProp { .. } => "ownprop",
+            Cons::DeleteIdx { .. } => "deleteidx",
+            Cons::Meta { .. } => "meta",
             Cons::AddsKeys => "addskeys",
             Cons::DefineKey { .. } => "definekey",
             Cons::DefineAll { .. } => "defineall",
@@ -1151,6 +1225,11 @@ impl Cons {
             Cons::AnyAccessors { .. } => "anyaccessors",
             Cons::UnnamedSet { .. } => "unnamedset",
             Cons::StoreTopProto { .. } => "storetopproto",
+            Cons::ChainSet { .. } => "chainset",
+            Cons::ChainRecv { .. } => "chainrecv",
+            Cons::FwdLoad { .. } => "fwdload",
+            Cons::FwdStore { .. } => "fwdstore",
+            Cons::DefineOwn { .. } => "defineown",
             Cons::Super { .. } => "super",
             Cons::SuperFrom { .. } => "super-from",
             Cons::SuperCtor { .. } => "superctor",

@@ -527,6 +527,38 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
     t
 }
 
+/// Rule PXDEFINE: the descriptor object a `defineProperty` trap call
+/// `call` is passed (10.5.6 step 6, 6.2.6.4 FromPropertyDescriptor of the
+/// data descriptor of an ordinary [[Set]], 10.1.9.2 steps 2.d / 2.e): a new
+/// ordinary object, one per trap call, with `value` ⊇ `value`, the Boolean
+/// `writable`, `enumerable`, `configurable` (step 2.e; 2.d passes `value`
+/// alone) and no `get` / `set`.
+pub(crate) fn trap_descriptor(m: &mut Model, call: CallId, value: NodeId) -> Tok {
+    let tm = site_template(m, call, "descriptor", false, false);
+    let ctx = m.birth_ctx(call);
+    let t = m.site_tok(tm, ctx);
+    let va = m.atom("value");
+    let fv = m.field(t, va);
+    m.edge(value, fv);
+    for name in ["writable", "enumerable", "configurable"] {
+        let a = m.atom(name);
+        let f = m.field(t, a);
+        m.add_prim(f, prim::BOOL | prim::UNDEF);
+    }
+    for name in ["get", "set"] {
+        let a = m.atom(name);
+        let f = m.field(t, a);
+        m.add_prim(f, prim::UNDEF);
+    }
+    t
+}
+
+/// Rule PXAPPLY: the argument list Array a Proxy trap is passed
+/// (CreateArrayFromList, 7.3.16), born at `call`.
+pub(crate) fn trap_args_array(m: &mut Model, call: CallId) -> Tok {
+    site_tmpl_born(m, call, "Array", false, false)
+}
+
 /// The view of `what` born at `call` whose [[ViewedArrayBuffer]] its
 /// birth writes itself (`Cons::ViewedBuffer`).
 fn site_view(m: &mut Model, call: CallId, what: &'static str) -> Tok {
@@ -3649,13 +3681,12 @@ fn ns_method_inner(
         (BuiltinNs::Object, "freeze" | "seal" | "preventExtensions") => {
             if let Some(o) = arg(m, call, 0) {
                 let r = m.reason("E8 Object.freeze (as a value call)");
-                m.cons(
-                    o,
-                    Cons::Hard {
-                        kind: Hard::E8Freeze,
-                        reason: r,
-                    },
-                );
+                let kind = match name {
+                    "freeze" => Hard::E8Freeze,
+                    "seal" => Hard::E8Seal,
+                    _ => Hard::E8PreventExtensions,
+                };
+                m.cons(o, Cons::Hard { kind, reason: r });
                 let ret = m.calls[call as usize].ret;
                 m.edge(o, ret);
             }
@@ -3669,6 +3700,9 @@ fn ns_method_inner(
             ret_prim(m, call, prim::BOOL);
         }
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible") => {
+            if let Some(o) = arg(m, call, 0) {
+                is_extensible_ops(m, o, name != "isExtensible");
+            }
             ret_prim(m, call, prim::BOOL);
         }
         // 20.1.2.13: ToObject(O), ToPropertyKey(P), then O.[[GetOwnProperty]](P):
@@ -4502,4 +4536,36 @@ fn error_tok(m: &mut Model, call: CallId) -> Tok {
 /// past the 285M bound; BATCHB31): the rule waits for that cost's fix.
 fn promise_all_index() -> bool {
     std::env::var("PERRY_FACTS_PROMISE_ALL_INDEX").as_deref() == Ok("1")
+}
+
+/// Rule PXINV: O.[[IsExtensible]]() of what `o` holds (`Object.isExtensible`,
+/// `Reflect.isExtensible`), and with `integrity` TestIntegrityLevel's
+/// (7.3.16) O.[[OwnPropertyKeys]]() and O.[[GetOwnProperty]](k) of each key
+/// (`Object.isFrozen` / `isSealed`). An ordinary object runs no code there;
+/// a Proxy runs its traps (`Cons::Meta`, `Cons::OwnProp`).
+pub(crate) fn is_extensible_ops(m: &mut Model, o: NodeId, integrity: bool) {
+    let reason = m.reason("[[IsExtensible]] / TestIntegrityLevel");
+    m.cons(
+        o,
+        Cons::Meta {
+            op: MetaOp::IsExtensible,
+            reason,
+        },
+    );
+    if integrity {
+        m.cons(
+            o,
+            Cons::Meta {
+                op: MetaOp::OwnKeys,
+                reason,
+            },
+        );
+        m.cons(
+            o,
+            Cons::OwnProp {
+                key: Key::any(),
+                idx: NO_NODE,
+            },
+        );
+    }
 }

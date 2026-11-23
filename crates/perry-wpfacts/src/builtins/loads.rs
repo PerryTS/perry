@@ -1337,6 +1337,16 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         {
             m.add_prim(dst, prim::UNDEF)
         }
+        // `Object.prototype`'s methods are builtin functions (10.3, no
+        // `prototype`): under a computed key, their own data (`name`,
+        // `length`) and the members of `Function.prototype`'s chain the key
+        // may spell, as for a builtin function value.
+        TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_))
+            if name.is_none() =>
+        {
+            m.add_prim(dst, prim::ALL);
+            family_any(m, Some(t), Family::Function, None, key, dst);
+        }
         TokKind::Builtin(ns) => match name.as_deref() {
             Some("@@__perry_wk_species")
                 if matches!(
@@ -1769,11 +1779,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         }
         TokKind::Top => {}
-        // PROXY2: only `solve/proxy.rs` models a Proxy: today's path.
-        TokKind::Proxy(p) => {
-            m.proxy_degrade(p, "family read");
-            m.add_tok(dst, TOP);
-        }
+        // A read of `key` off the Proxy itself: its [[Get]] (10.5.8, the
+        // `get` trap and the forward), with the Proxy as the receiver.
+        TokKind::Proxy(p) => m.proxy_get_into(p, key, NO_NODE, dst),
     }
 }
 

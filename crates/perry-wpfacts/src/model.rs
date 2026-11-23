@@ -1045,6 +1045,11 @@ pub enum Hard {
     E6SetPrototypeOf,
     E7Delete,
     E8Freeze,
+    /// `Object.seal` (SetIntegrityLevel sealed, 7.3.15).
+    E8Seal,
+    /// `Object.preventExtensions` / `Reflect.preventExtensions`
+    /// ([[PreventExtensions]] alone).
+    E8PreventExtensions,
     E9Proxy,
     E10ObjectCreate,
     E11ReflectConstruct,
@@ -1062,7 +1067,7 @@ impl Hard {
             Hard::E5DefineProperty => "E5",
             Hard::E6SetPrototypeOf => "E6",
             Hard::E7Delete => "E7",
-            Hard::E8Freeze => "E8",
+            Hard::E8Freeze | Hard::E8Seal | Hard::E8PreventExtensions => "E8",
             Hard::E9Proxy => "E9",
             Hard::E10ObjectCreate => "E10",
             Hard::E11ReflectConstruct => "E11",
@@ -2355,6 +2360,18 @@ pub struct Model {
     /// that made one ordinary, object/⊤ keys that ran the full lookup.
     pub own_read_census: [u64; 3],
     pub callthis_done: crate::pts::FxHashSet<(NodeId, CallId, Tok)>,
+    /// Rule PXCHAIN: (object, key, key node) whose `in` runs on its
+    /// prototype closure, and those closure nodes (`Cons::HasProp`).
+    pub chain_has_done: crate::pts::FxHashSet<(Tok, Key, NodeId)>,
+    pub chain_has_nodes: crate::pts::FxHashSet<NodeId>,
+    /// Rule PXCHAIN: receivers with a `Cons::ChainRecv` on their closure.
+    /// (holder, receiver): `holder`'s closure has `Cons::ChainRecv { origin: receiver }`.
+    pub chain_recv_done: crate::pts::FxHashSet<(Tok, Tok)>,
+    /// Rule PXCHAIN: (receiver, object, key) of an ordinary [[Set]]: its value and
+    /// throw nodes (`Model::chain_set_rule`); the stores (source, region)
+    /// that wait for a Proxy on the chain, by value node.
+    pub chain_set_nodes: crate::pts::FxHashMap<(Tok, Tok, Key), (NodeId, NodeId)>,
+    pub chain_set_pending: crate::pts::FxHashMap<NodeId, Vec<(NodeId, NodeId)>>,
     /// `CallThis` split (see `Model::bind_via`): `ThisTo` per (method node,
     /// receiver), the callee relay per call, the edges into it, and the
     /// (call, receiver) pairs bound through each method node.
@@ -3026,6 +3043,9 @@ pub struct Model {
     pub store_at: Option<NodeId>,
     /// The throw region of that `Cons::Store` (`Cons::Store::region`).
     pub store_region: Option<NodeId>,
+    /// The Receiver of that store when it is not the object stored into:
+    /// a Proxy's forward target.[[Set]](P, V, Receiver) (`Cons::FwdStore`).
+    pub store_recv: Option<Tok>,
     /// A call's constant first argument as a property-key spelling. Value
     /// callees record strings only (`BuiltinNs::Require`). Compiler data.
     pub call_lit: FxHashMap<CallId, Atom>,

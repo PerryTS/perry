@@ -63,7 +63,11 @@ fn function_constructor_is_dynamic_code() {
     assert!(dynamic(
         "const g: any = function () {}; const h = g[k]; h(d);"
     ));
-    assert!(d_escape("const g: any = function () {}; g[k](d);").is_some());
+    // Closed world (owner 2026-11-14): without interpreted code the
+    // Function constructor runs no program text; the other members a
+    // function holds under the key (`call`, `apply`, `bind`,
+    // `Object.prototype`'s) keep nothing of `d` with `this` = `g`.
+    assert_eq!(d_escape("const g: any = function () {}; g[k](d);"), None);
     assert!(dynamic("class A {} (A as any)[k](d);"));
     // A builtin constructor is a function: its `constructor` is Function.
     assert!(dynamic("const O: any = Object; O.constructor(d);"));
@@ -71,6 +75,13 @@ fn function_constructor_is_dynamic_code() {
         "const O: any = Object; const c = O.constructor; c(d);"
     ));
     assert!(dynamic("const O: any = Object; O[k](d);"));
+    // PXCHAIN: the value read is the same set as the method form's callee;
+    // closed world, a bare call of each keeps `d` (Function.prototype's
+    // members throw on `this` = undefined, 20.2.3).
+    assert!(dynamic("const O: any = Object; const h = O[k]; h(d);"));
+    assert_eq!(d_escape("const O: any = Object; const h = O[k]; h(d);"), None);
+    assert_eq!(d_escape("const g: any = function () {}; const h = g[k]; h(d);"), None);
+    assert_eq!(d_escape("class A {} const h = (A as any)[k]; h(d);"), None);
     assert!(dynamic(
         "const t: any = { a: 1 }; const c = t[k]; const f = c[k]; f(d);"
     ));

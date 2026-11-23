@@ -1001,6 +1001,8 @@ impl Model {
                 Cons::Identity { .. }
                     | Cons::HasProp { .. }
                     | Cons::OwnProp { .. }
+                    | Cons::DeleteIdx { .. }
+                    | Cons::Meta { .. }
                     | Cons::ThisTo { .. }
                     | Cons::CallArgs { .. }
                     | Cons::RetInto { .. }

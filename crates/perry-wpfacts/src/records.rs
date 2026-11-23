@@ -232,7 +232,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
     match c {
         // `k in o` (no flow; before PROXY2 it made no constraint at all).
         Cons::HasProp { .. } => Allowed,
-        Cons::OwnProp { .. } => Allowed,
+        Cons::OwnProp { .. } | Cons::DeleteIdx { .. } | Cons::Meta { .. } => Allowed,
         Cons::Identity { route } => match route {
             IdentityRoute::JsonReplacer => Reject(R5Protocol("JsonReplacer".into())),
             r => Reject(R4Identity(r.name().into())),
@@ -349,6 +349,11 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::NativeParent { .. }
         | Cons::PlainKey { .. }
         | Cons::StoreTopProto { .. }
+        | Cons::ChainSet { .. }
+        | Cons::ChainRecv { .. }
+        | Cons::FwdLoad { .. }
+        | Cons::FwdStore { .. }
+        | Cons::DefineOwn { .. }
         | Cons::HolderStep { .. }
         | Cons::VisitHolders { .. }
         | Cons::VisitStop { .. }
