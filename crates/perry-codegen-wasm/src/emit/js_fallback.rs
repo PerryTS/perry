@@ -18,6 +18,7 @@ impl WasmModuleEmitter {
             .collect();
         let params_str = params.join(", ");
 
+        self.js_preallocated.borrow_mut().clear();
         let mut body = String::new();
         let scoped_names = scoped_js::scoped_js_names(&func.body);
         if !scoped_names.is_empty() {
@@ -30,6 +31,9 @@ impl WasmModuleEmitter {
         let mut local_names: BTreeMap<u32, String> = BTreeMap::new();
         for (i, param) in func.params.iter().enumerate() {
             local_names.insert(param.id, format!("__p{}", i));
+            if self.js_boxed(param.id) {
+                body.push_str(&format!("    __p{i} = {{ value: toJsValue(__p{i}) }};\n"));
+            }
         }
 
         for stmt in &func.body {
@@ -80,11 +84,18 @@ impl WasmModuleEmitter {
             Stmt::Let { id, init, .. } => {
                 let name = format!("__l{}", id);
                 locals.insert(*id, name.clone());
-                if let Some(init_expr) = init {
-                    let val = self.emit_js_expr(init_expr, locals);
-                    out.push_str(&format!("{pad}    var {name} = {val};\n"));
+                let val = match init {
+                    Some(init_expr) => self.emit_js_expr(init_expr, locals),
+                    None => "u64ToF64(TAG_UNDEFINED)".to_string(),
+                };
+                if self.js_preallocated.borrow().contains(id) {
+                    out.push_str(&format!("{pad}    {name}.value = toJsValue({val});\n"));
+                } else if self.js_boxed(*id) {
+                    out.push_str(&format!(
+                        "{pad}    var {name} = {{ value: toJsValue({val}) }};\n"
+                    ));
                 } else {
-                    out.push_str(&format!("{pad}    var {name} = u64ToF64(TAG_UNDEFINED);\n"));
+                    out.push_str(&format!("{pad}    var {name} = {val};\n"));
                 }
             }
             Stmt::Expr(e) => {
@@ -189,7 +200,12 @@ impl WasmModuleEmitter {
                         let name = format!("__l{}", param_id);
                         locals.insert(*param_id, name.clone());
                         out.push_str(&format!("{pad}    }} catch (__e) {{\n"));
-                        out.push_str(&format!("{pad}      let {name} = fromJsValue(__e);\n"));
+                        let value = if self.js_boxed(*param_id) {
+                            "{ value: __e }"
+                        } else {
+                            "fromJsValue(__e)"
+                        };
+                        out.push_str(&format!("{pad}      let {name} = {value};\n"));
                     } else {
                         out.push_str(&format!("{pad}    }} catch (__e) {{\n"));
                     }
@@ -256,10 +272,17 @@ impl WasmModuleEmitter {
                 }
                 out.push_str(&format!("{pad}    }}\n"));
             }
-            // Issue #569: PreallocateBoxes is a perry-codegen-only directive
-            // — JS hoisting handles forward refs natively, so the wasm/JS
-            // backend has no equivalent to emit.
-            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
+            // A closure created before its captured binding's `Let` shares the cell made
+            // here, as in the WASM arm; a TDZ cell starts as `undefined` there too.
+            Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
+                for id in ids.iter().filter(|id| self.js_boxed(**id)) {
+                    let name = format!("__l{}", id);
+                    locals.insert(*id, name.clone());
+                    out.push_str(&format!("{pad}    var {name} = {{ value: undefined }};\n"));
+                    self.js_preallocated.borrow_mut().insert(*id);
+                }
+            }
+            Stmt::ReleaseBoxes(_) => {}
         }
     }
 
@@ -294,6 +317,7 @@ impl WasmModuleEmitter {
             // A local the body does not bind is a module-level `let`, promoted to an
             // exported WASM global (`module_let_globals`); no JS binding exists for it.
             Expr::LocalGet(id) => match locals.get(id) {
+                Some(name) if self.js_boxed(*id) => format!("fromJsValue({name}.value)"),
                 Some(name) => name.clone(),
                 None => match self.module_let_globals.get(&(self.current_mod_idx, *id)) {
                     Some(&gidx) => {
@@ -1052,10 +1076,7 @@ impl WasmModuleEmitter {
             Expr::ArrayPush {
                 array_id, value, ..
             } => {
-                let arr = locals
-                    .get(array_id)
-                    .cloned()
-                    .unwrap_or_else(|| format!("__l{}", array_id));
+                let arr = self.emit_js_expr(&Expr::LocalGet(*array_id), locals);
                 let val = self.emit_js_expr(value, locals);
                 format!("fromJsValue(toJsValue({}).push(toJsValue({})))", arr, val)
             }
@@ -1190,6 +1211,50 @@ impl WasmModuleEmitter {
                 } else {
                     "u64ToF64(TAG_UNDEFINED)".to_string()
                 }
+            }
+            // The same `closure_new` / `closure_set_capture` sequence as the WASM arm in
+            // `emit/expr/classes.rs`. The body is a module function, so a captured `this`
+            // is undefined.
+            Expr::Closure {
+                func_id,
+                body,
+                captures,
+                mutable_captures,
+                captures_this,
+                is_arrow,
+                ..
+            } => {
+                let Some(&func_idx) = self.func_map.get(func_id) else {
+                    return "u64ToF64(TAG_UNDEFINED)".to_string();
+                };
+                let table_idx = self
+                    .func_to_table_idx
+                    .get(&func_idx)
+                    .copied()
+                    .unwrap_or(func_idx);
+                let this = closure_this(*captures_this, *is_arrow, body);
+                let mut closure = format!(
+                    "__memDispatch.closure_new({}, {}, {}, {})",
+                    table_idx,
+                    captures.len(),
+                    u8::from(this == ClosureThis::Receiver),
+                    self.fn_proto_code(func_idx)
+                );
+                let mut values: Vec<String> = captures
+                    .iter()
+                    .chain(mutable_captures.iter())
+                    .map(|id| match locals.get(id) {
+                        Some(cell) if self.js_boxed(*id) => cell.clone(),
+                        _ => format!("toJsValue({})", self.emit_js_expr(&Expr::LocalGet(*id), locals)),
+                    })
+                    .collect();
+                if this == ClosureThis::Captured {
+                    values.push("undefined".to_string());
+                }
+                for (i, value) in values.iter().enumerate() {
+                    closure = format!("__memDispatch.closure_set_capture({closure}, {i}, {value})");
+                }
+                format!("fromJsValue({closure})")
             }
             Expr::FuncRef(id) => {
                 if let Some(&func_idx) = self.func_map.get(id) {
@@ -1378,6 +1443,12 @@ impl WasmModuleEmitter {
         format!("fromJsValue(__memDispatch.{bridge}({}))", host_args(&args))
     }
 
+    /// A local a closure assigns lives in a `{ value }` cell, the object `box_new` makes
+    /// for the WASM arm, so the closure body's `box_get` / `box_set` share it.
+    fn js_boxed(&self, id: LocalId) -> bool {
+        self.boxed_locals.contains(&(self.current_mod_idx, id))
+    }
+
     /// JS that stores `value` in local `id` and yields it. A local the body does not bind
     /// is a module-level `let` held in its exported WASM global.
     fn emit_js_local_set(
@@ -1387,6 +1458,9 @@ impl WasmModuleEmitter {
         locals: &BTreeMap<u32, String>,
     ) -> String {
         match locals.get(&id) {
+            Some(name) if self.js_boxed(id) => {
+                format!("((__v) => ({name}.value = toJsValue(__v), __v))({value})")
+            }
             Some(name) => format!("({} = {})", name, value),
             None => match self.module_let_globals.get(&(self.current_mod_idx, id)) {
                 Some(&gidx) => format!(

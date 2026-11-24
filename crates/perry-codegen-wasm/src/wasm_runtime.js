@@ -2380,6 +2380,7 @@ const __memDispatch = {
   object_super_get: (home, receiver, key) => __superGet(home, key, receiver),
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
+    if (typeof obj === 'symbol') return obj[key];
     if (!__holdsProperties(obj)) return undefined;
     return obj[key];
   },
@@ -2432,6 +2433,8 @@ const __memDispatch = {
     const wellKnown = k.startsWith('@@__perry_wk_') ? Symbol[k.slice(13)] : undefined;
     return typeof wellKnown === 'symbol' ? wellKnown : Symbol.for(k);
   },
+  symbol_new: (...desc) => Symbol(...desc),
+  symbol_key_for: (sym) => Symbol.keyFor(sym),
   // `key in Object(v)` without handing the temporary wrapper back as a handle.
   object_coerce_has_property: (obj, key) => (key in Object(obj)) ? 1 : 0,
   object_assign: (target, source) => {
@@ -2975,6 +2978,7 @@ const __memDispatch = {
   class_get_field: (obj, name) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
     if (typeof obj === 'function') return __classStaticGet(__classNameOfValue(obj), String(name), obj, obj);
+    if (typeof obj === 'symbol') return obj[String(name)];
     if (!__holdsProperties(obj)) return undefined;
     const fname = String(name);
     // Check for compiled getter method — WASM uses i64 (BigInt). A nearer class's
