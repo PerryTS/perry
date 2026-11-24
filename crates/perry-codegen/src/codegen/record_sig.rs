@@ -425,9 +425,6 @@ fn site(ctx: &mut FnCtx<'_>, callee: &Expr) -> Result<Option<Site>> {
             ..
         } => {
             let offset = *byte_offset;
-            if offset == 0 {
-                return Ok(None);
-            }
             let Some(&mid) = ctx.wpfacts.typed_calls.get(&offset) else {
                 return Ok(None);
             };

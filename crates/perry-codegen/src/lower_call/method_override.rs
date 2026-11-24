@@ -1932,10 +1932,9 @@ pub(super) fn emit_guarded_direct_method_call(
         .filter(|_| !ctx.wpfacts_off && super::proven_call::native_abi(ctx))
         .and_then(|_| {
             let at = (
-                crate::codegen::signature_entry::method_site_offset(),
+                crate::codegen::signature_entry::method_site_offset()?,
                 property.to_string(),
             );
-            (at.0 != 0).then_some(())?;
             ctx.wpfacts.late_call_bodies.get(&at).cloned()
         })
         .and_then(|bodies| {
