@@ -179,6 +179,33 @@ fn a_host_stream_write_keeps_its_chunk() {
     );
 }
 
+/// The chunk is not readable back through `writableBuffer` (perry-runtime):
+/// `process.stdout`'s own `write` (os_process_streams.rs,
+/// `process_stdout_write_stub`) writes synchronously and never queues;
+/// only node_stream's `Writable.prototype.write` queues
+/// (`buffer_writable_write`). On a TTY the getter (tty.WriteStream ->
+/// net.Socket -> stream chain, node_stream/proto_methods.rs
+/// `Prop::WritableBuffer`) reads the stream's queue, which stays unset, so it
+/// returns a fresh empty array: `w[0]` is undefined and the delete throws
+/// before `c.s`. Off a TTY the member is absent. Either way the program never
+/// reaches the chunk through it, and the stream's contract (Phase B) keeps it.
+#[test]
+fn a_host_stream_chunk_is_not_read_back_through_writable_buffer() {
+    let src = "class C { s = \"c\"; toString() { return this.s; } }\n\
+        const c = new C();\n\
+        process.stdout.write(c as any);\n\
+        const w: any = (process.stdout as any).writableBuffer;\n\
+        delete w[0].chunk.s;\n\
+        console.log(c.s); // SITE\n";
+    let pf = facts(src);
+    let v = site(&pf, src, "s");
+    assert!(
+        v.iter().all(|v| !matches!(v, Verdict::No(_))),
+        "{v:?}\n{}",
+        pf.dump_text()
+    );
+}
+
 /// Control: beside an unseen module (foreign code) the stream's chunk
 /// reaches code that may write it under any key.
 #[test]

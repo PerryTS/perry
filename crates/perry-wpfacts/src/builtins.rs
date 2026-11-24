@@ -3269,6 +3269,24 @@ fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
     for &a in c.args.iter().chain(c.spread.iter()) {
         m.sink_node(a, r);
     }
+    // K3 (A): its invoke points, which the contract escape above no longer
+    // runs. A chunk that is no string and no binary view is converted by
+    // ToString (perry `with_write_bytes` -> `js_jsvalue_to_string`); the
+    // callback (the third argument, else the second) is queued as a tick and
+    // called with no receiver and no argument (`schedule_write_callback`),
+    // its throw reported by the host.
+    if !c.spread.is_empty() {
+        return unknown_method(m, call, "spread stream write arguments");
+    }
+    if let Some(&chunk) = c.arg(0) {
+        string_methods::to_prim(m, chunk, "stream write chunk ToString");
+    }
+    let host = m.host_report;
+    for i in [1, 2] {
+        if let Some(&cb) = c.arg(i) {
+            let _ = collections::cb_call_in(m, call, cb, ThisArg::Undef, vec![], host);
+        }
+    }
     ret_prim(m, call, prim::BOOL);
 }
 

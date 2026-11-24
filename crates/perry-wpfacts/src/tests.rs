@@ -1686,6 +1686,7 @@ mod navigator_store;
 mod realmval;
 mod amp_loop;
 pub(crate) mod amp_flow;
+mod amp_k3;
 mod performance_store;
 mod new_verdicts;
 mod nocall1;

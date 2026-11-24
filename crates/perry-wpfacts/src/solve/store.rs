@@ -631,6 +631,14 @@ impl Model {
                 return;
             }
         }
+        // A class constructor's own `prototype` is non-writable and
+        // non-configurable (`final_class_proto`): a [[Set]] writes nothing (a
+        // strict one throws the runtime's TypeError), a definition throws.
+        if let Key::Named(a) = key {
+            if self.final_class_proto(t, a) {
+                return;
+            }
+        }
         // A [[Set]] that meets the realm's accessor without a setter
         // (`navigator` on the global object) writes nothing; in strict code
         // it throws the runtime's TypeError (`Model::thrown`). Until a
@@ -775,6 +783,7 @@ impl Model {
             }
         }
         if t == TOP {
+            self.rfam_top_holder(src);
             // DECISIONS 149b: ⊤ reached from the receiver is the reader's.
             if self.rooted_store(t, key, src, site) {
                 return;

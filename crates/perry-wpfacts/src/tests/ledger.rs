@@ -265,8 +265,9 @@ cause_test!(
     "escaped-this",
     "property",
     "y",
+    // A plain function: a method's `this` is its class family (K3 (B)).
     r#"
-        declare function external(x?: unknown): any;const g: any = external(); g({ m() { return (this as any).y; } });"#
+        declare function external(x?: unknown): any;const g: any = external(); g(function (this: any) { return this.y; });"#
 );
 cause_test!(
     unseen intrinsic_prototype_top_store,

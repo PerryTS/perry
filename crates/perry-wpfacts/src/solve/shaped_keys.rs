@@ -154,7 +154,7 @@ impl Model {
             self.edge(n, numeric);
         }
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
-            if self.key_may_name(key, a) {
+            if self.key_may_name(key, a) && !self.final_class_proto(t, a) {
                 let f = self.field(t, a);
                 self.edge(n, f);
             }
@@ -182,9 +182,11 @@ impl Model {
         let Some(v) = self.shaped_of.get(&t).cloned() else {
             return;
         };
+        let fixed = self.final_class_proto(t, a);
         for (s, w, store) in v {
             if self.key_may_name(Key::Any(s), a) {
                 match store {
+                    true if fixed => {}
                     true => self.edge(w, n),
                     false => self.edge(n, w),
                 }

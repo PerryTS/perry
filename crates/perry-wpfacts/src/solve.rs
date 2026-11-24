@@ -34,6 +34,7 @@ mod apply;
 mod arr_len;
 mod builtin_fields;
 pub(crate) mod proxy;
+pub(crate) mod recv_family;
 
 #[path = "solve/store.rs"]
 mod store;
@@ -232,7 +233,7 @@ impl Model {
         if !later.is_empty() {
             if top_new || node.pts.contains_tok(TOP) {
                 node.dropped = true;
-                if self.ledger.is_some() {
+                if self.ledger.is_some() || self.k3_held.is_some() || node.fam_watch != 0 {
                     ledger_gone = std::mem::take(&mut later);
                 }
             } else {
@@ -255,7 +256,7 @@ impl Model {
         // ⊤ arrived: a member listed before it and escaped since is that ⊤
         // now, and leaves the set (rebuilt) and the node's delta.
         if top_new {
-            if self.ledger.is_some() {
+            if self.ledger.is_some() || self.k3_held.is_some() {
                 let gone: Vec<Tok> = self.nodes[n as usize]
                     .pts
                     .to_sorted()
@@ -278,7 +279,14 @@ impl Model {
                 self.charge_work(before as u64);
             }
         }
-        if !ledger_gone.is_empty() {
+        // K3 (B): a field or prototypes node the receiver families read
+        // (`recv_family`), the dropped tokens included.
+        let fam_new = if self.nodes[n as usize].fam_watch != 0 {
+            self.rfam_filter(n, &mut fresh.iter().chain(&ledger_gone).copied())
+        } else {
+            Vec::new()
+        };
+        if !ledger_gone.is_empty() && (self.ledger.is_some() || self.k3_held.is_some()) {
             self.ledger_again_beside_top(n, &ledger_gone);
         }
         if self.prov.is_some() && !fresh.is_empty() {
@@ -287,6 +295,9 @@ impl Model {
         }
         self.fresh = fresh;
         self.fresh_seen = seen;
+        if !fam_new.is_empty() {
+            self.rfam_arrived(n, &fam_new);
+        }
         if top_new && self.diagnostic.is_some() {
             self.diagnostic_predecessor(n, self.cur_src, self.cur_why);
         }
@@ -713,6 +724,10 @@ impl Model {
     /// records that, so it does not depend on whether ⊤ or the token reached
     /// `n` first.
     fn ledger_again_beside_top(&mut self, n: NodeId, toks: &[Tok]) {
+        if let Some(h) = self.k3_held.as_mut() {
+            let fs = toks.iter().copied().filter(|&t| matches!(self.toks[t as usize], TokKind::Func(..)));
+            h.entry(n).or_default().extend(fs);
+        }
         let sinks: Vec<(u32, Option<Tok>)> = self.nodes[n as usize]
             .cons
             .iter()
@@ -1160,7 +1175,7 @@ impl Model {
             if !holds {
                 continue;
             }
-            if self.ledger.is_some() {
+            if self.ledger.is_some() || self.k3_held.is_some() {
                 members.clear();
                 node.pts.sorted_into(&mut members);
                 let gone: Vec<Tok> = members.iter().copied().filter(|&t| cover(t)).collect();
@@ -1207,6 +1222,7 @@ impl Model {
                     && !self.settle_record_entry()
                     && !self.settle_not_error()
                     && !self.settle_ta_len()
+                    && !self.settle_family()
                     && !crate::builtins::settle_native_given(self)
                 {
                     break;
@@ -1410,6 +1426,7 @@ impl Model {
         }
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.proto_node.insert(t, n);
+        self.rfam_watch(n, t, 0, recv_family::WATCH_PROTO);
         self.rel(|| format!("protonode {n} {t}"));
         // Seed the static part of the chain.
         let objproto = self.tok(TokKind::ObjectProto);

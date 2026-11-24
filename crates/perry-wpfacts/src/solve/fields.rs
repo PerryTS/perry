@@ -183,6 +183,19 @@ impl Model {
         }
     }
 
+    /// K3BUILD7: `a` is class constructor `t`'s own `prototype`, which
+    /// ClassDefinitionEvaluation makes non-writable and non-configurable
+    /// (ECMA-262 15.7.14: MakeConstructor(F, false, proto), 10.2.5): no
+    /// [[Set]] (10.1.9.2 step 2.a) and no [[DefineOwnProperty]] (10.1.6.3
+    /// ValidateAndApplyPropertyDescriptor step 5) by any code changes it,
+    /// under a named or a computed key: its field holds what the class
+    /// definition put there and nothing a store writes.
+    pub(crate) fn final_class_proto(&self, t: Tok, a: Atom) -> bool {
+        matches!(self.toks[t as usize], TokKind::ClassObj(tm)
+            if matches!(self.tmpls[tm as usize].kind, crate::model::TmplKind::Class { literal_shape: false, .. }))
+            && self.atoms[a as usize] == "prototype"
+    }
+
     /// Field `a` of `t` as a read or a non-enumerable definition finds it:
     /// the node, without making `a` an enumerable key (`Node::enum_key`).
     pub fn field_r(&mut self, t: Tok, a: Atom) -> NodeId {
@@ -206,6 +219,7 @@ impl Model {
         self.nodes[n as usize].frame = self.fam_home(t);
         self.nodes[n as usize].of_marker = self.is_marker(t);
         self.fields.insert((t, a), n);
+        self.rfam_watch(n, t, a, crate::solve::recv_family::WATCH_FIELD);
         // A view's [[ViewedArrayBuffer]] is an internal slot, no property:
         // only its birth writes it and only `.buffer` reads it; no key
         // lists, copies or reads it (`VIEWED_BUFFER`).
@@ -255,7 +269,9 @@ impl Model {
                 true => self.named_any(t),
                 false => self.field_any(t),
             };
-            self.edge(any, n);
+            if !self.final_class_proto(t, a) {
+                self.edge(any, n);
+            }
             // A JSON object's property named here: its own position class
             // (`json_pos`), distinct from every other name's.
             // Every property of a parsed object is an own enumerable data
@@ -536,6 +552,7 @@ impl Model {
                 self.nodes[n as usize].frame = self.fam_home(t);
                 self.nodes[n as usize].of_marker = self.is_marker(t);
                 self.fields.insert((t, a), n);
+                self.rfam_watch(n, t, a, crate::solve::recv_family::WATCH_FIELD);
                 self.rel(|| format!("fieldnode {n} {t} {a}"));
                 n
             }
@@ -576,6 +593,12 @@ impl Model {
         self.nodes[n as usize].frame = self.fam_home(t);
         self.nodes[n as usize].of_marker = self.is_marker(t);
         self.field_any.insert(t, n);
+        self.rfam_watch(
+            n,
+            t,
+            crate::solve::recv_family::NO_HOME_KEY,
+            crate::solve::recv_family::WATCH_FIELD,
+        );
         self.rel(|| format!("fieldany {n} {t}"));
         // A JSON object's properties under keys no read names, or an
         // array's elements: their own position class (`json_pos`).
@@ -701,6 +724,12 @@ impl Model {
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.named_any.insert(t, n);
+        self.rfam_watch(
+            n,
+            t,
+            crate::solve::recv_family::NO_HOME_KEY,
+            crate::solve::recv_family::WATCH_FIELD,
+        );
         self.rel(|| format!("namedany {n} {t}"));
         let any = self.field_any(t);
         self.edge(n, any);

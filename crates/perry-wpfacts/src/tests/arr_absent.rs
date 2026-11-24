@@ -127,12 +127,15 @@ fn control_program_adds_the_key_to_array_prototype() {
     assert!(none_own(&v), "{v:?}");
 }
 
+/// K8 (owner 2026-11-23, f0d8455cfb): a call of an unknown value holds the
+/// realm only where code beside the program may name it (`realm_nameable`),
+/// so this control runs beside an unseen module (`import "unseen-host"`).
 #[test]
 fn control_unknown_code_holds_the_realm() {
     // Unknown code (a declared function: ECMA-262 9.3, it holds the realm)
     // may run `Array.prototype.POSITION = 7`, which the lock admits.
     let pf = one(&format!(
-        "{C}declare function sink(x: any): void;\nsink(0);\n\
+        "import \"unseen-host\";\n{C}declare function sink(x: any): void;\nsink(0);\n\
          const v: any = c ? {{ POSITION: 1 }} : [1, 2];\nconsole.log(v.POSITION);\n"
     ));
     let v = reads(&pf, "POSITION");
