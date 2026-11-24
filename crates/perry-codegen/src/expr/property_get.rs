@@ -148,9 +148,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         ..
     } = expr
     {
-        if let Some(v) =
-            super::wpfacts_access::try_lower_proven_getter(ctx, object, property, *byte_offset)?
-        {
+        if let Some(v) = super::wpfacts_access::try_lower_proven_getter(
+            ctx,
+            expr,
+            object,
+            property,
+            *byte_offset,
+        )? {
             return Ok(v);
         }
     }
