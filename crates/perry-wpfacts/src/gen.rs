@@ -556,8 +556,15 @@ pub struct Gen<'a> {
     /// `H.call(o,k)`, `o` of `o.hasOwnProperty(k)`).
     pub(crate) own_test_recv: Option<NodeId>,
     /// FVA 4.3b: (module, `__keys` local) -> the `__forin_obj` local whose
-    /// `ForInKeys` it holds.
-    pub(crate) for_in_keys_of: FxHashMap<(u32, u32), u32>,
+    /// `ForInKeys` it holds; or (E1) the for-of source local (and its
+    /// `__forof_lit_arr_` copy) holding `Object.keys(o)` /
+    /// `Object.getOwnPropertyNames(o)` of local `o`, with the key list.
+    pub(crate) for_in_keys_of: FxHashMap<(u32, u32), (u32, crate::model::KeyList)>,
+    /// A keys local made by a namespace pair (`namespace_pair`): the node of
+    /// its generic arm's result (what a replaced member returns).
+    pub(crate) keys_generic: FxHashMap<(u32, u32), NodeId>,
+    /// The generic arm's result of the last namespace pair walked.
+    pub(crate) last_ns_generic: Option<NodeId>,
     /// The for-in bodies being walked: (module, loop variable, key parameter).
     pub(crate) for_in_key: Vec<(u32, u32, NodeId)>,
     /// ENUM1: the for-in loops being walked, outlined or not, whose key and
@@ -938,6 +945,8 @@ impl<'a> Gen<'a> {
             own_store_reads: Default::default(),
             own_test_recv: None,
             for_in_keys_of: FxHashMap::default(),
+            keys_generic: FxHashMap::default(),
+            last_ns_generic: None,
             for_in_key: Vec::new(),
             for_in_reads: Vec::new(),
             local_copies: FxHashMap::default(),
@@ -1065,9 +1074,12 @@ impl<'a> Gen<'a> {
                 // may write one (`global_in_top`, as for the global object
                 // given to unknown code). In per-unit mode a missing target
                 // is another unit.
+                // A module the realm declares (`builtin_module_tok`: its
+                // namespace object) is no unseen code either.
                 if target.is_none()
                     && !self.m.unit_mode
                     && !crate::builtins::is_builtin_module(&imp.source)
+                    && crate::builtins::builtin_module_tok(&mut self.m, &imp.source).is_none()
                 {
                     let t = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     let what = format!("module {} runs unseen", imp.source);
@@ -1119,7 +1131,26 @@ impl<'a> Gen<'a> {
                                 .insert((mi, local.clone()), (imp, None));
                             continue;
                         }
-                        // Native / builtin / unresolved modules: ⊤ values.
+                        // A builtin module: the namespace object the realm
+                        // declares for it (the value of `require(m)`).
+                        (ImportSpecifier::Namespace { local }, None)
+                            if !self.m.unit_mode
+                                && crate::builtins::builtin_module_tok(
+                                    &mut self.m,
+                                    &imp.source,
+                                )
+                                .is_some() =>
+                        {
+                            let v = self
+                                .builtin_module_value(&imp.source)
+                                .expect("declared module");
+                            let n = self
+                                .m
+                                .node_named("ns-import", || format!("ns-import({local})"));
+                            self.m.edge(v, n);
+                            (local.clone(), n)
+                        }
+                        // Native / unresolved modules: ⊤ values.
                         (ImportSpecifier::Namespace { local }, None) => {
                             let why =
                                 format!("import from native/unresolved module {}", imp.source);
@@ -1567,7 +1598,9 @@ impl<'a> Gen<'a> {
                 Some(perry_hir::fn_proto::FnProtoKind::of_function(module, meth)),
             );
             let t = self.m.funcs[f as usize].token;
-            for a in self.method_keys(&meth.name) {
+            let keys = self.method_keys(&meth.name);
+            self.m.rfam_home(t, &keys, None);
+            for a in keys {
                 let n = self.m.field_r(proto, a);
                 self.m.add_tok(n, t);
             }
@@ -1586,7 +1619,9 @@ impl<'a> Gen<'a> {
                 Some(perry_hir::fn_proto::FnProtoKind::of_function(module, meth)),
             );
             let t = self.m.funcs[f as usize].token;
-            for a in self.method_keys(&meth.name) {
+            let keys = self.method_keys(&meth.name);
+            self.m.rfam_home(t, &keys, None);
+            for a in keys {
                 let n = self.m.field_r(cobj, a);
                 self.m.add_tok(n, t);
                 self.m.tmpls[tm as usize].static_methods.push(a);
@@ -1615,6 +1650,7 @@ impl<'a> Gen<'a> {
             let a = self.accessor_atom(mi, c, name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
+            self.m.rfam_home(ft, &[a], Some(holder));
             self.m.accessors.entry((holder, a)).or_default().0.push(ft);
             push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
@@ -1641,6 +1677,7 @@ impl<'a> Gen<'a> {
             let a = self.accessor_atom(mi, c, name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
+            self.m.rfam_home(ft, &[a], Some(holder));
             self.m.accessors.entry((holder, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
@@ -1669,6 +1706,7 @@ impl<'a> Gen<'a> {
                 };
                 self.m.add_accessor_atom(a);
                 let ft = self.m.funcs[f as usize].token;
+                self.m.rfam_home(ft, &[a], Some(holder));
                 let e = self.m.accessors.entry((holder, a)).or_default();
                 if setter { &mut e.1 } else { &mut e.0 }.push(ft);
                 push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
@@ -1677,6 +1715,7 @@ impl<'a> Gen<'a> {
             let holder = if cm.is_static { cobj } else { proto };
             let t = self.m.funcs[f as usize].token;
             if let Some(a) = method_key {
+                self.m.rfam_home(t, &[a], None);
                 let n = self.m.field_r(holder, a);
                 self.m.add_tok(n, t);
                 if cm.is_static {
@@ -1835,9 +1874,61 @@ impl<'a> Gen<'a> {
             let pa = self.m.atom("prototype");
             let pp = self.load(pv, Key::Named(pa));
             self.m.tmpls[tm as usize].parent_value = Some((pv, pp));
+            if let Some(identity) = binding.and_then(|n| self.realm_parent_named(mi, c, n)) {
+                self.m.realm_parent.insert(tm, identity);
+            }
             self.parent_values
                 .push((mi, tm, binding.map(str::to_string)));
         }
+    }
+
+    /// The realm constructor heritage binding `n` statically names: the node
+    /// module export HIR resolved it to (`import { Readable } from
+    /// "stream"`), else the global object's (`extends EventTarget`), when
+    /// the realm declares what `super(...)` into it does and its
+    /// `prototype`. The name is resolved by static scope (ECMA-262 9.1.2.1
+    /// GetIdentifierReference): only a name no module-level binding or
+    /// import of module `mi` holds reaches the global binding (a lexical
+    /// local takes HIR's `extends_expr` and names no binding here). Linked
+    /// like a program parent named in `extends`: the evaluated value is
+    /// checked after the solve (`settle_parent_values`).
+    fn realm_parent_named(&mut self, mi: u32, c: &Class, n: &str) -> Option<&'static str> {
+        if self.m.unit_mode {
+            return None;
+        }
+        let ns = match c.native_extends.as_ref().filter(|(_, name)| name == n) {
+            Some((module, _)) => crate::builtins::node_module_ns(module)?,
+            None if self.module_binds(mi as usize, n) => return None,
+            None => crate::model::BuiltinNs::GlobalThis,
+        };
+        let identity = self.m.namespace_property(ns, n)?.native?;
+        (crate::builtins::declared_super_construct(identity).is_some()
+            && crate::builtins::realm_ctor_prototype(identity).is_some())
+        .then_some(identity)
+    }
+
+    /// Does a binding of module `mi` (a top-level declaration, function,
+    /// class, global or a value import) hold name `n`, so that `n` does not
+    /// reach the global object there?
+    fn module_binds(&self, mi: usize, n: &str) -> bool {
+        use perry_hir::ImportSpecifier as S;
+        self.init_of(mi)
+            .iter()
+            .any(|s| matches!(s, Stmt::Let { name, .. } if name == n))
+            || self.functions_of(mi).iter().any(|f| f.name == n)
+            || self
+                .classes_of(mi)
+                .iter()
+                .any(|c| c.name == n || c.aliases.iter().any(|a| a == n))
+            || self.globals_of(mi).iter().any(|g| g.name == n)
+            || self.imports_of(mi).iter().any(|imp| {
+                !imp.type_only
+                    && imp.specifiers.iter().any(|sp| match sp {
+                        S::Named { local, .. } | S::Default { local } | S::Namespace { local } => {
+                            local == n
+                        }
+                    })
+            })
     }
 
     /// DECISIONS 95/96: per unit, a class and the evaluation of its parent

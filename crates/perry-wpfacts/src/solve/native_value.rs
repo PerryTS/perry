@@ -27,6 +27,15 @@ impl Model {
         let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] else {
             return false;
         };
+        // The Worker global's own native (`builtins::worker_global_call`),
+        // whatever `this`.
+        if let Some(n) = identity.strip_prefix(builtins::WORKER_GLOBAL_PREFIX) {
+            if self.bind_done.insert((call, t, u32::MAX - 7)) {
+                self.diagnostic_callee(call, t);
+                self.with_native(call, |m, call| builtins::worker_global_call(m, n, call));
+            }
+            return true;
+        }
         // A module member whose effects the runtime declares at the body
         // its dispatch arm calls: the declaration runs, whatever `this`.
         if let Some(e) = builtins::declared_member(identity) {
@@ -70,8 +79,11 @@ impl Model {
             return true;
         }
 
+        // No family model: a prototype method whose effects the runtime
+        // declares without naming `this` runs its declaration, whatever the
+        // receiver (`Performance.prototype.toJSON` as JSON's protocol call).
         let Some((fam, what, name)) = builtins::native_model(self, t) else {
-            return false;
+            return self.declared_proto_call(call, t, identity);
         };
         let key = self.atom(&name.replace("@@", builtins::WK_PREFIX));
         let r = match (this_tok, &self.calls[call as usize].this) {
@@ -89,6 +101,7 @@ impl Model {
                         fam,
                         Family::Object
                             | Family::Array
+                            | Family::Function
                             | Family::Str
                             | Family::Num
                             | Family::Bool
@@ -131,7 +144,11 @@ impl Model {
     /// `RequireObjectCoercible(this)` or `thisStringValue` (22.1.3) or
     /// `thisNumberValue` / `thisBooleanValue` / `thisSymbolValue` /
     /// `thisBigIntValue` (21.1.3, 20.3.3, 20.4.3, 21.2.3): a TypeError before
-    /// any argument is used. No argument reaches other code. (The three
+    /// any argument is used. `Function.prototype`'s `call`, `apply`, `bind`
+    /// and `toString` throw a TypeError first too (IsCallable(this) is false:
+    /// 20.2.3.3 step 2, 20.2.3.1 step 2, 20.2.3.2 step 2, 20.2.3.5 step 3);
+    /// its `@@hasInstance` is OrdinaryHasInstance, false for a non-callable
+    /// `this` (20.2.3.6, 7.3.21 step 1). No argument reaches other code. (The three
     /// receiver-independent `Object.prototype` methods are `ObjectProtoOwn`;
     /// a method whose effects the runtime declares ran as `declared_member`.)
     fn method_undefined_this(&mut self, call: CallId, t: Tok, fam: Family, name: &str) -> bool {
@@ -140,6 +157,10 @@ impl Model {
             if fam == Family::Object && name == "toString" {
                 let ret = self.calls[call as usize].ret;
                 self.add_prim(ret, prim::STR);
+            }
+            if fam == Family::Function && name == "@@hasInstance" {
+                let ret = self.calls[call as usize].ret;
+                self.add_prim(ret, prim::BOOL);
             }
         }
         true

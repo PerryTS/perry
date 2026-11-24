@@ -67,6 +67,33 @@ impl IdentityRoute {
     }
 }
 
+/// The keys a loop body run per key visits (FVA 4.3b, `Cons::ForInBody`).
+/// A run per key exists exactly where the rule that lists the keys gives
+/// String constants; any other value runs the body with every key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KeyList {
+    /// `for (k in o)`: the enumerable String keys of `o` and its chain
+    /// (ECMA-262 14.7.5.9 EnumerateObjectProperties; `Model::enum_keys`).
+    ForIn,
+    /// `for (const k of Object.keys(o))`: the own enumerable String keys
+    /// (20.1.2.18, 7.3.23; rule EK, `Model::own_keys_of`).
+    OwnKeys,
+    /// `for (const k of Object.getOwnPropertyNames(o))`: the own String keys
+    /// (20.1.2.10, 10.1.11.1; rule PK, `Model::proto_names`).
+    OwnNames,
+}
+
+/// Rule PXINV: the internal methods `Cons::Meta` runs (ECMA-262 10.5).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MetaOp {
+    /// [[IsExtensible]] (10.5.3).
+    IsExtensible,
+    /// [[GetPrototypeOf]] (10.5.1), its result compared, not kept.
+    ProtoOf,
+    /// [[OwnPropertyKeys]] (10.5.11), its list compared, not kept.
+    OwnKeys,
+}
+
 /// Complex constraints, attached to the node whose new tokens trigger them.
 #[derive(Clone, Copy, Debug)]
 pub enum Cons {
@@ -127,7 +154,11 @@ pub enum Cons {
     /// members (`Math.PI`, 21.3.1.6), the methods of `Object.prototype`, a
     /// String's `length` (10.4.3). Those values are read by an any-key [[Get]]
     /// on the intrinsic-bearing object (a superset of its own data values).
-    OwnDescValues { dst: NodeId },
+    /// `key`: the key node of the call (`NO_NODE`: not decided by it). A
+    /// for-in run's one key (`Model::key_nodes`) is the one property the
+    /// descriptor describes (20.1.2.8): its `value` is that own property
+    /// only (`Model::idx_own_load_tok`), never every own value.
+    OwnDescValues { dst: NodeId, key: NodeId },
     /// A store under an index of each Array in the node: it may leave a
     /// hole (`Model::mark_hole`); an append never does.
     IndexHole,
@@ -190,6 +221,12 @@ pub enum Cons {
     /// section 8): once ⊤ is here, unknown code may run (a getter, a trap,
     /// ToPrimitive, a callee) and throw anything into the region.
     Raise { region: NodeId },
+    /// The node is a value a native hands to unknown code (`sink_node`)
+    /// during a call that runs in throw region `region`: once a value
+    /// (a token, ⊤ included) is here, that code may run with it and throw
+    /// anything into the region. Primitives run no code; an empty node
+    /// hands nothing and raises nothing.
+    HandRaise { region: NodeId },
     /// A realm field already retains its canonical value. Storing it again
     /// exposes no new reach; every other alternative takes the usual sink.
     RuntimeStore { reason: u32, retained: Tok },
@@ -347,6 +384,18 @@ pub enum Cons {
     /// primitive pass. The binding's other values pass all (a `Guard`,
     /// `guard::NOT_OBJECT_CTOR`, on the read of the global).
     NotObjectProto { dst: NodeId },
+    /// Rule NOT-ERROR: `x instanceof Error` false of the intrinsic binding:
+    /// the values but the ones whose prototype chain surely reaches
+    /// `%Error.prototype%` (a native Error, an instance of a program class
+    /// whose `extends` chain ends at the built-in `Error` or a NativeError;
+    /// `Model::not_error_drops`) flow into `dst`; ⊤, a Proxy, a marker and
+    /// every primitive pass. The compiled program answers the bare name by
+    /// the native Error brand and by the class chain (perry-runtime
+    /// `instanceof/static_dispatch.rs`), OrdinaryHasInstance (ECMA-262
+    /// 7.3.22). `hook` holds what `Error[@@hasInstance]` may find: a value
+    /// there lets every value through. The binding's other values pass all
+    /// (a `Guard`, `guard::NOT_ERROR_CTOR`, on the read of the global).
+    NotError { hook: NodeId, dst: NodeId },
     /// The pattern operand of the RegExp constructor as ECMA-262 22.2.4.1
     /// steps 4-6 convert it: an object with a [[RegExpMatcher]] slot gives
     /// its [[OriginalSource]] and [[OriginalFlags]] (no `source`/`flags`
@@ -386,6 +435,19 @@ pub enum Cons {
     /// `getOwnPropertyDescriptor` trap (`solve/proxy.rs`). `idx`: the key
     /// value, or `NO_NODE` for a named key.
     OwnProp { key: Key, idx: NodeId },
+    /// Rule PXINV: a delete under a computed key (`delete o[k]`,
+    /// `Reflect.deleteProperty`, an Array method's index delete), beside the
+    /// operation's `Hard` E7: `idx` holds the key ToPropertyKey made. No
+    /// flow on an ordinary object; a Proxy passes it to its
+    /// `deleteProperty` trap (10.5.10).
+    DeleteIdx { idx: NodeId, reason: u32 },
+    /// Rule PXINV: an internal method of the node's objects whose result is
+    /// a test, not a value (`MetaOp`): what the 10.5 invariant checks call
+    /// on a Proxy's target, and `Object.isExtensible` / `isFrozen` /
+    /// `isSealed`. No flow on an ordinary object (its own [[IsExtensible]],
+    /// [[GetPrototypeOf]], [[OwnPropertyKeys]] run no code); a Proxy runs
+    /// its trap and its own invariant checks (`solve/proxy.rs`).
+    Meta { op: MetaOp, reason: u32 },
     /// `Object.defineProperty(o, key, desc)` with a constant key (FVA 4.3a).
     /// An accessor descriptor (`data` false) on a literal layout that does
     /// not hold `key` as data: the key becomes an accessor key (the getter
@@ -469,11 +531,57 @@ pub enum Cons {
     AnyAccessors { origin: Tok, act: ChainAct },
     /// The node is a copy source's unnamed-key field (`field_any`): once it
     /// holds a value the source has an own key the model does not name, a
-    /// [[Set]] of some key on `target` (Object.assign, `spread_into`).
-    UnnamedSet { target: Tok },
+    /// [[Set]] of some key on `target` (Object.assign, `spread_into`) at
+    /// the copy's store site `site`.
+    UnnamedSet { target: Tok, site: SiteId },
     /// The node is the prototype closure of `origin`: an unknown (⊤)
     /// prototype may hold a setter, so the stored value and `origin` escape.
     StoreTopProto { origin: Tok, src: NodeId },
+    /// Rule PXCHAIN: the node is the prototype closure of `origin`, which
+    /// stores `src` under `key` (an ordinary [[Set]], throwing into
+    /// `region`): a Proxy there runs its `set` trap with `origin` as the
+    /// receiver (`Model::proxy_chain_set`); other links add nothing.
+    ChainSet {
+        origin: Tok,
+        key: Key,
+        src: NodeId,
+        region: NodeId,
+    },
+    /// Rule PXCHAIN: the node is the prototype closure of receiver
+    /// `origin`: a Proxy there is passed `origin` as the receiver of the
+    /// traps its chain operations run.
+    ChainRecv { origin: Tok },
+    /// Rule PXRECV: the node is a Proxy's target; the Proxy's forward
+    /// target.[[Get]](P, Receiver) (10.5.8 step 6): `dst` ⊇ the value of
+    /// `key` (`idx` `NO_NODE`) or of the key value `idx` read on each
+    /// target, its getters run with `this` = `recv`, the original receiver.
+    FwdLoad {
+        key: Key,
+        idx: NodeId,
+        dst: NodeId,
+        recv: Tok,
+    },
+    /// Rule PXRECV: the node is a Proxy's target; the Proxy's forward
+    /// target.[[Set]](P, V, Receiver) (10.5.9 step 6): the store of `src`
+    /// under `key` into each target (a `Cons::Store`), its setters run with
+    /// `this` = `recv` and a Proxy on its chain is passed `recv`.
+    FwdStore {
+        key: Key,
+        src: NodeId,
+        site: SiteId,
+        region: NodeId,
+        recv: Tok,
+    },
+    /// Rule PXDEFINE: [[DefineOwnProperty]] of `key` with a data descriptor
+    /// whose [[Value]] is `value` on each object of the node, throwing into
+    /// `region`. A Proxy runs its `defineProperty` trap and forwards to its
+    /// target (10.5.6); on an ordinary object the definition is the store
+    /// that made it (its own field), so the rule adds nothing there.
+    DefineOwn {
+        key: Key,
+        value: NodeId,
+        region: NodeId,
+    },
     /// The node is `this`: continue a `super.key` lookup at `start` with
     /// each `this` token as the receiver.
     Super { start: Tok, key: Key, act: ChainAct },
@@ -585,6 +693,9 @@ pub enum Cons {
     /// (`Cons::IdxLoad`'s primitive read, decided by the key's values).
     IdxKey {
         obj: Tok,
+        /// The receiver (`obj` itself, or a Proxy's original receiver,
+        /// `Cons::FwdLoad`): `this` of the getters the read runs.
+        origin: Tok,
         prim: u16,
         dst: NodeId,
         shape: KeyShapeId,
@@ -689,12 +800,20 @@ pub enum Cons {
     /// The node is the value of a for-in body (FVA 4.3b, `gen/for_in.rs`):
     /// each body token runs per value of `obj` (`ForInKeys`), its runs bound
     /// through the template call `call` (one argument: the key).
-    ForInBody { obj: NodeId, call: CallId },
+    ForInBody {
+        obj: NodeId,
+        call: CallId,
+        list: KeyList,
+    },
     /// The node is the object for-in body `ft` iterates: a literal whose keys
     /// are exactly its birth keys runs the body once per key, that run's key
     /// parameter holding the one key (`Model::key_nodes`); any other value
     /// runs it once through `call`, with every key.
-    ForInKeys { ft: Tok, call: CallId },
+    ForInKeys {
+        ft: Tok,
+        call: CallId,
+        list: KeyList,
+    },
     /// The node is the key of `defineProperty(o, k, desc)` in a for-in body:
     /// a run's one key defines it as a constant key does (`DefineKey`);
     /// any other key is E5 HARD.
@@ -1015,6 +1134,7 @@ impl Cons {
                 | Cons::Fulfil { .. }
                 | Cons::NotBuffer { .. }
                 | Cons::NotObjectProto { .. }
+                | Cons::NotError { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
@@ -1043,6 +1163,7 @@ impl Cons {
                 | Cons::Fulfil { .. }
                 | Cons::NotBuffer { .. }
                 | Cons::NotObjectProto { .. }
+                | Cons::NotError { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
@@ -1079,6 +1200,7 @@ impl Cons {
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } | Cons::RuntimeStore { .. } => "top",
             Cons::Raise { .. } => "raise",
+            Cons::HandRaise { .. } => "handraise",
             Cons::HandOver { .. } => "handover",
             Cons::OwnOnly { .. } => "ownonly",
             Cons::CallerValue { .. } => "callervalue",
@@ -1100,6 +1222,7 @@ impl Cons {
             Cons::TypeIs { .. } => "typeis",
             Cons::NotBuffer { .. } => "notbuffer",
             Cons::NotObjectProto { .. } => "notobjectproto",
+            Cons::NotError { .. } => "noterror",
             Cons::NotRegExp { .. } => "notregexp",
             Cons::ProtoObjects { .. } => "protoobjects",
             Cons::Objects { .. } => "objects",
@@ -1108,6 +1231,8 @@ impl Cons {
             Cons::DeleteKey { .. } => "deletekey",
             Cons::HasProp { .. } => "hasprop",
             Cons::OwnProp { .. } => "ownprop",
+            Cons::DeleteIdx { .. } => "deleteidx",
+            Cons::Meta { .. } => "meta",
             Cons::AddsKeys => "addskeys",
             Cons::DefineKey { .. } => "definekey",
             Cons::DefineAll { .. } => "defineall",
@@ -1129,6 +1254,11 @@ impl Cons {
             Cons::AnyAccessors { .. } => "anyaccessors",
             Cons::UnnamedSet { .. } => "unnamedset",
             Cons::StoreTopProto { .. } => "storetopproto",
+            Cons::ChainSet { .. } => "chainset",
+            Cons::ChainRecv { .. } => "chainrecv",
+            Cons::FwdLoad { .. } => "fwdload",
+            Cons::FwdStore { .. } => "fwdstore",
+            Cons::DefineOwn { .. } => "defineown",
             Cons::Super { .. } => "super",
             Cons::SuperFrom { .. } => "super-from",
             Cons::SuperCtor { .. } => "superctor",

@@ -13,6 +13,7 @@ mod copy;
 mod define;
 mod lookup;
 pub(crate) mod map_vals;
+mod not_error;
 mod own_read;
 mod range_inputs;
 mod record_entry;
@@ -35,6 +36,7 @@ mod apply;
 mod arr_len;
 mod builtin_fields;
 pub(crate) mod proxy;
+pub(crate) mod recv_family;
 
 #[path = "solve/store.rs"]
 mod store;
@@ -48,9 +50,11 @@ mod virt;
 
 // Property-key ranges come from value deltas, not source annotations. Keep
 // computed reads and calls on the same partition of ToPropertyKey's inputs.
-/// An escaped value (unknown code holds it) that is no parameter or
+/// An escaped value that code no contract describes holds (it may write
+/// any key of it, `Model::is_escaped_writer`) and that is no parameter or
 /// argument marker: beside ⊤ it is that ⊤, since every rule does to ⊤ at
-/// least what it does to the value. The one predicate of the arrival rule
+/// least what it does to the value. A value handed only by contract is not:
+/// a program store through ⊤ beside it must still write it. The one predicate of the arrival rule
 /// (`add_tokens_s`, with the markers that read as ⊤, DECISIONS 42), of ⊤'s
 /// arrival at a node that lists the value, and of a ⊤ node's pop.
 pub(crate) fn escaped_beside_top<V>(
@@ -212,7 +216,7 @@ impl Model {
             // is an escaped value (`Model::top_beside`): unknown code holds
             // it, so beside ⊤ it is that ⊤.
             if marker_top_bit(&self.marker_top, t)
-                || escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                || escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t)
             {
                 later.push(t);
                 continue;
@@ -231,7 +235,7 @@ impl Model {
         if !later.is_empty() {
             if top_new || node.pts.contains_tok(TOP) {
                 node.dropped = true;
-                if self.ledger.is_some() {
+                if self.ledger.is_some() || self.k3_held.is_some() || node.fam_watch != 0 {
                     ledger_gone = std::mem::take(&mut later);
                 }
             } else {
@@ -254,19 +258,19 @@ impl Model {
         // ⊤ arrived: a member listed before it and escaped since is that ⊤
         // now, and leaves the set (rebuilt) and the node's delta.
         if top_new {
-            if self.ledger.is_some() {
+            if self.ledger.is_some() || self.k3_held.is_some() {
                 let gone: Vec<Tok> = self.nodes[n as usize]
                     .pts
                     .to_sorted()
                     .into_iter()
                     .filter(|&t| {
-                        escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                        escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t)
                     })
                     .collect();
                 self.ledger_again_beside_top(n, &gone);
             }
             let node = &mut self.nodes[n as usize];
-            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let (esc, pm, ab) = (&self.esc_writer_bits, &self.param_marker, &self.arg_bits);
             let old = std::mem::take(&mut node.pts);
             let before = old.len();
             node.pts = self
@@ -279,7 +283,14 @@ impl Model {
                 self.charge_work(before as u64);
             }
         }
-        if !ledger_gone.is_empty() {
+        // K3 (B): a field or prototypes node the receiver families read
+        // (`recv_family`), the dropped tokens included.
+        let fam_new = if self.nodes[n as usize].fam_watch != 0 {
+            self.rfam_filter(n, &mut fresh.iter().chain(&ledger_gone).copied())
+        } else {
+            Vec::new()
+        };
+        if !ledger_gone.is_empty() && (self.ledger.is_some() || self.k3_held.is_some()) {
             self.ledger_again_beside_top(n, &ledger_gone);
         }
         if self.prov.is_some() && !fresh.is_empty() {
@@ -288,6 +299,9 @@ impl Model {
         }
         self.fresh = fresh;
         self.fresh_seen = seen;
+        if !fam_new.is_empty() {
+            self.rfam_arrived(n, &fam_new);
+        }
         if top_new && self.diagnostic.is_some() {
             self.diagnostic_predecessor(n, self.cur_src, self.cur_why);
         }
@@ -364,6 +378,7 @@ impl Model {
         !matches!(
             c,
             Cons::Raise { .. }
+                | Cons::HandRaise { .. }
                 | Cons::Identity { .. }
                 | Cons::Guard { .. }
                 | Cons::Defined { .. }
@@ -373,6 +388,7 @@ impl Model {
                 | Cons::Falsy { .. }
                 | Cons::NotBuffer { .. }
                 | Cons::NotObjectProto { .. }
+                | Cons::NotError { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
@@ -715,6 +731,10 @@ impl Model {
     /// records that, so it does not depend on whether ⊤ or the token reached
     /// `n` first.
     fn ledger_again_beside_top(&mut self, n: NodeId, toks: &[Tok]) {
+        if let Some(h) = self.k3_held.as_mut() {
+            let fs = toks.iter().copied().filter(|&t| matches!(self.toks[t as usize], TokKind::Func(..)));
+            h.entry(n).or_default().extend(fs);
+        }
         let sinks: Vec<(u32, Option<Tok>)> = self.nodes[n as usize]
             .cons
             .iter()
@@ -731,7 +751,7 @@ impl Model {
             let root = l.enter_sink(n);
             for &t in toks {
                 if retained != Some(t)
-                    && escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                    && escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t)
                 {
                     l.again(t, reason, std::panic::Location::caller());
                 }
@@ -1030,6 +1050,8 @@ impl Model {
                 Cons::Identity { .. }
                     | Cons::HasProp { .. }
                     | Cons::OwnProp { .. }
+                    | Cons::DeleteIdx { .. }
+                    | Cons::Meta { .. }
                     | Cons::ThisTo { .. }
                     | Cons::CallArgs { .. }
                     | Cons::RetInto { .. }
@@ -1167,7 +1189,7 @@ impl Model {
         self.late_esc_at = self.work.get();
         let mut members = Vec::new();
         for n in 0..self.nodes.len() {
-            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let (esc, pm, ab) = (&self.esc_writer_bits, &self.param_marker, &self.arg_bits);
             let cover = |t: Tok| escaped_beside_top(esc, pm, ab, t);
             let node = &mut self.nodes[n];
             if !node.pts.contains_tok(TOP) {
@@ -1185,13 +1207,13 @@ impl Model {
             if !holds {
                 continue;
             }
-            if self.ledger.is_some() {
+            if self.ledger.is_some() || self.k3_held.is_some() {
                 members.clear();
                 node.pts.sorted_into(&mut members);
                 let gone: Vec<Tok> = members.iter().copied().filter(|&t| cover(t)).collect();
                 self.ledger_again_beside_top(n as NodeId, &gone);
             }
-            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let (esc, pm, ab) = (&self.esc_writer_bits, &self.param_marker, &self.arg_bits);
             let cover = |t: Tok| escaped_beside_top(esc, pm, ab, t);
             let node = &mut self.nodes[n];
             let old = std::mem::take(&mut node.pts);
@@ -1229,8 +1251,11 @@ impl Model {
                     && !self.settle_val_runs()
                     && !self.settle_define()
                     && !self.settle_proto_first()
+                    && !self.settle_realm_set()
                     && !self.settle_record_entry()
+                    && !self.settle_not_error()
                     && !self.settle_ta_len()
+                    && !self.settle_family()
                     && !crate::builtins::settle_native_given(self)
                 {
                     break;
@@ -1434,7 +1459,13 @@ impl Model {
         }
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.proto_node.insert(t, n);
+        self.rfam_watch(n, t, 0, recv_family::WATCH_PROTO);
         self.rel(|| format!("protonode {n} {t}"));
+        // Rule PXNEWT: an object made with a Proxy new target has the
+        // prototype its `prototype` [[Get]] gives (`proxy_nt_inst`) only.
+        if self.proxy_nt_toks.contains(&t) {
+            return n;
+        }
         // Seed the static part of the chain.
         let objproto = self.tok(TokKind::ObjectProto);
         match self.toks[t as usize].clone() {
@@ -1592,6 +1623,12 @@ impl Model {
         for t in toks.iter() {
             match self.toks[*t as usize] {
                 TokKind::ObjectProto => return None,
+                // A realm prototype taken as a value
+                // (`builtins::realm_proto_value`) is one object of its own:
+                // an operation through it is on it alone, and the lookups
+                // that pass it ask it under its identity
+                // (`builtins::intrinsic_miss_on`).
+                TokKind::NativeProto(..) if builtins::realm_proto_of(self, *t).is_some() => {}
                 TokKind::NativeProto(..) => native = true,
                 _ => {}
             }
@@ -1627,6 +1664,29 @@ impl Model {
         self.apply_tokens_on(n, c, toks, prim);
     }
     fn apply_tokens_on(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
+        if crate::hold_ledger::blast()
+            && self.ledger.as_ref().is_some_and(|l| l.cur == u32::MAX)
+            && toks.iter().any(|&t| t == crate::model::TOP)
+        {
+            let k = self.top_origin_id(n);
+            let rest: Vec<Tok> = toks
+                .iter()
+                .copied()
+                .filter(|&t| t != crate::model::TOP)
+                .collect();
+            if !rest.is_empty() || prim != 0 {
+                self.apply_tokens_on_b(n, c, Tokens::Slice(&rest), prim);
+            }
+            let saved = self.ledger.as_mut().unwrap().enter_top(k);
+            self.apply_tokens_on_b(n, c, Tokens::Slice(&[crate::model::TOP]), 0);
+            if let Some(l) = self.ledger.as_mut() {
+                l.leave(saved);
+            }
+            return;
+        }
+        self.apply_tokens_on_b(n, c, toks, prim);
+    }
+    fn apply_tokens_on_b(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         if let Some(d) = self.diagnostic.as_mut() {
             let saved = (d.cur_call.take(), d.cause_node.replace(n));
             self.apply_tokens_in(n, c, toks, prim);
@@ -1693,6 +1753,51 @@ impl Model {
                 },
                 _ => None,
             };
+            // One realm constructor (ECMA-262 13.3.7.1): the chain is the
+            // class's prototype, then the realm prototype; `super()` runs
+            // the constructor's declared construct effects on the instance
+            // (`run_super_construct`), else the instance is E21.
+            let realm = match toks.as_slice() {
+                [t] if !null && one.is_none() => match &self.toks[*t as usize] {
+                    TokKind::BuiltinFn(crate::model::Native::Member { identity, .. }) => {
+                        Some(identity.to_string())
+                    }
+                    TokKind::Builtin(_) => Some(self.tok_name(*t)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            // A class linked to a realm parent by name (`Model::realm_parent`):
+            // the evaluated `extends` is exactly that constructor, else the
+            // layout the solve used is not the instances' (E11, as for a
+            // program parent linked by name).
+            if let Some(&want) = self.realm_parent.get(&tm) {
+                if realm.as_deref() != Some(want) {
+                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                    let what = format!(
+                        "E11 class whose evaluated `extends` is not its linked realm constructor {want} ({} tokens{}{})",
+                        toks.len(),
+                        if toks.contains(&TOP) { ", ⊤" } else { "" },
+                        if null { ", null" } else { "" }
+                    );
+                    let r = self.reason(&what);
+                    self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                    self.parent_unsettled.insert(tm);
+                    continue;
+                }
+            }
+            if let Some(identity) = realm {
+                self.parent_unsettled.insert(tm);
+                if self.unit_mode || crate::builtins::declared_super_construct(&identity).is_none()
+                {
+                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                    let r = self.reason(&format!(
+                        "E21 realm parent constructor {identity} declares no construct effects"
+                    ));
+                    self.mark_hard(inst, Hard::E21NativeParent, r);
+                }
+                continue;
+            }
             match one {
                 Some(p) => self.tmpls[tm as usize].parent = Some(p),
                 None => {
@@ -1954,15 +2059,28 @@ impl Model {
                 d.store_top.entry(n).or_insert(c);
             }
         }
+        // The native's region gets what that code may throw once a value
+        // reaches `n` (HandRaise), not when the sink is attached: an empty
+        // slot (`fetch(url)`: no `init`, no `init.body`) hands nothing.
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
-            self.raise_top(
-                region,
-                n,
-                "a native hands a value to unknown code, which may throw",
-            );
+            let seen = self.nodes[n as usize]
+                .cons
+                .iter()
+                .any(|x| matches!(x, Cons::HandRaise { region: r } if *r == region));
+            if region != u32::MAX && !seen {
+                self.cons(n, Cons::HandRaise { region });
+            }
         }
-        if self.sunk_nodes.insert(n) {
+        // Per level: a node sunk with a contract reason is sunk again with
+        // a writer reason (`Model::writes_any`), never the other way.
+        let first = if self.writes_any(reason) {
+            self.sunk_nodes.insert(n);
+            self.sunk_writer_nodes.insert(n)
+        } else {
+            !self.sunk_writer_nodes.contains(&n) && self.sunk_nodes.insert(n)
+        };
+        if first {
             self.cons(n, Cons::TopSink { reason });
         }
     }
@@ -1974,6 +2092,7 @@ impl Model {
     /// modeled (⊤, a marker's run, a bound function's target), `lhs` is
     /// passed to unknown code: it escapes.
     pub fn has_instance(&mut self, t: Tok, reason: u32, lhs: NodeId) {
+        self.instanceof_walk(lhs);
         let unknown =
             t == TOP || self.is_marker(t) || matches!(self.toks[t as usize], TokKind::Bound(_));
         if unknown {
@@ -1988,6 +2107,25 @@ impl Model {
         let arg = self.has_instance_node(t);
         self.edge(lhs, arg);
         self.implicit(t, reason, Protocol::HasInstance, self.thrown);
+    }
+
+    /// OrdinaryHasInstance (7.3.22 steps 5-6) walks the left side's chain
+    /// with O.[[GetPrototypeOf]]() until it meets C.prototype or null. An
+    /// ordinary link runs no code there; a Proxy (the value itself, or one
+    /// on its chain) runs its `getPrototypeOf` trap and the forward
+    /// (10.5.1, `Cons::ProtoOf` on it), and the walk goes on from what that
+    /// returns: the walk node holds every link (`ProtoOf` of the left side
+    /// and of the walk node itself). Made for every left side that meets
+    /// InstanceofOperator, once per node: a superset where `@@hasInstance`
+    /// is another function than Function.prototype's, which walks nothing.
+    fn instanceof_walk(&mut self, lhs: NodeId) {
+        if !self.idx_done.insert((lhs, TOP, lhs, IDX_INSTANCEOF_WALK)) {
+            return;
+        }
+        let w = self.node_l("instanceof-chain");
+        self.nodes[w as usize].frame = self.nodes[lhs as usize].frame;
+        self.cons(lhs, Cons::ProtoOf { dst: w });
+        self.cons(w, Cons::ProtoOf { dst: w });
     }
 
     /// The argument node of the `@@hasInstance` call on `t`, one per token.
@@ -2075,6 +2213,113 @@ impl Model {
         self.shared_scope(|m| m.implicit_touch(t, reason, proto, region));
     }
 
+    /// Rule R2 (perry-runtime builtins/formatting.rs): how the formatter
+    /// treats the depth of value `t`.
+    fn inspect_shape(&self, t: Tok) -> InspectShape {
+        match &self.toks[t as usize] {
+            // GC_TYPE_CLOSURE (formatting.rs:820, format_function_for_console
+            // / format_class_for_console): no limit check, own properties at
+            // depth 1. `Object.prototype` stands for every builtin prototype,
+            // `Function.prototype` among them; a builtin namespace whose chain
+            // is not `Object.prototype` is a constructor or function.
+            TokKind::Func(..)
+            | TokKind::ClassObj(_)
+            | TokKind::Bound(_)
+            | TokKind::BuiltinFn(_)
+            | TokKind::ObjectProto => InspectShape::Function,
+            TokKind::Builtin(ns) if !builtins::ns_is_ordinary(*ns) => InspectShape::Function,
+            TokKind::NativeProto(name, _) if name == "Function" => InspectShape::Function,
+            // GC_TYPE_ERROR (formatting.rs:720, errors.rs:90), a Promise
+            // (:821) and a weak collection (`format_weak_wrapper`, :803):
+            // members at depth + 1 with no limit check.
+            TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
+                TmplKind::BObj {
+                    what: "Error" | "Promise" | "WeakMap" | "WeakSet",
+                    ..
+                } => InspectShape::Unchecked,
+                _ => InspectShape::Ordinary,
+            },
+            _ => InspectShape::Ordinary,
+        }
+    }
+
+    /// The protocols run on what touch `proto` reads, an inspection's at
+    /// `shown` (rule R2).
+    fn touches_at(proto: Protocol, shown: Option<InspectAt>) -> Vec<Protocol> {
+        proto
+            .read_touches()
+            .iter()
+            .map(|&p| match (p, shown) {
+                (Protocol::InspectShown(_), Some(at)) => Protocol::InspectShown(at),
+                _ => p,
+            })
+            .collect()
+    }
+
+    /// A console call's formatter request on node `n` (rule R2): shown
+    /// (`InspectShown`) or consumable by a specifier (`Inspect`), at depth 0
+    /// under the call's own limit `floor`. An `ambient` call sets no limit
+    /// of its own: it runs under the limit of the extent it runs in, at
+    /// least `floor` (`inspect_raised`).
+    pub(crate) fn console_inspect(
+        &mut self,
+        n: NodeId,
+        reason: u32,
+        shown: bool,
+        region: NodeId,
+        floor: u8,
+        ambient: bool,
+    ) {
+        let mut limit = floor;
+        if ambient {
+            self.inspect_reqs.push((n, reason, shown, region, floor));
+            limit = limit.max(self.inspect_raised);
+        }
+        self.console_inspect_at(n, reason, shown, region, limit);
+    }
+
+    fn console_inspect_at(
+        &mut self,
+        n: NodeId,
+        reason: u32,
+        shown: bool,
+        region: NodeId,
+        limit: u8,
+    ) {
+        let at = InspectAt::arg(limit.max(INSPECT_DEFAULT_LIMIT));
+        let proto = if shown {
+            Protocol::InspectShown(at)
+        } else {
+            Protocol::Inspect(at)
+        };
+        self.cons(
+            n,
+            Cons::Implicit {
+                reason,
+                proto,
+                region,
+            },
+        );
+    }
+
+    /// A touch under raised limit `limit` may run program code (a hook, a
+    /// getter): a console call that code makes formats under `limit`
+    /// (`InspectDepthLimitGuard` holds for the dynamic extent). Every
+    /// ambient console request is re-issued under it (monotone).
+    fn raise_inspect_limit(&mut self, limit: u8) {
+        let limit = limit.min(INSPECT_HARD_CAP);
+        if limit <= self.inspect_raised.max(INSPECT_DEFAULT_LIMIT) {
+            return;
+        }
+        self.inspect_raised = limit;
+        let reqs = self.inspect_reqs.clone();
+        for (n, reason, shown, region, floor) in reqs {
+            if floor < limit {
+                self.console_inspect_at(n, reason, shown, region, limit);
+            }
+        }
+    }
+
     #[track_caller]
     fn implicit_touch(&mut self, t: Tok, reason: u32, proto: Protocol, region: NodeId) {
         // A Proxy's ToPrimitive runs its [[Get]]s (`proxy_to_primitive`),
@@ -2083,19 +2328,48 @@ impl Model {
         if let TokKind::Proxy(p) = self.toks[t as usize] {
             match proto {
                 Protocol::ToPrimitive => return self.proxy_to_primitive(p, reason, region),
-                Protocol::InspectShown => return self.proxy_inspect_shown(p, reason, region),
+                Protocol::InspectShown(at) => {
+                    return self.proxy_inspect_shown(p, at, reason, region)
+                }
                 Protocol::Json => return self.proxy_json(p, reason, region),
-                Protocol::Inspect => return self.proxy_inspect(p, reason, region),
+                Protocol::Inspect(at) => return self.proxy_inspect(p, at, reason, region),
                 _ => {}
             }
         }
+        // Rule R2: the formatter reads a value only down to the inspect
+        // depth limit (`InspectAt`): past the hard cap nothing; an ordinary
+        // object past the limit prints `[Object]` with no read and no hook
+        // lookup; a function's own values are at depth 1; an Error's, a
+        // Promise's and a weak collection's are read with no limit check.
+        let shown = match proto.inspect_at() {
+            None => None,
+            Some(at) => {
+                if at.depth > INSPECT_HARD_CAP {
+                    return;
+                }
+                let next = if t == TOP || self.is_marker(t) {
+                    at.member()
+                } else {
+                    match self.inspect_shape(t) {
+                        InspectShape::Function => at.fn_member(),
+                        InspectShape::Unchecked => at.member(),
+                        InspectShape::Ordinary if at.depth > at.limit => return,
+                        InspectShape::Ordinary => at.member(),
+                    }
+                };
+                if at.limit > INSPECT_DEFAULT_LIMIT && t != TOP {
+                    self.raise_inspect_limit(at.limit);
+                }
+                Some(next)
+            }
+        };
         // I32 at rest (PR B): a protocol touch reads elements undecoded.
         self.rest_used(t);
         // The formatter's `%j` serializes the ARGUMENT (JSON.stringify,
         // 25.5.2.1): its own values are serialized by that touch's own
         // reads, never a value only the formatter shows (a chain member,
         // a class's `prototype`).
-        if proto == Protocol::Inspect {
+        if matches!(proto, Protocol::Inspect(_)) {
             self.implicit(t, reason, Protocol::Json, region);
         }
         // The touch looks up and calls the protocol's keys and reads its
@@ -2191,7 +2465,7 @@ impl Model {
             self.nodes[dst as usize].frame = home;
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::Load { key, dst });
-            for &proto in proto.read_touches() {
+            for proto in Self::touches_at(proto, shown) {
                 self.cons(
                     dst,
                     Cons::Implicit {
@@ -2210,7 +2484,7 @@ impl Model {
             self.nodes[dst as usize].frame = home;
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::OwnValues { dst });
-            for &proto in proto.read_touches() {
+            for proto in Self::touches_at(proto, shown) {
                 self.cons(
                     dst,
                     Cons::Implicit {
@@ -2220,6 +2494,31 @@ impl Model {
                     },
                 );
             }
+            self.add_tok(recv, t);
+        }
+        // An Error's `errors` elements (errors.rs:77 format_error_array) are
+        // shown one level below the array, with no limit check either.
+        if let (Some(at), true) = (shown, self.native_error_tok(t)) {
+            let key = Key::Named(self.atom("errors"));
+            let ek = self.elem_key();
+            let recv = self.node_l("implicit-recv");
+            let arr = self.node_l("implicit-read");
+            let dst = self.node_l("implicit-read");
+            for n in [recv, arr, dst] {
+                self.nodes[n as usize].frame = home;
+            }
+            self.nodes[arr as usize].sink = true;
+            self.nodes[dst as usize].sink = true;
+            self.cons(recv, Cons::Load { key, dst: arr });
+            self.cons(arr, Cons::Load { key: ek, dst });
+            self.cons(
+                dst,
+                Cons::Implicit {
+                    reason,
+                    proto: Protocol::InspectShown(at.member()),
+                    region: throw,
+                },
+            );
             self.add_tok(recv, t);
         }
         // `t instanceof C` for the constructors on its chain: `C`'s
@@ -2285,11 +2584,29 @@ impl Model {
                 self.reasons[reason as usize]
             );
         }
-        match keys {
-            None => self.method_on(t, Key::any(), call),
-            Some(ks) => {
-                for a in ks {
-                    self.method_on(t, Key::Named(a), call);
+        // A Proxy's protocol keys are its [[Get]]s (10.5.8, `proxy_get`),
+        // each value called with `this` = the Proxy; OrdinaryHasInstance
+        // (7.3.21 step 4) also reads Get( p, "prototype" ), a value compared
+        // only.
+        if let TokKind::Proxy(p) = self.toks[t as usize] {
+            let mut ks: Vec<Key> = match &keys {
+                None => vec![Key::any()],
+                Some(ks) => ks.iter().map(|&a| Key::Named(a)).collect(),
+            };
+            if proto == Protocol::HasInstance {
+                ks.push(Key::Named(self.atom("prototype")));
+            }
+            for key in ks {
+                let f = self.proxy_get(p, key, NO_NODE);
+                self.cons(f, Cons::Call { call });
+            }
+        } else {
+            match keys {
+                None => self.method_on(t, Key::any(), call),
+                Some(ks) => {
+                    for a in ks {
+                        self.method_on(t, Key::Named(a), call);
+                    }
                 }
             }
         }
@@ -2329,4 +2646,16 @@ pub(crate) fn numeric_key(name: &str) -> bool {
 pub(crate) fn implsrc_on() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("PERRY_WPF_IMPLSRC").is_some())
+}
+
+/// How the runtime's formatter treats a value's depth (rule R2,
+/// `Model::inspect_shape`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InspectShape {
+    /// Read only at a depth within the limit; members one level deeper.
+    Ordinary,
+    /// Read at any depth within the hard cap; own values at depth 1.
+    Function,
+    /// Read at any depth within the hard cap; members one level deeper.
+    Unchecked,
 }

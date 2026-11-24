@@ -82,9 +82,12 @@ const FUNCTION: &[(&str, Mem)] = &[
     ("name", Mem::Prim(prim::STR)),
     ("toString", Mem::Fn),
     (WK_HAS_INSTANCE, Mem::Fn),
-    // Annex B: throwing accessors on %Function.prototype%.
-    ("arguments", Mem::Prim(prim::NULL)),
-    ("caller", Mem::Prim(prim::NULL)),
+    // %Function.prototype%'s `arguments` and `caller` accessors, whose
+    // getter and setter are %ThrowTypeError% (ECMA-262 10.2.4
+    // AddRestrictedFunctionProperties): a getter the model lists as a
+    // method (`loads::family_member` runs its declaration).
+    ("arguments", Mem::Fn),
+    ("caller", Mem::Fn),
 ];
 
 const ARRAY: &[(&str, Mem)] = &[
@@ -701,7 +704,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" | "mapGroups" | "hostrecord" | "stringrecord" => Family::Box,
+        | "fromEntries" | "mapGroups" | "hostrecord" | "stringrecord" | "nullrecord" => Family::Box,
         "Object()" | "Object(prim)" | "BoxedNumber" | "BoxedString" | "BoxedBoolean"
         | "BoxedSymbol" | "BoxedBigInt" => Family::Wrapper,
         _ => Family::Opaque,
@@ -723,7 +726,7 @@ pub(crate) fn box_chain(what: &str) -> BoxChain {
             BoxChain::Object
         }
         "keys" | "arraybox" => BoxChain::Array,
-        "groups" => BoxChain::Null,
+        "groups" | "nullrecord" => BoxChain::Null,
         _ => BoxChain::Unknown,
     }
 }

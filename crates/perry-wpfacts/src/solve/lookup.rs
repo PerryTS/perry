@@ -232,6 +232,8 @@ impl Model {
         if !self.virt_protos.contains_key(&t) {
             if let Some(tm) = self.tmpl_of(t) {
                 let tp = &self.tmpls[tm as usize];
+                // A realm birth's declared own field (`realm_born`) is made
+                // as a literal's is.
                 if matches!(
                     tp.kind,
                     crate::model::TmplKind::Lit { .. }
@@ -239,7 +241,8 @@ impl Model {
                             literal_shape: true,
                             ..
                         }
-                ) {
+                ) || self.realm_born.contains(&tm)
+                {
                     return !self.keys_unsure.contains(&tm)
                         && !self.inst_lose.contains(&tm)
                         && (tp.definite.contains(&a) || self.spread_sure(tm, a));
@@ -707,6 +710,111 @@ impl Model {
         }
     }
 
+    /// OrdinarySet (ECMA-262 10.1.9.2) of `a` on `t` finds a realm accessor:
+    /// `t` is an instance of program classes whose static chain (each link
+    /// the class's prototype only: no `setPrototypeOf`, `delete`,
+    /// `defineProperty` (`hard`), no unknown code (`escaped`,
+    /// `inst_escaped`)) holds no `a` of its own (no own definition of `t`,
+    /// `realm_set_open`; no method, accessor or stored field on a link) and
+    /// ends at realm prototypes that each own an accessor under `a`, which
+    /// no native write replaced. The store's own data definition then never
+    /// runs; the setter (or, getter-only, nothing) does.
+    pub(crate) fn realm_accessor_sure(&self, t: Tok, a: Atom) -> bool {
+        if self.unit_mode
+            || t == TOP
+            || self.is_marker(t)
+            || self.is_proto_key(Key::Named(a))
+            || self.is_private_atom(a)
+            || self.reshaped_any
+            || self.reshaped_keys.contains(&a)
+            || self.realm_set_open.contains(&(t, a))
+        {
+            return false;
+        }
+        let TokKind::Obj(tm0, _) = self.toks[t as usize] else {
+            return false;
+        };
+        let clean = |m: &Self, o: Tok| {
+            !m.hard.contains_key(&o)
+                && !m.escaped.contains_key(&o)
+                && !m.accessor_keys.get(&o).is_some_and(|ks| ks.contains(&a))
+        };
+        // A link's field node exists once a lookup asked for it; it holds a
+        // stored value only after a store (which a later check sees).
+        let held = |n: Option<&NodeId>| {
+            n.is_some_and(|&n| {
+                let n = &self.nodes[n as usize];
+                n.prim != 0 || !n.pts.is_empty()
+            })
+        };
+        if !clean(self, t) {
+            return false;
+        }
+        let (mut c, mut below) = (tm0, t);
+        loop {
+            let tp = &self.tmpls[c as usize];
+            if tp.per_evaluation
+                || !matches!(
+                    tp.kind,
+                    TmplKind::Class {
+                        literal_shape: false,
+                        ..
+                    }
+                )
+                || self.inst_escaped.contains(&c)
+                || tp.accessor_keys.contains(&a)
+                || tp.proto_members.contains(&a)
+            {
+                return false;
+            }
+            let Some(&p) = self.tok_index.get(&TokKind::Proto(c)) else {
+                return false;
+            };
+            let only = self.proto_node.get(&below).is_none_or(|&n| {
+                self.nodes[n as usize]
+                    .pts
+                    .to_sorted()
+                    .iter()
+                    .all(|&q| q == p)
+            });
+            if !only
+                || !clean(self, p)
+                || held(self.fields.get(&(p, a)))
+                || held(self.field_any.get(&p))
+            {
+                return false;
+            }
+            match (tp.parent, &tp.native_parent) {
+                (Some(q), None) => (c, below) = (q, p),
+                // The linked realm parent (`Model::realm_parent`): the
+                // evaluated `extends` is that constructor (else E11 marks
+                // the instances hard), so the link's prototype is its
+                // declared prototype; what the solve gave the link so far
+                // agrees (a later value re-checks: `settle_realm_set`).
+                (None, _) if self.realm_parent.contains_key(&c) => {
+                    let name = &self.atoms[a as usize];
+                    if builtins::realm_ctor_prototype(self.realm_parent[&c])
+                        .and_then(|born| builtins::realm_born_setter(born, name))
+                        .is_none()
+                    {
+                        return false;
+                    }
+                    let rs = self
+                        .proto_node
+                        .get(&p)
+                        .map(|&n| self.nodes[n as usize].pts.to_sorted())
+                        .unwrap_or_default();
+                    return rs.iter().all(|&r| {
+                        r != TOP
+                            && builtins::realm_proto_setter(self, r, a).is_some()
+                            && !builtins::native_written(self, r, a)
+                    });
+                }
+                _ => return false,
+            }
+        }
+    }
+
     /// A read that rule 3 answers: filed, so that a later writer, escape or
     /// re-link gives it `undefined` after all (`settle_proto_first`).
     fn proto_first_read(&mut self, t: Tok, a: Atom, dst: NodeId) -> bool {
@@ -787,6 +895,15 @@ impl Model {
         // A key of `tm` no longer sure no longer shadows on its objects nor
         // on the receivers of class `tm` (`keys_unsure`, `spread_sure`).
         self.flush_shadowed_classes(&[tm]);
+    }
+
+    /// EvaluateCall's GetV then Call (ECMA-262 13.3.6.1, 7.3.20) of the
+    /// method call `call` on object `t` under `key`: it calls what [[Get]]
+    /// of the key on `t` reads, with `t` as `this`.
+    pub(crate) fn call_read_member(&mut self, t: Tok, key: Key, call: CallId) {
+        let callee = self.node_l("builtin-function-read");
+        self.load_from(t, t, key, callee);
+        self.bind_via(callee, call, t);
     }
 
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
@@ -950,7 +1067,8 @@ impl Model {
         let present = closed
             || match (key, self.tmpl_of(t)) {
                 (Key::Named(a), Some(tm)) => {
-                    let sure = self.tmpls[tm as usize].kind.is_fact_unit()
+                    let sure = (self.tmpls[tm as usize].kind.is_fact_unit()
+                        || self.realm_born.contains(&tm))
                         && !self.keys_unsure.contains(&tm)
                         && (self.tmpls[tm as usize].definite.contains(&a)
                             || self.spread_sure(tm, a)
@@ -1111,7 +1229,7 @@ impl Model {
             // members in `tok_load`; a prototype the program gave it
             // (`Object.setPrototypeOf`) is on its chain: its values.
             if crate::builtins::ordinary_box(self, t) || crate::builtins::array_chain(self, t) {
-                let cv = self.cv_of(t, key, false);
+                let cv = self.cv_recv(origin, t, key, false);
                 self.edge(cv, dst);
             }
             return;
@@ -1131,7 +1249,7 @@ impl Model {
             }
         }
         // The prototype chain's values, shared by every receiver of `t`.
-        let cv = self.cv_of(t, key, !shadow);
+        let cv = self.cv_recv(origin, t, key, !shadow);
         if defined || first {
             // A rule on the chain node, not an edge into a relay: an
             // observation node feeds only observation nodes (`edge`), and
@@ -1278,6 +1396,12 @@ impl Model {
     /// members under any key, a key a store into ⊤ wrote on an intrinsic
     /// prototype (`Cons::PlainKey`), and accessors that key may name.
     pub(crate) fn plain_key(&mut self, t: Tok, act: ChainAct) {
+        self.plain_key_from(t, t, act)
+    }
+
+    /// `plain_key` with receiver `origin` (rule PXRECV): `this` of the
+    /// accessors it runs, the receiver passed to a Proxy on `t`'s chain.
+    pub(crate) fn plain_key_from(&mut self, origin: Tok, t: Tok, act: ChainAct) {
         if t == TOP || (self.is_marker(t) && !self.virt_protos.contains_key(&t)) {
             return;
         }
@@ -1292,17 +1416,17 @@ impl Model {
             ChainAct::Call(_) => IDX_PLAIN_CALL,
         };
         if self.idx_done.insert((cp, t, at, tag)) {
-            self.cons(cp, Cons::PlainKey { origin: t, act });
+            self.cons(cp, Cons::PlainKey { origin, act });
             // An accessor under a numeric name (one under a computed key
             // made the object's fields ⊤ already).
             if self.numeric_accessor {
-                self.accessor_walk(t, t, Key::any(), act);
+                self.accessor_walk(origin, t, Key::any(), act);
             } else {
                 let num = self.atom(NUM_KEY);
                 self.visits
                     .entry(t)
                     .or_default()
-                    .insert((t, Key::Named(num), act));
+                    .insert((origin, Key::Named(num), act));
             }
         }
     }
@@ -1347,16 +1471,21 @@ impl Model {
     /// field and its program prototype chain, else `undefined`. The builtin
     /// member approximation (`tok_load`) has nothing under it.
     pub fn load_program_key(&mut self, t: Tok, a: Atom, dst: NodeId) {
+        self.load_program_key_from(t, t, a, dst)
+    }
+
+    /// `load_program_key` with receiver `origin` (rule PXRECV).
+    pub fn load_program_key_from(&mut self, origin: Tok, t: Tok, a: Atom, dst: NodeId) {
         if t == TOP || matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
-            return self.load_from(t, t, Key::Named(a), dst);
+            return self.load_from(origin, t, Key::Named(a), dst);
         }
         self.mark_use(t, crate::model::MARK_READ);
         self.add_prim(dst, prim::UNDEF);
         let f = self.field_r(t, a);
         self.edge(f, dst);
-        let cv = self.cv(t, Key::Named(a));
+        let cv = self.cv_recv(origin, t, Key::Named(a), true);
         self.edge(cv, dst);
-        self.accessor_walk(t, t, Key::Named(a), ChainAct::Load(dst, self.thrown));
+        self.accessor_walk(origin, t, Key::Named(a), ChainAct::Load(dst, self.thrown));
     }
 
     /// Accessors run with the receiver as `this`. Named keys an accessor
@@ -1554,6 +1683,19 @@ impl Model {
     /// `cv`, with the builtin prototypes' members or (`builtin` false)
     /// with the program prototypes' values only.
     pub fn cv_of(&mut self, t: Tok, key: Key, builtin: bool) -> NodeId {
+        self.cv_recv(t, t, key, builtin)
+    }
+
+    /// `cv_of` of `t` read with receiver `origin` (rule PXRECV: a Proxy's
+    /// forward): a Proxy on `t`'s chain is passed `origin`.
+    pub fn cv_recv(&mut self, origin: Tok, t: Tok, key: Key, builtin: bool) -> NodeId {
+        self.note_chain_recv_at(t, origin);
+        self.cv_up(t, key, builtin)
+    }
+
+    /// `cv_of` of a prototype `t` on a receiver's chain (the next link of a
+    /// `ChainUnion`): `t` is no receiver of it.
+    pub(super) fn cv_up(&mut self, t: Tok, key: Key, builtin: bool) -> NodeId {
         if let Some(&n) = self.cv_nodes.get(&(t, key, builtin)) {
             return n;
         }
@@ -1840,9 +1982,16 @@ impl Model {
 
     /// `super.key` from receiver `origin`: the lookup starts at `start`.
     pub(super) fn super_lookup(&mut self, origin: Tok, start: Tok, key: Key, act: ChainAct) {
+        // The Receiver of `super.key` is `this` (13.3.7.3 MakeSuperPropertyReference).
+        self.note_chain_recv(origin);
         if start == TOP {
             self.chain_step(0, origin, TOP, key, act);
             return;
+        }
+        // Rule PXSUPER: a Proxy home prototype runs its [[Get]] / [[Set]]
+        // with Receiver `this` (`proxy_super`).
+        if let TokKind::Proxy(p) = self.toks[start as usize] {
+            return self.proxy_super(p, origin, key, act);
         }
         match act {
             ChainAct::Load(dst, _) if self.is_array_length(start, key) => {
@@ -1922,7 +2071,7 @@ impl Model {
         }
         if let Some(v) = self.stopped_shared.remove(&p) {
             for (key, dst, builtin) in v {
-                let up = self.cv_of(p, key, builtin);
+                let up = self.cv_up(p, key, builtin);
                 self.edge(up, dst);
             }
         }
@@ -1935,6 +2084,33 @@ impl Model {
         if let ChainAct::Lookup { dst, setter } = act {
             self.accessor_functions(holder, key, dst, setter);
             return;
+        }
+        // A getter the realm declares on a realm prototype of the chain
+        // (`builtins::realm_proto_getter`) runs with the receiver as `this`.
+        if let Key::Named(a) = key {
+            if let Some(e) = builtins::realm_proto_getter(self, holder, a) {
+                match act {
+                    ChainAct::Load(dst, _) => {
+                        self.with_b(|m| builtins::realm_getter_load(m, e, origin, a, dst))
+                    }
+                    ChainAct::Call(call) => {
+                        let v = self.node_l("realm-getter-callee");
+                        self.with_b(|m| builtins::realm_getter_load(m, e, origin, a, v));
+                        self.bind_via(v, call, origin);
+                    }
+                    ChainAct::Store(..) | ChainAct::Lookup { .. } => {}
+                }
+            }
+            if let ChainAct::Store(src, region) = act {
+                self.realm_setter_hit(origin, holder, a, src, region);
+            }
+        }
+        if let (Key::Any(_), ChainAct::Store(src, region)) = (key, act) {
+            for a in self.with_b(|m| builtins::realm_proto_setter_keys(m, holder)) {
+                if self.key_may_name(key, a) {
+                    self.realm_setter_hit(origin, holder, a, src, region);
+                }
+            }
         }
         // A key whose shape splits the holder (`shape_splits`) runs only the
         // accessors named by a name it admits, and the computed-name ones.
@@ -1974,6 +2150,44 @@ impl Model {
         }
         self.acc_group(holder, key);
         self.group_hit(origin, holder, key, act);
+    }
+
+    /// A store from `origin` under `a` finds a realm accessor on the chain
+    /// of realm prototype `holder`: its declared setter runs with `origin`
+    /// as `this` (ECMA-262 10.1.9.2 step 7). A getter-only accessor runs
+    /// nothing and keeps nothing (`RealmSetter::GetterOnly`). A setter the
+    /// realm declares no effects for is an explicit stop: the seed names the
+    /// accessor, the stored value escapes and what the setter does to the
+    /// receiver is unknown.
+    fn realm_setter_hit(&mut self, origin: Tok, holder: Tok, a: Atom, src: NodeId, region: NodeId) {
+        match builtins::realm_proto_setter(self, holder, a) {
+            None | Some(builtins::RealmSetter::GetterOnly) => {}
+            Some(builtins::RealmSetter::Declared(e)) => {
+                self.with_b(|m| builtins::realm_setter_store(m, e, origin, a, src))
+            }
+            Some(builtins::RealmSetter::Undeclared(what)) => {
+                let reason = self.reason(&format!(
+                    "stored through realm accessor {what} whose setter the realm does not declare"
+                ));
+                self.cons(src, Cons::TopSink { reason });
+                let v = self.node_l("realm-setter-undeclared");
+                self.add_top(v, |_| {
+                    format!("store through realm accessor {what}: setter effects undeclared")
+                });
+                let n = self.node_l("realm-setter-this");
+                self.add_tok(n, origin);
+                let site = self.anon_post_site("undeclared realm setter");
+                self.cons(
+                    n,
+                    Cons::Store {
+                        key: Key::any(),
+                        src: v,
+                        site,
+                        region,
+                    },
+                );
+            }
+        }
     }
 
     /// One lookup from `origin` reaches group (holder, key).

@@ -10,7 +10,8 @@ use super::*;
 fn verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
-        class Svc {{ size = 3; leak() {{ (globalThis as any).hostTake(this); }} }}
+        declare function external(x?: unknown): any;
+        class Svc {{ size = 3; leak() {{ external(this); }} }}
         function g(a: any) {{ return a.size; }}
         const s: any = "a-b";
         const t: string = "a-b";
@@ -23,7 +24,7 @@ fn verdict(body: &str) -> Verdict {
 
 fn hook(sym: &str) -> String {
     format!(
-        "class Hook {{ size = 3; [Symbol.{sym}](..._a: any[]): any {{ (globalThis as any).hostTake(this); return 'r'; }} }}"
+        "class Hook {{ size = 3; [Symbol.{sym}](..._a: any[]): any {{ external(this); return 'r'; }} }}"
     )
 }
 
@@ -103,7 +104,7 @@ fn coerced_operands_read_only() {
 #[test]
 fn coerced_operand_runs_its_value_of() {
     let v = verdict(
-        "class Hook { size = 3; valueOf() { (globalThis as any).hostTake(this); return 1; } }
+        "class Hook { size = 3; valueOf() { external(this); return 1; } }
          const o: any = new Hook(); s.charAt(o); console.log(g(o));",
     );
     assert!(!proven(&v), "{v:?}");
@@ -113,7 +114,7 @@ fn coerced_operand_runs_its_value_of() {
 #[test]
 fn includes_reads_symbol_match() {
     let v = verdict(
-        "class Hook { size = 3; get [Symbol.match](): any { (globalThis as any).hostTake(this); return undefined; } }
+        "class Hook { size = 3; get [Symbol.match](): any { external(this); return undefined; } }
          const o: any = new Hook(); s.includes(o); console.log(g(o));",
     );
     assert!(!proven(&v), "{v:?}");
@@ -143,7 +144,7 @@ fn replace_callback_with_any_pattern() {
 #[test]
 fn replace_callback_result_is_to_stringed() {
     let v = verdict(
-        "class Hook { size = 3; toString() { (globalThis as any).hostTake(this); return 'x'; } }
+        "class Hook { size = 3; toString() { external(this); return 'x'; } }
          const o: any = new Hook(); s.replace(re, () => o); console.log(g(o));",
     );
     assert!(!proven(&v), "{v:?}");
@@ -159,7 +160,7 @@ fn regexp_test_and_exec_read_only() {
 #[test]
 fn regexp_test_runs_a_replaced_exec() {
     let v = verdict(
-        "const o = new Svc(); (re as any).exec = function (_x: string) { (globalThis as any).hostTake(o); return null; };
+        "const o = new Svc(); (re as any).exec = function (_x: string) { external(o); return null; };
          re.test('b'); console.log(g(o));",
     );
     assert!(!proven(&v), "{v:?}");
@@ -186,7 +187,7 @@ fn regexp_constructor_runs_flags_getter() {
     let v = verdict(
         "class Hook { size = 3; get [Symbol.match](): any { return true; }
            get source(): any { return 'a'; }
-           get flags(): any { (globalThis as any).hostTake(this); return ''; } }
+           get flags(): any { external(this); return ''; } }
          const o: any = new Hook(); new RegExp(o); console.log(g(o));",
     );
     assert!(!proven(&v), "{v:?}");

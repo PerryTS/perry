@@ -139,6 +139,11 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
 
 /// Diagnostic: the reasons of the writes [`native_written`] counts for
 /// `np`'s key `a`, with the written key (`None`: any key).
+fn cliffc_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_CLIFFC_DIAG").is_some_and(|v| v == "1"))
+}
+
 pub fn native_writers_why(m: &Model, np: Tok, a: Atom) -> Vec<String> {
     let mut out = Vec::new();
     for (&(t, k), w) in m.native_writes.iter() {
@@ -468,7 +473,15 @@ pub fn note_native_data_write(
 
 /// Does a recorded write already cover a write of `t`'s key `k` (an
 /// accessor-capable one only if `accessor`) storing `value`?
+///
+/// Whole program a write onto ⊤ writes no intrinsic (P-N1, [`note_write`]):
+/// there is nothing to record, so it is covered. The settle steps that
+/// write (`settle_native_given`) ask this before they report a change;
+/// without it each pass of the fixpoint found the same write new again.
 fn write_covered(m: &Model, t: Tok, k: Option<Atom>, accessor: bool, value: WriteValue) -> bool {
+    if t == TOP && !m.foreign_code() {
+        return true;
+    }
     let covers = |x: &crate::model::NativeWrite| {
         (x.accessor || !accessor)
             && (x.opaque
@@ -492,6 +505,11 @@ fn note_write(
     known: Option<(Tok, bool)>,
     value: WriteValue,
 ) {
+    // P-N1 (owner 2026-11-23): whole program, a value the analysis does not
+    // model is no intrinsic, so a write onto ⊤ writes none of them.
+    if t == TOP && !m.foreign_code() {
+        return;
+    }
     if t != TOP
         && !matches!(
             m.toks[t as usize],
@@ -816,10 +834,25 @@ pub fn note_global_in_top(m: &mut Model) {
 }
 
 /// Unknown code that holds the global object (`global_in_top`) reads its
-/// properties: what the program stored in global `n` leaves. R-GLOBAL (owner
-/// decision 2026-11-18) drops only the any-key write by that code, not its
-/// reads.
+/// properties: what the program stored in global `n` leaves. Whole program
+/// that code is the runtime, which reads only the global names the realm
+/// declares for it to read (`undeclared::global_store_escapes`: the
+/// declared constructors, `members::global_runtime_reads`, `process`, the
+/// host objects); the program's own stores into ⊤ are recorded with their
+/// keys where they happen (`written_by`). Owner decision 2026-11-24, the
+/// read twin of R-GLOBAL (2026-11-18, which dropped that code's any-key
+/// write). Per unit, beside an unseen module or interpreted code
+/// (`realm_nameable`), other code reads every global.
 fn global_field_read_by_unknown(m: &mut Model, n: NodeId) {
+    if !m.realm_nameable() {
+        let a = m.global_fields.iter().find(|&&(_, f)| f == n).map(|&(a, _)| a);
+        let g = m.tok_index.get(&TokKind::Builtin(BuiltinNs::GlobalThis)).copied();
+        if let (Some(a), Some(g)) = (a, g) {
+            if !super::undeclared::global_store_escapes(m, g, Key::Named(a)) {
+                return;
+            }
+        }
+    }
     let r = m.reason("global property read by unknown code that holds the global object");
     m.sink_node(n, r);
 }
@@ -1082,6 +1115,24 @@ fn answer_opaque(m: &mut Model, np: Tok, a: Atom, miss: NativeMiss) {
             });
         }
         NativeMiss::Load(dst) => {
+            if cliffc_diag() && !m.shared_replay {
+                static SEEN: std::sync::Mutex<Option<std::collections::HashSet<(u32, u32)>>> =
+                    std::sync::Mutex::new(None);
+                let first = SEEN
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(Default::default)
+                    .insert((np as u32, a as u32));
+                if first {
+                    eprintln!(
+                        "WHY CLIFFC opaque n{} {}.{} writers={:?}",
+                        dst,
+                        m.tok_name(np),
+                        m.atoms[a as usize],
+                        native_writers_why(m, np, a)
+                    );
+                }
+            }
             m.add_top(dst, |_| {
                 "member of a builtin prototype written through ⊤".into()
             });

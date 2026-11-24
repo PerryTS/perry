@@ -27,9 +27,10 @@ fn read(read: &str, give: &str) -> crate::ProgramFacts {
 fn minted(read: &str) -> u32 {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         const A: any = Array;
         const M: any = Math;
-        const k: string = String((globalThis as any).hostKey());
+        const k: string = String(external());
         const f: any = {read};
         console.log(f);
     "#
@@ -59,7 +60,7 @@ fn a_static_the_realm_does_not_install_reads_undefined() {
 fn a_value_on_its_chain_is_read() {
     let pf = read(
         "M.sumPrecise",
-        "(Object.prototype as any).sumPrecise = (globalThis as any)[process.argv[2]]();",
+        "(Object.prototype as any).sumPrecise = external();",
     );
     assert!(escape(&pf).is_some(), "{}", pf.dump_text());
 }

@@ -173,7 +173,7 @@ unsafe extern "C" fn address_json(_: *const RawClosureHeader, this: JsThis) -> f
     );
     proto.getter(
         "rules",
-        perry_ffi::js_function_info!(#[realm("node:net.BlockList.prototype.rules.<get>")] rules, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        perry_ffi::js_function_info!(#[realm("node:net.BlockList.prototype.rules.<get>", effects = { returns(fresh(Array.prototype, elems = [prim(str)])) })] rules, 0; with_flags(perry_ffi::FN_BUILTIN)),
     );
 }
 

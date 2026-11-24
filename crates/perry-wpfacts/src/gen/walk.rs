@@ -542,6 +542,24 @@ impl<'a> Gen<'a> {
                 push_unique(&mut keys, a);
             }
         }
+        if let Some(layout) = self
+            .m
+            .realm_parent
+            .get(&tm)
+            .and_then(|id| crate::builtins::construct_layout(id))
+        {
+            // `super(...)` runs the realm parent's declared construct on the
+            // instance (`run_super_construct`): the fields its `fresh` result
+            // defines are the instance's first own keys, present from then on
+            // when every result defines them.
+            for k in layout.keys {
+                let a = self.m.atom(k);
+                push_unique(&mut keys, a);
+                if layout.definite.contains(&k) {
+                    push_unique(&mut definite, a);
+                }
+            }
+        }
         let TmplKind::Class {
             module: mi, name, ..
         } = self.m.tmpls[tm as usize].kind.clone()
@@ -763,12 +781,25 @@ impl<'a> Gen<'a> {
         let mut cur = Some(tm);
         while let Some(c) = cur {
             let t = &self.m.tmpls[c as usize];
-            if t.parent_value.is_some() && t.parent.is_none() {
+            if t.parent_value.is_some()
+                && t.parent.is_none()
+                && !self.m.realm_parent.contains_key(&c)
+            {
                 return true;
             }
             cur = t.parent;
         }
         false
+    }
+
+    /// `tm` is linked to a realm parent (`Model::realm_parent`) whose declared
+    /// construct hands the instance to other code before `tm`'s own keys
+    /// are defined.
+    fn realm_parent_leaks(&self, tm: TmplId) -> bool {
+        self.m
+            .realm_parent
+            .get(&tm)
+            .is_some_and(|id| crate::builtins::construct_layout(id).is_none_or(|l| l.leaks))
     }
 
     /// Some class on `tm`'s chain takes its parent from a value (§17.2).
@@ -1018,7 +1049,10 @@ impl<'a> Gen<'a> {
             }
             up = self.m.tmpls[p as usize].parent;
         }
-        if self.m.tmpls[tm as usize].native_parent.is_some() || self.parent_pending(tm) {
+        if self.m.tmpls[tm as usize].native_parent.is_some()
+            || self.parent_pending(tm)
+            || self.realm_parent_leaks(tm)
+        {
             return true;
         }
         let mut cur = self.m.tmpls[tm as usize].parent;
@@ -1026,6 +1060,7 @@ impl<'a> Gen<'a> {
             if self.ctor_phase.get(&p).is_some_and(|ph| ph.leaks)
                 || self.stand_in_cc.get(&p).is_some_and(|c| c.ctor_leaks)
                 || self.m.tmpls[p as usize].native_parent.is_some()
+                || self.realm_parent_leaks(p)
             {
                 return true;
             }
@@ -1875,9 +1910,58 @@ impl<'a> Gen<'a> {
                     self.list_birth(fx.module, *id, list_tmpl);
                 }
                 self.direct_arr = None;
-                if let Some(perry_hir::Expr::ForInKeys(o)) = init {
+                // FVA 4.3b / E1: the keys local of a for-in, and the source of
+                // a for-of over `Object.keys(o)` / `getOwnPropertyNames(o)`
+                // written in the loop head (a fresh Array no other code sees;
+                // the counted walk binds exactly its elements, `for_of_walk`).
+                use crate::model::KeyList;
+                // The namespace pair `NamespacePatched(Object) ? Object.keys(o)
+                // : <intrinsic>` is one call of the realm's own member while
+                // its generic arm yields nothing (`namespace_pair`): its keys
+                // are `o`'s; what a replaced member returns runs the body with
+                // every key (`Gen::keys_generic`, `for_in_body`).
+                let generic = self.last_ns_generic.take();
+                let (kinit, generic) = match init {
+                    Some(perry_hir::Expr::Conditional {
+                        condition,
+                        else_expr,
+                        ..
+                    }) if self.m.ns_pairs
+                        && matches!(condition.as_ref(), perry_hir::Expr::NamespacePatched(ns) if ns == "Object")
+                        && generic.is_some() =>
+                    {
+                        (Some(else_expr.as_ref()), generic)
+                    }
+                    _ => (init.as_ref(), None),
+                };
+                let keys_src = match kinit {
+                    Some(perry_hir::Expr::ForInKeys(o)) => Some((o, KeyList::ForIn)),
+                    Some(perry_hir::Expr::ObjectKeys(o)) if name.starts_with("__forof_lit_src_") => {
+                        Some((o, KeyList::OwnKeys))
+                    }
+                    Some(perry_hir::Expr::ObjectGetOwnPropertyNames(o))
+                        if name.starts_with("__forof_lit_src_") =>
+                    {
+                        Some((o, KeyList::OwnNames))
+                    }
+                    _ => None,
+                };
+                if let Some((o, list)) = keys_src {
                     if let perry_hir::Expr::LocalGet(obj) = o.as_ref() {
-                        self.for_in_keys_of.insert((fx.module, *id), *obj);
+                        self.for_in_keys_of.insert((fx.module, *id), (*obj, list));
+                        if let Some(g) = generic {
+                            self.keys_generic.insert((fx.module, *id), g);
+                        }
+                    }
+                }
+                if let (Some(perry_hir::Expr::LocalGet(src)), true) =
+                    (kinit, name.starts_with("__forof_lit_arr_"))
+                {
+                    if let Some(&v) = self.for_in_keys_of.get(&(fx.module, *src)) {
+                        self.for_in_keys_of.insert((fx.module, *id), v);
+                    }
+                    if let Some(&g) = self.keys_generic.get(&(fx.module, *src)) {
+                        self.keys_generic.insert((fx.module, *id), g);
                     }
                 }
                 if let Some(perry_hir::Expr::LocalGet(src)) = init {

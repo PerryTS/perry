@@ -254,7 +254,7 @@ fn native_dispatch_direct_this_certificate_requires_the_lowered_route() {
 #[test]
 fn native_dispatch_named_negative_controls_keep_the_generic_route() {
     for (key, src) in [
-        ("m", "const x = (globalThis as any).hostValue; x.m();"),
+        ("m", "const x = external(); x.m();"),
         ("get", "const x: any = new Map(); x.get = function() { return 7; }; console.log(x.get('a'));"),
         ("get", "(Map.prototype as any).get = function() { return 7; }; const x: any = new Map(); console.log(x.get('a'));"),
         ("call", "const f = 'abc'.charCodeAt; console.log(f.call('abc', 0));"),

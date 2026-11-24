@@ -131,7 +131,8 @@ fn an_executor_never_called_makes_then_throw() {
 #[test]
 fn an_escaped_executor_hands_out_the_settled_value() {
     let v = sv(r#"
-        class C { constructor(ex: any) { (globalThis as any).hook(ex); } }
+        declare function external(x?: unknown): any;
+        class C { constructor(ex: any) { external(ex); } }
         (C as any)[Symbol.species] = C;
         const p: any = Promise.resolve(0);
         p.constructor = C;

@@ -147,6 +147,18 @@ impl<'a> Gen<'a> {
                     Some((class_name, args, get, set)) => {
                         let a = self.evaluate_all(fx, args);
                         let own = [get, set].map(|i| i.and_then(|i| a.get(i).copied()));
+                        // K3 (B): an accessor written in place is a method of
+                        // what it is defined on, under its key (`recv_family`).
+                        if let Some(ks) = key.as_deref() {
+                            let ka = self.m.atom(ks);
+                            for i in [get, set].into_iter().flatten() {
+                                if let (Expr::Closure { .. }, Some(&n)) = (&args[i], a.get(i)) {
+                                    for ft in self.m.nodes[n as usize].pts.to_sorted() {
+                                        self.m.rfam_home(ft, &[ka], None);
+                                    }
+                                }
+                            }
+                        }
                         (self.new_named(fx, class_name, a, vec![]), own)
                     }
                     None => (self.expr(fx, d), [None, None]),
@@ -191,14 +203,16 @@ impl<'a> Gen<'a> {
                 let on = self.expr(fx, o);
                 let kn = self.expr(fx, k);
                 self.to_property_key(kn);
-                let d = self.descriptor_of(mi, on);
+                // A for-in run's key is the one property described.
+                let key = self.for_in_key_of(mi, k).unwrap_or(NO_NODE);
+                let d = self.descriptor_of(mi, on, key);
                 // 20.1.2.8 / 28.1.7: an absent property gives `undefined`.
                 self.m.add_prim(d, prim::UNDEF);
                 d
             }
             Expr::ObjectGetOwnPropertyDescriptors(o) => {
                 let on = self.expr(fx, o);
-                let d = self.descriptor_of(mi, on);
+                let d = self.descriptor_of(mi, on, NO_NODE);
                 let (t, n) = self.bobj(mi, "descriptors");
                 let fa = self.m.field_any(t);
                 self.m.edge(d, fa);
@@ -250,13 +264,12 @@ impl<'a> Gen<'a> {
             Expr::ObjectFreeze(o) | Expr::ObjectSeal(o) | Expr::ObjectPreventExtensions(o) => {
                 let on = self.expr(fx, o);
                 let r = self.m.reason("E8 freeze/seal/preventExtensions");
-                self.m.cons(
-                    on,
-                    Cons::Hard {
-                        kind: Hard::E8Freeze,
-                        reason: r,
-                    },
-                );
+                let kind = match e {
+                    Expr::ObjectFreeze(_) => Hard::E8Freeze,
+                    Expr::ObjectSeal(_) => Hard::E8Seal,
+                    _ => Hard::E8PreventExtensions,
+                };
+                self.m.cons(on, Cons::Hard { kind, reason: r });
                 on
             }
             Expr::ReflectPreventExtensions(o) => {
@@ -265,7 +278,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(
                     on,
                     Cons::Hard {
-                        kind: Hard::E8Freeze,
+                        kind: Hard::E8PreventExtensions,
                         reason: r,
                     },
                 );
@@ -795,8 +808,6 @@ impl<'a> Gen<'a> {
             | Expr::ProxySet { .. }
             | Expr::ProxyHas { .. }
             | Expr::ProxyDelete { .. }
-            | Expr::ProxyApply { .. }
-            | Expr::ProxyConstruct { .. }
             | Expr::ReflectDefineMetadata { .. }
             | Expr::ReflectGetMetadata { .. }
             | Expr::ReflectGetOwnMetadata { .. }

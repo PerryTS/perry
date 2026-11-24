@@ -41,7 +41,7 @@ impl Model {
             Cons::OwnValues { dst } => format!("OwnValues dst={:?}", dst),
             Cons::OwnKeys { dst } => format!("OwnKeys dst={:?}", dst),
             Cons::OwnNames { dst } => format!("OwnNames dst={:?}", dst),
-            Cons::OwnDescValues { dst } => format!("OwnDescValues dst={:?}", dst),
+            Cons::OwnDescValues { dst, key } => format!("OwnDescValues dst={dst:?} key={key:?}"),
             Cons::IndexHole => format!("IndexHole"),
             Cons::IndexHoleIn { key } => format!("IndexHoleIn {key}"),
             Cons::IndexKept => format!("IndexKept"),
@@ -52,6 +52,8 @@ impl Model {
             Cons::OwnProp { key, idx } => {
                 format!("OwnProp key={:?} idx={idx}", self.packet_key(key))
             }
+            Cons::DeleteIdx { idx, reason } => format!("DeleteIdx idx={idx} reason={reason}"),
+            Cons::Meta { op, reason } => format!("Meta {op:?} reason={reason}"),
             Cons::LenIndex { lo, hi } => format!("LenIndex {lo} {hi}"),
             Cons::LenPermuted { t } => format!("LenPermuted {t}"),
             Cons::CjsPublish { dst } => format!("CjsPublish dst={:?}", dst),
@@ -95,6 +97,7 @@ impl Model {
                 act
             ),
             Cons::Raise { region } => format!("Raise region={region}"),
+            Cons::HandRaise { region } => format!("HandRaise region={region}"),
             Cons::TopSink { reason } => {
                 format!("TopSink reason={:?}", self.reasons.get(reason as usize))
             }
@@ -164,6 +167,7 @@ impl Model {
             Cons::ProtoObjects { dst } => format!("ProtoObjects dst={:?}", dst),
             Cons::NotRegExp { dst } => format!("NotRegExp dst={:?}", dst),
             Cons::NotObjectProto { dst } => format!("NotObjectProto dst={:?}", dst),
+            Cons::NotError { hook, dst } => format!("NotError hook={:?} dst={:?}", hook, dst),
             Cons::NotBuffer { shared, dst } => {
                 format!("NotBuffer shared={shared} dst={:?}", dst)
             }
@@ -256,9 +260,49 @@ impl Model {
                 self.packet_token(origin, packet),
                 act
             ),
-            Cons::UnnamedSet { target } => {
+            Cons::UnnamedSet { target, .. } => {
                 format!("UnnamedSet target={:?}", self.packet_token(target, packet))
             }
+            Cons::ChainSet {
+                origin,
+                key,
+                src,
+                region,
+            } => format!(
+                "ChainSet origin={:?} key={:?} src={:?} region={:?}",
+                self.packet_token(origin, packet),
+                key,
+                src,
+                region
+            ),
+            Cons::ChainRecv { origin } => {
+                format!("ChainRecv origin={:?}", self.packet_token(origin, packet))
+            }
+            Cons::FwdLoad {
+                key,
+                idx,
+                dst,
+                recv,
+            } => format!(
+                "FwdLoad key={:?} idx={idx} dst={dst} recv={:?}",
+                self.packet_key(key),
+                self.packet_token(recv, packet)
+            ),
+            Cons::FwdStore {
+                key,
+                src,
+                region,
+                recv,
+                ..
+            } => format!(
+                "FwdStore key={:?} src={src} region={region} recv={:?}",
+                self.packet_key(key),
+                self.packet_token(recv, packet)
+            ),
+            Cons::DefineOwn { key, value, region } => format!(
+                "DefineOwn key={:?} value={value} region={region}",
+                self.packet_key(key)
+            ),
             Cons::StoreTopProto { origin, src } => format!(
                 "StoreTopProto origin={:?} src={:?}",
                 self.packet_token(origin, packet),
@@ -435,11 +479,14 @@ impl Model {
                 call,
                 self.packet_shape(shape)
             ),
-            Cons::ForInBody { obj, call } => format!("ForInBody obj={:?} call={:?}", obj, call),
-            Cons::ForInKeys { ft, call } => format!(
-                "ForInKeys ft={:?} call={:?}",
+            Cons::ForInBody { obj, call, list } => {
+                format!("ForInBody obj={:?} call={:?} list={:?}", obj, call, list)
+            }
+            Cons::ForInKeys { ft, call, list } => format!(
+                "ForInKeys ft={:?} call={:?} list={:?}",
                 self.packet_token(ft, packet),
-                call
+                call,
+                list
             ),
             Cons::DefineKeyed {
                 o,

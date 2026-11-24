@@ -81,7 +81,7 @@ fn l1_an_unknown_value_makes_every_family_live() {
         reason(&r, "regex_engine")
     );
     // Twin: a global nothing declares is `undefined`, a known value.
-    let r = reach("const h = (globalThis as any).someHostThing;\nconsole.log(typeof h);\n");
+    let r = reach("const h = external();\nconsole.log(typeof h);\n");
     assert!(!r.live("typedarray"), "{:?}", r.dump_lines());
     assert!(!r.live("regex_engine"), "{:?}", r.dump_lines());
 }

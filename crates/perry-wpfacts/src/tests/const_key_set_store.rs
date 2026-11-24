@@ -11,9 +11,10 @@ use super::*;
 fn verdict(store: &str, read: &str) -> Verdict {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         declare const w: boolean;
         declare const name: string;
-        const h: any = (globalThis as any).hostFn();
+        const h: any = external();
         {store}
         class Svc {{ size = 3; }}
         const a: any = [new Svc()];

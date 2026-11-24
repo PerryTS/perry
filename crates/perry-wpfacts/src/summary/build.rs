@@ -312,7 +312,7 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
         let cache = |n: NodeId, c: &Cons| {
             Some(n) == pn
                 && match c {
-                    Cons::ProtoClosure { .. } | Cons::Raise { .. } => true,
+                    Cons::ProtoClosure { .. } | Cons::Raise { .. } | Cons::HandRaise { .. } => true,
                     Cons::ChainUnion { of, .. } => *of == t,
                     _ => false,
                 }
@@ -339,9 +339,9 @@ fn literal_births(m: &Model, cand: &[bool]) -> FxHashMap<FnIdx, Vec<Birth>> {
             let cs = &m.nodes[n as usize].cons;
             let binds = rest
                 && cs.iter().any(|c| bound(n, c))
-                && cs
-                    .iter()
-                    .all(|c| bound(n, c) || matches!(c, Cons::Raise { .. }));
+                && cs.iter().all(|c| {
+                    bound(n, c) || matches!(c, Cons::Raise { .. } | Cons::HandRaise { .. })
+                });
             binds || cs.iter().all(|c| cache(n, c))
         };
         let mut ok = own.iter().all(|&n| own_cons(n));
@@ -1196,7 +1196,7 @@ fn keyed_param(s: &Summary, param_nodes: &FxHashSet<NodeId>) -> Option<u32> {
                         proto: crate::model::Protocol::ToPrimitive,
                         ..
                     } => {}
-                    Cons::Raise { .. } => {}
+                    Cons::Raise { .. } | Cons::HandRaise { .. } => {}
                     // The key as a receiver (`key.slice(i)`, `key.length`;
                     // three.js `isBlobURL(key)` composed into Cache.get/add):
                     // the read binds `this` to the same value and changes
@@ -1267,7 +1267,7 @@ fn called_param(s: &Summary) -> Option<u32> {
                 // The call of it, and where what it throws goes.
                 match c {
                     Cons::Call { .. } => called = true,
-                    Cons::Raise { .. } => {}
+                    Cons::Raise { .. } | Cons::HandRaise { .. } => {}
                     _ => return false,
                 }
             } else if super::map::cons_fields(c).0.contains(&p) {

@@ -73,6 +73,27 @@ pub(super) fn bound_into_result(m: &mut Model, t: Tok, call: CallId) {
 
 // ------------------------------------------------- function protocol
 
+/// `Function.prototype.apply(thisArg, argArray)` builds its argument list by
+/// CreateListFromArrayLike (ECMA-262 20.2.3.1 step 4, 7.3.20): argument `i`
+/// is Get(argArray, ToString(i)), an index read, not an iteration. A program
+/// function with no rest parameter and no `arguments` object observes its
+/// parameters only, so each parameter `i` is the read `argArray[i]` (the
+/// rule of that read: an index-exact array's slot, else its elements).
+/// `Some((argArray, parameter count))` for such a target of a call without
+/// a spread; any other target (rest, `arguments`, bound, class, builtin)
+/// gets the array's elements in every position (a spread).
+fn apply_positional(m: &Model, t: Tok, c: &CallSite) -> Option<(NodeId, u32)> {
+    let TokKind::Func(f, _) = m.toks[t as usize] else {
+        return None;
+    };
+    let &a = c.arg(1)?;
+    let fi = &m.funcs[f as usize];
+    if !c.spread.is_empty() || fi.rest.is_some() || fi.has_arguments || fi.ctor_of.is_some() {
+        return None;
+    }
+    Some((a, (fi.params.len() - fi.captures.len()) as u32))
+}
+
 pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: CallId) {
     if let Some(name @ ("call" | "apply" | "bind" | "toString")) = name {
         m.diagnostic_builtin(call, |_| format!("Function.prototype.{name}"));
@@ -108,6 +129,49 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
                     this,
                     args: c.args_from(1).iter().copied().collect(),
                     spread: c.spread.clone(),
+                    ret: c.ret,
+                    site: c.site,
+                    region: m.calls[call as usize].region,
+                },
+            ) {
+                m.call_tok(call2, t, None);
+            }
+        }
+        Some("apply") if apply_positional(m, t, &c).is_some() => {
+            let this = match c.arg(0) {
+                Some(&n) => ThisArg::Node(n),
+                None => ThisArg::Undef,
+            };
+            let (a, n) = apply_positional(m, t, &c).expect("guard");
+            if !m.idx_done.insert((a, t, call, IDX_APPLY_POS)) {
+                return;
+            }
+            let args: Vec<NodeId> = (0..n)
+                .map(|i| {
+                    let k = m.index_literal(i);
+                    let p = m.node_l("apply-arg");
+                    m.cons(
+                        a,
+                        Cons::IdxLoad {
+                            idx: k,
+                            dst: p,
+                            shape: 0,
+                            enumerable: false,
+                            kept: false,
+                        },
+                    );
+                    p
+                })
+                .collect();
+            if let Some(call2) = m.solver_call_keyed(
+                call,
+                (crate::summary::MK_FN_APPLY, t, 0),
+                None,
+                CallSite {
+                    first_arg_fixed: true,
+                    this,
+                    args,
+                    spread: vec![],
                     ret: c.ret,
                     site: c.site,
                     region: m.calls[call as usize].region,
@@ -424,6 +488,11 @@ fn recv_call(
 /// per receiver. `true`: made now, the caller runs the declaration.
 pub(super) fn getter_call(m: &mut Model, t: Tok, key: Atom) -> (CallId, bool) {
     member_call(m, t, key, true, ThisArg::Tok(t), 0)
+}
+
+/// The call of the setter of `key` with receiver `t` and one argument.
+pub(super) fn setter_call(m: &mut Model, t: Tok, key: Atom) -> (CallId, bool) {
+    member_call(m, t, key, false, ThisArg::Tok(t), 1)
 }
 
 #[track_caller]
@@ -1194,6 +1263,10 @@ fn array_like_model(m: &mut Model, t: Tok, name: &str) -> NodeId {
                 reason,
             },
         );
+        // DeletePropertyOrThrow(O, ToString(index)): an index String.
+        let idx = m.node_l("array-method-delete-key");
+        m.add_prim(idx, prim::STR);
+        m.cons(recv, Cons::DeleteIdx { idx, reason });
     }
     if name == "concat" {
         let k = Key::Named(m.atom(&format!("{WK_PREFIX}isConcatSpreadable")));
@@ -2181,7 +2254,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-            | "fromEntries" | "hostrecord" | "stringrecord",
+            | "fromEntries" | "hostrecord" | "stringrecord" | "nullrecord",
             Some(n),
         ) => match members::box_chain(kind) {
             members::BoxChain::Array | members::BoxChain::Unknown => {

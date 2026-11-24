@@ -12,6 +12,7 @@ fn site(roots: &[u32], full: &[u32], store: bool) -> Refused {
         part: 0,
         store,
         why: None,
+        site: String::new(),
     }
 }
 

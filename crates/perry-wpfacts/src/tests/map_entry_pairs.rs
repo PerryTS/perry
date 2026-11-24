@@ -15,7 +15,7 @@ fn verdict(tail: &str) -> Verdict {
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         const s = new Svc();
-        const unknown: any = (globalThis as any)[process.argv[2]];
+        declare function hostValue(): any; const unknown: any = hostValue;
         const take = (x: any) => {{ unknown.take(x); }};
         (function () {{ {tail} }})();
         console.log(g(s));

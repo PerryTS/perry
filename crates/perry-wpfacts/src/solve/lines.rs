@@ -8,6 +8,8 @@ impl Model {
             Cons::Identity { route } => format!("identity {n} {}", route.name()),
             Cons::HasProp { key, idx } => format!("hasprop {n} {key:?} {idx}"),
             Cons::OwnProp { key, idx } => format!("ownprop {n} {key:?} {idx}"),
+            Cons::DeleteIdx { idx, .. } => format!("deleteidx {n} {idx}"),
+            Cons::Meta { op, .. } => format!("meta {n} {op:?}"),
             Cons::Load { key, dst } => format!("load {n} {} {dst}", self.key_name(*key)),
             Cons::ProtoKey { key, dst } => {
                 format!("protokey {n} {} {dst}", self.key_name(Key::Named(*key)))
@@ -15,7 +17,7 @@ impl Model {
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
             Cons::OwnKeys { dst } => format!("ownkeys {n} {dst}"),
             Cons::OwnNames { dst } => format!("ownnames {n} {dst}"),
-            Cons::OwnDescValues { dst } => format!("owndescvalues {n} {dst}"),
+            Cons::OwnDescValues { dst, key } => format!("owndescvalues {n} {dst} {key}"),
             Cons::IndexHole => format!("indexhole {n}"),
             Cons::IndexHoleIn { key } => format!("indexholein {n} {key}"),
             Cons::IndexKept => format!("indexkept {n}"),
@@ -44,6 +46,7 @@ impl Model {
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
             Cons::Raise { region } => format!("raise {n} {region}"),
+            Cons::HandRaise { region } => format!("handraise {n} {region}"),
             Cons::RuntimeStore { reason, retained } => {
                 format!("runtimestore {n} {retained} {reason}")
             }
@@ -91,6 +94,7 @@ impl Model {
             Cons::NotBuffer { shared, dst } => format!("notbuffer {n} {dst} shared={shared}"),
             Cons::NotRegExp { dst } => format!("notregexp {n} {dst}"),
             Cons::NotObjectProto { dst } => format!("notobjectproto {n} {dst}"),
+            Cons::NotError { hook, dst } => format!("noterror {n} {hook} {dst}"),
             Cons::ProtoObjects { dst } => format!("protoobjects {n} {dst}"),
             Cons::Objects { dst } => format!("objects {n} {dst}"),
             Cons::TopIfAny { dst, from, reason } => format!(
@@ -158,8 +162,31 @@ impl Model {
                 format!("protomethods {n} {origin} {} {call}", self.key_name(*key))
             }
             Cons::AnyAccessors { origin, act } => format!("anyaccessors {n} {origin} {act:?}"),
-            Cons::UnnamedSet { target } => format!("unnamedset {n} {target}"),
+            Cons::UnnamedSet { target, site } => format!("unnamedset {n} {target} {site}"),
             Cons::StoreTopProto { origin, src } => format!("storetopproto {n} {origin} {src}"),
+            Cons::ChainSet {
+                origin,
+                key,
+                src,
+                region,
+            } => format!("chainset {n} {origin} {key:?} {src} {region}"),
+            Cons::ChainRecv { origin } => format!("chainrecv {n} {origin}"),
+            Cons::FwdLoad {
+                key,
+                idx,
+                dst,
+                recv,
+            } => format!("fwdload {n} {key:?} {idx} {dst} {recv}"),
+            Cons::FwdStore {
+                key,
+                src,
+                region,
+                recv,
+                ..
+            } => format!("fwdstore {n} {key:?} {src} {region} {recv}"),
+            Cons::DefineOwn { key, value, region } => {
+                format!("defineown {n} {key:?} {value} {region}")
+            }
             Cons::Super { start, key, act } => {
                 format!("super {n} {start} {} {act:?}", self.key_name(*key))
             }
@@ -253,8 +280,8 @@ impl Model {
             Cons::IdxKeyCall {
                 obj, prim, call, ..
             } => format!("idxkeycall {n} {obj} {prim} {call}"),
-            Cons::ForInBody { obj, call } => format!("forinbody {n} {obj} {call}"),
-            Cons::ForInKeys { ft, call } => format!("forinkeys {n} {ft} {call}"),
+            Cons::ForInBody { obj, call, list } => format!("forinbody {n} {obj} {call} {list:?}"),
+            Cons::ForInKeys { ft, call, list } => format!("forinkeys {n} {ft} {call} {list:?}"),
             Cons::DefineKeyed {
                 o,
                 reason,

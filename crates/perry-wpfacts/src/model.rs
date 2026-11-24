@@ -81,9 +81,15 @@ pub const IDX_ENUM_READ: u16 = 65;
 pub const IDX_ENUM_CHAIN: u16 = 66;
 /// An index store watched for the hole it may leave (`Cons::IndexHoleIn`).
 pub const IDX_HOLE_IN: u16 = 67;
+/// `Model::instanceof_walk`: the chain walk of one `instanceof` left side.
+pub const IDX_INSTANCEOF_WALK: u16 = 68;
 pub const IDX_OWN_PRIM: u16 = 46;
 /// `Cons::Spread` of a String source: the store of its characters (10.4.3).
 pub const IDX_SPREAD_STR: u16 = 47;
+/// `idx_done` tag of `Function.prototype.apply`'s positional arguments
+/// (`builtins::collections::apply_positions`): once per (array node, target,
+/// call).
+pub const IDX_APPLY_POS: u16 = 69;
 
 /// Token 0 is ⊤: a value produced or touched by code the analysis does not
 /// model. Its presence in a node means "any escaped object or anything else".
@@ -150,6 +156,11 @@ pub mod guard {
     /// a constructor body result that makes a base `new` yield its `this`.
     /// Every primitive; no object or function token.
     pub const NOT_OBJECT: u8 = 23;
+    /// Rule NOT-ERROR: the value of `Error` where a failed `x instanceof
+    /// Error` narrows (`Cons::NotError`): any value but the intrinsic
+    /// constructor (a program store, ⊤) lets every value of `x` through; a
+    /// primitive throws and lets none.
+    pub const NOT_ERROR_CTOR: u8 = 24;
 
     /// The primitive kinds (`prim` bits) a test admits.
     pub fn prims(test: u8) -> u16 {
@@ -169,7 +180,7 @@ pub mod guard {
             NOT_CALLABLE => p::ALL,
             // A primitive right-hand side throws (InstanceofOperator step
             // 1): it selects no false side.
-            NOT_BUFFER_CTOR | NOT_SHARED_BUFFER_CTOR => 0,
+            NOT_BUFFER_CTOR | NOT_SHARED_BUFFER_CTOR | NOT_ERROR_CTOR => 0,
             // ECMA-262 7.2.16 IsStrictlyEqual with a Boolean constant: only
             // that Boolean is (`IS_*`); every other value is not (`NOT_*`).
             IS_FALSE => p::FALSE,
@@ -1040,6 +1051,11 @@ pub enum Hard {
     E6SetPrototypeOf,
     E7Delete,
     E8Freeze,
+    /// `Object.seal` (SetIntegrityLevel sealed, 7.3.15).
+    E8Seal,
+    /// `Object.preventExtensions` / `Reflect.preventExtensions`
+    /// ([[PreventExtensions]] alone).
+    E8PreventExtensions,
     E9Proxy,
     E10ObjectCreate,
     E11ReflectConstruct,
@@ -1057,7 +1073,7 @@ impl Hard {
             Hard::E5DefineProperty => "E5",
             Hard::E6SetPrototypeOf => "E6",
             Hard::E7Delete => "E7",
-            Hard::E8Freeze => "E8",
+            Hard::E8Freeze | Hard::E8Seal | Hard::E8PreventExtensions => "E8",
             Hard::E9Proxy => "E9",
             Hard::E10ObjectCreate => "E10",
             Hard::E11ReflectConstruct => "E11",
@@ -1075,6 +1091,62 @@ impl Hard {
 /// looks up (getters included) and calls with the value as `this`, and the
 /// values it reads. The site that issues the touch knows its protocol (the
 /// operator, the syntax or the runtime helper); ECMA-262 fixes each key set.
+/// Where the runtime's formatter shows a value (perry-runtime
+/// builtins/formatting.rs): its nesting `depth` (a console argument is 0)
+/// and the inspect depth `limit` in effect (`INSPECT_DEPTH_LIMIT`, default
+/// 2; `%o` 4, `console.dir(x, opts)` the options' depth). An ordinary object
+/// past the limit prints as `[Object]` with no read and no hook lookup;
+/// nothing is read past `INSPECT_HARD_CAP` (rule R2, `Model::implicit`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct InspectAt {
+    pub depth: u8,
+    pub limit: u8,
+}
+
+/// formatting.rs:592 / :1502 / :1169: `depth > 10` prints `[...]`.
+pub const INSPECT_HARD_CAP: u8 = 10;
+/// formatting.rs:226: Node's `util.inspect` default depth.
+pub const INSPECT_DEFAULT_LIMIT: u8 = 2;
+/// util_format.rs:415: `%o` formats with depth 4.
+pub const INSPECT_PCT_O_LIMIT: u8 = 4;
+
+impl InspectAt {
+    /// A console argument under the default limit.
+    pub const DEFAULT_ARG: InspectAt = InspectAt {
+        depth: 0,
+        limit: INSPECT_DEFAULT_LIMIT,
+    };
+
+    /// A console argument under `limit` (capped: a limit past the hard cap
+    /// reads what the cap allows).
+    pub const fn arg(limit: u8) -> InspectAt {
+        InspectAt {
+            depth: 0,
+            limit: if limit > INSPECT_HARD_CAP {
+                INSPECT_HARD_CAP
+            } else {
+                limit
+            },
+        }
+    }
+
+    /// The members of a value shown here.
+    pub fn member(self) -> InspectAt {
+        InspectAt {
+            depth: self.depth + 1,
+            limit: self.limit,
+        }
+    }
+
+    /// A function's own properties (formatting.rs:338 `format_jsvalue(v, 1)`).
+    pub fn fn_member(self) -> InspectAt {
+        InspectAt {
+            depth: 1,
+            limit: self.limit,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Protocol {
     /// ToPrimitive (ECMA-262 7.1.1), and through it ToString, ToNumber,
@@ -1130,7 +1202,7 @@ pub enum Protocol {
     /// formatted as `InspectShown`; what a hook or
     /// `toJSON` returns is formatted in turn. Getters run only under
     /// `console.dir(x, {getters})`; the reads here run them always.
-    Inspect,
+    Inspect(InspectAt),
     /// The runtime's value formatter on a value it shows (`format_jsvalue`,
     /// perry-runtime builtins/formatting.rs; Node lib/internal/util/
     /// inspect.js `formatValue`): the `[util.inspect.custom]` hook only;
@@ -1138,13 +1210,13 @@ pub enum Protocol {
     /// coercions belong to the format specifiers, which consume only
     /// arguments). Every value it shows and what a hook returns is
     /// formatted the same way.
-    InspectShown,
+    InspectShown(InspectAt),
     /// The formatter showing a Proxy's TARGET (`format_proxy_value`; Node
     /// `formatValue` after `getProxyDetails`): its own values, each
     /// `InspectShown`. No hook is looked up on it here: the Proxy's
     /// `[util.inspect.custom]` is read off the target and called with
     /// `this` = the Proxy (`Model::proxy_inspect_shown`).
-    InspectTarget,
+    InspectTarget(InspectAt),
     /// Node's `util.inspect(v, { depth: -1 })`, what an argument-type
     /// error's message runs on an object without a named constructor
     /// (lib/internal/errors.js `determineSpecificType`; node 26
@@ -1180,9 +1252,9 @@ impl Protocol {
         Protocol::Json,
         Protocol::HasInstance,
         Protocol::OwnKeys,
-        Protocol::Inspect,
-        Protocol::InspectShown,
-        Protocol::InspectTarget,
+        Protocol::Inspect(InspectAt::DEFAULT_ARG),
+        Protocol::InspectShown(InspectAt::DEFAULT_ARG),
+        Protocol::InspectTarget(InspectAt::DEFAULT_ARG),
         Protocol::ShallowInspect,
         Protocol::Clone,
         Protocol::Any,
@@ -1217,18 +1289,18 @@ impl Protocol {
             Protocol::BufferFrom => &["valueOf", WK_TO_PRIMITIVE],
             Protocol::Json => &["toJSON"],
             Protocol::HasInstance => &[WK_HAS_INSTANCE],
-            Protocol::Inspect => &[
+            Protocol::Inspect(_) => &[
                 INSPECT_CUSTOM_METHOD,
                 WK_TO_PRIMITIVE,
                 "valueOf",
                 "toString",
                 "toJSON",
             ],
-            Protocol::ShallowInspect | Protocol::InspectShown => &[INSPECT_CUSTOM_METHOD],
+            Protocol::ShallowInspect | Protocol::InspectShown(_) => &[INSPECT_CUSTOM_METHOD],
             Protocol::IterResult
             | Protocol::AsyncIterResult
             | Protocol::OwnKeys
-            | Protocol::InspectTarget
+            | Protocol::InspectTarget(_)
             | Protocol::Clone => &[],
             Protocol::Any => return None,
         })
@@ -1270,8 +1342,10 @@ impl Protocol {
     pub fn read_touches(self) -> &'static [Protocol] {
         match self {
             Protocol::Json => &[Protocol::Json],
-            Protocol::Inspect => &[Protocol::InspectShown],
-            Protocol::InspectShown | Protocol::InspectTarget => &[Protocol::InspectShown],
+            Protocol::Inspect(_) => &[Protocol::InspectShown(InspectAt::DEFAULT_ARG)],
+            Protocol::InspectShown(_) | Protocol::InspectTarget(_) => {
+                &[Protocol::InspectShown(InspectAt::DEFAULT_ARG)]
+            }
             Protocol::Clone => &[Protocol::Clone],
             Protocol::AsyncIterResult => &[Protocol::BufferFrom],
             Protocol::BufferFrom => &[Protocol::ToPrimitive],
@@ -1286,9 +1360,9 @@ impl Protocol {
         matches!(
             self,
             Protocol::Json
-                | Protocol::Inspect
-                | Protocol::InspectShown
-                | Protocol::InspectTarget
+                | Protocol::Inspect(_)
+                | Protocol::InspectShown(_)
+                | Protocol::InspectTarget(_)
                 | Protocol::Clone
                 | Protocol::BufferFrom
         )
@@ -1303,9 +1377,9 @@ impl Protocol {
             Protocol::IterResult => MARK_TOUCH_ITER_RESULT,
             Protocol::HasInstance => MARK_TOUCH_HAS_INSTANCE,
             Protocol::Json
-            | Protocol::Inspect
-            | Protocol::InspectShown
-            | Protocol::InspectTarget
+            | Protocol::Inspect(_)
+            | Protocol::InspectShown(_)
+            | Protocol::InspectTarget(_)
             | Protocol::ShallowInspect
             | Protocol::Clone
             | Protocol::OwnKeys
@@ -1340,8 +1414,8 @@ impl Protocol {
             Protocol::AsyncIterNext => Some(Protocol::AsyncIterResult),
             Protocol::BufferFrom => Some(Protocol::BufferFrom),
             Protocol::Json => Some(Protocol::Json),
-            Protocol::Inspect => Some(Protocol::Inspect),
-            Protocol::InspectShown => Some(Protocol::InspectShown),
+            Protocol::Inspect(at) => Some(Protocol::Inspect(at)),
+            Protocol::InspectShown(at) => Some(Protocol::InspectShown(at)),
             Protocol::ShallowInspect => Some(Protocol::ShallowInspect),
             Protocol::Any => Some(Protocol::Any),
             Protocol::ToPrimitive
@@ -1349,7 +1423,7 @@ impl Protocol {
             | Protocol::AsyncIterResult
             | Protocol::HasInstance
             | Protocol::OwnKeys
-            | Protocol::InspectTarget
+            | Protocol::InspectTarget(_)
             | Protocol::Clone => None,
         }
     }
@@ -1358,6 +1432,16 @@ impl Protocol {
     /// on it (`builtins::adopt`).
     pub fn awaits_result(self) -> bool {
         matches!(self, Protocol::AsyncIterNext)
+    }
+
+    /// Where an inspection protocol shows the value (`None`: another protocol).
+    pub fn inspect_at(self) -> Option<InspectAt> {
+        match self {
+            Protocol::Inspect(at) | Protocol::InspectShown(at) | Protocol::InspectTarget(at) => {
+                Some(at)
+            }
+            _ => None,
+        }
     }
 
     pub fn name(self) -> &'static str {
@@ -1373,9 +1457,9 @@ impl Protocol {
             Protocol::Json => "json",
             Protocol::HasInstance => "hasinstance",
             Protocol::OwnKeys => "ownkeys",
-            Protocol::Inspect => "inspect",
-            Protocol::InspectShown => "inspectshown",
-            Protocol::InspectTarget => "inspecttarget",
+            Protocol::Inspect(_) => "inspect",
+            Protocol::InspectShown(_) => "inspectshown",
+            Protocol::InspectTarget(_) => "inspecttarget",
             Protocol::ShallowInspect => "shallowinspect",
             Protocol::Clone => "clone",
             Protocol::Any => "any",
@@ -1508,6 +1592,9 @@ pub struct Node {
     /// DEADFN15: a rest array arriving here may be reached by another
     /// activation of its function (`Model::rest_front_watch`).
     pub front_watch: bool,
+    /// K3 (B): a field or prototypes node the receiver families read
+    /// (`solve::recv_family`, `WATCH_FIELD` / `WATCH_PROTO`), else 0.
+    pub fam_watch: u8,
     /// The integer interval of the Numbers it holds (`range::Iv`).
     pub range: range::Iv,
     /// The interval grew since the node was last delivered.
@@ -2248,6 +2335,13 @@ pub struct Model {
     /// (`prune_late_escaped`, R-ESCLATE): that prune's work list, which it
     /// empties.
     pub late_esc: Vec<Tok>,
+    /// K3 census only (`PERRY_K3_CENSUS`): the function tokens each node
+    /// lost beside ⊤ (`escaped_beside_top`), so the census still finds a
+    /// method's home field after ⊤ covered it there. `None` otherwise.
+    pub k3_held: Option<crate::pts::FxHashMap<NodeId, Vec<Tok>>>,
+    /// K3 (B): the receiver families of methods and accessors
+    /// (`solve::recv_family`).
+    pub rfam: crate::solve::recv_family::RecvFam,
     /// The work counter when the last late-escape prune ran.
     pub late_esc_at: u64,
     pub reasons: Vec<String>,
@@ -2266,11 +2360,28 @@ pub struct Model {
     /// (value node, `ProtoNode`) pairs a `ProtoGiven` watches.
     pub given_proto: crate::pts::FxHashSet<(NodeId, NodeId)>,
     pub implicit_done: crate::pts::FxHashMap<(Tok, Protocol), NodeId>,
+    /// Rule R2: the inspect depth limit a console call with default options
+    /// may run under (0: the default, 2). The runtime's limit holds for the
+    /// dynamic extent of the call that set it (`InspectDepthLimitGuard`), so
+    /// a console call run by a hook or getter inside `console.dir(x, opts)`
+    /// or `%o` formats under that limit: the join of the raised limits
+    /// whose touches may run program code (`Model::raise_inspect_limit`).
+    pub inspect_raised: u8,
+    /// Every console request (node, reason, shown, region, own floor),
+    /// re-issued when `inspect_raised` rises (`Model::console_inspect`).
+    pub inspect_reqs: Vec<(NodeId, u32, bool, NodeId, u8)>,
     /// The one argument node of the `@@hasInstance` touch on a token: every
     /// `instanceof` whose right-hand side holds the token adds its
     /// left-hand side (`Solver::has_instance`).
     pub has_instance_arg: crate::pts::FxHashMap<Tok, NodeId>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
+    /// Rule PXNEWT: the object `Reflect.construct( T, args, P )` with a Proxy
+    /// new target P makes, per (call, Proxy, T) (`proxy_nt_inst`).
+    pub proxy_nt_inst: crate::pts::FxHashMap<(CallId, u32, Tok), Tok>,
+    /// Rule PXNEWT: those objects. Their prototype is what
+    /// Get(P, "prototype") returns alone (10.1.14), so `proto_node` seeds
+    /// no static prototype for them.
+    pub proxy_nt_toks: crate::pts::FxHashSet<Tok>,
     /// (`new` call, summarized constructor) -> the node its runs' body
     /// result reaches instead of the call's result: the `new` result takes
     /// only its objects, and the this-object while it holds a non-object
@@ -2283,6 +2394,18 @@ pub struct Model {
     /// that made one ordinary, object/⊤ keys that ran the full lookup.
     pub own_read_census: [u64; 3],
     pub callthis_done: crate::pts::FxHashSet<(NodeId, CallId, Tok)>,
+    /// Rule PXCHAIN: (object, key, key node) whose `in` runs on its
+    /// prototype closure, and those closure nodes (`Cons::HasProp`).
+    pub chain_has_done: crate::pts::FxHashSet<(Tok, Key, NodeId)>,
+    pub chain_has_nodes: crate::pts::FxHashSet<NodeId>,
+    /// Rule PXCHAIN: receivers with a `Cons::ChainRecv` on their closure.
+    /// (holder, receiver): `holder`'s closure has `Cons::ChainRecv { origin: receiver }`.
+    pub chain_recv_done: crate::pts::FxHashSet<(Tok, Tok)>,
+    /// Rule PXCHAIN: (receiver, object, key) of an ordinary [[Set]]: its value and
+    /// throw nodes (`Model::chain_set_rule`); the stores (source, region)
+    /// that wait for a Proxy on the chain, by value node.
+    pub chain_set_nodes: crate::pts::FxHashMap<(Tok, Tok, Key), (NodeId, NodeId)>,
+    pub chain_set_pending: crate::pts::FxHashMap<NodeId, Vec<(NodeId, NodeId)>>,
     /// `CallThis` split (see `Model::bind_via`): `ThisTo` per (method node,
     /// receiver), the callee relay per call, the edges into it, and the
     /// (call, receiver) pairs bound through each method node.
@@ -2322,6 +2445,18 @@ pub struct Model {
     pub(crate) fresh: Vec<Tok>,
     pub(crate) fresh_seen: crate::pts::FxHashSet<Tok>,
     pub sunk_nodes: crate::pts::FxHashSet<NodeId>,
+    /// The nodes sunk with a writer reason (`Model::writes_any`): a node
+    /// sunk with a contract reason first is sunk again at that level.
+    pub sunk_writer_nodes: crate::pts::FxHashSet<NodeId>,
+    /// The escape reasons a builtin contract states (`Model::contract_reason`):
+    /// their holder writes a handed value only as that contract says.
+    pub contract_reasons: crate::pts::FxHashSet<u32>,
+    /// The escaped tokens such code holds (`escaped_beside_top`): unknown
+    /// code may write any key of them, so beside ⊤ they are that ⊤.
+    pub esc_writer_bits: Vec<u64>,
+    /// The reason each token of `esc_writer_bits` was first held with:
+    /// what derive names where such code may change the layout.
+    pub esc_writer_why: crate::pts::FxHashMap<Tok, u32>,
     /// The return nodes of escaped functions no summary instances
     /// (`Model::sink_own_return`): the function and the escape reason. An
     /// edge into one is judged as it is made (`edge_impl`).
@@ -2334,6 +2469,13 @@ pub struct Model {
     /// still evaluated (a class in a CommonJS factory, §17.4): the node the
     /// evaluated value reaches. After the solve it must be that parent.
     pub parent_checks: Vec<(TmplId, NodeId)>,
+    /// Classes whose `extends` binding statically names a realm constructor
+    /// that declares its construct and prototype (`import { Readable } from
+    /// "stream"`, `extends EventTarget`), linked at gen time: the declared
+    /// construct's fields are the instance's layout prefix. The evaluated
+    /// value (`parent_value`) must be that constructor after the solve
+    /// (`settle_parent_values`), else E11.
+    pub realm_parent: crate::pts::FxHashMap<TmplId, &'static str>,
     /// DEC 251 B: classes whose evaluated `extends` value settle could not
     /// link to one class (`settle_parent_values`): no static construction
     /// through a parent is published for them (`super_unrelinked`).
@@ -2378,6 +2520,14 @@ pub struct Model {
     /// (`proto_first_holds`); checked again whenever the worklist empties.
     pub proto_first_reads: Vec<(Tok, Atom, NodeId)>,
     pub proto_first_seen: crate::pts::FxHashSet<(Tok, Atom, NodeId)>,
+    /// Named stores that wrote no own property: the lookup of the key on
+    /// the receiver finds a realm accessor (`realm_accessor_sure`), whose
+    /// setter runs instead (10.1.9.2 step 7). Checked again whenever the
+    /// worklist empties (`settle_realm_set`).
+    pub realm_set_skips: Vec<(Tok, Atom, NodeId, SiteId)>,
+    /// (receiver, key) pairs whose lookup no longer surely finds the realm
+    /// accessor: their stores write the own property.
+    pub realm_set_open: crate::pts::FxHashSet<(Tok, Atom)>,
     /// Gen: the statements (by address) of rule 3 stores, and the class
     /// whose store statement is being walked.
     pub proto_first_stmts: FxHashMap<usize, TmplId>,
@@ -2393,6 +2543,11 @@ pub struct Model {
     /// Fact units whose keys can disappear (delete, defineProperty, with):
     /// no key of theirs is sure.
     pub keys_unsure: crate::pts::FxHashSet<TmplId>,
+    /// Built-in object templates of a realm prototype that a declared birth
+    /// makes (`effects::Run::fresh`, `fresh(PerformanceMark.prototype,
+    /// fields = {..})`): their `definite` keys are the own data fields every
+    /// declared birth of the template defines (the intersection).
+    pub realm_born: crate::pts::FxHashSet<TmplId>,
     /// DECISIONS 234: keys a `delete`, a `defineProperty` or an accessor
     /// through ⊤ or on a builtin prototype may have removed or redefined
     /// (`reshaped_any`: every key). A builtin prototype redefined under a
@@ -2467,6 +2622,11 @@ pub struct Model {
     /// token back (`record_entry_holds`), looked at again in
     /// `settle_record_entry`.
     pub record_entry_held: Vec<(Tok, NodeId)>,
+    /// Rule NOT-ERROR: (token, hook, dst) of each `Cons::NotError` that
+    /// dropped the token (`not_error_drops`), looked at again in
+    /// `settle_not_error`; the set keeps each triple once.
+    pub not_error_held: Vec<(Tok, NodeId, NodeId)>,
+    pub not_error_seen: crate::pts::FxHashSet<(Tok, NodeId, NodeId)>,
     /// The ordinary dispatch behind a name-keyed fold
     /// (`Gen::name_fold_call`), with the builtin kind the fold's helper
     /// serves itself: `method_on` makes it on every other receiver.
@@ -2853,7 +3013,7 @@ pub struct Model {
     pub shaped_of: FxHashMap<Tok, Vec<(KeyShapeId, NodeId, bool)>>,
     /// For-in bodies run per key: (call, body token, the literal), checked
     /// again once the worklist is empty (`settle_for_in`).
-    pub for_in_runs: Vec<(CallId, Tok, Tok)>,
+    pub for_in_runs: Vec<(CallId, Tok, Tok, KeyList)>,
     /// Runs of one function value (`bind_layout_run`): (call, function
     /// token, receiver, receiver primitives, the value), checked again once
     /// the worklist is empty (`settle_val_runs`).
@@ -2868,7 +3028,7 @@ pub struct Model {
     pub spelled_atoms: Option<usize>,
     /// FORIN1: (call, body token, the literal) of a shared run over named
     /// keys (`for_in_named_run`), checked again in `settle_for_in`.
-    pub for_in_named: Vec<(CallId, Tok, Tok)>,
+    pub for_in_named: Vec<(CallId, Tok, Tok, KeyList)>,
     /// Rule EK: (literal, key node) of each `Cons::OwnKeys` that gave the
     /// literal's known keys (`own_keys_of`), checked again in
     /// `settle_for_in`; the set dedups.
@@ -2949,6 +3109,9 @@ pub struct Model {
     pub store_at: Option<NodeId>,
     /// The throw region of that `Cons::Store` (`Cons::Store::region`).
     pub store_region: Option<NodeId>,
+    /// The Receiver of that store when it is not the object stored into:
+    /// a Proxy's forward target.[[Set]](P, V, Receiver) (`Cons::FwdStore`).
+    pub store_recv: Option<Tok>,
     /// A call's constant first argument as a property-key spelling. Value
     /// callees record strings only (`BuiltinNs::Require`). Compiler data.
     pub call_lit: FxHashMap<CallId, Atom>,

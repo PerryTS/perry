@@ -23,10 +23,11 @@ fn with_index<T>(f: impl FnOnce() -> T) -> T {
 fn src(tail: &str) -> String {
     format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         const s = new Svc();
-        const h: any = (globalThis as any).hostFn();
+        const h: any = external();
         {tail}
         "#
     )

@@ -98,6 +98,9 @@ impl Model {
             let p = self.stop_top.as_ref().unwrap().cur_pos();
             if p == crate::topstop::NOPOS {
                 self.note_nopos(std::panic::Location::caller(), "edge");
+                let s = self.stop_top.as_mut().unwrap();
+                let at = (std::panic::Location::caller(), s.rule, s.phase);
+                s.edge_at.insert((a as u64) << 32 | b as u64, at);
             } else {
                 self.stop_top
                     .as_mut()
@@ -285,6 +288,13 @@ impl Model {
             self.prov_arrivals(dst, &mut batch.each_token(), true, at);
             self.cur_src = saved;
         }
+        // K3 (B): an adopted delivery into a field or prototypes node the
+        // receiver families read arrives there as `add_tokens_s` does.
+        let fam_new = if self.nodes[dst as usize].fam_watch != 0 {
+            self.rfam_filter(dst, &mut batch.each_token())
+        } else {
+            Vec::new()
+        };
         let boundary = self.nodes[dst as usize].succ.len() as u32;
         let old = std::mem::replace(&mut self.nodes[dst as usize].pts, pts);
         self.sets.release(old);
@@ -320,6 +330,9 @@ impl Model {
             }
         }
         self.add_s(dst, &[], prim, strs);
+        if !fam_new.is_empty() {
+            self.rfam_arrived(dst, &fam_new);
+        }
         let node = &mut self.nodes[dst as usize];
         if !node.in_wl {
             node.in_wl = true;

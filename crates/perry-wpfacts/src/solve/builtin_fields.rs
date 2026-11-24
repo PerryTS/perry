@@ -203,7 +203,19 @@ impl Model {
         }
         // Unknown code can install an own member even when the intrinsic
         // prototype refuses additions. Ordinary reads replay that write.
-        builtins::note_native_write(self, holder, None, "built-in object given to unknown code");
+        // Whole program (owner premise 2026-11-19), unknown code never
+        // writes an intrinsic it reaches through a handed value; program
+        // stores onto it are recorded where they are made, and the field
+        // sink below still hands their values over. Code the analysis does
+        // not see (`foreign_code`) may.
+        if self.foreign_code() {
+            builtins::note_native_write(
+                self,
+                holder,
+                None,
+                "built-in object given to unknown code",
+            );
+        }
         let r = reason
             .unwrap_or_else(|| self.reason("field of a built-in object interpreted code may read"));
         let all = self.all_fields(holder);

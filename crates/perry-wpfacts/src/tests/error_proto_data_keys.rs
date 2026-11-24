@@ -47,7 +47,7 @@ fn an_error_prototype_name_or_message_reads_a_string() {
 fn a_value_stored_on_the_error_prototype_is_read() {
     for b in uses() {
         let b = format!(
-            "(TypeError.prototype as any).name = (globalThis as any).hostGet();\n(TypeError.prototype as any).message = (globalThis as any).hostGet();\n{b}"
+            "(TypeError.prototype as any).name = external();\n(TypeError.prototype as any).message = external();\n{b}"
         );
         assert!(!proven(&b), "{b}");
     }

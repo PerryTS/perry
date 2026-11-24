@@ -102,7 +102,7 @@ pub enum Deferred {
     ReflectConstruct(CallId, Tok, Tok),
     NewNamed(Atom, CallId),
     /// A for-in body token run over an object token (`Model::for_in_tok`).
-    ForIn(CallId, Tok, Tok),
+    ForIn(CallId, Tok, Tok, KeyList),
     /// A native method run at a call (`builtins::own_method`,
     /// `proto_method`, `prim_method`): like a birth, it waits for summaries,
     /// so what the method births and calls at a summary's call is per
@@ -384,6 +384,7 @@ impl Model {
                 | Cons::Falsy { dst }
                 | Cons::NotBuffer { dst, .. }
                 | Cons::NotObjectProto { dst }
+                | Cons::NotError { dst, .. }
                 | Cons::NotRegExp { dst }
                 | Cons::NotNull { dst }
  | Cons::RecordEntry { dst }
@@ -1135,8 +1136,12 @@ impl Model {
             NO_CTX => NO_VC,
             c => self.sum.ctx_vc[c as usize],
         };
+        // A loop body's run for one key (kind 6, FVA 4.3b) is keyed by that
+        // key's String as such a run is: what it births and the closures it
+        // makes (a wrapper capturing `p[k]`) are that key's.
         let vc = match val {
             v if v != NO_VAL && s.switch.is_some() && s.called.is_none() => self.vc_of(pvc, f, v),
+            _ if key.0 == 6 => self.vc_of(pvc, f, key.1),
             _ => pvc,
         };
         self.sum.insts.push(Inst {
@@ -1231,8 +1236,9 @@ impl Model {
             _ => LAY_NONE,
         };
         let key = match x {
-            // Rule C: a closure maker's runs are per call site.
-            _ if call != NO_NODE && self.closure_maker(f, x) => {
+            // Rule C: a closure maker's runs are per call site; so are those
+            // of a function with a rest parameter no receiver lays out (E2).
+            _ if call != NO_NODE && (self.closure_maker(f, x) || self.rest_per_site(f, lay)) => {
                 let site = self.sum.tmpl_of.get(&call).copied().unwrap_or(call);
                 (7, site, ft)
             }
@@ -1553,6 +1559,13 @@ impl Model {
                     self.bind_layout_run(call, ft, x, prim, true);
                     more = true;
                 }
+            } else if val == NO_VAL && self.called_pending(call, self.tok_fn(ft)) {
+                // A waiting call whose argument still holds nothing waits on:
+                // no value reaches that argument, so the call never runs
+                // with one (a loop arm whose source a guard holds back,
+                // `settle_record_entry`). A later settle that fills it
+                // binds it on the next round.
+                keep.push(r);
             } else if val == NO_VAL {
                 // A waiting call: bound now, by what its argument holds
                 // (pushes its run's record when it takes one): the run of
@@ -1578,6 +1591,18 @@ impl Model {
             return false;
         };
         (x.is_none() || s.this == NO_NODE) && s.maker
+    }
+
+    /// E2: a rest parameter's array is born by each call (ECMA-262 10.2.11
+    /// FunctionDeclarationInstantiation: CreateArrayFromList of that call's
+    /// remaining arguments), so its elements are that call's arguments only.
+    /// A run with no receiver layout (`LAY_NONE`) births the rest template
+    /// every such run shares (`fill_instance`), merging the arguments of
+    /// every call; the per-site run of rule C (kind 7, `LAY_SITE`) births one
+    /// array per call site instead. Bounded as rule C: a site inside an
+    /// instance is its template.
+    fn rest_per_site(&self, f: FnIdx, lay: u32) -> bool {
+        lay == LAY_NONE && self.funcs[f as usize].rest.is_some()
     }
 
     /// Apply the entries of every pending instance (a worklist: instances
@@ -2220,7 +2245,16 @@ impl Model {
                 self.nodes[b as usize].frame = run;
                 self.nodes[b as usize].rel = true;
                 self.nodes[p as usize].frame = run;
+                // The binding stands at the parameter's declaration (the
+                // position generation recorded for the parameter's node).
+                let saved = self.stop_top.as_mut().map(|s| {
+                    let at = s.node_pos.get(p as usize).copied().unwrap_or(crate::topstop::NOPOS);
+                    std::mem::replace(&mut s.gen_pos, at)
+                });
                 self.edge(b, p);
+                if let (Some(s), Some(g)) = (self.stop_top.as_mut(), saved) {
+                    s.gen_pos = g;
+                }
                 self.funcs[f as usize].params[i] = b;
             }
         }
@@ -2411,7 +2445,7 @@ impl Model {
                     self.reflect_construct(call, target, new_target)
                 }
                 Deferred::NewNamed(name, call) => self.new_named(name, call),
-                Deferred::ForIn(call, ft, t) => self.for_in_tok(call, ft, t),
+                Deferred::ForIn(call, ft, t, l) => self.for_in_tok(call, ft, t, l),
                 // A summary's call: its instances run the method.
                 Deferred::Native(_, _, call) if self.sum.templates.contains(&call) => {}
                 Deferred::Native(r, key, call) => self.with_native(call, |m, call| {

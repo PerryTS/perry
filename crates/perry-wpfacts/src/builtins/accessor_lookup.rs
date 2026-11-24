@@ -149,6 +149,15 @@ pub(crate) fn annexb_lookup(m: &mut Model, origin: Option<Tok>, call: CallId, se
         );
     }
     m.add_prim(c.ret, prim::UNDEF);
+    let key = if c.spread.is_empty() {
+        match m.call_lit.get(&call).copied() {
+            Some(a) => Key::Named(a),
+            None if c.args.is_empty() => Key::Named(m.atom("undefined")),
+            None => Key::any(),
+        }
+    } else {
+        Key::any()
+    };
     let Some(origin) = origin else {
         m.add_top(c.ret, |_| {
             "accessor descriptor on a primitive wrapper".into()
@@ -162,15 +171,12 @@ pub(crate) fn annexb_lookup(m: &mut Model, origin: Option<Tok>, call: CallId, se
         });
         return;
     }
-    let key = if c.spread.is_empty() {
-        match m.call_lit.get(&call).copied() {
-            Some(a) => Key::Named(a),
-            None if c.args.is_empty() => Key::Named(m.atom("undefined")),
-            None => Key::any(),
-        }
-    } else {
-        Key::any()
-    };
+    // B.2.2.4/5 on a Proxy: its getOwnPropertyDescriptor and getPrototypeOf
+    // traps are the loop's [[GetOwnProperty]] and [[GetPrototypeOf]].
+    if let TokKind::Proxy(p) = m.toks[origin as usize] {
+        m.proxy_annexb_lookup(p, key, call, c.ret, setter);
+        return;
+    }
     // B.2.2.4/5: an own accessor of a holder on the chain answers its
     // [[Get]]/[[Set]], a data property or the end of the chain `undefined`.
     // The realm's own accessors answer only from the intrinsic holders the

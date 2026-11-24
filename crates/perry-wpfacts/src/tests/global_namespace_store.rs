@@ -64,7 +64,7 @@ fn program(main: &str, interp: bool) -> Vec<(String, perry_hir::Module)> {
 fn live(tail: &str, interp: bool) -> bool {
     let main = format!(
         "const load = () => import(\"./fmtlib.js\");\n\
-         const unknown: any = (globalThis as any)[process.argv[2]];\n{tail}\nconsole.log(1);\n"
+         declare function hostValue(): any; const unknown: any = hostValue;\n{tail}\nconsole.log(1);\n"
     );
     let hirs = program(&main, interp);
     let list: Vec<(String, &perry_hir::Module)> =

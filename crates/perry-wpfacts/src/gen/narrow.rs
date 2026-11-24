@@ -273,13 +273,25 @@ impl<'a> Gen<'a> {
     }
 
     /// The node a read of local `id` sees under a narrowing, if any.
-    pub(crate) fn narrowed_read(&self, mi: u32, id: u32) -> Option<NodeId> {
-        let f = self.m.cur_fn;
-        self.narrow
+    ///
+    /// An outlined for-in body (`Gen::for_in_body`) runs in place, between
+    /// the enclosing loops' tests and their updates: its read of the
+    /// enclosing function's local sees that function's narrowings, as its
+    /// write reaches them (`narrowed_write`, `write_fns`), as a capture of
+    /// the narrowed node.
+    pub(crate) fn narrowed_read(&mut self, mi: u32, id: u32) -> Option<NodeId> {
+        let cur = self.m.cur_fn;
+        let fs = self.write_fns(cur);
+        let n = self
+            .narrow
             .iter()
             .rev()
-            .find(|n| n.mi == mi && n.id == id && n.f == f)
-            .map(|n| if n.written { n.end } else { n.start })
+            .find(|n| n.mi == mi && n.id == id && fs.contains(&n.f))
+            .map(|n| if n.written { n.end } else { n.start })?;
+        if cur != NO_FN && self.m.node_fn[n as usize] != cur {
+            self.m.captures.insert((n, cur));
+        }
+        Some(n)
     }
 
     /// A write of `vn` into local `id`: it reaches every narrowing's end
@@ -848,6 +860,32 @@ pub(crate) enum Presence {
     /// (`Cons::NotObjectProto`): not `%Object.prototype%`, while the global
     /// holds the intrinsic constructor.
     NotObjectProto,
+    /// Rule NOT-ERROR: `local instanceof Error` failed, the bare global
+    /// name (`Cons::NotError`): no value whose prototype chain surely
+    /// reaches `%Error.prototype%`, while the global holds the intrinsic
+    /// constructor.
+    NotError,
+    /// Rule RP2: `arrayRecordNeedsIterator(local)` true (`Cons::RecordEntry`):
+    /// no Array the runtime takes the array arm for.
+    RecordProtocol,
+}
+
+/// The source local of `arrayRecordNeedsIterator(t)`: the test of a guarded
+/// for-of (`perry-hir` `lower/for_of_guard.rs` `source_for_of`), whose
+/// IteratorRecord arm runs only when it is true.
+fn needs_iterator_of(e: &Expr) -> Option<&Expr> {
+    match e {
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object: None,
+            args,
+            ..
+        } if module == "__perry_runtime" && method == "arrayRecordNeedsIterator" && args.len() == 1 => {
+            args.first()
+        }
+        _ => None,
+    }
 }
 
 /// What condition `c` implies when it is `positive`ly true (false): a clip
@@ -918,6 +956,29 @@ fn implied<'p>(
             // Only a fact of a parameter that the call binds to a local.
             out.extend(found);
         }
+        // Rule RP2: `arrayRecordNeedsIterator(t)` decided true, bare or
+        // compared with a Boolean constant (ECMA-262 7.2.16: only `b` is
+        // `b`): what runs there never sees `t` an Array the runtime takes
+        // the array arm for.
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne),
+            left,
+            right,
+            ..
+        } if needs_iterator_of(left).is_some() && matches!(right.as_ref(), Expr::Bool(_)) => {
+            let Expr::Bool(b) = right.as_ref() else {
+                return;
+            };
+            let needs = *b == ((*op == CompareOp::Eq) == positive);
+            if let Some(id) = needs.then(|| needs_iterator_of(left)).flatten().and_then(|t| host_of(t, subst, depth)) {
+                out.push(Implied::Present(id, Presence::RecordProtocol));
+            }
+        }
+        Expr::NativeMethodCall { .. } if positive && needs_iterator_of(c).is_some() => {
+            if let Some(id) = needs_iterator_of(c).and_then(|t| host_of(t, subst, depth)) {
+                out.push(Implied::Present(id, Presence::RecordProtocol));
+            }
+        }
         // Rule G2: a truthy `local.key` (module docs, "Guards"); rule
         // G2-false: a falsy one, through the same forms negated.
         Expr::PropertyGet {
@@ -987,18 +1048,41 @@ fn implied<'p>(
             ty_expr: Some(rhs),
             ..
         } if !positive => {
-            let shared = match rhs.as_ref() {
+            // Rule NOT-ERROR: `Error` the same way; the runtime answers a
+            // native Error by its brand and any other object by its chain
+            // (`Cons::NotError`).
+            let presence = match rhs.as_ref() {
                 Expr::PropertyGet {
                     object, property, ..
                 } if matches!(object.as_ref(), Expr::GlobalGet(0)) => match property.as_str() {
-                    "ArrayBuffer" => Some(false),
-                    "SharedArrayBuffer" => Some(true),
+                    "ArrayBuffer" => Some(Presence::NotBuffer(false)),
+                    "SharedArrayBuffer" => Some(Presence::NotBuffer(true)),
+                    "Error" => Some(Presence::NotError),
                     _ => None,
                 },
                 _ => None,
             };
-            if let (Some(shared), Some(Bound::Local(id))) = (shared, bound_of(expr, subst)) {
-                out.push(Implied::Present(id, Presence::NotBuffer(shared)));
+            if let (Some(presence), Some(Bound::Local(id))) = (presence, bound_of(expr, subst)) {
+                out.push(Implied::Present(id, presence));
+            }
+        }
+        // Rule T7: `local !== Object.prototype` true (`===` false; `!=`
+        // true, `==` false), the right-hand side the `prototype` read of the
+        // bare global `Object`: the local is not `%Object.prototype%`. The
+        // intrinsic constructor's `prototype` is non-writable and
+        // non-configurable (ECMA-262 20.1.2.21); an object equals an object
+        // only when it is that object (7.2.15 step 1, 7.2.16 step 2). The
+        // global's other values let every value through
+        // (`guard::NOT_OBJECT_CTOR`).
+        Expr::Compare { op, left, right, .. } if object_prototype(left) || object_prototype(right) => {
+            let x = if object_prototype(right) { left } else { right };
+            let holds = matches!(
+                (op, positive),
+                (CompareOp::Ne | CompareOp::LooseNe, true)
+                    | (CompareOp::Eq | CompareOp::LooseEq, false)
+            );
+            if let (true, Some(Bound::Local(id))) = (holds, bound_of(x, subst)) {
+                out.push(Implied::Present(id, Presence::NotObjectProto));
             }
         }
         // Rule T7: `local !== Object.prototype` true (`===` false; `!=`
@@ -1667,6 +1751,9 @@ impl<'a> Gen<'a> {
                 Implied::Present(_, Presence::NotNull) => {
                     self.m.cons(src, Cons::NotNull { dst: start })
                 }
+                Implied::Present(_, Presence::RecordProtocol) => {
+                    self.m.cons(src, Cons::RecordEntry { dst: start })
+                }
                 Implied::Present(_, Presence::TypeIs(mask)) => {
                     self.m.cons(src, Cons::TypeIs { mask, dst: start })
                 }
@@ -1709,6 +1796,30 @@ impl<'a> Gen<'a> {
                         ctor,
                         Cons::Guard {
                             test: crate::model::guard::NOT_OBJECT_CTOR,
+                            from: src,
+                            dst: start,
+                        },
+                    );
+                }
+                Implied::Present(_, Presence::NotError) => {
+                    // The global's value (`globalThis.Error`, the read the
+                    // right-hand side makes): any value but the intrinsic
+                    // constructor lets every value through. `hook`: what
+                    // `GetMethod(Error, @@hasInstance)` may find (13.10.2
+                    // step 2); a program-installed one lets every value
+                    // through as well (`Model::not_error_drops`).
+                    let global = self.expr(fx, &Expr::GlobalGet(0));
+                    let ctor = self.tmp("instanceof-ctor");
+                    let key = Key::Named(self.m.atom("Error"));
+                    self.m.cons(global, Cons::Load { key, dst: ctor });
+                    let hook = self.tmp("instanceof-hook");
+                    let hk = Key::Named(self.m.atom(crate::model::WK_HAS_INSTANCE));
+                    self.m.cons(ctor, Cons::Load { key: hk, dst: hook });
+                    self.m.cons(src, Cons::NotError { hook, dst: start });
+                    self.m.cons(
+                        ctor,
+                        Cons::Guard {
+                            test: crate::model::guard::NOT_ERROR_CTOR,
                             from: src,
                             dst: start,
                         },

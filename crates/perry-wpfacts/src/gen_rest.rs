@@ -94,12 +94,54 @@ impl<'a> Gen<'a> {
         Some((class_name, args, arg("get"), arg("set")))
     }
 
+    /// The key a literal shape's constructor stores its argument `i` under
+    /// (`this.k = p_i`), when it stores it so.
+    pub(crate) fn shape_arg_key(&self, mi: u32, class_name: &str, i: usize) -> Option<String> {
+        let module = self.modules[mi as usize].1;
+        let ctor = module.classes.iter().find(|c| c.name == class_name)?.constructor.as_ref()?;
+        let p = ctor.params.get(i)?.id;
+        ctor.body.iter().find_map(|s| match s {
+            Stmt::Expr(Expr::PropertySet {
+                object,
+                property,
+                value,
+                ..
+            }) if matches!(object.as_ref(), Expr::This)
+                && matches!(value.as_ref(), Expr::LocalGet(q) if *q == p) =>
+            {
+                Some(property.clone())
+            }
+            _ => None,
+        })
+    }
+
     /// The class whose method home `home` reads, when it is that home.
     fn class_home_of(&self, fx: &Fx, home: &Expr) -> Option<TmplId> {
         match home {
             Expr::LocalGet(id) => self.class_homes.get(&(fx.module, *id)).copied(),
             _ => None,
         }
+    }
+
+    /// The value of builtin module `m` (`require(m)`, a namespace import
+    /// of it, HIR's `NativeModuleRef`): the namespace object the realm
+    /// declares. `process` (HIR also names it `process.namespace`) is the
+    /// global process object (node: `require("process") ===
+    /// globalThis.process`). node:module as a value hands out
+    /// `Module._cache`. None: no realm declaration names the module.
+    pub(crate) fn builtin_module_value(&mut self, m: &str) -> Option<NodeId> {
+        let name = m.strip_prefix("node:").unwrap_or(m);
+        let name = if name == "process.namespace" {
+            "process"
+        } else {
+            name
+        };
+        let t = crate::builtins::builtin_module_tok(&mut self.m, name)?;
+        if name == "module" {
+            let cache = self.m.cjs_cache;
+            self.to_sink(cache, "node:module names Module._cache");
+        }
+        Some(self.tok_node(t))
     }
 
     pub(crate) fn expr_rest(&mut self, fx: &Fx, e: &Expr) -> NodeId {
@@ -111,28 +153,10 @@ impl<'a> Gen<'a> {
             return self.folded_call(fx, e, &call);
         }
         match e {
-            Expr::NativeModuleRef(m) => {
-                let name = m.strip_prefix("node:").unwrap_or(m);
-                // The `process` module is the global process object (node:
-                // `require("process") === globalThis.process`); HIR names
-                // the value of `require("process")` and of a namespace
-                // import `process.namespace`.
-                // node:module as a value hands out `Module._cache`.
-                if name == "module" {
-                    let cache = self.m.cjs_cache;
-                    self.to_sink(cache, "node:module names Module._cache");
-                }
-                // A module the realm declares is its namespace object.
-                let name = if name == "process.namespace" {
-                    "process"
-                } else {
-                    name
-                };
-                if let Some(t) = crate::builtins::builtin_module_tok(&mut self.m, name) {
-                    return self.tok_node(t);
-                }
-                self.m.top_val(&format!("native module ref {m}"))
-            }
+            Expr::NativeModuleRef(m) => match self.builtin_module_value(m) {
+                Some(n) => n,
+                None => self.m.top_val(&format!("native module ref {m}")),
+            },
             Expr::NativeMethodCall {
                 module,
                 object,
@@ -422,13 +446,14 @@ impl<'a> Gen<'a> {
                 let n = self.m.node_l("process.argv");
                 self.m.own(n);
                 let argv = self.m.atom("argv");
-                match self.m.process_arrays.iter().find(|a| a.0 == argv) {
-                    Some(&(_, a, _)) => self.m.edge(a, n),
-                    None => {
-                        self.m.add_top(n, |_| "process.argv".into());
-                        self.m.add_prim(n, prim::ALL);
-                    }
-                }
+                // The realm declares `process.argv` a host array of strings
+                // (os.rs `process.argv`, `elements = string`); the manifest
+                // check (`RealmManifest::validate_namespace_values`) fails
+                // the build otherwise.
+                let Some(&(_, a, _)) = self.m.process_arrays.iter().find(|a| a.0 == argv) else {
+                    unreachable!("process.argv: the realm declares it a host string array")
+                };
+                self.m.edge(a, n);
                 n
             }
             // `process.env`: the one object the realm declares (`values =
@@ -511,19 +536,25 @@ impl<'a> Gen<'a> {
                     );
                     ops.push(v);
                 }
-                let (t, n) = self.bobj(mi, "arraybox");
-                let fa = self.m.field_any(t);
+                // A fresh Array of the keys (CreateArrayFromList, ECMA-262
+                // 7.3.18): an ordinary Array, its elements the keys, no other
+                // own property (rule RP2, `Model::ordinary_arrays`).
+                let fa = self.tmp("ownkeys");
                 // ECMA-262 20.1.2.18 / 20.1.2.10: Strings; 20.1.2.11:
                 // Symbols; 28.1.11 Reflect.ownKeys: both. Rule PK:
-                // getOwnPropertyNames gives the operand's own names.
+                // getOwnPropertyNames gives the operand's own names; rule
+                // EK: Object.keys its own enumerable String keys (7.3.23
+                // EnumerableOwnProperties, the keys `Object.entries` gives).
                 match (e, ops.first()) {
                     (Expr::ObjectGetOwnPropertyNames(..), Some(&o)) => {
                         self.m.cons(o, Cons::OwnNames { dst: fa });
                     }
+                    (Expr::ObjectKeys(..), Some(&o)) => self.m.cons(o, Cons::OwnKeys { dst: fa }),
                     (Expr::ObjectGetOwnPropertySymbols(..), _) => self.m.add_prim(fa, prim::SYMBOL),
                     (Expr::ReflectOwnKeys(..), _) => self.m.add_prim(fa, prim::STR | prim::SYMBOL),
                     _ => self.m.add_prim(fa, prim::STR),
                 }
+                let n = self.new_ordinary_arr_from(mi, "keys", &[fa]);
                 n
             }
             Expr::NamespacePatched(_) => self.prim_node(prim::BOOL),
@@ -559,7 +590,36 @@ impl<'a> Gen<'a> {
                 let _ = self.expr(fx, event);
                 let h = self.expr(fx, handler);
                 self.to_sink(h, "process event handler (called by the runtime)");
-                self.m.top_val("process event registration result")
+                match e {
+                    // perry-runtime os/os_process_emitter.rs
+                    // `register_process_listener`: every path returns
+                    // `process_namespace_value()`, the process object.
+                    Expr::ProcessOn { .. } | Expr::ProcessOnce { .. } => {
+                        let t = self.m.tok(TokKind::Builtin(BuiltinNs::Process));
+                        self.tok_node(t)
+                    }
+                    // perry-codegen misc_methods.rs: `js_readline_stdin_on`
+                    // is void; the expression is `undefined`.
+                    Expr::ProcessStdinOn { .. } => self.prim_node(prim::UNDEF),
+                    // perry-runtime tty.rs `js_process_stdout_on`: returns
+                    // `js_process_stdout()`: `process.stdout`, or `undefined`
+                    // while no os hook is installed (os_hook_slots.rs).
+                    Expr::ProcessStdoutOn { .. } => {
+                        let t = self.m.tok(TokKind::Builtin(BuiltinNs::Stdout));
+                        let n = self.tok_node(t);
+                        self.m.add_prim(n, prim::UNDEF);
+                        n
+                    }
+                    // perry-stdlib readline `js_readline_stdin_remove_listener`
+                    // returns the stdin readline interface handle
+                    // (`js_nanbox_handle(STDIN_READLINE_HANDLE)`, the value
+                    // `readline.createInterface` gives for stdin); the stub
+                    // returns `undefined`. The model has no native-handle
+                    // value yet (OPAQUE-BUILTIN lane).
+                    _ => self
+                        .m
+                        .top_val("process.stdin.removeListener result: readline handle"),
+                }
             }
             Expr::ProcessUptime
             | Expr::ProcessCwd
@@ -600,10 +660,6 @@ impl<'a> Gen<'a> {
             | Expr::PathMatchesGlob(..)
             | Expr::PathResolveJoin(..)
             | Expr::PathWin32Join(..)
-            | Expr::ObjectIsFrozen(..)
-            | Expr::ObjectIsSealed(..)
-            | Expr::ObjectIsExtensible(..)
-            | Expr::ReflectIsExtensible(..)
             | Expr::SymbolFor(..)
             | Expr::WellKnownSymbol(..)
             | Expr::SymbolKeyFor(..)
@@ -659,6 +715,20 @@ impl<'a> Gen<'a> {
             }
             // `Symbol(d)` is a Symbol (ECMA-262 20.4.1.1: ToString of `d`
             // unless undefined).
+            // Rule PXINV: [[IsExtensible]] of the operand (20.1.2.16,
+            // 28.1.10), and for isFrozen / isSealed TestIntegrityLevel
+            // (7.3.16): [[OwnPropertyKeys]] and [[GetOwnProperty]] of each
+            // key. A primitive operand answers without any (Reflect's
+            // throws a TypeError); nothing is converted.
+            Expr::ObjectIsFrozen(x)
+            | Expr::ObjectIsSealed(x)
+            | Expr::ObjectIsExtensible(x)
+            | Expr::ReflectIsExtensible(x) => {
+                let o = self.expr(fx, x);
+                let integrity = matches!(e, Expr::ObjectIsFrozen(..) | Expr::ObjectIsSealed(..));
+                crate::builtins::is_extensible_ops(&mut self.m, o, integrity);
+                self.prim_node(prim::BOOL)
+            }
             Expr::SymbolNew(..) => self.prim_kids(
                 fx,
                 e,
@@ -1150,8 +1220,6 @@ impl<'a> Gen<'a> {
             | Expr::JsNew { .. }
             | Expr::JsNewFromHandle { .. }
             | Expr::JsCreateCallback { .. }
-            | Expr::ProxyApply { .. }
-            | Expr::ProxyConstruct { .. }
             | Expr::ReflectDefineMetadata { .. }
             | Expr::ReflectGetMetadata { .. }
             | Expr::ReflectGetOwnMetadata { .. }
@@ -1298,6 +1366,8 @@ impl<'a> Gen<'a> {
             | Expr::ProxySet { .. }
             | Expr::ProxyHas { .. }
             | Expr::ProxyDelete { .. }
+            | Expr::ProxyApply { .. }
+            | Expr::ProxyConstruct { .. }
             | Expr::ProxyRevocable { .. }
             | Expr::ReflectGet { .. }
             | Expr::ReflectSet { .. }

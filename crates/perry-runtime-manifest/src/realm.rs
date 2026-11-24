@@ -267,6 +267,10 @@ pub struct RealmEntry {
     /// Its [[Prototype]] (`RealmDeclaration::prototype`): the declaration a
     /// lookup past `own` continues on; `None` ends the chain (`null`).
     pub proto: Option<&'static str>,
+    /// The value a constant declaration holds (`RealmDeclaration::value`,
+    /// `%WorkerGlobal%.onmessage`: `null`), its kind as an own property's;
+    /// `None` for a declaration without one.
+    pub value: Option<RealmOwnValue>,
 }
 
 /// An own property of a declaration in the generated compiler table.
@@ -299,27 +303,35 @@ pub enum RealmOwnValue {
     Other,
 }
 
+impl RealmValue {
+    /// The `RealmOwnValue` variant (const Rust, without its path) of a
+    /// property or a constant declaration holding this value.
+    pub fn emit_own_value(&self) -> String {
+        match self {
+            RealmValue::Undefined => "Undefined".into(),
+            RealmValue::Null => "Null".into(),
+            RealmValue::Boolean(_) => "Boolean".into(),
+            RealmValue::NumberBits(_) => "Number".into(),
+            RealmValue::String(_) => "String".into(),
+            RealmValue::Symbol(_) => "Symbol".into(),
+            RealmValue::Reference(r) => format!("Reference({r:?})"),
+            // A constructor identity capture (`realm_facts.rs`): a
+            // runtime-internal 0x7FFE word, never a JS Number (P3 B4a).
+            RealmValue::Int32(_)
+            | RealmValue::RawReference(_)
+            | RealmValue::Bytes(_)
+            | RealmValue::RawWord(_)
+            | RealmValue::Dynamic(_) => "Other".into(),
+        }
+    }
+}
+
 impl RealmProperty {
     /// Const Rust for this property's `RealmOwn` in the generated table;
     /// `p` is the path prefix of the schema module.
     pub fn emit_own(&self, p: &str) -> String {
         let value = match (&self.get, &self.set, &self.value) {
-            (None, None, Some(v)) => match v {
-                RealmValue::Undefined => "Undefined".into(),
-                RealmValue::Null => "Null".into(),
-                RealmValue::Boolean(_) => "Boolean".into(),
-                RealmValue::NumberBits(_) => "Number".into(),
-                RealmValue::String(_) => "String".into(),
-                RealmValue::Symbol(_) => "Symbol".into(),
-                RealmValue::Reference(r) => format!("Reference({r:?})"),
-                // A constructor identity capture (`realm_facts.rs`): a
-                // runtime-internal 0x7FFE word, never a JS Number (P3 B4a).
-                RealmValue::Int32(_)
-                | RealmValue::RawReference(_)
-                | RealmValue::Bytes(_)
-                | RealmValue::RawWord(_)
-                | RealmValue::Dynamic(_) => "Other".into(),
-            },
+            (None, None, Some(v)) => v.emit_own_value(),
             (None, None, None) => "Undefined".into(),
             (get, set, _) => format!("Accessor {{ get: {get:?}, set: {set:?} }}"),
         };
@@ -449,6 +461,92 @@ impl RealmManifest {
                         "{} references undeclared realm node {edge}",
                         d.name
                     ));
+                }
+            }
+        }
+        self.validate_namespace_values()
+    }
+
+    /// Every own member of a host namespace object (`%Global%`, `process`,
+    /// `node:<m>` and their sub-namespaces) has a value side: a data value
+    /// (a runtime-computed one names its primitive type, or the exotic
+    /// declaration of the one host object it is declares what that object
+    /// holds), or an accessor whose getter declares what it returns, with
+    /// no `open` effect and no `unknown` operand. A read of such a member is
+    /// then the declared value, never an unknown one.
+    fn validate_namespace_values(&self) -> Result<(), String> {
+        use self::{RealmEffect as E, RealmOperand as O};
+        fn unknown(o: &O) -> bool {
+            match o {
+                O::Unknown => true,
+                O::Fresh {
+                    elems,
+                    fields,
+                    slots,
+                    ..
+                } => {
+                    elems.iter().any(unknown)
+                        || fields.iter().chain(slots.iter()).any(|f| unknown(&f.value))
+                }
+                O::Promise { value, reject } => value.iter().chain(reject.iter()).any(unknown),
+                O::Species { args, .. } => args.iter().any(unknown),
+                O::Union(members) => members.iter().any(unknown),
+                O::Prim(_)
+                | O::Slot(_)
+                | O::Native(_)
+                | O::Namespace(_)
+                | O::Bound
+                | O::Json
+                | O::Never => {
+                    false
+                }
+            }
+        }
+        let decl = |name: &str| self.declarations.iter().find(|d| d.name == name);
+        for d in self
+            .declarations
+            .iter()
+            .filter(|d| d.kind == RealmKind::Namespace)
+        {
+            for p in &d.properties {
+                let member = format!("{}.{}", d.name, p.key);
+                match (&p.value, &p.get) {
+                    (Some(RealmValue::Dynamic(provider)), _) if p.value_type.is_none() => {
+                        let typed = self.declarations.iter().any(|h| {
+                            h.kind == RealmKind::Exotic
+                                && h.value.as_ref() == p.value.as_ref()
+                                && (h.elements.is_some() || h.values.is_some())
+                        });
+                        if !typed {
+                            return Err(format!(
+                                "namespace member {member}: runtime value {provider} declares no type \
+                                 (`runtime(path, kind)`, or an exotic declaration with `elements`/`values`)"
+                            ));
+                        }
+                    }
+                    (Some(_), _) => {}
+                    (None, Some(get)) => {
+                        let Some(g) = decl(get) else {
+                            return Err(format!("namespace member {member}: undeclared getter {get}"));
+                        };
+                        let returns = g.effects.iter().any(|e| matches!(e, E::Returns(_)));
+                        let open = g.effects.iter().any(|e| matches!(e, E::Open));
+                        let unknown_operand = g.effects.iter().any(|e| match e {
+                            E::Returns(o) => unknown(o),
+                            E::Calls { this, args, .. } => unknown(this) || args.iter().any(unknown),
+                            _ => false,
+                        });
+                        if !returns || open || unknown_operand {
+                            return Err(format!(
+                                "namespace member {member}: getter {get} ({}:{}) must declare \
+                                 `returns(..)` with no `open` effect and no `unknown` operand",
+                                g.source, g.line
+                            ));
+                        }
+                    }
+                    (None, None) => {
+                        return Err(format!("namespace member {member} has no value and no getter"));
+                    }
                 }
             }
         }

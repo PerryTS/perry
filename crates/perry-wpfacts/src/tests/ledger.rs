@@ -257,21 +257,25 @@ cause_test!(
     "escaped-parameter",
     "property",
     "x",
-    r#"const g: any = (globalThis as any).hostFn; g(function (o: any) { return o.x; });"#
+    r#"
+        declare function external(x?: unknown): any;const g: any = external(); g(function (o: any) { return o.x; });"#
 );
 cause_test!(
     unseen escaped_this,
     "escaped-this",
     "property",
     "y",
-    r#"const g: any = (globalThis as any).hostFn; g({ m() { return (this as any).y; } });"#
+    // A plain function: a method's `this` is its class family (K3 (B)).
+    r#"
+        declare function external(x?: unknown): any;const g: any = external(); g(function (this: any) { return this.y; });"#
 );
 cause_test!(
     unseen intrinsic_prototype_top_store,
     "intrinsic-prototype-top-store",
     "property",
     "q",
-    r#"const g: any = (globalThis as any).hostFn; (Array.prototype as any)[g()] = g(); const m: any = ([1] as any).zz; console.log(m.q);"#
+    r#"
+        declare function external(x?: unknown): any;const g: any = external(); (Array.prototype as any)[g()] = g(); const m: any = ([1] as any).zz; console.log(m.q);"#
 );
 /// A read on a ⊤ receiver names the receiver's own root, even when a key
 /// written onto a builtin prototype through ⊤ is also a member the primitive
@@ -282,7 +286,8 @@ fn top_receiver_read_keeps_the_receivers_root() {
     // written onto String.prototype through top, and its result is the
     // receiver of .z.
     let pf = whole(&unseen(
-        r#"const g: any = (globalThis as any).hostFn; (String.prototype as any)[g()] = g(); const r: any = Math.random() > 0.5 ? g() : "s"; console.log(r.q.z);"#,
+        r#"
+        declare function external(x?: unknown): any;const g: any = external(); (String.prototype as any)[g()] = g(); const r: any = Math.random() > 0.5 ? g() : "s"; console.log(r.q.z);"#,
     ));
     let got = causes(&pf, "property", "z");
     assert!(
@@ -314,7 +319,8 @@ cause_test!(
     "escaped-object-field",
     "property",
     "b",
-    r#"const g: any = (globalThis as any).hostFn; const o = { a: { b: 1 } }; g(o); console.log(o.a.b);"#
+    r#"
+        declare function external(x?: unknown): any;const g: any = external(); const o = { a: { b: 1 } }; g(o); console.log(o.a.b);"#
 );
 cause_test!(
     external_input,
@@ -342,14 +348,16 @@ cause_test!(
     "unknown-accessor-function",
     "property",
     "x",
-    r#"const g: any = (globalThis as any).hostFn; const o: any = {}; Object.defineProperty(o, "p", { get: g }); console.log(o.p.x);"#
+    r#"
+        declare function external(x?: unknown): any;const g: any = external(); const o: any = {}; Object.defineProperty(o, "p", { get: g }); console.log(o.p.x);"#
 );
 cause_test!(
     reflective_operation,
     "reflective-operation",
     "property",
     "b",
-    r#"const g: any = (globalThis as any).hostFn; const t = { a: { b: 1 } }; new Proxy(t, g()); console.log(t.a.b);"#
+    r#"
+        declare function external(x?: unknown): any;const g: any = external(); const t = { a: { b: 1 } }; new Proxy(t, g()); console.log(t.a.b);"#
 );
 
 verdict_test!(

@@ -12,7 +12,8 @@ use super::*;
 fn verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
-        class Svc {{ size = 3; leak() {{ (globalThis as any).hostTake(this); }} }}
+        declare function external(x?: unknown): any;
+        class Svc {{ size = 3; leak() {{ external(this); }} }}
         function g(a: any) {{ return a.size; }}
         const k = Math.floor(Math.random() * 2);
         const w: any = k > 0 ? 3n : 2;
@@ -40,48 +41,48 @@ macro_rules! case {
 case!(
     bigint_key_names_no_to_json,
     false,
-    "const ta: any = new Float64Array(4); const o: any = new Svc(); ta[w] = o; const j = ta.toJSON; (globalThis as any).hostTake(j); console.log(g(o));"
+    "const ta: any = new Float64Array(4); const o: any = new Svc(); ta[w] = o; const j = ta.toJSON; external(j); console.log(g(o));"
 );
 // (b) Nor any other non-digit name.
 case!(
     bigint_key_names_no_foo,
     false,
-    "const ta: any = new Float64Array(4); const o: any = new Svc(); ta[w] = o; (globalThis as any).hostTake(ta.foo); console.log(g(o));"
+    "const ta: any = new Float64Array(4); const o: any = new Svc(); ta[w] = o; external(ta.foo); console.log(g(o));"
 );
 // (c) A digit name a BigInt may spell holds the raw value.
 case!(
     bigint_key_digit_name_may_hold_the_value,
     true,
-    "const ta: any = new Float64Array(4); const o: any = new Svc(); ta[w] = o; (globalThis as any).hostTake(ta[\"12345678901234567890\"]); console.log(g(o));"
+    "const ta: any = new Float64Array(4); const o: any = new Svc(); ta[w] = o; external(ta[\"12345678901234567890\"]); console.log(g(o));"
 );
 // (c) So may an unknown String key.
 case!(
     bigint_key_unknown_string_read_may_hold_the_value,
     true,
-    "const ta: any = new Float64Array(4); const o: any = new Svc(); ta[w] = o; const s: any = (globalThis as any).hostKey(); (globalThis as any).hostTake(ta[s]); console.log(g(o));"
+    "const ta: any = new Float64Array(4); const o: any = new Svc(); ta[w] = o; const s: any = external(); external(ta[s]); console.log(g(o));"
 );
 // (d) A key that may be any String may name `toJSON`.
 case!(
     string_key_may_name_to_json,
     true,
-    "const ta: any = new Float64Array(4); const o: any = new Svc(); const s: any = (globalThis as any).hostKey(); const x: any = k > 0 ? s : 2; ta[x] = o; (globalThis as any).hostTake(ta.toJSON); console.log(g(o));"
+    "const ta: any = new Float64Array(4); const o: any = new Svc(); const s: any = external(); const x: any = k > 0 ? s : 2; ta[x] = o; external(ta.toJSON); console.log(g(o));"
 );
 // (e) A plain object receiver: the key names digits there too (10.1.9
 // OrdinarySet of Number::toString / BigInt::toString), never `toJSON`.
 case!(
     plain_object_receiver_names_no_to_json,
     false,
-    "const ta: any = new Float64Array(4); const p: any = {}; const r: any = k > 0 ? ta : p; const o: any = new Svc(); r[w] = o; (globalThis as any).hostTake(p.toJSON); console.log(g(o));"
+    "const ta: any = new Float64Array(4); const p: any = {}; const r: any = k > 0 ? ta : p; const o: any = new Svc(); r[w] = o; external(p.toJSON); console.log(g(o));"
 );
 // (e) The plain object's digit names may hold the value.
 case!(
     plain_object_receiver_digit_name_may_hold_the_value,
     true,
-    "const ta: any = new Float64Array(4); const p: any = {}; const r: any = k > 0 ? ta : p; const o: any = new Svc(); r[w] = o; (globalThis as any).hostTake(p[\"12345678901234567890\"]); console.log(g(o));"
+    "const ta: any = new Float64Array(4); const p: any = {}; const r: any = k > 0 ? ta : p; const o: any = new Svc(); r[w] = o; external(p[\"12345678901234567890\"]); console.log(g(o));"
 );
 // (f) A Number key is an element store: the element is a Number.
 case!(
     number_key_is_an_element_store,
     false,
-    "const ta: any = new Float64Array(4); const o: any = new Svc(); ta[k] = o; (globalThis as any).hostTake(ta[k]); (globalThis as any).hostTake(ta.toJSON); console.log(g(o));"
+    "const ta: any = new Float64Array(4); const o: any = new Svc(); ta[k] = o; external(ta[k]); external(ta.toJSON); console.log(g(o));"
 );

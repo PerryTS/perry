@@ -217,7 +217,7 @@ fn an_array_unknown_code_holds_has_no_length() {
     let r = ranges(
         "const M = [1, 2, 3, 4];\n\
          function g(): number { let s = 0; for (let w = 0; w < M.length; w++) s += w; return s; }\n\
-         (globalThis as any).someHostHook?.(M);\n\
+         external(M);\n\
          setTimeout(() => console.log(g()), 0);",
     );
     assert!(unbounded(&r, "w"), "w: {:?}", r["w"]);
