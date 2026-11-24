@@ -2320,6 +2320,26 @@ impl Model {
                     );
                 }
             }
+            // Rule PXOWN: ObjectDefineProperties( O, p ) (20.1.2.3.1) with the
+            // Proxy as the descriptors map: p.[[OwnPropertyKeys]]() (`ownKeys`),
+            // p.[[GetOwnProperty]]( k ) of each key (`getOwnPropertyDescriptor`)
+            // and Get( p, k ) of each enumerable one (`get`, Receiver p): the
+            // descriptor objects (`descs`, which generation reads as
+            // ToPropertyDescriptor does), each defined on O under k, a
+            // computed key (`define_any_on`: E5 on O, the value stored under
+            // any key).
+            Cons::DefineAll {
+                o,
+                descs,
+                value,
+                site,
+                reason,
+            } => {
+                self.proxy_own_props(p, reason);
+                let g = self.proxy_get(p, Key::any(), NO_NODE);
+                self.edge(g, descs);
+                self.define_any_on(o, descs, value, site, reason);
+            }
             // Rule PXESC: the rules with no Proxy model yet, each named (a new
             // rule must take a place in this match). The operation may run
             // any internal method of the Proxy: its escape, the rule named in
@@ -2335,7 +2355,6 @@ impl Model {
             | Cons::CallerValue { .. }
             | Cons::CjsPublish { .. }
             | Cons::ContractThis { .. }
-            | Cons::DefineAll { .. }
             | Cons::DefineDesc { .. }
             | Cons::EnumKeyAny { .. }
             | Cons::EnumKeyStore { .. }

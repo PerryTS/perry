@@ -565,3 +565,24 @@ fn proxy_own_descriptor_accessor_is_the_traps() {
         site("{ a: 1 }", gopd, op, true).unwrap();
     }
 }
+
+/// Rule PXOWN: Object.defineProperties( o, px ) reads the descriptors off
+/// the Proxy with its `ownKeys`, `getOwnPropertyDescriptor` and `get`
+/// traps and defines them on `o`; nothing of the target escapes.
+#[test]
+fn proxy_define_properties_map_runs_the_traps() {
+    let op = "const o: any = {};\nObject.defineProperties(o, px);";
+    let out = format!("{op}\nexternal(o);");
+    for h in [
+        "get(t: any, k: any) { external(payload); return { value: 1 }; }",
+        "ownKeys(t: any) { external(payload); return []; }",
+        "getOwnPropertyDescriptor(t: any, k: any) { external(payload); return undefined; }",
+    ] {
+        site("{ a: { value: 1 } }", h, op, false).unwrap();
+    }
+    let get = "get(t: any, k: any) { return { value: payload, enumerable: true }; }";
+    site("{ a: { value: 1 } }", get, &out, false).unwrap();
+    site("{ a: { value: payload } }", "", &out, false).unwrap();
+    site("{ a: { value: payload } }", "", op, true).unwrap();
+    site("{ a: { value: 1 } }", get, op, true).unwrap();
+}
