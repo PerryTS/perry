@@ -67,7 +67,7 @@ pub(super) fn default_output_path(
 
 /// `--target macos` or any embedded-Apple target, or a native build on a
 /// macOS host — the platforms whose shared-library convention is `.dylib`.
-pub(super) fn is_apple_target(target: Option<&str>) -> bool {
+fn is_apple_target(target: Option<&str>) -> bool {
     matches!(
         target,
         Some(
