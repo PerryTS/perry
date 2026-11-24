@@ -20,11 +20,26 @@ cancels.
 On the web target the callback receives only the file's name, since a page
 cannot read a path. `openFileDialogData(accept, callback)` delivers the name and
 the contents as a base64 `data:` URL, ready for an upload request; `accept`
-filters the picker (`"image/*"`, `".pdf"`, or `""` for any file). Native
-backends open no dialog for it; read the path from `openFileDialog` instead.
+filters the picker (`"image/*"`, `".pdf"`, or `""` for any file).
+
+| Outcome | `name` | `dataUrl` |
+|---|---|---|
+| picked | file name | `data:…;base64,…`, also for an empty file |
+| cancelled | `""` | `""` |
+| could not be read | file name | `""` |
+| native backend | `""` | `""` |
+
+Native backends open no dialog and report a cancelled one before the call
+returns; read the path from `openFileDialog` instead. On HarmonyOS the call does
+nothing, as `openFileDialog` does.
+
+The page keeps every `dataUrl` it receives, about 1.4 times the file's size, in
+memory until it is closed, and there is no size limit: use it for photos and
+documents, not for large files.
 
 ```typescript,no-test
 openFileDialogData("image/*", (name: string, dataUrl: string) => {
+  if (dataUrl === "") return;
   fetch("/api/photos", { method: "POST", body: JSON.stringify({ name, dataUrl }) });
 });
 ```
