@@ -402,7 +402,12 @@ impl Writer<'_> {
             .collect();
         self.strings = std::mem::take(&mut self.strings)
             .into_values()
-            .map(|(index, handle)| (handle.with_const_ptr::<u8, _>(|p| p as usize), (index, handle)))
+            .map(|(index, handle)| {
+                (
+                    handle.with_const_ptr::<u8, _>(|p| p as usize),
+                    (index, handle),
+                )
+            })
             .collect();
     }
 
