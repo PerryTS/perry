@@ -164,6 +164,18 @@ pub enum ProxyOp {
     Plain(Tok, ChainAct),
     /// Rule PXESC: the Proxy reached unknown code (`proxy_escape`).
     Escape,
+    /// Rule PXOWN: the node of the `getOwnPropertyDescriptor` trap's
+    /// results for any key (`proxy_own_props`).
+    OwnDesc,
+    /// Rule PXOWN: one copy of the own properties (CopyDataProperties)
+    /// into the targets node at a site: its stores.
+    Copy(NodeId, SiteId),
+    /// Rule PXOWN: the descriptor values one getOwnPropertyDescriptor(s)
+    /// node takes: the trap result's fields and the forward.
+    DescValues(NodeId),
+    /// Rule PXOWN: the getters (false) / setters (true) of those
+    /// descriptors one node takes.
+    DescAcc(bool, NodeId),
 }
 
 impl Model {
@@ -778,6 +790,7 @@ impl Model {
         // [[GetOwnProperty]] of each key: the trap, the descriptor read.
         let k = self.proxy_key_arg(Key::any(), NO_NODE);
         let desc = self.node_l("proxy-gopd-ret");
+        self.proxies[p as usize].ops.insert(ProxyOp::OwnDesc, desc);
         self.proxy_trap(
             p,
             "getOwnPropertyDescriptor",
@@ -2213,6 +2226,100 @@ impl Model {
                     | Hard::B4Resizable,
                 ..
             } => {}
+            // Rule PXOWN: EnumerableOwnProperties( p, value ) (7.3.23:
+            // Object.values / Object.entries): p.[[OwnPropertyKeys]]()
+            // (10.5.11, the `ownKeys` trap), p.[[GetOwnProperty]]( k ) of
+            // each String key (10.5.5, `getOwnPropertyDescriptor`), and
+            // Get( p, k ) of each enumerable one (10.5.8, the `get` trap with
+            // Receiver p, the forward the target's [[Get]]): into `dst`.
+            Cons::OwnValues { dst } => {
+                let r = self.reason("EnumerableOwnProperties of a Proxy");
+                self.proxy_own_props(p, r);
+                self.proxy_get_into(p, Key::any(), NO_NODE, dst);
+            }
+            // Rule PXOWN: EnumerableOwnProperties( p, key ) (Object.entries'
+            // keys): the same two traps; a key is a String of the `ownKeys`
+            // list (CreateListFromArrayLike, read in `proxy_keys_trap`), any
+            // String.
+            Cons::OwnKeys { dst } => {
+                let r = self.reason("EnumerableOwnProperties of a Proxy");
+                self.proxy_own_props(p, r);
+                self.add_prim(dst, prim::STR);
+            }
+            // Rule PXOWN: Object.getOwnPropertyDescriptor(s) of p (20.1.2.8,
+            // 20.1.2.9): p.[[OwnPropertyKeys]]() and p.[[GetOwnProperty]]( k )
+            // (the `getOwnPropertyDescriptor` trap, its result
+            // ToPropertyDescriptor'd, then FromPropertyDescriptor'd: a fresh
+            // object whose `value` is the trap result's; `get` / `set` are
+            // `Cons::OwnDescAcc`'s); without the trap the target's own
+            // descriptor (the forward). getOwnPropertyDescriptor runs one
+            // key's trap: the [[OwnPropertyKeys]] here is a superset.
+            Cons::OwnDescValues { dst } => {
+                let r = self.reason("getOwnPropertyDescriptor(s) of a Proxy");
+                self.proxy_own_props(p, r);
+                if !self.proxy_made(p, ProxyOp::DescValues(dst)) {
+                    let d = self.proxies[p as usize].ops[&ProxyOp::OwnDesc];
+                    let a = self.atom("value");
+                    self.cons(
+                        d,
+                        Cons::Load {
+                            key: Key::Named(a),
+                            dst,
+                        },
+                    );
+                    let t = self.proxies[p as usize].target;
+                    self.cons(t, Cons::OwnDescValues { dst });
+                }
+            }
+            // Rule PXOWN: the `get` (or `set`) of those descriptors: the
+            // trap result's field (ToPropertyDescriptor 6.2.6.5 reads it,
+            // FromPropertyDescriptor hands it out), and the forward, the
+            // target's own accessors.
+            Cons::OwnDescAcc { setter, dst } => {
+                let r = self.reason("getOwnPropertyDescriptor(s) of a Proxy");
+                self.proxy_own_props(p, r);
+                if !self.proxy_made(p, ProxyOp::DescAcc(setter, dst)) {
+                    let d = self.proxies[p as usize].ops[&ProxyOp::OwnDesc];
+                    let a = self.atom(if setter { "set" } else { "get" });
+                    self.cons(
+                        d,
+                        Cons::Load {
+                            key: Key::Named(a),
+                            dst,
+                        },
+                    );
+                    let t = self.proxies[p as usize].target;
+                    self.cons(t, Cons::OwnDescAcc { setter, dst });
+                }
+            }
+            // Rule PXOWN: CopyDataProperties( target, p, excluded ) (7.3.25:
+            // `{ ...p }`, object rest; Object.assign 20.1.2.1 the same reads):
+            // p.[[OwnPropertyKeys]]() (`ownKeys`), p.[[GetOwnProperty]]( k )
+            // of each key (`getOwnPropertyDescriptor`) and Get( p, k ) of each
+            // enumerable one (`get`, Receiver p), stored under k, a String or
+            // a Symbol, on each target: a computed-key store at the copy's
+            // site (a definition for a spread, a [[Set]] for Object.assign).
+            // No key is surely copied.
+            Cons::Spread { into, site } => {
+                let r = self.reason("CopyDataProperties from a Proxy");
+                self.proxy_own_props(p, r);
+                if let Some(&tm) = self.lit_spread_site.get(&site) {
+                    self.spread_source(tm, site, Vec::new());
+                }
+                if !self.proxy_made(p, ProxyOp::Copy(into, site)) {
+                    let g = self.proxy_get(p, Key::any(), NO_NODE);
+                    let region = self.thrown;
+                    self.cons(
+                        into,
+                        Cons::Store {
+                            key: Key::any(),
+                            src: g,
+                            site,
+                            region,
+                        },
+                    );
+                }
+            }
             // Rule PXESC: the rules with no Proxy model yet, each named (a new
             // rule must take a place in this match). The operation may run
             // any internal method of the Proxy: its escape, the rule named in
@@ -2247,19 +2354,14 @@ impl Model {
             | Cons::NotRegExp { .. }
             | Cons::OverrideThis { .. }
             | Cons::OwnComputedKey { .. }
-            | Cons::OwnDescAcc { .. }
-            | Cons::OwnDescValues { .. }
             | Cons::OwnGate { .. }
-            | Cons::OwnKeys { .. }
             | Cons::OwnOnly { .. }
             | Cons::OwnTest { .. }
-            | Cons::OwnValues { .. }
             | Cons::ProtoKey { .. }
             | Cons::ProtoKeySet { .. }
             | Cons::RegExpPattern { .. }
             | Cons::RequireSpec { .. }
             | Cons::ShareBuffer { .. }
-            | Cons::Spread { .. }
             | Cons::SpreadFrom { .. }
             | Cons::StoreKeyed { .. }
             | Cons::StoreOut { .. }

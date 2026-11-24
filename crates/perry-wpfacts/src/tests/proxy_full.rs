@@ -503,3 +503,65 @@ fn proxy_unmodeled_rule_is_its_escape() {
         site("{ a: 1 }", "", op, true).unwrap();
     }
 }
+
+/// Rule PXOWN: EnumerableOwnProperties (Object.values, Object.entries) and
+/// CopyDataProperties (`{ ...px }`, Object.assign) of a Proxy run its
+/// `ownKeys`, `getOwnPropertyDescriptor` and `get` traps; the values reach
+/// the result, and nothing of the target escapes.
+#[test]
+fn proxy_own_values_and_copy_run_the_traps() {
+    let traps = [
+        "get(t: any, k: any) { external(payload); return 1; }",
+        "ownKeys(t: any) { external(payload); return []; }",
+        "getOwnPropertyDescriptor(t: any, k: any) { external(payload); return undefined; }",
+    ];
+    for op in [
+        "const v: any = Object.values(px);",
+        "const v: any = Object.entries(px);",
+        "const v: any = { ...px };",
+        "const v: any = Object.assign({}, px);",
+    ] {
+        for h in traps {
+            site("{ a: 1 }", h, op, false).unwrap();
+        }
+        // The values reach the result (sound) ...
+        site("{ a: payload }", "", &format!("{op}\nexternal(v);"), false).unwrap();
+        let get = "get(t: any, k: any) { return payload; }";
+        site("{ a: 1 }", get, &format!("{op}\nexternal(v);"), false).unwrap();
+        // ... and nothing else: the target does not escape.
+        site("{ a: payload }", "", op, true).unwrap();
+        site("{ a: payload }", get, op, true).unwrap();
+    }
+}
+
+/// Rule PXOWN: Object.getOwnPropertyDescriptors / getOwnPropertyDescriptor
+/// of a Proxy: the `getOwnPropertyDescriptor` trap's result fields are the
+/// descriptors' values; without the trap the target's own.
+#[test]
+fn proxy_own_descriptors_run_the_trap() {
+    let gopd = "getOwnPropertyDescriptor(t: any, k: any) { return { value: payload, configurable: true, enumerable: true, writable: true }; }";
+    for op in [
+        "const v: any = Object.getOwnPropertyDescriptors(px);",
+        "const v: any = Object.getOwnPropertyDescriptor(px, \"a\");",
+    ] {
+        site("{ a: 1 }", gopd, &format!("{op}\nexternal(v);"), false).unwrap();
+        site("{ a: payload }", "", &format!("{op}\nexternal(v);"), false).unwrap();
+        site("{ a: payload }", "", op, true).unwrap();
+        site("{ a: 1 }", gopd, op, true).unwrap();
+    }
+}
+
+/// Rule PXOWN: the `get` of an accessor descriptor the
+/// `getOwnPropertyDescriptor` trap returns is handed out by
+/// Object.getOwnPropertyDescriptor(s).
+#[test]
+fn proxy_own_descriptor_accessor_is_the_traps() {
+    let gopd = "getOwnPropertyDescriptor(t: any, k: any) { return { get() { return payload; }, configurable: true, enumerable: true }; }";
+    for op in [
+        "const v: any = Object.getOwnPropertyDescriptors(px);",
+        "const v: any = Object.getOwnPropertyDescriptor(px, \"a\");",
+    ] {
+        site("{ a: 1 }", gopd, &format!("{op}\nexternal(v);"), false).unwrap();
+        site("{ a: 1 }", gopd, op, true).unwrap();
+    }
+}
