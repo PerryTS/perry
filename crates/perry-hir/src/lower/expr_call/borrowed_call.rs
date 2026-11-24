@@ -98,7 +98,7 @@ pub(super) fn borrowed_call_folds(
         callee: Box::new(Expr::LocalGet(id)),
         args: args.iter().skip(1).cloned().collect(),
         type_args: Vec::new(),
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::call_token(call),
     };
     if let Some(this_arg) = args.first() {
         fast = Expr::Sequence(vec![this_arg.clone(), fast]);
@@ -116,7 +116,7 @@ pub(super) fn borrowed_call_folds(
         body: Box::new(Expr::Conditional {
             byte_offset: call.span.lo.0,
             condition: Box::new(Expr::NativeMethodCall {
-                byte_offset: call.span.lo.0,
+                byte_offset: crate::lower::call_token(call),
                 module: "__perry_borrowed_proof".to_string(),
                 class_name: Some("Function.prototype".to_string()),
                 object: Some(Box::new(Expr::LocalGet(id))),

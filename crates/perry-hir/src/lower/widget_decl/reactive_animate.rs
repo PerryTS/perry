@@ -166,7 +166,7 @@ pub(crate) fn try_desugar_reactive_animate(
             args.push(lower_expr(ctx, &a.expr)?);
         }
         return Ok(Some(Expr::NativeMethodCall {
-            byte_offset: call.span.lo.0,
+            byte_offset: crate::lower::call_token(call),
             module: "perry/ui".to_string(),
             method: method_name.to_string(),
             object: None,
@@ -199,7 +199,7 @@ pub(crate) fn try_desugar_reactive_animate(
         initial_args.push(lower_expr(ctx, &a.expr)?);
     }
     outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::call_token(call),
         module: "perry/ui".to_string(),
         method: method_name.to_string(),
         object: None,
@@ -232,7 +232,7 @@ pub(crate) fn try_desugar_reactive_animate(
             fresh_args.push(lower_expr(ctx, &a.expr)?);
         }
         let animate_call = Expr::NativeMethodCall {
-            byte_offset: call.span.lo.0,
+            byte_offset: crate::lower::call_token(call),
             module: "perry/ui".to_string(),
             method: method_name.to_string(),
             object: None,
@@ -274,7 +274,7 @@ pub(crate) fn try_desugar_reactive_animate(
         };
 
         outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
-            byte_offset: call.span.lo.0,
+            byte_offset: crate::lower::call_token(call),
             module: "perry/ui".to_string(),
             method: "stateOnChange".to_string(),
             object: None,
@@ -322,6 +322,6 @@ pub(crate) fn try_desugar_reactive_animate(
         callee: Box::new(outer_closure),
         args: vec![],
         type_args: vec![],
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::call_token(call),
     }))
 }
