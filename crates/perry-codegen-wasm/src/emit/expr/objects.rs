@@ -525,6 +525,19 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, key);
                 self.emit_memcall(func, "symbol_for", 1);
             }
+            Expr::SymbolNew(desc) => {
+                let argc = desc.is_some() as u32;
+                self.emit_frame_begin(func, argc);
+                if let Some(desc) = desc {
+                    self.emit_store_arg(func, 0, desc);
+                }
+                self.emit_memcall(func, "symbol_new", argc);
+            }
+            Expr::SymbolKeyFor(sym) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, sym);
+                self.emit_memcall(func, "symbol_key_for", 1);
+            }
             Expr::In { property, object } => {
                 // JS evaluates the property before the object.
                 let (object, bridge) = match object.as_ref() {

@@ -96,3 +96,49 @@ f().then((v) => console.log(v), (e) => console.log("threw " + e.message));
         "3,1,\"\""
     );
 }
+
+// A closure created in an async body is a function that reads its captures, as one
+// created in a synchronous body is. Expected output is Node's.
+#[test]
+fn async_body_closure_is_a_function_over_its_captures() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(n: number): Promise<string> {
+  const k = 3;
+  const g = () => 4;
+  const add = (x: number) => x + n + k;
+  return [typeof g, g(), add(1), apply(add, 2)].join(",");
+}
+function apply(fn: (x: number) => number, x: number): number { return fn(x); }
+f(10).then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "function,4,14,15"
+    );
+}
+
+// A local an async body's closure assigns is one binding shared with the body: each
+// sees the other's writes, a parameter and a closure that reassigns its own binding included. Expected output is Node's.
+#[test]
+fn async_body_closure_shares_assigned_captures() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(p: number): Promise<string> {
+  let count = 0;
+  const bump = () => { count += 10; p++; return count; };
+  count++;
+  const seen = bump();
+  count++;
+  let caught = "";
+  try { throw "e"; } catch (err) { const tag = () => { err += "!"; }; tag(); caught = err; }
+  let self = () => { self = () => 7; return 1; };
+  return [seen, count, bump(), count, p, caught, self() + self()].join(",");
+}
+f(1).then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "11,12,22,22,3,e!,8"
+    );
+}
