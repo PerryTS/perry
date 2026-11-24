@@ -1,0 +1,1 @@
+Add `Disclosure(title)` to `perry/ui`: a section whose children, attached with `widgetAddChild`, show when the reader expands it. The web target renders `<details>`/`<summary>`; native backends show a `Section`, always expanded.
