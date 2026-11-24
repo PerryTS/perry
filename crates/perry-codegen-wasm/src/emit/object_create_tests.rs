@@ -222,3 +222,21 @@ console.log(msg + "|" + seen.join(","));
         "TypeError: Getter must be a function: 1|get"
     );
 }
+
+// A mixed data and accessor descriptor throws before the next descriptor is read.
+// Expected output is Node's.
+#[test]
+fn define_properties_rejects_a_mixed_descriptor_before_reading_the_next() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Mixed { get value() { return 2; } set get(f: any) {} }
+class Later { get enumerable(): any { throw new Error("later"); } }
+let msg = "none";
+try { Object.defineProperties({}, { a: new Mixed() as any, b: new Later() as any }); } catch (e: any) { msg = e.name; }
+console.log(msg);
+"#
+        ),
+        "TypeError"
+    );
+}
