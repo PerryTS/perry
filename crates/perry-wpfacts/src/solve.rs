@@ -1712,6 +1712,25 @@ impl Model {
                 },
                 _ => None,
             };
+            // A class linked to a realm parent by name (`Model::realm_parent`):
+            // the evaluated `extends` is exactly that constructor, else the
+            // layout the solve used is not the instances' (E11, as for a
+            // program parent linked by name).
+            if let Some(&want) = self.realm_parent.get(&tm) {
+                if realm.as_deref() != Some(want) {
+                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                    let what = format!(
+                        "E11 class whose evaluated `extends` is not its linked realm constructor {want} ({} tokens{}{})",
+                        toks.len(),
+                        if toks.contains(&TOP) { ", ⊤" } else { "" },
+                        if null { ", null" } else { "" }
+                    );
+                    let r = self.reason(&what);
+                    self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                    self.parent_unsettled.insert(tm);
+                    continue;
+                }
+            }
             if let Some(identity) = realm {
                 self.parent_unsettled.insert(tm);
                 if self.unit_mode || crate::builtins::declared_super_construct(&identity).is_none()

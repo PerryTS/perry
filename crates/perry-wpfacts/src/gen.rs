@@ -1846,9 +1846,32 @@ impl<'a> Gen<'a> {
             let pa = self.m.atom("prototype");
             let pp = self.load(pv, Key::Named(pa));
             self.m.tmpls[tm as usize].parent_value = Some((pv, pp));
+            if let Some(identity) = binding.and_then(|n| self.realm_parent_named(c, n)) {
+                self.m.realm_parent.insert(tm, identity);
+            }
             self.parent_values
                 .push((mi, tm, binding.map(str::to_string)));
         }
+    }
+
+    /// The realm constructor heritage binding `n` statically names: the node
+    /// module export HIR resolved it to (`import { Readable } from
+    /// "stream"`), else the global object's (`extends EventTarget`), when
+    /// the realm declares what `super(...)` into it does and its
+    /// `prototype`. Linked like a program parent named in `extends`: the
+    /// evaluated value is checked after the solve (`settle_parent_values`).
+    fn realm_parent_named(&mut self, c: &Class, n: &str) -> Option<&'static str> {
+        if self.m.unit_mode {
+            return None;
+        }
+        let ns = match c.native_extends.as_ref().filter(|(_, name)| name == n) {
+            Some((module, _)) => crate::builtins::node_module_ns(module)?,
+            None => crate::model::BuiltinNs::GlobalThis,
+        };
+        let identity = self.m.namespace_property(ns, n)?.native?;
+        (crate::builtins::declared_super_construct(identity).is_some()
+            && crate::builtins::realm_ctor_prototype(identity).is_some())
+        .then_some(identity)
     }
 
     /// DECISIONS 95/96: per unit, a class and the evaluation of its parent

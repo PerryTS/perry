@@ -38,7 +38,7 @@ pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
     declared_construct, declared_member, declared_proto_method, declared_static,
-    declared_super_construct, run_construct, run_function, run_member, run_super_construct,
+    construct_layout, declared_super_construct, run_construct, run_function, run_member, run_super_construct,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};

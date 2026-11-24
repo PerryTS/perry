@@ -147,6 +147,46 @@ pub(crate) fn declared_super_construct(identity: &str) -> Option<&'static RealmE
     declared_construct(identity).or_else(|| declared_ctor(identity))
 }
 
+/// What `super(...)` into realm constructor `identity` defines on the
+/// instance, by its declaration (`declared_super_construct`).
+pub(crate) struct ConstructLayout {
+    /// The own data keys of its `returns(fresh(..))` results, in order.
+    pub keys: Vec<&'static str>,
+    /// Those every result defines (none when a result is not `fresh`).
+    pub definite: Vec<&'static str>,
+    /// The declaration hands the instance (`result`) to other code.
+    pub leaks: bool,
+}
+
+pub(crate) fn construct_layout(identity: &str) -> Option<ConstructLayout> {
+    let e = declared_super_construct(identity)?;
+    let mut keys: Vec<&'static str> = Vec::new();
+    let mut definite: Option<Vec<&'static str>> = None;
+    for fx in e.effects.iter() {
+        let RealmEffect::Returns(o) = fx else {
+            continue;
+        };
+        let own: Vec<&'static str> = match o {
+            RealmOperand::Fresh { fields, .. } => fields.iter().map(|f| f.key.as_ref()).collect(),
+            _ => Vec::new(),
+        };
+        for k in &own {
+            if !keys.contains(k) {
+                keys.push(k);
+            }
+        }
+        definite = Some(match definite {
+            None => own,
+            Some(d) => d.into_iter().filter(|k| own.contains(k)).collect(),
+        });
+    }
+    Some(ConstructLayout {
+        keys,
+        definite: definite.unwrap_or_default(),
+        leaks: names_root(e.effects, RealmSlotRoot::Result),
+    })
+}
+
 fn by_proto() -> &'static ByProto {
     &index().0
 }

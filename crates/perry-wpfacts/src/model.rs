@@ -2414,6 +2414,13 @@ pub struct Model {
     /// still evaluated (a class in a CommonJS factory, §17.4): the node the
     /// evaluated value reaches. After the solve it must be that parent.
     pub parent_checks: Vec<(TmplId, NodeId)>,
+    /// Classes whose `extends` binding statically names a realm constructor
+    /// that declares its construct and prototype (`import { Readable } from
+    /// "stream"`, `extends EventTarget`), linked at gen time: the declared
+    /// construct's fields are the instance's layout prefix. The evaluated
+    /// value (`parent_value`) must be that constructor after the solve
+    /// (`settle_parent_values`), else E11.
+    pub realm_parent: crate::pts::FxHashMap<TmplId, &'static str>,
     /// DEC 251 B: classes whose evaluated `extends` value settle could not
     /// link to one class (`settle_parent_values`): no static construction
     /// through a parent is published for them (`super_unrelinked`).

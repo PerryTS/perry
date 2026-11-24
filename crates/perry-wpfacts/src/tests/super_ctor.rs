@@ -14,16 +14,13 @@ fn a_declared_realm_parent_constructs_the_instance_itself() {
     let t = tmpl(&pf, "T");
     assert!(t.hard.is_none(), "{:?}\n{}", t.hard, pf.dump_text());
     assert!(t.escape.is_none(), "{:?}\n{}", t.escape, pf.dump_text());
-    // DECISIONS 47: the solve sees a value parent unsettled, so a read of
-    // the subclass's own key may be `undefined` (settle_parent_layouts).
+    // The realm parent is linked at generation time (`Model::realm_parent`):
+    // its declared construct's fields are the layout prefix, so the
+    // subclass's own field is definite in the solve.
     let k = &field(tmpl(&pf, "H"), "v").kind;
     assert!(
-        !k.top
-            && k.prims & prim::NUM != 0
-            && k.prims & !(prim::NUM | prim::UNDEF) == 0
-            && k.objs.is_empty(),
-        "{k:?}
-{}",
+        !k.top && k.prims == prim::NUM && k.objs.is_empty(),
+        "{k:?}\n{}",
         pf.dump_text()
     );
 }
@@ -36,6 +33,19 @@ fn a_realm_parent_without_a_construct_declaration_is_e21_with_its_reason() {
     let h = t.hard.as_deref().unwrap_or_default();
     assert!(
         h.starts_with("E21") && h.contains("declares no construct effects"),
+        "{h:?}\n{}",
+        pf.dump_text()
+    );
+}
+
+#[test]
+fn an_extends_value_that_is_not_the_linked_realm_parent_is_e11_with_its_reason() {
+    let pf = facts(
+        "(globalThis as any).EventTarget = class Q { };\nclass T extends EventTarget { q = 1; }\nconst t = new T();\nconsole.log(t.q);\n",
+    );
+    let h = tmpl(&pf, "T").hard.as_deref().unwrap_or_default();
+    assert!(
+        h.starts_with("E11") && h.contains("linked realm constructor"),
         "{h:?}\n{}",
         pf.dump_text()
     );
