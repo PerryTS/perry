@@ -119,7 +119,7 @@ f(10).then((v) => console.log(v), (e) => console.log("threw " + e.message));
 }
 
 // A local an async body's closure assigns is one binding shared with the body: each
-// sees the other's writes, a parameter included. Expected output is Node's.
+// sees the other's writes, a parameter and a closure that reassigns its own binding included. Expected output is Node's.
 #[test]
 fn async_body_closure_shares_assigned_captures() {
     assert_eq!(
@@ -133,11 +133,12 @@ async function f(p: number): Promise<string> {
   count++;
   let caught = "";
   try { throw "e"; } catch (err) { const tag = () => { err += "!"; }; tag(); caught = err; }
-  return [seen, count, bump(), count, p, caught].join(",");
+  let self = () => { self = () => 7; return 1; };
+  return [seen, count, bump(), count, p, caught, self() + self()].join(",");
 }
 f(1).then((v) => console.log(v), (e) => console.log("threw " + e.message));
 "#
         ),
-        "11,12,22,22,3,e!"
+        "11,12,22,22,3,e!,8"
     );
 }
