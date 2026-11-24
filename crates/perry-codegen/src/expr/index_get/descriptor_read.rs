@@ -353,7 +353,7 @@ fn loop_writes(stmts: &[Stmt], controls: &[&Expr], out: &mut std::collections::H
 /// Every element read in the loop, with its receiver binding.
 fn candidate_reads<'a>(stmts: &'a [Stmt], controls: &[&'a Expr]) -> Vec<(u32, &'a Expr)> {
     fn walk<'a>(e: &'a Expr, out: &mut Vec<(u32, &'a Expr)>) {
-        if let (Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }) = e {
+        if let Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } = e {
             if let Expr::LocalGet(id) = object.as_ref() {
                 out.push((*id, e));
             }

@@ -457,7 +457,7 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
                     saw_names = true;
                 }
                 Expr::TypeOf(value) => {
-                    if let (Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }) =
+                    if let Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } =
                         value.as_ref()
                     {
                         if matches!(object.as_ref(), Expr::LocalGet(local) if local == id) {
@@ -472,8 +472,8 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
                     } = callee.as_ref()
                     {
                         if property == "bind" {
-                            if let (Expr::IndexGet { object, .. }
-                            | Expr::RegionOut { object, .. }) = object.as_ref()
+                            if let Expr::IndexGet { object, .. }
+                            | Expr::RegionOut { object, .. } = object.as_ref()
                             {
                                 if matches!(object.as_ref(), Expr::LocalGet(local) if local == id) {
                                     allowed_local_gets

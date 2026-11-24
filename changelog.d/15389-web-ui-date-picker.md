@@ -1,0 +1,1 @@
+Fixed `DatePicker` on the web target: it rendered nothing and `datePickerGetSelectedDate` returned `undefined`, because the web runtime had none of the `perry_ui_date_picker_*` functions. It is now an `<input type="date">` whose `onChange` and `datePickerGetSelectedDate` report the ISO `yyyy-MM-dd` string the native backends report, and `datePickerSetDate` sets it.

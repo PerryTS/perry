@@ -1677,7 +1677,7 @@ fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
     if let Some(lowered) = lower_packed_u32_loop_index_get(ctx, e)? {
         return Ok(lowered);
     }
-    if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e {
+    if let Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } = e {
         if let Some(lowered) = super::try_lower_proven_view_checked_u32_load(ctx, object, index)? {
             return Ok(lowered);
         }

@@ -355,7 +355,8 @@ month-grid `Calendar`. Each platform uses its native compact date control:
 macOS `NSDatePicker` (text-field-and-stepper), iOS / visionOS
 `UIDatePicker` (`.compact`), Windows `SysDateTimePick32`, Android
 `android.widget.DatePicker`. GTK4 has no native compact date field, so it
-reuses `GtkCalendar`; tvOS / watchOS stub. `onChange` receives the selected
+reuses `GtkCalendar`; the web target uses `<input type="date">`; tvOS / watchOS
+stub. `onChange` receives the selected
 date as an ISO `yyyy-MM-dd` string.
 
 ```typescript,no-test

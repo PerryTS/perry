@@ -85,6 +85,8 @@ pub(super) struct WasmModuleEmitter {
     pub(super) module_func_maps: Vec<BTreeMap<FuncId, u32>>,
     /// The intrinsic prototype of each function's value, by wasm function index.
     pub(super) fn_proto_kinds: BTreeMap<u32, FnProtoKind>,
+    /// The string id of each function declaration's `name`, by wasm function index.
+    pub(super) fn_names: BTreeMap<u32, u32>,
     /// Set of WASM function indices that return void (no return value).
     /// Used to push TAG_UNDEFINED after calling void functions via FuncRef.
     pub(super) void_funcs: std::collections::BTreeSet<u32>,
@@ -167,6 +169,7 @@ impl WasmModuleEmitter {
             async_func_imports: Vec::new(),
             module_func_maps: Vec::new(),
             fn_proto_kinds: BTreeMap::new(),
+            fn_names: BTreeMap::new(),
             void_funcs: std::collections::BTreeSet::new(),
             func_param_counts: BTreeMap::new(),
             rest_params: BTreeMap::new(),

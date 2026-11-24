@@ -961,6 +961,15 @@ impl WasmModuleEmitter {
                 self.fn_proto_kinds.insert(idx, kind);
             }
         }
+        for (mod_idx, (_, module)) in modules.iter().enumerate() {
+            for f in &module.functions {
+                if let Some(&idx) = self.module_func_maps[mod_idx].get(&f.id) {
+                    let name = module.closure_display_names.get(&f.id).unwrap_or(&f.name);
+                    let id = self.intern_string(name);
+                    self.fn_names.insert(idx, id);
+                }
+            }
+        }
 
         // Register globals from all modules. This precedes the async JS generation below,
         // which reads `global_map` to tell a declared global from the unresolved-global

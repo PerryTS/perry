@@ -496,7 +496,7 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
             }
             // A flat-const table element is a native `[N x i32]` load
             // (issue #50): no boxed fallback edge exists.
-            if let (Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. }) = expr {
+            if let Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } = expr {
                 if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() {
                     return false;
                 }

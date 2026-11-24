@@ -135,16 +135,7 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::FuncRef(id) => {
                 if let Some(&func_idx) = self.emitter.func_map.get(id) {
                     // The function's one value (see `function_value`)
-                    let table_idx = self
-                        .emitter
-                        .func_to_table_idx
-                        .get(&func_idx)
-                        .copied()
-                        .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 2);
-                    self.emit_store_const(func, 0, table_idx as f64);
-                    self.emit_store_const(func, 1, self.emitter.fn_proto_code(func_idx));
-                    self.emit_memcall(func, "function_value", 2);
+                    self.emit_function_value(func, func_idx);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
@@ -169,16 +160,7 @@ impl<'a> FuncEmitCtx<'a> {
                 {
                     // The function's one value, as for FuncRef.
                     // Consumer import table first — bare names collide.
-                    let table_idx = self
-                        .emitter
-                        .func_to_table_idx
-                        .get(&func_idx)
-                        .copied()
-                        .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 2);
-                    self.emit_store_const(func, 0, table_idx as f64);
-                    self.emit_store_const(func, 1, self.emitter.fn_proto_code(func_idx));
-                    self.emit_memcall(func, "function_value", 2);
+                    self.emit_function_value(func, func_idx);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
