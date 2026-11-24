@@ -831,7 +831,12 @@ impl<'a> Gen<'a> {
                     if std::env::var("PERRY_HIRPOS_SAMPLE").is_ok_and(|v| v == k) {
                         let d = format!("{e:?}");
                         let path = s.paths.get(fx.module as usize).map_or("", |p| p.as_str());
-                        eprintln!("HPSAMPLE {k} m{} {path} near {} {}", fx.module, s.gen_pos.1, &d[..d.len().min(600)]);
+                        eprintln!(
+                            "HPSAMPLE {k} m{} {path} near {} {}",
+                            fx.module,
+                            s.gen_pos.1,
+                            &d[..d.len().min(600)]
+                        );
                     }
                 }
                 if let Some(o) = crate::topstop::expr_offset(e) {
@@ -1442,24 +1447,10 @@ impl<'a> Gen<'a> {
                 // then PutValue of one reference, one base evaluation: two
                 // sites at the member's offset. The GetValue is the value's
                 // read of the same key at the same offset (the HIR pair).
-                let get = match value.as_ref() {
-                    Expr::Binary { left, .. } => match left.as_ref() {
-                        Expr::PropertyGet {
-                            property: p,
-                            byte_offset: at,
-                            ..
-                        } if p == property && at == byte_offset => Some(left.as_ref()),
-                        _ => None,
-                    },
-                    _ => None,
-                };
-                let compound = *byte_offset != 0
-                    && !matches!(object.as_ref(), Expr::PrivateGuard { .. })
-                    && get.is_some();
-                let outer = std::mem::replace(
-                    &mut self.compound_get,
-                    get.filter(|_| compound).map(|g| g as *const Expr),
-                );
+                let get = e.compound_get();
+                let compound = get.is_some();
+                let outer =
+                    std::mem::replace(&mut self.compound_get, get.map(|g| g as *const Expr));
                 let v = self.expr_zs(fx, value);
                 self.compound_get = outer;
                 let a = self.member_atom(object, property);

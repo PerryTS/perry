@@ -3089,6 +3089,42 @@ impl Expr {
 }
 
 impl Expr {
+    /// A compound `o.k op= v` (13.15.3): the `PropertySet` whose value is a
+    /// `Binary` with a read of the same key at the same offset on its left.
+    /// That read is the compound's GetValue (step 2), its `UpdateGet` site;
+    /// the store is its PutValue. `None` for every other expression. A site
+    /// is (module, start, kind): the GetValue shares its start with the
+    /// store, and with any ordinary read standing at the same member start,
+    /// so a lookup tells them apart by this kind, never by the offset alone.
+    pub fn compound_get(&self) -> Option<&Expr> {
+        let Expr::PropertySet {
+            object,
+            property,
+            value,
+            byte_offset,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        if *byte_offset == 0 || matches!(object.as_ref(), Expr::PrivateGuard { .. }) {
+            return None;
+        }
+        let Expr::Binary { left, .. } = value.as_ref() else {
+            return None;
+        };
+        match left.as_ref() {
+            Expr::PropertyGet {
+                property: p,
+                byte_offset: at,
+                ..
+            } if p == property && at == byte_offset => Some(left.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+impl Expr {
     /// The callable global fetch used by ordinary and spread-call lowering.
     /// Imported or locally shadowed functions named fetch are not this callee.
     pub fn is_global_fetch_callee(&self) -> bool {

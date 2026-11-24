@@ -979,6 +979,7 @@ pub(super) fn compile_module_entry(
         let mut init_local_types: HashMap<u32, perry_hir::types::Type> = HashMap::new();
         crate::boxed_vars::collect_let_types_in_stmts(main_init, &mut init_local_types);
         let mut ctx = FnCtx {
+            compound_get: None,
             for_in_facts: Default::default(),
             for_in_snapshots: Default::default(),
             for_in_keys_locals: Default::default(),

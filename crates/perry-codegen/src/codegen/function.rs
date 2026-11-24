@@ -1390,6 +1390,7 @@ pub(super) fn compile_function(
     };
 
     let mut ctx = FnCtx {
+        compound_get: None,
         for_in_facts: Default::default(),
         for_in_snapshots: Default::default(),
         for_in_keys_locals: Default::default(),

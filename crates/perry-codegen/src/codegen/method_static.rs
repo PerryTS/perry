@@ -251,6 +251,7 @@ pub(in crate::codegen) fn compile_static_method(
     };
 
     let mut ctx = FnCtx {
+        compound_get: None,
         for_in_facts: Default::default(),
         for_in_snapshots: Default::default(),
         for_in_keys_locals: Default::default(),

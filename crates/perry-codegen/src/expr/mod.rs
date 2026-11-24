@@ -401,6 +401,10 @@ pub enum HeaderImageSource {
 }
 
 pub(crate) struct FnCtx<'a> {
+    /// The compound GetValue read of the `o.k op= v` store being lowered
+    /// (`Expr::compound_get`): that read is the `UpdateGet` site, not a
+    /// `Get` site, though both stand at the member's offset.
+    pub compound_get: Option<*const Expr>,
     /// The for-in loops of this function: receiver local -> the entry slot
     /// of the loop fact taken beside the snapshot (`js_for_in_loop_fact`).
     /// Per-loop state: born zero per invocation, written at loop start.

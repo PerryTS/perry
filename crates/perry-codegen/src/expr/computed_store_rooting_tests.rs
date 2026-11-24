@@ -723,7 +723,11 @@ fn masked_window_index_coercion_loop(key_ty: Type) -> String {
 
 fn masked_window_rhs_coercion_loop(key_ty: Type) -> String {
     let read = |index| {
-        Expr::index_get_at(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(index)), 0)
+        Expr::index_get_at(
+            Box::new(Expr::LocalGet(1)),
+            Box::new(Expr::Integer(index)),
+            0,
+        )
     };
     compile_masked_window_loop(
         key_ty,
@@ -747,7 +751,11 @@ fn masked_window_rhs_coercion_loop(key_ty: Type) -> String {
 fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
     let value = || {
         let read = |index| {
-            Expr::index_get_at(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(index)), 0)
+            Expr::index_get_at(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Integer(index)),
+                0,
+            )
         };
         Expr::Binary {
             byte_offset: 0,
@@ -780,7 +788,11 @@ fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
 
 fn masked_window_pair_sum() -> Expr {
     let read = |index| {
-        Expr::index_get_at(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(index)), 0)
+        Expr::index_get_at(
+            Box::new(Expr::LocalGet(1)),
+            Box::new(Expr::Integer(index)),
+            0,
+        )
     };
     Expr::Binary {
         byte_offset: 0,
