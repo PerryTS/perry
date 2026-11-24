@@ -2435,9 +2435,12 @@ const __memDispatch = {
   reflect_has: (obj, key) => {
     if (!__holdsProperties(obj)) return Reflect.has(obj, key);
     const k = __memDispatch.to_property_key(key);
-    let o = obj;
-    while (__isInternalKey(o, k)) o = Object.getPrototypeOf(o);
-    return Reflect.has(o, k);
+    if (k !== 'funcIdx' && k !== 'captures') return Reflect.has(obj, k);
+    // A closure's bookkeeping keys are also hidden from what inherits from it.
+    for (let o = obj; o !== null; o = Reflect.getPrototypeOf(o)) {
+      if (__memDispatch.object_has_own(o, k)) return true;
+    }
+    return false;
   },
   reflect_own_keys: (obj) => Reflect.ownKeys(obj).filter(k => !__isInternalKey(obj, k)),
   reflect_get_own_property_descriptor: (obj, key) => __holdsProperties(obj)
