@@ -1275,6 +1275,14 @@ pub(super) fn on_eof(id: impl Into<Target>) {
     if already != Some(false) {
         return;
     }
+    if peek(id, |conn| conn.role == Role::Client && conn.handshaking).unwrap_or(false) {
+        // Node's error for a peer that closes before the handshake completes.
+        fail_tls(
+            id,
+            "ECONNRESET: Client network socket disconnected before secure TLS connection was established",
+        );
+        return;
+    }
     // The transport is gone: the core produces one terminal per open stream.
     with_owned(id, |conn| {
         if let Some(core) = conn.core.as_mut() {
@@ -1350,7 +1358,8 @@ pub(super) fn on_timer(id: impl Into<Target>) {
 
 /// The TLS session failed: a client session's `'error'` carries the cause
 /// before the connection closes, as Node's does.
-fn fail_tls(id: i64, failure: &str) {
+fn fail_tls(id: impl Into<Target>, failure: &str) {
+    let id = id.into();
     if peek(id, |conn| conn.role == Role::Client).unwrap_or(false) {
         let session = peek(id, |conn| conn.session_handle).unwrap_or(0);
         cancel_queued_opens(id, &perry_ext_net::turnloop_tls::node_failure(failure).1);

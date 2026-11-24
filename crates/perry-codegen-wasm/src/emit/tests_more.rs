@@ -1282,6 +1282,9 @@ mod random_uuid_v7;
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;
 
+#[path = "overwritten_call_tests.rs"]
+mod overwritten_call;
+
 #[path = "object_is_tests.rs"]
 mod object_is;
 
@@ -1291,8 +1294,23 @@ mod number_to_string_radix;
 #[path = "object_create_tests.rs"]
 mod object_create;
 
+#[path = "reflection_tests.rs"]
+mod reflection;
+
+#[path = "object_accessor_tests.rs"]
+mod object_accessor;
+
+#[path = "object_key_tests.rs"]
+mod object_key;
+
 #[path = "object_prototype_method_tests.rs"]
 mod object_prototype_method;
+
+#[path = "string_position_tests.rs"]
+mod string_position;
+
+#[path = "class_descriptor_tests.rs"]
+mod class_descriptor;
 
 #[path = "class_prototype_tests.rs"]
 mod class_prototype;

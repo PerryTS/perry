@@ -614,8 +614,13 @@ impl WasmModuleEmitter {
                     }
                     collect_closures_from_stmts(&method.body, &mut module_closures);
                 }
+                let accessors = || class.getters.iter().chain(&class.setters).map(|(_, f)| f);
                 let statics_start = module_closures.len();
-                for method in &class.static_methods {
+                for method in class
+                    .static_methods
+                    .iter()
+                    .chain(accessors().filter(|f| class.is_static_accessor(f)))
+                {
                     for param in &method.params {
                         if let Some(default) = &param.default {
                             collect_closures_from_expr(default, &mut module_closures);
@@ -624,21 +629,13 @@ impl WasmModuleEmitter {
                     collect_closures_from_stmts(&method.body, &mut module_closures);
                 }
                 let statics_end = module_closures.len();
-                for (_, getter) in &class.getters {
-                    for param in &getter.params {
+                for accessor in accessors().filter(|f| !class.is_static_accessor(f)) {
+                    for param in &accessor.params {
                         if let Some(default) = &param.default {
                             collect_closures_from_expr(default, &mut module_closures);
                         }
                     }
-                    collect_closures_from_stmts(&getter.body, &mut module_closures);
-                }
-                for (_, setter) in &class.setters {
-                    for param in &setter.params {
-                        if let Some(default) = &param.default {
-                            collect_closures_from_expr(default, &mut module_closures);
-                        }
-                    }
-                    collect_closures_from_stmts(&setter.body, &mut module_closures);
+                    collect_closures_from_stmts(&accessor.body, &mut module_closures);
                 }
                 for member in &class.computed_members {
                     collect_closures_from_stmts(&member.function.body, &mut module_closures);
@@ -889,12 +886,15 @@ impl WasmModuleEmitter {
                     let results = vec![ValType::I64];
                     let type_idx = self.get_type_idx(params, results);
                     let _ = type_idx;
-                    self.class_method_map
+                    self.class_accessor_map
                         .entry(class.name.clone())
                         .or_default()
-                        .insert(format!("__get_{}", name), user_func_idx);
+                        .push((
+                            name.clone(),
+                            accessor_code(false, class.is_static_accessor(getter)),
+                            user_func_idx,
+                        ));
                     self.func_param_counts.insert(user_func_idx, 1);
-                    let _ = getter;
                     user_func_idx += 1;
                 }
                 // Setters: this + value
@@ -903,12 +903,15 @@ impl WasmModuleEmitter {
                     let results = vec![ValType::I64];
                     let type_idx = self.get_type_idx(params, results);
                     let _ = type_idx;
-                    self.class_method_map
+                    self.class_accessor_map
                         .entry(class.name.clone())
                         .or_default()
-                        .insert(format!("__set_{}", name), user_func_idx);
+                        .push((
+                            name.clone(),
+                            accessor_code(true, class.is_static_accessor(setter)),
+                            user_func_idx,
+                        ));
                     self.func_param_counts.insert(user_func_idx, 2);
-                    let _ = setter;
                     user_func_idx += 1;
                 }
                 // Computed members take `this` + params; the class definition installs
@@ -956,6 +959,15 @@ impl WasmModuleEmitter {
         for (mod_idx, id, kind) in proto_kinds {
             if let Some(&idx) = self.module_func_maps[mod_idx].get(&id) {
                 self.fn_proto_kinds.insert(idx, kind);
+            }
+        }
+        for (mod_idx, (_, module)) in modules.iter().enumerate() {
+            for f in &module.functions {
+                if let Some(&idx) = self.module_func_maps[mod_idx].get(&f.id) {
+                    let name = module.closure_display_names.get(&f.id).unwrap_or(&f.name);
+                    let id = self.intern_string(name);
+                    self.fn_names.insert(idx, id);
+                }
             }
         }
 
@@ -1331,6 +1343,9 @@ impl WasmModuleEmitter {
                     }
                 }
             }
+            for accessors in self.class_accessor_map.values() {
+                indices.extend(accessors.iter().map(|(_, _, idx)| *idx));
+            }
             for idx in self.class_computed_map.values() {
                 if !indices.contains(idx) {
                     indices.push(*idx);
@@ -1524,7 +1539,7 @@ impl WasmModuleEmitter {
                     code_section.function(&func);
                 }
                 for method in &class.methods {
-                    let func = self.compile_class_method(&class.name, method);
+                    let func = self.compile_class_method(Some(&class.name), method);
                     code_section.function(&func);
                 }
                 for method in &class.static_methods {
@@ -1539,16 +1554,14 @@ impl WasmModuleEmitter {
                     let func = self.compile_static_method(class, method);
                     code_section.function(&func);
                 }
-                for (_name, getter) in &class.getters {
-                    let func = self.compile_class_method(&class.name, getter);
-                    code_section.function(&func);
-                }
-                for (_name, setter) in &class.setters {
-                    let func = self.compile_class_method(&class.name, setter);
+                // A static accessor's `super` carries its own static home (`ClassMethodHome`).
+                for (_name, accessor) in class.getters.iter().chain(&class.setters) {
+                    let home = (!class.is_static_accessor(accessor)).then_some(class.name.as_str());
+                    let func = self.compile_class_method(home, accessor);
                     code_section.function(&func);
                 }
                 for member in &class.computed_members {
-                    let func = self.compile_class_method(&class.name, &member.function);
+                    let func = self.compile_class_method(Some(&class.name), &member.function);
                     code_section.function(&func);
                 }
             }
@@ -1645,8 +1658,7 @@ impl WasmModuleEmitter {
                         .unwrap_or(0);
                     let class_bits = (STRING_TAG << 48) | (class_name_id as u64);
 
-                    // Register instance methods in classMethodTable (including getters/setters),
-                    // and named static methods, which a class value carries as properties.
+                    // Register instance methods, named static methods and named accessors.
                     let methods = self.class_method_map.get(&class.name).into_iter().flatten();
                     // A static block (`__perry_static_init_N`) is not a property of the class.
                     let statics = self
@@ -1655,14 +1667,23 @@ impl WasmModuleEmitter {
                         .into_iter()
                         .flatten()
                         .filter(|(name, _)| !name.starts_with("__perry_static_init_"));
-                    let registrations: Vec<(&str, String, u32)> = methods
-                        .map(|(name, &idx)| ("class_set_method", name.clone(), idx))
-                        .chain(
-                            statics
-                                .map(|(name, &idx)| ("class_set_static_method", name.clone(), idx)),
-                        )
+                    let accessors = self
+                        .class_accessor_map
+                        .get(&class.name)
+                        .into_iter()
+                        .flatten();
+                    // The last argument is a method's `fn_proto_code` or an `accessor_code`.
+                    let registrations: Vec<(&str, String, u32, f64)> = methods
+                        .map(|(name, &idx)| ("class_set_method", name, idx))
+                        .chain(statics.map(|(name, &idx)| ("class_set_static_method", name, idx)))
+                        .map(|(bridge, name, idx)| {
+                            (bridge, name.clone(), idx, self.fn_proto_code(idx))
+                        })
+                        .chain(accessors.map(|(name, code, idx)| {
+                            ("class_set_accessor", name.clone(), *idx, *code)
+                        }))
                         .collect();
-                    for (bridge, method_name, func_idx) in registrations {
+                    for (bridge, method_name, func_idx, last) in registrations {
                         let real_name = method_name.as_str();
                         let method_name_id = self.string_map.get(real_name).copied().unwrap_or(0);
                         let method_bits = (STRING_TAG << 48) | (method_name_id as u64);
@@ -1696,9 +1717,7 @@ impl WasmModuleEmitter {
                             memory_index: 0,
                         }));
                         func.instruction(&Instruction::I32Const(0xFF18));
-                        func.instruction(&Instruction::I64Const(
-                            self.fn_proto_code(func_idx).to_bits() as i64,
-                        ));
+                        func.instruction(&Instruction::I64Const(last.to_bits() as i64));
                         func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
                             offset: 0,
                             align: 3,

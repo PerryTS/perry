@@ -8,7 +8,8 @@ use super::*;
 
 impl WasmModuleEmitter {
     /// Generate JavaScript code for an async function body.
-    /// The generated function uses NaN-boxed f64 values and bridge helper functions.
+    /// The generated function uses NaN-boxed f64 values and bridge helper functions, and
+    /// returns a host value: its promise is read by host reactions as well as compiled ones.
     pub(super) fn emit_js_async_function(&self, func: &perry_hir::ir::Function) -> String {
         let params: Vec<String> = func
             .params
@@ -44,14 +45,12 @@ impl WasmModuleEmitter {
             "  __async_{name}: ({params}) => {{\n\
              \x20   const __p = (async () => {{\n\
              {body}\
-             \x20     return {undef};\n\
              \x20   }})();\n\
              \x20   return nanboxPointer(allocHandle(__p));\n\
              \x20 }},",
             name = func.name,
             params = params_str,
             body = body,
-            undef = "u64ToF64(TAG_UNDEFINED)",
         )
     }
 
@@ -104,10 +103,10 @@ impl WasmModuleEmitter {
             }
             Stmt::Return(Some(e), _) => {
                 let val = self.emit_js_expr(e, locals);
-                out.push_str(&format!("{pad}    return {val};\n"));
+                out.push_str(&format!("{pad}    return toJsValue({val});\n"));
             }
             Stmt::Return(None, _) => {
-                out.push_str(&format!("{pad}    return u64ToF64(TAG_UNDEFINED);\n"));
+                out.push_str(&format!("{pad}    return;\n"));
             }
             Stmt::If {
                 condition,
@@ -287,7 +286,30 @@ impl WasmModuleEmitter {
         }
     }
 
+    /// JS for `emit_function_value`'s call.
+    fn js_function_value(&self, func_idx: u32) -> String {
+        let table_idx = self
+            .func_to_table_idx
+            .get(&func_idx)
+            .copied()
+            .unwrap_or(func_idx);
+        let name = self
+            .fn_names
+            .get(&func_idx)
+            .map_or("", |&id| &self.string_table[id as usize].0);
+        format!(
+            "fromJsValue(__memDispatch.function_value({}, {}, {}))",
+            table_idx,
+            self.fn_proto_code(func_idx),
+            js_string_literal(name)
+        )
+    }
+
     pub(super) fn emit_js_expr(&self, expr: &Expr, locals: &BTreeMap<u32, String>) -> String {
+        if let Some((bridge, args)) = super::expr::reflection_bridge(expr) {
+            let args: Vec<String> = args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+            return format!("fromJsValue(__memDispatch.{bridge}({}))", host_args(&args));
+        }
         match expr {
             // Rust spells an infinity `inf`, which is not a JS literal.
             Expr::Number(n) if n.is_infinite() => {
@@ -965,10 +987,6 @@ impl WasmModuleEmitter {
                 let (obj, props) = (self.emit_js_expr(obj, locals), self.emit_js_expr(props, locals));
                 format!("fromJsValue(__memDispatch.object_define_properties(toJsValue({obj}), toJsValue({props})))")
             }
-            Expr::ObjectGetOwnPropertyDescriptor(obj, key) => {
-                let (obj, key) = (self.emit_js_expr(obj, locals), self.emit_js_expr(key, locals));
-                format!("fromJsValue(__memDispatch.object_get_own_property_descriptor(toJsValue({obj}), toJsValue({key})))")
-            }
             Expr::ObjectEntries(o) => {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.entries(toJsValue({})))", o)
@@ -1088,7 +1106,7 @@ impl WasmModuleEmitter {
             Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 let obj = self.emit_js_expr(object, locals);
                 let idx = self.emit_js_expr(index, locals);
-                format!("fromJsValue(toJsValue({})[toJsValue({})])", obj, idx)
+                format!("fromJsValue(toJsValue({})[__hostKey(toJsValue({}))])", obj, idx)
             }
             Expr::IndexSet {
                 object,
@@ -1100,7 +1118,7 @@ impl WasmModuleEmitter {
                 let idx = self.emit_js_expr(index, locals);
                 let val = self.emit_js_expr(value, locals);
                 format!(
-                    "(toJsValue({})[toJsValue({})] = toJsValue({}), {})",
+                    "(toJsValue({})[__hostKey(toJsValue({}))] = toJsValue({}), {})",
                     obj, idx, val, val
                 )
             }
@@ -1114,7 +1132,7 @@ impl WasmModuleEmitter {
                 let val = self.emit_js_expr(value, locals);
                 // Target, key, then value, each evaluated once (see PropertySet).
                 format!(
-                    "((__o, __k, __v) => (toJsValue(__o)[toJsValue(__k)] = toJsValue(__v), __v))({}, {}, {})",
+                    "((__o, __k, __v) => (toJsValue(__o)[__hostKey(toJsValue(__k))] = toJsValue(__v), __v))({}, {}, {})",
                     obj, k, val
                 )
             }
@@ -1288,16 +1306,7 @@ impl WasmModuleEmitter {
                     // makes it: the raw export takes i64 parameters, so a JS caller
                     // cannot pass it numbers. Consumer import table first — bare names
                     // collide.
-                    let table_idx = self
-                        .func_to_table_idx
-                        .get(&func_idx)
-                        .copied()
-                        .unwrap_or(func_idx);
-                    format!(
-                        "fromJsValue(__memDispatch.function_value({}, {}))",
-                        table_idx,
-                        self.fn_proto_code(func_idx)
-                    )
+                    self.js_function_value(func_idx)
                 } else {
                     "u64ToF64(TAG_UNDEFINED)".to_string()
                 }
@@ -1352,16 +1361,7 @@ impl WasmModuleEmitter {
                 let Some(&func_idx) = self.func_map.get(id) else {
                     return "u64ToF64(TAG_UNDEFINED)".to_string();
                 };
-                let table_idx = self
-                    .func_to_table_idx
-                    .get(&func_idx)
-                    .copied()
-                    .unwrap_or(func_idx);
-                format!(
-                    "fromJsValue(__memDispatch.function_value({}, {}))",
-                    table_idx,
-                    self.fn_proto_code(func_idx)
-                )
+                self.js_function_value(func_idx)
             }
             Expr::New {
                 class_name,
@@ -1434,7 +1434,7 @@ impl WasmModuleEmitter {
                     js_string_literal(property)
                 ),
                 Expr::IndexGet { object, index, .. } => format!(
-                    "fromJsValue(delete toJsValue({})[toJsValue({})])",
+                    "fromJsValue(delete toJsValue({})[__hostKey(toJsValue({}))])",
                     self.emit_js_expr(object, locals),
                     self.emit_js_expr(index, locals)
                 ),

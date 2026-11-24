@@ -135,16 +135,7 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::FuncRef(id) => {
                 if let Some(&func_idx) = self.emitter.func_map.get(id) {
                     // The function's one value (see `function_value`)
-                    let table_idx = self
-                        .emitter
-                        .func_to_table_idx
-                        .get(&func_idx)
-                        .copied()
-                        .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 2);
-                    self.emit_store_const(func, 0, table_idx as f64);
-                    self.emit_store_const(func, 1, self.emitter.fn_proto_code(func_idx));
-                    self.emit_memcall(func, "function_value", 2);
+                    self.emit_function_value(func, func_idx);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
@@ -169,16 +160,7 @@ impl<'a> FuncEmitCtx<'a> {
                 {
                     // The function's one value, as for FuncRef.
                     // Consumer import table first — bare names collide.
-                    let table_idx = self
-                        .emitter
-                        .func_to_table_idx
-                        .get(&func_idx)
-                        .copied()
-                        .unwrap_or(func_idx);
-                    self.emit_frame_begin(func, 2);
-                    self.emit_store_const(func, 0, table_idx as f64);
-                    self.emit_store_const(func, 1, self.emitter.fn_proto_code(func_idx));
-                    self.emit_memcall(func, "function_value", 2);
+                    self.emit_function_value(func, func_idx);
                 } else {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
@@ -771,24 +753,13 @@ impl<'a> FuncEmitCtx<'a> {
                 class_name,
                 field_name,
             } => {
-                let class_id = self
-                    .emitter
-                    .string_map
-                    .get(class_name.as_str())
-                    .copied()
-                    .unwrap_or(0);
-                let class_bits = (STRING_TAG << 48) | (class_id as u64);
-                let field_id = self
-                    .emitter
-                    .string_map
-                    .get(field_name.as_str())
-                    .copied()
-                    .unwrap_or(0);
-                let field_bits = (STRING_TAG << 48) | (field_id as u64);
-                self.emit_frame_begin(func, 2);
-                self.emit_store_const(func, 0, f64::from_bits(class_bits));
-                self.emit_store_const(func, 1, f64::from_bits(field_bits));
-                self.emit_memcall(func, "class_get_static", 2);
+                let ctor_slot = self.class_ctor_slot(class_name);
+                self.emit_class_bridge(
+                    func,
+                    "class_get_static",
+                    class_name,
+                    &[&Expr::String(field_name.clone()), &Expr::Number(ctor_slot)],
+                );
             }
             Expr::StaticFieldSet {
                 class_name,
@@ -796,26 +767,18 @@ impl<'a> FuncEmitCtx<'a> {
                 value,
                 ..
             } => {
-                let class_id = self
-                    .emitter
-                    .string_map
-                    .get(class_name.as_str())
-                    .copied()
-                    .unwrap_or(0);
-                let class_bits = (STRING_TAG << 48) | (class_id as u64);
-                let field_id = self
-                    .emitter
-                    .string_map
-                    .get(field_name.as_str())
-                    .copied()
-                    .unwrap_or(0);
-                let field_bits = (STRING_TAG << 48) | (field_id as u64);
-                self.emit_frame_begin(func, 3);
-                self.emit_store_const(func, 0, f64::from_bits(class_bits));
-                self.emit_store_const(func, 1, f64::from_bits(field_bits));
-                self.emit_store_arg(func, 2, value);
                 // The bridge returns the stored value: the initializer runs once.
-                self.emit_memcall(func, "class_set_static", 3);
+                let ctor_slot = self.class_ctor_slot(class_name);
+                self.emit_class_bridge(
+                    func,
+                    "class_set_static",
+                    class_name,
+                    &[
+                        &Expr::String(field_name.clone()),
+                        value,
+                        &Expr::Number(ctor_slot),
+                    ],
+                );
             }
             Expr::StaticMethodCall {
                 class_name,
