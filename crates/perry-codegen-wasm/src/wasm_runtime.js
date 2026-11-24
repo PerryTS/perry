@@ -6145,8 +6145,7 @@ const hostCallbacks = new WeakMap();
 // table, not on the host object, so its fields are read as Perry reads them.
 function __hostDescriptor(desc) {
   if (!__holdsProperties(desc)) return desc;
-  const cls = __classOf(desc);
-  const hasAccessor = (field) => {
+  const hasAccessor = (cls, field) => {
     for (let c = cls; c; c = classParentTable[c] || null) {
       const methods = classMethodTable[c];
       if (methods && (('__get_' + field) in methods || ('__set_' + field) in methods)) return true;
@@ -6155,10 +6154,16 @@ function __hostDescriptor(desc) {
   };
   const copy = Object.create(null);
   for (const field of ['enumerable', 'configurable', 'value', 'writable', 'get', 'set']) {
-    if (!(field in desc) && !hasAccessor(field)) continue;
+    // A getter may change the descriptor's prototype, so its class is read per field.
+    const cls = __classOf(desc);
+    if (!(field in desc) && !hasAccessor(cls, field)) continue;
     const v = cls ? __memDispatch.class_get_field(desc, field) : desc[field];
     if (cls) __memDispatch.propagate_exception(true);
-    copy[field] = (field === 'get' || field === 'set') ? __hostAccessor(v) : v;
+    if (field === 'get' || field === 'set') {
+      // An uncallable accessor throws the host's TypeError before a later field is read.
+      if (v !== undefined && typeof v !== 'function' && !__isPerryClosure(v)) Object.defineProperty({}, field, { [field]: v });
+      copy[field] = __hostAccessor(v);
+    } else copy[field] = v;
   }
   return copy;
 }
