@@ -1250,20 +1250,32 @@ console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
 #[path = "class_eval_tests.rs"]
 mod class_eval;
 
+#[path = "array_copy_method_tests.rs"]
+mod array_copy_method;
+
 #[path = "collection_for_of_tests.rs"]
 mod collection_for_of;
 
 #[path = "static_method_tests.rs"]
 mod static_method;
 
+#[path = "date_setter_tests.rs"]
+mod date_setter;
+
 #[path = "class_value_tests.rs"]
 mod class_value;
+
+#[path = "weak_ref_tests.rs"]
+mod weak_ref;
 
 #[path = "function_value_tests.rs"]
 mod function_value;
 
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;
+
+#[path = "object_is_tests.rs"]
+mod object_is;
 
 #[path = "object_create_tests.rs"]
 mod object_create;
@@ -1277,6 +1289,9 @@ mod class_prototype;
 #[path = "builtin_subclass_tests.rs"]
 mod builtin_subclass;
 
+#[path = "array_from_tests.rs"]
+mod array_from;
+
 #[path = "rest_param_tests.rs"]
 mod rest_param;
 
@@ -1288,6 +1303,9 @@ mod math_minmax;
 
 #[path = "async_operator_tests.rs"]
 mod async_operator;
+
+#[path = "patched_builtin_tests.rs"]
+mod patched_builtin;
 
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {
@@ -1317,3 +1335,6 @@ for (const name of ["phone", "email", "count", "box", "pin"]) {
         "phone tel\nemail email\ncount number\nbox text\npin password"
     );
 }
+
+#[path = "array_iterator_tests.rs"]
+mod array_iterator;
