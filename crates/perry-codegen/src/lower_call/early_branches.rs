@@ -79,14 +79,7 @@ fn typed_closure_signature_note(ret: &str, reps: &[crate::codegen::TypedParamRep
 }
 
 fn is_async_dispose_symbol_index(index: &Expr) -> bool {
-    let Expr::SymbolFor(symbol_name) = index else {
-        return false;
-    };
-    match symbol_name.as_ref() {
-        Expr::String(name) => name == "@@__perry_wk_asyncDispose",
-        Expr::WtfString(name) => name.as_slice() == b"@@__perry_wk_asyncDispose",
-        _ => false,
-    }
+    matches!(index, Expr::WellKnownSymbol("asyncDispose"))
 }
 
 pub fn try_lower_native_chain_method_call(

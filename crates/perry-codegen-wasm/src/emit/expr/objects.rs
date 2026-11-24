@@ -525,6 +525,11 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, key);
                 self.emit_memcall(func, "symbol_for", 1);
             }
+            Expr::WellKnownSymbol(name) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, &Expr::String(name.to_string()));
+                self.emit_memcall(func, "symbol_well_known", 1);
+            }
             Expr::SymbolNew(desc) => {
                 let argc = desc.is_some() as u32;
                 self.emit_frame_begin(func, argc);

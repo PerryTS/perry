@@ -18,8 +18,8 @@ fn with_numeric_local_7(index: &Expr) -> bool {
     uint8array_get_reads_a_byte(index, &mut |id| id == 7)
 }
 
-fn sym(key: &str) -> Expr {
-    Expr::SymbolFor(Box::new(Expr::String(key.to_string())))
+fn sym(name: &'static str) -> Expr {
+    Expr::WellKnownSymbol(name)
 }
 
 fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
@@ -37,13 +37,13 @@ fn numeric_literals_read_a_byte() {
 }
 
 /// The regression itself: `const it = u8[Symbol.iterator]` lowers to a
-/// `Uint8ArrayGet` with a `SymbolFor` key. Answering "byte read" here gave the
+/// `Uint8ArrayGet` with a `WellKnownSymbol` key. Answering "byte read" here gave the
 /// destination local an i32 slot, and `ToInt32(ToNumber(fn))` made `typeof it`
 /// report `number` instead of `function`.
 #[test]
 fn a_symbol_key_does_not_read_a_byte() {
-    assert!(!structural(&sym("@@__perry_wk_iterator")));
-    assert!(!with_numeric_local_7(&sym("@@__perry_wk_iterator")));
+    assert!(!structural(&sym("iterator")));
+    assert!(!with_numeric_local_7(&sym("iterator")));
 }
 
 /// `const k: any = "byteLength"; u8[k]` — the key is a `LocalGet` the caller
@@ -154,7 +154,7 @@ fn a_nested_byte_read_is_a_numeric_key() {
 
     let inner_symbol = Expr::Uint8ArrayGet {
         array: Box::new(Expr::LocalGet(1)),
-        index: Box::new(sym("@@__perry_wk_iterator")),
+        index: Box::new(sym("iterator")),
     };
     assert!(!structural(&inner_symbol));
 }

@@ -461,6 +461,15 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 .block()
                 .call(DOUBLE, "js_symbol_for", &[(DOUBLE, &k_box)]))
         }
+        Expr::WellKnownSymbol(name) => {
+            let number = perry_abi::well_known_symbol_number(name)
+                .ok_or_else(|| anyhow::anyhow!("unknown well-known symbol {name}"))?;
+            Ok(ctx.block().call(
+                DOUBLE,
+                "js_well_known_symbol",
+                &[(I32, &number.to_string())],
+            ))
+        }
         Expr::SymbolKeyFor(sym) => {
             let s_box = lower_expr(ctx, sym)?;
             Ok(ctx

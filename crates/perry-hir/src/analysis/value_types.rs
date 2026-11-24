@@ -580,7 +580,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         Expr::Number(_) | Expr::Integer(_) => Type::Number,
         Expr::BigInt(_) => Type::BigInt,
         Expr::String(_) | Expr::WtfString(_) | Expr::I18nString { .. } => Type::String,
-        Expr::SymbolNew(_) | Expr::SymbolFor(_) => Type::Symbol,
+        Expr::SymbolNew(_) | Expr::SymbolFor(_) | Expr::WellKnownSymbol(_) => Type::Symbol,
 
         Expr::LocalGet(id) => env.local_type(*id).cloned().unwrap_or(Type::Any),
         Expr::This => env.this_type().unwrap_or(Type::Any),

@@ -84,19 +84,24 @@ pub unsafe extern "C" fn js_symbol_for(key_f64: f64) -> f64 {
     f64::from_bits(POINTER_TAG | (symbol_for_text(&key) as u64 & POINTER_MASK))
 }
 
-/// `Symbol.for(key)` for key text: the well-known symbol a `@@__perry_wk_`
-/// sentinel names, else the registry's symbol (created on first use).
-pub(crate) fn symbol_for_text(key: &str) -> usize {
-    // Well-known symbol sentinel: HIR lowers `Symbol.toPrimitive` etc. to
-    // `SymbolFor(String("@@__perry_wk_toPrimitive"))`. Detect the prefix
-    // and delegate to the well-known cache instead of polluting the
-    // Symbol.for registry. These symbols have `registered=0` so
-    // `Symbol.keyFor()` returns undefined for them.
-    if let Some(short_name) = key.strip_prefix(WK_PREFIX) {
-        let wk_ptr = well_known_symbol(short_name);
-        return wk_ptr as usize;
-    }
+/// `Symbol.<name>`: `number` is its index in `WELL_KNOWN_SYMBOLS`.
+#[no_mangle]
+pub extern "C" fn js_well_known_symbol(number: i32) -> f64 {
+    let symbol = well_known_symbol(perry_abi::WELL_KNOWN_SYMBOLS[number as usize]);
+    f64::from_bits(POINTER_TAG | (symbol as u64 & POINTER_MASK))
+}
 
+/// The symbol a class member declaration spells (perry-hir's
+/// `Expr::known_symbol`): `@@__perry_wk_<name>` or a registry key.
+pub(crate) fn declared_symbol(spelling: &str) -> usize {
+    match spelling.strip_prefix(WK_PREFIX) {
+        Some(name) => well_known_symbol(name) as usize,
+        None => symbol_for_text(spelling),
+    }
+}
+
+/// The registry's symbol for `key` (created on first use).
+fn symbol_for_text(key: &str) -> usize {
     let mut guard = SYMBOL_REGISTRY.lock().unwrap();
     if guard.is_none() {
         *guard = Some(HashMap::new());
@@ -140,8 +145,7 @@ pub(crate) fn symbol_for_text(key: &str) -> usize {
 
 /// #6676: a *computed* read of a well-known symbol off the `Symbol`
 /// constructor — `Symbol[name]` with a runtime key. Dot access (`Symbol.iterator`)
-/// and a string-literal bracket key are folded to the `@@__perry_wk_` sentinel at
-/// HIR, but a dynamic key can't be folded. This is the exact shape esbuild's
+/// and a string-literal bracket key are folded at HIR, but a dynamic key can't be folded. This is the exact shape esbuild's
 /// `__knownSymbol` helper emits when downleveling `yield*`/`async` to
 /// es2015/es2017: `(symbol = Symbol[name]) ? symbol : Symbol.for("Symbol." + name)`.
 ///
@@ -204,6 +208,10 @@ fn is_well_known_symbol_member_name(name: &str) -> bool {
 #[used(compiler)]
 static KEEP_JS_SYMBOL_COMPUTED_MEMBER: unsafe extern "C" fn(f64, f64) -> f64 =
     js_symbol_computed_member;
+
+#[cfg(feature = "keepalive-anchors")]
+#[used(compiler)]
+static KEEP_JS_WELL_KNOWN_SYMBOL: extern "C" fn(i32) -> f64 = js_well_known_symbol;
 
 /// `Symbol.keyFor(sym)` — reverse lookup. Returns the registration key as a
 /// string for registered symbols, or undefined for non-registered symbols.
@@ -327,6 +335,25 @@ pub unsafe extern "C" fn js_symbol_equals(a: f64, b: f64) -> i32 {
 #[cfg(test)]
 mod registry_key_tests {
     use super::*;
+
+    #[test]
+    fn a_registry_key_never_names_a_well_known_symbol() {
+        for (number, name) in perry_abi::WELL_KNOWN_SYMBOLS.iter().enumerate() {
+            let spelling = format!("{WK_PREFIX}{name}");
+            unsafe {
+                let text = js_string_from_bytes(spelling.as_ptr(), spelling.len() as u32);
+                let registered = js_symbol_for(crate::value::js_nanbox_string(text as i64));
+                let well_known = js_well_known_symbol(number as i32);
+                assert_ne!(registered.to_bits(), well_known.to_bits(), "{name}");
+                assert_eq!(js_symbol_key_for(well_known).to_bits(), TAG_UNDEFINED);
+                assert_ne!(js_symbol_key_for(registered).to_bits(), TAG_UNDEFINED);
+                assert_eq!(
+                    declared_symbol(&spelling) as u64,
+                    well_known.to_bits() & POINTER_MASK
+                );
+            }
+        }
+    }
 
     /// `Symbol.for(<number>)` registers under `ToString(number)`. A subnormal
     /// double's bits can land inside the heap range, and magnitude alone used to

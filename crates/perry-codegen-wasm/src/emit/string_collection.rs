@@ -72,6 +72,7 @@ impl WasmModuleEmitter {
             "object_assign",
             "object_coerce",
             "symbol_for",
+            "symbol_well_known",
             "symbol_new",
             "symbol_key_for",
             "object_coerce_has_property",
@@ -580,6 +581,9 @@ impl WasmModuleEmitter {
             }
             Expr::String(s) => {
                 self.intern_string(s);
+            }
+            Expr::WellKnownSymbol(name) => {
+                self.intern_string(name);
             }
             Expr::Binary { left, right, .. }
             | Expr::Compare { left, right, .. }

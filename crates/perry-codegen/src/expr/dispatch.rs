@@ -513,6 +513,7 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::ProcessKill { .. }
         | Expr::SymbolNew(..)
         | Expr::SymbolFor(..)
+        | Expr::WellKnownSymbol(..)
         | Expr::SymbolKeyFor(..)
         | Expr::SymbolDescription(..)
         | Expr::RegExpEscape(..)

@@ -907,7 +907,10 @@ pub(crate) fn lower(
             // and they kept falling through to `js_put_value_set`.
             let index_is_static_string_or_symbol = matches!(
                 index.as_ref(),
-                Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
+                Expr::String(_)
+                    | Expr::WtfString(_)
+                    | Expr::SymbolFor(_)
+                    | Expr::WellKnownSymbol(_)
             ) || is_string_expr(ctx, index);
             if recv_unknown && !index_is_static_string_or_symbol {
                 let strict = assignment_strict;

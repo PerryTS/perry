@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::types::{FuncId, GlobalId, LocalId, Type};
+use std::borrow::Cow;
 
 /// The layout an array birth's named properties are born in: the keys whose
 /// writes reach this birth through value flow, in the order of their first
@@ -1136,6 +1137,8 @@ pub enum Expr {
     // Symbol operations
     SymbolNew(Option<Box<Expr>>), // Symbol() / Symbol(description)
     SymbolFor(Box<Expr>),         // Symbol.for(key) -> registered symbol
+    /// `Symbol.<name>`: a name of `perry_abi::WELL_KNOWN_SYMBOLS`.
+    WellKnownSymbol(&'static str),
     SymbolKeyFor(Box<Expr>),      // Symbol.keyFor(sym) -> key | undefined
     SymbolDescription(Box<Expr>), // sym.description
     /// RegExp.escape(str) -> escaped string (TC39 proposal, Node 24+)
@@ -3029,6 +3032,22 @@ pub enum PathWin32Method {
 }
 
 impl Expr {
+    /// The spelling of the symbol this expression names when the compiler knows
+    /// it: `@@__perry_wk_<name>` for a well-known symbol, the registry key for
+    /// `Symbol.for("key")`. A registry key in the well-known form has no
+    /// spelling, so a spelling names one symbol.
+    pub fn known_symbol(&self) -> Option<Cow<'_, str>> {
+        const WELL_KNOWN: &str = "@@__perry_wk_";
+        match self {
+            Expr::WellKnownSymbol(name) => Some(Cow::Owned(format!("{WELL_KNOWN}{name}"))),
+            Expr::SymbolFor(key) => match key.as_ref() {
+                Expr::String(key) if !key.starts_with(WELL_KNOWN) => Some(Cow::Borrowed(key)),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// The callable global fetch used by ordinary and spread-call lowering.
     /// Imported or locally shadowed functions named fetch are not this callee.
     pub fn is_global_fetch_callee(&self) -> bool {

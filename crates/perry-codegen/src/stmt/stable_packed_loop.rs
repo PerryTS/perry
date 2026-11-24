@@ -331,7 +331,7 @@ fn expr_blocks_repeated_read_cache(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
         );
         let static_string_or_symbol = matches!(
             key.as_ref(),
-            Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
+            Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_) | Expr::WellKnownSymbol(_)
         ) || crate::type_analysis::is_string_expr(ctx, key);
         if !same_local
             || static_string_or_symbol

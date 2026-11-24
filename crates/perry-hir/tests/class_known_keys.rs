@@ -83,6 +83,18 @@ fn well_known_and_registered_symbol_keys_are_known() {
 }
 
 #[test]
+fn a_registry_key_in_the_well_known_spelling_is_evaluated() {
+    let m = lower_src(
+        r#"class R { [Symbol.for("@@__perry_wk_iterator")]() { return 1; } }
+           new R();"#,
+    );
+    let r = class(&m, "R");
+    assert_eq!(r.computed_members.len(), 1);
+    assert_eq!(r.computed_members[0].known_symbol(), None);
+    assert!(r.has_evaluated_members());
+}
+
+#[test]
 fn evaluated_key_is_evaluated() {
     let m = lower_src(
         r#"const k = String(Math.random() > 2 ? "a" : "b");

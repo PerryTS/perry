@@ -82,19 +82,6 @@ enum KeyConst {
     Symbol(Option<ImageKey>),
 }
 
-/// `Symbol.for(desc)` as a layout key: a well-known symbol (the HIR spells
-/// `Symbol.iterator` as `Symbol.for("@@__perry_wk_iterator")`) or a
-/// registered one.
-fn symbol_key(desc: &str) -> Option<ImageKey> {
-    match desc.strip_prefix("@@__perry_wk_") {
-        Some(name) => crate::runtime_abi::WELL_KNOWN_SYMBOLS
-            .iter()
-            .position(|n| *n == name)
-            .map(|i| ImageKey::WellKnown(i as u32)),
-        None => Some(ImageKey::Registered(desc.to_string())),
-    }
-}
-
 /// `%Object.prototype%`'s own keys: data methods an add of the name would
 /// shadow, and `__proto__`. A family key is none of them (an intrinsic's
 /// attributes are not the compiler's to follow).
@@ -234,9 +221,12 @@ impl Analysis<'_> {
         match e {
             Expr::String(s) => Some(KeyConst::Str(s.clone())),
             Expr::SymbolFor(desc) => Some(KeyConst::Symbol(match desc.as_ref() {
-                Expr::String(d) => symbol_key(d),
+                Expr::String(d) => Some(ImageKey::Registered(d.clone())),
                 _ => None,
             })),
+            Expr::WellKnownSymbol(name) => Some(KeyConst::Symbol(
+                perry_abi::well_known_symbol_number(name).map(ImageKey::WellKnown),
+            )),
             Expr::LocalGet(x) => self.consts.get(x).cloned(),
             _ => match self.imported(e)? {
                 ExportFact::Key(ImageKey::Str(s)) => Some(KeyConst::Str(s.clone())),
@@ -344,7 +334,10 @@ fn analyze<'a>(hir: &'a Module, exports: &'a ProtoExports) -> Analysis<'a> {
                 .insert(*id, KeyConst::Symbol(Some(ImageKey::Local(*id))));
             continue;
         }
-        if matches!(init, Expr::String(_) | Expr::SymbolFor(_)) {
+        if matches!(
+            init,
+            Expr::String(_) | Expr::SymbolFor(_) | Expr::WellKnownSymbol(_)
+        ) {
             if let Some(k) = a.key_const(init) {
                 a.consts.insert(*id, k);
             }

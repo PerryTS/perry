@@ -1313,8 +1313,8 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
     })
 }
 
-/// The registration key `js_to_property_key(SymbolFor("lit"))` (or the bare
-/// `SymbolFor`): a symbol the compiler knows (`ClassComputedMember::known_symbol`).
+/// The registration key `js_to_property_key(<symbol>)` (or the bare symbol) of
+/// a symbol the compiler knows (`Expr::known_symbol`).
 fn known_symbol_key(key: &Expr) -> bool {
     let key = match key {
         Expr::Call { callee, args, .. }
@@ -1325,7 +1325,7 @@ fn known_symbol_key(key: &Expr) -> bool {
         }
         key => key,
     };
-    matches!(key, Expr::SymbolFor(inner) if matches!(inner.as_ref(), Expr::String(_)))
+    key.known_symbol().is_some()
 }
 
 /// Whether the declaration of `class_name` names this known-symbol instance

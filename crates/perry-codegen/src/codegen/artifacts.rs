@@ -710,7 +710,7 @@ pub(super) fn emit_module_artifacts(
         // its symbol's spelling.
         for m in class.computed_members.iter().filter(|m| !m.is_static) {
             if let Some(name) = m.known_symbol() {
-                let _ = strings.intern(name);
+                let _ = strings.intern(&name);
             }
         }
     }

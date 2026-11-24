@@ -241,10 +241,26 @@ class A { static [Symbol.iterator] = 1; static [s] = 2; static ["x" + 1] = 3; }
 const K: any = A;
 console.log(JSON.stringify(Object.keys(A)) + " " + K[Symbol.iterator] + " " + K[s] + " " + K.x1);
 console.log((s === Symbol.for("k")) + " " + (Symbol.iterator === Symbol["iterator"]) + " " + String(Symbol.asyncIterator));
-console.log(String(Symbol.for("@@__perry_wk_noSuchName")));
 "#
         ),
-        "[\"x1\"] 1 2 3\ntrue true Symbol(Symbol.asyncIterator)\nSymbol(@@__perry_wk_noSuchName)"
+        "[\"x1\"] 1 2 3\ntrue true Symbol(Symbol.asyncIterator)"
+    );
+}
+
+// A registry key may spell anything: `Symbol.for(key)` is never a well-known symbol.
+// Expected output is Node's.
+#[test]
+fn a_registry_key_never_names_a_well_known_symbol() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function keyFor(key: string) { return Symbol.keyFor(Symbol.for(key)); }
+console.log(Symbol.keyFor(Symbol.for("@@__perry_wk_iterator")) + " " + keyFor("@@__perry_wk_" + "iterator"));
+console.log(((Symbol.for("@@__perry_wk_iterator") as symbol) === Symbol.iterator) + " " + String(Symbol.for("@@__perry_wk_noSuchName")));
+console.log(String(Symbol.keyFor(Symbol.iterator)) + " " + String(Symbol.iterator));
+"#
+        ),
+        "@@__perry_wk_iterator @@__perry_wk_iterator\nfalse Symbol(@@__perry_wk_noSuchName)\nundefined Symbol(Symbol.iterator)"
     );
 }
 

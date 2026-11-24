@@ -265,7 +265,7 @@ impl ClassMemberDecl {
         // SAFETY: `name` addresses `name_len` bytes of the image.
         let bytes = unsafe { std::slice::from_raw_parts(self.name, self.name_len as usize) };
         let key = std::str::from_utf8(bytes).ok()?;
-        Some(crate::symbol::symbol_for_text(key)).filter(|&s| s != 0)
+        Some(crate::symbol::declared_symbol(key)).filter(|&s| s != 0)
     }
 
     /// The literal name's bytes, `None` for a computed member or one keyed

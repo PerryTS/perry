@@ -944,7 +944,10 @@ pub(crate) fn lower(
             // (`@@toStringTag` — used by `safe-stable-stringify` — and
             // `@@iterator`). The dynamic-index helper below stringifies the key
             // and would miss them.
-            if matches!(index.as_ref(), Expr::SymbolFor(_)) {
+            if matches!(
+                index.as_ref(),
+                Expr::SymbolFor(_) | Expr::WellKnownSymbol(_)
+            ) {
                 // `Symbol.for(k)` interns — it allocates a SymbolHeader on
                 // first use — so the receiver was live across an allocation.
                 return rooting::with_operands_rooted(ctx, &[array, index], |ctx, vals| {

@@ -521,18 +521,17 @@ impl<'a> Gen<'a> {
     }
 
     /// The key of a computed READ or method call. `Symbol.iterator` & co.:
-    /// HIR folds a well-known symbol to the runtime's `@@__perry_wk_<name>`
-    /// sentinel, one symbol per name, so the read names it. Stores keep
+    /// the atom of `Expr::WellKnownSymbol` is `@@__perry_wk_<name>`, one
+    /// symbol per name, so the read names it. Stores keep
     /// `Key::Any`, which every named read sees; as an atom it can only
     /// merge with a string key of the same spelling (more flow, never less).
     pub(crate) fn read_key(&mut self, mi: u32, index: &Expr) -> Key {
         match index {
-            Expr::SymbolFor(name) => match name.as_ref() {
-                Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => {
-                    Key::Named(self.m.atom(s))
-                }
-                _ => Key::any(),
-            },
+            Expr::WellKnownSymbol(name) => Key::Named(
+                self.m
+                    .atom(&format!("{}{name}", crate::builtins::WK_PREFIX)),
+            ),
+            Expr::SymbolFor(_) => Key::any(),
             _ => self.key_of(mi, index),
         }
     }
@@ -1606,12 +1605,11 @@ impl<'a> Gen<'a> {
                 // Observing a key must not intern atoms or add solver work.
                 let atom = match key.as_ref() {
                     Expr::String(s) => self.m.atom_index.get(s).copied(),
-                    Expr::SymbolFor(name) => match name.as_ref() {
-                        Expr::String(s) if s.starts_with(crate::builtins::WK_PREFIX) => {
-                            self.m.atom_index.get(s).copied()
-                        }
-                        _ => None,
-                    },
+                    Expr::WellKnownSymbol(name) => self
+                        .m
+                        .atom_index
+                        .get(&format!("{}{name}", crate::builtins::WK_PREFIX))
+                        .copied(),
                     _ => None,
                 };
                 let element_key = atom.map_or(Key::any(), Key::Named);

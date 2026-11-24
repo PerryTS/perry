@@ -730,7 +730,7 @@ pub(crate) fn put_value_index_fast_path(
     // `js_put_value_set`.
     let key_is_static_string_or_symbol = matches!(
         key,
-        Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
+        Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_) | Expr::WellKnownSymbol(_)
     ) || is_string_expr(ctx, key);
     // Representation-selection Phase 2: a receiver statically typed as a
     // numeric typed array also belongs on `index_set::lower`'s typed-array

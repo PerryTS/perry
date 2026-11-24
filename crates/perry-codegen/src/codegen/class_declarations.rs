@@ -58,7 +58,7 @@ pub(crate) fn declared_symbol_member<'a>(
     member: &'a perry_hir::ClassComputedMember,
     cid: u32,
     fresh: &std::collections::HashSet<u32>,
-) -> Option<&'a str> {
+) -> Option<std::borrow::Cow<'a, str>> {
     if member.is_static || fresh.contains(&cid) {
         return None;
     }
@@ -176,7 +176,7 @@ pub(super) fn class_declaration_globals(
             // Known by its symbol: named here (the same rule as
             // `declared_symbol_member`), so it is an ordinary member.
             let symbol = declared_symbol_member(member, cid, fresh)
-                .and_then(|s| named(s))
+                .and_then(|s| named(&s))
                 .map(|(name, len, _)| (name, len, FLAG_NAME_SYMBOL));
             let (name, name_len, name_flag) = symbol.unwrap_or(("ptr null".to_string(), 0, 0));
             members.push(Member {

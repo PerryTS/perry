@@ -4,6 +4,7 @@
 
 use super::*;
 use crate::types::{FuncId, GlobalId, LocalId, Type, TypeParam};
+use std::borrow::Cow;
 
 /// An enum definition
 #[derive(Debug, Clone)]
@@ -532,19 +533,12 @@ pub struct ClassComputedMember {
 }
 
 impl ClassComputedMember {
-    /// The member's key when it is known at compile time: a well-known symbol
-    /// (`SymbolFor("@@__perry_wk_<name>")`) or a registered `Symbol.for("lit")`.
+    /// The member's key when it is known at compile time ([`Expr::known_symbol`]).
     /// The key expression IS the key's identity, so a known member is named
     /// by it exactly as a string member is named by its text. String and
     /// number literal keys never reach here: the lowering names those members.
-    pub fn known_symbol(&self) -> Option<&str> {
-        match &self.key_expr {
-            Expr::SymbolFor(inner) => match inner.as_ref() {
-                Expr::String(s) => Some(s.as_str()),
-                _ => None,
-            },
-            _ => None,
-        }
+    pub fn known_symbol(&self) -> Option<Cow<'_, str>> {
+        self.key_expr.known_symbol()
     }
 
     /// The key is evaluated by ClassDefinitionEvaluation (not known here).

@@ -1486,6 +1486,10 @@ impl JsEmitter {
                 self.emit_expr(key);
                 self.output.push(')');
             }
+            Expr::WellKnownSymbol(name) => {
+                self.output.push_str("Symbol.");
+                self.output.push_str(name);
+            }
             Expr::SymbolKeyFor(sym) => {
                 self.output.push_str("Symbol.keyFor(");
                 self.emit_expr(sym);

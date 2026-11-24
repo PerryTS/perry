@@ -173,7 +173,7 @@ fn store_target(module: &Module, t: &Expr, k: &str) -> Option<(String, bool)> {
 /// `js_to_property_key` conversion.
 fn known_symbol_key(e: &Expr) -> bool {
     match e {
-        Expr::SymbolFor(inner) => matches!(inner.as_ref(), Expr::String(_)),
+        Expr::SymbolFor(_) | Expr::WellKnownSymbol(_) => e.known_symbol().is_some(),
         Expr::Call { callee, args, .. } => {
             matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == "js_to_property_key")
                 && matches!(args.as_slice(), [a] if known_symbol_key(a))
