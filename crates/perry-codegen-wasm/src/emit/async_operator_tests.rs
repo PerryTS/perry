@@ -142,3 +142,31 @@ f(1).then((v) => console.log(v), (e) => console.log("threw " + e.message));
         "11,12,22,22,3,e!,8"
     );
 }
+
+// A function declaration an async body uses as a value is the same function value a
+// synchronous body sees: callable with numbers through a variable, an argument or
+// `.map`, an async or rest-parameter function included. Expected output is Node's.
+#[test]
+fn async_body_function_declaration_is_its_function_value() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function add(a: number, b: number) { return a + b; }
+function inc(x: number) { return x + 1; }
+function sum(...xs: number[]) { return xs.reduce((s, x) => s + x, 0); }
+async function dbl(x: number) { return x * 2; }
+function twice(f: (x: number) => number, x: number) { return f(f(x)); }
+const syncAdd = add;
+async function run(): Promise<string> {
+  const g = add;
+  const s = sum;
+  const d = dbl;
+  return [g(1, 2), twice(inc, 5), typeof add, [1, 2, 3].map(inc).join("|"), s(1, 2, 3), await d(4),
+    g === syncAdd, add === add, Object.getPrototypeOf(d) === Object.getPrototypeOf(async () => {})].join(",");
+}
+run().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "3,7,function,2|3|4,6,8,true,true,true"
+    );
+}

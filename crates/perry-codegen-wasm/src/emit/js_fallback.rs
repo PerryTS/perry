@@ -1260,12 +1260,22 @@ impl WasmModuleEmitter {
                 }
                 format!("fromJsValue({closure})")
             }
+            // The function's one value, as the WASM arm in `emit/expr/classes.rs` makes it:
+            // the raw export takes i64 parameters, so a JS caller cannot pass it numbers.
             Expr::FuncRef(id) => {
-                if let Some(&func_idx) = self.func_map.get(id) {
-                    format!("fromJsValue(wasmInstance.exports.__wasm_func_{})", func_idx)
-                } else {
-                    "u64ToF64(TAG_UNDEFINED)".to_string()
-                }
+                let Some(&func_idx) = self.func_map.get(id) else {
+                    return "u64ToF64(TAG_UNDEFINED)".to_string();
+                };
+                let table_idx = self
+                    .func_to_table_idx
+                    .get(&func_idx)
+                    .copied()
+                    .unwrap_or(func_idx);
+                format!(
+                    "fromJsValue(__memDispatch.function_value({}, {}))",
+                    table_idx,
+                    self.fn_proto_code(func_idx)
+                )
             }
             Expr::New {
                 class_name, args, ..
