@@ -1604,6 +1604,7 @@ impl Model {
                             self.reason("accessor under a computed key")
                         };
                         self.escape(f, r);
+                        self.rfam_holding(f, t, crate::solve::recv_family::NO_HOME_KEY);
                         let fa = self.any_key_node(t);
                         self.add_top(fa, |_| "accessor under a computed key".into());
                         self.add_prim(fa, prim::ALL);
@@ -1619,6 +1620,7 @@ impl Model {
                         continue;
                     }
                     list.push(f);
+                    self.rfam_holding(f, t, key);
                     let ks = self.accessor_keys.entry(t).or_default();
                     if !ks.contains(&key) {
                         ks.push(key);

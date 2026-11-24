@@ -1028,6 +1028,13 @@ impl<'a> Gen<'a> {
                     _ => Key::any(),
                 };
                 if let Key::Named(a) = key {
+                    // K3 (B): a method written in a literal (its IIFE form)
+                    // is a method of the literal under its key.
+                    if name == "js_object_set_method_by_name" && birth_tm.is_some() {
+                        for ft in self.m.nodes[v as usize].pts.to_sorted() {
+                            self.m.rfam_home(ft, &[a], None);
+                        }
+                    }
                     if let Some(tm) = birth_tm {
                         crate::gen::push_unique(&mut self.m.tmpls[tm as usize].birth_keys, a);
                         crate::gen::push_unique(&mut self.m.tmpls[tm as usize].definite, a);
@@ -1091,6 +1098,15 @@ impl<'a> Gen<'a> {
                 }
                 for (i, which) in [(2usize, 0u8), (3, 1)] {
                     if let Some(f) = arg(i) {
+                        // K3 (B): a literal's `get k()` / `set k()` (the
+                        // literal IIFE's define) is an accessor of the
+                        // literal under its key (`recv_family`); a computed
+                        // key has no home key.
+                        if k.is_some() && birth_tm.is_some() {
+                            for ft in self.m.nodes[f as usize].pts.to_sorted() {
+                                self.m.rfam_home(ft, &[a], None);
+                            }
+                        }
                         self.m.cons(
                             f,
                             Cons::Accessor {

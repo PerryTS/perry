@@ -1559,7 +1559,9 @@ impl<'a> Gen<'a> {
                 Some(perry_hir::fn_proto::FnProtoKind::of_function(module, meth)),
             );
             let t = self.m.funcs[f as usize].token;
-            for a in self.method_keys(&meth.name) {
+            let keys = self.method_keys(&meth.name);
+            self.m.rfam_home(t, &keys, None);
+            for a in keys {
                 let n = self.m.field_r(proto, a);
                 self.m.add_tok(n, t);
             }
@@ -1578,7 +1580,9 @@ impl<'a> Gen<'a> {
                 Some(perry_hir::fn_proto::FnProtoKind::of_function(module, meth)),
             );
             let t = self.m.funcs[f as usize].token;
-            for a in self.method_keys(&meth.name) {
+            let keys = self.method_keys(&meth.name);
+            self.m.rfam_home(t, &keys, None);
+            for a in keys {
                 let n = self.m.field_r(cobj, a);
                 self.m.add_tok(n, t);
                 self.m.tmpls[tm as usize].static_methods.push(a);
@@ -1607,6 +1611,7 @@ impl<'a> Gen<'a> {
             let a = self.accessor_atom(mi, c, name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
+            self.m.rfam_home(ft, &[a], Some(holder));
             self.m.accessors.entry((holder, a)).or_default().0.push(ft);
             push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
@@ -1633,6 +1638,7 @@ impl<'a> Gen<'a> {
             let a = self.accessor_atom(mi, c, name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
+            self.m.rfam_home(ft, &[a], Some(holder));
             self.m.accessors.entry((holder, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
@@ -1661,6 +1667,7 @@ impl<'a> Gen<'a> {
                 };
                 self.m.add_accessor_atom(a);
                 let ft = self.m.funcs[f as usize].token;
+                self.m.rfam_home(ft, &[a], Some(holder));
                 let e = self.m.accessors.entry((holder, a)).or_default();
                 if setter { &mut e.1 } else { &mut e.0 }.push(ft);
                 push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
@@ -1669,6 +1676,7 @@ impl<'a> Gen<'a> {
             let holder = if cm.is_static { cobj } else { proto };
             let t = self.m.funcs[f as usize].token;
             if let Some(a) = method_key {
+                self.m.rfam_home(t, &[a], None);
                 let n = self.m.field_r(holder, a);
                 self.m.add_tok(n, t);
                 if cm.is_static {

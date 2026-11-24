@@ -1573,6 +1573,9 @@ pub struct Node {
     /// DEADFN15: a rest array arriving here may be reached by another
     /// activation of its function (`Model::rest_front_watch`).
     pub front_watch: bool,
+    /// K3 (B): a field or prototypes node the receiver families read
+    /// (`solve::recv_family`, `WATCH_FIELD` / `WATCH_PROTO`), else 0.
+    pub fam_watch: u8,
     /// The integer interval of the Numbers it holds (`range::Iv`).
     pub range: range::Iv,
     /// The interval grew since the node was last delivered.
@@ -2316,6 +2319,9 @@ pub struct Model {
     /// lost beside ⊤ (`escaped_beside_top`), so the census still finds a
     /// method's home field after ⊤ covered it there. `None` otherwise.
     pub k3_held: Option<crate::pts::FxHashMap<NodeId, Vec<Tok>>>,
+    /// K3 (B): the receiver families of methods and accessors
+    /// (`solve::recv_family`).
+    pub rfam: crate::solve::recv_family::RecvFam,
     /// The work counter when the last late-escape prune ran.
     pub late_esc_at: u64,
     pub reasons: Vec<String>,

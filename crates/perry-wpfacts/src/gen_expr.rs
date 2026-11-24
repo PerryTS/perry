@@ -1969,6 +1969,13 @@ impl<'a> Gen<'a> {
                         continue;
                     }
                     let a = self.m.atom(k);
+                    // K3 (B): a function written as a literal's member is
+                    // a method of the literal (`recv_family`).
+                    if matches!(v, Expr::Closure { .. }) {
+                        for ft in self.m.nodes[vn as usize].pts.to_sorted() {
+                            self.m.rfam_home(ft, &[a], None);
+                        }
+                    }
                     self.store(
                         fx,
                         obj,
@@ -2262,6 +2269,23 @@ impl<'a> Gen<'a> {
                 } else {
                     None
                 };
+                // K3 (B): a closed object literal is born by its shape's
+                // constructor, which stores argument i under its key: a
+                // function written as the literal's member is a method of
+                // the literal (`recv_family`).
+                if class_name.starts_with("__AnonShape_") {
+                    for (i, e) in args.iter().enumerate() {
+                        if !matches!(e, Expr::Closure { .. }) {
+                            continue;
+                        }
+                        if let Some(k) = self.shape_arg_key(fx.module, class_name, i) {
+                            let ka = self.m.atom(&k);
+                            for ft in self.m.nodes[a[i] as usize].pts.to_sorted() {
+                                self.m.rfam_home(ft, &[ka], None);
+                            }
+                        }
+                    }
+                }
                 let born = self.new_named(fx, class_name, a, vec![]);
                 if let Some(x) = x {
                     self.m.edge(born, x);
