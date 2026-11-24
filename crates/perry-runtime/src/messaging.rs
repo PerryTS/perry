@@ -94,8 +94,11 @@ fn set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
 
 /// `globalThis[name]` at run time: the runtime's by-name global read (realm
 /// table `RUNTIME_GLOBAL_READS`).
+/// The realm's original constructor `name`: a port, channel or broadcast
+/// channel the runtime builds is born with it, whatever the global binding
+/// holds now (node never reads the global object to build one).
 fn get_global_constructor(name: &str) -> f64 {
-    object::js_get_global_this_builtin_value(name.as_ptr(), name.len())
+    object::builtin_constructor_value(name)
 }
 
 fn constructor_prototype(name: &str) -> f64 {
