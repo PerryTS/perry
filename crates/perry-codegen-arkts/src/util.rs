@@ -207,6 +207,7 @@ pub(crate) fn is_widget_factory(name: &str) -> bool {
             | "ImageSymbol"
             | "TextField"
             | "TextArea"
+            | "Label"
             | "Toggle"
             | "Slider"
             | "Picker"

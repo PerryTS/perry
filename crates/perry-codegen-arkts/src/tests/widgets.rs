@@ -21,6 +21,27 @@ fn text_strips_app_call() {
 }
 
 #[test]
+fn label_is_its_text() {
+    let mut m = empty_module();
+    m.init.push(app_with_body(nmc(
+        "VStack",
+        vec![Expr::Array(
+            vec![nmc(
+                "Label",
+                vec![
+                    Expr::String("Phone".into()),
+                    nmc("TextField", vec![Expr::String("0912".into())]),
+                ],
+            )],
+            None,
+        )],
+    )));
+    let r = emit_index_ets(&mut m).unwrap().unwrap();
+    assert!(r.ets_source.contains("Text('Phone').fontSize(20)"));
+    assert!(!r.ets_source.contains("unsupported"));
+}
+
+#[test]
 fn vstack_with_text_children() {
     let mut m = empty_module();
     m.init.push(app_with_body(nmc(

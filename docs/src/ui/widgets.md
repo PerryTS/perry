@@ -475,10 +475,12 @@ These are linked from their own pages where richer examples exist.
 `Label(text, field)` captions a form field. On the web target it is a
 `<label for>` bound to the field (or to the first input, textarea or select
 inside a composite widget such as a `Toggle`), so tapping the caption focuses
-the field and a screen reader announces the caption as the field's name. Native
+the field and a screen reader announces the caption as the field's name. Two
+`Label`s for one field are read together in document order, and
+`widgetSetAccessibilityLabel` wins over any `Label`, whichever is set first. Native
 backends show `text` as a `Text` and give the field that name, replacing one set
-before; tapping the caption does not focus the field. On Windows it is only a
-`Text`.
+before; tapping the caption does not focus the field. On Windows and HarmonyOS it
+is only a `Text`.
 
 ```typescript,no-test
 const phone = TextField("0912 345 678", (value: string) => {});
@@ -499,7 +501,7 @@ Every widget handle accepts these:
 | `widgetSetEnabled(w, flag)` | `0` disables, `1` enables |
 | `widgetSetHidden(w, flag)` | `0` visible, `1` hidden |
 | `widgetSetTooltip(w, text)` | Tooltip on hover (desktop only) |
-| `widgetSetAccessibilityLabel(w, text)` | Name a screen reader announces for a control, not a layout container (web `aria-label`; `accessibilityLabel` on Apple targets; content description on Android, where it replaces a text field's value: use `Label`; GTK4 accessible label; no-op on Windows) |
+| `widgetSetAccessibilityLabel(w, text)` | Name a screen reader announces for a control, not a layout container (web `aria-label`; `accessibilityLabel` on Apple targets; content description on Android, where it replaces a text field's value: use `Label`; GTK4 accessible label; no-op on Windows and HarmonyOS) |
 | `widgetSetOnClick(w, cb)` | Click handler |
 | `widgetSetOnHover(w, cb)` | Hover enter/leave (desktop only) |
 | `widgetSetOnDoubleClick(w, cb)` | Double-click handler |
