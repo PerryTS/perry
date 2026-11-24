@@ -3234,6 +3234,19 @@ const __memDispatch = {
   // `super(msg)` in a class extending a built-in Error: the instance is a plain
   // object (see __classInstance), so it takes the message the Error constructor would
   // give it, non-enumerable as on a real Error. Returns the instance.
+  // `super(...args)`: the parent's compiled constructor at table slot `ctorIdx` runs
+  // on `self` with `args`; a rest parameter at `restAt` receives the tail as one array.
+  super_call_spread: (self, ctorIdx, args, restAt) => {
+    let a = Array.isArray(args) ? args : [];
+    if (restAt >= 0) {
+      const head = a.slice(0, restAt);
+      while (head.length < restAt) head.push(undefined);
+      a = [...head, a.slice(restAt)];
+    }
+    const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx | 0);
+    __invokeWasmCallback(impl, __jsValueToBits(self), ...a.map(__jsValueToBits));
+    return undefined;
+  },
   error_super_init: (obj, msg) => {
     if (!obj || typeof obj !== 'object') return obj;
     Object.defineProperty(obj, 'message', {
