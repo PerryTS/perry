@@ -459,3 +459,63 @@ fn the_ext_install_hint_names_npm_and_perry_and_a_rejected_root() {
         "{hint}"
     );
 }
+
+#[test]
+fn source_build_commands_name_the_crate_and_directory_of_an_archive() {
+    for (archive, triple, build, dir) in [
+        (
+            "libperry_ui_macos.a",
+            None,
+            "cargo build --release -p perry-ui-macos ",
+            "target/release",
+        ),
+        (
+            "libperry_ui_macos.a",
+            Some("aarch64-apple-darwin"),
+            "cargo build --release -p perry-ui-macos --target aarch64-apple-darwin ",
+            "target/aarch64-apple-darwin/release",
+        ),
+        (
+            "perry_ui_windows.lib",
+            None,
+            "cargo build --release -p perry-ui-windows ",
+            "target/release",
+        ),
+        (
+            "libperry_ext_http.a",
+            None,
+            "cargo build --release -p perry-ext-http ",
+            "target/release",
+        ),
+        (
+            "libperry_ui_android.a",
+            Some("aarch64-linux-android"),
+            "cargo build --release -p perry-ui-android --target aarch64-linux-android ",
+            "target/aarch64-linux-android/release",
+        ),
+        (
+            "libperry_runtime.a",
+            Some("aarch64-apple-ios-sim"),
+            "cargo build --release -p perry-runtime-static -p perry-stdlib-static --target aarch64-apple-ios-sim ",
+            "target/aarch64-apple-ios-sim/release",
+        ),
+        (
+            "libperry_runtime.a",
+            Some("wasm32-wasip1"),
+            "scripts/wasi_build_runtime.sh wasm32-wasip1 ",
+            "target/wasm32-wasip1/release",
+        ),
+    ] {
+        let commands = source_build_commands(archive, triple);
+        assert!(commands.starts_with(build), "{archive}: {commands}");
+        assert!(
+            commands.ends_with(&format!("set PERRY_RUNTIME_DIR to its {dir} directory")),
+            "{archive}: {commands}"
+        );
+        assert_eq!(
+            commands.contains(&format!("scripts/gc_call_effects/sidecars.sh {dir}\n")),
+            build.contains("perry-runtime-static"),
+            "{archive}: {commands}"
+        );
+    }
+}

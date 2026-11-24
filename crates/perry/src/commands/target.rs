@@ -300,13 +300,19 @@ pub(crate) enum PackageFetch {
 /// install layout has it. When perry publishes that package and
 /// `PERRY_NO_AUTO_FETCH` is unset, install it now, exactly as `perry target
 /// add` would, saying so in one line. Only this path touches the network
-/// during a compile, and only when such a library is missing.
-pub(crate) fn ensure_package(kind: PackageKind, triple: &str) -> Option<PackageFetch> {
+/// during a compile, and only when such a library is missing. `source_build`
+/// is what a refusal names when this perry has no keys to verify a package.
+pub(crate) fn ensure_package(
+    kind: PackageKind,
+    triple: &str,
+    source_build: &str,
+) -> Option<PackageFetch> {
     let exe = std::env::current_exe().ok();
     let home = dirs::home_dir();
     fetch_package(
         kind,
         triple,
+        source_build,
         PerryIdentity::current(),
         exe.as_deref(),
         home.as_deref(),
@@ -319,6 +325,7 @@ pub(crate) fn ensure_package(kind: PackageKind, triple: &str) -> Option<PackageF
 fn fetch_package(
     kind: PackageKind,
     triple: &str,
+    source_build: &str,
     me: PerryIdentity<'_>,
     exe: Option<&Path>,
     home: Option<&Path>,
@@ -328,7 +335,15 @@ fn fetch_package(
         return None;
     }
     let package = format!("{}@{}", package_name(kind, triple), me.version);
-    let hint = || install_hint(kind, triple, &add_command(kind, triple), exe, home, me);
+    let keys = keys();
+    // Without keys `perry target add` cannot verify a package either; an npm
+    // install still has its npm command.
+    let command = if keys.is_err() && exe.and_then(npm_install).is_none() {
+        source_build.to_string()
+    } else {
+        add_command(kind, triple)
+    };
+    let hint = || install_hint(kind, triple, &command, exe, home, me);
     let refused = |why: String| {
         Some(PackageFetch::Refused(format!(
             "it ships in {package}, {why}\n{}",
@@ -345,7 +360,7 @@ fn fetch_package(
             "which is not installed, and there is no home directory to put it in.".into(),
         );
     };
-    let keys = match keys() {
+    let keys = match keys {
         Ok(keys) => keys,
         Err(e) => {
             return refused(format!(

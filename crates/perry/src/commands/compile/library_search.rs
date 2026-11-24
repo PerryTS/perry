@@ -1155,6 +1155,7 @@ pub(super) fn locate_or_fetch_from(
     fetch: impl FnOnce(
         super::target_packages::PackageKind,
         &str,
+        &str,
     ) -> Option<crate::commands::target::PackageFetch>,
 ) -> Result<LocatedLibrary, Missed> {
     use super::target_packages::{discover, PerryIdentity, HOST_TRIPLE};
@@ -1180,7 +1181,9 @@ pub(super) fn locate_or_fetch_from(
     {
         return missed(searched, None);
     }
-    match fetch(kind, triple) {
+    let source_build =
+        super::target_packages::source_build_commands(name, rust_target_triple(target));
+    match fetch(kind, triple, &source_build) {
         Some(PackageFetch::Installed) => locate_among(
             collect_library_candidates_from(name, target, exe, home),
             name,
