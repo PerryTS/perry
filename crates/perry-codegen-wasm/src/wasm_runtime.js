@@ -1861,6 +1861,21 @@ function __isComputedKeySlot(key) {
   return key.startsWith('__perry_computed_field_key_');
 }
 
+// Re-parents onto the built-in `base`'s prototype the first prototype up `className`'s
+// chain of user classes that inherits from Object.prototype.
+function __linkHostBase(className, base) {
+  const { prototype } = globalThis[base];
+  for (let c = className; c && c !== base; c = classParentTable[c]) {
+    const p = __classProto(c);
+    const up = Object.getPrototypeOf(p);
+    if (up === prototype) break;
+    if (up === Object.prototype) {
+      Object.setPrototypeOf(p, prototype);
+      break;
+    }
+  }
+}
+
 // With `caps`, the constructor is one evaluation of a class expression
 // (`Expr::ClassExprFresh`) with that capture environment. Its `prototype` holds
 // the class's own members bound to the evaluation, and its instances inherit from it.
@@ -1910,7 +1925,8 @@ function __classCtor(className, ctorIdx, caps, base, init = 0) {
   // A declared class's value shares its instances' prototype (see __classProto). An
   // evaluation has its own, holding the class's members bound to it.
   // With a built-in parent, an evaluation's instances are the built-in's objects, whose
-  // methods its prototype inherits, as class_new_host re-parents a declared class's.
+  // methods its prototype inherits, directly or through its declared parent classes.
+  if (typeof base === 'string') __linkHostBase(classParentTable[className], base);
   const protoBase = evaluated ? __classProtoBase(className) : undefined;
   const proto = evaluated
     ? Object.create(typeof base === 'string' && protoBase === Object.prototype ? globalThis[base].prototype : protoBase)
@@ -2825,21 +2841,11 @@ const __memDispatch = {
   // class_set_method/class_call_method interact with WASM indirect call table.
   class_new: (className, ctorIdx) => __classInstance(__classNoteCtorSlot(className, ctorIdx)),
   // `new C()` where C's chain of user classes ends at the built-in `base` (Map, Array,
-  // ...): the built-in object itself, on C's prototype. The first prototype up the chain
-  // that inherits from Object.prototype is re-parented onto base's.
+  // ...): the built-in object itself, on C's prototype.
   class_new_host: (className, ctorIdx, base) => {
     const cls = __classNoteCtorSlot(className, ctorIdx);
-    const Base = globalThis[String(base)];
-    for (let c = cls; c && c !== String(base); c = classParentTable[c]) {
-      const p = __classProto(c);
-      const up = Object.getPrototypeOf(p);
-      if (up === Base.prototype) break;
-      if (up === Object.prototype) {
-        Object.setPrototypeOf(p, Base.prototype);
-        break;
-      }
-    }
-    return Object.setPrototypeOf(Reflect.construct(Base, []), __classProto(cls));
+    __linkHostBase(cls, String(base));
+    return Object.setPrototypeOf(Reflect.construct(globalThis[String(base)], []), __classProto(cls));
   },
   // `super(...args)` into the built-in an instance from class_new_host was made from.
   // A collection's entries go through the instance's `set`/`add` (see __addMapEntries).
