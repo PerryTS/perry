@@ -46,8 +46,11 @@ pub struct Family {
     off: bool,
     /// Its `this` nodes, once an escape gave it its family (`escape_this`).
     dsts: Vec<NodeId>,
+    /// The family node: the members `this` may be, with a copy edge into
+    /// each of `dsts` (one set per family, not one token per `this` node).
+    node: Option<NodeId>,
     members: FxHashSet<Tok>,
-    /// The members its `this` nodes hold (`rfam_give`).
+    /// The members the family node holds (`rfam_give`).
     given: FxHashSet<Tok>,
     /// Tokens `escape_this` adds itself beside the family (published
     /// receivers, a receiver marker).
@@ -319,12 +322,24 @@ impl Model {
         if r.off {
             return false;
         }
+        let mut new = Vec::new();
         for &d in dsts {
             if !r.dsts.contains(&d) {
                 r.dsts.push(d);
+                new.push(d);
             }
         }
-        r.given.clear();
+        let node = match r.node {
+            Some(n) => n,
+            None => {
+                let n = self.node_l("rfam-family");
+                self.rfam.fams.get_mut(&f).unwrap().node = Some(n);
+                n
+            }
+        };
+        for &d in &new {
+            self.edge(node, d);
+        }
         for &d in dsts {
             self.add_prim(d, prim::NULL | prim::UNDEF);
         }
@@ -350,13 +365,13 @@ impl Model {
         if new.is_empty() {
             return false;
         }
-        let dsts = r.dsts.clone();
+        let Some(node) = r.node else {
+            return false;
+        };
         let r = self.rfam.fams.get_mut(&f).unwrap();
         r.given.extend(new.iter().copied());
-        for d in dsts {
-            for &t in &new {
-                self.add_tok(d, t);
-            }
+        for &t in &new {
+            self.add_tok(node, t);
         }
         true
     }
