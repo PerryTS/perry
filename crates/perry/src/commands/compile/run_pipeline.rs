@@ -720,9 +720,7 @@ pub fn run_with_parse_cache(
     // layer observes it uniformly. Only set (never unset): the flag is an
     // explicit opt-in, and a `perry dev` session that asked for symbols once
     // wants them for the rest of the session.
-    if args.debug_symbols && std::env::var_os("PERRY_DEBUG_SYMBOLS").is_none() {
-        std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
-    }
+    let _unit_objects = post_link::begin_debug_symbols(&args);
 
     // #10574: `--function-source=header` elides function bodies from the
     // image. Promote to `PERRY_FUNCTION_SOURCE` before rayon codegen so

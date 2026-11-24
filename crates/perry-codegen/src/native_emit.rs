@@ -615,7 +615,9 @@ fn compile_module_units_native_with_workers(
         }
         let obj = crate::linker::finish_native_pieces(unit_bytes, &effective_target, &args)
             .with_context(|| format!("unit {i}"))?;
-        if let Some((cache, key)) = checkpoint {
+        if let Some((cache, key)) =
+            checkpoint.filter(|_| !crate::debug_units::names_retained_unit(&obj))
+        {
             cache.store(i, unit_total, key, &obj);
         }
         log::debug!(

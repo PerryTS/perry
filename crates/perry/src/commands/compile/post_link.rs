@@ -84,6 +84,24 @@ pub(super) fn strip_final_binary(
     Ok(())
 }
 
+fn wants_macos_dsym(target: Option<&str>) -> bool {
+    cfg!(target_os = "macos")
+        && std::env::var_os("PERRY_DEBUG_SYMBOLS").is_some()
+        && target.is_none_or(|t| target_os_of(t) == Some("macos"))
+}
+
+/// Promote `--debug-symbols` to `PERRY_DEBUG_SYMBOLS`, never unsetting it, and
+/// keep codegen-unit objects for `emit_macos_dsym` while the result is held.
+pub(super) fn begin_debug_symbols(
+    args: &super::CompileArgs,
+) -> Option<perry_codegen::debug_units::RetainUnitObjects> {
+    if args.debug_symbols && std::env::var_os("PERRY_DEBUG_SYMBOLS").is_none() {
+        std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
+    }
+    (!args.no_link && wants_macos_dsym(args.target.as_deref()))
+        .then(perry_codegen::debug_units::RetainUnitObjects::begin)
+}
+
 /// #9856: under `--debug-symbols` on a macOS host building a macOS binary,
 /// gather the DWARF into `<exe>.dSYM`.
 ///
@@ -93,10 +111,7 @@ pub(super) fn strip_final_binary(
 /// VS Code's CodeLLDB — finds no line table and cannot bind a breakpoint.
 /// Runs before the strip decision and the cleanup, while the objects exist.
 fn emit_macos_dsym(exe_path: &Path, target: Option<&str>) {
-    if !cfg!(target_os = "macos") || std::env::var_os("PERRY_DEBUG_SYMBOLS").is_none() {
-        return;
-    }
-    if target.is_some_and(|t| target_os_of(t) != Some("macos")) {
+    if !wants_macos_dsym(target) {
         return;
     }
     match std::process::Command::new("dsymutil")

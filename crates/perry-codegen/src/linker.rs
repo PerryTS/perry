@@ -1454,10 +1454,11 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
     let pid = std::process::id();
     let nonce = TEMP_NONCE_COUNTER.fetch_add(1, Ordering::Relaxed);
 
-    let mut cleanup = TempPathGuard::new(env::var_os("PERRY_LLVM_KEEP_IR").is_some());
+    let keep = env::var_os("PERRY_LLVM_KEEP_IR").is_some();
+    let mut cleanup = TempPathGuard::new(keep);
     let mut obj_paths: Vec<PathBuf> = Vec::with_capacity(objs.len());
     for (i, bytes) in objs.iter().enumerate() {
-        let p = tmp_dir.join(format!("perry_cgu_{}_{}_{}.o", pid, nonce, i));
+        let p = tmp_dir.join(crate::debug_units::unit_object_name(nonce, i));
         cleanup.push(&p);
         fs::write(&p, bytes)
             .with_context(|| format!("failed to write codegen-unit object {}", p.display()))?;
@@ -1505,6 +1506,10 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
         }
     })?;
     let result = if out.status.success() {
+        #[cfg(not(target_os = "windows"))]
+        if keep_private_externs && !keep && crate::debug_units::retain(&obj_paths) {
+            cleanup.release(&obj_paths);
+        }
         fs::read(&combined)
             .with_context(|| format!("failed to read merged object {}", combined.display()))
     } else {
@@ -1521,8 +1526,8 @@ pub(crate) fn merge_unit_objects(objs: &[Vec<u8>]) -> Result<Vec<u8>> {
         ))
     };
 
-    // `cleanup` removes the objects and the merged output on every exit,
-    // including the early `?` returns above (#11495).
+    // `cleanup` removes the merged output on every exit, including the early
+    // `?` returns above (#11495), and the objects unless `retain` took them.
     result
 }
 
