@@ -2772,8 +2772,8 @@ const __memDispatch = {
     for (let i = 0; i < arr.length; i++) { if (__bitsToJsValue(call(__jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr)))) return i; }
     return -1;
   },
-  array_find_last: (arr, cb) => Array.prototype.findLast.call(arr, __hostPredicate(cb)),
-  array_find_last_index: (arr, cb) => Array.prototype.findLastIndex.call(arr, __hostPredicate(cb)),
+  array_find_last: (arr, cb) => __reflectApply(Array.prototype.findLast, arr, [__hostPredicate(cb)]),
+  array_find_last_index: (arr, cb) => __reflectApply(Array.prototype.findLastIndex, arr, [__hostPredicate(cb)]),
   array_sort: (arr, cb) => {
     if (!Array.isArray(arr)) return arr;
     if (cb === undefined || cb === null) { arr.sort(); return arr; }
@@ -2788,18 +2788,18 @@ const __memDispatch = {
   array_reduce_right: (arr, cb, ...initial) => {
     const call = __arrayCallback(cb);
     const fn = call ? (...args) => __bitsToJsValue(call(...args.map(__jsValueToBits))) : cb;
-    return Array.prototype.reduceRight.call(arr, fn, ...initial);
+    return __reflectApply(Array.prototype.reduceRight, arr, [fn, ...initial]);
   },
-  array_to_reversed: (arr) => Array.prototype.toReversed.call(arr),
-  array_to_sorted: (arr) => Array.prototype.toSorted.call(arr),
+  array_to_reversed: (arr) => __reflectApply(Array.prototype.toReversed, arr, []),
+  array_to_sorted: (arr) => __reflectApply(Array.prototype.toSorted, arr, []),
   array_to_sorted_cmp: (arr, cb) => {
     const call = __arrayCallback(cb);
     const cmp = call ? (a, b) => __bitsToJsValue(call(__jsValueToBits(a), __jsValueToBits(b))) : cb;
-    return Array.prototype.toSorted.call(arr, cmp);
+    return __reflectApply(Array.prototype.toSorted, arr, [cmp]);
   },
-  array_to_spliced: (arr, start, deleteCount, ...items) => Array.prototype.toSpliced.call(arr, start, deleteCount, ...items),
-  array_with: (arr, index, value) => Array.prototype.with.call(arr, index, value),
-  array_copy_within: (arr, target, start, end) => Array.prototype.copyWithin.call(arr, target, start, end),
+  array_to_spliced: (arr, start, deleteCount, ...items) => __reflectApply(Array.prototype.toSpliced, arr, [start, deleteCount, ...items]),
+  array_with: (arr, index, value) => __reflectApply(Array.prototype.with, arr, [index, value]),
+  array_copy_within: (arr, target, start, end) => __reflectApply(Array.prototype.copyWithin, arr, [target, start, end]),
   array_some: (arr, cb) => Array.isArray(arr) && arr.some(__hostPredicate(cb)) ? 1 : 0,
   array_every: (arr, cb) => Array.isArray(arr) && arr.every(__hostPredicate(cb)) ? 1 : 0,
 
@@ -3188,14 +3188,14 @@ const __memDispatch = {
   // WeakRef / FinalizationRegistry are the host's; a Perry closure cleanup callback is
   // wrapped so the host can call it.
   weakref_new: (target) => new WeakRef(target),
-  weakref_deref: (ref) => WeakRef.prototype.deref.call(ref),
+  weakref_deref: (ref) => __reflectApply(WeakRef.prototype.deref, ref, []),
   finreg_new: (cb) => {
     const call = __arrayCallback(cb);
     return new FinalizationRegistry(call ? (held) => { call(__jsValueToBits(held)); } : cb);
   },
   finreg_register: (reg, target, held, token) =>
-    FinalizationRegistry.prototype.register.call(reg, target, held, token),
-  finreg_unregister: (reg, token) => FinalizationRegistry.prototype.unregister.call(reg, token),
+    __reflectApply(FinalizationRegistry.prototype.register, reg, [target, held, token]),
+  finreg_unregister: (reg, token) => __reflectApply(FinalizationRegistry.prototype.unregister, reg, [token]),
   // The Set/Map `for...of` fast path steps `slot = cursor_next(coll, slot + 1, ep)`,
   // then `ep = compaction_epoch(coll)`, and reads the entry with `*_at(coll, slot)`;
   // -1 ends the loop. A host collection has no slots, so each loop owns a live iterator:
@@ -3272,7 +3272,7 @@ const __memDispatch = {
   date_to_locale_date_string: (d) => (d instanceof Date) ? d.toLocaleDateString() : '',
   date_to_locale_time_string: (d) => (d instanceof Date) ? d.toLocaleTimeString() : '',
   date_to_json: (d) => (d instanceof Date) ? d.toJSON() : null,
-  date_to_utc_string: (d) => Date.prototype.toUTCString.call(d),
+  date_to_utc_string: (d) => __reflectApply(Date.prototype.toUTCString, d, []),
   date_get_full_year: (d) => (d instanceof Date) ? d.getFullYear() : 0,
   date_get_month: (d) => (d instanceof Date) ? d.getMonth() : 0,
   date_get_date: (d) => (d instanceof Date) ? d.getDate() : 0,
@@ -3292,21 +3292,21 @@ const __memDispatch = {
   date_get_timezone_offset: (d) => (d instanceof Date) ? d.getTimezoneOffset() : 0,
   // A setter takes every argument the call passed and a non-Date receiver throws, as
   // the host's own setter does.
-  date_set_utc_full_year: (d, ...v) => Date.prototype.setUTCFullYear.apply(d, v),
-  date_set_utc_month: (d, ...v) => Date.prototype.setUTCMonth.apply(d, v),
-  date_set_utc_date: (d, ...v) => Date.prototype.setUTCDate.apply(d, v),
-  date_set_utc_hours: (d, ...v) => Date.prototype.setUTCHours.apply(d, v),
-  date_set_utc_minutes: (d, ...v) => Date.prototype.setUTCMinutes.apply(d, v),
-  date_set_utc_seconds: (d, ...v) => Date.prototype.setUTCSeconds.apply(d, v),
-  date_set_utc_milliseconds: (d, ...v) => Date.prototype.setUTCMilliseconds.apply(d, v),
-  date_set_full_year: (d, ...v) => Date.prototype.setFullYear.apply(d, v),
-  date_set_month: (d, ...v) => Date.prototype.setMonth.apply(d, v),
-  date_set_date: (d, ...v) => Date.prototype.setDate.apply(d, v),
-  date_set_hours: (d, ...v) => Date.prototype.setHours.apply(d, v),
-  date_set_minutes: (d, ...v) => Date.prototype.setMinutes.apply(d, v),
-  date_set_seconds: (d, ...v) => Date.prototype.setSeconds.apply(d, v),
-  date_set_milliseconds: (d, ...v) => Date.prototype.setMilliseconds.apply(d, v),
-  date_set_time: (d, ...v) => Date.prototype.setTime.apply(d, v),
+  date_set_utc_full_year: (d, ...v) => __reflectApply(Date.prototype.setUTCFullYear, d, v),
+  date_set_utc_month: (d, ...v) => __reflectApply(Date.prototype.setUTCMonth, d, v),
+  date_set_utc_date: (d, ...v) => __reflectApply(Date.prototype.setUTCDate, d, v),
+  date_set_utc_hours: (d, ...v) => __reflectApply(Date.prototype.setUTCHours, d, v),
+  date_set_utc_minutes: (d, ...v) => __reflectApply(Date.prototype.setUTCMinutes, d, v),
+  date_set_utc_seconds: (d, ...v) => __reflectApply(Date.prototype.setUTCSeconds, d, v),
+  date_set_utc_milliseconds: (d, ...v) => __reflectApply(Date.prototype.setUTCMilliseconds, d, v),
+  date_set_full_year: (d, ...v) => __reflectApply(Date.prototype.setFullYear, d, v),
+  date_set_month: (d, ...v) => __reflectApply(Date.prototype.setMonth, d, v),
+  date_set_date: (d, ...v) => __reflectApply(Date.prototype.setDate, d, v),
+  date_set_hours: (d, ...v) => __reflectApply(Date.prototype.setHours, d, v),
+  date_set_minutes: (d, ...v) => __reflectApply(Date.prototype.setMinutes, d, v),
+  date_set_seconds: (d, ...v) => __reflectApply(Date.prototype.setSeconds, d, v),
+  date_set_milliseconds: (d, ...v) => __reflectApply(Date.prototype.setMilliseconds, d, v),
+  date_set_time: (d, ...v) => __reflectApply(Date.prototype.setTime, d, v),
 
   // Error — args are plain JS values
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),

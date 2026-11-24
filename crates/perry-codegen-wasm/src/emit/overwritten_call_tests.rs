@@ -73,3 +73,23 @@ function run() {
         "1,2;1;2,3;9;1,2,3,k;1;2;4"
     );
 }
+
+// Expected output is Node's.
+#[test]
+fn host_method_bridges_ignore_an_overwritten_call_and_apply() {
+    assert_eq!(
+        run_overwritten(
+            r#"
+const a = [3, 1, 2];
+const d = new Date(0);
+const w = new WeakRef(a);
+function run() {
+  d.setTime(5);
+  d.setUTCFullYear(2001);
+  return [a.findLast((x) => x < 3), a.findLastIndex((x) => x === 1), a.reduceRight((p, c) => p + "" + c, ""), a.toReversed().join(""), a.toSorted().join(""), a.toSorted((p, q) => q - p).join(""), a.toSpliced(0, 1, 9).join(""), a.with(0, 7).join(""), [1, 2, 3].copyWithin(0, 1).join(""), d.getTime(), d.toUTCString(), w.deref() === a].join(";");
+}
+"#
+        ),
+        "2;1;213;213;123;321;912;712;233;978307200005;Mon, 01 Jan 2001 00:00:00 GMT;true"
+    );
+}
