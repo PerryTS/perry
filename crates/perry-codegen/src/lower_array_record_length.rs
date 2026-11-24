@@ -29,10 +29,12 @@ mod tests {
         crate::temp_root_coverage::under_both_lowerings(|_mode| {
             let mut m = perry_hir::Module::new("record_length");
             m.functions.push(perry_hir::Function {
+                byte_offset: 0,
                 id: 1,
                 name: "length".into(),
                 type_params: vec![],
                 params: vec![perry_hir::Param {
+                    byte_offset: 0,
                     id: 1,
                     name: "source".into(),
                     ty: perry_hir::types::Type::Any,
@@ -42,15 +44,17 @@ mod tests {
                     arguments_object: None,
                 }],
                 return_type: perry_hir::types::Type::Number,
-                body: vec![perry_hir::Stmt::Return(Some(
-                    perry_hir::Expr::NativeMethodCall {
+                body: vec![perry_hir::Stmt::Return(
+                    Some(perry_hir::Expr::NativeMethodCall {
+                        byte_offset: 0,
                         module: "__perry_runtime".into(),
                         class_name: None,
                         object: None,
                         method: "arrayRecordLength".into(),
                         args: vec![perry_hir::Expr::LocalGet(1)],
-                    },
-                ))],
+                    }),
+                    0,
+                )],
                 is_async: false,
                 is_generator: false,
                 is_strict: true,

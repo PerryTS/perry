@@ -54,6 +54,7 @@ impl WasmModuleEmitter {
             "object_set_prototype_of",
             "object_get_prototype_of",
             "reflect_get_prototype_of",
+            "object_is",
             "object_super_get",
             "object_get_dynamic",
             "object_set_dynamic",
@@ -78,6 +79,10 @@ impl WasmModuleEmitter {
             "array_new",
             "array_constructor_single",
             "array_push",
+            "array_push_hole",
+            "array_keys",
+            "array_entries",
+            "array_values",
             "array_pop",
             "array_get",
             "array_set",
@@ -94,6 +99,7 @@ impl WasmModuleEmitter {
             "array_flat",
             "array_is_array",
             "array_from",
+            "array_from_mapped",
             "array_push_spread",
             "string_charAt",
             "string_substring",
@@ -159,6 +165,13 @@ impl WasmModuleEmitter {
             "array_find",
             "array_find_index",
             "array_sort",
+            "array_reduce_right",
+            "array_to_reversed",
+            "array_to_sorted",
+            "array_to_sorted_cmp",
+            "array_to_spliced",
+            "array_with",
+            "array_copy_within",
             "array_some",
             "array_every",
             "class_new",
@@ -211,6 +224,11 @@ impl WasmModuleEmitter {
             "json_stringify",
             "map_new",
             "WeakMap",
+            "weakref_new",
+            "weakref_deref",
+            "finreg_new",
+            "finreg_register",
+            "finreg_unregister",
             "map_set",
             "map_get",
             "map_has",
@@ -264,6 +282,15 @@ impl WasmModuleEmitter {
             "date_set_utc_minutes",
             "date_set_utc_seconds",
             "date_set_utc_milliseconds",
+            "date_set_full_year",
+            "date_set_month",
+            "date_set_date",
+            "date_set_hours",
+            "date_set_minutes",
+            "date_set_seconds",
+            "date_set_milliseconds",
+            "date_set_time",
+            "date_to_utc_string",
             "date_to_date_string",
             "date_to_time_string",
             "date_to_locale_string",
@@ -496,7 +523,7 @@ impl WasmModuleEmitter {
                 }
             }
             Stmt::Expr(e) => self.collect_strings_in_expr(e),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.collect_strings_in_expr(e);
                 }
@@ -558,6 +585,7 @@ impl WasmModuleEmitter {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.collect_strings_in_expr(discriminant);
                 for case in cases {
@@ -588,7 +616,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(right);
             }
             Expr::Unary { operand, .. } => self.collect_strings_in_expr(operand),
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 self.collect_strings_in_expr(callee);
                 for a in args {
                     self.collect_strings_in_expr(a);
@@ -601,6 +629,7 @@ impl WasmModuleEmitter {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 self.collect_strings_in_expr(condition);
                 self.collect_strings_in_expr(then_expr);
@@ -620,6 +649,7 @@ impl WasmModuleEmitter {
                 args,
                 class_name,
                 object,
+                ..
             } => {
                 for a in args {
                     self.collect_strings_in_expr(a);
@@ -683,7 +713,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(value);
                 self.intern_string(property);
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 self.collect_strings_in_expr(object);
                 self.collect_strings_in_expr(index);
             }
@@ -713,7 +743,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(value);
                 self.collect_strings_in_expr(receiver);
             }
-            Expr::Await(e) | Expr::TypeOf(e) | Expr::Void(e) => {
+            Expr::Await(e, _) | Expr::TypeOf(e) | Expr::Void(e) => {
                 self.collect_strings_in_expr(e);
             }
             Expr::New { args, .. } => {
@@ -745,6 +775,7 @@ impl WasmModuleEmitter {
                 class_name,
                 field_name,
                 value,
+                ..
             } => {
                 self.intern_string(class_name);
                 self.intern_string(field_name);
@@ -754,6 +785,7 @@ impl WasmModuleEmitter {
                 class_name,
                 method_name,
                 args,
+                ..
             } => {
                 self.intern_string(class_name);
                 self.intern_string(method_name);
@@ -1142,7 +1174,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(object);
                 self.collect_strings_in_expr(index);
             }
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 for a in args {
                     self.collect_strings_in_expr(a);
                 }

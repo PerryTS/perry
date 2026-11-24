@@ -143,7 +143,7 @@ pub(crate) fn chain_birth_f64_fields(
         let mut body: &[Stmt] = ctor.map(|c| c.body.as_slice()).unwrap_or(&[]);
         if depth > 0 && ctor.is_some() {
             match body.first() {
-                Some(Stmt::Expr(Expr::SuperCall(args)))
+                Some(Stmt::Expr(Expr::SuperCall(args, _)))
                     if args.iter().all(|a| !observes_this(a)) =>
                 {
                     body = &body[1..];
@@ -340,7 +340,7 @@ impl Walk {
 fn observes_this(e: &Expr) -> bool {
     match e {
         Expr::This
-        | Expr::SuperCall(_)
+        | Expr::SuperCall(_, _)
         | Expr::SuperCallSpread(_)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }

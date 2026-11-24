@@ -18,6 +18,7 @@ pub(super) fn user_info_expr_for_call(call: &ast::CallExpr, args: Vec<Expr>) -> 
         Some(true) => Expr::OsUserInfoBuffer,
         Some(false) => Expr::OsUserInfo,
         None => Expr::NativeMethodCall {
+            byte_offset: crate::lower::call_token(call),
             module: "os".to_string(),
             class_name: None,
             object: None,

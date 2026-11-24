@@ -211,8 +211,8 @@ impl Scan {
             Stmt::Let { id, init, .. } => self.bind(*id, init.as_ref()),
             Stmt::Expr(e) => self.expr(e, Use::Consume),
             Stmt::Throw(e) => self.expr(e, Use::Value),
-            Stmt::Return(Some(e)) => self.expr(e, Use::Return),
-            Stmt::Return(None) => {}
+            Stmt::Return(Some(e), _) => self.expr(e, Use::Return),
+            Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,
@@ -267,6 +267,7 @@ impl Scan {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant, Use::Consume);
                 for c in cases {
@@ -333,7 +334,7 @@ impl Scan {
     fn chain_indices(&mut self, e: &Expr) {
         match e {
             Expr::PropertyGet { object, .. } => self.chain_indices(object),
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 self.chain_indices(object);
                 self.expr(index, Use::Consume);
             }
@@ -378,7 +379,7 @@ impl Scan {
                     }
                 }
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 self.receiver(object);
                 self.expr(index, Use::Consume);
                 if how != Use::Consume {
@@ -440,7 +441,7 @@ impl Scan {
             }
             Expr::Delete(operand) => match operand.as_ref() {
                 Expr::PropertyGet { object, .. } => self.store(object),
-                Expr::IndexGet { object, index, .. } => {
+                Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                     self.store(object);
                     self.expr(index, Use::Consume);
                 }
@@ -464,12 +465,16 @@ impl Scan {
                 self.store_roots[self.current].push(Some(*set_id));
                 self.expr_children(e, Use::Value);
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 match callee.as_ref() {
                     // A method call hands the receiver over as `this`.
-                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+                    Expr::PropertyGet { object, .. }
+                    | Expr::IndexGet { object, .. }
+                    | Expr::RegionOut { object, .. } => {
                         self.expr(object, Use::Value);
-                        if let Expr::IndexGet { index, .. } = callee.as_ref() {
+                        if let (Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. }) =
+                            callee.as_ref()
+                        {
                             self.expr(index, Use::Consume);
                         }
                     }
@@ -501,6 +506,7 @@ impl Scan {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 self.expr(condition, Use::Consume);
                 self.expr(then_expr, how);
@@ -661,7 +667,9 @@ impl Scan {
 fn chain_root(e: &Expr) -> Option<u32> {
     match e {
         Expr::LocalGet(id) => Some(*id),
-        Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => chain_root(object),
+        Expr::PropertyGet { object, .. }
+        | Expr::IndexGet { object, .. }
+        | Expr::RegionOut { object, .. } => chain_root(object),
         _ => None,
     }
 }

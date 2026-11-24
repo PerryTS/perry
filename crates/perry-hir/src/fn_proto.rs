@@ -107,7 +107,7 @@ pub fn record_generator_birth_kind(expr: &Expr) -> Option<GeneratorRecordKind> {
 /// The record-birth kind of a generator wrapper body, if it returns one.
 pub fn body_generator_record_kind(body: &[Stmt]) -> Option<GeneratorRecordKind> {
     body.iter().find_map(|stmt| match stmt {
-        Stmt::Return(Some(e)) => record_generator_birth_kind(e),
+        Stmt::Return(Some(e), _) => record_generator_birth_kind(e),
         _ => None,
     })
 }
@@ -129,11 +129,11 @@ pub fn function_body_returns_generator_object(body: &[Stmt]) -> bool {
         return false;
     }
     body.iter().any(|stmt| match stmt {
-        Stmt::Return(Some(e)) if is_record_generator_birth(e) => true,
+        Stmt::Return(Some(e), _) if is_record_generator_birth(e) => true,
         // The generator transform may wrap the returned iterator in the
         // instance-prototype linker; unwrap it so the iterator shape remains
         // the stable signal that this is a lowered generator wrapper.
-        Stmt::Return(Some(expr)) => {
+        Stmt::Return(Some(expr), _) => {
             let inner = match expr {
                 Expr::LinkGeneratorPrototype { obj, .. } => obj.as_ref(),
                 other => other,

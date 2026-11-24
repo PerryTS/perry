@@ -50,7 +50,7 @@ fn collect_used_object_fields_in_stmts(
             Stmt::Expr(expr) | Stmt::Throw(expr) => {
                 collect_used_object_fields_in_expr(expr, non_escaping_object_literals, used);
             }
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     collect_used_object_fields_in_expr(expr, non_escaping_object_literals, used);
                 }
@@ -139,6 +139,7 @@ fn collect_used_object_fields_in_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 collect_used_object_fields_in_expr(
                     discriminant,
@@ -319,7 +320,7 @@ pub fn check_object_literal_escapes_in_stmts(
             Stmt::Expr(e) | Stmt::Throw(e) => {
                 check_object_literal_escapes_in_expr(e, candidates, escaped);
             }
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     check_object_literal_escapes_in_expr(e, candidates, escaped);
                 }
@@ -372,6 +373,7 @@ pub fn check_object_literal_escapes_in_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 check_object_literal_escapes_in_expr(discriminant, candidates, escaped);
                 for case in cases {
@@ -534,7 +536,7 @@ pub fn check_object_literal_escapes_in_expr(
         // compare answers `undefined`.
         Expr::Delete(operand) => {
             match operand.as_ref() {
-                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
                     if let Expr::LocalGet(id) = object.as_ref() {
                         if candidates.contains_key(id) {
                             escaped.insert(*id);
@@ -554,7 +556,7 @@ pub fn check_object_literal_escapes_in_expr(
             check_object_literal_escapes_in_expr(right, candidates, escaped);
         }
         Expr::Unary { operand, .. } | Expr::Void(operand) | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::StringCoerce(operand) | Expr::TemplateStringCoerce(operand) | Expr::ObjectCoerce(operand) | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) | Expr::IsFinite(operand)
         | Expr::IsNaN(operand) | Expr::NumberIsNaN(operand)
@@ -562,12 +564,12 @@ pub fn check_object_literal_escapes_in_expr(
         | Expr::IsUndefinedOrBareNan(operand) | Expr::ParseFloat(operand) => {
             check_object_literal_escapes_in_expr(operand, candidates, escaped);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional { condition, then_expr, else_expr, .. } => {
             check_object_literal_escapes_in_expr(condition, candidates, escaped);
             check_object_literal_escapes_in_expr(then_expr, candidates, escaped);
             check_object_literal_escapes_in_expr(else_expr, candidates, escaped);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             // Issue #518: `cur.toArray()` where `cur` is a scalar-replaceable
             // object literal — the PropertyGet handler above treats it as
             // safe because `toArray` is a known field, but in CALLEE position
@@ -619,7 +621,7 @@ pub fn check_object_literal_escapes_in_expr(
                 check_object_literal_escapes_in_expr(a, candidates, escaped);
             }
         }
-        Expr::IndexGet { object, index , .. } => {
+        Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. } => {
             check_object_literal_escapes_in_expr(object, candidates, escaped);
             check_object_literal_escapes_in_expr(index, candidates, escaped);
         }

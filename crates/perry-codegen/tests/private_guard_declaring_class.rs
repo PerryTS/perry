@@ -64,6 +64,7 @@ fn class(id: u32, name: &str) -> Class {
 
 fn module_with(classes: Vec<Class>, body: Vec<Stmt>) -> Module {
     Module {
+        byte_offset: 0,
         name: "private_guard_declaring_class.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -73,6 +74,7 @@ fn module_with(classes: Vec<Class>, body: Vec<Stmt>) -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),

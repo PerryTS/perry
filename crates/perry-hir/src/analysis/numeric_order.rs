@@ -264,7 +264,7 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
                     continue;
                 }
                 match stmt {
-                    Stmt::Return(value) => {
+                    Stmt::Return(value, _) => {
                         let value = match value {
                             Some(v) => self.expr(v, &env)?,
                             None => Value::Undefined,
@@ -384,6 +384,7 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
                 op: BinaryOp::Sub,
                 left,
                 right,
+                ..
             } => {
                 let a = self.expr(left, env)?;
                 let b = self.expr(right, env)?;
@@ -410,6 +411,7 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
                 op: BinaryOp::Add | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod,
                 left,
                 right,
+                ..
             } => {
                 let a = self.expr(left, env)?.exact()?;
                 let b = self.expr(right, env)?.exact()?;
@@ -424,7 +426,9 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
                     _ => unreachable!(),
                 }))
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 let a = self.expr(left, env)?;
                 let b = self.expr(right, env)?;
                 if matches!((&a, &b), (Value::Undefined, _) | (_, Value::Undefined)) {
@@ -522,6 +526,7 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 let v = self.expr(condition, env)?;
                 let b = self.truth(&v)?;
@@ -535,6 +540,7 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
                 op: LogicalOp::And | LogicalOp::Or,
                 left,
                 right,
+                ..
             } => {
                 let a = self.expr(left, env)?;
                 let b = self.truth(&a)?;
@@ -557,7 +563,7 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
                     a.merge(self.expr(right, env)?)
                 }
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if matches!(callee.as_ref(), Expr::LocalGet(id) if env.contains_key(id)) {
                     return None; // symbolic numeric inputs are never callable
                 }

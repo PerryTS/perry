@@ -14,6 +14,7 @@ pub fn specialize_function(func: &Function, type_args: &[Type], new_id: FuncId) 
     let specialized_name = generate_specialized_name(&func.name, type_args);
 
     Function {
+        byte_offset: func.byte_offset,
         id: new_id,
         name: specialized_name,
         type_params: Vec::new(), // Specialized function has no type params
@@ -21,6 +22,7 @@ pub fn specialize_function(func: &Function, type_args: &[Type], new_id: FuncId) 
             .params
             .iter()
             .map(|p| Param {
+                byte_offset: p.byte_offset,
                 id: p.id,
                 name: p.name.clone(),
                 ty: substitute_type(&p.ty, &substitutions),
@@ -74,6 +76,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             .fields
             .iter()
             .map(|f| ClassField {
+                byte_offset: f.byte_offset,
                 origin: f.origin,
                 name: f.name.clone(),
                 key_expr: f
@@ -88,6 +91,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             })
             .collect(),
         constructor: class.constructor.as_ref().map(|ctor| Function {
+            byte_offset: ctor.byte_offset,
             id: ctor.id,
             name: ctor_name.clone(),
             type_params: Vec::new(),
@@ -95,6 +99,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                 .params
                 .iter()
                 .map(|p| Param {
+                    byte_offset: p.byte_offset,
                     id: p.id,
                     name: p.name.clone(),
                     ty: substitute_type(&p.ty, &substitutions),
@@ -124,6 +129,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             .iter()
             .map(|m| {
                 Function {
+                    byte_offset: m.byte_offset,
                     id: m.id,
                     name: m.name.clone(),
                     type_params: m.type_params.clone(), // Methods can still be generic
@@ -131,6 +137,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                         .params
                         .iter()
                         .map(|p| Param {
+                            byte_offset: p.byte_offset,
                             id: p.id,
                             name: p.name.clone(),
                             ty: substitute_type(&p.ty, &substitutions),
@@ -164,6 +171,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                 (
                     name.clone(),
                     Function {
+                        byte_offset: f.byte_offset,
                         id: f.id,
                         name: f.name.clone(),
                         type_params: Vec::new(),
@@ -190,6 +198,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                 (
                     name.clone(),
                     Function {
+                        byte_offset: f.byte_offset,
                         id: f.id,
                         name: f.name.clone(),
                         type_params: Vec::new(),
@@ -197,6 +206,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                             .params
                             .iter()
                             .map(|p| Param {
+                                byte_offset: p.byte_offset,
                                 id: p.id,
                                 name: p.name.clone(),
                                 ty: substitute_type(&p.ty, &substitutions),
@@ -235,6 +245,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                 key_expr: substitute_expr(&member.key_expr, &substitutions),
                 source_order: member.source_order,
                 function: Function {
+                    byte_offset: member.function.byte_offset,
                     id: member.function.id,
                     name: member.function.name.clone(),
                     type_params: member.function.type_params.clone(),
@@ -243,6 +254,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
                         .params
                         .iter()
                         .map(|p| Param {
+                            byte_offset: p.byte_offset,
                             id: p.id,
                             name: p.name.clone(),
                             ty: substitute_type(&p.ty, &substitutions),

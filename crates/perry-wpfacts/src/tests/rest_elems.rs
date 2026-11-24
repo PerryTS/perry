@@ -256,7 +256,7 @@ fn a_push_filled_field_array_is_at_rest_with_its_final_length() {
         let pf = facts(&src);
         let mb = pf.bindings_for("t.ts").expect("module bindings");
         let at = |text: &str| src.find(text).expect("site in source") as u32 + 1;
-        assert_eq!(mb.rest_pushes, vec![(at("this.tab.push(seed)"), 16)]);
+        assert_eq!(mb.rest_pushes, vec![(at("tab.push(seed)"), 16)]);
         assert_eq!(mb.rest_reads, vec![(at("this.tab[k & 15]"), 16)]);
         assert!(mb.rest_births.is_empty(), "{:?}", mb.rest_births);
     }

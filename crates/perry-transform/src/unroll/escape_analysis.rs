@@ -177,7 +177,7 @@ pub(crate) fn count_local_refs_stmt(stmt: &Stmt, counts: &mut HashMap<LocalId, u
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => count_local_refs_expr(e, counts),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 count_local_refs_expr(e, counts);
             }
@@ -231,6 +231,7 @@ pub(crate) fn count_local_refs_stmt(stmt: &Stmt, counts: &mut HashMap<LocalId, u
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             count_local_refs_expr(discriminant, counts);
             for c in cases {

@@ -76,13 +76,15 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     .find(|method| method.name == *method_name)
             })
             .is_some_and(|method| matches!(method.return_type, HirType::BigInt)),
-        Expr::PropertyGet { .. } | Expr::Call { .. } => {
+        Expr::PropertyGet { .. } | Expr::Call { .. } | Expr::RegionCall { .. } => {
             matches!(static_type_of(ctx, e), Some(HirType::BigInt))
         }
         // Nested bigint arithmetic — `(n * 10n) + d` must see the
         // inner `n * 10n` as bigint so the outer `+` routes through
         // the bigint dispatch instead of the float fallback.
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             matches!(
                 op,
                 BinaryOp::Add
@@ -208,8 +210,8 @@ fn function_returns_literal_number(ctx: &FnCtx<'_>, id: u32) -> bool {
     }
     fn returns_ok(stmts: &[Stmt]) -> bool {
         stmts.iter().all(|s| match s {
-            Stmt::Return(Some(e)) => literal(e),
-            Stmt::Return(None) => false,
+            Stmt::Return(Some(e), _) => literal(e),
+            Stmt::Return(None, _) => false,
             Stmt::If {
                 then_branch,
                 else_branch,
@@ -223,7 +225,7 @@ fn function_returns_literal_number(ctx: &FnCtx<'_>, id: u32) -> bool {
             _ => true,
         })
     }
-    matches!(f.body.last(), Some(Stmt::Return(Some(e))) if literal(e)) && returns_ok(&f.body)
+    matches!(f.body.last(), Some(Stmt::Return(Some(e), _)) if literal(e)) && returns_ok(&f.body)
 }
 
 /// A selection of numeric literals returns a canonical Number regardless of
@@ -268,19 +270,23 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Uint8ArrayLength(_) | Expr::BufferLength(_) => true,
         // An element of a folded flat-const int table lowers to
         // `sitofp i32 -> double` (issue #50): a raw Number by representation.
-        Expr::IndexGet { object, index, .. }
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
             if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() =>
         {
             true
         }
-        Expr::IndexGet { .. }
+        Expr::IndexGet { .. } | Expr::RegionOut { .. }
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e) =>
         {
             true
         }
         // I32 at rest B2: a present at-rest slot is decoded to its int32
         // Number (`rest_elems::number_read`).
-        Expr::IndexGet { .. } if crate::expr::rest_elems::number_read(ctx, e) => true,
+        Expr::IndexGet { .. } | Expr::RegionOut { .. }
+            if crate::expr::rest_elems::number_read(ctx, e) =>
+        {
+            true
+        }
         Expr::LocalGet(id) => {
             local_is_number(ctx, *id)
                 || ctx.integer_locals.contains(id)
@@ -309,6 +315,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } => {
             (is_numeric_expr(ctx, left) && is_numeric_expr(ctx, right))
                 // CLS D2: Numbers and primitive-kind field reads (facts).
@@ -585,7 +592,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Without this, `sum + arr[i]` in a hot loop wraps the element
         // load in `js_number_coerce` which blocks LLVM's vectorizer
         // and adds a function call per iteration.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             // #6750 follow-up: a masked-index read covered by an ACTIVE
             // masked-window fact (dense range-loop / straight-line-region
             // fast copy) is a guard-proven numeric element load, even when
@@ -662,7 +669,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // User function calls returning Number: skip js_number_coerce.
         // Without this, `fib(n-1) + fib(n-2)` wraps both results in
         // js_number_coerce — ~4 billion wasted runtime calls on fib(40).
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if crate::stmt::numeric_callbacks::returns_number(ctx, callee, args.len()) {
                 return true;
             }
@@ -768,7 +775,7 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
     // A direct call of a module function whose every completion returns a
     // numeric literal selection (`return c === "w" ? 1 : -1;`): the value is
     // one of those literals, whatever the arguments.
-    if let Expr::Call { callee, .. } = e {
+    if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = e {
         if let Expr::FuncRef(id) = callee.as_ref() {
             if function_returns_literal_number(ctx, *id) {
                 return true;
@@ -798,13 +805,17 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
                 && !ctx.closure_captures.contains_key(id)
                 && !ctx.module_globals.contains_key(id)
         }
-        Expr::IndexGet { .. }
+        Expr::IndexGet { .. } | Expr::RegionOut { .. }
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e) =>
         {
             true
         }
         // I32 at rest B2: the decoded word of a present at-rest slot.
-        Expr::IndexGet { .. } if crate::expr::rest_elems::number_read(ctx, e) => true,
+        Expr::IndexGet { .. } | Expr::RegionOut { .. }
+            if crate::expr::rest_elems::number_read(ctx, e) =>
+        {
+            true
+        }
         // #10777: a `Ptr<Shape>`-proven receiver whose field is in the fact's
         // `numeric_fields` already lowers to a BARE `load double` —
         // `expr/property_get.rs` and `expr/property_get/helpers.rs` emit
@@ -896,12 +907,13 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } if crate::expr::facts_number::add_is_number(ctx, left, right) => true,
         // A Number-returning `String.prototype` method on a proven string
         // lowers to a real double whose only NaN is the canonical quiet NaN
         // (`string_method_returns_number`), so it holds without the facts:
         // `u8[i] = s.charCodeAt(i)` needs no ToNumber call per store.
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             crate::expr::facts_number::closed_number_call(ctx, e)
                 || matches!(
                     callee.as_ref(),
@@ -1090,9 +1102,11 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => {
             crate::expr::ta_element_read::byte_read_is_numeric(ctx, e)
         }
-        Expr::IndexGet { object, .. } => receiver_class_name(ctx, object)
-            .as_deref()
-            .is_some_and(is_numeric_typed_array_class),
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
+            receiver_class_name(ctx, object)
+                .as_deref()
+                .is_some_and(is_numeric_typed_array_class)
+        }
 
         // (`Expr::Binary` / `Expr::Unary` are handled structurally above.)
 
@@ -1198,7 +1212,9 @@ fn integer_magnitude_bits_inner(ctx: &FnCtx<'_>, e: &Expr, allow_i64_locals: boo
                 None
             }
         }
-        Expr::Binary { op, left, right } => match op {
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
             BinaryOp::Add | BinaryOp::Sub => {
                 let l = recurse(left)?;
                 let r = recurse(right)?;

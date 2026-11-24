@@ -95,6 +95,7 @@ pub(super) fn try_buffer_uint8array_statics(
                 }
                 "allocUnsafeSlow" => {
                     return Ok(Ok(Expr::NativeMethodCall {
+                        byte_offset: crate::lower::call_token(call),
                         module: "buffer".to_string(),
                         class_name: None,
                         object: None,
@@ -114,6 +115,7 @@ pub(super) fn try_buffer_uint8array_statics(
                 }
                 "copyBytesFrom" => {
                     return Ok(Ok(Expr::NativeMethodCall {
+                        byte_offset: crate::lower::call_token(call),
                         module: "buffer".to_string(),
                         class_name: None,
                         object: None,
@@ -156,13 +158,13 @@ pub(super) fn try_buffer_uint8array_statics(
                         byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: crate::lower::call_token(call),
                             object: Box::new(a),
                             property: "compare".to_string(),
                         }),
                         args: vec![b],
                         type_args: vec![],
-                        byte_offset: 0,
+                        byte_offset: crate::lower::call_token(call),
                     }));
                 }
                 _ => {} // Fall through to generic handling

@@ -14,6 +14,7 @@ fn fixture(with_args: bool) -> Module {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "v".into(),
             key_expr: None,
@@ -43,6 +44,7 @@ fn fixture(with_args: bool) -> Module {
     if with_args {
         for name in ["left", "right"] {
             module.classes[0].fields.push(ClassField {
+                byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: name.into(),
                 key_expr: None,
@@ -54,12 +56,14 @@ fn fixture(with_args: bool) -> Module {
             });
         }
         module.classes[0].constructor = Some(Function {
+            byte_offset: 0,
             id: 21,
             name: "constructor".into(),
             type_params: Vec::new(),
             params: [10, 11]
                 .into_iter()
                 .map(|id| Param {
+                    byte_offset: 0,
                     id,
                     name: format!("arg{id}"),
                     ty: Type::Any,

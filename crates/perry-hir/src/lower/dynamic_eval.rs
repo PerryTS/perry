@@ -78,6 +78,7 @@ pub(crate) fn enter_function(
     ctx.push_with_env_at(id, mark);
     ctx.dynamic_eval_scopes.push((id, mark));
     Some(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name: "__perry_eval_scope".to_string(),
         ty: Type::Any,
@@ -137,7 +138,7 @@ fn bindings_object(
 /// does not. Keep the container rooted in the caller instead of emitting a
 /// one-shot builder function and its GC metadata for every direct eval.
 fn inline_bindings_builder(expr: Expr) -> Expr {
-    let Expr::Call { callee, args, .. } = &expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = &expr else {
         return expr;
     };
     let Expr::Closure {
@@ -153,7 +154,8 @@ fn inline_bindings_builder(expr: Expr) -> Expr {
         return expr;
     }
     let id = params[0].id;
-    let Some((Stmt::Return(Some(Expr::LocalGet(result))), definitions)) = body.split_last() else {
+    let Some((Stmt::Return(Some(Expr::LocalGet(result)), _), definitions)) = body.split_last()
+    else {
         return expr;
     };
     // Only the compiler-generated static accessor definitions qualify. If
@@ -161,7 +163,7 @@ fn inline_bindings_builder(expr: Expr) -> Expr {
     if *result != id
         || !definitions.iter().all(|stmt| {
             matches!(stmt,
-                Stmt::Expr(Expr::Call { callee, args, .. })
+                Stmt::Expr(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. })
                     if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
                         if name == "js_object_define_accessor")
                     && args.len() == 4
@@ -184,7 +186,7 @@ fn inline_bindings_builder(expr: Expr) -> Expr {
     let sequence = body
         .into_iter()
         .map(|stmt| match stmt {
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) => expr,
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) => expr,
             _ => unreachable!(),
         })
         .collect();
@@ -281,7 +283,7 @@ pub(crate) fn lower(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
         args.clear();
         Expr::IndexGet {
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset: call.span.lo.0,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(id)),
             index: Box::new(Expr::Number(0.0)),
@@ -308,7 +310,7 @@ pub(crate) fn lower(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
             Expr::Bool(ctx.current_strict || ctx.current_strict_mode()),
         ],
         type_args: Vec::new(),
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::call_token(call),
     };
     // Extra eval arguments are evaluated, though only the first is source.
     // ScopedTemp keeps the first argument live while the extras run.

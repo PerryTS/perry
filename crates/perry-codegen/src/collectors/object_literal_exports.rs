@@ -96,7 +96,7 @@ fn capability_from_init(
     global_id: u32,
     init: &Expr,
 ) -> Option<ExportedObjectLiteralCapability> {
-    let Expr::Call { callee, args, .. } = init else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = init else {
         return None;
     };
     let Expr::Closure {
@@ -171,7 +171,7 @@ fn capability_from_init(
                     eligible_method(hir, func_names, class, key, value),
                 );
             }
-            Stmt::Expr(Expr::Call { callee, args, .. }) => {
+            Stmt::Expr(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) => {
                 let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
                     return None;
                 };
@@ -191,7 +191,7 @@ fn capability_from_init(
                     eligible_method(hir, func_names, class, key, value),
                 );
             }
-            Stmt::Return(Some(value)) if local_get_is(value, param.id) && !saw_return => {
+            Stmt::Return(Some(value), _) if local_get_is(value, param.id) && !saw_return => {
                 saw_return = true;
             }
             _ => return None,

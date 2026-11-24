@@ -1,0 +1,1 @@
+`--target web`: `Array.from(x)` inside an `async` function returns the array as in Node instead of `undefined`, and `Array.from(x, mapFn, thisArg)` applies its map function (with the index and `thisArg`) in synchronous and async code instead of returning an empty or `undefined` result (#15105).

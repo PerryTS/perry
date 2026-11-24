@@ -4,6 +4,12 @@
 
 // NaN-boxing constants (matching perry-runtime/src/value.rs)
 const __hostGlobal = globalThis;
+// The program shares the host Math and JSON and may replace their members (#15104).
+// The glue's own arithmetic and formatting call the originals, captured before any
+// program code runs. The math_* / json_* bridges keep reading the live members: a call
+// bound to the intrinsic still reaches a replacement the compiler cannot see (eval).
+const __Math = Object.fromEntries(Object.getOwnPropertyNames(Math).map((k) => [k, Math[k]]));
+const __JSON = { parse: JSON.parse, stringify: JSON.stringify };
 
 const TAG_UNDEFINED = 0x7FFC_0000_0000_0001n;
 const TAG_NULL      = 0x7FFC_0000_0000_0002n;
@@ -32,11 +38,11 @@ function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
 function __padBigintArgs(fn, prefix, bigintArgs) {
   const rest = wasmInstance?.exports['__wasm_rest_' + fn.name];
   if (rest) {
-    const at = Math.max(0, rest.value - (prefix | 0));
+    const at = __Math.max(0, rest.value - (prefix | 0));
     while (bigintArgs.length < at) bigintArgs.push(TAG_UNDEFINED);
     bigintArgs.push(__jsValueToBits(bigintArgs.splice(at).map(__bitsToJsValue)));
   }
-  const need = Math.max(0, (fn.length | 0) - (prefix | 0));
+  const need = __Math.max(0, (fn.length | 0) - (prefix | 0));
   while (bigintArgs.length < need) bigintArgs.push(TAG_UNDEFINED);
   return bigintArgs;
 }
@@ -131,7 +137,7 @@ function fromJsValue(v) {
 // in an async loop that reads builtins.
 let __globalThisBoxed;
 function globalThisValue() {
-  if (__globalThisBoxed === undefined) __globalThisBoxed = fromJsValue(globalThis);
+  if (__globalThisBoxed === undefined) __globalThisBoxed = fromJsValue(__hostGlobal);
   return __globalThisBoxed;
 }
 
@@ -372,7 +378,7 @@ function buildImports() {
         const arr = getHandle(handle);
         if (!arr) return nanboxString(allocHandle(''));
         const sep = getString(separator);
-        const result = arr.map(v => typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v)).join(sep);
+        const result = arr.map(v => typeof v === 'object' && v !== null ? __JSON.stringify(v) : String(v)).join(sep);
         stringTable.push(result);
         return nanboxString(stringTable.length - 1);
       },
@@ -1425,7 +1431,7 @@ function buildImports() {
         const name = stringTable[nameId | 0];
         const argc = argCount | 0;
         const base = baseAddr | 0;
-        const u64View = new BigUint64Array(wasmMemory.buffer, base, Math.max(argc, 1));
+        const u64View = new BigUint64Array(wasmMemory.buffer, base, __Math.max(argc, 1));
         const args = [];
         for (let i = 0; i < argc; i++) args.push(__bitsToJsValue(u64View[i]));
         let result;
@@ -1454,7 +1460,7 @@ function buildImports() {
         const name = stringTable[nameId | 0];
         const argc = argCount | 0;
         const base = baseAddr | 0;
-        const u64View = new BigUint64Array(wasmMemory.buffer, base, Math.max(argc, 1));
+        const u64View = new BigUint64Array(wasmMemory.buffer, base, __Math.max(argc, 1));
         const args = [];
         for (let i = 0; i < argc; i++) args.push(__bitsToJsValue(u64View[i]));
         const fn = __memDispatch[name];
@@ -1555,7 +1561,7 @@ function wrapForI64(fn, coerceNumberToBigInt = true) {
       // payloads) via bit-reinterpret. Skipped for non-i64-return imports
       // (#1049 instances 2/3) — those declare i32/f64 returns and would
       // reject a BigInt with the inverse error.
-      if (coerceNumberToBigInt && Number.isInteger(result) && Math.abs(result) < 2147483648) {
+      if (coerceNumberToBigInt && Number.isInteger(result) && __Math.abs(result) < 2147483648) {
         return BigInt(result);
       }
       if (!coerceNumberToBigInt) return result;
@@ -2353,6 +2359,8 @@ const __memDispatch = {
   parse_float: (val) => parseFloat(String(val)),
   js_mod: (a, b) => a % b,
   is_null_or_undefined: (val) => (val === null || val === undefined) ? 1 : 0,
+  // SameValue: NaN is itself and 0 is not -0, unlike `===`.
+  object_is: (a, b) => Object.is(a, b),
 
   // Objects — args are plain JS values (obj is the object itself, key is a string, etc.)
   object_new: () => ({}),
@@ -2491,6 +2499,13 @@ const __memDispatch = {
     }
     return [value];
   },
+  // `[a, , b]`: a hole adds to the length without creating an element.
+  array_push_hole: (arr) => { if (Array.isArray(arr)) arr.length += 1; return arr; },
+  // `a.keys()` / `a.entries()` / `a.values()`: the method the receiver holds, which a
+  // program may have replaced with a Perry closure.
+  array_keys: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'keys'), []),
+  array_entries: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'entries'), []),
+  array_values: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'values'), []),
   // Every argument in one `push` call, so `a.push(x, y)` is the single call JS makes.
   array_push: (arr, ...values) => { if (Array.isArray(arr)) arr.push(...values); return arr; },
   array_pop: (arr) => { if (!Array.isArray(arr) || arr.length === 0) return undefined; return arr.pop(); },
@@ -2529,6 +2544,17 @@ const __memDispatch = {
   array_flat: (arr) => Array.isArray(arr) ? arr.flat() : [],
   array_is_array: (val) => Array.isArray(val) ? 1 : 0,
   array_from: (val) => Array.from(val),
+  // `Array.from(value, mapFn, thisArg)`: mapFn receives (element, index), with `this`
+  // bound to thisArg. An undefined mapFn maps nothing. An exception mapFn left pending
+  // is thrown here, so the host stops and closes the iterator.
+  array_from_mapped: (val, fn, thisArg) => {
+    if (fn === undefined) return Array.from(val);
+    return Array.from(val, (v, i) => {
+      const mapped = __memDispatch.reflect_apply(fn, thisArg, [v, i]);
+      __memDispatch.propagate_exception(true);
+      return mapped;
+    });
+  },
   // `[...source]`: any iterable source (a Set, a Map, an iterator) spreads its values.
   // One push per value: `push(...source)` passes each value as an argument and
   // overflows the stack for a large source.
@@ -2733,6 +2759,24 @@ const __memDispatch = {
     arr.sort((a, b) => { const r = call(__jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
     return arr;
   },
+  // `reduceRight`, the change-by-copy methods and `copyWithin` run the host's own, so
+  // hole handling, argument coercions and errors are the host's. `initial` is empty when
+  // the call passes none: an explicit undefined is an initial value.
+  array_reduce_right: (arr, cb, ...initial) => {
+    const call = __arrayCallback(cb);
+    const fn = call ? (...args) => __bitsToJsValue(call(...args.map(__jsValueToBits))) : cb;
+    return Array.prototype.reduceRight.call(arr, fn, ...initial);
+  },
+  array_to_reversed: (arr) => Array.prototype.toReversed.call(arr),
+  array_to_sorted: (arr) => Array.prototype.toSorted.call(arr),
+  array_to_sorted_cmp: (arr, cb) => {
+    const call = __arrayCallback(cb);
+    const cmp = call ? (a, b) => __bitsToJsValue(call(__jsValueToBits(a), __jsValueToBits(b))) : cb;
+    return Array.prototype.toSorted.call(arr, cmp);
+  },
+  array_to_spliced: (arr, start, deleteCount, ...items) => Array.prototype.toSpliced.call(arr, start, deleteCount, ...items),
+  array_with: (arr, index, value) => Array.prototype.with.call(arr, index, value),
+  array_copy_within: (arr, target, start, end) => Array.prototype.copyWithin.call(arr, target, start, end),
   array_some: (arr, cb) => {
     const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
     if (!call) return 0;
@@ -3125,6 +3169,18 @@ const __memDispatch = {
   set_size: (s) => (s instanceof Set) ? s.size : 0,
   set_clear: (s) => { if (s instanceof Set) s.clear(); },
   set_values: (s) => (s instanceof Set) ? [...s.values()] : [],
+
+  // WeakRef / FinalizationRegistry are the host's; a Perry closure cleanup callback is
+  // wrapped so the host can call it.
+  weakref_new: (target) => new WeakRef(target),
+  weakref_deref: (ref) => WeakRef.prototype.deref.call(ref),
+  finreg_new: (cb) => {
+    const call = __arrayCallback(cb);
+    return new FinalizationRegistry(call ? (held) => { call(__jsValueToBits(held)); } : cb);
+  },
+  finreg_register: (reg, target, held, token) =>
+    FinalizationRegistry.prototype.register.call(reg, target, held, token),
+  finreg_unregister: (reg, token) => FinalizationRegistry.prototype.unregister.call(reg, token),
   // The Set/Map `for...of` fast path steps `slot = cursor_next(coll, slot + 1, ep)`,
   // then `ep = compaction_epoch(coll)`, and reads the entry with `*_at(coll, slot)`;
   // -1 ends the loop. A host collection has no slots, so each loop owns a live iterator:
@@ -3188,7 +3244,7 @@ const __memDispatch = {
 
   // Date — arg is a plain JS value (the Date object itself once created)
   date_new: () => new Date(),
-  date_new_val: (...args) => (args.length === 0) ? new Date() : new Date(args[0]),
+  date_new_val: (...args) => new Date(...args),
   date_now: () => Date.now(),
   date_parse: (s) => Date.parse(String(s)),
   date_utc: (...args) => Date.UTC(...args.map(Number)),
@@ -3201,6 +3257,7 @@ const __memDispatch = {
   date_to_locale_date_string: (d) => (d instanceof Date) ? d.toLocaleDateString() : '',
   date_to_locale_time_string: (d) => (d instanceof Date) ? d.toLocaleTimeString() : '',
   date_to_json: (d) => (d instanceof Date) ? d.toJSON() : null,
+  date_to_utc_string: (d) => Date.prototype.toUTCString.call(d),
   date_get_full_year: (d) => (d instanceof Date) ? d.getFullYear() : 0,
   date_get_month: (d) => (d instanceof Date) ? d.getMonth() : 0,
   date_get_date: (d) => (d instanceof Date) ? d.getDate() : 0,
@@ -3218,13 +3275,23 @@ const __memDispatch = {
   date_get_utc_seconds: (d) => (d instanceof Date) ? d.getUTCSeconds() : 0,
   date_get_utc_milliseconds: (d) => (d instanceof Date) ? d.getUTCMilliseconds() : 0,
   date_get_timezone_offset: (d) => (d instanceof Date) ? d.getTimezoneOffset() : 0,
-  date_set_utc_full_year: (d, v) => (d instanceof Date) ? d.setUTCFullYear(Number(v)) : 0,
-  date_set_utc_month: (d, v) => (d instanceof Date) ? d.setUTCMonth(Number(v)) : 0,
-  date_set_utc_date: (d, v) => (d instanceof Date) ? d.setUTCDate(Number(v)) : 0,
-  date_set_utc_hours: (d, v) => (d instanceof Date) ? d.setUTCHours(Number(v)) : 0,
-  date_set_utc_minutes: (d, v) => (d instanceof Date) ? d.setUTCMinutes(Number(v)) : 0,
-  date_set_utc_seconds: (d, v) => (d instanceof Date) ? d.setUTCSeconds(Number(v)) : 0,
-  date_set_utc_milliseconds: (d, v) => (d instanceof Date) ? d.setUTCMilliseconds(Number(v)) : 0,
+  // A setter takes every argument the call passed and a non-Date receiver throws, as
+  // the host's own setter does.
+  date_set_utc_full_year: (d, ...v) => Date.prototype.setUTCFullYear.apply(d, v),
+  date_set_utc_month: (d, ...v) => Date.prototype.setUTCMonth.apply(d, v),
+  date_set_utc_date: (d, ...v) => Date.prototype.setUTCDate.apply(d, v),
+  date_set_utc_hours: (d, ...v) => Date.prototype.setUTCHours.apply(d, v),
+  date_set_utc_minutes: (d, ...v) => Date.prototype.setUTCMinutes.apply(d, v),
+  date_set_utc_seconds: (d, ...v) => Date.prototype.setUTCSeconds.apply(d, v),
+  date_set_utc_milliseconds: (d, ...v) => Date.prototype.setUTCMilliseconds.apply(d, v),
+  date_set_full_year: (d, ...v) => Date.prototype.setFullYear.apply(d, v),
+  date_set_month: (d, ...v) => Date.prototype.setMonth.apply(d, v),
+  date_set_date: (d, ...v) => Date.prototype.setDate.apply(d, v),
+  date_set_hours: (d, ...v) => Date.prototype.setHours.apply(d, v),
+  date_set_minutes: (d, ...v) => Date.prototype.setMinutes.apply(d, v),
+  date_set_seconds: (d, ...v) => Date.prototype.setSeconds.apply(d, v),
+  date_set_milliseconds: (d, ...v) => Date.prototype.setMilliseconds.apply(d, v),
+  date_set_time: (d, ...v) => Date.prototype.setTime.apply(d, v),
 
   // Error — args are plain JS values
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
@@ -3694,12 +3761,12 @@ self.onmessage = async function(e) {
         return mapSequential(array, closure);
       }
 
-      const numChunks = Math.min(concurrency, array.length);
+      const numChunks = __Math.min(concurrency, array.length);
       const ws = ensureWorkers(numChunks);
       if (!ws) return mapSequential(array, closure);
 
       const { funcIdx, captures } = serializeClosure(closure);
-      const chunkSize = Math.ceil(array.length / numChunks);
+      const chunkSize = __Math.ceil(array.length / numChunks);
       const promises = [];
       for (let i = 0; i < numChunks; i++) {
         const chunk = array.slice(i * chunkSize, (i + 1) * chunkSize);
@@ -3723,12 +3790,12 @@ self.onmessage = async function(e) {
         return filterSequential(array, closure);
       }
 
-      const numChunks = Math.min(concurrency, array.length);
+      const numChunks = __Math.min(concurrency, array.length);
       const ws = ensureWorkers(numChunks);
       if (!ws) return filterSequential(array, closure);
 
       const { funcIdx, captures } = serializeClosure(closure);
-      const chunkSize = Math.ceil(array.length / numChunks);
+      const chunkSize = __Math.ceil(array.length / numChunks);
       const promises = [];
       for (let i = 0; i < numChunks; i++) {
         const chunk = array.slice(i * chunkSize, (i + 1) * chunkSize);
@@ -4191,7 +4258,7 @@ function perry_ui_set_font_weight(h, weight) { const el = uiGet(h); if (el) el.s
 function perry_ui_text_set_font_weight(h, size, weight) {
   const el = uiGet(h); if (!el) return;
   el.style.fontSize = size + "px";
-  el.style.fontWeight = String(Math.round(1 + 8 * Math.min(Math.max(weight, 0), 1)) * 100);
+  el.style.fontWeight = String(__Math.round(1 + 8 * __Math.min(__Math.max(weight, 0), 1)) * 100);
 }
 function perry_ui_set_font_family(h, family) { const el = uiGet(h); if (el) el.style.fontFamily = family; }
 function perry_ui_set_padding(h, top, left, bottom, right) {
@@ -5190,7 +5257,7 @@ function _perry_media_wire_session() {
       const e = _perry_media_get(h);
       if (!e) return;
       const skip = (details && details.seekOffset) || 10;
-      perry_media_seek(h, Math.max(0, (e.audio.currentTime || 0) - skip));
+      perry_media_seek(h, __Math.max(0, (e.audio.currentTime || 0) - skip));
     });
   } catch (err) { /* setActionHandler can throw on unsupported actions — ignore */ }
 }
@@ -5461,7 +5528,7 @@ function _perry_audio_resolve_url(path) {
 
 function _perry_audio_set_gain(gainParam, target, fadeMs) {
   if (!PERRY_AUDIO_CTX) return;
-  const t = Math.max(0, Number(target) || 0);
+  const t = __Math.max(0, Number(target) || 0);
   const ms = Number(fadeMs) || 0;
   const now = PERRY_AUDIO_CTX.currentTime;
   try {
@@ -5491,9 +5558,9 @@ function _perry_audio_start_voice(entry) {
 
   const voiceGain = PERRY_AUDIO_CTX.createGain();
   let tail = voiceGain;
-  if (Math.abs(entry.pan) > 1e-6 && typeof PERRY_AUDIO_CTX.createStereoPanner === "function") {
+  if (__Math.abs(entry.pan) > 1e-6 && typeof PERRY_AUDIO_CTX.createStereoPanner === "function") {
     const panner = PERRY_AUDIO_CTX.createStereoPanner();
-    try { panner.pan.value = Math.max(-1, Math.min(1, entry.pan)); } catch (_) {}
+    try { panner.pan.value = __Math.max(-1, __Math.min(1, entry.pan)); } catch (_) {}
     voiceGain.connect(panner);
     tail = panner;
     entry.pannerNode = panner;
@@ -5631,7 +5698,7 @@ function perry_audio_play(soundHandle, volume, loop_, rate, pan, fadeInMs) {
     loop: Number(loop_) >= 0.5,
     rate: (Number(rate) > 0) ? Number(rate) : 1.0,
     pan: Number(pan) || 0,
-    fadeInMs: Math.max(0, Number(fadeInMs) || 0),
+    fadeInMs: __Math.max(0, Number(fadeInMs) || 0),
     source: null,
     gain: null,
     pannerNode: null,
@@ -5658,7 +5725,7 @@ function perry_audio_play(soundHandle, volume, loop_, rate, pan, fadeInMs) {
 function perry_audio_stop(handle, fadeOutMs) {
   const ctx = _perry_audio_ctx();
   if (!ctx) return;
-  const ms = Math.max(0, Number(fadeOutMs) || 0);
+  const ms = __Math.max(0, Number(fadeOutMs) || 0);
   const stopOne = (v) => {
     if (!v || v.stopped) return;
     if (ms > 0 && v.gain) {
@@ -5697,7 +5764,7 @@ function perry_audio_pause(playbackHandle) {
   const elapsed = ctx.currentTime - v.startedAt;
   let offset = elapsed;
   if (v.sound && v.sound.audioBuffer && !v.loop) {
-    offset = Math.min(elapsed, v.sound.audioBuffer.duration);
+    offset = __Math.min(elapsed, v.sound.audioBuffer.duration);
   } else if (v.sound && v.sound.audioBuffer && v.loop) {
     offset = elapsed % v.sound.audioBuffer.duration;
   }
@@ -5723,7 +5790,7 @@ function perry_audio_resume(playbackHandle) {
 
 function perry_audio_set_volume(handle, volume, fadeMs) {
   if (!PERRY_AUDIO_CTX) return;
-  const v = Math.max(0, Number(volume) || 0);
+  const v = __Math.max(0, Number(volume) || 0);
   const kind = _perry_audio_handle_kind(handle);
   if (kind === "playback") {
     const p = _perry_audio_get_playback(handle);
@@ -5761,7 +5828,7 @@ function perry_audio_set_pan(playbackHandle, pan) {
   if (!ctx) return;
   const v = _perry_audio_get_playback(playbackHandle);
   if (!v) return;
-  const p = Math.max(-1, Math.min(1, Number(pan) || 0));
+  const p = __Math.max(-1, __Math.min(1, Number(pan) || 0));
   v.pan = p;
   if (v.pannerNode) {
     try { v.pannerNode.pan.value = p; } catch (_) {}
@@ -5792,7 +5859,7 @@ function perry_audio_fade_out(playbackHandle, durationMs) {
 }
 
 function perry_audio_crossfade(fromHandle, toHandle, durationMs) {
-  const ms = Math.max(0, Number(durationMs) || 0);
+  const ms = __Math.max(0, Number(durationMs) || 0);
   const from = _perry_audio_get_playback(fromHandle);
   const to = _perry_audio_get_playback(toHandle);
   if (from && from.gain) _perry_audio_set_gain(from.gain.gain, 0, ms);
@@ -5856,7 +5923,7 @@ function perry_audio_solo_bus(busHandle, soloed) {
 
 function perry_audio_set_master_volume(volume, fadeMs) {
   if (!_perry_audio_ctx()) return;
-  const v = Math.max(0, Number(volume) || 0);
+  const v = __Math.max(0, Number(volume) || 0);
   PERRY_AUDIO_MASTER_BUS.stored_volume = v;
   _perry_audio_set_gain(PERRY_AUDIO_MASTER_GAIN.gain, v, fadeMs);
 }
@@ -5912,7 +5979,7 @@ function perry_audio_get_position(playbackHandle) {
   if (v.sound && v.sound.audioBuffer) {
     const d = v.sound.audioBuffer.duration;
     if (v.loop && d > 0) return elapsed % d;
-    return Math.min(elapsed, d);
+    return __Math.min(elapsed, d);
   }
   return elapsed;
 }

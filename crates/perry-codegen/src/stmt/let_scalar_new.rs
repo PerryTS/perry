@@ -375,7 +375,10 @@ pub(super) fn scalar_rebind(ctx: &FnCtx<'_>, id: u32, init: Option<&perry_hir::E
         }
         // Only the split the scalar path takes: any other call initializes
         // ordinary storage, so it must take the redeclaration store.
-        Some(perry_hir::Expr::Call { callee, args, .. }) => {
+        Some(
+            perry_hir::Expr::Call { callee, args, .. }
+            | perry_hir::Expr::RegionCall { callee, args, .. },
+        ) => {
             ctx.scalar_replaced_arrays.contains_key(&id)
                 && ctx.non_escaping_arrays.contains_key(&id)
                 && is_scalar_split(ctx, callee, args)

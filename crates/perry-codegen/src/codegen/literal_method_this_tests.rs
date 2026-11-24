@@ -21,6 +21,7 @@ const RECV: u32 = 50;
 fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
     let field_names = ["a", "m"];
     let field = |name: &str| ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -34,6 +35,7 @@ fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
         .iter()
         .enumerate()
         .map(|(i, name)| Param {
+            byte_offset: 0,
             id: param_base + i as u32,
             name: (*name).to_string(),
             ty: Type::Any,
@@ -66,6 +68,7 @@ fn anon_shape(id: u32, name: &str, ctor_id: u32, param_base: u32) -> Class {
         heritage_lexically_shadowed: false,
         fields: field_names.iter().map(|name| field(name)).collect(),
         constructor: Some(Function {
+            byte_offset: 0,
             id: ctor_id,
             name: "constructor".to_string(),
             type_params: Vec::new(),
@@ -114,6 +117,7 @@ fn this_a() -> Expr {
 /// closure clones, so the public symbol is the ordinary body.
 fn method(func_id: u32, is_arrow: bool, is_strict: bool) -> Expr {
     Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -125,11 +129,15 @@ fn method(func_id: u32, is_arrow: bool, is_strict: bool) -> Expr {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::Binary {
-                op: BinaryOp::Add,
-                left: Box::new(this_a()),
-                right: Box::new(this_a()),
-            })),
+            Stmt::Return(
+                Some(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::Add,
+                    left: Box::new(this_a()),
+                    right: Box::new(this_a()),
+                }),
+                0,
+            ),
         ],
         captures: Vec::new(),
         mutable_captures: Vec::new(),
@@ -149,6 +157,7 @@ fn literal_module(closure: Expr) -> Module {
     let mut hir = Module::new("literal_method_this_test");
     hir.classes.push(anon_shape(1, SHAPE, 90, 60));
     hir.init.push(Stmt::Let {
+        byte_offset: 0,
         id: RECV,
         name: "o".to_string(),
         ty: Type::Any,
@@ -295,6 +304,7 @@ fn home_classes_name_only_unambiguous_dynamic_this_methods() {
     hir.init
         .push(new_shape(OTHER_SHAPE, method(9, false, false)));
     hir.functions.push(Function {
+        byte_offset: 0,
         id: 30,
         name: "make".to_string(),
         type_params: Vec::new(),

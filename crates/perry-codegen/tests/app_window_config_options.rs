@@ -89,6 +89,7 @@ fn empty_opts() -> CompileOptions {
 
 fn module(name: &str, body: Vec<Stmt>) -> Module {
     Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -98,6 +99,7 @@ fn module(name: &str, body: Vec<Stmt>) -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -149,6 +151,7 @@ fn module(name: &str, body: Vec<Stmt>) -> Module {
 
 fn app_call(config: Vec<(&str, Expr)>) -> Stmt {
     Stmt::Expr(Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,
@@ -164,6 +167,7 @@ fn app_call(config: Vec<(&str, Expr)>) -> Stmt {
 
 fn text_call(second_arg: Expr) -> Stmt {
     Stmt::Expr(Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,

@@ -187,6 +187,9 @@ pub struct Module {
     /// deferred-import dispatch to chain the init promise rather than
     /// returning a pre-resolved namespace.
     pub has_top_level_await: bool,
+    /// Source offset (`span.lo.0`) of the module construct itself. The
+    /// resumable top-level-await body stands here. Excluded from stable-hashing.
+    pub byte_offset: u32,
     /// Resumable module body; its lexical bindings remain module globals.
     pub async_init_function: Option<crate::types::FuncId>,
     /// Issue #100: eager vs deferred init. Modules reachable from the
@@ -383,6 +386,7 @@ impl Module {
             extern_funcs: Vec::new(),
             init_was_unrolled: false,
             has_top_level_await: false,
+            byte_offset: 0,
             async_init_function: None,
             init_kind: ModuleInitKind::Eager,
             async_step_closures: std::collections::HashSet::new(),

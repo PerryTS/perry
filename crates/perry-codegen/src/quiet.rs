@@ -165,7 +165,7 @@ pub(crate) fn site(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         }
         Expr::Binary { left, right, .. } => primitive(ctx, left) && primitive(ctx, right),
         // Strict equality converts nothing.
-        Expr::Compare { op, left, right } => {
+        Expr::Compare { op, left, right, .. } => {
             matches!(op, CompareOp::Eq | CompareOp::Ne)
                 || primitive(ctx, left) && primitive(ctx, right)
         }

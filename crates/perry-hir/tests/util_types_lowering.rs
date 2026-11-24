@@ -47,6 +47,7 @@ fn find_native_method_call<'a>(expr: &'a Expr, method: &str) -> Option<(&'a str,
             object,
             method: call_method,
             args,
+            ..
         } => {
             if call_method == method {
                 return Some((module.as_str(), class_name.as_deref()));

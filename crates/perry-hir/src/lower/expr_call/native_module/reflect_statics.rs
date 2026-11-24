@@ -124,7 +124,7 @@ pub(super) fn try_reflect_statics(
                                         class_name: cls_name,
                                         args: new_args,
                                         type_args: vec![],
-                                        byte_offset: 0,
+                                        byte_offset: call.span.lo.0,
                                         cap_args_appended: 0,
                                     }));
                                 }

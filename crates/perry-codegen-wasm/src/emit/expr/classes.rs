@@ -239,22 +239,13 @@ impl<'a> FuncEmitCtx<'a> {
                         return true;
                     }
                     "Date" => {
-                        if let Some(arg) = args.first() {
-                            self.emit_expr(func, arg);
-                        } else {
-                            func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                        }
-                        self.emit_frame_begin(func, 1);
-                        func.instruction(&Instruction::LocalSet(self.temp_local));
-                        self.emit_slot_addr(func, 0);
-                        func.instruction(&Instruction::LocalGet(self.temp_local));
-                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                            offset: 0,
-                            align: 3,
-                            memory_index: 0,
-                        }));
                         // Same bridge as `Expr::DateNew`; see date_error.rs.
-                        self.emit_memcall(func, "date_new_val", args.len().min(1) as u32);
+                        let argc = args.len() as u32;
+                        self.emit_frame_begin(func, argc);
+                        for (slot, arg) in (0..).zip(args) {
+                            self.emit_store_arg(func, slot, arg);
+                        }
+                        self.emit_memcall(func, "date_new_val", argc);
                         return true;
                     }
                     // `new Array()` / `new Array(n)` / `new Array(a, b, ...)`.
@@ -388,7 +379,10 @@ impl<'a> FuncEmitCtx<'a> {
                 if let Some(ctor_idx) = ctor {
                     // Stack: [instance_handle]
                     let ctor_args: &[Expr] = if forwarded { &[] } else { args };
-                    for arg in ctor_args {
+                    let ctor_args = self
+                        .emitter
+                        .with_rest_packed_after_receiver(ctor_idx, ctor_args);
+                    for arg in ctor_args.iter() {
                         self.emit_expr(func, arg);
                     }
                     // Keep the operand stack aligned with the ctor's arity: pad
@@ -447,7 +441,7 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::This => {
                 func.instruction(&Instruction::LocalGet(self.this_local.unwrap_or(0)));
             }
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 // Call parent constructor: super(args)
                 // this is local 0 in the current constructor
                 let mut called = false;
@@ -462,15 +456,25 @@ impl<'a> FuncEmitCtx<'a> {
                             let forwarded = implicit.contains(parent_name)
                                 && !implicit.contains(current_class)
                                 && self.host_base_parent(current_class).is_some();
+                            // A synthesized constructor's own parameters are already the
+                            // parent's, a rest one packed.
+                            let passes_params_on =
+                                self.emitter.forwarding_ctor_classes.contains(current_class);
                             if forwarded {
                                 func.instruction(&Instruction::LocalGet(0));
                                 self.emit_host_super_init(func, args);
                                 func.instruction(&Instruction::Drop);
                             }
                             let ctor_args: &[Expr] = if forwarded { &[] } else { args };
+                            let ctor_args = if passes_params_on {
+                                std::borrow::Cow::Borrowed(ctor_args)
+                            } else {
+                                self.emitter
+                                    .with_rest_packed_after_receiver(ctor_idx, ctor_args)
+                            };
                             // Call parent constructor with this + args
                             func.instruction(&Instruction::LocalGet(0)); // this
-                            for arg in ctor_args {
+                            for arg in ctor_args.iter() {
                                 self.emit_expr(func, arg);
                             }
                             if let Some(&expected) = self.emitter.func_param_counts.get(&ctor_idx) {
@@ -705,6 +709,7 @@ impl<'a> FuncEmitCtx<'a> {
                 class_name,
                 field_name,
                 value,
+                ..
             } => {
                 let class_id = self
                     .emitter
@@ -731,6 +736,7 @@ impl<'a> FuncEmitCtx<'a> {
                 class_name,
                 method_name,
                 args,
+                ..
             } => {
                 // Try to call compiled static method directly
                 if let Some(statics) = self.emitter.class_static_map.get(class_name.as_str()) {

@@ -123,7 +123,7 @@ fn refs_stmts<const FREE: bool>(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
     for s in stmts {
         match s {
             perry_hir::Stmt::Expr(e) | perry_hir::Stmt::Throw(e) => refs_expr::<FREE>(e, out),
-            perry_hir::Stmt::Return(opt) => {
+            perry_hir::Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     refs_expr::<FREE>(e, out);
                 }
@@ -200,6 +200,7 @@ fn refs_stmts<const FREE: bool>(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
             perry_hir::Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 refs_expr::<FREE>(discriminant, out);
                 for case in cases {
@@ -260,7 +261,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
@@ -355,7 +356,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(a, out);
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             walk(callee, out);
             for a in args {
                 walk(a, out);
@@ -381,6 +382,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             walk(condition, out);
             walk(then_expr, out);
@@ -392,7 +394,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(value, out);
         }
         Expr::PropertyUpdate { object, .. } => walk(object, out),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             walk(object, out);
             walk(index, out);
         }
@@ -704,7 +706,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk(property, out);
             walk(object, out);
         }
-        Expr::SuperCall(args)
+        Expr::SuperCall(args, _)
         | Expr::SuperMethodCall { args, .. }
         | Expr::StaticMethodCall { args, .. } => {
             for a in args {
@@ -740,6 +742,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             key,
             receiver,
             args,
+            ..
         } => {
             walk(home, out);
             walk(key, out);
@@ -1060,7 +1063,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
 /// with a rhs that's typically not int32-producing, so mutably-captured
 /// locals naturally fall out. Read-only captures remain qualified.
 pub fn is_clamp_call(e: &perry_hir::Expr, clamp_fn_ids: &HashSet<u32>) -> bool {
-    if let perry_hir::Expr::Call { callee, .. } = e {
+    if let perry_hir::Expr::Call { callee, .. } | perry_hir::Expr::RegionCall { callee, .. } = e {
         if let perry_hir::Expr::FuncRef(fid) = callee.as_ref() {
             return clamp_fn_ids.contains(fid);
         }

@@ -138,6 +138,7 @@ pub(crate) fn lower_module_decl(
                     }
                     let id = ctx.define_local(local.clone(), Type::Any);
                     module.init.push(Stmt::Let {
+                        byte_offset: import_decl.span.lo.0,
                         id,
                         name: local,
                         ty: Type::Any,
@@ -308,7 +309,13 @@ pub(crate) fn lower_module_decl(
                                 ctx.native_import_value_origins
                                     .insert(local.clone(), (source.clone(), imported.clone()));
                             }
-                            init_named_cell(module, &source, &imported, native_method.as_ref());
+                            init_named_cell(
+                                module,
+                                &source,
+                                &imported,
+                                native_method.as_ref(),
+                                named.span.lo.0,
+                            );
                             ctx.register_native_module(local.clone(), native_module, native_method);
                             // #1991: `perry/ui` exposes these as numeric
                             // `const enum`s in `types/perry/ui/index.d.ts`.
@@ -1255,6 +1262,7 @@ pub(crate) fn lower_module_decl(
                             };
                             ctx.record_local_source_span(id, decl.name.span());
                             module.init.push(Stmt::Let {
+                                byte_offset: decl.span.lo.0,
                                 id,
                                 name: name.clone(),
                                 ty,
@@ -1341,6 +1349,7 @@ pub(crate) fn lower_module_decl(
                             };
                             ctx.record_local_source_span(id, decl.name.span());
                             module.init.push(Stmt::Let {
+                                byte_offset: decl.span.lo.0,
                                 id,
                                 name: name.clone(),
                                 ty,
@@ -1551,7 +1560,13 @@ pub(crate) fn lower_module_decl(
                                             local
                                         );
                                     }
-                                    init_named_cell(module, &native_source, &local, Some(&local));
+                                    init_named_cell(
+                                        module,
+                                        &native_source,
+                                        &local,
+                                        Some(&local),
+                                        named.span.lo.0,
+                                    );
                                 }
                                 let synthetic_local =
                                     format!("__perry_builtin_reexport_{}", ctx.fresh_local());
@@ -1644,7 +1659,10 @@ pub(crate) fn lower_module_decl(
                         }
 
                         let local = default_export_binding::materialize_native_default_alias(
-                            ctx, module, &local,
+                            ctx,
+                            module,
+                            &local,
+                            named.span.lo.0,
                         );
                         module.exports.push(Export::Named {
                             local: local.clone(),
@@ -2016,6 +2034,7 @@ pub(crate) fn lower_module_decl(
                 // For other expressions (closures, calls, etc.), create a synthetic "default" variable
                 let id = ctx.define_local("default".to_string(), Type::Any);
                 module.init.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id,
                     name: "default".to_string(),
                     ty: Type::Any,

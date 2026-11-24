@@ -34,7 +34,7 @@ pub(crate) fn emit_for_each(
             // The closure body is a Vec<Stmt>; we expect a single return-
             // expr or expression-statement. Take the first Expr we find.
             let body_expr = body.iter().find_map(|s| match s {
-                Stmt::Return(Some(e)) => Some(e.clone()),
+                Stmt::Return(Some(e), _) => Some(e.clone()),
                 Stmt::Expr(e) => Some(e.clone()),
                 _ => None,
             });

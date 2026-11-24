@@ -66,7 +66,7 @@ fn proven_receiver_clone_benefit_sites(
                 matches!(target.as_ref(), Expr::This)
                     && matches!(key.as_ref(), Expr::String(k) if chain_fields.contains(k.as_str()))
             }
-            Expr::Call { callee, .. } => matches!(
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. }
                     if matches!(object.as_ref(), Expr::This)

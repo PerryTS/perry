@@ -52,6 +52,7 @@ pub fn rewrite_break_continue_in_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                byte_offset,
             } if switch_cases_have_loop_continue(&cases) => {
                 // Replace the switch (currently a placeholder after the
                 // mem::replace) with its if-chain desugar and reprocess from
@@ -59,7 +60,8 @@ pub fn rewrite_break_continue_in_stmts(
                 // so this rewriter descends them and converts the loop-level
                 // `continue`s to sentinels; `break`s were already folded
                 // into the desugar's done-flag.
-                let desugared = desugar_switch_to_ifs(&discriminant, &cases, next_local_id);
+                let desugared =
+                    desugar_switch_to_ifs(&discriminant, &cases, byte_offset, next_local_id);
                 stmts.splice(i..=i, desugared);
             }
             mut other => {
@@ -283,7 +285,7 @@ pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
                 init: Some(Expr::Yield { .. }),
                 ..
             } => return true,
-            Stmt::Return(Some(Expr::Yield { .. })) => return true,
+            Stmt::Return(Some(Expr::Yield { .. }), _) => return true,
             // #6728: in an async generator, a statement-level `await` (post
             // `hoist_awaits_in_stmts`: bare / `let =` / `return` / `throw`) is a
             // suspend point too — it must be split into its own state via
@@ -298,17 +300,19 @@ pub fn body_contains_yield(stmts: &[Stmt]) -> bool {
             // generators — plain async fns rewrite `await`→`yield` upstream),
             // so plain generators / async functions are unaffected. Mirrors the
             // four `Expr::Await` statement arms in `linearize.rs`.
-            Stmt::Expr(Expr::Await(_)) if super::linearize::linearize_async_generator() => {
+            Stmt::Expr(Expr::Await(_, _)) if super::linearize::linearize_async_generator() => {
                 return true
             }
             Stmt::Let {
-                init: Some(Expr::Await(_)),
+                init: Some(Expr::Await(_, _)),
                 ..
             } if super::linearize::linearize_async_generator() => return true,
-            Stmt::Return(Some(Expr::Await(_))) if super::linearize::linearize_async_generator() => {
+            Stmt::Return(Some(Expr::Await(_, _)), _)
+                if super::linearize::linearize_async_generator() =>
+            {
                 return true
             }
-            Stmt::Throw(Expr::Await(_)) if super::linearize::linearize_async_generator() => {
+            Stmt::Throw(Expr::Await(_, _)) if super::linearize::linearize_async_generator() => {
                 return true
             }
             Stmt::If {
@@ -584,6 +588,7 @@ fn stmts_have_loop_level_continue(stmts: &[Stmt]) -> bool {
 pub fn desugar_switch_to_ifs(
     discriminant: &Expr,
     cases: &[SwitchCase],
+    byte_offset: u32,
     next_local_id: &mut u32,
 ) -> Vec<Stmt> {
     let n = cases.len();
@@ -596,6 +601,7 @@ pub fn desugar_switch_to_ifs(
     let done_id = alloc_local(next_local_id);
 
     let idx_is_unmatched = || Expr::Compare {
+        byte_offset,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(idx_id)),
         right: Box::new(Expr::Number(unmatched)),
@@ -624,6 +630,7 @@ pub fn desugar_switch_to_ifs(
                 Stmt::Expr(Expr::LocalSet(t_id, Box::new(test.clone()))),
                 Stmt::If {
                     condition: Expr::Compare {
+                        byte_offset,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(d_id)),
                         right: Box::new(Expr::LocalGet(t_id)),
@@ -656,12 +663,14 @@ pub fn desugar_switch_to_ifs(
         guard_switch_breaks(&case.body, done_id, &mut guarded);
         out.push(Stmt::If {
             condition: Expr::Logical {
+                byte_offset,
                 op: LogicalOp::And,
                 left: Box::new(Expr::Unary {
                     op: UnaryOp::Not,
                     operand: Box::new(Expr::LocalGet(done_id)),
                 }),
                 right: Box::new(Expr::Compare {
+                    byte_offset,
                     op: CompareOp::Le,
                     left: Box::new(Expr::LocalGet(idx_id)),
                     right: Box::new(Expr::Number(i as f64)),
@@ -767,7 +776,9 @@ fn rewrite_switch_breaks_in_stmt(s: &Stmt, done_id: LocalId) -> Stmt {
             catch,
             finally,
             forof_completion,
+            byte_offset,
         } => Stmt::Try {
+            byte_offset: *byte_offset,
             body: guarded(body),
             catch: catch.as_ref().map(|c| CatchClause {
                 param: c.param.clone(),
@@ -923,6 +934,7 @@ fn escape_set(carrier: LocalId, value: f64) -> Stmt {
 
 fn escape_is(carrier: LocalId, op: CompareOp, value: f64) -> Expr {
     Expr::Compare {
+        byte_offset: 0, /*HPOS*/
         op,
         left: Box::new(Expr::LocalGet(carrier)),
         right: Box::new(Expr::Number(value)),
@@ -1113,11 +1125,17 @@ fn rewrite_escape_in_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                byte_offset,
             } if cases
                 .iter()
                 .any(|c| stmts_can_escape_to_label(&c.body, label)) =>
             {
-                Some(desugar_switch_to_ifs(discriminant, cases, next_local_id))
+                Some(desugar_switch_to_ifs(
+                    discriminant,
+                    cases,
+                    *byte_offset,
+                    next_local_id,
+                ))
             }
             _ => None,
         };

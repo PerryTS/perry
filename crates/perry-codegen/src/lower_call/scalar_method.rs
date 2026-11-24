@@ -57,7 +57,9 @@ fn collect_guarded_numeric_arg_locals(ctx: &FnCtx<'_>, arg: &Expr) -> Option<Vec
             Expr::Unary { op, operand } => {
                 matches!(op, UnaryOp::Pos | UnaryOp::Neg) && walk(ctx, operand, locals)
             }
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 matches!(
                     op,
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
@@ -164,7 +166,9 @@ fn lower_guarded_numeric_arg_fast(
                 _ => bail!("unsupported guarded scalar method unary arg"),
             })
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let left = lower_guarded_numeric_arg_fast(ctx, left, raw_locals)?;
             let right = lower_guarded_numeric_arg_fast(ctx, right, raw_locals)?;
             Ok(match op {
@@ -363,7 +367,7 @@ fn lower_scalar_method_inline_body(
             {
                 lower_expr(ctx, expr)?;
             }
-            perry_hir::Stmt::Return(Some(expr)) => {
+            perry_hir::Stmt::Return(Some(expr), _) => {
                 result = Some(lower_expr(ctx, expr)?);
                 break;
             }
@@ -463,7 +467,7 @@ fn lower_scalar_method_int32_inline_body(
                 ctx.local_types.insert(*id, ty.clone());
                 ctx.proven_local_types.insert(*id, Type::Int32);
             }
-            perry_hir::Stmt::Return(Some(expr)) => {
+            perry_hir::Stmt::Return(Some(expr), _) => {
                 raw_i32 = Some(lower_expr_as_i32(ctx, expr)?);
                 break;
             }

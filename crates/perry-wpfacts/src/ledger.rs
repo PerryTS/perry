@@ -503,12 +503,23 @@ pub(crate) fn hir_kind(e: &Expr) -> Option<&'static str> {
     Some(match e {
         Expr::PropertyGet { .. } => "property",
         Expr::IndexGet { .. } => "element",
+        // A dead-zone check is its own kind of operation (not a call of the
+        // program): it may share its start with the call around it.
+        Expr::Call { .. } if perry_hir::tdz_check::is_dead_zone_op(e) => "tdz-check",
         Expr::Call { .. } | Expr::CallSpread { .. } => "value-call",
         Expr::New { .. } | Expr::NewDynamic { .. } | Expr::NewDynamicSpread { .. } => "new",
         Expr::PropertySet { .. } => "write",
         Expr::IndexSet { .. } => "element-write",
         Expr::PropertyUpdate { .. } => "update",
         Expr::IndexUpdate { .. } => "element-update",
+        // The PutValue store (13.15.2): the analysis walks it as the member
+        // or element write it performs, a copy of this one source operation
+        // (named key: `write`; computed key: `element-write`), which pairs
+        // with it here.
+        Expr::PutValueSet { key, .. } => match key.as_ref() {
+            Expr::String(_) => "write",
+            _ => "element-write",
+        },
         _ => return None,
     })
 }
@@ -569,6 +580,11 @@ fn span(e: &Expr) -> (u32, u32) {
             byte_offset,
             byte_end,
             ..
+        }
+        | Expr::PutValueSet {
+            byte_offset,
+            byte_end,
+            ..
         } => (*byte_offset, *byte_end),
         _ => (0, 0),
     }
@@ -583,7 +599,7 @@ fn span(e: &Expr) -> (u32, u32) {
 /// with a source span that pairs with no HIR site) must be 0.
 pub(crate) fn census(
     modules: &[(&str, &Module)],
-    sites: &[(usize, &'static str, u32)],
+    sites: &[(usize, String, &'static str, u32)],
 ) -> Vec<String> {
     use crate::diagnostics::quote;
     let recorded: FxHashSet<usize> = sites.iter().map(|s| s.0).collect();
@@ -610,20 +626,18 @@ pub(crate) fn census(
             }
         });
     }
-    // A recorded expression no module holds: one the analysis made itself
-    // (literal-birth stores, no source coordinate), or its own copy of a
+    // A recorded expression no module holds: the analysis's own copy of a
     // HIR body (a CJS wrapper, a run-once body). A copy pairs with the
-    // unrecorded HIR site of the same kind and start; the rest are gaps.
-    let mut made = FxHashSet::default();
-    let mut copies: BTreeMap<(&str, u32), FxHashSet<usize>> = BTreeMap::new();
+    // unrecorded HIR site of the same identity (module, kind, start); the
+    // rest are strays.
+    let mut copies: BTreeMap<(&str, &str, u32), FxHashSet<usize>> = BTreeMap::new();
     for s in sites.iter().filter(|s| !seen.contains(&s.0)) {
-        if s.2 == 0 {
-            made.insert(s.0);
-        } else {
-            copies.entry((s.1, s.2)).or_default().insert(s.0);
-        }
+        copies
+            .entry((s.1.as_str(), s.2, s.3))
+            .or_default()
+            .insert(s.0);
     }
-    let mut paired: BTreeMap<(&str, u32), usize> = BTreeMap::new();
+    let mut paired: BTreeMap<(&str, &str, u32), usize> = BTreeMap::new();
     let mut out = Vec::new();
     // kind -> (hir, recorded, recorded through a copy, callee-of-call, unrecorded)
     let mut counts: BTreeMap<&'static str, [u64; 5]> = BTreeMap::new();
@@ -634,9 +648,9 @@ pub(crate) fn census(
             c[1] += 1;
             continue;
         }
-        let k = (kind, start);
+        let k = (path, kind, start);
         let have = copies.get(&k).map_or(0, |s| s.len());
-        let reason = if start != 0 && paired.get(&k).copied().unwrap_or(0) < have {
+        let reason = if paired.get(&k).copied().unwrap_or(0) < have {
             *paired.entry(k).or_default() += 1;
             c[2] += 1;
             continue;
@@ -651,7 +665,8 @@ pub(crate) fn census(
             "{{\"record\":\"site\",\"file\":{},\"start\":{start},\"end\":{end},\"kind\":{},\"origin\":{},\"verdict\":\"not-a-site\",\"reason\":{}}}",
             quote(path),
             quote(kind),
-            quote(if start == 0 { "synthesized" } else { "source" }),
+            // No source position: a lowering gap, not a kind of site.
+            quote(if start == 0 { "unlocated" } else { "source" }),
             quote(reason)
         ));
     }
@@ -661,9 +676,10 @@ pub(crate) fn census(
         if left > 0 {
             stray += left;
             out.push(format!(
-                "{{\"record\":\"stray\",\"kind\":{},\"start\":{},\"count\":{left}}}",
+                "{{\"record\":\"stray\",\"file\":{},\"kind\":{},\"start\":{},\"count\":{left}}}",
                 quote(k.0),
-                k.1
+                quote(k.1),
+                k.2
             ));
         }
     }
@@ -674,8 +690,7 @@ pub(crate) fn census(
         ));
     }
     out.push(format!(
-        "{{\"record\":\"completeness\",\"kind\":\"*\",\"recordedNotInHir\":{stray},\"analysisSynthesized\":{}}}",
-        made.len()
+        "{{\"record\":\"completeness\",\"kind\":\"*\",\"recordedNotInHir\":{stray}}}"
     ));
     out
 }

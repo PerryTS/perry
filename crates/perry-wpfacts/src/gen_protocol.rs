@@ -178,7 +178,7 @@ impl<'a> Gen<'a> {
     /// `v[Symbol.iterator]()`, then `.next()` on the result and on `v`
     /// itself, then `.value`.
     pub(crate) fn iterate(&mut self, v: NodeId) -> NodeId {
-        self.iterate_with(v, false)
+        self.iterate_with(v, false).0
     }
 
     /// `iterate` by a consumer that can stop before the iterator is done:
@@ -189,11 +189,16 @@ impl<'a> Gen<'a> {
     /// iterator (IteratorClose, ECMA-262 7.4.11): `return` is called on it,
     /// a protocol call as the for-of record's close is (`gen/glue.rs`).
     pub(crate) fn iterate_closed(&mut self, v: NodeId) -> NodeId {
+        self.iterate_closed_with_iterator(v).0
+    }
+
+    /// `iterate_closed`, with the iterator `v[Symbol.iterator]()` returned.
+    pub(crate) fn iterate_closed_with_iterator(&mut self, v: NodeId) -> (NodeId, NodeId) {
         let close = self.m.reach_iter_close;
         self.iterate_with(v, close)
     }
 
-    fn iterate_with(&mut self, v: NodeId, close: bool) -> NodeId {
+    fn iterate_with(&mut self, v: NodeId, close: bool) -> (NodeId, NodeId) {
         let out = self.tmp("iterated");
         let ik = self.m.iter_key();
         self.m.cons(v, Cons::Load { key: ik, dst: out });
@@ -228,7 +233,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(recv, Cons::MCall { key: ra, call: rc });
             }
         }
-        out
+        (out, it)
     }
 
     /// The consumer's read of `done` on the step results in `result`
@@ -237,6 +242,35 @@ impl<'a> Gen<'a> {
         if let Some(d) = self.m.step_done(result) {
             self.m.own(d);
         }
+    }
+
+    /// `new.target` (ECMA-262 13.3.12.1): the constructor whose body reads it,
+    /// a class derived from another value (`super()` passes its own target
+    /// along), a `Reflect.construct` new target, or what unknown code gives.
+    pub(crate) fn new_target_value(&mut self, fx: &Fx) -> NodeId {
+        let out = self.tmp("new-target");
+        let top = self.m.top_val("new.target");
+        self.m.edge(top, out);
+        self.m.edge(self.m.reflect_new_targets, out);
+        for (mi, (_, module)) in self.modules.iter().enumerate() {
+            for c in &module.classes {
+                let derived = c.extends.is_some()
+                    || c.extends_name.is_some()
+                    || c.extends_expr.is_some()
+                    || c.native_extends.is_some();
+                if let Some(&tm) = self.mods[mi].classes.get(&c.name) {
+                    if derived || fx.class == Some(tm) {
+                        let t = self.m.tok(TokKind::ClassObj(tm));
+                        self.m.add_tok(out, t);
+                    }
+                }
+            }
+        }
+        if let Some(f) = fx.new_target {
+            let t = self.m.tok(TokKind::Func(f, NO_CTX));
+            self.m.add_tok(out, t);
+        }
+        out
     }
 
     /// What `v[Symbol.iterator]()` returns (GetIterator, ECMA-262 7.4.3):

@@ -11,6 +11,7 @@ use perry_hir::{Expr, Function, Module as HirModule, Stmt};
 fn push_ir(value: Expr) -> String {
     let mut hir = HirModule::new("apush_string_gate_test");
     hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "pushes".to_string(),
         type_params: Vec::new(),
@@ -18,6 +19,7 @@ fn push_ir(value: Expr) -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 0,
                 name: "a".to_string(),
                 ty: Type::Any,
@@ -29,7 +31,7 @@ fn push_ir(value: Expr) -> String {
                 value: Box::new(value),
                 field_writeback: None,
             }),
-            Stmt::Return(Some(Expr::LocalGet(0))),
+            Stmt::Return(Some(Expr::LocalGet(0)), 0),
         ],
         is_async: false,
         is_generator: false,

@@ -7,6 +7,7 @@ use super::{group_scope_boxes, ScopeMap};
 
 fn let_num(id: u32, v: f64) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Number,
@@ -23,6 +24,7 @@ fn mutating_closure(func_id: u32, ids: &[u32]) -> Expr {
             Stmt::Expr(Expr::LocalSet(
                 id,
                 Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: perry_hir::BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(id)),
                     right: Box::new(Expr::Number(1.0)),
@@ -30,8 +32,9 @@ fn mutating_closure(func_id: u32, ids: &[u32]) -> Expr {
             ))
         })
         .collect();
-    body.push(Stmt::Return(ids.last().map(|id| Expr::LocalGet(*id))));
+    body.push(Stmt::Return(ids.last().map(|id| Expr::LocalGet(*id)), 0));
     Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -51,6 +54,7 @@ fn mutating_closure(func_id: u32, ids: &[u32]) -> Expr {
 
 fn function(id: u32, body: Vec<Stmt>) -> Function {
     Function {
+        byte_offset: 0,
         id,
         name: format!("probe{id}"),
         type_params: Vec::new(),
@@ -91,13 +95,14 @@ fn wide_body(n: u32) -> Vec<Stmt> {
     let ids: Vec<u32> = (10..10 + n).collect();
     let mut body: Vec<Stmt> = ids.iter().map(|&id| let_num(id, id as f64)).collect();
     body.push(Stmt::Let {
+        byte_offset: 0,
         id: 9,
         name: "f".to_string(),
         ty: Type::Any,
         mutable: false,
         init: Some(mutating_closure(100, &ids)),
     });
-    body.push(Stmt::Return(Some(Expr::LocalGet(9))));
+    body.push(Stmt::Return(Some(Expr::LocalGet(9)), 0));
     body
 }
 
@@ -193,6 +198,7 @@ fn the_map_follows_the_group_statements() {
 /// skips case 1's `let`, so the home never ran there.
 fn switch_read_from_next_case(case1: Vec<Stmt>) -> Vec<Stmt> {
     vec![Stmt::Switch {
+        byte_offset: 0,
         discriminant: Expr::Number(2.0),
         cases: vec![
             perry_hir::SwitchCase {
@@ -201,9 +207,10 @@ fn switch_read_from_next_case(case1: Vec<Stmt>) -> Vec<Stmt> {
             },
             perry_hir::SwitchCase {
                 test: Some(Expr::Number(2.0)),
-                body: vec![Stmt::Return(Some(Expr::TypeOf(Box::new(Expr::LocalGet(
-                    7,
-                )))))],
+                body: vec![Stmt::Return(
+                    Some(Expr::TypeOf(Box::new(Expr::LocalGet(7)))),
+                    0,
+                )],
             },
         ],
     }]
@@ -248,11 +255,11 @@ fn a_reference_in_the_last_statement_of_the_home_list_still_groups() {
         Stmt::PreallocateBoxes(vec![7]),
         let_num(7, 5.0),
         Stmt::Expr(mutating_closure(100, &[7])),
-        Stmt::Return(Some(Expr::LocalGet(7))),
+        Stmt::Return(Some(Expr::LocalGet(7)), 0),
     ]));
     // Drop case 2's read: only the in-list references remain.
     if let Stmt::Switch { cases, .. } = &mut module.functions[0].body[0] {
-        cases[1].body = vec![Stmt::Return(None)];
+        cases[1].body = vec![Stmt::Return(None, 0)];
     }
     group_scope_boxes(&mut module);
     let boxed = crate::codegen::boxed_locals::collect_module_boxed_vars(&module);
@@ -338,6 +345,7 @@ fn a_reassigned_scoped_array_keeps_only_a_guarded_read_claim() {
     }
     let mut module = module_with(vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "items".into(),
             ty: Type::Array(Box::new(Type::Any)),
@@ -394,10 +402,11 @@ fn writes_before_every_capture_need_no_cell() {
         let_num(1, 0.0),
         Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Number(5.0)))),
         Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 100,
             params: Vec::new(),
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::LocalGet(1)))],
+            body: vec![Stmt::Return(Some(Expr::LocalGet(1)), 0)],
             captures: vec![1],
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -430,7 +439,7 @@ pub(super) fn pointer_scope_store_ir() -> String {
                 if let Some(Expr::Closure { body, .. }) = init {
                     *body = vec![
                         Stmt::Expr(Expr::LocalSet(10, Box::new(Expr::LocalGet(11)))),
-                        Stmt::Return(Some(Expr::LocalGet(10))),
+                        Stmt::Return(Some(Expr::LocalGet(10)), 0),
                     ];
                 }
             }
@@ -510,6 +519,7 @@ fn group_root_clears_around_write(late: u32) -> (usize, usize) {
         let_num(10, 1.0),
         let_num(11, 2.0),
         Stmt::Let {
+            byte_offset: 0,
             id: 9,
             name: "f".to_string(),
             ty: Type::Any,
@@ -518,7 +528,7 @@ fn group_root_clears_around_write(late: u32) -> (usize, usize) {
         },
         Stmt::Expr(Expr::LocalSet(late, Box::new(Expr::Number(42.0)))),
         Stmt::Expr(Expr::LocalGet(9)),
-        Stmt::Return(Some(Expr::LocalGet(9))),
+        Stmt::Return(Some(Expr::LocalGet(9)), 0),
     ]);
     group_scope_boxes(&mut module);
     let boxed = crate::codegen::boxed_locals::collect_module_boxed_vars(&module);
