@@ -1956,6 +1956,16 @@ impl Model {
                     ChainAct::Store(..) | ChainAct::Lookup { .. } => {}
                 }
             }
+            if let ChainAct::Store(src, region) = act {
+                self.realm_setter_hit(origin, holder, a, src, region);
+            }
+        }
+        if let (Key::Any(_), ChainAct::Store(src, region)) = (key, act) {
+            for a in self.with_b(|m| builtins::realm_proto_setter_keys(m, holder)) {
+                if self.key_may_name(key, a) {
+                    self.realm_setter_hit(origin, holder, a, src, region);
+                }
+            }
         }
         // A key whose shape splits the holder (`shape_splits`) runs only the
         // accessors named by a name it admits, and the computed-name ones.
@@ -1995,6 +2005,43 @@ impl Model {
         }
         self.acc_group(holder, key);
         self.group_hit(origin, holder, key, act);
+    }
+
+    /// A store from `origin` under `a` finds a realm accessor on the chain
+    /// of realm prototype `holder`: its declared setter runs with `origin`
+    /// as `this` (ECMA-262 10.1.9.2 step 7). A setter the realm declares no
+    /// effects for, or none (a getter-only accessor), is an explicit stop:
+    /// the seed names the accessor, the stored value escapes and what the
+    /// setter does to the receiver is unknown.
+    fn realm_setter_hit(&mut self, origin: Tok, holder: Tok, a: Atom, src: NodeId, region: NodeId) {
+        match builtins::realm_proto_setter(self, holder, a) {
+            None => {}
+            Some(builtins::RealmSetter::Declared(e)) => {
+                self.with_b(|m| builtins::realm_setter_store(m, e, origin, a, src))
+            }
+            Some(builtins::RealmSetter::Undeclared(what)) => {
+                let reason = self.reason(&format!(
+                    "stored through realm accessor {what} whose setter the realm does not declare"
+                ));
+                self.cons(src, Cons::TopSink { reason });
+                let v = self.node_l("realm-setter-undeclared");
+                self.add_top(v, |_| {
+                    format!("store through realm accessor {what}: setter effects undeclared")
+                });
+                let n = self.node_l("realm-setter-this");
+                self.add_tok(n, origin);
+                let site = self.anon_post_site("undeclared realm setter");
+                self.cons(
+                    n,
+                    Cons::Store {
+                        key: Key::any(),
+                        src: v,
+                        site,
+                        region,
+                    },
+                );
+            }
+        }
     }
 
     /// One lookup from `origin` reaches group (holder, key).

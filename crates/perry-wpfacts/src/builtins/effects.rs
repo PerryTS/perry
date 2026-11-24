@@ -327,6 +327,17 @@ pub(super) fn getter_load(m: &mut Model, e: &'static RealmEntry, t: Tok, a: Atom
     m.edge(ret, dst);
 }
 
+/// `src` stored through declared setter `e` of key `a` on receiver `t`
+/// (ECMA-262 10.1.9.2 step 7: Call(setter, Receiver, « V »)).
+pub(super) fn setter_run(m: &mut Model, e: &'static RealmEntry, t: Tok, a: Atom, src: NodeId) {
+    let (call, made) = super::collections::setter_call(m, t, a);
+    if made {
+        run_native(m, e, t, call);
+    }
+    let arg = m.calls[call as usize].args[0];
+    m.edge(src, arg);
+}
+
 /// The declaration of setter `key` of `proto` (`AbortSignal.prototype`,
 /// `onabort`), when it only keeps its argument in a slot of its receiver
 /// (an event handler's internal slot): a store through it writes that slot

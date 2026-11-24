@@ -129,3 +129,45 @@ fn an_imported_binding_shadowing_a_realm_ctor_name_links_no_realm_parent() {
         ),
     ]);
 }
+
+const EVENT: &str = "class E2 extends Event { }\nclass D { }\nclass H { v: any = 0; }\nconst e: any = new E2(\"x\");\nconst h = new H();\n";
+
+fn h_v(src: &str) -> crate::derive::KindFact {
+    let pf = facts(&format!("{EVENT}{src}\nconsole.log(h.v);\n"));
+    field(tmpl(&pf, "H"), "v").kind.clone()
+}
+
+/// A store through a realm accessor runs its setter, not an own data
+/// definition (ECMA-262 10.1.9.2 step 7). `Event.prototype.returnValue`'s
+/// setter declares no effects: an explicit stop (its seed), never the
+/// stored value read back as an own field.
+#[test]
+fn a_store_through_an_undeclared_realm_setter_is_an_explicit_stop() {
+    let k = h_v("e.returnValue = new D();\nh.v = e.returnValue;");
+    assert!(k.top, "{k:?}");
+}
+
+/// A getter-only realm accessor (`Event.prototype.type`) has no setter to
+/// run: the store is an explicit stop too.
+#[test]
+fn a_store_through_a_getter_only_realm_accessor_is_an_explicit_stop() {
+    let k = h_v("e.type = new D();\nh.v = e.type;");
+    assert!(k.top, "{k:?}");
+}
+
+/// A computed key may name any setter of the realm chain.
+#[test]
+fn a_computed_key_store_reaches_the_realm_setters_it_may_name() {
+    let k = h_v("const k: string = process.argv[2];\ne[k] = new D();\nh.v = e.returnValue;");
+    assert!(k.top, "{k:?}");
+}
+
+/// A key no realm accessor holds stays the instance's own data property.
+#[test]
+fn an_own_key_store_on_a_realm_subclass_instance_is_its_own_field() {
+    let k = h_v("e.mine = new D();\nh.v = e.mine;");
+    assert!(
+        !k.top && k.objs.len() == 1 && k.objs[0].ends_with(":D"),
+        "{k:?}"
+    );
+}

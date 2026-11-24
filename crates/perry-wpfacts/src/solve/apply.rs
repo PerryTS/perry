@@ -1313,7 +1313,14 @@ impl Model {
                             .or_default()
                             .push((origin, act));
                     }
-                    if q != TOP && self.accessor_keys.get(&q).is_some_and(|k| !k.is_empty()) {
+                    // A realm prototype's setters run for a computed-key
+                    // store the key may name (`realm_setter_hit`).
+                    let realm_store = matches!(act, ChainAct::Store(..))
+                        && builtins::realm_proto_of(self, q).is_some();
+                    if q != TOP
+                        && (realm_store
+                            || self.accessor_keys.get(&q).is_some_and(|k| !k.is_empty()))
+                    {
                         self.accessor_hit(origin, q, Key::any(), act);
                     }
                 }

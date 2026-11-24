@@ -2902,7 +2902,7 @@ pub(crate) fn realm_proto_value(
     let mut at = Some(born);
     while let Some(e) = at {
         for o in e.own.iter() {
-            if realm_chain_getter(born, o).is_some() {
+            if realm_chain_getter(born, o).is_some() || realm_chain_setter(born, o).is_some() {
                 let n = match (o.symbol, o.key.strip_prefix("@@")) {
                     (true, Some(wk)) => format!("{WK_PREFIX}{wk}"),
                     (true, None) => continue,
@@ -2961,6 +2961,87 @@ fn realm_chain_getter(
         }
         _ => None,
     }
+}
+
+/// What a store through own accessor `o` of `born`'s chain runs when the
+/// lookup of its key finds `o` (ECMA-262 10.1.9.2 OrdinarySetWithOwnDescriptor
+/// steps 3-7): its setter. `Object.prototype`'s (`__proto__`) is not one:
+/// that object is its own token on every chain, whose accessor the Annex B
+/// lookups run (`accessor_lookup`).
+fn realm_chain_setter(
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    o: &perry_hir::realm_manifest::RealmOwn,
+) -> Option<RealmSetter> {
+    use perry_hir::realm_manifest::RealmOwnValue;
+    let RealmOwnValue::Accessor { set, .. } = o.value else {
+        return None;
+    };
+    let name = match (o.symbol, o.key.strip_prefix("@@")) {
+        (true, Some(wk)) => format!("{WK_PREFIX}{wk}"),
+        (true, None) => return None,
+        (false, _) => o.key.to_string(),
+    };
+    let members::RealmFind::Own(p, owner) = members::realm_chain_find(born, &name) else {
+        return None;
+    };
+    if !std::ptr::eq(p, o) || owner.name == "Object.prototype" {
+        return None;
+    }
+    Some(
+        match set
+            .and_then(members::realm_entry)
+            .filter(|e| !e.effects.is_empty() && effects::interpretable(e.effects))
+        {
+            Some(e) => RealmSetter::Declared(e),
+            None => RealmSetter::Undeclared(format!("{}.{name}", owner.name)),
+        },
+    )
+}
+
+/// The setter a store finds on a realm prototype's chain.
+pub(crate) enum RealmSetter {
+    /// Declared effects: they run with the receiver as `this` and the
+    /// stored value as the argument (`realm_setter_store`).
+    Declared(&'static perry_hir::realm_manifest::RealmEntry),
+    /// No setter, or one without declared effects: the accessor's name.
+    Undeclared(String),
+}
+
+/// The setter of key `a` on the chain of realm prototype token `holder`.
+pub(crate) fn realm_proto_setter(m: &Model, holder: Tok, a: Atom) -> Option<RealmSetter> {
+    let born = realm_proto_of(m, holder)?;
+    let members::RealmFind::Own(p, _) = members::realm_chain_find(born, &m.atoms[a as usize])
+    else {
+        return None;
+    };
+    realm_chain_setter(born, p)
+}
+
+/// The keys of `holder`'s realm chain a store finds a realm setter under
+/// (`realm_proto_setter`), as atoms.
+pub(crate) fn realm_proto_setter_keys(m: &mut Model, holder: Tok) -> Vec<Atom> {
+    let Some(born) = realm_proto_of(m, holder) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for k in members::realm_chain_keys(born) {
+        let a = m.atom(&k);
+        if realm_proto_setter(m, holder, a).is_some() {
+            out.push(a);
+        }
+    }
+    out
+}
+
+/// Setter `e` runs on receiver `origin` with `src` as its argument.
+pub(crate) fn realm_setter_store(
+    m: &mut Model,
+    e: &'static perry_hir::realm_manifest::RealmEntry,
+    origin: Tok,
+    a: Atom,
+    src: NodeId,
+) {
+    effects::setter_run(m, e, origin, a, src);
 }
 
 /// The getter the realm declares for key `a` on the chain of realm
