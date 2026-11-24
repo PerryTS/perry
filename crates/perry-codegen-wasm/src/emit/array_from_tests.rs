@@ -79,3 +79,44 @@ inAsync();
         "closed\nat 2 2\n1,2\nat 2 2\n1,2"
     );
 }
+
+// A mapFn that is not callable is a TypeError, even for an empty source; an undefined
+// one maps nothing. Expected output is Node's.
+#[test]
+fn array_from_with_a_non_callable_map_fn_throws_type_error() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const bad: any[] = [42, {}, "x", null, Symbol("s")];
+function sync(): string {
+  const out: string[] = [];
+  for (const f of bad) {
+    try {
+      out.push(JSON.stringify(Array.from([1, 2], f)));
+    } catch (e: any) {
+      out.push((e instanceof TypeError) + ":" + e.message);
+    }
+  }
+  try {
+    out.push(JSON.stringify(Array.from([], bad[0])));
+  } catch (e: any) {
+    out.push((e instanceof TypeError) + ":" + e.message);
+  }
+  out.push(JSON.stringify(Array.from([1, 2], undefined)));
+  return out.join(" | ");
+}
+async function inAsync(): Promise<string> {
+  const src = await Promise.resolve([1, 2]);
+  try {
+    return JSON.stringify(Array.from(src, bad[0]));
+  } catch (e: any) {
+    return (e instanceof TypeError) + ":" + e.message;
+  }
+}
+console.log(sync());
+inAsync().then((v) => console.log(v), (e) => console.log("rejected " + e.message));
+"#
+        ),
+        "true:number 42 is not a function | true:object is not a function | true:string \"x\" is not a function | true:object null is not a function | true:symbol is not a function | true:number 42 is not a function | [1,2]\ntrue:number 42 is not a function"
+    );
+}

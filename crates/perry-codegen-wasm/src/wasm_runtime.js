@@ -2545,10 +2545,16 @@ const __memDispatch = {
   array_is_array: (val) => Array.isArray(val) ? 1 : 0,
   array_from: (val) => Array.from(val),
   // `Array.from(value, mapFn, thisArg)`: mapFn receives (element, index), with `this`
-  // bound to thisArg. An undefined mapFn maps nothing. An exception mapFn left pending
-  // is thrown here, so the host stops and closes the iterator.
+  // bound to thisArg. An undefined mapFn maps nothing; any other value that is not
+  // callable is a TypeError before `value` is read. An exception mapFn left pending is
+  // thrown here, so the host stops and closes the iterator.
   array_from_mapped: (val, fn, thisArg) => {
     if (fn === undefined) return Array.from(val);
+    if (__typeOf(fn) !== 'function') {
+      const what = fn === null ? 'object null' : typeof fn === 'string' ? `string "${fn}"`
+        : ['object', 'bigint', 'symbol'].includes(typeof fn) ? typeof fn : `${typeof fn} ${fn}`;
+      throw new TypeError(`${what} is not a function`);
+    }
     return Array.from(val, (v, i) => {
       const mapped = __memDispatch.reflect_apply(fn, thisArg, [v, i]);
       __memDispatch.propagate_exception(true);
