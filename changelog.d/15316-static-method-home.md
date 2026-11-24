@@ -1,0 +1,1 @@
+Native: `super.m()` in a static method no longer throws "Cannot convert undefined or null to object" when the method runs through the declared class's own function object (a class declared in a function and evaluated more than once, or a static generator); the declared class's static method objects carry their home class like an evaluation's do (#15283).

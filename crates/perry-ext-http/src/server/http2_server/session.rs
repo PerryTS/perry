@@ -679,6 +679,56 @@ mod tests {
         );
     }
 
+    /// A request cancelled before its stream opened gets Node's
+    /// `ERR_HTTP2_STREAM_CANCEL`, naming the session's failure, and is closed.
+    #[test]
+    fn a_cancelled_pending_request_errors_with_the_cancel_code() {
+        let session_handle = register_handle(client_session(0));
+        let stream_handle = register_handle(Http2StreamHandle {
+            session_handle,
+            id: 0,
+            pending: true,
+            closed: false,
+            destroyed: false,
+            aborted: false,
+            rst_code: 0,
+            headers_sent: false,
+            sent_headers: Vec::new(),
+            request_headers: HashMap::new(),
+            listeners: HashMap::new(),
+            encoding: None,
+            response_status: 0,
+            response_headers: Vec::new(),
+            turnloop_conn: 0,
+            turnloop_responded: false,
+            request_started: true,
+        });
+        crate::server::http2_server::queue_turnloop_stream_cancel(stream_handle, "ECONNREFUSED");
+        let events = H2_PENDING_EVENTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let queued: Vec<(String, Option<String>)> = events
+            .iter()
+            .filter_map(|event| match event {
+                Http2PendingEvent::ClientError {
+                    handle: h,
+                    message,
+                    code,
+                } if *h == stream_handle => Some((message.clone(), code.clone())),
+                _ => None,
+            })
+            .collect();
+        drop(events);
+        assert_eq!(
+            queued,
+            vec![(
+                "The pending stream has been canceled (caused by: ECONNREFUSED)".to_string(),
+                Some("ERR_HTTP2_STREAM_CANCEL".to_string())
+            )]
+        );
+        assert!(get_handle::<Http2StreamHandle>(stream_handle).is_some_and(|s| s.closed));
+    }
+
     /// The per-request half of the deleted `h2` fallback: `session.request()` on
     /// a session that is not on turnloop used to build a SECOND private
     /// `current_thread` runtime and take an `h2::client::SendRequest`. With that

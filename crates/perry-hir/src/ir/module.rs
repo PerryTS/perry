@@ -325,6 +325,50 @@ impl Module {
                 || self.globals.iter().any(|g| g.name == name))
     }
 
+    /// The declared function an export publishes under another name
+    /// (`export const addRef = add`, `export { add as a2 }`): `exported_functions`
+    /// records the alias with the function's id.
+    pub fn function_alias_origin(&self, exported: &str) -> Option<&String> {
+        let (_, id) = self
+            .exported_functions
+            .iter()
+            .find(|(name, _)| name == exported)?;
+        self.functions
+            .iter()
+            .find(|f| f.id == *id && f.name != exported)
+            .map(|f| &f.name)
+    }
+
+    /// The exported declaration an importer of `exported` reads under another
+    /// name: a renamed class or an aliased declared function.
+    pub fn declared_export_origin<'a>(
+        &'a self,
+        local: &'a String,
+        exported: &str,
+    ) -> Option<&'a String> {
+        // An origin whose name publicly exports something else is not reachable
+        // by that name.
+        let taken = |name: &str| {
+            self.exports.iter().any(|export| {
+                matches!(export, Export::Named { local, exported }
+                    if exported == name && local != name)
+            })
+        };
+        let origin = self
+            .function_alias_origin(exported)
+            .filter(|name| !taken(name))
+            .unwrap_or(local);
+        let declared = self
+            .classes
+            .iter()
+            .any(|c| c.name == *local && c.is_exported)
+            || self
+                .functions
+                .iter()
+                .any(|f| f.name == *origin && f.is_exported);
+        (origin != exported && declared).then_some(origin)
+    }
+
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -398,3 +442,7 @@ impl Module {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "function_alias_origin_tests.rs"]
+mod function_alias_origin_tests;
