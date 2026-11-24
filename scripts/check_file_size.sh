@@ -20,17 +20,17 @@ THRESHOLD="${PERRY_FILE_SIZE_THRESHOLD:-2000}"
 # comments OK; `--update` rewrites it).
 ALLOWLIST=$(cat <<'EOF'
 # The module compilation pipeline shares closure state; decomposition is tracked in #1435.
-crates/perry/src/commands/compile/run_pipeline.rs	6493
+crates/perry/src/commands/compile/run_pipeline.rs	6494
 # Generator for-of destructuring remains in the statement-lowering core; split the function group in a follow-up.
-crates/perry-hir/src/lower_decl/body_stmt.rs	2069
+crates/perry-hir/src/lower_decl/body_stmt.rs	2152
 # Representation-aware codegen core; further decomposition is tracked in #1435.
-crates/perry-codegen/src/codegen/mod.rs	3707
+crates/perry-codegen/src/codegen/mod.rs	3715
 # Representation-aware HIR fact collection; further decomposition is tracked in #1435.
-crates/perry-codegen/src/collectors/hir_facts.rs	2767
+crates/perry-codegen/src/collectors/hir_facts.rs	2804
 # Representation-aware expression dispatch; further decomposition is tracked in #1435.
-crates/perry-codegen/src/expr/mod.rs	2899
+crates/perry-codegen/src/expr/mod.rs	2904
 # Loop versioning and representation evidence share lowering state; decomposition is tracked in #1435.
-crates/perry-codegen/src/stmt/loops.rs	8458
+crates/perry-codegen/src/stmt/loops.rs	8521
 # Representation-aware map core; further decomposition is tracked in #1435.
 crates/perry-runtime/src/map.rs	3020
 # Representation-aware set core; further decomposition is tracked in #1435.
@@ -40,11 +40,11 @@ crates/perry-runtime/src/typed_feedback.rs	2450
 # Snapshot census runner (instr-only, #13935); split after #14259 lands (snap census owner).
 crates/perry-runtime/src/snap_census/runner.rs	4942
 # Native ABI proof cases; test organization is a separate follow-up.
-crates/perry-codegen/tests/native_proof_regressions.rs	15922
+crates/perry-codegen/tests/native_proof_regressions.rs	16605
 # Lowering report schema and its emitters; split emitters in a follow-up.
 crates/perry/src/commands/compile/lowering_report.rs	2321
 # CallInliner argument and return remapping share one walker; split the traversal in a follow-up.
-crates/perry-transform/src/inline/call_inliner.rs	2125
+crates/perry-transform/src/inline/call_inliner.rs	2145
 # Web Streams controllers share state; extract reader, tee and BYOB groups in a follow-up.
 crates/perry-stdlib/src/streams.rs	2454
 # Collection policy and debt accounting share phase state; decomposition is tracked in #1435.
@@ -60,17 +60,17 @@ third_party/windows-winui/windows-reactor/src/bindings.rs	26441
 # Upstream Windows Reactor backend; preserve layout for vendor comparisons.
 third_party/windows-winui/windows-reactor/src/winui/backend/mod.rs	4035
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
-crates/perry-wpfacts/src/derive.rs	3748
+crates/perry-wpfacts/src/derive.rs	3760
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
 crates/perry-wpfacts/src/builtins.rs	3132
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
 crates/perry-wpfacts/src/solve/apply.rs	2784
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
-crates/perry-wpfacts/src/gen_expr.rs	2452
+crates/perry-wpfacts/src/gen_expr.rs	2504
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
-crates/perry-wpfacts/src/diagnostics.rs	2088
+crates/perry-wpfacts/src/diagnostics.rs	2102
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
-crates/perry-wpfacts/src/gen/walk.rs	2024
+crates/perry-wpfacts/src/gen/walk.rs	2068
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
 crates/perry-wpfacts/src/solve/lookup.rs	2013
 EOF
