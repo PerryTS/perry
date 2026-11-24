@@ -1377,9 +1377,11 @@ fn compound_member_assign_once(
     };
     let key_id = key.as_ref().map(|(id, _)| *id);
     let read = match (&prop, key_id) {
+        // 13.15.3 step 2: the compound's GetValue, at the member's offset;
+        // its PutValue below stands there too (one site pair, UpdateGet + Set).
         (Some(p), _) => Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: member.span.lo.0,
             object: Box::new(Expr::LocalGet(base_id)),
             property: p.clone(),
         },
@@ -1610,9 +1612,10 @@ pub(crate) fn hoist_compound_member_assign(
     }
 
     let read = match (&prop, key_id) {
+        // 13.15.3 step 2: the compound's GetValue, at the member's offset.
         (Some(p), _) => Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: member.span.lo.0,
             object: Box::new(base_ref.clone()),
             property: p.clone(),
         },

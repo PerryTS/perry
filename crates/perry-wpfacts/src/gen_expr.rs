@@ -830,7 +830,8 @@ impl<'a> Gen<'a> {
                     *s.self_gap.entry(k).or_default() += 1;
                     if std::env::var("PERRY_HIRPOS_SAMPLE").is_ok_and(|v| v == k) {
                         let d = format!("{e:?}");
-                        eprintln!("HPSAMPLE {k} m{} {}", fx.module, &d[..d.len().min(600)]);
+                        let path = s.paths.get(fx.module as usize).map_or("", |p| p.as_str());
+                        eprintln!("HPSAMPLE {k} m{} {path} near {} {}", fx.module, s.gen_pos.1, &d[..d.len().min(600)]);
                     }
                 }
                 if let Some(o) = crate::topstop::expr_offset(e) {
@@ -1364,11 +1365,14 @@ impl<'a> Gen<'a> {
                 byte_offset,
                 ..
             } => {
+                // A compound's GetValue is its `UpdateGet` site (the
+                // PropertySet arm records it), not a read site of its own.
+                let component = self.compound_get.is_some_and(|g| std::ptr::eq(g, e));
                 // `E.prototype.K`: the read of `K` runs per value of `E`
                 // (`Cons::ProtoKey`), so that a builtin namespace's prototype
                 // member is the native it names.
                 if let Some((e, o, a)) = self.proto_member(fx, object, property) {
-                    if *byte_offset != 0 {
+                    if *byte_offset != 0 && !component {
                         self.read_sites.push(ReadSite {
                             global_get: false,
                             access: crate::derive::Access::Read,
@@ -1390,7 +1394,7 @@ impl<'a> Gen<'a> {
                     None => self.expr(fx, object),
                 };
                 let a = self.member_atom(object, property);
-                if *byte_offset != 0 {
+                if *byte_offset != 0 && !component {
                     self.read_sites.push(ReadSite {
                         global_get: false,
                         access: crate::derive::Access::Read,
@@ -1421,7 +1425,7 @@ impl<'a> Gen<'a> {
                     self.m.add_prim(dst, prim::ALL);
                 }
                 self.field_reads.push(dst);
-                if *byte_offset != 0 {
+                if *byte_offset != 0 && !component {
                     self.load_sites.push((mi, *byte_offset, a, dst));
                 }
                 dst
@@ -1434,15 +1438,31 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let o = self.expr(fx, object);
-                let v = self.expr_zs(fx, value);
-                let a = self.member_atom(object, property);
                 // ACCSITE1 P4: a compound `o.k op= v` (13.15.3): GetValue
                 // then PutValue of one reference, one base evaluation: two
-                // sites at the member's offset.
+                // sites at the member's offset. The GetValue is the value's
+                // read of the same key at the same offset (the HIR pair).
+                let get = match value.as_ref() {
+                    Expr::Binary { left, .. } => match left.as_ref() {
+                        Expr::PropertyGet {
+                            property: p,
+                            byte_offset: at,
+                            ..
+                        } if p == property && at == byte_offset => Some(left.as_ref()),
+                        _ => None,
+                    },
+                    _ => None,
+                };
                 let compound = *byte_offset != 0
                     && !matches!(object.as_ref(), Expr::PrivateGuard { .. })
-                    && matches!(value.as_ref(), Expr::Binary { left, .. }
-                        if matches!(left.as_ref(), Expr::PropertyGet { property: p, byte_offset: 0, .. } if p == property));
+                    && get.is_some();
+                let outer = std::mem::replace(
+                    &mut self.compound_get,
+                    get.filter(|_| compound).map(|g| g as *const Expr),
+                );
+                let v = self.expr_zs(fx, value);
+                self.compound_get = outer;
+                let a = self.member_atom(object, property);
                 if compound {
                     for access in [
                         crate::derive::Access::UpdateGet,
