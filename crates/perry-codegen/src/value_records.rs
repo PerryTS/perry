@@ -996,9 +996,6 @@ impl Rewriter<'_> {
             } => (*member, None),
             _ => return None,
         };
-        if offset == 0 {
-            return None;
-        }
         let facts: &ElisionFacts = self.facts;
         let fid = *facts.typed_calls.get(&offset)?;
         if direct.is_some_and(|d| d != fid) || !self.lane_fns.contains(&fid) {
