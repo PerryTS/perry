@@ -314,6 +314,7 @@ impl WasmModuleEmitter {
             "searchparams_delete",
             "searchparams_to_string",
             "crypto_random_uuid",
+            "crypto_random_uuidv7",
             "crypto_random_bytes",
             "path_join",
             "path_dirname",
