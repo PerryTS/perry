@@ -179,8 +179,8 @@ impl<'a> FuncEmitCtx<'a> {
                         "setInterval" => Some(("set_interval", 2u32)),
                         "clearTimeout" => Some(("clear_timeout", 1u32)),
                         "clearInterval" => Some(("clear_interval", 1u32)),
-                        // A literal that needs its own builder (`__proto__`, a method
-                        // using `super`) defines its keys and prototype through these.
+                        // A literal that needs its own builder (a computed key, `__proto__`,
+                        // a method using `super`) defines its keys and prototype through these.
                         "js_object_literal_define" | "js_object_literal_set_computed" => {
                             Some(("object_literal_define", 3u32))
                         }

@@ -52,12 +52,6 @@ impl<'a> FuncEmitCtx<'a> {
         func.instruction(&Instruction::End);
     }
 
-    /// Emit a bridge function call via WASM memory (Firefox NaN-safe, reentrant-safe).
-    /// Call pattern: emit_store_arg(0, ..), emit_store_arg(1, ..), ..., emit_memcall(name, N).
-    /// Handles stack pointer save/advance/restore automatically.
-    /// Call a bridge function. Frame must already be set up via emit_frame_begin + emit_store_arg.
-    /// Returns f64 result, then restores sp.
-    #[track_caller]
     /// The one value of the function declaration `func_idx` (`function_value`).
     pub(super) fn emit_function_value(&mut self, func: &mut Function, func_idx: u32) {
         let emitter = &self.emitter;
@@ -67,12 +61,7 @@ impl<'a> FuncEmitCtx<'a> {
             .copied()
             .unwrap_or(func_idx);
         let proto = emitter.fn_proto_code(func_idx);
-        let name = emitter
-            .fn_names
-            .get(&func_idx)
-            .and_then(|name| emitter.string_map.get(name))
-            .copied()
-            .unwrap_or(0);
+        let name = emitter.fn_names.get(&func_idx).copied().unwrap_or(0);
         self.emit_frame_begin(func, 3);
         self.emit_store_const(func, 0, table_idx as f64);
         self.emit_store_const(func, 1, proto);
@@ -84,6 +73,12 @@ impl<'a> FuncEmitCtx<'a> {
         self.emit_memcall(func, "function_value", 3);
     }
 
+    /// Emit a bridge function call via WASM memory (Firefox NaN-safe, reentrant-safe).
+    /// Call pattern: emit_store_arg(0, ..), emit_store_arg(1, ..), ..., emit_memcall(name, N).
+    /// Handles stack pointer save/advance/restore automatically.
+    /// Call a bridge function. Frame must already be set up via emit_frame_begin + emit_store_arg.
+    /// Returns f64 result, then restores sp.
+    #[track_caller]
     pub(super) fn emit_memcall(
         &mut self,
         func: &mut Function,

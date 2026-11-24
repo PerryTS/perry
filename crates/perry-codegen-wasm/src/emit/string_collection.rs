@@ -384,9 +384,6 @@ impl WasmModuleEmitter {
             }
             self.collect_strings_in_stmts(&func.body);
         }
-        for func in &module.functions {
-            self.intern_string(Self::fn_display_name(module, func));
-        }
         for stmt in &module.init {
             self.collect_strings_in_stmt(stmt);
         }
