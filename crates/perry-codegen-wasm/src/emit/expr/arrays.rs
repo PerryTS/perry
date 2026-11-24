@@ -408,13 +408,7 @@ impl<'a> FuncEmitCtx<'a> {
                 array,
                 callback,
                 initial,
-            }
-            | Expr::ArrayReduceRight {
-                array,
-                callback,
-                initial,
             } => {
-                let is_right = matches!(expr, Expr::ArrayReduceRight { .. });
                 self.emit_expr(func, array);
                 self.emit_expr(func, callback);
                 if let Some(init) = initial {
@@ -447,12 +441,22 @@ impl<'a> FuncEmitCtx<'a> {
                     align: 3,
                     memory_index: 0,
                 }));
-                let name = if is_right {
-                    "array_reduce_right"
-                } else {
-                    "array_reduce"
-                };
-                self.emit_memcall(func, name, 3);
+                self.emit_memcall(func, "array_reduce", 3);
+            }
+            // The argument count says whether the call passed an initial value.
+            Expr::ArrayReduceRight {
+                array,
+                callback,
+                initial,
+            } => {
+                let argc = 2 + u32::from(initial.is_some());
+                self.emit_frame_begin(func, argc);
+                self.emit_store_arg(func, 0, array);
+                self.emit_store_arg(func, 1, callback);
+                if let Some(init) = initial {
+                    self.emit_store_arg(func, 2, init);
+                }
+                self.emit_memcall(func, "array_reduce_right", argc);
             }
             Expr::ArrayToReversed { array } => {
                 self.emit_frame_begin(func, 1);

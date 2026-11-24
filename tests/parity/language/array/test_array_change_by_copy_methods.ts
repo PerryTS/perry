@@ -14,3 +14,10 @@ function local(): number[] {
 console.log(local());
 console.log([1, 2, 3].reduceRight((acc, x) => acc + x, ""), [1, 2, 3].reduceRight((acc, x) => acc * 10 + x));
 try { a.with(5, 0); } catch (e) { console.log(e instanceof RangeError); }
+const tries = (f: () => any) => { try { return String(f()); } catch (e: any) { return e.name; } };
+console.log(tries(() => [1].reduceRight(null as any, 0 as any)), tries(() => [].reduceRight((x: any) => x)), tries(() => [].reduceRight((x: any) => x, 5 as any)));
+const sparse: any[] = [1, 2, 3];
+delete sparse[1];
+console.log(([1] as any[]).reduceRight(() => 42, undefined), sparse.reduceRight((acc, x) => acc + "," + x));
+const del: any[] = [1, 2, 3];
+console.log(del.reduceRight((acc, _x, i, arr) => { if (i === 2) delete arr[0]; return acc + 1; }, 0));

@@ -2728,16 +2728,14 @@ const __memDispatch = {
     arr.sort((a, b) => { const r = call(__jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
     return arr;
   },
-  array_reduce_right: (arr, cb, initial) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
-    if (!call) return undefined;
-    let i = arr.length - 1;
-    let acc = initial === undefined ? __jsValueToBits(arr[i--]) : __jsValueToBits(initial);
-    for (; i >= 0; i--) acc = call(acc, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr));
-    return __bitsToJsValue(acc);
+  // `reduceRight`, the change-by-copy methods and `copyWithin` run the host's own, so
+  // hole handling, argument coercions and errors are the host's. `initial` is empty when
+  // the call passes none: an explicit undefined is an initial value.
+  array_reduce_right: (arr, cb, ...initial) => {
+    const call = __arrayCallback(cb);
+    const fn = call ? (...args) => __bitsToJsValue(call(...args.map(__jsValueToBits))) : cb;
+    return Array.prototype.reduceRight.call(arr, fn, ...initial);
   },
-  // The change-by-copy methods and `copyWithin` run the host's own, so their argument
-  // coercions and range errors are the host's.
   array_to_reversed: (arr) => Array.prototype.toReversed.call(arr),
   array_to_sorted: (arr) => Array.prototype.toSorted.call(arr),
   array_to_sorted_cmp: (arr, cb) => {
