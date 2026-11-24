@@ -12,13 +12,14 @@
 use super::*;
 
 /// `h` is a value from unmodeled code; `h[name] = …` may write any key of
-/// `Object.prototype` (node: `hostFn` returns `Object.prototype`).
+/// `Object.prototype` (node: `argv[2]` names a function
+/// returning `Object.prototype`).
 fn size_verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
-        declare const name: string;
-        const h: any = (globalThis as any).hostFn();
-        h[name] = 1;
+        const name: string = process.argv[3];
+        const h: any = (globalThis as any)[process.argv[2]]();
+        h[name] = (globalThis as any)[process.argv[2]]();
         class Svc {{ size = 3; }}
         {body}
         "#
@@ -101,13 +102,13 @@ fn a_computed_delete_through_top_keeps_the_key_of_an_object_that_never_escaped()
     assert!(proven(&v), "{v:?}");
 }
 
-/// node: `hostFn(p)` hands `p` out and `hostGet()` returns it; the delete
+/// node: the first host call hands `p` out and the second returns it; the delete
 /// through ⊤ removes `p.svc`, so `this.svc` reads `Object.prototype.svc`.
 #[test]
 fn a_computed_delete_through_top_revokes_the_key_of_an_escaped_object() {
     let v = size_verdict(&format!(
-        "{P} const p = new P(new Svc()); (globalThis as any).hostFn(p); \
-         delete (globalThis as any).hostGet()[name]; console.log(p.total());"
+        "{P} const p = new P(new Svc()); (globalThis as any)[process.argv[2]](p); \
+         delete (globalThis as any)[process.argv[2]]()[name]; console.log(p.total());"
     ));
     assert!(!proven(&v), "{v:?}");
 }
@@ -126,7 +127,7 @@ fn a_define_property_through_top_revokes_the_key() {
 fn a_define_property_on_the_receiver_revokes_the_key() {
     let v = size_verdict(&format!(
         "{P} const p: any = new P(new Svc()); \
-         Object.defineProperty(p, \"svc\", {{ get() {{ return (globalThis as any).hostGet(); }} }}); console.log(p.total());"
+         Object.defineProperty(p, \"svc\", {{ get() {{ return (globalThis as any)[process.argv[2]](); }} }}); console.log(p.total());"
     ));
     // DEC 250 Q2: the runtime refuses a new key on `Object.prototype` (TypeError), so the store into ⊤ wrote nothing there; the getter's unknown value is what revokes the proof.
     assert!(!proven(&v), "{v:?}");
@@ -135,7 +136,7 @@ fn a_define_property_on_the_receiver_revokes_the_key() {
 #[test]
 fn an_escaped_receiver_reads_the_prototype() {
     let v = size_verdict(&format!(
-        "{P} const p = new P(new Svc()); (globalThis as any).hostFn(p); console.log(p.total());"
+        "{P} const p = new P(new Svc()); (globalThis as any)[process.argv[2]](p); console.log(p.total());"
     ));
     assert!(!proven(&v), "{v:?}");
 }
