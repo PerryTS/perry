@@ -1849,13 +1849,17 @@ function __linkClassParent(className, ctor) {
 // does; an enumerable one is already the field's accessor. A computed
 // member's hidden key slot (`__perry_computed_field_key_*`, see `lower_class_prop`)
 // shares the table and stays hidden.
+// The getters `__classExposeStatic` installs, so a descriptor reports the field as data.
+const classStaticFieldGetters = new WeakSet();
 function __classExposeStatic(className, key) {
   const ctor = __classRefs.get(className);
   if (!ctor || (typeof key === 'string' && key.startsWith('__perry_computed_field_key_'))) return;
   const own = Object.getOwnPropertyDescriptor(ctor, key);
   if (own && (own.enumerable || !own.configurable)) return;
+  const get = () => classStaticTable[className][key];
+  classStaticFieldGetters.add(get);
   Object.defineProperty(ctor, key, {
-    get() { return classStaticTable[className][key]; },
+    get,
     // Reached through a subclass's [[Prototype]], an assignment gives the subclass
     // its own field, as with an inherited data property.
     set(value) {
@@ -2397,6 +2401,9 @@ const __memDispatch = {
   object_define_properties: (obj, props) => Object.defineProperties(obj, __hostDescriptors(props)),
   object_get_own_property_descriptor: (obj, key) => {
     const desc = Object.getOwnPropertyDescriptor(obj, key);
+    if (desc && classStaticFieldGetters.has(desc.get)) {
+      return { value: desc.get.call(obj), writable: true, enumerable: desc.enumerable, configurable: desc.configurable };
+    }
     if (desc && 'get' in desc) {
       desc.get = hostAccessorClosures.get(desc.get) ?? desc.get;
       desc.set = hostAccessorClosures.get(desc.set) ?? desc.set;
