@@ -103,7 +103,17 @@ pub(super) fn family_load(
             anyfall("undescribed member", &(fam, what), &name);
             undescribed_member(m, dst);
         }
-        if !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+        // A realm-born object's chain: each prototype on it under its own
+        // identity (a program write onto `EventTarget.prototype` taken as
+        // a value, `realm_proto_value`), then the collapsed one.
+        // A builtin kind whose prototype the realm declares (`URL`: the
+        // object `URL.prototype` evaluates to, `realm_proto_value`) reads
+        // it the same way.
+        let unwritten = match what.filter(|w| super::realm_proto_named(w).is_some()) {
+            Some(w) => super::intrinsic_miss_on(m, Some(w), a, NativeMiss::Load(dst)),
+            None => intrinsic_miss(m, a, NativeMiss::Load(dst)),
+        };
+        if !unwritten {
             opaque_member(m, dst);
         }
         return;
@@ -251,7 +261,12 @@ pub(super) fn family_proto_value(m: &mut Model, fam: Family, what: Option<&str>,
     };
     let p = match ns.and_then(|ns| builtin_proto_tok(m, ns)) {
         Some(p) => p,
-        None => native_proto(m, what.unwrap_or("%UnknownPrototype%")),
+        // One object, one token: a realm prototype under its
+        // constructor's name (`realm_proto_value`).
+        None => native_proto(
+            m,
+            what.map_or("%UnknownPrototype%", |w| w.strip_suffix(".prototype").unwrap_or(w)),
+        ),
     };
     m.add_tok(dst, p);
 }
@@ -1727,6 +1742,18 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         TokKind::ModNs(_) | TokKind::Proto(_) => m.add_prim(dst, prim::UNDEF),
         // A key the native prototype does not define: the chain goes on.
         TokKind::NativeProto(..) if native_skips(m, t, key, NativeMiss::Load(dst)) => {}
+        // A realm constructor's prototype taken as a value
+        // (`realm_proto_value`): what the realm declares on its chain, as an
+        // object that declaration made reads it. A declared getter is no
+        // shared value: it runs per receiver (`realm_proto_getter`).
+        TokKind::NativeProto(..) if super::realm_proto_of(m, t).is_some() => {
+            let born = super::realm_proto_of(m, t).unwrap();
+            match key {
+                Key::Named(a) if super::realm_proto_getter(m, t, a).is_some() => {}
+                Key::Named(a) => family_load(m, t, Family::Opaque, Some(born.name), a, dst),
+                Key::Any(_) => family_any(m, Some(t), Family::Opaque, Some(born.name), key, dst),
+            }
+        }
         // A builtin's prototype object taken as a value (`builtin_proto_tok`):
         // its described members, as a receiver of its family reads them.
         TokKind::NativeProto(_, ns) if ns.and_then(proto_family).is_some() => {

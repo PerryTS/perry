@@ -1023,6 +1023,24 @@ impl Model {
                                 ks.push(key);
                             }
                         }
+                        // Defining NAMED `key` on a realm prototype
+                        // (`builtins::realm_proto_value`) writes that key of
+                        // that one object and no other (rule D1): the
+                        // lookups passing it see the write under its
+                        // identity (`intrinsic_miss_on`); its get/set are
+                        // installed by `Cons::Accessor`.
+                        _ if builtins::realm_proto_of(self, t).is_some() => {
+                            let k = Some(Key::Named(key));
+                            builtins::note_native_data_write(
+                                self,
+                                t,
+                                k,
+                                "E5 Object.defineProperty",
+                                builtins::WriteValue::Opaque,
+                            );
+                            self.virt_revoke(t, Some(key));
+                            self.reshape(Some(key));
+                        }
                         // Defining `key` on an unknown object writes that key
                         // of whatever it is, a builtin prototype included,
                         // and no other key.
@@ -1593,7 +1611,8 @@ impl Model {
                     }
                     self.note_fnproto_write(t, Some(Key::Named(key)), "accessor");
                     self.note_array_member_write(t, Some(Key::Named(key)), None, "accessor");
-                    if t == TOP {
+                    let realm_proto = builtins::realm_proto_of(self, t).is_some();
+                    if t == TOP || realm_proto {
                         // A known function: an accessor query that may
                         // reach the install returns it (10.1.6.3).
                         builtins::note_native_accessor(self, t, Some(Key::Named(key)), f, setter);
@@ -1613,6 +1632,15 @@ impl Model {
                         let r = self.reason("accessor installed on a value from unmodeled code");
                         self.escape(f, r);
                         continue;
+                    }
+                    if realm_proto {
+                        // On a realm prototype the runtime's own reads of
+                        // the objects whose chain passes it (an emitter's,
+                        // a stream's) may run it with such a receiver: it
+                        // is the runtime's to call. The program lookups
+                        // that walk the prototype run it too (`accessors`).
+                        let r = self.reason("accessor installed on a realm prototype");
+                        self.escape(f, r);
                     }
                     if key == star && !builtins::accessor_receiver(self, t, key) {
                         // A computed-key accessor: it may answer any key, so

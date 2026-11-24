@@ -13,8 +13,19 @@ fn a_declared_realm_parent_constructs_the_instance_itself() {
     );
     let t = tmpl(&pf, "T");
     assert!(t.hard.is_none(), "{:?}\n{}", t.hard, pf.dump_text());
+    assert!(t.escape.is_none(), "{:?}\n{}", t.escape, pf.dump_text());
+    // DECISIONS 47: the solve sees a value parent unsettled, so a read of
+    // the subclass's own key may be `undefined` (settle_parent_layouts).
     let k = &field(tmpl(&pf, "H"), "v").kind;
-    assert!(!k.top && k.prims == prim::NUM && k.objs.is_empty(), "{k:?}");
+    assert!(
+        !k.top
+            && k.prims & prim::NUM != 0
+            && k.prims & !(prim::NUM | prim::UNDEF) == 0
+            && k.objs.is_empty(),
+        "{k:?}
+{}",
+        pf.dump_text()
+    );
 }
 
 #[test]

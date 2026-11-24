@@ -1568,6 +1568,12 @@ impl Model {
         for t in toks.iter() {
             match self.toks[*t as usize] {
                 TokKind::ObjectProto => return None,
+                // A realm prototype taken as a value
+                // (`builtins::realm_proto_value`) is one object of its own:
+                // an operation through it is on it alone, and the lookups
+                // that pass it ask it under its identity
+                // (`builtins::intrinsic_miss_on`).
+                TokKind::NativeProto(..) if builtins::realm_proto_of(self, *t).is_some() => {}
                 TokKind::NativeProto(..) => native = true,
                 _ => {}
             }

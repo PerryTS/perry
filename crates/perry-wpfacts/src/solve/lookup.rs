@@ -1940,6 +1940,23 @@ impl Model {
             self.accessor_functions(holder, key, dst, setter);
             return;
         }
+        // A getter the realm declares on a realm prototype of the chain
+        // (`builtins::realm_proto_getter`) runs with the receiver as `this`.
+        if let Key::Named(a) = key {
+            if let Some(e) = builtins::realm_proto_getter(self, holder, a) {
+                match act {
+                    ChainAct::Load(dst, _) => {
+                        self.with_b(|m| builtins::realm_getter_load(m, e, origin, a, dst))
+                    }
+                    ChainAct::Call(call) => {
+                        let v = self.node_l("realm-getter-callee");
+                        self.with_b(|m| builtins::realm_getter_load(m, e, origin, a, v));
+                        self.bind_via(v, call, origin);
+                    }
+                    ChainAct::Store(..) | ChainAct::Lookup { .. } => {}
+                }
+            }
+        }
         // A key whose shape splits the holder (`shape_splits`) runs only the
         // accessors named by a name it admits, and the computed-name ones.
         if self.shape_splits(holder, key).is_some() {
