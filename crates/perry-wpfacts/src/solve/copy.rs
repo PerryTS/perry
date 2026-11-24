@@ -98,6 +98,9 @@ impl Model {
             let p = self.stop_top.as_ref().unwrap().cur_pos();
             if p == crate::topstop::NOPOS {
                 self.note_nopos(std::panic::Location::caller(), "edge");
+                let s = self.stop_top.as_mut().unwrap();
+                let at = (std::panic::Location::caller(), s.rule, s.phase);
+                s.edge_at.insert((a as u64) << 32 | b as u64, at);
             } else {
                 self.stop_top
                     .as_mut()

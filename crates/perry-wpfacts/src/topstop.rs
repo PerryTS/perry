@@ -81,6 +81,9 @@ pub struct StopTop {
     pub(crate) cons_at: FxHashMap<(NodeId, u32), &'static Location<'static>>,
     /// The program position of each copy edge, keyed `a << 32 | b`.
     pub(crate) edge_pos: FxHashMap<u64, (u32, u32)>,
+    /// A copy edge made with no program position, keyed as `edge_pos`: the
+    /// solver line that made it, the rule being applied and the phase.
+    pub(crate) edge_at: FxHashMap<u64, (&'static Location<'static>, Option<(NodeId, Cons)>, &'static str)>,
     /// Shared operations: what each is, and its callers' positions (program
     /// positions or `(SHARED, id)` of the shared operation that asked).
     pub(crate) shared: Vec<(String, Vec<(u32, u32)>)>,
@@ -103,6 +106,11 @@ pub struct StopTop {
     pub(crate) phase: &'static str,
     /// Escapes in progress: (token, reason id, node the rule ran on).
     pub(crate) esc: Vec<(Tok, u32, NodeId)>,
+    /// Native calls in progress: (call, callee token), innermost last.
+    pub(crate) natives: Vec<(CallId, Tok)>,
+    /// The escape a native hands to unknown code while it raises the
+    /// native's throw region (`escape_at`): (token, reason id).
+    pub(crate) hand: Option<(Tok, u32)>,
     /// The origin `Model::add_top` names while it adds ⊤.
     pub(crate) why: Option<String>,
     /// `PERRY_TOPSTOP_TOPFROM=1`: the ⊤ chain of an input that holds ⊤.
@@ -143,19 +151,18 @@ pub(crate) fn flow_on(on: bool) {
     FLOW.with(|f| f.set(on));
 }
 
-static CAPTURE: Mutex<Option<Vec<String>>> = Mutex::new(None);
+thread_local! {
+    /// Per thread: a test that captures sees only the blocks of its own solve.
+    static CAPTURE: std::cell::RefCell<Option<Vec<String>>> = const { std::cell::RefCell::new(None) };
+}
 
 /// Tests: run the switch without exiting; `take_captured` returns the block.
 pub fn capture_on() {
-    *CAPTURE.lock().unwrap_or_else(|e| e.into_inner()) = Some(Vec::new());
+    CAPTURE.with_borrow_mut(|c| *c = Some(Vec::new()));
 }
 
 pub fn take_captured() -> Vec<String> {
-    CAPTURE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .take()
-        .unwrap_or_default()
+    CAPTURE.with_borrow_mut(|c| c.take()).unwrap_or_default()
 }
 
 pub(crate) type RuleSaved = (Option<(NodeId, Cons)>, (u32, u32), (u32, u32), u32);
@@ -173,7 +180,7 @@ impl StopTop {
                 ..Default::default()
             }));
         }
-        let capture = CAPTURE.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+        let capture = CAPTURE.with_borrow(|c| c.is_some());
         if !capture && std::env::var("PERRY_FACTS_STOP_ON_TOP").ok().as_deref() != Some("1") {
             return None;
         }
@@ -461,6 +468,7 @@ impl Model {
     fn push_fed_by(&self, b: &mut String, n: NodeId) {
         let s = self.stop_top.as_ref().unwrap();
         let mut ps: Vec<(u32, u32)> = Vec::new();
+        let mut nopos: Vec<NodeId> = Vec::new();
         let mut k = 0usize;
         for (a, nd) in self.nodes.iter().enumerate() {
             if nd.succ.contains(&n) {
@@ -470,6 +478,9 @@ impl Model {
                     .get(&((a as u64) << 32 | n as u64))
                     .copied()
                     .unwrap_or(NOPOS);
+                if p == NOPOS {
+                    nopos.push(a as NodeId);
+                }
                 if !ps.contains(&p) {
                     ps.push(p);
                 }
@@ -491,6 +502,20 @@ impl Model {
         }
         if ps.len() > 5 {
             b.push_str(&format!("  edge:    ... {} more\n", ps.len() - 5));
+        }
+        // An edge with no position: where it comes from and the solver
+        // line that made it (each one a position bug of that line).
+        for &a in nopos.iter().take(5) {
+            let (at, rule, phase) = match s.edge_at.get(&((a as u64) << 32 | n as u64)) {
+                Some(&(l, r, ph)) => (format!("{}:{}", l.file(), l.line()), r, ph),
+                None => ("(not recorded)".to_string(), None, ""),
+            };
+            b.push_str(&format!(
+                "  nopos:   from {} ({} values); made at {at} in phase {phase}{}\n",
+                self.node_words(a),
+                self.nodes[a as usize].pts.len(),
+                rule.map_or(String::new(), |(rn, c)| format!(", rule {c:?} on node {rn}"))
+            ));
         }
     }
 
@@ -685,14 +710,27 @@ impl Model {
         if let Some((rn, c)) = rule_any {
             b.push_str(&format!("  context: constraint {:?} on node {rn}\n", c));
         }
+        let st = self.stop_top.as_ref().unwrap();
+        for &(c, t) in st.natives.iter().rev() {
+            b.push_str(&format!("  native:  call #{c} of {}\n", self.tok_name(t)));
+        }
+        if let Some((t, r)) = st.hand {
+            b.push_str(&format!(
+                "  hands:   {} ({})\n",
+                self.tok_name(t),
+                self.reason_text(r)
+            ));
+        }
         self.finish_block(b, capture);
     }
 
     fn finish_block(&self, b: String, capture: bool) {
         if capture {
-            if let Some(v) = CAPTURE.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-                v.push(b);
-            }
+            CAPTURE.with_borrow_mut(|c| {
+                if let Some(v) = c.as_mut() {
+                    v.push(b);
+                }
+            });
             return;
         }
         if let Some(s) = self.stop_top.as_ref() {

@@ -65,11 +65,17 @@ impl Model {
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
             let ret = self.calls[c as usize].ret;
+            if let Some(s) = self.stop_top.as_mut() {
+                s.hand = Some((t, reason));
+            }
             self.raise_top(
                 region,
                 ret,
                 "a native hands a value to unknown code, which may throw",
             );
+            if let Some(s) = self.stop_top.as_mut() {
+                s.hand = None;
+            }
         }
         #[cfg(test)]
         if self.packet_emit(crate::summary::packet::Emission::Escape(t, reason)) {

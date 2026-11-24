@@ -93,7 +93,13 @@ impl Model {
             call
         };
         let prev = self.cur_native_call.replace(call);
+        if let Some(s) = self.stop_top.as_mut() {
+            s.natives.push((call, t));
+        }
         let native = self.native_call(call, t, this_tok);
+        if let Some(s) = self.stop_top.as_mut() {
+            s.natives.pop();
+        }
         self.cur_native_call = prev;
         if native {
             return;
@@ -173,7 +179,13 @@ impl Model {
             TokKind::Builtin(ns) => self.with_b(|m| {
                 let prev = std::mem::replace(&mut m.cur_this, this_tok);
                 let pc = m.cur_native_call.replace(call);
+                if let Some(s) = m.stop_top.as_mut() {
+                    s.natives.push((call, t));
+                }
                 builtins::call_builtin_ns(m, ns, call);
+                if let Some(s) = m.stop_top.as_mut() {
+                    s.natives.pop();
+                }
                 m.cur_native_call = pc;
                 m.cur_this = prev;
             }),
