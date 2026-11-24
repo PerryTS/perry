@@ -58,10 +58,10 @@ const Q: any = P;
 console.log(new Q(1, 2, 3, 4).a.join(","));
 function local(v: number) { class L { r: number[]; constructor(...r: number[]) { this.r = r; } } return new L(v, v); }
 console.log(local(9).r.join(","));
-async function inAsync() { return new OnlyRest(1, 8, 9).a.join(",") + " " + new P(1, 8, 9).a.join(","); }
+async function inAsync() { return new OnlyRest(1, 8, 9).a.join(",") + " " + new P(1, 8, 9).a.join(",") + " " + new OnlyRest().a.length + new P(1).n + new D(1).n; }
 inAsync().then((v) => console.log("async " + v));
 "#
         ),
-        "3 2,3,4 0 0 5,6\n2,3 8,9\n2,3,4\n9,9\nasync 1,8,9 8,9"
+        "3 2,3,4 0 0 5,6\n2,3 8,9\n2,3,4\n9,9\nasync 1,8,9 8,9 000"
     );
 }
