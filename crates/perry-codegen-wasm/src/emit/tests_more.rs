@@ -735,6 +735,36 @@ toggle._inp.dispatch("change");
     );
 }
 
+// RadioGroup takes Picker's API: one radio per item, sharing a name, and onChange
+// receives the chosen index.
+#[test]
+fn radio_group_items_are_radios_and_report_the_chosen_index() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { RadioGroup, radioGroupAddItem, radioGroupGetSelected, radioGroupSetSelected } from "perry/ui";
+const group = RadioGroup((index: number) => { console.log("chose " + index + " " + radioGroupGetSelected(group)); });
+radioGroupAddItem(group, "Today");
+radioGroupAddItem(group, "This week");
+radioGroupAddItem(group, "Any time");
+console.log(radioGroupGetSelected(group));
+radioGroupSetSelected(group, 2);
+console.log(radioGroupGetSelected(group));
+"#,
+            r#"
+const fieldset = [...uiHandles.values()].find(e => e.tagName === "FIELDSET");
+const radios = fieldset.children.map(label => label.children[0]);
+console.log(radios.map(r => r.type + ":" + (r.name === radios[0].name) + ":" + r.checked).join(" "));
+console.log(fieldset.children.map(label => label.textContent).join("|"));
+radios[2].checked = false;
+radios[1].checked = true;
+radios[1].dispatch("change");
+"#
+        ),
+        "-1\n2\nradio:true:false radio:true:false radio:true:true\nToday|This week|Any time\nchose 1 1"
+    );
+}
+
 #[test]
 fn a_class_declared_in_a_function_keeps_its_methods() {
     assert_eq!(

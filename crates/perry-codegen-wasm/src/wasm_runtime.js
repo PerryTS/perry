@@ -4816,6 +4816,38 @@ function perry_ui_wheel_picker_add_item(h, title) {
 }
 function perry_ui_wheel_picker_set_selected(h, index) { const el = uiGet(h); if (el) el.selectedIndex = index; }
 function perry_ui_wheel_picker_get_selected(h) { const el = uiGet(h); return el ? el.selectedIndex : -1; }
+// RadioGroup: one `<fieldset>` whose radios share a name, each inside its own `<label>`;
+// onChange receives the chosen index, as Picker's does.
+let radioGroupSeq = 0;
+function perry_ui_radio_group_create(callback) {
+  const fs = document.createElement("fieldset");
+  fs.style.display = "flex"; fs.style.flexDirection = "column"; fs.style.gap = "4px";
+  fs.style.border = "none"; fs.style.padding = "0"; fs.style.margin = "0";
+  fs._perryCallback = callback;
+  fs._radioName = "perry-radio-" + (++radioGroupSeq);
+  fs._radios = [];
+  return uiAlloc(fs);
+}
+function perry_ui_radio_group_add_item(h, title) {
+  const fs = uiGet(h); if (!fs) return;
+  const index = fs._radios.length;
+  const label = document.createElement("label");
+  label.style.display = "flex"; label.style.alignItems = "center"; label.style.gap = "8px";
+  const input = document.createElement("input"); input.type = "radio"; input.name = fs._radioName; input.value = String(index);
+  input.addEventListener("change", () => {
+    if (input.checked && fs._perryCallback !== undefined) callWasmClosure(fs._perryCallback, index);
+  });
+  label.appendChild(input);
+  const text = document.createElement("span"); text.textContent = title; label.appendChild(text);
+  fs.appendChild(label);
+  fs._radios.push(input);
+}
+function perry_ui_radio_group_set_selected(h, index) {
+  const fs = uiGet(h); if (fs) fs._radios.forEach((r, i) => { r.checked = i === index; });
+}
+function perry_ui_radio_group_get_selected(h) {
+  const fs = uiGet(h); return fs ? fs._radios.findIndex(r => r.checked) : -1;
+}
 
 // ---------- Image ----------
 function perry_ui_image_create_symbol(name) { return perry_ui_text_create("⬜ " + name); }
@@ -6245,6 +6277,8 @@ const __perryUiDispatch = {
   // Picker
   perry_ui_picker_add_item, perry_ui_picker_set_selected, perry_ui_picker_get_selected,
   perry_ui_wheel_picker_add_item, perry_ui_wheel_picker_set_selected, perry_ui_wheel_picker_get_selected,
+  perry_ui_radio_group_create, perry_ui_radio_group_add_item,
+  perry_ui_radio_group_set_selected, perry_ui_radio_group_get_selected,
   // Image
   perry_ui_image_create_symbol, perry_ui_image_create_url,
     perry_ui_load_image, perry_ui_image_set_size, perry_ui_image_set_tint,

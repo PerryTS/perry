@@ -414,6 +414,30 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         args: &[ArgKind::Widget, ArgKind::I64Raw],
         ret: ReturnKind::Void,
     },
+    MethodRow {
+        method: "RadioGroup",
+        runtime: "perry_ui_radio_group_create",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "radioGroupAddItem",
+        runtime: "perry_ui_radio_group_add_item",
+        args: &[ArgKind::Widget, ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "radioGroupGetSelected",
+        runtime: "perry_ui_radio_group_get_selected",
+        args: &[ArgKind::Widget],
+        ret: ReturnKind::I64AsF64,
+    },
+    MethodRow {
+        method: "radioGroupSetSelected",
+        runtime: "perry_ui_radio_group_set_selected",
+        args: &[ArgKind::Widget, ArgKind::I64Raw],
+        ret: ReturnKind::Void,
+    },
     // ---- NavigationStack ----
     MethodRow {
         method: "NavStack",

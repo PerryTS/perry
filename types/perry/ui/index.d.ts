@@ -565,6 +565,13 @@ export function Picker(onChange: (index: number) => void): Widget;
  */
 export function WheelPicker(onChange: (index: number) => void): Widget;
 
+/**
+ * A group of radio buttons, one per item, for a short list where every choice
+ * should stay visible. Picker's API: add items with `radioGroupAddItem`; `onChange`
+ * receives the chosen index. Radio buttons on the web; native backends show a Picker.
+ */
+export function RadioGroup(onChange: (index: number) => void): Widget;
+
 /** Form section with a title. */
 export function Section(title: string): Widget;
 
@@ -1586,6 +1593,14 @@ export function pickerSetSelected(picker: Widget, index: number): void;
 export function wheelPickerAddItem(picker: Widget, title: string): void;
 export function wheelPickerGetSelected(picker: Widget): number;
 export function wheelPickerSetSelected(picker: Widget, index: number): void;
+
+// ---------------------------------------------------------------------------
+// RadioGroup
+// ---------------------------------------------------------------------------
+
+export function radioGroupAddItem(group: Widget, title: string): void;
+export function radioGroupGetSelected(group: Widget): number;
+export function radioGroupSetSelected(group: Widget, index: number): void;
 
 // ---------------------------------------------------------------------------
 // TabBar

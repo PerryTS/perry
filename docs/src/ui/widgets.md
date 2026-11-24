@@ -137,6 +137,22 @@ for (let hour = 0; hour < 24; hour++) {
 }
 ```
 
+## RadioGroup
+
+Radio buttons for a short list where every choice should stay visible. It
+takes Picker's API: items are added with `radioGroupAddItem`, and `onChange`
+receives the chosen index. The web target renders a `<fieldset>` of radio
+buttons; native backends show a Picker.
+
+```typescript,no-test
+import { RadioGroup, radioGroupAddItem } from "perry/ui";
+
+const urgency = RadioGroup((index) => console.log("urgency:", index));
+radioGroupAddItem(urgency, "Today");
+radioGroupAddItem(urgency, "This week");
+radioGroupAddItem(urgency, "Any time");
+```
+
 ```typescript,no-test
 {{#include ../../examples/ui/widgets/picker.ts}}
 ```
