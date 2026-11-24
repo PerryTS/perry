@@ -566,6 +566,33 @@ impl Model {
             && self.fn_inert(f)
     }
 
+    /// D2: generation is in the inert body `f` (before the summaries are
+    /// built): its side effects wait for its activation.
+    #[inline]
+    pub fn gen_inert(&self, f: FnIdx) -> bool {
+        f != NO_FN && !self.sum.ready && self.fn_inert(f)
+    }
+
+    /// D2: the side effect `e` of generating the body of `f`: applied now,
+    /// or, in an inert body, when it activates (`Act::foreign`).
+    pub fn effect_in(&mut self, f: FnIdx, e: crate::model::Effect) {
+        if self.gen_inert(f) {
+            let a = self.act.as_mut().unwrap();
+            a.foreign
+                .entry(f)
+                .or_default()
+                .push(crate::model::Foreign::Effect(e));
+        } else {
+            self.apply_effect(e);
+        }
+    }
+
+    pub(crate) fn apply_effect(&mut self, e: crate::model::Effect) {
+        match e {
+            crate::model::Effect::Activate(g, path) => self.activate(g, path),
+        }
+    }
+
     #[track_caller]
     pub fn node_l(&mut self, label: &'static str) -> NodeId {
         self.node_named(label, || label.to_string())

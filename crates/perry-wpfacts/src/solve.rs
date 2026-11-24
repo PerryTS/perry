@@ -1201,6 +1201,7 @@ impl Model {
                         }
                     }
                     crate::model::Foreign::Edge(x, y) => edges.push((*x, *y)),
+                    crate::model::Foreign::Effect(_) => {}
                 }
             }
         }
@@ -1269,6 +1270,7 @@ impl Model {
                             self.replay_cons(h, c, ci);
                         }
                         crate::model::Foreign::Edge(x, y) => self.edge_quiet(x, y),
+                        crate::model::Foreign::Effect(e) => self.apply_effect(e),
                     }
                 }
                 self.cur_fn = saved;

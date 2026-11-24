@@ -358,7 +358,9 @@ impl<'a> Gen<'a> {
                     // The site loads its target: its body runs.
                     if let Some(t) = loads.filter(|t| self.dynamic_only.contains(t)) {
                         let f = self.init_fn_of[&t];
-                        self.m.activate(f, "import");
+                        let at = self.m.cur_fn;
+                        self.m
+                            .effect_in(at, crate::model::Effect::Activate(f, "import"));
                     }
                     let target = loads.filter(|_| !self.dynimport_sabotage);
                     if let Some(t) = target {

@@ -3783,6 +3783,20 @@ pub enum Foreign {
     /// The holder's constraint at its index; `true` once detached (the
     /// index holds `Cons::Detached`).
     Cons(NodeId, u32, Cons, bool),
+    /// A generation side effect of the body (`Model::effect_in`).
+    Effect(Effect),
+}
+
+/// D2 (owner 11-24, PROF C1 A): what generating a body does beyond the
+/// rules it attaches. In an inert body it waits for the body's activation
+/// (`Act::foreign`, applied by `Model::wake_activated`): a body that never
+/// runs never does it.
+#[derive(Clone, Copy, Debug)]
+pub enum Effect {
+    /// The body's code activates the function (a module's static import of
+    /// a dynamic-only module, a dynamic import's target, its owned async
+    /// body, a computed accessor with its class).
+    Activate(FnIdx, &'static str),
 }
 
 /// The accessors of one holder under one key (or every key, `Key::Any`),

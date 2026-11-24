@@ -214,8 +214,13 @@ fn each_fixture_runs_its_body() {
 #[test]
 fn leaving_out_the_carrying_paths_excludes_the_body() {
     for (name, src, set, _) in FIXTURES {
+        // D2 (owner 11-24, PROF C1): the final solve is summarized, so a
+        // transfer the fixture's paths carry is also carried by a summary's
+        // instance and its composed calls: leaving out every carrying path
+        // leaves those out too.
+        let set = format!("{set}+instance+composed");
         assert!(
-            !hit_runs(src, Some(set)),
+            !hit_runs(src, Some(&set)),
             "{name}: hit active with {set} left out"
         );
     }

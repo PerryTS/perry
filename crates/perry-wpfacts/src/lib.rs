@@ -992,6 +992,13 @@ fn compute_act<'a>(
         let m = &g.m;
         g.read_sites.retain(|s| !inert(m, s.func));
         g.store_sites.retain(|s| !inert(m, s.func));
+        let walks = std::mem::take(&mut g.inert_walks);
+        g.unwalked.extend(
+            walks
+                .into_iter()
+                .filter(|(f, _)| m.fn_inert(*f))
+                .map(|(_, w)| w),
+        );
         let a = g.m.act.as_mut().unwrap();
         a.walked = walked;
         a.seen = seen;
