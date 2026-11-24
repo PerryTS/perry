@@ -71,7 +71,7 @@ fn expression(module: &Module, expr: &Expr) -> bool {
                 return pattern_needs_properties(pattern, flags) || expression(module, subject);
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if matches!(
                 callee.as_ref(),
                 Expr::FuncRef(_) | Expr::ExternFuncRef { .. }
@@ -170,6 +170,7 @@ fn expression(module: &Module, expr: &Expr) -> bool {
             return true
         }
         Expr::IndexGet { index, .. }
+        | Expr::RegionOut { index, .. }
         | Expr::ReflectGet { key: index, .. }
         | Expr::ReflectGetOwnPropertyDescriptor { key: index, .. }
         | Expr::ObjectGetOwnPropertyDescriptor(_, index)

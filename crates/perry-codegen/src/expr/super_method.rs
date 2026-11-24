@@ -69,6 +69,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             lower(
                 ctx,
                 &Expr::ObjectSuperMethodCall {
+                    // `super.m()` (`SuperMethodCall`) carries no offset; this
+                    // call is built in codegen, after the facts, and never looked up.
+                    byte_offset: 0,
                     home: Box::new(home),
                     key: Box::new(Expr::String(method.clone())),
                     receiver: Box::new(Expr::This),
@@ -159,6 +162,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             key,
             receiver,
             args,
+            ..
         } => {
             // An instance method's own home binding: the class's prototype.
             if let (Expr::LocalGet(id), Expr::String(method), Expr::This) =
@@ -272,6 +276,7 @@ fn home_read_unproven(ctx: &FnCtx<'_>, e: &Expr, home: u32) -> bool {
             key,
             receiver,
             args,
+            ..
         } if matches!(h.as_ref(), Expr::LocalGet(id) if *id == home) => {
             let proven = matches!(
                 (key.as_ref(), receiver.as_ref()),

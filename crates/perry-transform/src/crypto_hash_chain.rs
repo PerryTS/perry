@@ -109,7 +109,7 @@ fn is_crypto(expr: &Expr, aliases: &HashSet<LocalId>) -> bool {
 /// A call without the required arguments stays on the handle path, which
 /// owns its (non-throwing) degenerate behaviour.
 fn create_call_kind(expr: &Expr, aliases: &HashSet<LocalId>) -> Option<bool> {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return None;
     };
     let Expr::PropertyGet {
@@ -131,7 +131,7 @@ fn create_call_kind(expr: &Expr, aliases: &HashSet<LocalId>) -> Option<bool> {
 /// `recv.<method>(args)` with a plain `Expr::Call` (spread and optional
 /// calls are other variants and are never matched).
 fn method_call<'a>(expr: &'a Expr, method: &str) -> Option<(&'a Expr, &'a [Expr])> {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return None;
     };
     match callee.as_ref() {
@@ -167,11 +167,16 @@ fn is_literal_fast_path(expr: &Expr) -> bool {
     let Some((create, update_args)) = method_call(recv, "update") else {
         return false;
     };
-    let Expr::Call {
+    let (Expr::Call {
         callee,
         args: create_args,
         ..
-    } = create
+    }
+    | Expr::RegionCall {
+        callee,
+        args: create_args,
+        ..
+    }) = create
     else {
         return false;
     };
@@ -204,7 +209,7 @@ fn is_literal_fast_path(expr: &Expr) -> bool {
 
 fn contains_suspension(expr: &Expr) -> bool {
     match expr {
-        Expr::Await(_) | Expr::Yield { .. } => return true,
+        Expr::Await(_, _) | Expr::Yield { .. } => return true,
         // A closure body runs in its own frame, later.
         Expr::Closure { .. } => return false,
         _ => {}
@@ -238,7 +243,7 @@ fn for_each_stmt_expr(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e);
             }
@@ -293,6 +298,7 @@ fn for_each_stmt_expr(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for case in cases {
@@ -441,7 +447,7 @@ fn for_each_let(module: &Module, f: &mut dyn FnMut(&Stmt, &[Stmt])) {
 fn for_each_stmt_expr_shallow(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
     match stmt {
         Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(Some(e)) => f(e),
+        Stmt::Return(Some(e), _) => f(e),
         Stmt::If { condition, .. }
         | Stmt::While { condition, .. }
         | Stmt::DoWhile { condition, .. } => f(condition),
@@ -458,6 +464,7 @@ fn for_each_stmt_expr_shallow(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -536,7 +543,7 @@ fn cjs_crypto_aliases(module: &Module) -> HashSet<LocalId> {
         return HashSet::new();
     }
     let is_require_crypto = |e: &Expr| {
-        matches!(e, Expr::Call { callee, args, .. }
+        matches!(e, Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(callee.as_ref(), Expr::LocalGet(r) if requires.contains(r))
                 && args.len() == 1
                 && matches!(&args[0], Expr::String(sp) if sp == "crypto" || sp == "node:crypto"))
@@ -576,7 +583,8 @@ fn allowed_refs(expr: &Expr, id: LocalId, discarded: bool) -> usize {
     let chain_args_refs = |mut e: &Expr, n: &mut usize| {
         // Walk the receiver chain down to the root, counting refs in args.
         loop {
-            let Expr::Call { callee, args, .. } = e else {
+            let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = e
+            else {
                 break;
             };
             for a in args {
@@ -678,6 +686,7 @@ fn allowed_refs_stmt(stmt: &Stmt, id: LocalId) -> usize {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             allowed_refs(discriminant, id, false)
                 + cases
@@ -693,7 +702,7 @@ fn allowed_refs_stmt(stmt: &Stmt, id: LocalId) -> usize {
                     .sum::<usize>()
         }
         Stmt::Let { init, .. } => init.as_ref().map_or(0, |e| allowed_refs(e, id, false)),
-        Stmt::Return(e) => e.as_ref().map_or(0, |e| allowed_refs(e, id, false)),
+        Stmt::Return(e, _) => e.as_ref().map_or(0, |e| allowed_refs(e, id, false)),
         Stmt::Throw(e) => allowed_refs(e, id, false),
         Stmt::Break
         | Stmt::Continue
@@ -842,7 +851,7 @@ impl Rewriter<'_> {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.expr(e);
                 }
@@ -897,6 +906,7 @@ impl Rewriter<'_> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant);
                 for case in cases {
@@ -1020,7 +1030,7 @@ fn rewrite_refs_expr(expr: &mut Expr, id: LocalId) {
 
 /// Recurse into the non-state arguments of a rewritten chain.
 fn rewrite_chain_args(expr: &mut Expr, id: LocalId) {
-    let Expr::Call { args, .. } = expr else {
+    let (Expr::Call { args, .. } | Expr::RegionCall { args, .. }) = expr else {
         return;
     };
     let mut iter = args.iter_mut();
@@ -1040,7 +1050,7 @@ fn rewrite_refs_stmt(stmt: &mut Stmt, id: LocalId) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => rewrite_refs_expr(e, id),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 rewrite_refs_expr(e, id);
             }
@@ -1097,6 +1107,7 @@ fn rewrite_refs_stmt(stmt: &mut Stmt, id: LocalId) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             rewrite_refs_expr(discriminant, id);
             for case in cases {

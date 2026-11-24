@@ -67,7 +67,7 @@ use locals::{
     collect_exported_names, collect_expr_locals, collect_locals, collect_module_let_ids,
     collect_param_locals, resolve_export_to_func, resolve_export_to_let, resolve_source_module_idx,
 };
-use module_emitter::WasmModuleEmitter;
+use module_emitter::{accessor_code, WasmModuleEmitter};
 use runtime_imports::RuntimeImports;
 use stmt::has_return;
 use ui_method_map::map_ui_method;

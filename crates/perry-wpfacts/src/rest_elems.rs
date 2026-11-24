@@ -391,16 +391,6 @@ pub(crate) fn admit(
         if !matches!(m.tmpls[tm as usize].kind, TmplKind::Arr { plain: true, .. }) {
             continue;
         }
-        if m.rest_fills.iter().any(|f| {
-            f.offset == 0
-                && m.site_tmpls
-                    .get(&(f.site, "Array", true))
-                    .and_then(|&t| m.tmpl_of(t))
-                    == Some(tm)
-        }) {
-            refused.insert(tm, "no offset".to_string());
-            continue;
-        }
         // A token the fill wrote has an element node; one with none (the
         // template's own token beside its birth-site tokens) holds no Array.
         let mut toks = m.tmpl_toks(tm);
@@ -432,11 +422,9 @@ pub(crate) fn admit(
     }
     fill_recvs.extend(m.rest_fill_relays.iter().copied());
     let mut reads: FxHashSet<NodeId> = FxHashSet::default();
-    for &(_, offset, n) in &g.element_values {
-        if offset != 0 {
-            reads.insert(n);
-            reads.extend(copies.get(&n).into_iter().flatten().copied());
-        }
+    for &(_, _, n) in &g.element_values {
+        reads.insert(n);
+        reads.extend(copies.get(&n).into_iter().flatten().copied());
     }
     let mut buf = Vec::new();
     let mut refuse = |cand: &mut FxHashSet<TmplId>, tms: Vec<TmplId>, why: &str| {
@@ -501,7 +489,7 @@ pub(crate) fn admit(
             if hit.is_empty() {
                 continue;
             }
-            if p.offset != 0
+            if p.offset.is_some()
                 && recvs
                     .iter()
                     .all(|&r| crate::push_fills::only_fill(m, r, &cand, p.fill))
@@ -652,13 +640,13 @@ pub(crate) fn export(g: &Gen<'_>, bindings: &mut [ModuleBindings]) {
         let only = recvs
             .iter()
             .all(|&r| crate::push_fills::only_fill(m, r, &m.rest_tmpls, p.fill));
-        if let (true, true, Some(&len), Some(mb)) = (
-            holds && p.offset != 0,
-            only,
+        if let (true, Some(offset), Some(&len), Some(mb)) = (
+            holds && only,
+            p.offset,
             m.push_fill_lens.get(p.fill as usize),
             bindings.get_mut(p.module as usize),
         ) {
-            mb.rest_pushes.push((p.offset, len));
+            mb.rest_pushes.push((offset, len));
         }
     }
     for mb in bindings.iter_mut() {

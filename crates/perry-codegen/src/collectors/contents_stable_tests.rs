@@ -15,6 +15,7 @@ fn literal() -> Expr {
 
 fn let_(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Any,
@@ -54,6 +55,7 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
 
 fn product(id: u32) -> Stmt {
     Stmt::Expr(Expr::Binary {
+        byte_offset: 0,
         op: perry_hir::BinaryOp::Mul,
         left: Box::new(get(id, "x")),
         right: Box::new(get(id, "y")),
@@ -62,12 +64,14 @@ fn product(id: u32) -> Stmt {
 
 fn function(id: u32, params: Vec<u32>, body: Vec<Stmt>) -> Function {
     Function {
+        byte_offset: 0,
         id,
         name: format!("f{id}"),
         type_params: Vec::new(),
         params: params
             .into_iter()
             .map(|pid| Param {
+                byte_offset: 0,
                 id: pid,
                 name: format!("p{pid}"),
                 ty: Type::Any,
@@ -143,7 +147,7 @@ fn a_call_argument_escapes_unless_the_callee_parameter_is_stable() {
         vec![11],
         vec![set(11, "y", Expr::String("s".to_string()))],
     );
-    let reader = function(20, vec![21], vec![Stmt::Return(Some(get(21, "x")))]);
+    let reader = function(20, vec![21], vec![Stmt::Return(Some(get(21, "x")), 0)]);
     let ids = stable(
         vec![
             let_(1, literal()),
@@ -168,7 +172,7 @@ fn a_parameter_needs_a_body_without_unknown_code_or_foreign_stores() {
         vec![11],
         vec![
             Stmt::Expr(call(Expr::GlobalGet(0), Vec::new())),
-            Stmt::Return(Some(get(11, "x"))),
+            Stmt::Return(Some(get(11, "x")), 0),
         ],
     );
     // `other.y = v` may be a store through the same object (`f(o, o)`).
@@ -198,6 +202,7 @@ fn a_parameter_needs_a_body_without_unknown_code_or_foreign_stores() {
 #[test]
 fn a_closure_write_is_a_write() {
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 50,
         params: Vec::new(),
         return_type: Type::Any,
@@ -223,8 +228,8 @@ fn a_closure_write_is_a_write() {
 #[test]
 fn a_callee_returning_an_object_child_hands_it_out() {
     // f10(p11) returns p11.a (an object), f20(p21) returns p21.x (a number).
-    let object_child = function(10, vec![11], vec![Stmt::Return(Some(get(11, "a")))]);
-    let number_child = function(20, vec![21], vec![Stmt::Return(Some(get(21, "x")))]);
+    let object_child = function(10, vec![11], vec![Stmt::Return(Some(get(11, "a")), 0)]);
+    let number_child = function(20, vec![21], vec![Stmt::Return(Some(get(21, "x")), 0)]);
     let nested = Expr::Object(vec![
         ("a".to_string(), literal()),
         ("x".to_string(), Expr::Number(1.0)),

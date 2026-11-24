@@ -71,6 +71,7 @@ fn module_ir(quiet: bool) -> String {
         byte_offset: 0,
     }));
     let counter = Stmt::Let {
+        byte_offset: 0,
         id: I,
         name: "i".to_string(),
         ty: Type::Number,
@@ -78,6 +79,7 @@ fn module_ir(quiet: bool) -> String {
         init: Some(Expr::Integer(0)),
     };
     let condition = Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Lt,
         left: Box::new(Expr::LocalGet(I)),
         right: Box::new(Expr::PropertyGet {
@@ -103,10 +105,12 @@ fn module_ir(quiet: bool) -> String {
         }),
     ))];
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: BS,
             name: "bs".to_string(),
             ty: Type::Array(Box::new(Type::Any)),
@@ -118,6 +122,7 @@ fn module_ir(quiet: bool) -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: S,
                 name: "s".to_string(),
                 ty: Type::Any,
@@ -130,7 +135,7 @@ fn module_ir(quiet: bool) -> String {
                 update: Some(update),
                 body,
             },
-            Stmt::Return(Some(Expr::LocalGet(S))),
+            Stmt::Return(Some(Expr::LocalGet(S)), 0),
         ],
         is_async: false,
         is_generator: false,

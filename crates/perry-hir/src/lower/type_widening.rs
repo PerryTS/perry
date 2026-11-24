@@ -146,7 +146,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut WidenSets, env: &HirTypeEnv) {
     match stmt {
         Stmt::Let { init: Some(e), .. }
         | Stmt::Expr(e)
-        | Stmt::Return(Some(e))
+        | Stmt::Return(Some(e), _)
         | Stmt::Throw(e) => visit_expr(e, out, env),
         Stmt::If {
             condition,
@@ -212,6 +212,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut WidenSets, env: &HirTypeEnv) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             visit_expr(discriminant, out, env);
             for c in cases {
@@ -384,6 +385,7 @@ mod tests {
         let mut module = Module::new("type-widening-test");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "n".to_string(),
                 ty: Type::Number,
@@ -391,6 +393,7 @@ mod tests {
                 init: Some(Expr::Number(1.0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "s".to_string(),
                 ty: Type::String,
@@ -413,6 +416,7 @@ mod tests {
         let mut module = Module::new("type-widening-test");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "target".to_string(),
                 ty: Type::Number,
@@ -420,6 +424,7 @@ mod tests {
                 init: Some(Expr::Number(1.0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "source".to_string(),
                 ty: Type::Number,
@@ -442,6 +447,7 @@ mod tests {
         let mut module = Module::new("type-widening-test");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "n".to_string(),
                 ty: Type::Number,
@@ -449,6 +455,7 @@ mod tests {
                 init: Some(Expr::Number(1.0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "d".to_string(),
                 ty: Type::Named("Date".to_string()),
@@ -470,6 +477,7 @@ mod tests {
         let mut module = Module::new("type-widening-test");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "n".to_string(),
                 ty: Type::Number,
@@ -477,6 +485,7 @@ mod tests {
                 init: Some(Expr::Number(1.0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "b".to_string(),
                 ty: Type::BigInt,
@@ -498,6 +507,7 @@ mod tests {
         let mut module = Module::new("type-widening-test");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "n".to_string(),
                 ty: Type::Number,
@@ -519,6 +529,7 @@ mod tests {
         let mut module = Module::new("type-widening-test");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "n".to_string(),
                 ty: Type::Number,
@@ -526,6 +537,7 @@ mod tests {
                 init: Some(Expr::Number(1.0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "items".to_string(),
                 ty: Type::Array(Box::new(Type::String)),
@@ -547,6 +559,7 @@ mod tests {
         let mut module = Module::new("type-widening-test");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "value".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -578,6 +591,7 @@ mod tests {
         let mut module = Module::new("type-widening-test");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: Type::String,
@@ -606,6 +620,7 @@ mod tests {
         let mut module = Module::new("type-widening-test");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "head".to_string(),
                 ty: Type::Null,
@@ -639,6 +654,7 @@ mod tests {
         let mut module = Module::new("type-widening-test");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "tag".to_string(),
                 ty: Type::Null,
@@ -665,6 +681,7 @@ mod tests {
         let mut module = Module::new("type-widening-test");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "head".to_string(),
                 ty: Type::Null,
@@ -687,6 +704,7 @@ mod tests {
         let mut module = Module::new("type-widening-test");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "n".to_string(),
                 ty: Type::Number,

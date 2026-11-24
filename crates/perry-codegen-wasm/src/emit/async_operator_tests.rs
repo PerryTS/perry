@@ -2,6 +2,32 @@
 
 use super::run_web_source;
 
+// An async body calls a function with no return value, and another async function
+// with and without its optional argument. Expected output is Node's.
+#[test]
+fn async_body_calls_a_void_function_and_an_async_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function note(label: string, value: unknown) {
+  console.log(label, JSON.stringify(value));
+}
+async function inner(x: number, y?: number): Promise<number> {
+  return x + (y ?? 10);
+}
+async function outer(): Promise<string> {
+  note("note", [1, 2]);
+  const a = await inner(1);
+  const b = await inner(1, 2);
+  return a + " " + b;
+}
+outer().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "note [1,2]\n11 3"
+    );
+}
+
 // An async body computes `**`, the bitwise and shift operators (compound assignments
 // included), unary `~` / `+`, and `in` as a synchronous one does, and runs `for...in`,
 // whose lowering uses `&` and `in`; `in` evaluates its property before its object in
@@ -140,5 +166,83 @@ f(1).then((v) => console.log(v), (e) => console.log("threw " + e.message));
 "#
         ),
         "11,12,22,22,3,e!,8"
+    );
+}
+
+// A function declaration an async body uses as a value is the same function value a
+// synchronous body sees: callable with numbers through a variable, an argument or
+// `.map`, an async or rest-parameter function included. Expected output is Node's.
+#[test]
+fn async_body_function_declaration_is_its_function_value() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function add(a: number, b: number) { return a + b; }
+function inc(x: number) { return x + 1; }
+function sum(...xs: number[]) { return xs.reduce((s, x) => s + x, 0); }
+async function dbl(x: number) { return x * 2; }
+function twice(f: (x: number) => number, x: number) { return f(f(x)); }
+const syncAdd = add;
+async function run(): Promise<string> {
+  const g = add;
+  const s = sum;
+  const d = dbl;
+  return [g(1, 2), twice(inc, 5), typeof add, [1, 2, 3].map(inc).join("|"), s(1, 2, 3), await d(4),
+    g === syncAdd, add === add, Object.getPrototypeOf(d) === Object.getPrototypeOf(async () => {})].join(",");
+}
+run().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "3,7,function,2|3|4,6,8,true,true,true"
+    );
+}
+
+// A builtin method call HIR folds into its own node (`a.map(f)`, `a.some(f)`, ...) runs
+// in an async body as it does in a synchronous one. Expected output is Node's.
+#[test]
+fn async_body_folded_array_methods_call_the_method() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function arrays(): Promise<string> {
+  const xs = [3, 1, 2];
+  const seen: number[] = [];
+  xs.forEach((x) => seen.push(x * 10));
+  return [xs.map((x) => x + 1).join("|"), xs.filter((x) => x > 1).join("|"), xs.some((x) => x > 2),
+    xs.every((x) => x > 2), xs.find((x) => x < 3), xs.findIndex((x) => x === 2),
+    xs.reduce((s, x) => s + x, 0), xs.slice().sort((a, b) => a - b).join("|"), seen.join("|"),
+    xs.flatMap((x) => [x, x]).length, xs.indexOf(2), xs.includes(1)].join(",");
+}
+arrays().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "4|2|3,3|2,true,false,1,2,6,1|2|3,30|10|20,6,2,true"
+    );
+}
+
+// A function that throws inside an async body started under a synchronous `try` rejects
+// that body, at the call, whether or not it returns a value. Expected output is Node's.
+#[test]
+fn async_body_stops_at_a_throwing_call_under_a_synchronous_try() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function bad(x: number) { if (x) throw new Error("void " + x); }
+function badValue(x: number): number { if (x) throw new Error("value " + x); return 1; }
+function optional(a: number, b?: number) { return a + "/" + b; }
+async function caught(): Promise<string> {
+  try { bad(1); return "no throw"; } catch (e: any) { return "caught " + e.message; }
+}
+async function rejected(): Promise<string> { return "no throw " + badValue(2) + optional(1); }
+try {
+  caught().then((v) => console.log(v));
+  rejected().then((v) => console.log(v), (e) => console.log("rejected " + e.message));
+  console.log("after");
+} catch (e: any) { console.log("sync " + e.message); }
+async function calls(): Promise<string> { return optional(1) + " " + optional(1, 2); }
+calls().then((v) => console.log(v));
+"#
+        ),
+        "after\ncaught void 1\nrejected value 2\n1/undefined 1/2"
     );
 }

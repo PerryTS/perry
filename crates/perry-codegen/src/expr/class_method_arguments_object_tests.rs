@@ -133,6 +133,7 @@ fn ir_opts() -> CompileOptions {
 /// the ONLY parameter carrying `arguments_object`.
 fn synthetic_arguments_param() -> Param {
     Param {
+        byte_offset: 0,
         id: TAIL_ID,
         name: "arguments".to_string(),
         ty: Type::Any,
@@ -152,6 +153,7 @@ fn synthetic_arguments_param() -> Param {
 /// site has to tell apart.
 fn user_rest_param() -> Param {
     Param {
+        byte_offset: 0,
         id: TAIL_ID,
         name: "rest".to_string(),
         ty: Type::Any,
@@ -164,6 +166,7 @@ fn user_rest_param() -> Param {
 
 fn fixed(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -194,17 +197,21 @@ fn module_with_tail(tail: Param) -> Module {
         fields: Vec::new(),
         constructor: None,
         methods: vec![Function {
+            byte_offset: 0,
             id: 20,
             name: "m".to_string(),
             type_params: Vec::new(),
             params: vec![fixed(A_ID, "a"), fixed(B_ID, "b"), tail],
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(TAIL_ID)),
-                property: "length".to_string(),
-                byte_offset: 0,
-            }))],
+            body: vec![Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(TAIL_ID)),
+                    property: "length".to_string(),
+                    byte_offset: 0,
+                }),
+                0,
+            )],
             is_async: false,
             is_generator: false,
             is_strict: true,
@@ -232,6 +239,7 @@ fn module_with_tail(tail: Param) -> Module {
     }];
     m.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: RECV_ID,
             name: "t".to_string(),
             ty: Type::Named("T".to_string()),
@@ -269,7 +277,7 @@ fn emit(m: &Module) -> String {
 #[test]
 fn an_entry_observation_needs_no_readiness_state() {
     let mut module = module_with_tail(synthetic_arguments_param());
-    module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::LocalGet(TAIL_ID)))];
+    module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::LocalGet(TAIL_ID)), 0)];
     let ir = emit(&module);
     let method = ir
         .split("define ")
@@ -290,12 +298,13 @@ fn an_unexecuted_arguments_branch_does_not_birth_an_object() {
     let mut module = module_with_tail(synthetic_arguments_param());
     module.classes[0].methods[0].body = vec![Stmt::If {
         condition: Expr::Compare {
+            byte_offset: 0,
             op: perry_hir::CompareOp::Lt,
             left: Box::new(Expr::LocalGet(A_ID)),
             right: Box::new(Expr::Number(0.0)),
         },
-        then_branch: vec![Stmt::Return(Some(Expr::LocalGet(TAIL_ID)))],
-        else_branch: Some(vec![Stmt::Return(Some(Expr::LocalGet(B_ID)))]),
+        then_branch: vec![Stmt::Return(Some(Expr::LocalGet(TAIL_ID)), 0)],
+        else_branch: Some(vec![Stmt::Return(Some(Expr::LocalGet(B_ID)), 0)]),
     }];
     let ir = emit(&module);
     let method = ir
@@ -335,13 +344,16 @@ fn pushes_of(ir: &str, literal: &str) -> usize {
 #[test]
 fn a_class_method_reading_arguments_is_handed_every_passed_argument() {
     let mut module = module_with_tail(synthetic_arguments_param());
-    module.classes[0].methods[0].body = vec![Stmt::Return(Some(Expr::IndexGet {
-        element_offset: 0,
-        byte_offset: 0,
-        byte_end: 0,
-        object: Box::new(Expr::LocalGet(TAIL_ID)),
-        index: Box::new(Expr::Integer(0)),
-    }))];
+    module.classes[0].methods[0].body = vec![Stmt::Return(
+        Some(Expr::IndexGet {
+            element_offset: 0,
+            byte_offset: 0,
+            byte_end: 0,
+            object: Box::new(Expr::LocalGet(TAIL_ID)),
+            index: Box::new(Expr::Integer(0)),
+        }),
+        0,
+    )];
     let ir = emit(&module);
 
     assert!(

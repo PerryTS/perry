@@ -9,16 +9,22 @@ pub(crate) fn lower_expr_assignment(
     ctx: &mut LoweringContext,
     expr: &ast::Expr,
     value: Box<Expr>,
+    byte_offset: u32,
 ) -> Result<Expr> {
     match expr {
         // #6300: identifier stores — including the ones reached by unwrapping a
         // parenthesized / TS-cast assignment target below — go through the one
         // shared helper, so the `const`-immutability check can't be bypassed by
         // writing `(c as any) = 9` instead of `c = 9`.
-        ast::Expr::Ident(ident) => {
-            crate::lower::expr_assign::lower_ident_assignment(ctx, ident.sym.to_string(), value)
-        }
+        ast::Expr::Ident(ident) => crate::lower::expr_assign::lower_ident_assignment(
+            ctx,
+            ident.sym.to_string(),
+            value,
+            byte_offset,
+        ),
         ast::Expr::Member(member) => {
+            // A member store stands at its member token, as its read does.
+            let byte_offset = crate::lower::member_token(member);
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 // #5938 follow-up: resolve scope-local class renames so a
                 // colliding body-local `class X`'s static write targets the
@@ -31,6 +37,7 @@ pub(crate) fn lower_expr_assignment(
                         let field_name = prop_ident.sym.to_string();
                         if ctx.has_static_field(&obj_name, &field_name) {
                             return Ok(Expr::StaticFieldSet {
+                                byte_offset,
                                 class_name: obj_name,
                                 field_name,
                                 value,
@@ -113,7 +120,7 @@ pub(crate) fn lower_expr_assignment(
                         object,
                         property,
                         value,
-                        byte_offset: 0,
+                        byte_offset,
                         byte_end: 0,
                     }
                 }
@@ -124,11 +131,15 @@ pub(crate) fn lower_expr_assignment(
             })
         }
         // Recursively unwrap parens and type annotations
-        ast::Expr::Paren(paren) => lower_expr_assignment(ctx, &paren.expr, value),
-        ast::Expr::TsAs(ts_as) => lower_expr_assignment(ctx, &ts_as.expr, value),
-        ast::Expr::TsNonNull(ts_nn) => lower_expr_assignment(ctx, &ts_nn.expr, value),
-        ast::Expr::TsTypeAssertion(ts_ta) => lower_expr_assignment(ctx, &ts_ta.expr, value),
-        ast::Expr::TsSatisfies(ts_sat) => lower_expr_assignment(ctx, &ts_sat.expr, value),
+        ast::Expr::Paren(paren) => lower_expr_assignment(ctx, &paren.expr, value, byte_offset),
+        ast::Expr::TsAs(ts_as) => lower_expr_assignment(ctx, &ts_as.expr, value, byte_offset),
+        ast::Expr::TsNonNull(ts_nn) => lower_expr_assignment(ctx, &ts_nn.expr, value, byte_offset),
+        ast::Expr::TsTypeAssertion(ts_ta) => {
+            lower_expr_assignment(ctx, &ts_ta.expr, value, byte_offset)
+        }
+        ast::Expr::TsSatisfies(ts_sat) => {
+            lower_expr_assignment(ctx, &ts_sat.expr, value, byte_offset)
+        }
         _ => Err(anyhow!(
             "Unsupported expression as assignment target: {:?}",
             expr

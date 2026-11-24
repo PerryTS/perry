@@ -118,11 +118,14 @@ fn a_function_declaration_has_a_name() {
             r#"
 function q() {}
 async function aq() {}
+function later(f: () => string) { return f(); }
+async function first() { const f: any = later; return [f.name, Object.getOwnPropertyDescriptor(f, "name")!.value].join(","); }
+first().then((v) => console.log("async " + v));
 const d: any = Object.getOwnPropertyDescriptor(q, "name");
 console.log([d.value, d.writable, d.enumerable, d.configurable, q.name, (aq as any).name, Object.keys(q).length].join(","));
 "#
         ),
-        "q,false,false,true,q,aq,0"
+        "q,false,false,true,q,aq,0\nasync later,later"
     );
 }
 

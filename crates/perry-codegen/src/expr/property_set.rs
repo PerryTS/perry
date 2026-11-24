@@ -172,9 +172,13 @@ pub(crate) fn try_lower_proven_setter(
     value: &Expr,
     offset: u32,
 ) -> Result<Option<String>> {
-    let Some((fn_name, nullable)) =
-        super::wpfacts_access::proven_accessor_fn(ctx, object, property, offset, true)
-    else {
+    let Some((fn_name, nullable)) = super::wpfacts_access::proven_accessor_fn(
+        ctx,
+        object,
+        property,
+        offset,
+        crate::codegen::AccessorKind::Set,
+    ) else {
         return Ok(None);
     };
     let strict = ctx.is_strict_fn;
@@ -541,6 +545,18 @@ pub(crate) fn class_key_attributed(ctx: &FnCtx<'_>, class: &str, property: &str)
 /// modes (`lower_put_value_property_set_by_name`). The strict tail used to be an
 /// own-property store that skipped the prototype walk; see the helper.
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
+    // A compound's GetValue is its `UpdateGet` site while the store lowers
+    // (`Expr::compound_get`); any other read stays the `Get` site.
+    let outer = std::mem::replace(
+        &mut ctx.compound_get,
+        expr.compound_get().map(|g| g as *const Expr),
+    );
+    let lowered = lower_paired(ctx, expr, assignment_strict);
+    ctx.compound_get = outer;
+    lowered
+}
+
+fn lower_paired(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
     // I32 at rest (PR C): a store of a key some class keeps in an I32 lane.
     if let Some(value) = super::rest_fields::try_lower_set(ctx, expr, assignment_strict)? {
         return Ok(value);
@@ -580,38 +596,23 @@ fn lower_store(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Res
             // evaluated once; GetValue is the value's read of the same key on
             // it, at the site's offset (a proven getter is called directly,
             // else the read is the ordinary one); then the setter, once.
-            if *byte_offset != 0 {
-                if let Expr::Binary { op, left, right } = value.as_ref() {
-                    if let Expr::PropertyGet {
-                        object: read_object,
-                        property: read_property,
-                        byte_offset: 0,
-                        byte_end,
-                    } = left.as_ref()
+            if let Expr::Binary { left, .. } = value.as_ref() {
+                if let Expr::PropertyGet {
+                    object: read_object,
+                    property: read_property,
+                    byte_offset: read_offset,
+                    ..
+                } = left.as_ref()
+                {
+                    if read_property == property
+                        && read_offset == byte_offset
+                        && matches!((object.as_ref(), read_object.as_ref()),
+                            (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b)
                     {
-                        if read_property == property
-                            && matches!((object.as_ref(), read_object.as_ref()),
-                                (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b)
+                        if let Some(v) =
+                            try_lower_proven_setter(ctx, object, property, value, *byte_offset)?
                         {
-                            let value = Expr::Binary {
-                                op: *op,
-                                left: Box::new(Expr::PropertyGet {
-                                    object: read_object.clone(),
-                                    property: read_property.clone(),
-                                    byte_offset: *byte_offset,
-                                    byte_end: *byte_end,
-                                }),
-                                right: right.clone(),
-                            };
-                            if let Some(v) = try_lower_proven_setter(
-                                ctx,
-                                object,
-                                property,
-                                &value,
-                                *byte_offset,
-                            )? {
-                                return Ok(v);
-                            }
+                            return Ok(v);
                         }
                     }
                 }

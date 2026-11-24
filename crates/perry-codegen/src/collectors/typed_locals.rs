@@ -99,7 +99,9 @@ fn decided(cond: &Expr, proofs: &HashMap<u32, HirType>) -> Option<bool> {
             op: UnaryOp::Not,
             operand,
         } => decided(operand, proofs).map(|b| !b),
-        Expr::Logical { op, left, right } => {
+        Expr::Logical {
+            op, left, right, ..
+        } => {
             let (l, r) = (decided(left, proofs), decided(right, proofs));
             match op {
                 LogicalOp::And => match (l, r) {
@@ -115,7 +117,9 @@ fn decided(cond: &Expr, proofs: &HashMap<u32, HirType>) -> Option<bool> {
                 _ => None,
             }
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             let eq = match op {
                 CompareOp::Eq | CompareOp::LooseEq => true,
                 CompareOp::Ne | CompareOp::LooseNe => false,
@@ -383,7 +387,9 @@ impl Env<'_> {
             Expr::LocalGet(id) => self.local(*id),
             Expr::LocalSet(_, v) => rec(v),
             Expr::Sequence(v) => v.last().and_then(rec),
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let (l, r) = (rec(left), rec(right));
                 match op {
                     // `+` concatenates when either side is a String; two
@@ -427,33 +433,35 @@ impl Env<'_> {
             Expr::PropertyGet {
                 object, property, ..
             } if property == "length" => (rec(object) == Some(Kind::Str)).then_some(Kind::Num),
-            Expr::Call { callee, args, .. } => match callee.as_ref() {
-                // An IIFE: what every one of its returns is, by its own
-                // typed locals (`var t = (function () { var a = []; …;
-                // return a; })()`).
-                Expr::Closure {
-                    func_id,
-                    params,
-                    body,
-                    is_async: false,
-                    is_generator: false,
-                    ..
-                } if args.is_empty() && params.is_empty() => {
-                    // Cloned closure bodies share an ID, but the bounded
-                    // return analysis also depends on the caller's depth.
-                    let key = (*func_id, depth);
-                    if let Some(k) = self.iife.borrow().get(&key) {
-                        return *k;
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                match callee.as_ref() {
+                    // An IIFE: what every one of its returns is, by its own
+                    // typed locals (`var t = (function () { var a = []; …;
+                    // return a; })()`).
+                    Expr::Closure {
+                        func_id,
+                        params,
+                        body,
+                        is_async: false,
+                        is_generator: false,
+                        ..
+                    } if args.is_empty() && params.is_empty() => {
+                        // Cloned closure bodies share an ID, but the bounded
+                        // return analysis also depends on the caller's depth.
+                        let key = (*func_id, depth);
+                        if let Some(k) = self.iife.borrow().get(&key) {
+                            return *k;
+                        }
+                        let k = iife_return_kind(body, self.boxed_vars, self.module_globals, depth);
+                        self.iife.borrow_mut().insert(key, k);
+                        k
                     }
-                    let k = iife_return_kind(body, self.boxed_vars, self.module_globals, depth);
-                    self.iife.borrow_mut().insert(key, k);
-                    k
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if rec(object) == Some(Kind::Str) => string_method_kind(property),
+                    _ => None,
                 }
-                Expr::PropertyGet {
-                    object, property, ..
-                } if rec(object) == Some(Kind::Str) => string_method_kind(property),
-                _ => None,
-            },
+            }
             _ => None,
         }
     }
@@ -467,7 +475,7 @@ fn iife_return_kind(
     module_globals: &HashMap<u32, String>,
     depth: usize,
 ) -> Option<Kind> {
-    if depth > 4 || !matches!(body.last(), Some(Stmt::Return(Some(_)))) {
+    if depth > 4 || !matches!(body.last(), Some(Stmt::Return(Some(_), _))) {
         return None;
     }
     let t = collect_typed_locals(body, &HashMap::new(), boxed_vars, module_globals);
@@ -493,7 +501,7 @@ fn iife_return_kind(
     fn returns<'a>(stmts: &'a [Stmt], f: &mut dyn FnMut(Option<&'a Expr>)) {
         for s in stmts {
             match s {
-                Stmt::Return(e) => f(e.as_ref()),
+                Stmt::Return(e, _) => f(e.as_ref()),
                 Stmt::If {
                     then_branch,
                     else_branch,
@@ -548,7 +556,7 @@ fn is_code_unit(e: &Expr, env: &Env<'_>, set: &HashSet<u32>, depth: usize) -> bo
     }
     let rec = |x: &Expr| is_code_unit(x, env, set, depth + 1);
     match e {
-        Expr::Call { callee, .. } => matches!(callee.as_ref(),
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => matches!(callee.as_ref(),
             Expr::PropertyGet { object, property, .. }
             if property == "charCodeAt" && env.is(object, Kind::Str)),
         Expr::LocalGet(id) => set.contains(id),
@@ -579,7 +587,10 @@ pub(crate) fn int32_writer_range(expr: &Expr) -> Option<(i64, i64)> {
         }
         _ => {}
     }
-    let Expr::Binary { op, left, right } = expr else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = expr
+    else {
         return None;
     };
     if *op == BinaryOp::BitAnd {

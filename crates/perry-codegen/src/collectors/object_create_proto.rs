@@ -62,7 +62,7 @@ fn source(e: &Expr) -> Option<Source> {
             Expr::LocalGet(id) => Some(Source::Create(*id)),
             _ => None,
         },
-        Expr::Call { callee, .. } => match callee.as_ref() {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
             Expr::FuncRef(f) => Some(Source::Call(*f)),
             _ => None,
         },
@@ -123,11 +123,11 @@ pub(crate) fn object_create_protos(hir: &Module) -> ObjectCreateProtos {
         let mut returns = Vec::new();
         let mut ok = true;
         super::ptr_shape_elements::walk_stmts(&f.body, &mut |s| match s {
-            Stmt::Return(Some(e)) => match source(e) {
+            Stmt::Return(Some(e), _) => match source(e) {
                 Some(src) => returns.push(src),
                 None => ok = false,
             },
-            Stmt::Return(None) => ok = false,
+            Stmt::Return(None, _) => ok = false,
             _ => {}
         });
         if ok && !returns.is_empty() {

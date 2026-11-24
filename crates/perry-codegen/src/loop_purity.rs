@@ -167,6 +167,7 @@ fn expr_alloc_free(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool) -> bool {
             object: None,
             method,
             args,
+            ..
         } if module == "__perry_runtime" && method == "arrayRecordForUpdate" => {
             args.iter().all(|a| expr_alloc_free(a, is_inert))
         }
@@ -206,6 +207,7 @@ fn expr_alloc_free(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool) -> bool {
             op: CompareOp::Eq | CompareOp::Ne,
             left,
             right,
+            ..
         }
         | Expr::Logical { left, right, .. } => {
             expr_alloc_free(left, is_inert) && expr_alloc_free(right, is_inert)
@@ -238,6 +240,7 @@ fn expr_alloc_free(e: &Expr, is_inert: &dyn Fn(&Expr) -> bool) -> bool {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             expr_alloc_free(condition, is_inert)
                 && expr_alloc_free(then_expr, is_inert)
@@ -287,6 +290,7 @@ mod allocation_tests {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => stub_inert(condition) && stub_inert(then_expr) && stub_inert(else_expr),
             _ => false,
         }
@@ -308,6 +312,7 @@ mod allocation_tests {
 
     fn lt(left: Expr, right: Expr) -> Expr {
         Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(left),
             right: Box::new(right),
@@ -316,6 +321,7 @@ mod allocation_tests {
 
     fn add(left: Expr, right: Expr) -> Expr {
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(left),
             right: Box::new(right),
@@ -405,6 +411,7 @@ mod allocation_tests {
             CompareOp::LooseNe,
         ] {
             let e = Expr::Compare {
+                byte_offset: 0,
                 op,
                 left: Box::new(Expr::LocalGet(OBJ)),
                 right: Box::new(Expr::Integer(0)),
@@ -454,6 +461,7 @@ mod allocation_tests {
     #[test]
     fn strict_equality_stays_open_to_any_operand() {
         let e = Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(OBJ)),
             right: Box::new(Expr::Null),
@@ -471,6 +479,7 @@ mod allocation_tests {
         };
         let type_of = Expr::TypeOf(Box::new(Expr::LocalGet(OBJ)));
         let and = Expr::Logical {
+            byte_offset: 0,
             op: LogicalOp::And,
             left: Box::new(Expr::LocalGet(OBJ)),
             right: Box::new(Expr::LocalGet(OBJ)),
@@ -534,7 +543,7 @@ fn stmt_is_pure(s: &Stmt) -> bool {
     match s {
         Stmt::Expr(e) => expr_is_pure(e),
         Stmt::Let { init, .. } => init.as_ref().is_none_or(expr_is_pure),
-        Stmt::Return(_) | Stmt::Throw(_) => false,
+        Stmt::Return(_, _) | Stmt::Throw(_) => false,
         Stmt::If {
             condition,
             then_branch,
@@ -650,7 +659,7 @@ fn stmt_writes_outside(s: &Stmt, body_locals: &HashSet<u32>) -> bool {
         Stmt::Let { init, .. } => init
             .as_ref()
             .is_some_and(|e| expr_writes_outside(e, body_locals)),
-        Stmt::Return(opt) => opt
+        Stmt::Return(opt, _) => opt
             .as_ref()
             .is_some_and(|e| expr_writes_outside(e, body_locals)),
         Stmt::If {
@@ -709,6 +718,7 @@ fn expr_writes_outside(e: &Expr, body_locals: &HashSet<u32>) -> bool {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             expr_writes_outside(condition, body_locals)
                 || expr_writes_outside(then_expr, body_locals)
@@ -754,6 +764,7 @@ fn expr_is_pure(e: &Expr) -> bool {
             condition,
             then_expr,
             else_expr,
+            ..
         } => expr_is_pure(condition) && expr_is_pure(then_expr) && expr_is_pure(else_expr),
         Expr::TypeOf(operand) => expr_is_pure(operand),
         Expr::Void(operand) => expr_is_pure(operand),

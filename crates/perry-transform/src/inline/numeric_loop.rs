@@ -69,6 +69,7 @@ mod tests {
 
     fn function(id: FuncId, body: Vec<Stmt>) -> Function {
         Function {
+            byte_offset: 0,
             id,
             name: format!("f{id}"),
             type_params: Vec::new(),
@@ -89,10 +90,11 @@ mod tests {
 
     fn closure() -> Expr {
         Expr::Closure {
+            byte_offset: 0,
             func_id: 99,
             params: Vec::new(),
             return_type: Type::Number,
-            body: vec![Stmt::Return(Some(Expr::Integer(3)))],
+            body: vec![Stmt::Return(Some(Expr::Integer(3)), 0)],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -118,6 +120,7 @@ mod tests {
 
     fn arithmetic(field: bool) -> Stmt {
         Stmt::Expr(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Mul,
             left: Box::new(if field {
                 Expr::PropertyGet {
@@ -177,7 +180,7 @@ mod tests {
     fn has_call(stmts: &[Stmt], id: FuncId) -> bool {
         stmts.iter().any(|stmt| stmt_any_expr(stmt, &mut |expr| {
             fn check(expr: &Expr, id: FuncId) -> bool {
-                if matches!(expr, Expr::Call { callee, .. } if matches!(callee.as_ref(), Expr::FuncRef(n) if *n == id)) {
+                if matches!(expr, Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } if matches!(callee.as_ref(), Expr::FuncRef(n) if *n == id)) {
                     return true;
                 }
                 let mut found = false;

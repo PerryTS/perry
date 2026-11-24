@@ -46,7 +46,7 @@ fn count_in_stmt(s: &Stmt, n: &mut usize) {
         Stmt::Let { init: Some(e), .. }
         | Stmt::Expr(e)
         | Stmt::Throw(e)
-        | Stmt::Return(Some(e)) => count_in_expr(e, n),
+        | Stmt::Return(Some(e), _) => count_in_expr(e, n),
         Stmt::If {
             condition,
             then_branch,
@@ -85,6 +85,7 @@ fn count_in_stmt(s: &Stmt, n: &mut usize) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             count_in_expr(discriminant, n);
             for c in cases {
@@ -97,7 +98,7 @@ fn count_in_stmt(s: &Stmt, n: &mut usize) {
             }
         }
         Stmt::Let { init: None, .. }
-        | Stmt::Return(None)
+        | Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -168,6 +169,7 @@ mod tests {
     #[test]
     fn nested_closure_bodies_are_not_counted() {
         let closure = Expr::Closure {
+            byte_offset: 0,
             func_id: 0,
             params: vec![],
             return_type: Type::Any,

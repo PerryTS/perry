@@ -87,16 +87,14 @@ fn r9key1_f1a_three_tracks_activation_not_held() {
 
 // F1b (red before: every builtin chain member): the whole pipeline: `x.y`
 // reads the three targets' values only (and the honest `null` of the
-// buffer's first value, `undefined` of an absent key).
+// buffer's first value; the `undefined` of an absent key fails the
+// `x !== undefined` test that guards the read, top level as in a function).
 #[test]
 fn r9key1_f1b_three_tracks_read_named_members() {
     let pf = facts(&tracks(&R9));
     let y = recv(&pf, "y");
     eprintln!("R9KEY1 F1b y={y:?}");
-    assert_eq!(
-        y,
-        v(&["U", "V", "W", "null (TypeError)", "undefined (TypeError)"])
-    );
+    assert_eq!(y, v(&["U", "V", "W", "null (TypeError)"]));
 }
 
 fn is_const(want: &str, e: &str) -> Vec<String> {
@@ -168,7 +166,8 @@ fn r9key1_k1_unknown_string_operand_stays_any() {
 }
 
 // K2 KEEP: two constant keys, one absent on the receiver: the read is
-// exactly the present member and undefined, never another member.
+// exactly the present member and undefined, never another member; the
+// `x !== undefined` test leaves the present member only.
 #[test]
 fn r9key1_k2_two_keys_one_absent() {
     let pf = facts(
@@ -180,5 +179,5 @@ const x: any = r[ k ];
 if ( x !== undefined ) { console.log( x.p ); }
 "#,
     );
-    assert_eq!(recv(&pf, "p"), v(&["A", "undefined (TypeError)"]));
+    assert_eq!(recv(&pf, "p"), v(&["A"]));
 }

@@ -579,6 +579,7 @@ pub(crate) fn is_intrinsic(method: &str) -> bool {
 
 fn rt(method: &str, args: Vec<Expr>) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset: 0, /*HPOS*/
         module: RT.into(),
         class_name: None,
         object: None,
@@ -615,7 +616,7 @@ fn record_array_locals(
                 property,
                 byte_offset,
                 ..
-            } if *byte_offset != 0 => facts
+            } => facts
                 .record_array_reads
                 .get(&(*byte_offset, property.clone()))
                 .copied()
@@ -661,6 +662,7 @@ fn seq(mut list: Vec<Expr>, value: Expr) -> Expr {
 
 fn let_stmt(id: LocalId, name: String, ty: Type, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name,
         ty,
@@ -928,6 +930,7 @@ impl Rewriter<'_> {
                 Type::Any,
                 true,
                 Expr::Compare {
+                    byte_offset: 0, /*HPOS*/
                     op: CompareOp::Ne,
                     left: Box::new(Expr::LocalGet(p)),
                     right: Box::new(undefined()),
@@ -935,14 +938,10 @@ impl Rewriter<'_> {
             ));
         }
         for (i, k) in keys.iter().enumerate() {
-            let read = Expr::PropertyGet {
-                object: Box::new(Expr::LocalGet(p)),
-                property: k.clone(),
-                byte_offset: 0,
-                byte_end: 0,
-            };
+            let read = Expr::property_get_unsited(Box::new(Expr::LocalGet(p)), k.clone());
             let v = if rec.track {
                 Expr::Conditional {
+                    byte_offset: 0, /*HPOS*/
                     condition: Box::new(Expr::LocalGet(rec.present)),
                     then_expr: Box::new(read),
                     else_expr: Box::new(self.filler(rec.tmpl, i)),
@@ -988,12 +987,9 @@ impl Rewriter<'_> {
             Expr::PropertyGet {
                 byte_offset: member,
                 ..
-            } => (if *member != 0 { *member } else { *byte_offset }, None),
+            } => (*member, None),
             _ => return None,
         };
-        if offset == 0 {
-            return None;
-        }
         let facts: &ElisionFacts = self.facts;
         let fid = *facts.typed_calls.get(&offset)?;
         if direct.is_some_and(|d| d != fid) || !self.lane_fns.contains(&fid) {
@@ -1027,7 +1023,7 @@ impl Rewriter<'_> {
             .record_call(e)
             .map(|s| s.record_params.clone())
             .unwrap_or_default();
-        let Expr::Call { callee, args, .. } = e else {
+        let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = e else {
             return;
         };
         self.expr(callee);
@@ -1085,6 +1081,7 @@ impl Rewriter<'_> {
             list.push(Expr::LocalSet(
                 rec.present,
                 Box::new(Expr::Compare {
+                    byte_offset: 0, /*HPOS*/
                     op: CompareOp::Ne,
                     left: agg(),
                     right: Box::new(undefined()),
@@ -1093,14 +1090,10 @@ impl Rewriter<'_> {
         }
         let mut reads = Vec::new();
         for (i, k) in keys.iter().enumerate() {
-            let read = Expr::PropertyGet {
-                object: agg(),
-                property: k.clone(),
-                byte_offset: 0,
-                byte_end: 0,
-            };
+            let read = Expr::property_get_unsited(agg(), k.clone());
             let v = if rec.track {
                 Expr::Conditional {
+                    byte_offset: 0, /*HPOS*/
                     condition: Box::new(Expr::LocalGet(rec.present)),
                     then_expr: Box::new(read),
                     else_expr: Box::new(self.filler(rec.tmpl, i)),
@@ -1111,7 +1104,9 @@ impl Rewriter<'_> {
             reads.push(Expr::LocalSet(rec.fields[i], Box::new(v)));
         }
         list.push(Expr::Conditional {
+            byte_offset: 0, /*HPOS*/
             condition: Box::new(Expr::Compare {
+                byte_offset: 0, /*HPOS*/
                 op: CompareOp::Eq,
                 left: agg(),
                 right: Box::new(Expr::Bool(true)),
@@ -1188,14 +1183,14 @@ impl Rewriter<'_> {
             Stmt::Expr(e) => self.discarded(e),
             // VR-3b: a record-returning body writes the value into its
             // result lanes and returns their copy.
-            Stmt::Return(Some(e)) if self.ret.is_some() => {
+            Stmt::Return(Some(e), _) if self.ret.is_some() => {
                 let ret = self.ret.expect("result lanes");
                 let v = std::mem::replace(e, undefined());
                 let list = self.assign(ret, v);
                 *e = seq(list, self.copy(ret));
             }
-            Stmt::Return(Some(e)) | Stmt::Throw(e) => self.expr(e),
-            Stmt::Return(None) => {}
+            Stmt::Return(Some(e), _) | Stmt::Throw(e) => self.expr(e),
+            Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,
@@ -1257,6 +1252,7 @@ impl Rewriter<'_> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant);
                 for c in cases {
@@ -1428,6 +1424,7 @@ impl Rewriter<'_> {
             condition,
             then_expr,
             else_expr,
+            ..
         } = e
         {
             let mut c = *condition;
@@ -1435,6 +1432,7 @@ impl Rewriter<'_> {
             let a = self.assign(u, *then_expr);
             let b = self.assign(u, *else_expr);
             return vec![Expr::Conditional {
+                byte_offset: 0, /*HPOS*/
                 condition: Box::new(c),
                 then_expr: Box::new(seq(a, undefined())),
                 else_expr: Box::new(seq(b, undefined())),
@@ -1450,6 +1448,7 @@ impl Rewriter<'_> {
             list.push(Expr::LocalSet(
                 rec.present,
                 Box::new(Expr::Compare {
+                    byte_offset: 0, /*HPOS*/
                     op: CompareOp::Ne,
                     left: tmp(),
                     right: Box::new(undefined()),
@@ -1457,14 +1456,10 @@ impl Rewriter<'_> {
             ));
         }
         for (i, k) in keys.iter().enumerate() {
-            let read = Expr::PropertyGet {
-                object: tmp(),
-                property: k.clone(),
-                byte_offset: 0,
-                byte_end: 0,
-            };
+            let read = Expr::property_get_unsited(tmp(), k.clone());
             let v = if rec.track {
                 Expr::Conditional {
+                    byte_offset: 0, /*HPOS*/
                     condition: Box::new(Expr::LocalGet(rec.present)),
                     then_expr: Box::new(read),
                     else_expr: Box::new(self.filler(rec.tmpl, i)),
@@ -1515,6 +1510,7 @@ impl Rewriter<'_> {
         };
         if rec.track {
             Expr::Conditional {
+                byte_offset: 0, /*HPOS*/
                 condition: Box::new(Expr::LocalGet(rec.present)),
                 then_expr: Box::new(born),
                 else_expr: Box::new(undefined()),
@@ -1534,7 +1530,7 @@ impl Rewriter<'_> {
                 property,
                 byte_offset,
                 ..
-            } if *byte_offset != 0 => self
+            } => self
                 .facts
                 .record_array_reads
                 .get(&(*byte_offset, property.clone()))
@@ -1548,13 +1544,17 @@ impl Rewriter<'_> {
     fn ra_source(&self, e: &Expr) -> Option<u32> {
         match e {
             Expr::ArrayPop(id) => self.ra_locals.get(id).copied(),
-            Expr::Call { callee, args, .. } if args.is_empty() => match callee.as_ref() {
-                Expr::PropertyGet {
-                    object, property, ..
-                } if property == "pop" => self.ra_of(object),
-                _ => None,
-            },
-            Expr::IndexGet { object, .. } => self.ra_of(object),
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
+                if args.is_empty() =>
+            {
+                match callee.as_ref() {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if property == "pop" => self.ra_of(object),
+                    _ => None,
+                }
+            }
+            Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => self.ra_of(object),
             _ => None,
         }
     }
@@ -1564,7 +1564,7 @@ impl Rewriter<'_> {
         let t = Expr::Integer(i64::from(tmpl));
         *e = match std::mem::replace(e, undefined()) {
             Expr::ArrayPop(id) => rt(RA_POP, vec![Expr::LocalGet(id), t]),
-            Expr::Call { callee, .. } => {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
                 let Expr::PropertyGet { object, .. } = *callee else {
                     unreachable!("a record array's pop")
                 };
@@ -1572,7 +1572,7 @@ impl Rewriter<'_> {
                 self.expr(&mut o);
                 rt(RA_POP, vec![o, t])
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 let (mut o, mut i) = (*object, *index);
                 self.expr(&mut o);
                 self.expr(&mut i);
@@ -1618,6 +1618,7 @@ impl Rewriter<'_> {
             op: CompareOp::Eq,
             left,
             right,
+            ..
         } = condition
         else {
             return false;
@@ -1685,12 +1686,14 @@ impl Rewriter<'_> {
             } if module == "array" && matches!(method.as_str(), "push_single" | "push") => {
                 self.ra_of(o).map(|t| (t, args.len()))
             }
-            Expr::Call { callee, args, .. } => match callee.as_ref() {
-                Expr::PropertyGet {
-                    object, property, ..
-                } if property == "push" => self.ra_of(object).map(|t| (t, args.len())),
-                _ => None,
-            },
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                match callee.as_ref() {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if property == "push" => self.ra_of(object).map(|t| (t, args.len())),
+                    _ => None,
+                }
+            }
             _ => None,
         };
         if let Some((tmpl, n)) = pushed {
@@ -1750,7 +1753,7 @@ impl Rewriter<'_> {
             } if on(object) => Some(format!("a store of `{property}`")),
             Expr::IndexSet { object, .. } if on(object) => Some("an index store".into()),
             Expr::PutValueSet { target, .. } if on(target) => Some("a store".into()),
-            Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
                 Expr::PropertyGet {
                     object, property, ..
                 } if on(object) => Some(format!("a call of `{property}`")),
@@ -1888,6 +1891,7 @@ impl Rewriter<'_> {
                                 byte_end: *byte_end,
                             };
                             Expr::Conditional {
+                                byte_offset: 0, /*HPOS*/
                                 condition: Box::new(Expr::LocalGet(rec.present)),
                                 then_expr: Box::new(read),
                                 else_expr: Box::new(throw),
@@ -1900,11 +1904,12 @@ impl Rewriter<'_> {
                     None => self.expr(object),
                 }
             }
-            Expr::Compare { op, left, right }
-                if matches!(
-                    op,
-                    CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe
-                ) && (self.rec_of(left).is_some() || self.rec_of(right).is_some()) =>
+            Expr::Compare {
+                op, left, right, ..
+            } if matches!(
+                op,
+                CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe
+            ) && (self.rec_of(left).is_some() || self.rec_of(right).is_some()) =>
             {
                 let (r, other) = if self.rec_of(left).is_some() {
                     (left.as_ref(), right.as_ref())
@@ -1951,6 +1956,7 @@ impl Rewriter<'_> {
                 let object = Expr::String("object".into());
                 *e = if rec.track {
                     Expr::Conditional {
+                        byte_offset: 0, /*HPOS*/
                         condition: Box::new(Expr::LocalGet(rec.present)),
                         then_expr: Box::new(object),
                         else_expr: Box::new(Expr::String("undefined".into())),
@@ -1963,7 +1969,9 @@ impl Rewriter<'_> {
                 op: UnaryOp::Not,
                 operand,
             } => self.cond(operand),
-            Expr::Logical { op, left, right } if self.rec_of(left).is_some() => {
+            Expr::Logical {
+                op, left, right, ..
+            } if self.rec_of(left).is_some() => {
                 let u = self.rec_of(left).unwrap();
                 self.reach(u);
                 self.census.presence += 1;
@@ -1972,11 +1980,13 @@ impl Rewriter<'_> {
                 self.expr(&mut r);
                 *e = match op {
                     LogicalOp::And => Expr::Conditional {
+                        byte_offset: 0, /*HPOS*/
                         condition: Box::new(present),
                         then_expr: Box::new(r),
                         else_expr: Box::new(undefined()),
                     },
                     LogicalOp::Or | LogicalOp::Coalesce => Expr::Conditional {
+                        byte_offset: 0, /*HPOS*/
                         condition: Box::new(present),
                         then_expr: Box::new(self.materialize(u)),
                         else_expr: Box::new(r),
@@ -1991,6 +2001,7 @@ impl Rewriter<'_> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 self.cond(condition);
                 self.expr(then_expr);
@@ -2051,7 +2062,7 @@ fn lane_functions(hir: &Module, facts: &ElisionFacts) -> HashSet<u32> {
                 Expr::PropertyGet {
                     byte_offset: at, ..
                 } => {
-                    member.insert(if *at != 0 { *at } else { *byte_offset });
+                    member.insert(*at);
                 }
                 _ => {}
             }

@@ -8,6 +8,7 @@
 
 use crate::types::{LocalId, Type};
 use anyhow::{anyhow, Result};
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::destructuring::lower_destructuring_assignment;
@@ -70,7 +71,7 @@ pub(crate) fn lower_rhs_with_assignment_name(
     result
 }
 
-pub(crate) fn throw_type_error_const_assignment(name: &str) -> Expr {
+pub(crate) fn throw_type_error_const_assignment(name: &str, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -80,11 +81,11 @@ pub(crate) fn throw_type_error_const_assignment(name: &str) -> Expr {
         }),
         args: vec![Expr::String(name.to_string())],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
-fn throw_restricted_function_property_assignment() -> Expr {
+fn throw_restricted_function_property_assignment(byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -94,11 +95,11 @@ fn throw_restricted_function_property_assignment() -> Expr {
         }),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
-fn throw_reference_error_unresolvable_assignment(name: &str) -> Expr {
+fn throw_reference_error_unresolvable_assignment(name: &str, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -108,7 +109,7 @@ fn throw_reference_error_unresolvable_assignment(name: &str) -> Expr {
         }),
         args: vec![Expr::String(name.to_string())],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -164,8 +165,18 @@ fn lower_logical_assignment(
     op: LogicalOp,
 ) -> Result<Expr> {
     let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
-    let right = Box::new(lower_assignment_target(ctx, &assign.left, Box::new(rhs))?);
-    Ok(Expr::Logical { op, left, right })
+    let right = Box::new(lower_assignment_target(
+        ctx,
+        &assign.left,
+        Box::new(rhs),
+        assign.span.lo.0,
+    )?);
+    Ok(Expr::Logical {
+        byte_offset: assign.span.lo.0,
+        op,
+        left,
+        right,
+    })
 }
 
 fn register_assignment_native_instance(
@@ -322,7 +333,10 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         // still a declared binding (var hoisting) — self-assignment before
         // the declaration statement is fine and yields undefined.
         if ctx.lookup_local(name).is_none() {
-            return Ok(throw_reference_error_unresolvable_assignment(name));
+            return Ok(throw_reference_error_unresolvable_assignment(
+                name,
+                assign.span.lo.0,
+            ));
         }
     }
 
@@ -378,6 +392,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             // a += b becomes a = a + b
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
             Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Add,
                 left,
                 right: Box::new(rhs),
@@ -386,6 +401,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::SubAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
             Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Sub,
                 left,
                 right: Box::new(rhs),
@@ -394,6 +410,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::MulAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
             Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Mul,
                 left,
                 right: Box::new(rhs),
@@ -402,6 +419,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::DivAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
             Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Div,
                 left,
                 right: Box::new(rhs),
@@ -410,6 +428,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::ModAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
             Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Mod,
                 left,
                 right: Box::new(rhs),
@@ -418,6 +437,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::BitAndAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
             Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::BitAnd,
                 left,
                 right: Box::new(rhs),
@@ -426,6 +446,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::BitOrAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
             Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::BitOr,
                 left,
                 right: Box::new(rhs),
@@ -434,6 +455,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::BitXorAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
             Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::BitXor,
                 left,
                 right: Box::new(rhs),
@@ -442,6 +464,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::LShiftAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
             Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Shl,
                 left,
                 right: Box::new(rhs),
@@ -450,6 +473,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::RShiftAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
             Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Shr,
                 left,
                 right: Box::new(rhs),
@@ -458,6 +482,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
         ast::AssignOp::ZeroFillRShiftAssign => {
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
             Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::UShr,
                 left,
                 right: Box::new(rhs),
@@ -467,6 +492,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
             // a **= b becomes a = a ** b
             let left = Box::new(lower_assign_target_to_expr(ctx, &assign.left)?);
             Box::new(Expr::Binary {
+                byte_offset: assign.span.lo.0,
                 op: BinaryOp::Pow,
                 left,
                 right: Box::new(rhs),
@@ -479,7 +505,7 @@ pub(super) fn lower_assign(ctx: &mut LoweringContext, assign: &ast::AssignExpr) 
           // here — preferable to a silent runtime error path. No catch-all.
     };
 
-    lower_assignment_target(ctx, &assign.left, value)
+    lower_assignment_target(ctx, &assign.left, value, assign.span.lo.0)
 }
 
 /// Lower `<name> = value` where `<name>` is an identifier assignment target.
@@ -495,6 +521,7 @@ pub(crate) fn lower_ident_assignment(
     ctx: &mut LoweringContext,
     name: String,
     value: Box<Expr>,
+    byte_offset: u32,
 ) -> Result<Expr> {
     let with_envs = ctx.active_with_envs_for_ident(&name);
     if !with_envs.is_empty()
@@ -513,7 +540,7 @@ pub(crate) fn lower_ident_assignment(
         // resolved before the value is evaluated, as in the spec.
         let global = Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset,
             object: Box::new(Expr::GlobalGet(0)),
             property: "globalThis".to_string(),
         };
@@ -521,6 +548,7 @@ pub(crate) fn lower_ident_assignment(
             .iter()
             .rev()
             .fold(global, |outer, env| Expr::Conditional {
+                byte_offset,
                 condition: Box::new(Expr::ObjectHasOwn(
                     Box::new(Expr::LocalGet(*env)),
                     Box::new(Expr::String(name.clone())),
@@ -532,7 +560,7 @@ pub(crate) fn lower_ident_assignment(
             object: Box::new(target),
             property: name,
             value,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
         });
     }
@@ -554,7 +582,7 @@ pub(crate) fn lower_ident_assignment(
     if targets_class_inner {
         Ok(Expr::Sequence(vec![
             *value,
-            throw_type_error_const_assignment(&name),
+            throw_type_error_const_assignment(&name, byte_offset),
         ]))
     } else if let Some(id) = ctx.lookup_local(&name) {
         if ctx.is_local_immutable(id) {
@@ -563,7 +591,7 @@ pub(crate) fn lower_ident_assignment(
             // `TypeError: Assignment to constant variable.`
             return Ok(Expr::Sequence(vec![
                 *value,
-                throw_type_error_const_assignment(&name),
+                throw_type_error_const_assignment(&name, byte_offset),
             ]));
         }
         // A JavaScript `var` inferred from an array literal can later hold an
@@ -615,7 +643,7 @@ pub(crate) fn lower_ident_assignment(
             }),
             args: vec![Expr::ClassRef(class_name), *value],
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset: byte_offset,
         })
     } else if ctx.lookup_func(&name).is_some() {
         // v0.5.757: don't shadow a class/function binding with an
@@ -632,7 +660,7 @@ pub(crate) fn lower_ident_assignment(
             if matches!(name.as_str(), "undefined" | "NaN" | "Infinity") {
                 return Ok(Expr::Sequence(vec![
                     *value,
-                    throw_type_error_const_assignment(&name),
+                    throw_type_error_const_assignment(&name, byte_offset),
                 ]));
             }
             // #5989: strict-mode assignment to an existing global
@@ -660,13 +688,13 @@ pub(crate) fn lower_ident_assignment(
         Ok(Expr::PropertySet {
             object: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: "globalThis".to_string(),
             }),
             property: name,
             value,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
         })
     }
@@ -689,12 +717,15 @@ fn lower_assignment_target(
     ctx: &mut LoweringContext,
     target: &ast::AssignTarget,
     value: Box<Expr>,
+    byte_offset: u32,
 ) -> Result<Expr> {
     match target {
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Ident(ident)) => {
-            lower_ident_assignment(ctx, ident.id.sym.to_string(), value)
+            lower_ident_assignment(ctx, ident.id.sym.to_string(), value, byte_offset)
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) => {
+            // A member store stands at its member token, as its read does.
+            let byte_offset = crate::lower::member_token(member);
             // Proxy set: `proxy.foo = v` / `proxy[k] = v`
             if !matches!(member.prop, ast::MemberProp::PrivateName(_)) {
                 if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
@@ -717,7 +748,7 @@ fn lower_assignment_target(
                             receiver: proxy,
                             strict: ctx.current_strict,
                             element_offset: member.span.lo.0,
-                            byte_offset: 0,
+                            byte_offset,
                             byte_end: 0,
                         });
                     }
@@ -741,7 +772,7 @@ fn lower_assignment_target(
                     {
                         return Ok(Expr::Sequence(vec![
                             *value,
-                            throw_restricted_function_property_assignment(),
+                            throw_restricted_function_property_assignment(byte_offset),
                         ]));
                     }
                 }
@@ -759,7 +790,7 @@ fn lower_assignment_target(
                         if matches!(prop_ident.sym.as_ref(), "caller" | "arguments") {
                             return Ok(Expr::Sequence(vec![
                                 *value,
-                                throw_restricted_function_property_assignment(),
+                                throw_restricted_function_property_assignment(byte_offset),
                             ]));
                         }
                     }
@@ -775,6 +806,7 @@ fn lower_assignment_target(
                         let field_name = prop_ident.sym.to_string();
                         if ctx.has_static_field(&resolved_class, &field_name) {
                             return Ok(Expr::StaticFieldSet {
+                                byte_offset,
                                 class_name: resolved_class,
                                 field_name,
                                 value,
@@ -803,7 +835,7 @@ fn lower_assignment_target(
                                 }),
                                 args: vec![*value],
                                 type_args: vec![],
-                                byte_offset: 0,
+                                byte_offset,
                             });
                         }
                     }
@@ -879,6 +911,7 @@ fn lower_assignment_target(
                             if let Some(method) = setter_method {
                                 let object_expr = lower_expr(ctx, &member.obj)?;
                                 return Ok(Expr::NativeMethodCall {
+                                    byte_offset,
                                     module: module_name,
                                     class_name: Some(class_name),
                                     object: Some(Box::new(object_expr)),
@@ -1027,7 +1060,7 @@ fn lower_assignment_target(
                             receiver: object,
                             strict: ctx.current_strict,
                             element_offset: member.span.lo.0,
-                            byte_offset: 0,
+                            byte_offset,
                             byte_end: 0,
                         },
                     ))
@@ -1087,7 +1120,7 @@ fn lower_assignment_target(
                                     receiver: object,
                                     strict: ctx.current_strict,
                                     element_offset: member.span.lo.0,
-                                    byte_offset: 0,
+                                    byte_offset,
                                     byte_end: 0,
                                 },
                             ));
@@ -1125,7 +1158,7 @@ fn lower_assignment_target(
                             object,
                             property,
                             value,
-                            byte_offset: 0,
+                            byte_offset,
                             byte_end: 0,
                         },
                     ))
@@ -1164,19 +1197,19 @@ fn lower_assignment_target(
         ast::AssignTarget::Pat(pat) => lower_destructuring_assignment(ctx, pat, value),
         // Unwrap TypeScript type annotations and parentheses for assignment
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Paren(paren)) => {
-            lower_expr_assignment(ctx, &paren.expr, value)
+            lower_expr_assignment(ctx, &paren.expr, value, byte_offset)
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsAs(ts_as)) => {
-            lower_expr_assignment(ctx, &ts_as.expr, value)
+            lower_expr_assignment(ctx, &ts_as.expr, value, byte_offset)
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsNonNull(ts_nn)) => {
-            lower_expr_assignment(ctx, &ts_nn.expr, value)
+            lower_expr_assignment(ctx, &ts_nn.expr, value, byte_offset)
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsTypeAssertion(ts_ta)) => {
-            lower_expr_assignment(ctx, &ts_ta.expr, value)
+            lower_expr_assignment(ctx, &ts_ta.expr, value, byte_offset)
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::TsSatisfies(ts_sat)) => {
-            lower_expr_assignment(ctx, &ts_sat.expr, value)
+            lower_expr_assignment(ctx, &ts_sat.expr, value, byte_offset)
         }
         other => Err(anyhow!("Unsupported assignment target: {:?}", other)),
     }
@@ -1220,7 +1253,7 @@ fn array_assignment_iife(
         callee: Box::new(super::expr_function::lower_arrow(ctx, &arrow)?),
         args: vec![*value],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset: pat.span().lo.0,
         byte_end: 0,
     })
 }
@@ -1346,15 +1379,17 @@ fn compound_member_assign_once(
     };
     let key_id = key.as_ref().map(|(id, _)| *id);
     let read = match (&prop, key_id) {
+        // 13.15.3 step 2: the compound's GetValue, at the member's offset;
+        // its PutValue below stands there too (one site pair, UpdateGet + Set).
         (Some(p), _) => Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: crate::lower::member_token(member),
             object: Box::new(Expr::LocalGet(base_id)),
             property: p.clone(),
         },
         (None, Some(k)) => Expr::IndexGet {
             element_offset: member.span.lo.0,
-            byte_offset: 0,
+            byte_offset: crate::lower::member_token(member),
             byte_end: 0,
             object: Box::new(Expr::LocalGet(base_id)),
             index: Box::new(Expr::LocalGet(k)),
@@ -1369,7 +1404,7 @@ fn compound_member_assign_once(
                 value: Box::new(value),
                 // ACCSITE1: the compound's PutValue is a store site at the
                 // member's offset (13.15.3), with its GetValue beside it.
-                byte_offset: member.span.lo.0,
+                byte_offset: crate::lower::member_token(member),
                 byte_end: 0,
             },
             (None, Some(k)) => Expr::IndexSet {
@@ -1377,7 +1412,7 @@ fn compound_member_assign_once(
                 index: Box::new(Expr::LocalGet(k)),
                 value: Box::new(value),
                 element_offset: member.span.lo.0,
-                byte_offset: 0,
+                byte_offset: crate::lower::member_token(member),
                 byte_end: 0,
             },
             _ => unreachable!(),
@@ -1388,11 +1423,13 @@ fn compound_member_assign_once(
     let rhs = lower_expr(ctx, &assign.right)?;
     let mut body = match bin_op {
         Some(op) => write_of(Expr::Binary {
+            byte_offset: assign.span.lo.0,
             op,
             left: Box::new(read),
             right: Box::new(rhs),
         }),
         None => Expr::Logical {
+            byte_offset: assign.span.lo.0,
             op: logical_op.unwrap(),
             left: Box::new(read),
             right: Box::new(write_of(rhs)),
@@ -1482,6 +1519,7 @@ pub(crate) fn hoist_compound_member_assign(
             };
             let id = ctx.fresh_local();
             stmts.push(Stmt::Let {
+                byte_offset: assign.span.lo.0,
                 id,
                 name: format!("__cmpd_{}_{}", tag, id),
                 ty,
@@ -1577,15 +1615,16 @@ pub(crate) fn hoist_compound_member_assign(
     }
 
     let read = match (&prop, key_id) {
+        // 13.15.3 step 2: the compound's GetValue, at the member's offset.
         (Some(p), _) => Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: crate::lower::member_token(member),
             object: Box::new(base_ref.clone()),
             property: p.clone(),
         },
         (None, Some(k)) => Expr::IndexGet {
             element_offset: member.span.lo.0,
-            byte_offset: 0,
+            byte_offset: crate::lower::member_token(member),
             byte_end: 0,
             object: Box::new(base_ref.clone()),
             index: Box::new(Expr::LocalGet(k)),
@@ -1602,7 +1641,7 @@ pub(crate) fn hoist_compound_member_assign(
                 value: Box::new(value),
                 // ACCSITE1: the compound's PutValue is a store site at the
                 // member's offset (13.15.3), with its GetValue beside it.
-                byte_offset: member.span.lo.0,
+                byte_offset: crate::lower::member_token(member),
                 byte_end: 0,
             },
             (None, Some(k)) => Expr::IndexSet {
@@ -1610,7 +1649,7 @@ pub(crate) fn hoist_compound_member_assign(
                 index: Box::new(Expr::LocalGet(k)),
                 value: Box::new(value),
                 element_offset: member.span.lo.0,
-                byte_offset: 0,
+                byte_offset: crate::lower::member_token(member),
                 byte_end: 0,
             },
             _ => unreachable!(),
@@ -1623,6 +1662,7 @@ pub(crate) fn hoist_compound_member_assign(
     let rhs = lower_expr(ctx, &assign.right)?;
     let final_expr = if let Some(op) = bin_op {
         write_of(Expr::Binary {
+            byte_offset: assign.span.lo.0,
             op,
             left: Box::new(read),
             right: Box::new(rhs),
@@ -1630,6 +1670,7 @@ pub(crate) fn hoist_compound_member_assign(
     } else {
         // `read OP (target = rhs)` — mirrors `lower_logical_assignment`.
         Expr::Logical {
+            byte_offset: assign.span.lo.0,
             op: logical_op.unwrap(),
             left: Box::new(read),
             right: Box::new(write_of(rhs)),

@@ -9,25 +9,17 @@ impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_date_error(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
             Expr::DateNew(args) => {
-                if let Some(a) = args.first() {
-                    self.emit_expr(func, a);
-                } else {
-                    func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                }
-                self.emit_frame_begin(func, 1);
-                func.instruction(&Instruction::LocalSet(self.temp_local));
-                self.emit_slot_addr(func, 0);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
                 // `date_new_val`, not `date_new`: only the former is in the collected string
                 // table, and an uncollected bridge name resolves to string id 0, so every
                 // Date would come back undefined. The argument count tells `new Date()`
-                // (now) from `new Date(undefined)` (an invalid Date).
-                self.emit_memcall(func, "date_new_val", args.len().min(1) as u32);
+                // (now) from `new Date(undefined)` (an invalid Date), and every component
+                // of `new Date(y, m, d, ...)` reaches the host constructor.
+                let argc = args.len() as u32;
+                self.emit_frame_begin(func, argc);
+                for (slot, arg) in (0..).zip(args) {
+                    self.emit_store_arg(func, slot, arg);
+                }
+                self.emit_memcall(func, "date_new_val", argc);
             }
             Expr::DateGetTime(d) => {
                 self.emit_frame_begin(func, 1);
@@ -177,99 +169,46 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, d);
                 self.emit_memcall(func, "date_to_json", 1);
             }
-            // The wasm backend still uses single-value Date setter memcalls
-            // (its JS runtime ignores optional trailing components — the
-            // multi-arg #2851 work targets the native LLVM backend). Emit the
-            // leading argument (Undefined when the call site passes none).
-            Expr::DateSetUtcFullYear { date, args } => {
-                self.emit_frame_begin(func, 2);
+            // Every argument reaches the setter, so `setHours(h, m)` sets the minutes too.
+            Expr::DateSetUtcFullYear { date, args }
+            | Expr::DateSetUtcMonth { date, args }
+            | Expr::DateSetUtcDate { date, args }
+            | Expr::DateSetUtcHours { date, args }
+            | Expr::DateSetUtcMinutes { date, args }
+            | Expr::DateSetUtcSeconds { date, args }
+            | Expr::DateSetUtcMilliseconds { date, args }
+            | Expr::DateSetFullYear { date, args }
+            | Expr::DateSetMonth { date, args }
+            | Expr::DateSetDate { date, args }
+            | Expr::DateSetHours { date, args }
+            | Expr::DateSetMinutes { date, args }
+            | Expr::DateSetSeconds { date, args }
+            | Expr::DateSetMilliseconds { date, args }
+            | Expr::DateSetTime { date, args } => {
+                let bridge = match expr {
+                    Expr::DateSetUtcFullYear { .. } => "date_set_utc_full_year",
+                    Expr::DateSetUtcMonth { .. } => "date_set_utc_month",
+                    Expr::DateSetUtcDate { .. } => "date_set_utc_date",
+                    Expr::DateSetUtcHours { .. } => "date_set_utc_hours",
+                    Expr::DateSetUtcMinutes { .. } => "date_set_utc_minutes",
+                    Expr::DateSetUtcSeconds { .. } => "date_set_utc_seconds",
+                    Expr::DateSetUtcMilliseconds { .. } => "date_set_utc_milliseconds",
+                    Expr::DateSetFullYear { .. } => "date_set_full_year",
+                    Expr::DateSetMonth { .. } => "date_set_month",
+                    Expr::DateSetDate { .. } => "date_set_date",
+                    Expr::DateSetHours { .. } => "date_set_hours",
+                    Expr::DateSetMinutes { .. } => "date_set_minutes",
+                    Expr::DateSetSeconds { .. } => "date_set_seconds",
+                    Expr::DateSetMilliseconds { .. } => "date_set_milliseconds",
+                    _ => "date_set_time",
+                };
+                let argc = 1 + args.len() as u32;
+                self.emit_frame_begin(func, argc);
                 self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_utc_full_year", 2);
-            }
-            Expr::DateSetUtcMonth { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_utc_month", 2);
-            }
-            Expr::DateSetUtcDate { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_utc_date", 2);
-            }
-            Expr::DateSetUtcHours { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_utc_hours", 2);
-            }
-            Expr::DateSetUtcMinutes { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_utc_minutes", 2);
-            }
-            Expr::DateSetUtcSeconds { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_utc_seconds", 2);
-            }
-            Expr::DateSetUtcMilliseconds { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_utc_milliseconds", 2);
-            }
-            Expr::DateSetFullYear { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_full_year", 2);
-            }
-            Expr::DateSetMonth { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_month", 2);
-            }
-            Expr::DateSetDate { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_date", 2);
-            }
-            Expr::DateSetHours { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_hours", 2);
-            }
-            Expr::DateSetMinutes { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_minutes", 2);
-            }
-            Expr::DateSetSeconds { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_seconds", 2);
-            }
-            Expr::DateSetMilliseconds { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_milliseconds", 2);
-            }
-            Expr::DateSetTime { date, args } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, date);
-                self.emit_store_arg(func, 1, args.first().unwrap_or(&Expr::Undefined));
-                self.emit_memcall(func, "date_set_time", 2);
+                for (slot, arg) in (1..).zip(args) {
+                    self.emit_store_arg(func, slot, arg);
+                }
+                self.emit_memcall(func, bridge, argc);
             }
 
             // --- Error ---

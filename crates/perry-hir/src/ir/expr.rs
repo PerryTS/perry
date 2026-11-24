@@ -131,6 +131,9 @@ pub enum Expr {
         op: BinaryOp,
         left: Box<Expr>,
         right: Box<Expr>,
+        /// Source byte offset (`span.lo.0`) of the binary expression (or of the
+        /// source construct a synthesized one desugars). Excluded from stable-hashing.
+        byte_offset: u32,
     },
     Unary {
         op: UnaryOp,
@@ -142,6 +145,9 @@ pub enum Expr {
         op: CompareOp,
         left: Box<Expr>,
         right: Box<Expr>,
+        /// Source byte offset (`span.lo.0`) of the comparison (or of the source
+        /// construct a synthesized one desugars). Excluded from stable-hashing.
+        byte_offset: u32,
     },
 
     // Logical
@@ -149,6 +155,7 @@ pub enum Expr {
         op: LogicalOp,
         left: Box<Expr>,
         right: Box<Expr>,
+        byte_offset: u32,
     },
 
     // Function call
@@ -166,6 +173,14 @@ pub enum Expr {
         byte_offset: u32,
         /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
         byte_end: u32,
+    },
+    /// The call of a split region function (perry-codegen split_regions.rs):
+    /// `callee` is the region's `FuncRef`, `args` its live-in `LocalGet`s.
+    /// Compiler-built plumbing with no source construct: lowered and modeled
+    /// as the direct call it is, and no site of any kind.
+    RegionCall {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
     },
 
     /// Function call with spread arguments (e.g., fn(a, ...arr, b))
@@ -212,6 +227,9 @@ pub enum Expr {
         object: Option<Box<Expr>>,
         method: String,
         args: Vec<Expr>,
+        /// Source byte offset of the call this native method call lowers;
+        /// excluded from stable-hashing, like `Call.byte_offset`.
+        byte_offset: u32,
     },
 
     // Object/property access
@@ -234,8 +252,8 @@ pub enum Expr {
         object: Box<Expr>,
         property: String,
         value: Box<Expr>,
-        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
-        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        /// Source coordinates (SWC 1-based, end exclusive): the offset always, the
+        /// end only with `PERRY_FACTS_DUMP` (otherwise 0); ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
     },
@@ -246,8 +264,8 @@ pub enum Expr {
         op: BinaryOp, // Add for ++, Sub for --
         prefix: bool, // true for ++x, false for x++
         strict: bool,
-        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
-        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        /// Source coordinates (SWC 1-based, end exclusive): the offset always, the
+        /// end only with `PERRY_FACTS_DUMP` (otherwise 0); ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
     },
@@ -263,12 +281,21 @@ pub enum Expr {
         /// Ignored by stable hashing and structural equality.
         element_offset: u32,
     },
+    /// Output `k` of a split region, read back from the region call's
+    /// result array (`__region_out[k]`, perry-codegen split_regions.rs).
+    /// Compiler-built plumbing with no source construct: an element read of
+    /// `object` at `index` (always `Number(k)`), lowered and modeled as that
+    /// read is, and no site of any kind.
+    RegionOut {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
     IndexSet {
         object: Box<Expr>,
         index: Box<Expr>,
         value: Box<Expr>,
-        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
-        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        /// Source coordinates (SWC 1-based, end exclusive): the offset always, the
+        /// end only with `PERRY_FACTS_DUMP` (otherwise 0); ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
         /// Element-fact source identity (SWC span.lo), independent of verdict sites.
@@ -282,8 +309,8 @@ pub enum Expr {
         op: BinaryOp, // Add for ++, Sub for --
         prefix: bool, // true for ++x, false for x++
         strict: bool,
-        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
-        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        /// Source coordinates (SWC 1-based, end exclusive): the offset always, the
+        /// end only with `PERRY_FACTS_DUMP` (otherwise 0); ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
         /// Element-fact source identity (SWC span.lo), independent of verdict sites.
@@ -349,6 +376,7 @@ pub enum Expr {
         condition: Box<Expr>,
         then_expr: Box<Expr>,
         else_expr: Box<Expr>,
+        byte_offset: u32,
     },
 
     // Type operations
@@ -439,13 +467,19 @@ pub enum Expr {
         object: Box<Expr>,
     },
 
-    // Await expression (for async functions)
-    Await(Box<Expr>),
+    // Await expression (for async functions). The second field is the
+    // source byte offset (`span.lo.0`) of the `await` expression; an
+    // await synthesized by a desugaring takes the offset of the construct
+    // it is made for. Excluded from stable-hashing.
+    Await(Box<Expr>, u32),
 
     // Yield expression (for generator functions)
     Yield {
         value: Option<Box<Expr>>,
         delegate: bool,
+        /// Source byte offset (`span.lo.0`) of the `yield` / `yield*`
+        /// expression. Excluded from stable-hashing.
+        byte_offset: u32,
     },
 
     // New expression (class instantiation)
@@ -556,6 +590,7 @@ pub enum Expr {
         class_name: String,
         field_name: String,
         value: Box<Expr>,
+        byte_offset: u32,
     },
 
     // Static computed-key Symbol field assignment, e.g.
@@ -611,6 +646,9 @@ pub enum Expr {
         /// The refresh then also rewrites the environment slots, so members
         /// observe a captured binding initialized after the class evaluated.
         env_class: Option<String>,
+        /// The class construct's offset (diagnostics and op identity);
+        /// ignored by stable hashing.
+        byte_offset: u32,
     },
 
     /// Read slot `index` of a class's capture ENVIRONMENT: the per-class
@@ -861,13 +899,15 @@ pub enum Expr {
         class_name: String,
         method_name: String,
         args: Vec<Expr>,
+        /// The call's source offset (`call.span.lo.0`); ignored by stable hashing.
+        byte_offset: u32,
     },
 
     // This expression
     This,
 
-    // Super constructor call: super(args)
-    SuperCall(Vec<Expr>),
+    // Super constructor call: super(args), at its source offset
+    SuperCall(Vec<Expr>, u32),
 
     // Super method call: super.method(args)
     SuperMethodCall {
@@ -927,6 +967,8 @@ pub enum Expr {
         key: Box<Expr>,
         receiver: Box<Expr>,
         args: Vec<Expr>,
+        /// The call's source offset (`call.span.lo.0`); ignored by stable hashing.
+        byte_offset: u32,
     },
 
     // Environment variable access: process.env.VARNAME
@@ -2424,6 +2466,10 @@ pub enum Expr {
     Closure {
         /// Unique ID for this closure's underlying function
         func_id: FuncId,
+        /// Source byte offset (`span.lo.0`) of the arrow / function
+        /// expression; a synthesized closure takes the offset of the source
+        /// construct it is made for. Excluded from stable-hashing.
+        byte_offset: u32,
         /// Parameter definitions
         params: Vec<Param>,
         /// Return type
@@ -2842,8 +2888,8 @@ pub enum Expr {
         value: Box<Expr>,
         receiver: Box<Expr>,
         strict: bool,
-        /// Diagnostic source coordinates (SWC 1-based, end exclusive); set only with
-        /// `PERRY_FACTS_DUMP`, otherwise 0; ignored by stable hashing.
+        /// Source coordinates (SWC 1-based, end exclusive): the offset always, the
+        /// end only with `PERRY_FACTS_DUMP` (otherwise 0); ignored by stable hashing.
         byte_offset: u32,
         byte_end: u32,
         /// Element-fact source identity (SWC span.lo), independent of verdict sites.
@@ -3029,6 +3075,76 @@ pub enum PathWin32Method {
 }
 
 impl Expr {
+    /// Source byte offset of the expression, for the variants that carry one
+    /// (the construct's own position; 0 = built by the compiler with none).
+    pub fn byte_offset(&self) -> Option<u32> {
+        match self {
+            Expr::Binary { byte_offset, .. }
+            | Expr::Compare { byte_offset, .. }
+            | Expr::Call { byte_offset, .. }
+            | Expr::CallSpread { byte_offset, .. }
+            | Expr::NativeMethodCall { byte_offset, .. }
+            | Expr::PropertyGet { byte_offset, .. }
+            | Expr::PropertySet { byte_offset, .. }
+            | Expr::PropertyUpdate { byte_offset, .. }
+            | Expr::IndexGet { byte_offset, .. }
+            | Expr::IndexSet { byte_offset, .. }
+            | Expr::IndexUpdate { byte_offset, .. }
+            | Expr::Yield { byte_offset, .. }
+            | Expr::New { byte_offset, .. }
+            | Expr::NewDynamic { byte_offset, .. }
+            | Expr::NewDynamicSpread { byte_offset, .. }
+            | Expr::Closure { byte_offset, .. }
+            | Expr::Conditional { byte_offset, .. }
+            | Expr::StaticFieldSet { byte_offset, .. }
+            | Expr::Logical { byte_offset, .. }
+            | Expr::PutValueSet { byte_offset, .. }
+            | Expr::DynamicImport { byte_offset, .. }
+            | Expr::StaticMethodCall { byte_offset, .. }
+            | Expr::ObjectSuperMethodCall { byte_offset, .. } => Some(*byte_offset),
+            Expr::Await(_, o) | Expr::SuperCall(_, o) => Some(*o),
+            _ => None,
+        }
+    }
+}
+
+impl Expr {
+    /// A compound `o.k op= v` (13.15.3): the `PropertySet` whose value is a
+    /// `Binary` with a read of the same key at the same offset on its left.
+    /// That read is the compound's GetValue (step 2), its `UpdateGet` site;
+    /// the store is its PutValue. `None` for every other expression. A site
+    /// is (module, start, kind): the GetValue shares its start with the
+    /// store, and with any ordinary read standing at the same member start,
+    /// so a lookup tells them apart by this kind, never by the offset alone.
+    pub fn compound_get(&self) -> Option<&Expr> {
+        let Expr::PropertySet {
+            object,
+            property,
+            value,
+            byte_offset,
+            ..
+        } = self
+        else {
+            return None;
+        };
+        if *byte_offset == 0 || matches!(object.as_ref(), Expr::PrivateGuard { .. }) {
+            return None;
+        }
+        let Expr::Binary { left, .. } = value.as_ref() else {
+            return None;
+        };
+        match left.as_ref() {
+            Expr::PropertyGet {
+                property: p,
+                byte_offset: at,
+                ..
+            } if p == property && at == byte_offset => Some(left.as_ref()),
+            _ => None,
+        }
+    }
+}
+
+impl Expr {
     /// The callable global fetch used by ordinary and spread-call lowering.
     /// Imported or locally shadowed functions named fetch are not this callee.
     pub fn is_global_fetch_callee(&self) -> bool {
@@ -3038,24 +3154,60 @@ impl Expr {
 }
 
 impl Expr {
-    /// A compiler-owned indexed read with no source or verdict identity.
-    pub fn synthetic_index_get(object: Box<Expr>, index: Box<Expr>) -> Self {
+    /// A compiler-built indexed read standing at its construct's `byte_offset`
+    /// (diagnostics and op identity). It is no element site: element facts
+    /// identify source element reads only.
+    pub fn index_get_at(object: Box<Expr>, index: Box<Expr>, byte_offset: u32) -> Self {
         Self::IndexGet {
             object,
             index,
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
         }
     }
 
-    /// A compiler-owned indexed write with no source or verdict identity.
-    pub fn synthetic_index_set(object: Box<Expr>, index: Box<Expr>, value: Box<Expr>) -> Self {
+    /// A compiler-built indexed write standing at its construct's
+    /// `byte_offset`; like [`Expr::index_get_at`], no element site.
+    pub fn index_set_at(
+        object: Box<Expr>,
+        index: Box<Expr>,
+        value: Box<Expr>,
+        byte_offset: u32,
+    ) -> Self {
         Self::IndexSet {
             object,
             index,
             value,
             element_offset: 0,
+            byte_offset,
+            byte_end: 0,
+        }
+    }
+}
+
+impl Expr {
+    /// A member read codegen builds after facts (plumbing with no source
+    /// construct): it has no site. Its `byte_offset` is 0, the position no
+    /// source member read has (SWC positions start at 1, and every source
+    /// `PropertyGet` is located at its member token), so no fact producer
+    /// ever records a site at 0 and a facts lookup of this read finds none.
+    pub fn property_get_unsited(object: Box<Expr>, property: String) -> Self {
+        Self::PropertyGet {
+            object,
+            property,
+            byte_offset: 0,
+            byte_end: 0,
+        }
+    }
+
+    /// A member write codegen builds after facts; like
+    /// [`Expr::property_get_unsited`], it has no site.
+    pub fn property_set_unsited(object: Box<Expr>, property: String, value: Box<Expr>) -> Self {
+        Self::PropertySet {
+            object,
+            property,
+            value,
             byte_offset: 0,
             byte_end: 0,
         }

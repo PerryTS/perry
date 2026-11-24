@@ -1,6 +1,7 @@
 use super::*;
 fn init() -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: 2,
         name: "m".into(),
         ty: Type::Any,
@@ -46,6 +47,7 @@ fn projected(module: &Module) -> bool {
 fn projects_repeated_capture_and_null_check() {
     let m = optimized(vec![
         Stmt::Expr(Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Ne,
             left: Box::new(Expr::LocalGet(2)),
             right: Box::new(Expr::Null),
@@ -71,7 +73,7 @@ fn projects_repeated_capture_and_null_check() {
 #[test]
 fn rejects_escapes_metadata_aliases_writes_and_multiple_captures() {
     for extra in [
-        Stmt::Return(Some(Expr::LocalGet(2))),
+        Stmt::Return(Some(Expr::LocalGet(2)), 0),
         Stmt::Expr(Expr::PropertyGet {
             byte_end: 0,
             object: Box::new(Expr::LocalGet(2)),
@@ -79,6 +81,7 @@ fn rejects_escapes_metadata_aliases_writes_and_multiple_captures() {
             byte_offset: 0,
         }),
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "alias".into(),
             ty: Type::Any,
@@ -142,6 +145,7 @@ fn rejects_function_capture_metadata_even_without_localget() {
         body[0] = init();
     }
     module.functions.push(Function {
+        byte_offset: 0,
         id: 10,
         name: "closure".into(),
         type_params: vec![],

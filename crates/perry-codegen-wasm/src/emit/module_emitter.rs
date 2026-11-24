@@ -46,6 +46,8 @@ pub(super) struct WasmModuleEmitter {
     pub(super) class_method_map: BTreeMap<String, BTreeMap<String, u32>>,
     /// Class static method map: class_name → {method_name → wasm function index}
     pub(super) class_static_map: BTreeMap<String, BTreeMap<String, u32>>,
+    /// Class accessor map: class_name → (name, `accessor_code`, wasm function index)
+    pub(super) class_accessor_map: BTreeMap<String, Vec<(String, f64, u32)>>,
     /// Computed member function: (class_name, function name) → wasm function index
     pub(super) class_computed_map: BTreeMap<(String, String), u32>,
     /// Function name → wasm function index (for cross-module ExternFuncRef resolution)
@@ -61,6 +63,12 @@ pub(super) struct WasmModuleEmitter {
     /// The classes `declares_no_constructor` holds for: `new` forwards their
     /// arguments to a built-in parent's constructor.
     pub(super) implicit_ctor_classes: std::collections::BTreeSet<String>,
+    /// Classes whose compiled constructor is synthesized from the parent's
+    /// (`constructor_of`): its `super(...)` passes its parameters on as they are, a
+    /// rest parameter already as one array.
+    pub(super) forwarding_ctor_classes: std::collections::BTreeSet<String>,
+    /// Each class's constructor parameters that hold its captures, by name and local id.
+    pub(super) ctor_cap_params: BTreeMap<String, Vec<(String, u32)>>,
     /// Enum member values: (enum_name, member_name) → numeric value or string
     pub(super) enum_values: BTreeMap<(String, String), EnumResolvedValue>,
     /// Global index for NaN-safe temp storage (global.set/get may preserve NaN in Firefox)
@@ -147,12 +155,15 @@ impl WasmModuleEmitter {
             class_ctor_map: BTreeMap::new(),
             class_method_map: BTreeMap::new(),
             class_static_map: BTreeMap::new(),
+            class_accessor_map: BTreeMap::new(),
             class_computed_map: BTreeMap::new(),
             func_name_map: BTreeMap::new(),
             ffi_imports: Vec::new(),
             class_parent_map: BTreeMap::new(),
             user_classes: std::collections::BTreeSet::new(),
             implicit_ctor_classes: std::collections::BTreeSet::new(),
+            forwarding_ctor_classes: std::collections::BTreeSet::new(),
+            ctor_cap_params: BTreeMap::new(),
             enum_values: BTreeMap::new(),
             nan_temp_global: 0, // set during compile()
             async_func_imports: Vec::new(),
@@ -204,4 +215,9 @@ impl WasmModuleEmitter {
         self.type_map.insert(key, idx);
         idx
     }
+}
+
+/// `class_set_accessor`'s last argument: bit 0 a setter, bit 1 static.
+pub(super) fn accessor_code(is_setter: bool, is_static: bool) -> f64 {
+    f64::from(u8::from(is_setter) | u8::from(is_static) << 1)
 }

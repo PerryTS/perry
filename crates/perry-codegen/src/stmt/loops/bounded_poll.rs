@@ -452,6 +452,7 @@ fn step_of<'a>(s: &'a Expr, negated: bool) -> Option<Step<'a>> {
         condition,
         then_expr,
         else_expr,
+        ..
     } = s
     else {
         return None;
@@ -474,7 +475,10 @@ fn step_write<'a>(e: &'a Expr, id: u32) -> Option<Step<'a>> {
             UpdateOp::Decrement => Dir::Down,
         })),
         Expr::LocalSet(i, value) if *i == id => {
-            let Expr::Binary { op, left, right } = value.as_ref() else {
+            let Expr::Binary {
+                op, left, right, ..
+            } = value.as_ref()
+            else {
                 return None;
             };
             let is_c = |x: &Expr| matches!(x, Expr::LocalGet(l) if *l == id);
@@ -527,8 +531,8 @@ fn writes_in_stmt<'a>(s: &'a Stmt, id: u32, out: &mut Vec<Step<'a>>) -> bool {
         // A second binding of the counter is a write this proof does not read.
         Stmt::Let { id: i, .. } if *i == id => false,
         Stmt::Let { init, .. } => init.as_ref().is_none_or(|e| writes_in_expr(e, id, out)),
-        Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => writes_in_expr(e, id, out),
-        Stmt::Return(None)
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => writes_in_expr(e, id, out),
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -578,6 +582,7 @@ fn writes_in_stmt<'a>(s: &'a Stmt, id: u32, out: &mut Vec<Step<'a>>) -> bool {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             writes_in_expr(discriminant, id, out)
                 && cases.iter().all(|c| {
@@ -741,11 +746,14 @@ fn guard_window(e: &Expr, id: u32) -> (i64, i64) {
             op: perry_hir::LogicalOp::And,
             left,
             right,
+            ..
         } => {
             let (a, b) = (guard_window(left, id), guard_window(right, id));
             (a.0.max(b.0), a.1.min(b.1))
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             use perry_hir::CompareOp::{Ge, Gt, Le, Lt};
             // `c op bound`, or `bound op c` read from the other side.
             let (op, bound) = if is_c(left) {
@@ -877,6 +885,7 @@ mod tests {
         Expr::LocalSet(
             id,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(id)),
                 right: Box::new(step),
@@ -923,6 +932,7 @@ mod tests {
             Expr::LocalSet(
                 1,
                 Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(l),
                     right: Box::new(r),
@@ -939,6 +949,7 @@ mod tests {
     #[test]
     fn a_selected_step_of_both_signs_is_one_direction_only_with_its_test() {
         let pick = |a: i64, b: i64| Expr::Conditional {
+            byte_offset: 0,
             condition: Box::new(Expr::LocalGet(9)),
             then_expr: Box::new(int(a)),
             else_expr: Box::new(int(b)),
@@ -1032,6 +1043,7 @@ mod tests {
 
     fn cmp(op: perry_hir::CompareOp, left: Expr, right: Expr) -> Expr {
         Expr::Compare {
+            byte_offset: 0,
             op,
             left: Box::new(left),
             right: Box::new(right),
@@ -1040,6 +1052,7 @@ mod tests {
 
     fn and(left: Expr, right: Expr) -> Expr {
         Expr::Logical {
+            byte_offset: 0,
             op: perry_hir::LogicalOp::And,
             left: Box::new(left),
             right: Box::new(right),
@@ -1070,6 +1083,7 @@ mod tests {
         assert_eq!(guard_window(&cmp(Lt, Expr::LocalGet(2), int(8)), 1), open);
         assert_eq!(guard_window(&cmp(Ne, c(), int(8)), 1), open);
         let or = Expr::Logical {
+            byte_offset: 0,
             op: perry_hir::LogicalOp::Or,
             left: Box::new(cmp(Lt, c(), int(8))),
             right: Box::new(cmp(Lt, c(), int(4))),

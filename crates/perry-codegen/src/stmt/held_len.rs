@@ -31,6 +31,7 @@ pub(super) fn classify(
         op: CompareOp::Lt,
         left,
         right,
+        ..
     } = cond
     else {
         return None;
