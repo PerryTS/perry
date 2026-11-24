@@ -55,6 +55,76 @@ inAsync().then((v) => console.log("async " + v));
     );
 }
 
+// An async body reads a descriptor as a sync one does. Expected output is Node's.
+#[test]
+fn get_own_property_descriptor_in_async_body() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function s() { const d: any = Object.getOwnPropertyDescriptor({ a: 1 }, "a"); return [d.value, d.writable, d.enumerable, d.configurable].join(","); }
+async function f() { const d: any = Object.getOwnPropertyDescriptor({ a: 1 }, "a"); return [d.value, d.writable, d.enumerable, d.configurable].join(","); }
+async function g() { return Object.getOwnPropertyDescriptor({ a: 1 }, "b") === undefined; }
+console.log(s());
+f().then((v) => console.log("async " + v)).then(() => g()).then((v) => console.log("missing " + v));
+"#
+        ),
+        "1,true,true,true\nasync 1,true,true,true\nmissing true"
+    );
+}
+
+// A Perry closure accessor reads back as the same closure. Expected output is Node's.
+#[test]
+fn get_own_property_descriptor_returns_the_accessor_closure() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const g = () => 7;
+const o: any = {};
+Object.defineProperty(o, "x", { get: g });
+const d: any = Object.getOwnPropertyDescriptor(o, "x");
+async function f() { const a: any = Object.getOwnPropertyDescriptor(o, "x"); return a.get === g; }
+console.log([d.get === g, d.get(), d.set === undefined].join(","));
+f().then((v) => console.log("async " + v));
+"#
+        ),
+        "true,7,true\nasync true"
+    );
+}
+
+// A static field reads back as a data property.
+// Expected output is Node's.
+#[test]
+fn get_own_property_descriptor_of_a_static_field_is_a_data_descriptor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class C { static x = 1; }
+C.x = 3;
+const d: any = Object.getOwnPropertyDescriptor(C, "x");
+console.log([d.value, d.writable, d.enumerable, d.configurable, "get" in d].join(","));
+"#
+        ),
+        "3,true,true,true,false"
+    );
+}
+
+// A static field redefined with a setter reads back as an accessor. Expected output is Node's.
+#[test]
+fn get_own_property_descriptor_of_a_redefined_static_field_is_an_accessor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class C { static x = 1; }
+const s = (v: number) => {};
+Object.defineProperty(C, "x", { set: s });
+const d: any = Object.getOwnPropertyDescriptor(C, "x");
+console.log(["value" in d, d.set === s].join(","));
+"#
+        ),
+        "false,true"
+    );
+}
+
 // `Object.defineProperty` and `Object.defineProperties` accessors that are Perry
 // closures run with the receiver as `this`. Expected output is Node's.
 #[test]

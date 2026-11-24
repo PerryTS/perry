@@ -924,6 +924,10 @@ impl WasmModuleEmitter {
                 let (obj, props) = (self.emit_js_expr(obj, locals), self.emit_js_expr(props, locals));
                 format!("fromJsValue(__memDispatch.object_define_properties(toJsValue({obj}), toJsValue({props})))")
             }
+            Expr::ObjectGetOwnPropertyDescriptor(obj, key) => {
+                let (obj, key) = (self.emit_js_expr(obj, locals), self.emit_js_expr(key, locals));
+                format!("fromJsValue(__memDispatch.object_get_own_property_descriptor(toJsValue({obj}), toJsValue({key})))")
+            }
             Expr::ObjectEntries(o) => {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.entries(toJsValue({})))", o)
