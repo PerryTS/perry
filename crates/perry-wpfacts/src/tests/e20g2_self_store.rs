@@ -80,16 +80,56 @@ fn e20g2_self_store_keeps_the_realm() {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
-/// KEEP: the global object handed to an unknown function escapes.
+/// Owner 11-24 decision 2 (the read twin of R-GLOBAL 11-18): whole
+/// program, unknown code that holds the global object reads only the global
+/// names the realm declares (`undeclared::global_store_escapes`) and the
+/// program's own stores. RED (was KEEP "the global object handed to an
+/// unknown function escapes"): a program store under a name the realm does
+/// not declare stays the program's field when the global object is handed
+/// to an unknown function.
 #[test]
-fn e20g2_global_to_unknown_call_escapes() {
-    let src = "class N { v = 1; }
-        const n = new N();
-        (globalThis as any).keep = n;
-        const f: any = (globalThis as any)[process.argv[2]];
-        f(globalThis);
-        console.log(/*A*/ n.v);";
-    assert!(!v_proven(src), "n.v proven although globalThis escaped");
+fn e20g2_global_to_unknown_call_reads_declared_names() {
+    let src = |name: &str| {
+        format!(
+            "class N {{ v = 1; }}
+            const n = new N();
+            (globalThis as any).{name} = n;
+            const f: any = (globalThis as any)[process.argv[2]];
+            f(globalThis);
+            console.log(/*A*/ n.v);"
+        )
+    };
+    let mut bad = Vec::new();
+    for name in ["keep", "appState"] {
+        if !v_proven(&src(name)) {
+            bad.push(format!("{name}: n.v not proven although no realm name reads it"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// KEEP (soundness, owner 11-24 decision 2): a value the program stores
+/// under a global name the runtime reads (`onerror`, `WebAssembly`), a
+/// declared constructor or function (`Array`, `setTimeout`) or a host
+/// object (`console`) escapes when the global object is handed to unknown
+/// code.
+#[test]
+fn e20g2_global_to_unknown_call_declared_name_escapes() {
+    let mut bad = Vec::new();
+    for name in ["onerror", "WebAssembly", "Array", "setTimeout", "console"] {
+        let src = format!(
+            "class N {{ v = 1; }}
+            const n = new N();
+            (globalThis as any).{name} = n;
+            const f: any = (globalThis as any)[process.argv[2]];
+            f(globalThis);
+            console.log(/*A*/ n.v);"
+        );
+        if v_proven(&src) {
+            bad.push(format!("{name}: n.v proven although the runtime reads it"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
 /// Soundness: bare `window` / `self` read the program's store.

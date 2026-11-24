@@ -834,10 +834,25 @@ pub fn note_global_in_top(m: &mut Model) {
 }
 
 /// Unknown code that holds the global object (`global_in_top`) reads its
-/// properties: what the program stored in global `n` leaves. R-GLOBAL (owner
-/// decision 2026-11-18) drops only the any-key write by that code, not its
-/// reads.
+/// properties: what the program stored in global `n` leaves. Whole program
+/// that code is the runtime, which reads only the global names the realm
+/// declares for it to read (`undeclared::global_store_escapes`: the
+/// declared constructors, `members::global_runtime_reads`, `process`, the
+/// host objects); the program's own stores into ⊤ are recorded with their
+/// keys where they happen (`written_by`). Owner decision 2026-11-24, the
+/// read twin of R-GLOBAL (2026-11-18, which dropped that code's any-key
+/// write). Per unit, beside an unseen module or interpreted code
+/// (`realm_nameable`), other code reads every global.
 fn global_field_read_by_unknown(m: &mut Model, n: NodeId) {
+    if !m.realm_nameable() {
+        let a = m.global_fields.iter().find(|&&(_, f)| f == n).map(|&(a, _)| a);
+        let g = m.tok_index.get(&TokKind::Builtin(BuiltinNs::GlobalThis)).copied();
+        if let (Some(a), Some(g)) = (a, g) {
+            if !super::undeclared::global_store_escapes(m, g, Key::Named(a)) {
+                return;
+            }
+        }
+    }
     let r = m.reason("global property read by unknown code that holds the global object");
     m.sink_node(n, r);
 }
