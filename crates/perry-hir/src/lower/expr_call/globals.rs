@@ -282,7 +282,7 @@ pub(super) fn try_global_builtins(
                     Expr::Undefined
                 };
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -304,7 +304,7 @@ pub(super) fn try_global_builtins(
                     Expr::Undefined
                 };
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -326,7 +326,7 @@ pub(super) fn try_global_builtins(
                     });
                 }
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -377,7 +377,7 @@ pub(super) fn try_global_builtins(
                     });
                 }
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -393,7 +393,7 @@ pub(super) fn try_global_builtins(
                     Expr::Undefined
                 };
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -415,7 +415,7 @@ pub(super) fn try_global_builtins(
                     Expr::Undefined
                 };
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -432,7 +432,7 @@ pub(super) fn try_global_builtins(
                     Expr::Undefined
                 };
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -451,7 +451,7 @@ pub(super) fn try_global_builtins(
                     Expr::Undefined
                 };
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -474,7 +474,7 @@ pub(super) fn try_global_builtins(
                     Expr::Undefined
                 };
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -484,7 +484,7 @@ pub(super) fn try_global_builtins(
             }
             "__perry_cjs_open" => {
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -501,7 +501,7 @@ pub(super) fn try_global_builtins(
                     Expr::Undefined
                 };
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: "__perry_runtime".to_string(),
                     class_name: None,
                     object: None,
@@ -573,13 +573,13 @@ pub(super) fn try_global_builtins(
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: call.span.lo.0,
+                        byte_offset: crate::lower::call_token(call),
                         object: Box::new(Expr::GlobalGet(0)),
                         property: "fetch".to_string(),
                     }),
                     args,
                     type_args: vec![],
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                 }));
             }
             _ => {} // Fall through to generic handling
@@ -934,13 +934,13 @@ pub(super) fn try_global_builtins(
                             byte_end: 0,
                             callee: Box::new(Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: call.span.lo.0,
+                                byte_offset: crate::lower::call_token(call),
                                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                                 property: "createSecretKey".to_string(),
                             }),
                             args: new_args,
                             type_args: vec![],
-                            byte_offset: call.span.lo.0,
+                            byte_offset: crate::lower::call_token(call),
                         }));
                     }
                     // #3927: `generateKeySync(alg, options)` from a named import.
@@ -957,13 +957,13 @@ pub(super) fn try_global_builtins(
                             byte_end: 0,
                             callee: Box::new(Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: call.span.lo.0,
+                                byte_offset: crate::lower::call_token(call),
                                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                                 property: "generateKeySync".to_string(),
                             }),
                             args: vec![alg_arg, options_arg],
                             type_args: vec![],
-                            byte_offset: call.span.lo.0,
+                            byte_offset: crate::lower::call_token(call),
                         }));
                     }
                     _ => {} // Fall through
@@ -1013,7 +1013,7 @@ pub(super) fn try_global_builtins(
         if let Some((module_name, Some(method_name))) = ctx.lookup_native_module(func_name) {
             if module_name == "inspector/promises" && method_name == "Session" {
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: module_name.to_string(),
                     class_name: None,
                     object: None,
@@ -1043,7 +1043,7 @@ pub(super) fn try_global_builtins(
                     "userInfo" => return Ok(Ok(user_info_expr_for_call(call, args))),
                     "getPriority" | "setPriority" => {
                         return Ok(Ok(Expr::NativeMethodCall {
-                            byte_offset: call.span.lo.0,
+                            byte_offset: crate::lower::call_token(call),
                             module: "os".to_string(),
                             class_name: None,
                             object: None,
@@ -1055,7 +1055,7 @@ pub(super) fn try_global_builtins(
                 }
             }
             return Ok(Ok(Expr::NativeMethodCall {
-                byte_offset: call.span.lo.0,
+                byte_offset: crate::lower::call_token(call),
                 module: module_name.to_string(),
                 class_name: None,
                 object: None,
@@ -1068,7 +1068,7 @@ pub(super) fn try_global_builtins(
         // e.g., Fastify() where import Fastify from 'fastify'
         if let Some((module_name, None)) = ctx.lookup_native_module(func_name) {
             return Ok(Ok(Expr::NativeMethodCall {
-                byte_offset: call.span.lo.0,
+                byte_offset: crate::lower::call_token(call),
                 module: module_name.to_string(),
                 class_name: None,
                 object: None,

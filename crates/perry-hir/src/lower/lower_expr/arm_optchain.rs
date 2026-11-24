@@ -558,7 +558,7 @@ pub(crate) fn lower_opt_chain_expr(
                         callee: Box::new(fixed_callee.clone()),
                         args,
                         type_args: Vec::new(),
-                        byte_offset: opt_chain.span.lo.0,
+                        byte_offset: optional_call_at(&fixed_callee, opt_chain.span.lo.0),
                     };
                     // For `foo?.bar?.(args)` the function value (`bar` on the
                     // un-short-circuited receiver) must itself be null-checked
@@ -661,6 +661,7 @@ pub(crate) fn lower_opt_chain_expr(
             };
 
             // Build the call expression
+            let call_at = optional_call_at(&callee_expr, opt_chain.span.lo.0);
             let call_expr = if has_spread {
                 let spread_args: Vec<CallArg> = call
                     .args
@@ -675,7 +676,7 @@ pub(crate) fn lower_opt_chain_expr(
                     })
                     .collect();
                 Expr::CallSpread {
-                    byte_offset: opt_chain.span.lo.0,
+                    byte_offset: call_at,
                     byte_end: 0,
                     callee: Box::new(callee_expr),
                     args: spread_args,
@@ -692,7 +693,7 @@ pub(crate) fn lower_opt_chain_expr(
                     callee: Box::new(callee_expr),
                     args,
                     type_args: Vec::new(),
-                    byte_offset: opt_chain.span.lo.0,
+                    byte_offset: call_at,
                 })
             };
 
@@ -764,5 +765,15 @@ pub(crate) fn lower_opt_chain_expr(
                 bindings,
             ))
         }
+    }
+}
+
+/// Where an optional call stands: a method call (`a?.b()`, `a.b?.()`,
+/// `a?.[k]()`) at its callee member read's token (the call and that read
+/// are two kinds there), any other call at the chain's start.
+fn optional_call_at(callee: &Expr, start: u32) -> u32 {
+    match callee {
+        Expr::PropertyGet { byte_offset, .. } | Expr::IndexGet { byte_offset, .. } => *byte_offset,
+        _ => start,
     }
 }

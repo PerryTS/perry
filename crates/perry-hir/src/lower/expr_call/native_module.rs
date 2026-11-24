@@ -153,7 +153,7 @@ fn lower_os_module_method_call(
         "networkInterfaces" => Some(Expr::OsNetworkInterfaces),
         "userInfo" => Some(user_info_expr_for_call(call, args.to_vec())),
         "getPriority" | "setPriority" => Some(Expr::NativeMethodCall {
-            byte_offset: call.span.lo.0,
+            byte_offset: crate::lower::call_token(call),
             module: "os".to_string(),
             class_name: None,
             object: None,
@@ -371,7 +371,7 @@ pub(super) fn try_native_module_methods(
             Some(("inspector/promises", Some("Session")))
         ) {
             return Ok(Ok(Expr::NativeMethodCall {
-                byte_offset: call.span.lo.0,
+                byte_offset: crate::lower::call_token(call),
                 module: "inspector/promises".to_string(),
                 class_name: None,
                 object: None,
@@ -414,7 +414,7 @@ pub(super) fn try_native_module_methods(
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     if method_ident.sym.as_ref() == "from" {
                         return Ok(Ok(Expr::NativeMethodCall {
-                            byte_offset: call.span.lo.0,
+                            byte_offset: crate::lower::call_token(call),
                             module: "readable_stream".to_string(),
                             class_name: Some("ReadableStream".to_string()),
                             object: None,
@@ -479,7 +479,7 @@ pub(super) fn try_native_module_methods(
                         | "getHeapSnapshot"
                         | "writeHeapSnapshot" => {
                             return Ok(Ok(Expr::NativeMethodCall {
-                                byte_offset: call.span.lo.0,
+                                byte_offset: crate::lower::call_token(call),
                                 module: "v8".to_string(),
                                 class_name: None,
                                 object: None,

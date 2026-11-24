@@ -23,12 +23,12 @@ pub(super) fn encoder_call(
         callee: Box::new(Expr::PropertyGet {
             object: Box::new(receiver),
             property: method.into(),
-            byte_offset: call.span.lo.0,
+            byte_offset: crate::lower::call_token(call),
             byte_end: call.span.hi.0,
         }),
         args,
         type_args: vec![],
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::call_token(call),
         byte_end: call.span.hi.0,
     }
 }

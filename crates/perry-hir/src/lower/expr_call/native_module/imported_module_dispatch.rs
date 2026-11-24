@@ -97,7 +97,7 @@ pub(super) fn try_imported_module_dispatch(
                 ) && perry_api_manifest::module_has_symbol(module_name, method_name).is_none()
                 {
                     return Ok(Ok(Expr::NativeMethodCall {
-                        byte_offset: call.span.lo.0,
+                        byte_offset: crate::lower::call_token(call),
                         module: module_name.to_string(),
                         class_name: None,
                         object: None,
@@ -184,7 +184,7 @@ pub(super) fn try_imported_module_dispatch(
                         }),
                         args: Vec::new(),
                         type_args: Vec::new(),
-                        byte_offset: call.span.lo.0,
+                        byte_offset: crate::lower::call_token(call),
                     });
                     return Ok(Ok(Expr::Sequence(exprs)));
                 }
@@ -194,7 +194,7 @@ pub(super) fn try_imported_module_dispatch(
                     && is_cluster_default_event_emitter_method(&method_name)
                 {
                     return Ok(Ok(Expr::NativeMethodCall {
-                        byte_offset: call.span.lo.0,
+                        byte_offset: crate::lower::call_token(call),
                         module: module_name.to_string(),
                         class_name: None,
                         object: None,
@@ -260,7 +260,7 @@ pub(super) fn try_imported_module_dispatch(
                             }),
                             args: call_args,
                             type_args: Vec::new(),
-                            byte_offset: call.span.lo.0,
+                            byte_offset: crate::lower::call_token(call),
                         }));
                     }
                     if imported_callable {
@@ -363,7 +363,7 @@ pub(super) fn try_imported_module_dispatch(
                     None
                 };
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: module_name.to_string(),
                     class_name,
                     object: None, // Static call on module itself

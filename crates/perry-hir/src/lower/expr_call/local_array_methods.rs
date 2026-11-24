@@ -460,7 +460,7 @@ pub(super) fn try_local_array_methods(
                                     // and set-length-zero-array-length-is-non-writable).
                                     // Route through the native push dispatch, which
                                     // emits `js_array_push_guard`.
-                                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: call.span.lo.0,
+                                    return Ok(Ok(Expr::NativeMethodCall { byte_offset: crate::lower::call_token(call),
                                         module: "array".to_string(),
                                         class_name: None,
                                         object: Some(Box::new(Expr::LocalGet(array_id))),
@@ -484,11 +484,11 @@ pub(super) fn try_local_array_methods(
                                         byte_end: 0,
                                         object: Box::new(Expr::LocalGet(array_id)),
                                         property: "push".to_string(),
-                                        byte_offset: call.span.lo.0,
+                                        byte_offset: crate::lower::call_token(call),
                                     }),
                                     args,
                                     type_args: vec![],
-                                    byte_offset: call.span.lo.0,
+                                    byte_offset: crate::lower::call_token(call),
                                 }));
                             }
                             "pop" => {

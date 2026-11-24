@@ -112,7 +112,7 @@ pub(crate) fn try_desugar_reactive_text(
 
     let initial_concat = lower_tpl_to_concat(ctx, tpl)?;
     let text_call = Expr::NativeMethodCall {
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::call_token(call),
         module: "perry/ui".to_string(),
         method: "Text".to_string(),
         object: None,
@@ -153,7 +153,7 @@ pub(crate) fn try_desugar_reactive_text(
         };
         let fresh_concat = lower_tpl_to_concat(ctx, tpl)?;
         let set_text_call = Expr::NativeMethodCall {
-            byte_offset: call.span.lo.0,
+            byte_offset: crate::lower::call_token(call),
             module: "perry/ui".to_string(),
             method: "textSetString".to_string(),
             object: None,
@@ -194,7 +194,7 @@ pub(crate) fn try_desugar_reactive_text(
         };
 
         outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
-            byte_offset: call.span.lo.0,
+            byte_offset: crate::lower::call_token(call),
             module: "perry/ui".to_string(),
             method: "stateOnChange".to_string(),
             object: None,
@@ -244,6 +244,6 @@ pub(crate) fn try_desugar_reactive_text(
         callee: Box::new(outer_closure),
         args: vec![],
         type_args: vec![],
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::call_token(call),
     }))
 }

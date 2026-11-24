@@ -416,6 +416,30 @@ pub(crate) fn member_token(member: &ast::MemberExpr) -> u32 {
     }
 }
 
+/// Where a call stands: a method call (`a.b()`, `a[k]()`, `super.m()`, also
+/// parenthesized or behind a TS wrapper) at its callee's member token, so in
+/// `a.b().c()` the calls stand at `b` and `c` (the member reads there are
+/// another kind); any other call at its start.
+pub(crate) fn call_token(call: &ast::CallExpr) -> u32 {
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return call.span.lo.0;
+    };
+    let mut cur = callee.as_ref();
+    loop {
+        cur = match cur {
+            ast::Expr::TsAs(x) => &x.expr,
+            ast::Expr::TsNonNull(x) => &x.expr,
+            ast::Expr::TsSatisfies(x) => &x.expr,
+            ast::Expr::TsTypeAssertion(x) => &x.expr,
+            ast::Expr::TsConstAssertion(x) => &x.expr,
+            ast::Expr::Paren(x) => &x.expr,
+            ast::Expr::Member(m) => return member_token(m),
+            ast::Expr::SuperProp(m) => return super_member_token(m),
+            _ => return call.span.lo.0,
+        };
+    }
+}
+
 /// `super.name` / `super[key]` stands at its member token, as `member_token`.
 pub(crate) fn super_member_token(member: &ast::SuperPropExpr) -> u32 {
     match &member.prop {

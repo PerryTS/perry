@@ -195,7 +195,7 @@ pub(crate) fn try_strict_eval_arguments_assignment(
         }),
         args: Vec::new(),
         type_args: Vec::new(),
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::call_token(call),
     })
 }
 

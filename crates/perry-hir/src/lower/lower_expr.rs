@@ -135,14 +135,19 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
         let span = expr.span();
         match (expr, value) {
             (
-                ast::Expr::Call(_),
+                ast::Expr::Call(call),
                 Expr::CallSpread {
                     byte_offset,
                     byte_end,
                     ..
                 },
-            )
-            | (
+            ) => {
+                *byte_offset = call_token(call);
+                if dump {
+                    *byte_end = span.hi.0;
+                }
+            }
+            (
                 ast::Expr::Member(_),
                 Expr::IndexGet {
                     byte_offset,

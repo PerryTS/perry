@@ -89,7 +89,7 @@ pub(super) fn try_module_class_static(
                                 }),
                                 args: call_args,
                                 type_args: Vec::new(),
-                                byte_offset: call.span.lo.0,
+                                byte_offset: crate::lower::call_token(call),
                             }));
                         }
                         // Unimplemented-API gate (#463) for the chained
@@ -162,7 +162,7 @@ pub(super) fn try_module_class_static(
                             })
                         {
                             return Ok(Ok(Expr::NativeMethodCall {
-                                byte_offset: call.span.lo.0,
+                                byte_offset: crate::lower::call_token(call),
                                 module: module_name.to_string(),
                                 class_name: Some(class_name.to_string()),
                                 object: None,

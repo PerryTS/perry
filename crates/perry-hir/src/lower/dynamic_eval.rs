@@ -309,7 +309,7 @@ pub(crate) fn lower(ctx: &mut LoweringContext, call: &ast::CallExpr) -> Result<E
             Expr::Bool(ctx.current_strict || ctx.current_strict_mode()),
         ],
         type_args: Vec::new(),
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::call_token(call),
     };
     // Extra eval arguments are evaluated, though only the first is source.
     // ScopedTemp keeps the first argument live while the extras run.
