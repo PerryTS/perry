@@ -6156,11 +6156,8 @@ function __hostDescriptor(desc) {
   const copy = Object.create(null);
   for (const field of ['enumerable', 'configurable', 'value', 'writable', 'get', 'set']) {
     if (!(field in desc) && !hasAccessor(field)) continue;
-    let v = desc[field];
-    if (cls) {
-      v = __memDispatch.class_get_field(desc, field);
-      __memDispatch.propagate_exception(true);
-    }
+    const v = cls ? __memDispatch.class_get_field(desc, field) : desc[field];
+    if (cls) __memDispatch.propagate_exception(true);
     copy[field] = (field === 'get' || field === 'set') ? __hostAccessor(v) : v;
   }
   return copy;
