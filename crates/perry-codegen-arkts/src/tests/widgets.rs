@@ -10,6 +10,21 @@ fn emits_none_for_empty_module() {
 }
 
 #[test]
+fn link_is_its_text() {
+    let mut m = empty_module();
+    m.init.push(app_with_body(nmc(
+        "Link",
+        vec![
+            Expr::String("Docs".into()),
+            Expr::String("https://a.test/".into()),
+        ],
+    )));
+    let r = emit_index_ets(&mut m).unwrap().unwrap();
+    assert!(r.ets_source.contains("Text('Docs').fontSize(20)"));
+    assert!(!r.ets_source.contains("a.test"));
+}
+
+#[test]
 fn text_strips_app_call() {
     let mut m = empty_module();
     m.init

@@ -153,3 +153,8 @@ harness = false
 name = "native_date_picker_fill_width"
 path = "tests/native_date_picker_fill_width.rs"
 harness = false
+
+[[test]]
+name = "native_link"
+path = "tests/native_link.rs"
+harness = false

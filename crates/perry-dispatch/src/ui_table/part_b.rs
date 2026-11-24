@@ -433,6 +433,30 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         args: &[ArgKind::Widget],
         ret: ReturnKind::Void,
     },
+    MethodRow {
+        method: "Link",
+        runtime: "perry_ui_link_create",
+        args: &[ArgKind::Str, ArgKind::Str],
+        ret: ReturnKind::Widget,
+    },
+    MethodRow {
+        method: "routerNavigate",
+        runtime: "perry_ui_router_navigate",
+        args: &[ArgKind::Str],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "routerOnChange",
+        runtime: "perry_ui_router_on_change",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
+    MethodRow {
+        method: "routerCurrentPath",
+        runtime: "perry_ui_router_current_path",
+        args: &[],
+        ret: ReturnKind::Str,
+    },
     // ---- TabBar ----
     MethodRow {
         method: "TabBar",

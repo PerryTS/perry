@@ -88,6 +88,28 @@ pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     })
 }
 
+/// A Link is its text; a tap opens its URL.
+#[no_mangle]
+pub extern "C" fn perry_ui_link_create(text_ptr: i64, href_ptr: i64) -> i64 {
+    catch_panic("perry_ui_link_create", || {
+        let href = unsafe { app::str_from_header(href_ptr as *const u8) };
+        let handle = widgets::text::create(text_ptr as *const u8);
+        let open = perry_ui::link::open_link_callback(href, super::perry_system_open_url);
+        widgets::set_on_click(handle, open);
+        handle
+    })
+}
+/// The router follows the browser's location and history, which exist on the web target
+/// only: here navigation does nothing, no change is ever reported, and the path is "".
+#[no_mangle]
+pub extern "C" fn perry_ui_router_navigate(_path_ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_on_change(_callback: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_current_path() -> i64 {
+    perry_ffi::alloc_string("").as_raw() as i64
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_vstack_create(spacing: f64) -> i64 {
     catch_panic("perry_ui_vstack_create", || {

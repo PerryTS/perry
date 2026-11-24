@@ -77,6 +77,13 @@ pub(crate) fn emit_widget(
         } if m == "perry/ui" => {
             let core = match method.as_str() {
                 "Text" => emit_text(args, text_slots, arkts_locals, bindings),
+                // Only its text: a second string is Text's reactive id, not an href.
+                "Link" => emit_text(
+                    &args[..args.len().min(1)],
+                    text_slots,
+                    arkts_locals,
+                    bindings,
+                ),
                 "VStack" => emit_stack(
                     "Column",
                     args,

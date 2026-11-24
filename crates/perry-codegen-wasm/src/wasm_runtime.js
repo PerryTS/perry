@@ -4752,6 +4752,55 @@ function perry_ui_navstack_pop(h) {
   const nav = uiGet(h); if (!nav || !nav._navStack?.length) return;
   const prev = nav._navStack.pop(); nav.innerHTML = ""; prev.forEach(c => nav.appendChild(c));
 }
+// Links and the router. A route is `location.pathname + search + hash`. routerNavigate
+// pushes it onto the session history; it, a Link click and back/forward (popstate) all
+// notify every routerOnChange listener. A plain click on a same-origin Link navigates
+// client-side; every other click keeps the browser default.
+const routeListeners = [];
+function perry_ui_router_current_path() {
+  return location.pathname + location.search + location.hash;
+}
+function notifyRouteListeners() {
+  // Read per call: a listener that navigates moves the route under the rest. A copy: a
+  // listener registered meanwhile waits for the next change.
+  for (const cb of [...routeListeners]) callWasmClosure(cb, perry_ui_router_current_path());
+}
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("popstate", notifyRouteListeners);
+}
+function pushRoute(url) {
+  if (url.href !== location.href) history.pushState(null, "", url.href);
+}
+function perry_ui_router_navigate(path) {
+  pushRoute(new URL(String(path), location.href));
+  notifyRouteListeners();
+}
+function perry_ui_router_on_change(callback) {
+  if (callback !== undefined) routeListeners.push(callback);
+}
+function perry_ui_link_create(text, href) {
+  const a = document.createElement("a");
+  a.textContent = text === undefined ? "" : String(text);
+  // A `javascript:` href would run script on a click; native ignores it too.
+  let scheme;
+  try { scheme = new URL(String(href), location.href).protocol; } catch (_) {}
+  if (scheme === "javascript:") return uiAlloc(a);
+  a.setAttribute("href", href === undefined ? "" : String(href));
+  a.addEventListener("click", (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if ((a.target && a.target !== "_self") || a.hasAttribute("download")) return;
+    let url;
+    try { url = new URL(a.href, location.href); } catch (_) { return; }
+    // Opaque origins (file:, mailto:, data:) all read "null", so they compare equal.
+    if (!/^https?:$/.test(url.protocol) || url.origin !== location.origin) return;
+    // The browser scrolls to a fragment of this page and fires popstate itself.
+    if (url.href.includes("#") && url.pathname === location.pathname && url.search === location.search) return;
+    try { pushRoute(url); } catch (_) { return; }
+    e.preventDefault();
+    notifyRouteListeners();
+  });
+  return uiAlloc(a);
+}
 
 // ---------- Picker ----------
 function perry_ui_picker_add_item(h, title) {
@@ -6192,6 +6241,7 @@ const __perryUiDispatch = {
   perry_ui_canvas_fill_gradient,
   // Navigation
   perry_ui_navstack_push, perry_ui_navstack_pop,
+  perry_ui_link_create, perry_ui_router_navigate, perry_ui_router_on_change, perry_ui_router_current_path,
   // Picker
   perry_ui_picker_add_item, perry_ui_picker_set_selected, perry_ui_picker_get_selected,
   perry_ui_wheel_picker_add_item, perry_ui_wheel_picker_set_selected, perry_ui_wheel_picker_get_selected,

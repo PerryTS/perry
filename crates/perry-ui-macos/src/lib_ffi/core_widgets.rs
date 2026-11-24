@@ -125,6 +125,26 @@ pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     widgets::button::create(label_ptr as *const u8, on_press)
 }
 
+/// A Link is its text; a click opens its URL.
+#[no_mangle]
+pub extern "C" fn perry_ui_link_create(text_ptr: i64, href_ptr: i64) -> i64 {
+    let href = unsafe { perry_ffi::copy_string_from_raw(href_ptr as *const u8) };
+    let handle = perry_ui_text_create(text_ptr);
+    let open = perry_ui::link::open_link_callback(href, perry_system_open_url);
+    widgets::set_on_click(handle, open);
+    handle
+}
+/// The router follows the browser's location and history, which exist on the web target
+/// only: here navigation does nothing, no change is ever reported, and the path is "".
+#[no_mangle]
+pub extern "C" fn perry_ui_router_navigate(_path_ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_on_change(_callback: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_current_path() -> i64 {
+    perry_ffi::alloc_string("").as_raw() as i64
+}
+
 /// Create a VStack container. spacing = f64. Returns widget handle.
 #[no_mangle]
 pub extern "C" fn perry_ui_vstack_create(spacing: f64) -> i64 {
