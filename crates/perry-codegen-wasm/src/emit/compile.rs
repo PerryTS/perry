@@ -578,6 +578,8 @@ impl WasmModuleEmitter {
         let mut closure_class: std::collections::HashMap<(usize, FuncId), String> =
             Default::default();
         let mut proto_kinds = Vec::new();
+        // (mod_idx, FuncId, name, length) of every closure.
+        let mut closure_names: Vec<(usize, FuncId, String, u32)> = Vec::new();
         for (mod_idx, (_, module)) in modules.iter().enumerate() {
             for f in &module.functions {
                 proto_kinds.push((mod_idx, f.id, FnProtoKind::of_function(module, f)));
@@ -670,6 +672,13 @@ impl WasmModuleEmitter {
                 if seen.insert(fid) {
                     let kind = FnProtoKind::of_closure(module, fid, is_async, is_generator, &body);
                     proto_kinds.push((mod_idx, fid, kind));
+                    let name = module.closure_display_names.get(&fid).cloned();
+                    closure_names.push((
+                        mod_idx,
+                        fid,
+                        name.unwrap_or_default(),
+                        fn_length(&params),
+                    ));
                     closure_funcs.push((fid, params, body, caps, mut_caps, this, mod_idx));
                 }
             }
@@ -835,6 +844,14 @@ impl WasmModuleEmitter {
                     let _ = type_idx;
                     self.class_ctor_map
                         .insert(class.name.clone(), user_func_idx);
+                    // An implicit constructor's `length` is 0, as `constructor(...args)`'s is.
+                    let length = class
+                        .constructor
+                        .as_ref()
+                        .map_or(0, |c| fn_length(&c.params));
+                    let name_id = self.intern_string(&class.name);
+                    self.fn_names.insert(user_func_idx, name_id);
+                    self.fn_lengths.insert(user_func_idx, length);
                     self.func_param_counts.insert(user_func_idx, param_count);
                     self.record_rest_param(user_func_idx, 1, &ctor.params);
                     let cap_params = ctor
@@ -863,6 +880,10 @@ impl WasmModuleEmitter {
                     self.func_param_counts.insert(user_func_idx, param_count);
                     self.fn_proto_kinds
                         .insert(user_func_idx, FnProtoKind::of_function(module, method));
+                    let name_id = self.intern_string(&method.name);
+                    self.fn_names.insert(user_func_idx, name_id);
+                    self.fn_lengths
+                        .insert(user_func_idx, fn_length(&method.params));
                     self.record_rest_param(user_func_idx, 1, &method.params);
                     user_func_idx += 1;
                 }
@@ -883,6 +904,10 @@ impl WasmModuleEmitter {
                     self.func_param_counts.insert(user_func_idx, param_count);
                     self.fn_proto_kinds
                         .insert(user_func_idx, FnProtoKind::of_function(module, method));
+                    let name_id = self.intern_string(&method.name);
+                    self.fn_names.insert(user_func_idx, name_id);
+                    self.fn_lengths
+                        .insert(user_func_idx, fn_length(&method.params));
                     self.record_rest_param(user_func_idx, 0, &method.params);
                     user_func_idx += 1;
                 }
@@ -973,7 +998,15 @@ impl WasmModuleEmitter {
                     let name = module.closure_display_names.get(&f.id).unwrap_or(&f.name);
                     let id = self.intern_string(name);
                     self.fn_names.insert(idx, id);
+                    self.fn_lengths.insert(idx, fn_length(&f.params));
                 }
+            }
+        }
+        for (mod_idx, fid, name, length) in closure_names {
+            if let Some(&idx) = self.module_func_maps[mod_idx].get(&fid) {
+                let id = self.intern_string(&name);
+                self.fn_names.insert(idx, id);
+                self.fn_lengths.insert(idx, length);
             }
         }
 
@@ -1677,6 +1710,11 @@ impl WasmModuleEmitter {
                         .get(&class.name)
                         .into_iter()
                         .flatten();
+                    // The constructor registers its `name` and `length` for the class value.
+                    let ctor = self
+                        .class_ctor_map
+                        .get(&class.name)
+                        .map(|&idx| ("function_name_length", class.name.clone(), idx, 0.0));
                     // The last argument is a method's `fn_proto_code` or an `accessor_code`.
                     let registrations: Vec<(&str, String, u32, f64)> = methods
                         .map(|(name, &idx)| ("class_set_method", name, idx))
@@ -1687,11 +1725,13 @@ impl WasmModuleEmitter {
                         .chain(accessors.map(|(name, code, idx)| {
                             ("class_set_accessor", name.clone(), *idx, *code)
                         }))
+                        .chain(ctor)
                         .collect();
                     for (bridge, method_name, func_idx, last) in registrations {
                         let real_name = method_name.as_str();
                         let method_name_id = self.string_map.get(real_name).copied().unwrap_or(0);
                         let method_bits = (STRING_TAG << 48) | (method_name_id as u64);
+                        let length = self.fn_lengths.get(&func_idx).copied().unwrap_or(0);
                         let table_idx = self
                             .func_to_table_idx
                             .get(&func_idx)
@@ -1728,9 +1768,18 @@ impl WasmModuleEmitter {
                             align: 3,
                             memory_index: 0,
                         }));
+                        func.instruction(&Instruction::I32Const(0xFF20));
+                        func.instruction(
+                            &Instruction::I64Const(f64::from(length).to_bits() as i64),
+                        );
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
                         let csm_id = self.string_map.get(bridge).copied().unwrap_or(0);
                         func.instruction(&f64_const(csm_id as f64));
-                        func.instruction(&f64_const(4.0));
+                        func.instruction(&f64_const(5.0));
                         func.instruction(&Instruction::I32Const(0xFF00));
                         func.instruction(&Instruction::Call(rt.mem_call));
                         func.instruction(&Instruction::Drop);
@@ -1889,3 +1938,11 @@ impl WasmModuleEmitter {
 #[cfg(test)]
 #[path = "tests.rs"]
 mod tests;
+
+/// A function's `length`: its parameters before the first one with a default or the rest.
+fn fn_length(params: &[perry_hir::ir::Param]) -> u32 {
+    params
+        .iter()
+        .take_while(|p| p.default.is_none() && !p.is_rest)
+        .count() as u32
+}

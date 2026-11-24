@@ -298,10 +298,11 @@ impl WasmModuleEmitter {
             .get(&func_idx)
             .map_or("", |&id| &self.string_table[id as usize].0);
         format!(
-            "fromJsValue(__memDispatch.function_value({}, {}, {}))",
+            "fromJsValue(__memDispatch.function_value({}, {}, {}, {}))",
             table_idx,
             self.fn_proto_code(func_idx),
-            js_string_literal(name)
+            js_string_literal(name),
+            self.fn_lengths.get(&func_idx).copied().unwrap_or(0)
         )
     }
 
@@ -1340,12 +1341,18 @@ impl WasmModuleEmitter {
                     .copied()
                     .unwrap_or(func_idx);
                 let this = closure_this(*captures_this, *is_arrow, body);
+                let name = self
+                    .fn_names
+                    .get(&func_idx)
+                    .map_or("", |&id| &self.string_table[id as usize].0);
                 let mut closure = format!(
-                    "__memDispatch.closure_new({}, {}, {}, {})",
+                    "__memDispatch.closure_new({}, {}, {}, {}, {}, {})",
                     table_idx,
                     captures.len(),
                     u8::from(this == ClosureThis::Receiver),
-                    self.fn_proto_code(func_idx)
+                    self.fn_proto_code(func_idx),
+                    js_string_literal(name),
+                    self.fn_lengths.get(&func_idx).copied().unwrap_or(0)
                 );
                 let mut values: Vec<String> = captures
                     .iter()

@@ -1381,6 +1381,9 @@ mod async_random_uuid;
 #[path = "function_value_tests.rs"]
 mod function_value;
 
+#[path = "fn_name_length_tests.rs"]
+mod fn_name_length;
+
 #[path = "random_uuid_v7_tests.rs"]
 mod random_uuid_v7;
 
