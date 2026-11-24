@@ -62,7 +62,8 @@ impl<'a> FuncEmitCtx<'a> {
             .unwrap_or(func_idx);
         let proto = emitter.fn_proto_code(func_idx);
         let name = emitter.fn_names.get(&func_idx).copied().unwrap_or(0);
-        self.emit_frame_begin(func, 3);
+        let length = emitter.fn_lengths.get(&func_idx).copied().unwrap_or(0);
+        self.emit_frame_begin(func, 4);
         self.emit_store_const(func, 0, table_idx as f64);
         self.emit_store_const(func, 1, proto);
         self.emit_store_const(
@@ -70,7 +71,8 @@ impl<'a> FuncEmitCtx<'a> {
             2,
             f64::from_bits((STRING_TAG << 48) | u64::from(name)),
         );
-        self.emit_memcall(func, "function_value", 3);
+        self.emit_store_const(func, 3, f64::from(length));
+        self.emit_memcall(func, "function_value", 4);
     }
 
     /// Emit a bridge function call via WASM memory (Firefox NaN-safe, reentrant-safe).
