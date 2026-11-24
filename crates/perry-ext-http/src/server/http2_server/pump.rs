@@ -413,7 +413,11 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                     }
                 }
             }
-            Http2PendingEvent::ClientError { handle, message } => {
+            Http2PendingEvent::ClientError {
+                handle,
+                message,
+                code,
+            } => {
                 let listeners = get_handle::<Http2SessionHandle>(handle)
                     .and_then(|s| s.listeners.get("error").cloned())
                     .or_else(|| {
@@ -421,9 +425,21 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                             .and_then(|s| s.listeners.get("error").cloned())
                     })
                     .unwrap_or_default();
-                let arg = string_value(&message);
+                let scope = perry_ffi::TransientRootScope::enter();
+                let listeners = scope.root_addrs(&listeners);
+                let arg = scope.root_nanbox(match code {
+                    Some(code) => f64::from_bits(
+                        perry_ffi::error_value_with_code(
+                            &message,
+                            &code,
+                            perry_ffi::ErrorKind::Error,
+                        )
+                        .bits(),
+                    ),
+                    None => string_value(&message),
+                });
                 for cb in listeners {
-                    call1(cb, arg);
+                    call1(cb.get(), arg.get());
                     unsafe {
                         js_promise_run_microtasks();
                     }
