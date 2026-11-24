@@ -50,6 +50,7 @@ pub(super) fn rewrite_labeled_bc_in_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                byte_offset,
             } if cases
                 .iter()
                 .any(|case| stmts_have_labeled_break_for(&case.body, label)) =>
@@ -57,6 +58,7 @@ pub(super) fn rewrite_labeled_bc_in_stmts(
                 Some(super::super::break_continue::desugar_switch_to_ifs(
                     discriminant,
                     cases,
+                    *byte_offset,
                     next_local_id,
                 ))
             }

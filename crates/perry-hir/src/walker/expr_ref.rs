@@ -133,7 +133,7 @@ where
         | Expr::GlobalSet(_, v)
         | Expr::TypeOf(v)
         | Expr::Void(v)
-        | Expr::Await(v)
+        | Expr::Await(v, _)
         | Expr::Delete(v)
         | Expr::Unary { operand: v, .. }
         | Expr::PropertyGet { object: v, .. }
@@ -697,7 +697,7 @@ where
         Expr::GetFunctionPrototypeMethod { func, .. } => {
             f(func);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             f(object);
             f(index);
         }
@@ -831,12 +831,13 @@ where
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             f(condition);
             f(then_expr);
             f(else_expr);
         }
-        Expr::Array(elements, _) | Expr::Sequence(elements) | Expr::SuperCall(elements) => {
+        Expr::Array(elements, _) | Expr::Sequence(elements) | Expr::SuperCall(elements, _) => {
             for e in elements {
                 f(e);
             }
@@ -900,6 +901,7 @@ where
             key,
             receiver,
             args,
+            ..
         } => {
             f(home);
             f(key);
@@ -924,7 +926,7 @@ where
             f(value);
             f(object);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             f(callee);
             for a in args {
                 f(a);

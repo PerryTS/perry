@@ -28,6 +28,11 @@ fn at(text: &str) -> u32 {
     SRC.find(text).expect("site in source") as u32 + 1
 }
 
+/// The member token of the named read `text` (`p.g`: `g`).
+fn member_at(text: &str) -> u32 {
+    at(text) + text.find('.').expect("a named read") as u32 + 1
+}
+
 impl Solved {
     fn mb(&self) -> &crate::ModuleBindings {
         self.pf.bindings_for("t.ts").expect("module bindings")
@@ -64,7 +69,12 @@ impl Solved {
 
     /// The dump line of the site of `kind` at `text`: its verdict or refusal.
     fn line(&self, kind: &str, text: &str) -> String {
-        let head = format!("# quiet kind={kind} module=0 offset={} ", at(text));
+        let offset = if kind == "read" {
+            member_at(text)
+        } else {
+            at(text)
+        };
+        let head = format!("# quiet kind={kind} module=0 offset={offset} ");
         let lines: Vec<&String> = self
             .pf
             .rep_probe
@@ -171,14 +181,18 @@ fn a_key_that_may_be_an_object_is_not_quiet() {
 fn a_data_field_read_is_quiet_and_a_getter_read_is_not() {
     let s = solve(None);
     assert!(!s.local("fields", "p").class_ids.is_empty());
-    let read = |text: &str, key: &str| s.mb().quiet_reads.contains(&(at(text), key.to_string()));
+    let read = |text: &str, key: &str| {
+        s.mb()
+            .quiet_reads
+            .contains(&(member_at(text), key.to_string()))
+    };
     assert!(read("p.plain", "plain"), "{}", s.line("read", "p.plain"));
     assert!(!read("p.g;", "g"), "{}", s.line("read", "p.g;"));
     // The field holds Numbers only: a primitive value.
     assert!(s
         .mb()
         .primitive_reads
-        .contains(&(at("p.plain"), "plain".to_string())));
+        .contains(&(member_at("p.plain"), "plain".to_string())));
 }
 
 #[test]
@@ -194,5 +208,8 @@ fn the_negative_control_claims_every_site() {
     assert!(s.element("q[\"w\"] = 1"));
     assert!(s.element("ys[i] = 1"));
     assert!(s.element("m[k]"));
-    assert!(s.mb().quiet_reads.contains(&(at("p.g;"), "g".to_string())));
+    assert!(s
+        .mb()
+        .quiet_reads
+        .contains(&(member_at("p.g;"), "g".to_string())));
 }

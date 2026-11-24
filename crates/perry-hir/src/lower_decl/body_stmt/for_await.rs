@@ -12,6 +12,7 @@ pub(super) fn lower_runtime_for_await_iterator_body(
     ctx.locals
         .push((format!("__iter_{}", iter_id), iter_id, Type::Any));
     result.push(Stmt::Let {
+        byte_offset: for_of_stmt.span.lo.0,
         id: iter_id,
         name: format!("__iter_{}", iter_id),
         ty: Type::Any,
@@ -26,16 +27,17 @@ pub(super) fn lower_runtime_for_await_iterator_body(
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: for_of_stmt.span.lo.0,
             object: Box::new(Expr::LocalGet(iter_id)),
             property: "next".to_string(),
         }),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: for_of_stmt.span.lo.0,
     };
-    let next_call = Expr::Await(Box::new(raw_next_call));
+    let next_call = Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0);
     result.push(Stmt::Let {
+        byte_offset: for_of_stmt.span.lo.0,
         id: result_id,
         name: format!("__result_{}", result_id),
         ty: Type::Any,
@@ -65,7 +67,7 @@ pub(super) fn lower_runtime_for_await_iterator_body(
         binding_pat,
         Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: for_of_stmt.span.lo.0,
             object: Box::new(Expr::LocalGet(result_id)),
             property: "value".to_string(),
         },
@@ -81,6 +83,7 @@ pub(super) fn lower_runtime_for_await_iterator_body(
         result_id,
         next_call,
         body_stmts,
+        for_of_stmt.span.lo.0,
     );
 
     ctx.pop_block_scope(scope_mark);

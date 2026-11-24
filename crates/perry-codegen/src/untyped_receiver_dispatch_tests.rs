@@ -6,6 +6,7 @@ use perry_hir::{Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,
@@ -20,12 +21,13 @@ fn param(id: u32, name: &str) -> Param {
 fn function_ir(body: Expr) -> String {
     let mut m = Module::new("untyped_dispatch");
     m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "f".into(),
         type_params: vec![],
         params: vec![param(1, "a"), param(2, "k"), param(3, "x")],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(body))],
+        body: vec![Stmt::Return(Some(body), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,

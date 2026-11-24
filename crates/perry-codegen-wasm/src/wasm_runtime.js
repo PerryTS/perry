@@ -34,14 +34,21 @@ function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
 // throw "Cannot convert undefined to a BigInt". `prefix` is the count of leading
 // args already on the call (e.g. 1 for the receiver, or closure capture count).
 // A function with a rest parameter exports its slot as `__wasm_rest_<index>`; the
-// arguments from that slot on become one array, as a direct call packs them.
-function __padBigintArgs(fn, prefix, bigintArgs) {
+// arguments from that slot on become one array, as a direct call packs them. The last
+// `caps` arguments are a class's captures, the constructor's last parameters.
+function __padBigintArgs(fn, prefix, bigintArgs, caps = 0) {
   const rest = wasmInstance?.exports['__wasm_rest_' + fn.name];
+  const captures = bigintArgs.splice(bigintArgs.length - caps);
   if (rest) {
     const at = __Math.max(0, rest.value - (prefix | 0));
     while (bigintArgs.length < at) bigintArgs.push(TAG_UNDEFINED);
     bigintArgs.push(__jsValueToBits(bigintArgs.splice(at).map(__bitsToJsValue)));
+  } else if (caps > 0) {
+    const own = fn.length - (prefix | 0) - caps;
+    while (bigintArgs.length < own) bigintArgs.push(TAG_UNDEFINED);
+    bigintArgs.length = own;
   }
+  bigintArgs.push(...captures);
   const need = __Math.max(0, (fn.length | 0) - (prefix | 0));
   while (bigintArgs.length < need) bigintArgs.push(TAG_UNDEFINED);
   return bigintArgs;
@@ -1902,12 +1909,9 @@ function __classCtor(className, ctorIdx, caps) {
     // The constructor's trailing params are the class's captures (see
     // `synthesize_class_captures`): an evaluation passes its own.
     const envCaps = evaluated ? __evaluationOf(ctor).caps : [];
-    if (envCaps.length) {
-      args = args.slice(0, impl.length - 1 - envCaps.length);
-      while (args.length < impl.length - 1 - envCaps.length) args.push(undefined);
-      args.push(...envCaps);
-    }
-    const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...args.map(__jsValueToBits)));
+    args.push(...envCaps);
+    const result = __bitsToJsValue(
+      __invokeConstructor(impl, envCaps.length, __jsValueToBits(self), ...args.map(__jsValueToBits)));
     // [[Construct]]: only an object result replaces the instance; `return;` yields undefined.
     return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
   };
@@ -2044,6 +2048,12 @@ function __arrayCallback(cb) {
   if (!cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return undefined;
   const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
   return fn && ((...bits) => __invokeWasmCallback(fn, ...cb.captures, ...bits));
+}
+// An array callback as a host array method calls it; a value that is not a Perry
+// callable is passed on for the host to call or reject.
+function __hostPredicate(cb) {
+  const call = __arrayCallback(cb);
+  return call ? (...args) => __bitsToJsValue(call(...args.map(__jsValueToBits))) : cb;
 }
 // The one value of a declared class's static method, shared by every class value
 // that reaches it, so `Sub.m === Base.m`.
@@ -2355,7 +2365,7 @@ const __memDispatch = {
   math_imul: (a, b) => Math.imul(a, b),
   date_now: () => Date.now(),
   js_typeof: (val) => __typeOf(val),
-  parse_int: (val) => parseInt(String(val), 10),
+  parse_int: (val, radix) => parseInt(String(val), radix),
   parse_float: (val) => parseFloat(String(val)),
   js_mod: (a, b) => a % b,
   is_null_or_undefined: (val) => (val === null || val === undefined) ? 1 : 0,
@@ -2499,6 +2509,13 @@ const __memDispatch = {
     }
     return [value];
   },
+  // `[a, , b]`: a hole adds to the length without creating an element.
+  array_push_hole: (arr) => { if (Array.isArray(arr)) arr.length += 1; return arr; },
+  // `a.keys()` / `a.entries()` / `a.values()`: the method the receiver holds, which a
+  // program may have replaced with a Perry closure.
+  array_keys: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'keys'), []),
+  array_entries: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'entries'), []),
+  array_values: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'values'), []),
   // Every argument in one `push` call, so `a.push(x, y)` is the single call JS makes.
   array_push: (arr, ...values) => { if (Array.isArray(arr)) arr.push(...values); return arr; },
   array_pop: (arr) => { if (!Array.isArray(arr) || arr.length === 0) return undefined; return arr.pop(); },
@@ -2537,6 +2554,23 @@ const __memDispatch = {
   array_flat: (arr) => Array.isArray(arr) ? arr.flat() : [],
   array_is_array: (val) => Array.isArray(val) ? 1 : 0,
   array_from: (val) => Array.from(val),
+  // `Array.from(value, mapFn, thisArg)`: mapFn receives (element, index), with `this`
+  // bound to thisArg. An undefined mapFn maps nothing; any other value that is not
+  // callable is a TypeError before `value` is read. An exception mapFn left pending is
+  // thrown here, so the host stops and closes the iterator.
+  array_from_mapped: (val, fn, thisArg) => {
+    if (fn === undefined) return Array.from(val);
+    if (__typeOf(fn) !== 'function') {
+      const what = fn === null ? 'object null' : typeof fn === 'string' ? `string "${fn}"`
+        : ['object', 'bigint', 'symbol'].includes(typeof fn) ? typeof fn : `${typeof fn} ${fn}`;
+      throw new TypeError(`${what} is not a function`);
+    }
+    return Array.from(val, (v, i) => {
+      const mapped = __memDispatch.reflect_apply(fn, thisArg, [v, i]);
+      __memDispatch.propagate_exception(true);
+      return mapped;
+    });
+  },
   // `[...source]`: any iterable source (a Set, a Map, an iterator) spreads its values.
   // One push per value: `push(...source)` passes each value as an argument and
   // overflows the stack for a large source.
@@ -2733,6 +2767,8 @@ const __memDispatch = {
     for (let i = 0; i < arr.length; i++) { if (__bitsToJsValue(call(__jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr)))) return i; }
     return -1;
   },
+  array_find_last: (arr, cb) => Array.prototype.findLast.call(arr, __hostPredicate(cb)),
+  array_find_last_index: (arr, cb) => Array.prototype.findLastIndex.call(arr, __hostPredicate(cb)),
   array_sort: (arr, cb) => {
     if (!Array.isArray(arr)) return arr;
     if (cb === undefined || cb === null) { arr.sort(); return arr; }
@@ -2741,16 +2777,26 @@ const __memDispatch = {
     arr.sort((a, b) => { const r = call(__jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
     return arr;
   },
-  array_some: (arr, cb) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
-    if (!call) return 0;
-    return arr.some((v, i) => __bitsToJsValue(call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
+  // `reduceRight`, the change-by-copy methods and `copyWithin` run the host's own, so
+  // hole handling, argument coercions and errors are the host's. `initial` is empty when
+  // the call passes none: an explicit undefined is an initial value.
+  array_reduce_right: (arr, cb, ...initial) => {
+    const call = __arrayCallback(cb);
+    const fn = call ? (...args) => __bitsToJsValue(call(...args.map(__jsValueToBits))) : cb;
+    return Array.prototype.reduceRight.call(arr, fn, ...initial);
   },
-  array_every: (arr, cb) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
-    if (!call) return 0;
-    return arr.every((v, i) => __bitsToJsValue(call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
+  array_to_reversed: (arr) => Array.prototype.toReversed.call(arr),
+  array_to_sorted: (arr) => Array.prototype.toSorted.call(arr),
+  array_to_sorted_cmp: (arr, cb) => {
+    const call = __arrayCallback(cb);
+    const cmp = call ? (a, b) => __bitsToJsValue(call(__jsValueToBits(a), __jsValueToBits(b))) : cb;
+    return Array.prototype.toSorted.call(arr, cmp);
   },
+  array_to_spliced: (arr, start, deleteCount, ...items) => Array.prototype.toSpliced.call(arr, start, deleteCount, ...items),
+  array_with: (arr, index, value) => Array.prototype.with.call(arr, index, value),
+  array_copy_within: (arr, target, start, end) => Array.prototype.copyWithin.call(arr, target, start, end),
+  array_some: (arr, cb) => Array.isArray(arr) && arr.some(__hostPredicate(cb)) ? 1 : 0,
+  array_every: (arr, cb) => Array.isArray(arr) && arr.every(__hostPredicate(cb)) ? 1 : 0,
 
   // Classes — args are plain JS values. obj is the object, className/methodName are strings.
   // class_new returns a plain object carrying its class name (see __classInstance).
@@ -3262,6 +3308,13 @@ const __memDispatch = {
   error_new_kind: (kind, msg) =>
     new ([Error, TypeError, RangeError, ReferenceError, SyntaxError][kind] || Error)(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
+  // `super(...args)`: the parent's compiled constructor at table slot `ctorIdx` runs
+  // on `self` with `args`, then the parent's captures `caps`.
+  super_call_spread: (self, ctorIdx, args, caps) => {
+    const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx | 0);
+    __invokeConstructor(impl, caps.length, __jsValueToBits(self), ...[...args, ...caps].map(__jsValueToBits));
+    return undefined;
+  },
   // `super(msg)` in a class extending a built-in Error: the instance is a plain
   // object (see __classInstance), so it takes the message the Error constructor would
   // give it, non-enumerable as on a real Error. Returns the instance.
@@ -3328,7 +3381,17 @@ const __memDispatch = {
 
   // Crypto — args are plain JS values
   crypto_random_uuid: () => crypto.randomUUID(),
-  crypto_random_uuidv7: () => crypto.randomUUIDv7(),
+  // Web Crypto has no `randomUUIDv7`: an RFC 9562 version-7 UUID is the 48-bit Unix
+  // millisecond time, then random bits under the version and variant fields.
+  crypto_random_uuidv7: () => {
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    let ms = Date.now();
+    for (let i = 5; i >= 0; i--, ms = Math.floor(ms / 256)) b[i] = ms % 256;
+    b[6] = (b[6] & 0x0f) | 0x70;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  },
   crypto_random_bytes: (n) => crypto.getRandomValues(new Uint8Array(n)),
   crypto_sha256: (data) => {
     const str = String(data);
@@ -3814,7 +3877,13 @@ function uiAlloc(el) {
 function uiGet(h) { return uiHandles.get(h); }
 
 function __invokeWasmCallback(fn, ...bigintArgs) {
-  const result = fn(...__padBigintArgs(fn, 0, bigintArgs));
+  return __invokeConstructor(fn, 0, ...bigintArgs);
+}
+
+// `__invokeWasmCallback` of a constructor whose last `caps` arguments are its class's
+// captures.
+function __invokeConstructor(fn, caps, ...bigintArgs) {
+  const result = fn(...__padBigintArgs(fn, 0, bigintArgs, caps));
   __memDispatch.propagate_exception(true);
   return result;
 }

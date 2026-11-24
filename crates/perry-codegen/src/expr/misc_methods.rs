@@ -1322,6 +1322,7 @@ mod define_get_accessor_tests {
             fields: fields
                 .iter()
                 .map(|field| ClassField {
+                    byte_offset: 0,
                     origin: perry_hir::ClassFieldOrigin::Definition,
                     name: (*field).to_string(),
                     key_expr: None,
@@ -1360,6 +1361,7 @@ mod define_get_accessor_tests {
         ];
         m.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "o".to_string(),
                 ty: Type::Any,

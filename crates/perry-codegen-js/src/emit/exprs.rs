@@ -10,23 +10,28 @@ impl JsEmitter {
             condition,
             then_expr,
             else_expr,
+            ..
         } = body
         else {
             return false;
         };
         if !matches!(then_expr.as_ref(), Expr::Undefined)
-            || !matches!(condition.as_ref(), Expr::Compare { op: CompareOp::LooseEq, left, right } if matches!(left.as_ref(), Expr::LocalGet(local) if *local == id) && matches!(right.as_ref(), Expr::Null))
+            || !matches!(condition.as_ref(), Expr::Compare { op: CompareOp::LooseEq, left, right, .. } if matches!(left.as_ref(), Expr::LocalGet(local) if *local == id) && matches!(right.as_ref(), Expr::Null))
         {
             return false;
         }
         let (access, args) = match else_expr.as_ref() {
-            Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id) => {
+            Expr::PropertyGet { object, .. }
+            | Expr::IndexGet { object, .. }
+            | Expr::RegionOut { object, .. }
+                if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id) =>
+            {
                 (else_expr.as_ref(), None)
             }
-            Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(local) if *local == id) => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(local) if *local == id) => {
                 (callee.as_ref(), Some(args))
             }
-            Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id)) => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } if matches!(callee.as_ref(), Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id)) => {
                 (callee.as_ref(), Some(args))
             }
             _ => return false,
@@ -40,7 +45,7 @@ impl JsEmitter {
                 self.output.push_str(&self.quote_string(property));
                 self.output.push(']');
             }
-            Expr::IndexGet { index, .. } => {
+            Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } => {
                 self.output.push('[');
                 self.emit_expr(index);
                 self.output.push(']');
@@ -176,7 +181,7 @@ impl JsEmitter {
             }
 
             // --- Binary operations ---
-            Expr::Binary { op, left, right } => {
+            Expr::Binary { op, left, right, .. } => {
                 self.output.push('(');
                 self.emit_expr(left);
                 let op_str = match op {
@@ -209,7 +214,7 @@ impl JsEmitter {
             }
 
             // --- Comparison ---
-            Expr::Compare { op, left, right } => {
+            Expr::Compare { op, left, right, .. } => {
                 self.output.push('(');
                 self.emit_expr(left);
                 let op_str = match op {
@@ -228,7 +233,7 @@ impl JsEmitter {
             }
 
             // --- Logical ---
-            Expr::Logical { op, left, right } => {
+            Expr::Logical { op, left, right, .. } => {
                 self.output.push('(');
                 self.emit_expr(left);
                 let op_str = match op {
@@ -244,7 +249,7 @@ impl JsEmitter {
             // --- Function calls ---
             // #11826: module-level TDZ checks. Emitted JS declares its own
             // `let`/`const`, so the engine enforces the dead zone itself.
-            Expr::Call { callee, args, .. }
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                 if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
                     if name == perry_hir::tdz_check::TDZ_CHECK
                         || name == perry_hir::tdz_check::TDZ_CHECK_THEN
@@ -267,7 +272,7 @@ impl JsEmitter {
                     self.output.push_str(" + \"' before initialization\"); })()");
                 }
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 self.emit_expr(callee);
                 self.output.push('(');
                 for (i, arg) in args.iter().enumerate() {
@@ -309,7 +314,7 @@ impl JsEmitter {
                 self.output.push_str("undefined");
             }
 
-            Expr::NativeMethodCall { module, class_name, object, method, args } => {
+            Expr::NativeMethodCall { module, class_name, object, method, args, .. } => {
                 self.emit_native_method_call(module, class_name.as_deref(), object.as_deref(), method, args);
             }
 
@@ -357,7 +362,7 @@ impl JsEmitter {
             }
 
             // --- Index access ---
-            Expr::IndexGet { object, index , .. } => {
+            Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. } => {
                 self.emit_expr(object);
                 self.output.push('[');
                 self.emit_expr(index);
@@ -473,7 +478,7 @@ impl JsEmitter {
             }
 
             // --- Conditional (ternary) ---
-            Expr::Conditional { condition, then_expr, else_expr } => {
+            Expr::Conditional { condition, then_expr, else_expr, .. } => {
                 self.output.push('(');
                 self.emit_expr(condition);
                 self.output.push_str(" ? ");
@@ -506,12 +511,12 @@ impl JsEmitter {
             }
 
             // --- Await / Yield ---
-            Expr::Await(expr) => {
+            Expr::Await(expr, _) => {
                 self.output.push_str("(await ");
                 self.emit_expr(expr);
                 self.output.push(')');
             }
-            Expr::Yield { value, delegate } => {
+            Expr::Yield { value, delegate, .. } => {
                 if *delegate {
                     self.output.push_str("yield* ");
                 } else {
@@ -554,12 +559,12 @@ impl JsEmitter {
             Expr::StaticFieldGet { class_name, field_name } => {
                 let _ = write!(self.output, "{}.{}", class_name, field_name);
             }
-            Expr::StaticFieldSet { class_name, field_name, value } => {
+            Expr::StaticFieldSet { class_name, field_name, value, .. } => {
                 let _ = write!(self.output, "({}.{} = ", class_name, field_name);
                 self.emit_expr(value);
                 self.output.push(')');
             }
-            Expr::StaticMethodCall { class_name, method_name, args } => {
+            Expr::StaticMethodCall { class_name, method_name, args, .. } => {
                 let _ = write!(self.output, "{}.{}(", class_name, method_name);
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 { self.output.push_str(", "); }
@@ -570,7 +575,7 @@ impl JsEmitter {
 
             // --- This / Super ---
             Expr::This => self.output.push_str("this"),
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 self.output.push_str("super(");
                 for (i, arg) in args.iter().enumerate() {
                     if i > 0 { self.output.push_str(", "); }

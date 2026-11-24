@@ -46,11 +46,18 @@ fn lines(pf: &crate::ProgramFacts, key: &str, part: &str) -> Vec<String> {
         .collect()
 }
 
+/// The member token of the call `text` (`this.k.fill(1)`: `fill`); SWC offsets
+/// are 1-based.
+fn member_at(text: &str) -> u32 {
+    let start = SRC.find(text).expect("site in source");
+    (start + text.rfind('.').expect("a member call") + 2) as u32
+}
+
 /// The exported record of the callee site at `text` (SWC offsets are
 /// 1-based).
 fn callee(pf: &crate::ProgramFacts, text: &str, key: &str) -> Option<u8> {
     assert_eq!(SRC.matches(text).count(), 1, "`{text}` names one site");
-    let site = Site::Callee(SRC.find(text).expect("site in source") as u32 + 1);
+    let site = Site::Callee(member_at(text));
     pf.bindings_for("t.ts")
         .expect("module bindings")
         .method_sites
@@ -98,7 +105,7 @@ fn a_lying_annotation_has_no_fact() {
         ("e.fill(4)", "receiver:primitive"),
     ] {
         assert_eq!(callee(&pf, text, "fill"), None, "{text}");
-        let offset = SRC.find(text).unwrap() + 1;
+        let offset = member_at(text);
         let l = lines(&pf, "fill", &format!("site=callee:{offset} "));
         assert!(
             l.len() == 1 && l[0].contains(&format!(" typed_array=0({why}) ")),

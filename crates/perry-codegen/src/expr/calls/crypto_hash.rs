@@ -8,7 +8,7 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 
 /// Phase H crypto: collapse `crypto.createHash(alg).update(data).digest(enc)`
 /// into a single runtime call (chain-collapse arm). `outer_callee`/`outer_args`
-/// are the `Expr::Call { callee, args, .. }` bindings of the outer `.digest(...)`
+/// are the `Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }` bindings of the outer `.digest(...)`
 /// call. See the guard in the trunk dispatcher.
 pub(crate) fn arm_crypto_hash_chain(
     ctx: &mut FnCtx<'_>,
@@ -28,6 +28,11 @@ pub(crate) fn arm_crypto_hash_chain(
         callee: uc,
         args: ua,
         ..
+    }
+    | Expr::RegionCall {
+        callee: uc,
+        args: ua,
+        ..
     } = update_call
     {
         let inner = if let Expr::PropertyGet { object, .. } = uc.as_ref() {
@@ -40,6 +45,11 @@ pub(crate) fn arm_crypto_hash_chain(
         unreachable!()
     };
     let (create_method, create_args) = if let Expr::Call {
+        callee: cc,
+        args: ca,
+        ..
+    }
+    | Expr::RegionCall {
         callee: cc,
         args: ca,
         ..

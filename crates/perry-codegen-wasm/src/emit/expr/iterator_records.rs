@@ -146,6 +146,7 @@ impl<'a> FuncEmitCtx<'a> {
                 op: CompareOp::Eq,
                 left,
                 right,
+                ..
             } if matches!(right.as_ref(), Expr::Bool(true)) => {
                 self.emit_expr(func, left);
                 func.instruction(&Instruction::I64Const(TAG_TRUE as i64));

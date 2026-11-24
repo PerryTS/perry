@@ -665,6 +665,7 @@ mod tests {
             heritage_lexically_shadowed: false,
             fields: vec![],
             constructor: Some(perry_hir::Function {
+                byte_offset: 0,
                 id: 92,
                 name: "AbruptDerived_constructor".into(),
                 type_params: vec![],
@@ -703,6 +704,7 @@ mod tests {
         let unknown_receiver = matches!(ty, Type::Any);
         let mut module = perry_hir::Module::new("terminated_guarded_store");
         module.init = vec![Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "items".into(),
             ty,
@@ -719,6 +721,7 @@ mod tests {
         }];
         module.classes.push(abrupt_derived_class());
         module.functions.push(perry_hir::Function {
+            byte_offset: 0,
             id: 2,
             name: "store".into(),
             type_params: vec![],

@@ -9,6 +9,7 @@ pub fn lower_async_module_body(module: &mut Module) {
     let mut body = std::mem::take(&mut module.init);
     lift_bindings(&mut body, &mut module.init);
     module.functions.push(Function {
+        byte_offset: module.byte_offset,
         id,
         name: format!("__async_module_body_{id}"),
         type_params: Vec::new(),
@@ -54,9 +55,11 @@ fn lift_bindings(body: &mut [Stmt], declarations: &mut Vec<Stmt>) {
             ty,
             mutable,
             init,
+            ..
         } = stmt
         {
             declarations.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: *id,
                 name: name.clone(),
                 ty: ty.clone(),

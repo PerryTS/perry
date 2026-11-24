@@ -32,9 +32,10 @@ fn a_copied_class_parent_temp_does_not_rename_its_callers_binding() {
         .iter_mut()
         .find(|f| f.name == "mixin")
         .unwrap();
-    factory.body = vec![perry_hir::Stmt::Return(Some(perry_hir::Expr::ClassRef(
-        template,
-    )))];
+    factory.body = vec![perry_hir::Stmt::Return(
+        Some(perry_hir::Expr::ClassRef(template)),
+        0,
+    )];
     perry_transform::inline_functions(
         &mut module,
         &Default::default(),

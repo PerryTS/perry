@@ -209,6 +209,7 @@ pub(crate) fn try_import_meta_require(
             .transpose()?
             .unwrap_or(Expr::Undefined);
         return Ok(Some(Expr::NativeMethodCall {
+            byte_offset: crate::lower::call_token(call),
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,

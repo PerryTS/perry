@@ -20,6 +20,7 @@ use perry_hir::{Expr, Stmt};
 /// establish that a checked read returns only a byte or undefined.
 fn buffer_local(id: u32) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: "buf".to_string(),
         ty: perry_hir::types::Type::Named("Buffer".to_string()),
@@ -32,6 +33,7 @@ fn buffer_local(id: u32) -> Stmt {
 /// allocation-free — exactly what forces the dynamic add and its rooting.
 fn any_local(id: u32, name: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: perry_hir::types::Type::Any,
@@ -52,11 +54,13 @@ fn packet_tag(id: u32) -> Expr {
 /// `<element read> + packet.tag`, bound to a local so nothing folds it away.
 fn dynamic_add_with_element_read(element: Expr, packet_id: u32) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: 90,
         name: "next".to_string(),
         ty: perry_hir::types::Type::Number,
         mutable: false,
         init: Some(Expr::Binary {
+            byte_offset: 0,
             op: perry_hir::BinaryOp::Add,
             left: Box::new(element),
             right: Box::new(packet_tag(packet_id)),

@@ -74,7 +74,7 @@ fn names_call(e: &Expr, s: &SiteFacts) -> bool {
     if matches!(e, Expr::Closure { .. }) {
         return false;
     }
-    if let Expr::Call { callee, .. } = e {
+    if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = e {
         if matches!(callee.as_ref(), Expr::PropertyGet { object, property, byte_offset, .. }
             if matches!(object.as_ref(), Expr::This)
                 && *byte_offset == s.byte_offset && *property == s.key
@@ -139,7 +139,7 @@ fn imported_instance(s: &SiteFacts, hir: &perry_hir::Module, c: &Class) -> bool 
     let mut agree = true;
     builtin::module(hir, &mut |e| {
         let (callee, plain) = match e {
-            Expr::Call { callee, .. } => (callee, true),
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => (callee, true),
             Expr::CallSpread { callee, .. } => (callee, false),
             _ => return,
         };

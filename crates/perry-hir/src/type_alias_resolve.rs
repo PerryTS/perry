@@ -443,7 +443,7 @@ fn fix_stmts(stmts: &mut [Stmt], table: &AliasTable) {
                     fix_expr(init, table);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 fix_expr(expr, table);
             }
             Stmt::If {
@@ -482,6 +482,7 @@ fn fix_stmts(stmts: &mut [Stmt], table: &AliasTable) {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 fix_expr(discriminant, table);
                 for case in cases {
@@ -505,7 +506,7 @@ fn fix_stmts(stmts: &mut [Stmt], table: &AliasTable) {
                     fix_stmts(finally, table);
                 }
             }
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -826,10 +827,12 @@ mod tests {
         };
         let mut module = Module::new("m");
         module.functions.push(Function {
+            byte_offset: 0,
             id: 0,
             name: "f".into(),
             type_params: vec![],
             params: vec![Param {
+                byte_offset: 0,
                 id: 0,
                 name: "id".into(),
                 ty: id_ty.clone(),
@@ -840,15 +843,18 @@ mod tests {
             }],
             return_type: Type::Named("ComponentId".into()),
             body: vec![Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "x".into(),
                 ty: id_ty.clone(),
                 mutable: false,
                 init: Some(Expr::Closure {
+                    byte_offset: 0,
                     func_id: 1,
                     params: vec![],
                     return_type: id_ty.clone(),
                     body: vec![Stmt::Let {
+                        byte_offset: 0,
                         id: 2,
                         name: "y".into(),
                         ty: id_ty.clone(),

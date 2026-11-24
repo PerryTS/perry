@@ -27,7 +27,7 @@ pub(crate) fn rewrite_set_hidden_in_stmt(
     match stmt {
         Stmt::Expr(e) => rewrite_set_hidden_in_expr(e, bindings),
         Stmt::Let { init: Some(e), .. } => rewrite_set_hidden_in_expr(e, bindings),
-        Stmt::Return(Some(e)) => rewrite_set_hidden_in_expr(e, bindings),
+        Stmt::Return(Some(e), _) => rewrite_set_hidden_in_expr(e, bindings),
         Stmt::If {
             condition,
             then_branch,
@@ -82,6 +82,7 @@ pub(crate) fn rewrite_set_hidden_in_expr(
         method,
         args,
         object: None,
+        byte_offset,
         ..
     } = e
     {
@@ -99,6 +100,7 @@ pub(crate) fn rewrite_set_hidden_in_expr(
                         other => other.clone(),
                     };
                     *e = Expr::NativeMethodCall {
+                        byte_offset: *byte_offset,
                         module: "perry/arkts".to_string(),
                         class_name: None,
                         object: None,
@@ -116,7 +118,7 @@ pub(crate) fn rewrite_set_hidden_in_expr(
         Expr::Closure { body, .. } => {
             rewrite_set_hidden_calls_in_stmts(body, bindings);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             rewrite_set_hidden_in_expr(callee, bindings);
             for a in args.iter_mut() {
                 rewrite_set_hidden_in_expr(a, bindings);
@@ -137,6 +139,7 @@ pub(crate) fn rewrite_set_hidden_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             rewrite_set_hidden_in_expr(condition, bindings);
             rewrite_set_hidden_in_expr(then_expr, bindings);
@@ -187,7 +190,7 @@ pub(crate) fn rewrite_set_hidden_in_closures_in_stmt(
     bindings: &HashMap<LocalId, VisibilityBinding>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) => {
             rewrite_set_hidden_in_closures_in_expr(e, bindings);
         }
         Stmt::Let { init: Some(e), .. } => {
@@ -248,7 +251,7 @@ pub(crate) fn rewrite_set_hidden_in_closures_in_expr(
     // Otherwise descend into sub-exprs without rewriting top-level
     // widgetSetHidden calls.
     match e {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             rewrite_set_hidden_in_closures_in_expr(callee, bindings);
             for a in args.iter_mut() {
                 rewrite_set_hidden_in_closures_in_expr(a, bindings);
@@ -269,6 +272,7 @@ pub(crate) fn rewrite_set_hidden_in_closures_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             rewrite_set_hidden_in_closures_in_expr(condition, bindings);
             rewrite_set_hidden_in_closures_in_expr(then_expr, bindings);

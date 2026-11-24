@@ -14,6 +14,7 @@ fn resolve_string_literal() {
 #[test]
 fn resolve_ternary_of_literals() {
     let r = resolve_import_path(&Expr::Conditional {
+        byte_offset: 0,
         condition: Box::new(Expr::Bool(true)),
         then_expr: Box::new(Expr::String("./a.ts".into())),
         else_expr: Box::new(Expr::String("./b.ts".into())),
@@ -31,6 +32,7 @@ fn resolve_ternary_of_literals() {
 #[test]
 fn resolve_ternary_dedupes() {
     let r = resolve_import_path(&Expr::Conditional {
+        byte_offset: 0,
         condition: Box::new(Expr::Bool(true)),
         then_expr: Box::new(Expr::String("./a.ts".into())),
         else_expr: Box::new(Expr::String("./a.ts".into())),
@@ -51,7 +53,7 @@ fn resolve_unresolvable_local() {
 fn tla_detects_module_init_await() {
     let mut m = Module::new("t");
     m.init
-        .push(Stmt::Expr(Expr::Await(Box::new(Expr::Undefined))));
+        .push(Stmt::Expr(Expr::Await(Box::new(Expr::Undefined), 0)));
     detect_top_level_await(&mut m);
     assert!(m.has_top_level_await);
 }
@@ -62,8 +64,10 @@ fn resolve_template_literal_with_const_local() {
     // `./locale_${lang}.ts` where lang is a module-level const.
     // The Add chain is `("./locale_" + lang) + ".ts"`.
     let arg = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::String("./locale_".into())),
             right: Box::new(Expr::LocalGet(7)),
@@ -84,13 +88,16 @@ fn resolve_template_literal_with_const_local() {
 fn resolve_template_literal_with_ternary_interpolation() {
     // `./locale_${cond ? 'en' : 'es'}.ts` — Cartesian product.
     let interp = Expr::Conditional {
+        byte_offset: 0,
         condition: Box::new(Expr::Bool(true)),
         then_expr: Box::new(Expr::String("en".into())),
         else_expr: Box::new(Expr::String("es".into())),
     };
     let arg = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::String("./locale_".into())),
             right: Box::new(interp),
@@ -353,11 +360,13 @@ fn resolve_param_string_literal_union() {
 fn collect_param_string_literal_union_from_function() {
     let mut m = Module::new("t");
     m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "load".to_string(),
         type_params: Vec::new(),
         params: vec![
             Param {
+                byte_offset: 0,
                 id: 42,
                 name: "specifier".to_string(),
                 ty: Type::Union(vec![
@@ -370,6 +379,7 @@ fn collect_param_string_literal_union_from_function() {
                 arguments_object: None,
             },
             Param {
+                byte_offset: 0,
                 id: 43,
                 name: "broad".to_string(),
                 ty: Type::Union(vec![
@@ -410,11 +420,13 @@ fn collect_param_string_literal_union_from_function() {
 fn collect_param_string_literal_union_from_type_alias() {
     let mut m = Module::new("t");
     m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "load".to_string(),
         type_params: Vec::new(),
         params: vec![
             Param {
+                byte_offset: 0,
                 id: 42,
                 name: "specifier".to_string(),
                 ty: Type::Named("Specifier".to_string()),
@@ -424,6 +436,7 @@ fn collect_param_string_literal_union_from_type_alias() {
                 arguments_object: None,
             },
             Param {
+                byte_offset: 0,
                 id: 43,
                 name: "chained".to_string(),
                 ty: Type::Named("ChainedSpecifier".to_string()),
@@ -433,6 +446,7 @@ fn collect_param_string_literal_union_from_type_alias() {
                 arguments_object: None,
             },
             Param {
+                byte_offset: 0,
                 id: 44,
                 name: "mixed".to_string(),
                 ty: Type::Named("MixedSpecifier".to_string()),
@@ -442,6 +456,7 @@ fn collect_param_string_literal_union_from_type_alias() {
                 arguments_object: None,
             },
             Param {
+                byte_offset: 0,
                 id: 45,
                 name: "cycle".to_string(),
                 ty: Type::Named("CycleA".to_string()),
@@ -520,6 +535,7 @@ fn collect_param_string_literal_union_from_type_alias() {
 fn collect_consts_skips_mutated() {
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "stable".into(),
         ty: crate::types::Type::String,
@@ -527,6 +543,7 @@ fn collect_consts_skips_mutated() {
         init: Some(Expr::String("./a.ts".into())),
     });
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 2,
         name: "mutated".into(),
         ty: crate::types::Type::String,
@@ -548,6 +565,7 @@ fn collect_includes_unreassigned_let_but_drops_reassigned() {
     // const; a reassigned one still falls back to Unresolved.
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "stableLet".into(),
         ty: crate::types::Type::String,
@@ -555,6 +573,7 @@ fn collect_includes_unreassigned_let_but_drops_reassigned() {
         init: Some(Expr::String("./a.ts".into())),
     });
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 2,
         name: "reassignedLet".into(),
         ty: crate::types::Type::String,
@@ -575,11 +594,13 @@ fn resolve_unreassigned_let_ternary_union() {
     // The #1674 acceptance shape: `let p = cond ? './a.ts' : './b.ts'`.
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "p".into(),
         ty: crate::types::Type::String,
         mutable: true,
         init: Some(Expr::Conditional {
+            byte_offset: 0,
             condition: Box::new(Expr::Bool(true)),
             then_expr: Box::new(Expr::String("./a.ts".into())),
             else_expr: Box::new(Expr::String("./b.ts".into())),
@@ -600,6 +621,7 @@ fn resolve_unreassigned_let_ternary_union() {
 fn resolve_reassigned_local_literal_candidates() {
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "p".into(),
         ty: Type::String,
@@ -678,6 +700,7 @@ fn resolve_path_join_over_replaced_dirname() {
 fn resolve_cjs_path_default_join_over_replaced_dirname_local() {
     let mut module = Module::new("node-pty-windows-conout");
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 81,
         name: "scriptPath".into(),
         ty: Type::String,
@@ -759,6 +782,7 @@ fn resolve_path_join_normalizes_relative_segments() {
 fn worker_new_visitor_descends_into_closure_bodies() {
     let mut module = Module::new("worker-closure");
     module.init.push(Stmt::Expr(Expr::Closure {
+        byte_offset: 0,
         func_id: 1,
         params: vec![],
         return_type: Type::Void,
@@ -812,6 +836,7 @@ fn dynamic_import_visitors_keep_closure_and_toplevel_order_in_lockstep() {
 
     let mut module = Module::new("dynamic-import-order");
     module.init.push(Stmt::Expr(Expr::Closure {
+        byte_offset: 0,
         func_id: 1,
         params: vec![],
         return_type: Type::Void,
@@ -872,6 +897,7 @@ fn resolve_web_worker_url_relative_to_import_meta() {
 fn reassigned_local_candidates_drop_mixed_dynamic_defs() {
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "p".into(),
         ty: Type::String,
@@ -902,10 +928,12 @@ fn resolve_closure_local_const_specifier() {
     // specifier resolves instead of erroring "not a module-level const".
     let mut m = Module::new("t");
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 0,
         params: vec![],
         return_type: Type::Any,
         body: vec![Stmt::Let {
+            byte_offset: 0,
             id: 9,
             name: "cfWorkers".into(),
             ty: Type::String,
@@ -944,6 +972,7 @@ fn collect_consts_invalidates_closure_mutation() {
     // from the const map (the mutation scan descends into closures, #1725).
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "p".into(),
         ty: Type::String,
@@ -951,6 +980,7 @@ fn collect_consts_invalidates_closure_mutation() {
         init: Some(Expr::String("./a.ts".into())),
     });
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 0,
         params: vec![],
         return_type: Type::Any,
@@ -1071,6 +1101,7 @@ fn flatten_export_all_cycle_safe() {
 fn module_defining_fn(module: &str, name: &str) -> Module {
     let mut m = Module::new(module);
     m.functions.push(crate::ir::Function {
+        byte_offset: 0,
         id: 0,
         name: name.into(),
         type_params: vec![],
@@ -1216,6 +1247,7 @@ fn flatten_explicit_reexport_through_export_all_reaches_ultimate_owner() {
     // emits, so the dependency corpus fails at link time.
     let mut leaf = Module::new("leaf");
     leaf.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "NEVER".into(),
         ty: Type::Any,
@@ -1227,6 +1259,7 @@ fn flatten_explicit_reexport_through_export_all_reaches_ultimate_owner() {
         exported: "NEVER".into(),
     });
     leaf.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 2,
         name: "_null".into(),
         ty: Type::Any,
@@ -1412,10 +1445,11 @@ fn tla_skips_await_inside_closure() {
     // Build a closure body containing an Await — the module-level
     // detector must NOT descend into the closure.
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 0,
         params: vec![],
         return_type: Type::Any,
-        body: vec![Stmt::Expr(Expr::Await(Box::new(Expr::Undefined)))],
+        body: vec![Stmt::Expr(Expr::Await(Box::new(Expr::Undefined), 0))],
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,
@@ -1436,8 +1470,10 @@ fn tla_skips_await_inside_closure() {
 // non-resolvable local — the HIR shape of `` `./plugins/${name}.ts` ``.
 fn glob_chain(prefix: &str, suffix: &str, wild_id: u32) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::String(prefix.into())),
             right: Box::new(Expr::LocalGet(wild_id)),
@@ -1476,6 +1512,7 @@ fn glob_pattern_none_when_fully_resolvable() {
     // No wildcard part — the normal resolver handles this, not the glob.
     let consts: std::collections::HashMap<u32, Expr> = std::collections::HashMap::new();
     let arg = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::String("./a".into())),
         right: Box::new(Expr::String(".ts".into())),
@@ -1490,9 +1527,13 @@ fn glob_pattern_none_when_fully_resolvable() {
 #[test]
 fn resolve_through_a_tdz_checked_const_read() {
     let checked = |id: u32, name: &str| {
-        Expr::Sequence(vec![crate::tdz_check::check(id, name), Expr::LocalGet(id)])
+        Expr::Sequence(vec![
+            crate::tdz_check::check(id, name, 0),
+            Expr::LocalGet(id),
+        ])
     };
     let arg = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(checked(7, "dir")),
         right: Box::new(Expr::String("/x.ts".into())),

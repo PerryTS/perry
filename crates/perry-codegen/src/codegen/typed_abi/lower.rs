@@ -45,7 +45,9 @@ fn lower_typed_f64_expr_with_env(
             let v = lower_typed_f64_expr_with_env(blk, operand, locals, reps)?;
             Ok(blk.fneg(&v))
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let l = lower_typed_f64_expr_with_env(blk, left, locals, reps)?;
             let r = lower_typed_f64_expr_with_env(blk, right, locals, reps)?;
             Ok(match op {
@@ -90,7 +92,9 @@ fn lower_typed_i32_expr_with_env(
             let v = lower_typed_i32_expr_with_env(blk, operand, locals)?;
             Ok(blk.xor(crate::types::I32, &v, "-1"))
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let l = lower_typed_i32_expr_with_env(blk, left, locals)?;
             let r_raw = lower_typed_i32_expr_with_env(blk, right, locals)?;
             let r = if matches!(op, BinaryOp::Shl | BinaryOp::Shr) {
@@ -133,7 +137,9 @@ fn lower_typed_i1_expr_with_env(
             let v = lower_typed_i1_expr_with_env(blk, operand, locals, reps)?;
             Ok(blk.xor(crate::types::I1, &v, "true"))
         }
-        Expr::Logical { op, left, right } => {
+        Expr::Logical {
+            op, left, right, ..
+        } => {
             let l = lower_typed_i1_expr_with_env(blk, left, locals, reps)?;
             let r = lower_typed_i1_expr_with_env(blk, right, locals, reps)?;
             Ok(match op {
@@ -144,7 +150,9 @@ fn lower_typed_i1_expr_with_env(
                 }
             })
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             if expr_is_typed_i1_safe(left, reps)
                 && expr_is_typed_i1_safe(right, reps)
                 && matches!(
@@ -267,7 +275,7 @@ pub(crate) fn lower_typed_f64_body_with_seed_locals_and_reps(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => lower_typed_f64_expr_with_env(blk, expr, &locals, &reps),
+        Stmt::Return(Some(expr), _) => lower_typed_f64_expr_with_env(blk, expr, &locals, &reps),
         _ => anyhow::bail!("typed-f64 clone requires a final return value"),
     }
 }
@@ -316,7 +324,7 @@ pub(crate) fn lower_typed_i32_body_with_seed_locals(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => lower_typed_i32_expr_with_env(blk, expr, &locals),
+        Stmt::Return(Some(expr), _) => lower_typed_i32_expr_with_env(blk, expr, &locals),
         _ => anyhow::bail!("typed-i32 clone requires a final return value"),
     }
 }
@@ -349,7 +357,7 @@ pub(crate) fn lower_typed_string_body_with_seed_locals(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => lower_typed_string_expr_with_env(expr, &locals),
+        Stmt::Return(Some(expr), _) => lower_typed_string_expr_with_env(expr, &locals),
         _ => anyhow::bail!("typed-string clone requires a final return value"),
     }
 }
@@ -426,7 +434,9 @@ fn lower_typed_f64_receiver_expr_with_env(
             )?;
             Ok(blk.fneg(&v))
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let l =
                 lower_typed_f64_receiver_expr_with_env(blk, left, locals, receiver, header_skip)?;
             let r =
@@ -491,7 +501,7 @@ pub(crate) fn lower_typed_f64_receiver_body(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => {
+        Stmt::Return(Some(expr), _) => {
             lower_typed_f64_receiver_expr_with_env(blk, expr, &locals, receiver, header_skip)
         }
         _ => anyhow::bail!("typed-f64 receiver clone requires a final return value"),
@@ -553,7 +563,7 @@ pub(crate) fn lower_typed_i1_body_with_seed_locals(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => lower_typed_i1_expr_with_env(blk, expr, &locals, &reps),
+        Stmt::Return(Some(expr), _) => lower_typed_i1_expr_with_env(blk, expr, &locals, &reps),
         _ => anyhow::bail!("typed-i1 clone requires a final return value"),
     }
 }

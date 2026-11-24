@@ -3,12 +3,14 @@ use super::*;
 fn fixture(ty: Type) -> Module {
     let mut m = Module::new("private_frame");
     m.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "producer".into(),
         type_params: vec![],
         params: vec![],
         return_type: ty,
         body: vec![Stmt::Expr(Expr::Yield {
+            byte_offset: 0,
             value: Some(Box::new(Expr::Number(7.0))),
             delegate: false,
         })],
@@ -24,6 +26,7 @@ fn fixture(ty: Type) -> Module {
     });
     m.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "it".into(),
             ty: Type::Any,
@@ -41,8 +44,9 @@ fn fixture(ty: Type) -> Module {
             vec![
                 Expr::LocalGet(10),
                 Expr::Undefined,
-                Expr::LocalSet(11, Box::new(runtime("iteratorStepOutput", vec![]))),
+                Expr::LocalSet(11, Box::new(runtime("iteratorStepOutput", vec![], 0))),
             ],
+            0,
         )),
     ];
     m
@@ -65,8 +69,9 @@ fn private_frame_admission_uses_values_and_uses_not_annotations() {
 #[test]
 fn private_frame_escape_and_alias_keep_standalone_record() {
     for escape in [
-        Stmt::Return(Some(Expr::LocalGet(10))),
+        Stmt::Return(Some(Expr::LocalGet(10)), 0),
         Stmt::Let {
+            byte_offset: 0,
             id: 12,
             name: "alias".into(),
             ty: Type::Any,
@@ -127,7 +132,7 @@ fn private_frame_lifetime_cannot_cross_its_consumer_scope() {
             then_branch: init,
             else_branch: None,
         },
-        Stmt::Expr(runtime("iteratorNextMethod", vec![Expr::LocalGet(10)])),
+        Stmt::Expr(runtime("iteratorNextMethod", vec![Expr::LocalGet(10)], 0)),
     ];
     super::super::transform_generators(&mut m);
     assert!(
@@ -139,6 +144,7 @@ fn private_frame_lifetime_cannot_cross_its_consumer_scope() {
 fn private_frame_capture_even_without_body_read_is_an_escape() {
     let mut m = fixture(Type::Any);
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 2,
         params: vec![],
         return_type: Type::Any,
@@ -207,6 +213,7 @@ fn private_frame_terminal_logging_cannot_hide_observable_getters() {
             byte_offset: 0,
         }),
         args: vec![Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::String("caller ".into())),
             right: Box::new(Expr::IndexGet {
@@ -233,10 +240,11 @@ fn private_frame_logging_requires_primitive_writes_not_a_number_annotation() {
         (Expr::Number(1.0), true),
         (
             Expr::Closure {
+                byte_offset: 0,
                 func_id: 9,
                 params: vec![],
                 return_type: Type::Any,
-                body: vec![Stmt::Return(Some(Expr::Number(1.0)))],
+                body: vec![Stmt::Return(Some(Expr::Number(1.0)), 0)],
                 captures: vec![],
                 mutable_captures: vec![],
                 captures_this: false,
@@ -253,6 +261,7 @@ fn private_frame_logging_requires_primitive_writes_not_a_number_annotation() {
     ] {
         let mut m = fixture(Type::Any);
         m.init.push(Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "logged".into(),
             ty: Type::Number,
@@ -286,6 +295,7 @@ fn nested_argument_fixture(escapes: bool) -> Module {
     consumer.id = 1;
     consumer.name = "consumer".into();
     consumer.params = vec![perry_hir::Param {
+        byte_offset: 0,
         id: 30,
         name: "input".into(),
         ty: Type::Any,
@@ -296,6 +306,7 @@ fn nested_argument_fixture(escapes: bool) -> Module {
     }];
     consumer.body = if escapes {
         vec![Stmt::Expr(Expr::Yield {
+            byte_offset: 0,
             value: Some(Box::new(Expr::LocalGet(30))),
             delegate: false,
         })]
@@ -306,10 +317,12 @@ fn nested_argument_fixture(escapes: bool) -> Module {
                 vec![
                     Expr::LocalGet(30),
                     Expr::Undefined,
-                    Expr::LocalSet(31, Box::new(runtime("iteratorStepOutput", vec![]))),
+                    Expr::LocalSet(31, Box::new(runtime("iteratorStepOutput", vec![], 0))),
                 ],
+                0,
             )),
             Stmt::Expr(Expr::Yield {
+                byte_offset: 0,
                 value: Some(Box::new(Expr::Number(8.0))),
                 delegate: false,
             }),

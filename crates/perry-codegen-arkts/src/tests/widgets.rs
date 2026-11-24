@@ -217,6 +217,7 @@ fn local_get_escape_follows_const_binding() {
     let mut m = empty_module();
     // Simulate: const t = Text("via let"); App({body: t});
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 7,
         name: "t".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -555,6 +556,7 @@ fn for_each_lowers_array_map_in_vstack() {
     let mut m = empty_module();
     // Build `Expr::ArrayMap { array: ["a","b","c"], callback: (p) => Text(p) }`.
     let item_param = perry_hir::ir::Param {
+        byte_offset: 0,
         id: 42,
         name: "item".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -574,10 +576,11 @@ fn for_each_lowers_array_map_in_vstack() {
             None,
         )),
         callback: Box::new(Expr::Closure {
+            byte_offset: 0,
             func_id: 0 as perry_hir::types::FuncId,
             params: vec![item_param],
             return_type: perry_hir::types::Type::Any,
-            body: vec![Stmt::Return(Some(inner_text))],
+            body: vec![Stmt::Return(Some(inner_text), 0)],
             captures: vec![],
             mutable_captures: vec![],
             captures_this: false,

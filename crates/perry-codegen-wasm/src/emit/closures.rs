@@ -62,7 +62,7 @@ pub(super) fn collect_closures_from_stmts(stmts: &[Stmt], out: &mut Vec<Collecte
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => collect_closures_from_expr(e, out),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     collect_closures_from_expr(e, out);
                 }
@@ -119,6 +119,7 @@ pub(super) fn collect_closures_from_stmts(stmts: &[Stmt], out: &mut Vec<Collecte
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 collect_closures_from_expr(discriminant, out);
                 for case in cases {
@@ -172,12 +173,15 @@ pub(super) fn collect_closures_from_expr(expr: &Expr, out: &mut Vec<CollectedClo
 /// reads them between calls, so every one of them lives in a cell.
 pub(super) fn generator_record_captures(body: &[Stmt]) -> &[LocalId] {
     match body.last() {
-        Some(Stmt::Return(Some(Expr::LinkGeneratorPrototype {
-            obj,
-            is_async: false,
-            fixed_state: true,
-            ..
-        }))) => match obj.as_ref() {
+        Some(Stmt::Return(
+            Some(Expr::LinkGeneratorPrototype {
+                obj,
+                is_async: false,
+                fixed_state: true,
+                ..
+            }),
+            _,
+        )) => match obj.as_ref() {
             Expr::Closure { captures, .. } => captures,
             _ => &[],
         },

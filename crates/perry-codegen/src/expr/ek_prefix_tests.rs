@@ -8,6 +8,7 @@ use perry_hir::{Expr, Function, Module as HirModule, Param, Stmt};
 fn module_ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
     let mut hir = HirModule::new("ek_prefix_test");
     hir.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -37,6 +38,7 @@ fn module_ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty,
@@ -49,6 +51,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 
 fn local_array(init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: 0,
         name: "a".to_string(),
         ty: Type::Array(Box::new(Type::Any)),
@@ -206,13 +209,16 @@ fn read_ir(numeric: bool) -> String {
             param(1, "array", Type::Array(Box::new(elem))),
             param(2, "key", Type::Any),
         ],
-        vec![Stmt::Return(Some(Expr::IndexGet {
-            element_offset: 0,
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(Expr::Integer(1)),
-        }))],
+        vec![Stmt::Return(
+            Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::Integer(1)),
+            }),
+            0,
+        )],
     )
 }
 
@@ -275,7 +281,7 @@ fn inline_literal_is_born_with_its_prefix() {
                 vec![Expr::Number(1.0), Expr::Number(2.0), Expr::Number(3.0)],
                 None,
             )),
-            Stmt::Return(Some(Expr::LocalGet(0))),
+            Stmt::Return(Some(Expr::LocalGet(0)), 0),
         ],
     );
     let word = 8 + crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES;
@@ -308,7 +314,7 @@ fn outlined_literal_is_born_with_its_prefix() {
                 (0..n).map(|i| Expr::Number(i as f64 + 0.5)).collect(),
                 None,
             )),
-            Stmt::Return(Some(Expr::LocalGet(0))),
+            Stmt::Return(Some(Expr::LocalGet(0)), 0),
         ],
     );
     let offset = crate::target_layout::ARRAY_EK_PREFIX_OFFSET_BYTES;
@@ -336,7 +342,7 @@ fn store_ir(stmt: Stmt) -> String {
         vec![
             local_array(Expr::Array(Vec::new(), None)),
             stmt,
-            Stmt::Return(Some(Expr::LocalGet(0))),
+            Stmt::Return(Some(Expr::LocalGet(0)), 0),
         ],
     )
 }
@@ -394,13 +400,16 @@ fn inline_writers_raise_the_frontier() {
 fn dynamic_read_ic_takes_the_prefix_hit_first() {
     let ll = module_ir(
         vec![param(1, "o", Type::Any), param(2, "i", Type::Number)],
-        vec![Stmt::Return(Some(Expr::IndexGet {
-            element_offset: 0,
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(Expr::LocalGet(2)),
-        }))],
+        vec![Stmt::Return(
+            Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(Expr::LocalGet(2)),
+            }),
+            0,
+        )],
     );
     let guard = block(&ll, "arrlike.ic.array_guard");
     assert!(

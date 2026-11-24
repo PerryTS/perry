@@ -56,6 +56,7 @@ fn stamp_self_constructions(ctx: &mut LoweringContext, class_name: &str, body: &
     body.insert(
         0,
         Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: eval_id,
             name: "__perry_class_env_evaluation".to_string(),
             ty: Type::Any,
@@ -76,7 +77,7 @@ fn closure_free_exprs_of_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e);
             }
@@ -131,6 +132,7 @@ fn closure_free_exprs_of_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for case in cases {
@@ -196,7 +198,7 @@ fn closure_capture_ids_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<Loc
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => closure_capture_ids_expr(e, out),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 closure_capture_ids_expr(e, out);
             }
@@ -251,6 +253,7 @@ fn closure_capture_ids_stmt(stmt: &Stmt, out: &mut std::collections::HashSet<Loc
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             closure_capture_ids_expr(discriminant, out);
             for case in cases {
@@ -299,6 +302,9 @@ impl CaptureDefinition {
 pub fn synthesize_class_captures(
     ctx: &mut LoweringContext,
     name: &str,
+    // Source offset of the class construct; a synthesized default
+    // constructor stands there.
+    class_offset: u32,
     extends_name: Option<&str>,
     has_heritage: bool,
     fields: &mut Vec<ClassField>,
@@ -490,6 +496,7 @@ pub fn synthesize_class_captures(
             continue;
         }
         fields.push(ClassField {
+            byte_offset: class_offset,
             origin: crate::ClassFieldOrigin::Capture,
             name: crate::cap_fields::cap_field_name(cap_salt, cid),
             key_expr: None,
@@ -605,6 +612,7 @@ pub fn synthesize_class_captures(
                 }
             };
             prologue.push(Stmt::Let {
+                byte_offset: class_offset,
                 id: new_id,
                 name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 ty,
@@ -737,6 +745,7 @@ pub fn synthesize_class_captures(
             let new_id = ctx.fresh_local();
             id_map.insert(outer_id, new_id);
             prologue.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: new_id,
                 name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 ty: captured_outer_types
@@ -784,6 +793,7 @@ pub fn synthesize_class_captures(
             let new_id = ctx.fresh_local();
             id_map.insert(outer_id, new_id);
             prologue.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: new_id,
                 name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 ty: captured_outer_types
@@ -835,6 +845,7 @@ pub fn synthesize_class_captures(
             let new_id = ctx.fresh_local();
             id_map.insert(outer_id, new_id);
             prologue.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: new_id,
                 name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 ty: captured_outer_types
@@ -895,6 +906,7 @@ pub fn synthesize_class_captures(
             let (params, body) = if has_heritage {
                 let pid = ctx.fresh_local();
                 let params = vec![Param {
+                    byte_offset: class_offset,
                     id: pid,
                     name: "__perry_dflt_args".to_string(),
                     ty: Type::Any,
@@ -911,6 +923,7 @@ pub fn synthesize_class_captures(
                 (Vec::new(), Vec::new())
             };
             Function {
+                byte_offset: class_offset,
                 id: ctx.fresh_func(),
                 name: format!("{}::constructor", name),
                 type_params: Vec::new(),
@@ -961,6 +974,7 @@ pub fn synthesize_class_captures(
             .cloned()
             .unwrap_or(Type::Any);
         ctor.params.push(Param {
+            byte_offset: class_offset,
             id: fresh_param_id,
             name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
             ty,
@@ -997,7 +1011,7 @@ pub fn synthesize_class_captures(
                 object: Box::new(Expr::This),
                 property: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 value: Box::new(Expr::LocalGet(fresh_param_id)),
-                byte_offset: 0,
+                byte_offset: class_offset,
                 byte_end: 0,
             }
         }));
@@ -1178,7 +1192,7 @@ fn early_capture_stash_slot(body: &mut Vec<Stmt>) -> Option<usize> {
 }
 
 fn is_super_call(expr: &Expr) -> bool {
-    matches!(expr, Expr::SuperCall(_) | Expr::SuperCallSpread(_))
+    matches!(expr, Expr::SuperCall(_, _) | Expr::SuperCallSpread(_))
 }
 
 /// True when `expr` is or contains a `super(…)` call outside nested closures
@@ -1205,7 +1219,7 @@ fn stmt_has_direct_super_call(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Expr(e) | Stmt::Throw(e) => expr_has_direct_super_call(e),
         Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_has_direct_super_call),
-        Stmt::Return(e) => e.as_ref().is_some_and(expr_has_direct_super_call),
+        Stmt::Return(e, _) => e.as_ref().is_some_and(expr_has_direct_super_call),
         Stmt::If {
             condition,
             then_branch,
@@ -1247,6 +1261,7 @@ fn stmt_has_direct_super_call(stmt: &Stmt) -> bool {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             expr_has_direct_super_call(discriminant)
                 || cases.iter().any(|case| {
@@ -1273,7 +1288,7 @@ fn insert_stashes_before_returns(body: &mut Vec<Stmt>, stashes: &[Stmt]) {
     let mut i = 0;
     while i < body.len() {
         // Check via shared ref first to decide what to do.
-        let is_return = matches!(body[i], Stmt::Return(_));
+        let is_return = matches!(body[i], Stmt::Return(_, _));
         if is_return {
             for (j, s) in stashes.iter().enumerate() {
                 body.insert(i + j, s.clone());
@@ -1405,7 +1420,7 @@ pub(crate) fn append_new_args_stmt(
         Stmt::Expr(e) | Stmt::Throw(e) => {
             append_new_args_expr(e, class_name, cap_args, skip_if_present)
         }
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 append_new_args_expr(e, class_name, cap_args, skip_if_present);
             }
@@ -1476,6 +1491,7 @@ pub(crate) fn append_new_args_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             append_new_args_expr(discriminant, class_name, cap_args, skip_if_present);
             for c in cases {
@@ -1542,7 +1558,7 @@ fn stamp_self_new_stmt(stmt: &mut Stmt, class_name: &str, eval_id: LocalId) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => stamp_self_new_expr(e, class_name, eval_id),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 stamp_self_new_expr(e, class_name, eval_id);
             }
@@ -1611,6 +1627,7 @@ fn stamp_self_new_stmt(stmt: &mut Stmt, class_name: &str, eval_id: LocalId) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             stamp_self_new_expr(discriminant, class_name, eval_id);
             for c in cases {

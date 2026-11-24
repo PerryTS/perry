@@ -558,9 +558,44 @@ impl<'a> Gen<'a> {
         body: &[Stmt],
         captures: &[u32],
     ) -> Scope {
+        self.narrow_enter(mi, f, params, body, captures, None)
+    }
+
+    /// A module's top-level body (`init_fn`): its locals are the top-level
+    /// `let`s, which the module's functions and class members name too, so
+    /// a local one of them writes is not the body's own.
+    pub(crate) fn narrow_enter_top(&mut self, mi: u32, f: FnIdx) -> Scope {
+        let m = self.modules[mi as usize].1;
+        let mut outside = crate::pts::FxHashSet::default();
+        let mut note = |e: &Expr| {
+            if let Expr::LocalSet(l, _) | Expr::Update { id: l, .. } = e {
+                outside.insert(*l);
+            }
+        };
+        for func in &m.functions {
+            perry_hir::tdz_check::for_each_function_expr(func, &mut note);
+        }
+        for c in &m.classes {
+            perry_hir::tdz_check::for_each_class_expr(c, &mut note);
+        }
+        self.narrow_enter(mi, f, &[], &m.init, &[], Some(&outside))
+    }
+
+    fn narrow_enter(
+        &mut self,
+        mi: u32,
+        f: FnIdx,
+        params: &[perry_hir::Param],
+        body: &[Stmt],
+        captures: &[u32],
+        outside: Option<&crate::pts::FxHashSet<u32>>,
+    ) -> Scope {
         let mut own = Vec::new();
         let scope = (self.int_ranges || self.guard_presence).then(|| {
             let mut ls = scope_locals(params, body);
+            if let Some(outside) = outside {
+                ls.retain(|id| !outside.contains(id));
+            }
             // `this` of a body with its own binding (not an arrow's, which
             // is its enclosing body's).
             // PERRY_WPF_NO_THIS_HOST: diagnostic switch (default off) that
@@ -603,7 +638,7 @@ pub(crate) fn always_exits(ss: &[Stmt]) -> bool {
     matches!(
         ss.last(),
         Some(
-            Stmt::Return(_)
+            Stmt::Return(_, _)
                 | Stmt::Throw(_)
                 | Stmt::Break
                 | Stmt::Continue
@@ -670,7 +705,7 @@ pub(crate) fn may_complete(ss: &[Stmt]) -> bool {
             body,
             ..
         } => !breaks_out(body),
-        Stmt::Return(_) | Stmt::Throw(_) => true,
+        Stmt::Return(_, _) | Stmt::Throw(_) => true,
         Stmt::If {
             then_branch,
             else_branch: Some(else_branch),
@@ -837,6 +872,7 @@ fn implied<'p>(
             op: LogicalOp::And,
             left,
             right,
+            ..
         } if positive => {
             let mut l = Vec::new();
             implied(left, true, subst, pred, depth, &mut l);
@@ -847,6 +883,7 @@ fn implied<'p>(
             op: LogicalOp::Or,
             left,
             right,
+            ..
         } if !positive => {
             let mut l = Vec::new();
             implied(left, false, subst, pred, depth, &mut l);
@@ -859,7 +896,7 @@ fn implied<'p>(
         } => implied(operand, !positive, subst, pred, depth, out),
         // A predicate's result is its body's: what the body implies of its
         // parameters, it implies of the arguments that are locals.
-        Expr::Call { callee, args, .. } if depth < 2 => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } if depth < 2 => {
             let Expr::FuncRef(fid) = callee.as_ref() else {
                 return;
             };
@@ -903,6 +940,7 @@ fn implied<'p>(
             op: op @ (CompareOp::Eq | CompareOp::Ne),
             left,
             right,
+            ..
         } if matches!(
             (left.as_ref(), right.as_ref()),
             (Expr::Bool(_), Expr::PropertyGet { .. }) | (Expr::PropertyGet { .. }, Expr::Bool(_))
@@ -971,7 +1009,9 @@ fn implied<'p>(
         // only when it is that object (7.2.15 step 1, 7.2.16 step 2). The
         // global's other values let every value through
         // (`guard::NOT_OBJECT_CTOR`).
-        Expr::Compare { op, left, right } if object_prototype(left) || object_prototype(right) => {
+        Expr::Compare {
+            op, left, right, ..
+        } if object_prototype(left) || object_prototype(right) => {
             let x = if object_prototype(right) { left } else { right };
             let holds = matches!(
                 (op, positive),
@@ -994,6 +1034,7 @@ fn implied<'p>(
             op: op @ (CompareOp::Eq | CompareOp::Ne),
             left,
             right,
+            ..
         } if (matches!(op, CompareOp::Eq) == positive)
             && match (left.as_ref(), right.as_ref()) {
                 (Expr::PropertyGet { .. }, l) | (l, Expr::PropertyGet { .. }) => {
@@ -1045,6 +1086,7 @@ fn implied<'p>(
             op: op @ (CompareOp::Eq | CompareOp::Ne),
             left,
             right,
+            ..
         } if typeof_unbound_global(left, right).is_some() => {
             use crate::model::guard;
             let Some(name) = typeof_unbound_global(left, right) else {
@@ -1065,6 +1107,7 @@ fn implied<'p>(
             op: op @ (CompareOp::Eq | CompareOp::Ne),
             left,
             right,
+            ..
         } if (matches!(op, CompareOp::Eq) == positive)
             && typeof_member_test(left, right).is_some() =>
         {
@@ -1088,6 +1131,7 @@ fn implied<'p>(
             op: op @ (CompareOp::Eq | CompareOp::Ne),
             left,
             right,
+            ..
         } if (matches!(op, CompareOp::Eq) == positive)
             && typeof_local_mask(left, right).is_some() =>
         {
@@ -1112,6 +1156,7 @@ fn implied<'p>(
             op: op @ (CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe),
             left,
             right,
+            ..
         } if (matches!(op, CompareOp::Ne | CompareOp::LooseNe) == positive)
             && matches!(
                 (left.as_ref(), right.as_ref()),
@@ -1152,9 +1197,10 @@ fn implied<'p>(
         // `undefined`. Rule T1: `local === null` false, `!==` true: not
         // `null` (7.2.16: only `null` is strictly equal to `null`;
         // `undefined` passes). `!= null` excludes both (7.2.15 steps 2-3).
-        Expr::Compare { op, left, right }
-            if matches!(left.as_ref(), Expr::Undefined | Expr::Null)
-                || matches!(right.as_ref(), Expr::Undefined | Expr::Null) =>
+        Expr::Compare {
+            op, left, right, ..
+        } if matches!(left.as_ref(), Expr::Undefined | Expr::Null)
+            || matches!(right.as_ref(), Expr::Undefined | Expr::Null) =>
         {
             let (x, nil) = match (left.as_ref(), right.as_ref()) {
                 (n @ (Expr::Undefined | Expr::Null), x) => (x, n),
@@ -1176,7 +1222,9 @@ fn implied<'p>(
                 out.push(Implied::Present(id, p));
             }
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             // The clip of `local OP bound`, `OP` read for a true comparison.
             let k = |op: &CompareOp, positive: bool| -> Option<u8> {
                 Some(match (op, positive) {
@@ -1280,7 +1328,8 @@ fn typeof_unbound_global<'e>(a: &'e Expr, b: &'e Expr) -> Option<&'e String> {
     if s != "undefined" {
         return None;
     }
-    let Expr::Call { callee, args, .. } = o.as_ref() else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = o.as_ref()
+    else {
         return None;
     };
     let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
@@ -1362,7 +1411,7 @@ fn case_leaves(c: &perry_hir::SwitchCase) -> bool {
                 | Stmt::Continue
                 | Stmt::LabeledBreak(_)
                 | Stmt::LabeledContinue(_)
-                | Stmt::Return(_)
+                | Stmt::Return(_, _)
                 | Stmt::Throw(_)
         )
     )
@@ -1404,7 +1453,9 @@ fn bound_of(e: &Expr, subst: &dyn Fn(u32) -> Option<Bound>) -> Option<Bound> {
             },
             _ => None,
         },
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let op = match op {
                 BinaryOp::Add => RangeOp::Add,
                 BinaryOp::Sub => RangeOp::Sub,
@@ -1442,7 +1493,7 @@ pub(crate) fn predicate_of(f: &perry_hir::Function) -> Option<Predicate<'_>> {
     match f.body.as_slice() {
         // A write in the expression would make a later read of a parameter
         // no longer the argument.
-        [Stmt::Return(Some(e))]
+        [Stmt::Return(Some(e), _)]
             if !expr_has(e, &mut |x| {
                 matches!(
                     x,
@@ -1711,6 +1762,7 @@ impl<'a> Gen<'a> {
         disc: &Expr,
         cases: &[perry_hir::SwitchCase],
         i: usize,
+        byte_offset: u32,
     ) -> usize {
         if !matches!(disc, Expr::PropertyGet { .. }) {
             return 0;
@@ -1736,6 +1788,7 @@ impl<'a> Gen<'a> {
             return 0;
         };
         let cond = Expr::Compare {
+            byte_offset,
             op: CompareOp::Eq,
             left: Box::new(disc.clone()),
             right: Box::new(lit.clone()),
@@ -1869,7 +1922,7 @@ fn da_list(ss: &[Stmt], x: u32, sw: bool) -> Da {
 fn da_stmt(s: &Stmt, x: u32, sw: bool) -> Da {
     match s {
         Stmt::Expr(Expr::LocalSet(l, _)) if *l == x => Da::Assigns,
-        Stmt::Return(_) | Stmt::Throw(_) | Stmt::Continue => Da::Exits,
+        Stmt::Return(_, _) | Stmt::Throw(_) | Stmt::Continue => Da::Exits,
         Stmt::Break if sw => Da::Escape,
         Stmt::Break => Da::Exits,
         Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => Da::Escape,

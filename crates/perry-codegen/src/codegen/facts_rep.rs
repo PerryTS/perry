@@ -81,7 +81,7 @@ pub(crate) fn direct_number_calls() -> bool {
 pub(crate) fn number_call(
     ctx: &crate::expr::FnCtx<'_>,
     callee: &perry_hir::Expr,
-    call_offset: u32,
+    call_offset: Option<u32>,
 ) -> bool {
     let Some(byte_offset) = claimed_call(ctx, callee, call_offset) else {
         return false;
@@ -99,17 +99,16 @@ pub(crate) fn number_call(
 fn claimed_call(
     ctx: &crate::expr::FnCtx<'_>,
     callee: &perry_hir::Expr,
-    call_offset: u32,
+    call_offset: Option<u32>,
 ) -> Option<u32> {
     let byte_offset = match callee {
         perry_hir::Expr::PropertyGet { byte_offset, .. } => *byte_offset,
-        _ if direct_number_calls() => call_offset,
+        _ if direct_number_calls() => call_offset?,
         _ => return None,
     };
     let usable = typed_params()
         && !ctx.wpfacts_off
         && !ctx.wpfacts.interp_guard
-        && byte_offset != 0
         && ctx.wpfacts.number_calls.contains(&byte_offset);
     usable.then_some(byte_offset)
 }

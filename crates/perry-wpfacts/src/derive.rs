@@ -1800,6 +1800,20 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                     let (r2, _, v2, f2, t2) =
                         judge(m, &by_id, &runtime, s, &key, &[it], 0, top_recv);
                     if matches!(v2, Verdict::T0Mono | Verdict::T0Set) {
+                        if m.stop_top.is_some() {
+                            // TOPSTOP2: what the unguarded set held (the
+                            // site's `top=1` says only "E0 by the guard").
+                            let held: Vec<String> =
+                                toks.iter().take(6).map(|&t| m.tok_words(t)).collect();
+                            eprintln!(
+                                "TOPSTOP e0-guard: {} .{} unguarded top={} {:?}; unguarded receivers [{}] prims {prim:#x}",
+                                m.pos_text((s.module as u32, s.byte_offset as u32)),
+                                key,
+                                top,
+                                verdict,
+                                held.join("; ")
+                            );
+                        }
                         (receivers, top, verdict, fixed_shape, targets) =
                             (r2, true, Verdict::E0, f2, t2);
                     }
