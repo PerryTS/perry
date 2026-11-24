@@ -302,6 +302,20 @@ pub(crate) fn queue_turnloop_stream_error(stream_handle: i64, message: &str) {
     });
 }
 
+/// A client stream that never opened because its session failed first: Node's
+/// `ERR_HTTP2_STREAM_CANCEL`, naming the session's failure as the cause.
+pub(crate) fn queue_turnloop_stream_cancel(stream_handle: i64, cause: &str) {
+    if stream_handle == 0 {
+        return;
+    }
+    mark_turnloop_stream_closed(stream_handle);
+    push_h2_event(Http2PendingEvent::ClientError {
+        handle: stream_handle,
+        message: format!("The pending stream has been canceled (caused by: {cause})"),
+        code: Some("ERR_HTTP2_STREAM_CANCEL".to_string()),
+    });
+}
+
 pub(crate) fn mark_turnloop_stream_closed(stream_handle: i64) {
     if let Some(stream) = get_handle_mut::<Http2StreamHandle>(stream_handle) {
         stream.closed = true;
