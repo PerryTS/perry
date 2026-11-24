@@ -16,3 +16,12 @@ console.log(f.getFullYear(), f.getMonth(), f.getDate(), f.getHours(), f.getMinut
 const u = new Date(0);
 u.setUTCFullYear(2001, 1, 2); u.setUTCHours(3, 4, 5, 6);
 console.log(u.toISOString());
+const e = new Date(2020, 0, 1);
+e.setMonth(2, 3); e.setMinutes(4, 5, 6);
+console.log(e.getMonth(), e.getDate(), e.getMinutes(), e.getSeconds(), e.getMilliseconds());
+e.setSeconds(7, 8); u.setUTCMonth(3, 4); u.setUTCDate(5); u.setUTCMinutes(6, 7, 8);
+console.log(e.getSeconds(), e.getMilliseconds(), u.toISOString());
+u.setUTCSeconds(9, 10);
+console.log(u.toISOString(), u.setUTCMilliseconds(11) === u.getTime(), u.getUTCMilliseconds());
+async function inAsync(x: number) { return new Date(x).toUTCString() + " " + (new Date(2020, 5) instanceof Date); }
+inAsync(0).then((v) => console.log(v));
