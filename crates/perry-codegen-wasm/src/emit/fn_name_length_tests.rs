@@ -38,3 +38,28 @@ inAsync();
         "decl 2 arrow 3 adecl 1\nfexpr 1 inner 2 opt 1\nC 2 D 0 m 1 s 3\nmeth 2 prop 1 true\nasync decl 2 local 2"
     );
 }
+
+// A constructor's hidden capture parameters are not part of its `length`, and a method
+// with a symbol key is named by the symbol's bracketed description. Output is Node's.
+#[test]
+fn captures_and_symbol_keys_are_not_part_of_name_and_length() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const work = Symbol("work");
+const bare = Symbol();
+class K { [work](a: number) { return a; } [bare]() {} }
+function local(cap: number) {
+  class A { z: number; constructor(a: number) { this.z = a + cap; } m(x: number, y: number) { return x + cap + y; } }
+  class B { m() { return cap; } }
+  class D { z: number; constructor(a: number, b = cap) { this.z = a + b + cap; } }
+  console.log(A.length, new A(1).m.length, B.length, D.length);
+}
+local(1);
+const k: any = new K();
+console.log(k[work].name, k[bare].name === "", typeof k[work].name);
+"#
+        ),
+        "1 2 0 1\n[work] true string"
+    );
+}

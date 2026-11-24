@@ -1934,10 +1934,13 @@ impl WasmModuleEmitter {
 #[path = "tests.rs"]
 mod tests;
 
-/// A function's `length`: its parameters before the first one with a default or the rest.
+/// A function's `length`: its parameters before the first one with a default or the rest,
+/// less the capture parameters a class constructor takes after its own.
 fn fn_length(params: &[perry_hir::ir::Param]) -> u32 {
     params
         .iter()
-        .take_while(|p| p.default.is_none() && !p.is_rest)
+        .take_while(|p| {
+            p.default.is_none() && !p.is_rest && !perry_hir::cap_fields::is_cap_field_name(&p.name)
+        })
         .count() as u32
 }
