@@ -23,6 +23,8 @@ pub(crate) fn lower_expr_assignment(
             byte_offset,
         ),
         ast::Expr::Member(member) => {
+            // A member store stands at its member token, as its read does.
+            let byte_offset = crate::lower::member_token(member);
             if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
                 // #5938 follow-up: resolve scope-local class renames so a
                 // colliding body-local `class X`'s static write targets the

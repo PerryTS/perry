@@ -225,7 +225,7 @@ pub(crate) fn lower_opt_chain_expr(
                     // on another regex.
                     Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: member.span.lo.0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(obj_expr.clone()),
                         property: prop_name,
                     }
@@ -234,7 +234,7 @@ pub(crate) fn lower_opt_chain_expr(
                     let index = lower_expr(ctx, &comp.expr)?;
                     Expr::IndexGet {
                         element_offset: member.span.lo.0,
-                        byte_offset: member.span.lo.0,
+                        byte_offset: crate::lower::member_token(member),
                         byte_end: 0,
                         object: Box::new(obj_expr.clone()),
                         index: Box::new(index),
@@ -251,7 +251,7 @@ pub(crate) fn lower_opt_chain_expr(
                     let property = expr_member::private_storage_property(ctx, &private_name);
                     Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: member.span.lo.0,
+                        byte_offset: crate::lower::member_token(member),
                         object,
                         property,
                     }
@@ -368,7 +368,7 @@ pub(crate) fn lower_opt_chain_expr(
                     let prop = match &member.prop {
                         ast::MemberProp::Ident(id) => Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: member.span.lo.0,
+                            byte_offset: crate::lower::member_token(member),
                             object: Box::new(obj.clone()),
                             property: id.sym.to_string(),
                         },
@@ -376,7 +376,7 @@ pub(crate) fn lower_opt_chain_expr(
                             let idx = lower_expr(ctx, &c.expr)?;
                             Expr::IndexGet {
                                 element_offset: member.span.lo.0,
-                                byte_offset: member.span.lo.0,
+                                byte_offset: crate::lower::member_token(member),
                                 byte_end: 0,
                                 object: Box::new(obj.clone()),
                                 index: Box::new(idx),
@@ -394,7 +394,7 @@ pub(crate) fn lower_opt_chain_expr(
                                 expr_member::private_storage_property(ctx, &private_name);
                             Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: member.span.lo.0,
+                                byte_offset: crate::lower::member_token(member),
                                 object: guarded,
                                 property,
                             }

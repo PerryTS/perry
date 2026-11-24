@@ -724,6 +724,8 @@ fn lower_assignment_target(
             lower_ident_assignment(ctx, ident.id.sym.to_string(), value, byte_offset)
         }
         ast::AssignTarget::Simple(ast::SimpleAssignTarget::Member(member)) => {
+            // A member store stands at its member token, as its read does.
+            let byte_offset = crate::lower::member_token(member);
             // Proxy set: `proxy.foo = v` / `proxy[k] = v`
             if !matches!(member.prop, ast::MemberProp::PrivateName(_)) {
                 if let ast::Expr::Ident(obj_ident) = member.obj.as_ref() {
@@ -1381,13 +1383,13 @@ fn compound_member_assign_once(
         // its PutValue below stands there too (one site pair, UpdateGet + Set).
         (Some(p), _) => Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: member.span.lo.0,
+            byte_offset: crate::lower::member_token(member),
             object: Box::new(Expr::LocalGet(base_id)),
             property: p.clone(),
         },
         (None, Some(k)) => Expr::IndexGet {
             element_offset: member.span.lo.0,
-            byte_offset: member.span.lo.0,
+            byte_offset: crate::lower::member_token(member),
             byte_end: 0,
             object: Box::new(Expr::LocalGet(base_id)),
             index: Box::new(Expr::LocalGet(k)),
@@ -1402,7 +1404,7 @@ fn compound_member_assign_once(
                 value: Box::new(value),
                 // ACCSITE1: the compound's PutValue is a store site at the
                 // member's offset (13.15.3), with its GetValue beside it.
-                byte_offset: member.span.lo.0,
+                byte_offset: crate::lower::member_token(member),
                 byte_end: 0,
             },
             (None, Some(k)) => Expr::IndexSet {
@@ -1410,7 +1412,7 @@ fn compound_member_assign_once(
                 index: Box::new(Expr::LocalGet(k)),
                 value: Box::new(value),
                 element_offset: member.span.lo.0,
-                byte_offset: member.span.lo.0,
+                byte_offset: crate::lower::member_token(member),
                 byte_end: 0,
             },
             _ => unreachable!(),
@@ -1615,13 +1617,13 @@ pub(crate) fn hoist_compound_member_assign(
         // 13.15.3 step 2: the compound's GetValue, at the member's offset.
         (Some(p), _) => Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: member.span.lo.0,
+            byte_offset: crate::lower::member_token(member),
             object: Box::new(base_ref.clone()),
             property: p.clone(),
         },
         (None, Some(k)) => Expr::IndexGet {
             element_offset: member.span.lo.0,
-            byte_offset: member.span.lo.0,
+            byte_offset: crate::lower::member_token(member),
             byte_end: 0,
             object: Box::new(base_ref.clone()),
             index: Box::new(Expr::LocalGet(k)),
@@ -1638,7 +1640,7 @@ pub(crate) fn hoist_compound_member_assign(
                 value: Box::new(value),
                 // ACCSITE1: the compound's PutValue is a store site at the
                 // member's offset (13.15.3), with its GetValue beside it.
-                byte_offset: member.span.lo.0,
+                byte_offset: crate::lower::member_token(member),
                 byte_end: 0,
             },
             (None, Some(k)) => Expr::IndexSet {
@@ -1646,7 +1648,7 @@ pub(crate) fn hoist_compound_member_assign(
                 index: Box::new(Expr::LocalGet(k)),
                 value: Box::new(value),
                 element_offset: member.span.lo.0,
-                byte_offset: member.span.lo.0,
+                byte_offset: crate::lower::member_token(member),
                 byte_end: 0,
             },
             _ => unreachable!(),

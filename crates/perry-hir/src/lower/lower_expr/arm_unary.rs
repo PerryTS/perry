@@ -548,7 +548,7 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                         byte_end: 0,
                         object: Box::new(object),
                         property: "length".to_string(),
-                        byte_offset: member.span.lo.0,
+                        byte_offset: crate::lower::member_token(member),
                     })));
                 }
                 if is_global
