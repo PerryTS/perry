@@ -1057,7 +1057,8 @@ select.dispatch("change");
 }
 
 // The web DatePicker reports the ISO `yyyy-MM-dd` string the native backends report;
-// an out-of-range year or month falls back to 2026-01.
+// an out-of-range year or month falls back to 2026-01, and a day past the month's end
+// is the month's last.
 #[test]
 fn date_picker_reports_and_sets_an_iso_date() {
     assert_eq!(
@@ -1068,6 +1069,8 @@ const picker = DatePicker(2026, 11, (iso: string) => { console.log("changed " + 
 console.log(datePickerGetSelectedDate(picker));
 datePickerSetDate(picker, 2027, 2, 9);
 console.log(datePickerGetSelectedDate(picker));
+datePickerSetDate(picker, 2028, 2, 31);
+console.log(datePickerGetSelectedDate(picker));
 const fallback = DatePicker(0, 13, (iso: string) => {});
 console.log(datePickerGetSelectedDate(fallback));
 "#,
@@ -1077,7 +1080,7 @@ input.value = "2026-11-12";
 input.dispatch("change");
 "#
         ),
-        "2026-11-01\n2027-02-09\n2026-01-01\nchanged 2026-11-12 string"
+        "2026-11-01\n2027-02-09\n2028-02-29\n2026-01-01\nchanged 2026-11-12 string"
     );
 }
 

@@ -4132,7 +4132,8 @@ function perry_ui_picker_create(callback) {
 function __isoDate(year, month, day) {
   const y = (year >= 1 && year <= 9999) ? (year | 0) : 2026;
   const m = (month >= 1 && month <= 12) ? (month | 0) : 1;
-  const d = (day >= 1 && day <= 31) ? (day | 0) : 1;
+  // A date input drops a date that does not exist, so the day stops at the month's last.
+  const d = day >= 1 ? __Math.min(day | 0, new Date(Date.UTC(y, m, 0)).getUTCDate()) : 1;
   return String(y).padStart(4, "0") + "-" + String(m).padStart(2, "0") + "-" + String(d).padStart(2, "0");
 }
 function perry_ui_date_picker_create(year, month, callback) {
