@@ -1384,7 +1384,7 @@ impl Census<'_> {
                 }
                 self.expr(index, Some(e));
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 let (fn_id, what) = match callee.as_ref() {
                     Expr::FuncRef(f) => (Some(*f), "direct function"),
                     Expr::LocalGet(c)

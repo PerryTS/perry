@@ -469,7 +469,10 @@ fn visit_function(function: &Function, out: &mut Refs) {
 }
 
 fn visit_expr(expr: &Expr, out: &mut Refs) {
-    if let Expr::Call { callee, .. } | Expr::NewDynamicSpread { callee, .. } = expr {
+    if let Expr::Call { callee, .. }
+    | Expr::RegionCall { callee, .. }
+    | Expr::NewDynamicSpread { callee, .. } = expr
+    {
         if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
             out.called_or_constructed.insert(name.clone());
         }

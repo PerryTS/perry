@@ -542,7 +542,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
         | Expr::ObjectCoerce(operand)
         | Expr::BooleanCoerce(operand)
         | Expr::NumberCoerce(operand) => expr_has_mutation(operand, id),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if expr_has_mutation(callee, id) {
                 return true;
             }

@@ -194,7 +194,7 @@ pub fn collect_localsets_in_expr_for_propagate<'a>(
         | Expr::NumberCoerce(operand)
         | Expr::IsFinite(operand)
         | Expr::IsNaN(operand) => collect_localsets_in_expr_for_propagate(operand, out),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             collect_localsets_in_expr_for_propagate(callee, out);
             for a in args {
                 collect_localsets_in_expr_for_propagate(a, out);
@@ -456,7 +456,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             walk_index_uses_in_expr(then_expr, out);
             walk_index_uses_in_expr(else_expr, out);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             walk_index_uses_in_expr(callee, out);
             for a in args {
                 walk_index_uses_in_expr(a, out);

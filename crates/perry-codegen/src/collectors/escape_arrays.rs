@@ -751,7 +751,7 @@ pub fn check_array_escapes_in_expr(
             check_array_escapes_in_expr(then_expr, candidates, escaped);
             check_array_escapes_in_expr(else_expr, candidates, escaped);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             escape_method_call_receiver(callee, candidates, escaped);
             check_array_escapes_in_expr(callee, candidates, escaped);
             for a in args {

@@ -135,7 +135,7 @@ pub(crate) fn import_is_runtime_erased(
 /// initial ESM binding.
 pub(crate) fn prune_unused_named_cells(module: &mut Module) {
     fn key(expr: &Expr) -> Option<(String, String)> {
-        let Expr::Call { callee, args, .. } = expr else {
+        let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
             return None;
         };
         let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
@@ -196,7 +196,7 @@ pub(crate) fn prune_unused_named_cells(module: &mut Module) {
         .collect();
     module.init.retain_mut(|stmt| {
         let Stmt::Expr(expr) = stmt else { return true };
-        let Expr::Call { callee, args, .. } = expr else {
+        let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
             return true;
         };
         let Expr::ExternFuncRef { name, .. } = callee.as_mut() else {

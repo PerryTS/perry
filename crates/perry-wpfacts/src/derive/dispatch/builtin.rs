@@ -271,11 +271,15 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                     };
                     (then_expr.as_ref(), else_expr.as_ref(), Some(ns.as_str()))
                 }
-                Expr::Call { .. } | Expr::CallSpread { .. } => (e, e, None),
+                Expr::Call { .. } | Expr::RegionCall { .. } | Expr::CallSpread { .. } => {
+                    (e, e, None)
+                }
                 _ => return,
             };
             let (callee, arity, spread) = match call {
-                Expr::Call { callee, args, .. } => (callee.as_ref(), args.len(), false),
+                Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                    (callee.as_ref(), args.len(), false)
+                }
                 Expr::CallSpread { callee, args, .. } => (callee.as_ref(), args.len(), true),
                 _ => return,
             };
@@ -350,12 +354,12 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                         callee: fast_callee,
                         args: fast_args,
                         ..
-                    } = fast
+                    } | Expr::RegionCall { callee: fast_callee, args: fast_args, .. } = fast
                     {
                         if perry_hir::method_call::console_method(fast_callee) == Some("log")
                             && property == "log"
                             && fast_args.len() == arity
-                            && matches!(call, Expr::Call { args, .. } if fast_args.iter().zip(args)
+                            && matches!(call, Expr::Call { args, .. } | Expr::RegionCall { args, .. } if fast_args.iter().zip(args)
                             .all(|(a, b)| perry_hir::stable_hash::same_expr_structure(a, b)))
                         {
                             return a.is_empty() || (no_subscribers && a.as_slice() == [prim::STR]);
@@ -376,7 +380,7 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                             fast,
                             a,
                             match call {
-                                Expr::Call { args, .. } => args,
+                                Expr::Call { args, .. } | Expr::RegionCall { args, .. } => args,
                                 _ => unreachable!(),
                             },
                         )
@@ -481,7 +485,7 @@ mod tests {
             .init
             .iter()
             .find_map(|s| match s {
-                Stmt::Expr(e @ Expr::Call { .. }) => Some(e.clone()),
+                Stmt::Expr(e @ (Expr::Call { .. } | Expr::RegionCall { .. })) => Some(e.clone()),
                 _ => None,
             })
             .expect("live init call");
@@ -508,7 +512,7 @@ mod tests {
         });
         let mut calls = 0;
         module(&hir, &mut |e| {
-            if matches!(e, Expr::Call { callee, .. }
+            if matches!(e, Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
                 if matches!(callee.as_ref(), Expr::PropertyGet { property, .. } if property == "log"))
             {
                 calls += 1;

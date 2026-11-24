@@ -221,7 +221,9 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
 
 fn visit_expr(expr: &Expr, ctx: &mut WalkCtx) {
     match expr {
-        Expr::Call { callee, args, .. } if callee.is_global_fetch_callee() => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
+            if callee.is_global_fetch_callee() =>
+        {
             if let Some(url) = args.first() {
                 check_url(ctx, "fetch", url);
             }

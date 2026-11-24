@@ -433,33 +433,35 @@ impl Env<'_> {
             Expr::PropertyGet {
                 object, property, ..
             } if property == "length" => (rec(object) == Some(Kind::Str)).then_some(Kind::Num),
-            Expr::Call { callee, args, .. } => match callee.as_ref() {
-                // An IIFE: what every one of its returns is, by its own
-                // typed locals (`var t = (function () { var a = []; …;
-                // return a; })()`).
-                Expr::Closure {
-                    func_id,
-                    params,
-                    body,
-                    is_async: false,
-                    is_generator: false,
-                    ..
-                } if args.is_empty() && params.is_empty() => {
-                    // Cloned closure bodies share an ID, but the bounded
-                    // return analysis also depends on the caller's depth.
-                    let key = (*func_id, depth);
-                    if let Some(k) = self.iife.borrow().get(&key) {
-                        return *k;
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                match callee.as_ref() {
+                    // An IIFE: what every one of its returns is, by its own
+                    // typed locals (`var t = (function () { var a = []; …;
+                    // return a; })()`).
+                    Expr::Closure {
+                        func_id,
+                        params,
+                        body,
+                        is_async: false,
+                        is_generator: false,
+                        ..
+                    } if args.is_empty() && params.is_empty() => {
+                        // Cloned closure bodies share an ID, but the bounded
+                        // return analysis also depends on the caller's depth.
+                        let key = (*func_id, depth);
+                        if let Some(k) = self.iife.borrow().get(&key) {
+                            return *k;
+                        }
+                        let k = iife_return_kind(body, self.boxed_vars, self.module_globals, depth);
+                        self.iife.borrow_mut().insert(key, k);
+                        k
                     }
-                    let k = iife_return_kind(body, self.boxed_vars, self.module_globals, depth);
-                    self.iife.borrow_mut().insert(key, k);
-                    k
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if rec(object) == Some(Kind::Str) => string_method_kind(property),
+                    _ => None,
                 }
-                Expr::PropertyGet {
-                    object, property, ..
-                } if rec(object) == Some(Kind::Str) => string_method_kind(property),
-                _ => None,
-            },
+            }
             _ => None,
         }
     }
@@ -554,7 +556,7 @@ fn is_code_unit(e: &Expr, env: &Env<'_>, set: &HashSet<u32>, depth: usize) -> bo
     }
     let rec = |x: &Expr| is_code_unit(x, env, set, depth + 1);
     match e {
-        Expr::Call { callee, .. } => matches!(callee.as_ref(),
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => matches!(callee.as_ref(),
             Expr::PropertyGet { object, property, .. }
             if property == "charCodeAt" && env.is(object, Kind::Str)),
         Expr::LocalGet(id) => set.contains(id),

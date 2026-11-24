@@ -506,7 +506,10 @@ impl<'a> Model<'a> {
         let note_chunks =
             |stmts: &'a [Stmt], owner: Option<u32>, out: &mut HashMap<u32, Option<u32>>| {
                 for st in stmts {
-                    if let Stmt::Expr(Expr::Call { callee, args, .. }) = st {
+                    if let Stmt::Expr(
+                        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. },
+                    ) = st
+                    {
                         if let Expr::FuncRef(id) = callee.as_ref() {
                             if args.is_empty() && chunks.contains_key(id) {
                                 out.insert(*id, owner);
@@ -863,7 +866,7 @@ fn initializer_kind(m: &Model<'_>, init: &Expr) -> Option<HirType> {
     if let Some(class) = crate::collectors::spec_abi_sites::typed_array_new_class(init) {
         return Some(HirType::Named(class.to_string()));
     }
-    if let Expr::Call { callee, args, .. } = init {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = init {
         if let Expr::Closure {
             params,
             body,
@@ -925,7 +928,7 @@ fn confined(m: &Model<'_>, v: u32, init: &Expr) -> bool {
     if matches!(init, Expr::Array(_, _)) {
         return true;
     }
-    let Expr::Call { callee, .. } = init else {
+    let (Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) = init else {
         return false;
     };
     let Expr::Closure { func_id, body, .. } = callee.as_ref() else {

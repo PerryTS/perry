@@ -160,7 +160,7 @@ impl<'a> Gen<'a> {
                 Expr::LocalGet(id) => (mi, false, *id),
                 Expr::GlobalGet(id) => (mi, true, *id),
                 // ToPropertyKey of a string is the string.
-                Expr::Call { callee, args, .. }
+                Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                     if args.len() == 1
                         && matches!(callee.as_ref(),
                             Expr::ExternFuncRef { name, .. } if name == "js_to_property_key") =>

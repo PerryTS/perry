@@ -80,7 +80,7 @@ fn constant_arg(expr: &Expr, module_constants: &HashMap<u32, f64>) -> Option<i64
 
 fn visit_expr(expr: &Expr, module_constants: &HashMap<u32, f64>, scan: &mut Scan) {
     match expr {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 let site: Vec<Option<i64>> = args
                     .iter()

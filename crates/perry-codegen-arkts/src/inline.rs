@@ -55,7 +55,7 @@ pub(crate) fn inlined_analysis_init(module: &Module) -> Vec<Stmt> {
             continue;
         }
         match stmt {
-            Stmt::Expr(Expr::Call { callee, args, .. }) => {
+            Stmt::Expr(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) => {
                 let func_id = match callee.as_ref() {
                     Expr::FuncRef(id) => Some(*id),
                     _ => None,
@@ -220,7 +220,7 @@ pub(crate) fn inline_calls_in_expr(
     // First descend into sub-expressions (post-order: children inlined
     // first so a call's args might themselves be inlined calls).
     match expr {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             for a in args.iter_mut() {
                 inline_calls_in_expr(a, function_map, bindings, next_local, budget, hoists);
             }
@@ -288,36 +288,38 @@ pub(crate) fn inline_calls_in_expr(
         return;
     }
     let (params, body, args, is_strict, fn_offset) = match expr {
-        Expr::Call { callee, args, .. } => match callee.as_ref() {
-            Expr::FuncRef(id) => match function_map.get(id) {
-                Some(func) if func.params.len() == args.len() => (
-                    func.params.clone(),
-                    func.body.clone(),
-                    args.clone(),
-                    func.is_strict,
-                    func.byte_offset,
-                ),
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+            match callee.as_ref() {
+                Expr::FuncRef(id) => match function_map.get(id) {
+                    Some(func) if func.params.len() == args.len() => (
+                        func.params.clone(),
+                        func.body.clone(),
+                        args.clone(),
+                        func.is_strict,
+                        func.byte_offset,
+                    ),
+                    _ => return,
+                },
+                Expr::LocalGet(local_id) => match bindings.get(local_id) {
+                    Some(Expr::Closure {
+                        params,
+                        body,
+                        is_strict,
+                        is_async: false,
+                        byte_offset,
+                        ..
+                    }) if params.len() == args.len() => (
+                        params.clone(),
+                        body.clone(),
+                        args.clone(),
+                        *is_strict,
+                        *byte_offset,
+                    ),
+                    _ => return,
+                },
                 _ => return,
-            },
-            Expr::LocalGet(local_id) => match bindings.get(local_id) {
-                Some(Expr::Closure {
-                    params,
-                    body,
-                    is_strict,
-                    is_async: false,
-                    byte_offset,
-                    ..
-                }) if params.len() == args.len() => (
-                    params.clone(),
-                    body.clone(),
-                    args.clone(),
-                    *is_strict,
-                    *byte_offset,
-                ),
-                _ => return,
-            },
-            _ => return,
-        },
+            }
+        }
         _ => return,
     };
     // Detect simple-return shape: last `Stmt::Return(Some(LocalGet(id)))`.

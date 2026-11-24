@@ -981,7 +981,7 @@ fn int32_producing_deps(
             op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul,
             ..
         } => exact_range_deps(e, candidates, known, deps, &recurse).is_some_and(|r| r.fits_i32()),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 if !clamp_fn_ids.contains(fid) {
                     return false;
@@ -1374,7 +1374,7 @@ pub fn is_int32_producing_expr(
                 numeric_locals,
             )
         }
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 clamp_fn_ids.contains(fid)
             } else {

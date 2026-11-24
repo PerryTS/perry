@@ -61,7 +61,10 @@ impl Arms<'_> {
 
 /// The callee of the pair's generic `globalThis.<ns>.<member>` call.
 pub fn pair_callee<'a>(ns: &str, generic: &'a Expr) -> Option<&'a Expr> {
-    let (Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }) = generic else {
+    let (Expr::Call { callee, .. }
+    | Expr::RegionCall { callee, .. }
+    | Expr::CallSpread { callee, .. }) = generic
+    else {
         return None;
     };
     let Expr::PropertyGet { object, .. } = callee.as_ref() else {
@@ -390,7 +393,7 @@ mod tests {
         fn of(e: &Expr) -> &'static str {
             match e {
                 Expr::MathCos(_) => "intrinsic",
-                Expr::Call { .. } => "generic",
+                Expr::Call { .. } | Expr::RegionCall { .. } => "generic",
                 _ => "pair",
             }
         }
@@ -471,7 +474,7 @@ mod tests {
                 {
                     "intrinsic"
                 }
-                Stmt::Expr(Expr::Call { .. }) => "call",
+                Stmt::Expr(Expr::Call { .. } | Expr::RegionCall { .. }) => "call",
                 _ => "other",
             })
             .collect();

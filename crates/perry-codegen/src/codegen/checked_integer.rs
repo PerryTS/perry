@@ -45,7 +45,7 @@ fn expr_ok(e: &Expr, f: &Function, recursive: &mut bool) -> bool {
                 && expr_ok(then_expr, f, recursive)
                 && expr_ok(else_expr, f, recursive)
         }
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(callee.as_ref(), Expr::FuncRef(id) if *id == f.id)
                 && args.len() == f.params.len() =>
         {
@@ -196,7 +196,7 @@ impl Lowerer<'_> {
                     CompareOp::Ne | CompareOp::LooseNe => self.block().icmp_ne(I32, &a, &b),
                 }
             }
-            Expr::Call { args, .. } => {
+            Expr::Call { args, .. } | Expr::RegionCall { args, .. } => {
                 let value = self.expr(&args[0]);
                 self.stack_guard();
                 let boundary = self.contract.base_limit.to_string();

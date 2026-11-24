@@ -254,7 +254,7 @@ pub(crate) fn evaluate_condition(
             // branch. Without this, the heuristic-pick-then-branch
             // fallback selects darkColor and Mango renders translucent
             // light-on-light text.
-            Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
                 Expr::ExternFuncRef { name, .. } if is_harmonyos_zero_fn(name) => {
                     Some(Lit::Num(0.0))
                 }

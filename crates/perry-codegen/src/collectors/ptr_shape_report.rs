@@ -933,7 +933,7 @@ fn scan_expr(e: &Expr, depth: u32, ctx: &'static str, out: &mut Vec<NewSite>) {
                 scan_expr(a, depth, arg_ctx, out);
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             scan_expr(callee, depth, ctx, out);
             for a in args {
                 scan_expr(a, depth, "call argument", out);

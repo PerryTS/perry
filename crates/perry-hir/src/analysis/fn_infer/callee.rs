@@ -123,7 +123,7 @@ fn val(e: &Expr, st: &St) -> Callees {
         Expr::PropertyGet { property, .. } => {
             st.props.get(property).cloned().unwrap_or(Callees::Unknown)
         }
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             let mut acc = Callees::None;
             match val(callee, st) {
                 Callees::Set(s) => {
@@ -254,7 +254,7 @@ pub(super) fn infer_callees(m: &Module, units: &[Unit<'_>]) -> CalleeFacts {
         } => {
             out.new_sites.insert(*byte_offset, val(callee, &st));
         }
-        Expr::Call { callee, .. }
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::LocalGet(_) | Expr::GlobalGet(_) | Expr::PropertyGet { .. }

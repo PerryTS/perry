@@ -123,6 +123,7 @@ fn number_operand_reads(e: &Expr, out: &mut Vec<(usize, Recv, String)>) {
         Expr::IndexGet { .. }
         | Expr::RegionOut { .. }
         | Expr::Call { .. }
+        | Expr::RegionCall { .. }
         | Expr::CallSpread { .. }
         | Expr::New { .. } => return,
         Expr::Conditional {
@@ -437,7 +438,7 @@ impl Planner<'_, '_> {
                 }
                 st
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if let Expr::PropertyGet { object, .. } = callee.as_ref() {
                     st = self.expr(object, st);
                 } else {
@@ -1036,7 +1037,7 @@ pub(super) fn accesses(ss: &[Stmt]) -> Vec<(Recv, String, bool, usize, Option<&E
             _ => {}
         }
         // A method callee `o.m(...)` is not an own-slot read.
-        if let Expr::Call { callee, args, .. } = e {
+        if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = e {
             if let Expr::PropertyGet { object, .. } = callee.as_ref() {
                 e_walk(object, out);
             } else {

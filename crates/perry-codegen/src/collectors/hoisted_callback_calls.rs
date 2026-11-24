@@ -228,7 +228,8 @@ pub(crate) fn collect_hoisted_callback_calls(method: &Function) -> Vec<HoistedCa
         let aliases = immutable_aliases(param.id, &alias_edges);
         let mut calls_by_arity: BTreeMap<usize, BTreeSet<u32>> = BTreeMap::new();
         walk_stmts(&method.body, &mut |expr| {
-            let Expr::Call { callee, args, .. } = expr else {
+            let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr
+            else {
                 return;
             };
             let Expr::LocalGet(callee_local) = callee.as_ref() else {
@@ -293,7 +294,7 @@ pub(crate) fn collect_loop_called_callee_bindings(
         if matches!(expr, Expr::Closure { .. }) {
             return;
         }
-        if let Expr::Call { callee, args, .. } = expr {
+        if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = expr {
             if let Expr::LocalGet(id) = callee.as_ref() {
                 if loop_depth > 0 && args.len() <= 16 {
                     out.insert((*id, args.len()));

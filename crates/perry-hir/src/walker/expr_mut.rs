@@ -929,7 +929,7 @@ where
             f(value);
             f(object);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             f(callee);
             for a in args {
                 f(a);

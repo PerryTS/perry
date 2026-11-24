@@ -260,7 +260,7 @@ pub(super) fn reads_in_expr(ctx: &FnCtx<'_>, e: &Expr, out: &mut Vec<Read>) {
     if matches!(e, Expr::Closure { .. }) {
         return;
     }
-    if let Expr::Call { callee, args, .. } = e {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = e {
         if let Some(read) =
             crate::lower_call::field_read_call::field_read_call_at(ctx, callee, args)
         {
@@ -569,7 +569,7 @@ fn expr_reads(e: &Expr, trusted: &dyn Fn(&Expr) -> bool) -> bool {
         Expr::Unary { operand, .. } => expr_reads(operand, trusted),
         Expr::LocalSet(_, value) => expr_reads(value, trusted),
         Expr::Sequence(items) => items.iter().any(|x| expr_reads(x, trusted)),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             expr_reads(callee, trusted) || args.iter().any(|a| expr_reads(a, trusted))
         }
         Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {

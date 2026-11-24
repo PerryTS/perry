@@ -174,7 +174,7 @@ fn store_target(module: &Module, t: &Expr, k: &str) -> Option<(String, bool)> {
 fn known_symbol_key(e: &Expr) -> bool {
     match e {
         Expr::SymbolFor(inner) => matches!(inner.as_ref(), Expr::String(_)),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == "js_to_property_key")
                 && matches!(args.as_slice(), [a] if known_symbol_key(a))
         }

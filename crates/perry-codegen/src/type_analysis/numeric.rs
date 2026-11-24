@@ -76,7 +76,7 @@ pub(crate) fn is_bigint_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                     .find(|method| method.name == *method_name)
             })
             .is_some_and(|method| matches!(method.return_type, HirType::BigInt)),
-        Expr::PropertyGet { .. } | Expr::Call { .. } => {
+        Expr::PropertyGet { .. } | Expr::Call { .. } | Expr::RegionCall { .. } => {
             matches!(static_type_of(ctx, e), Some(HirType::BigInt))
         }
         // Nested bigint arithmetic — `(n * 10n) + d` must see the
@@ -669,7 +669,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // User function calls returning Number: skip js_number_coerce.
         // Without this, `fib(n-1) + fib(n-2)` wraps both results in
         // js_number_coerce — ~4 billion wasted runtime calls on fib(40).
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if crate::stmt::numeric_callbacks::returns_number(ctx, callee, args.len()) {
                 return true;
             }
@@ -775,7 +775,7 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
     // A direct call of a module function whose every completion returns a
     // numeric literal selection (`return c === "w" ? 1 : -1;`): the value is
     // one of those literals, whatever the arguments.
-    if let Expr::Call { callee, .. } = e {
+    if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = e {
         if let Expr::FuncRef(id) = callee.as_ref() {
             if function_returns_literal_number(ctx, *id) {
                 return true;
@@ -913,7 +913,7 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
         // lowers to a real double whose only NaN is the canonical quiet NaN
         // (`string_method_returns_number`), so it holds without the facts:
         // `u8[i] = s.charCodeAt(i)` needs no ToNumber call per store.
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             crate::expr::facts_number::closed_number_call(ctx, e)
                 || matches!(
                     callee.as_ref(),

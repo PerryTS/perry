@@ -96,7 +96,9 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32, defer_apply: bool) -
             // G8: a forwarding apply reads the binding at the site itself,
             // where an unborn object is answered by its bundle
             // ([`deferred_forward_apply_binding`]).
-            Expr::Call { callee, args, .. } if defer_apply && is_forward_apply_of(expr, id) => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
+                if defer_apply && is_forward_apply_of(expr, id) =>
+            {
                 observes(callee, id) || observes(&args[0], id)
             }
             Expr::LocalGet(local) => *local == id,
@@ -116,7 +118,7 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32, defer_apply: bool) -
                 ..
             } => observes(condition, id) || (observes(then_expr, id) && observes(else_expr, id)),
             Expr::Sequence(exprs) => exprs.iter().any(|expr| observes(expr, id)),
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 observes(callee, id) || args.iter().any(|arg| observes(arg, id))
             }
             Expr::CallSpread { callee, args, .. } => {
@@ -400,7 +402,7 @@ pub(crate) fn ensure_arguments_object(ctx: &mut FnCtx<'_>, id: u32) {
 /// G8: `X.apply(y, arguments)` with exactly these two arguments, the second
 /// the local `id`.
 pub(crate) fn is_forward_apply_of(expr: &Expr, id: u32) -> bool {
-    matches!(expr, Expr::Call { callee, args, .. }
+    matches!(expr, Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
         if args.len() == 2
             && matches!(&args[1], Expr::LocalGet(l) if *l == id)
             && matches!(callee.as_ref(), Expr::PropertyGet { property, .. } if property == "apply"))
@@ -685,7 +687,11 @@ impl LocalUses {
                 self.index_reads += 1
             }
             Expr::Delete(target) if is_member(target) => self.reference_uses += 1,
-            Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } if is_member(callee) => {
+            Expr::Call { callee, .. }
+            | Expr::RegionCall { callee, .. }
+            | Expr::CallSpread { callee, .. }
+                if is_member(callee) =>
+            {
                 self.reference_uses += 1
             }
             Expr::Closure { captures, body, .. } => {

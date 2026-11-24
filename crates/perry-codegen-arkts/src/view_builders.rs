@@ -199,7 +199,7 @@ pub(crate) fn scan_module_level_addchild_in_expr(
     // for primary-target detection. (We will still handle the closure
     // body separately if it contains a view-builder pattern.)
     match e {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             scan_module_level_addchild_in_expr(callee, module_locals, found);
             for a in args {
                 scan_module_level_addchild_in_expr(a, module_locals, found);
@@ -348,7 +348,7 @@ pub(crate) fn rewrite_view_builder_calls_in_expr(
         return;
     }
     match e {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             rewrite_view_builder_calls_in_expr(callee, lookup);
             for a in args.iter_mut() {
                 rewrite_view_builder_calls_in_expr(a, lookup);
@@ -451,7 +451,7 @@ pub(crate) fn scan_closure_body_for_view_builder_calls_in_expr<'a>(
     if matches!(e, Expr::Closure { .. }) {
         return;
     }
-    if let Expr::Call { callee, .. } = e {
+    if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = e {
         if let Expr::FuncRef(id) = callee.as_ref() {
             if let Some(b) = lookup.get(id) {
                 if seen.insert(*id) {
@@ -461,7 +461,7 @@ pub(crate) fn scan_closure_body_for_view_builder_calls_in_expr<'a>(
         }
     }
     match e {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             scan_closure_body_for_view_builder_calls_in_expr(callee, lookup, out, seen);
             for a in args {
                 scan_closure_body_for_view_builder_calls_in_expr(a, lookup, out, seen);

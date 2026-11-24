@@ -206,7 +206,7 @@ pub(crate) fn lower_opt_chain_expr(
             // A call continued by this link is bound once (the codegen reads
             // an optional method call's method once only in this form).
             let (obj_expr, call_temp) = match obj_expr {
-                call @ Expr::Call { .. } if upstream.is_some() => {
+                call @ (Expr::Call { .. } | Expr::RegionCall { .. }) if upstream.is_some() => {
                     let id = ctx.fresh_local();
                     (Expr::LocalGet(id), Some((id, call)))
                 }

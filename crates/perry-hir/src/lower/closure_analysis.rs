@@ -164,7 +164,7 @@ fn widen_mutable_captures_expr(
             widen_mutable_captures_expr(right, scope_mutable);
         }
         Expr::Unary { operand, .. } => widen_mutable_captures_expr(operand, scope_mutable),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             widen_mutable_captures_expr(callee, scope_mutable);
             for arg in args {
                 widen_mutable_captures_expr(arg, scope_mutable);
@@ -483,7 +483,7 @@ fn collect_closure_assigned_expr(expr: &Expr, out: &mut std::collections::HashSe
             collect_closure_assigned_expr(right, out);
         }
         Expr::Unary { operand, .. } => collect_closure_assigned_expr(operand, out),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             collect_closure_assigned_expr(callee, out);
             for arg in args {
                 collect_closure_assigned_expr(arg, out);
@@ -795,7 +795,7 @@ fn collect_closure_captures_expr(expr: &Expr, out: &mut std::collections::HashSe
             collect_closure_captures_expr(right, out);
         }
         Expr::Unary { operand, .. } => collect_closure_captures_expr(operand, out),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             collect_closure_captures_expr(callee, out);
             for arg in args {
                 collect_closure_captures_expr(arg, out);
@@ -1093,7 +1093,7 @@ fn collect_scope_level_assigns_expr(expr: &Expr, out: &mut std::collections::Has
             collect_scope_level_assigns_expr(right, out);
         }
         Expr::Unary { operand, .. } => collect_scope_level_assigns_expr(operand, out),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             collect_scope_level_assigns_expr(callee, out);
             for arg in args {
                 collect_scope_level_assigns_expr(arg, out);
@@ -1230,7 +1230,7 @@ fn collect_closure_assigned_in_body_expr(
             collect_closure_assigned_in_body_expr(right, out);
         }
         Expr::Unary { operand, .. } => collect_closure_assigned_in_body_expr(operand, out),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             collect_closure_assigned_in_body_expr(callee, out);
             for arg in args {
                 collect_closure_assigned_in_body_expr(arg, out);

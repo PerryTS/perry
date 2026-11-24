@@ -311,7 +311,7 @@ pub(crate) fn ptr_array_cache_fields(class: &Class, method: &Function) -> Vec<(S
             // vetted transitively, but its stores could replace a cached
             // array slot. Keep this local transform independent of that
             // transitive analysis and decline the clone.
-            Expr::Call { callee, .. }
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
                 if matches!(
                     callee.as_ref(),
                     Expr::PropertyGet { object, .. }

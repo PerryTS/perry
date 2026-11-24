@@ -59,7 +59,7 @@ pub(crate) fn inline(
     predicate: fn(&Expr) -> bool,
     hoist: fn(&mut Vec<Stmt>, &mut LocalId),
 ) -> bool {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return false;
     };
     if args.len() != 1 || !contains(callee, predicate) {

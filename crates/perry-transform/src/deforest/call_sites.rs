@@ -259,7 +259,7 @@ pub(super) fn match_consumer_fuse_pattern(
     let (child_id, callee_id) = match &stmts[0] {
         Stmt::Let {
             id,
-            init: Some(Expr::Call { callee, .. }),
+            init: Some(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }),
             ..
         } => match callee.as_ref() {
             Expr::FuncRef(fid) if producers.contains_key(fid) => (*id, *fid),
@@ -371,24 +371,26 @@ fn match_consume_loop(
             }
             Some(*array_id)
         }
-        Expr::Call { callee, args, .. } => match callee.as_ref() {
-            Expr::PropertyGet {
-                object, property, ..
-            } if property == "push" => {
-                let outer_id = match object.as_ref() {
-                    Expr::LocalGet(id) => *id,
-                    _ => return None,
-                };
-                if args.len() != 1 {
-                    return None;
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+            match callee.as_ref() {
+                Expr::PropertyGet {
+                    object, property, ..
+                } if property == "push" => {
+                    let outer_id = match object.as_ref() {
+                        Expr::LocalGet(id) => *id,
+                        _ => return None,
+                    };
+                    if args.len() != 1 {
+                        return None;
+                    }
+                    if !is_index_get_of(&args[0], child_id, j_id) {
+                        return None;
+                    }
+                    Some(outer_id)
                 }
-                if !is_index_get_of(&args[0], child_id, j_id) {
-                    return None;
-                }
-                Some(outer_id)
+                _ => None,
             }
-            _ => None,
-        },
+        }
         _ => None,
     }
 }

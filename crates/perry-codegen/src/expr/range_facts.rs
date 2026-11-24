@@ -97,7 +97,9 @@ fn native_index_source_local(ctx: &FnCtx<'_>, expr: &Expr) -> Option<u32> {
             right,
             ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => native_index_source_local(ctx, left),
-        Expr::Call { callee, args, .. } if args.len() == 1 => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
+            if args.len() == 1 =>
+        {
             let Expr::FuncRef(fid) = callee.as_ref() else {
                 return None;
             };
@@ -543,7 +545,9 @@ fn int_range_expr_inner(
                 _ => None,
             }
         }
-        Expr::Call { callee, args, .. } if args.len() == 3 => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
+            if args.len() == 3 =>
+        {
             let Expr::FuncRef(fid) = callee.as_ref() else {
                 return None;
             };

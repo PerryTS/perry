@@ -714,12 +714,12 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
             is_async: *is_async,
             is_generator: *is_generator,
         }),
-        Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => {
-            match infer_expr_type(callee, env) {
-                Type::Function(function) => *function.return_type,
-                _ => Type::Any,
-            }
-        }
+        Expr::Call { callee, .. }
+        | Expr::RegionCall { callee, .. }
+        | Expr::CallSpread { callee, .. } => match infer_expr_type(callee, env) {
+            Type::Function(function) => *function.return_type,
+            _ => Type::Any,
+        },
         Expr::ReflectApply { func, .. } | Expr::ProxyApply { proxy: func, .. } => {
             function_return_type_from_expr(func, env)
         }

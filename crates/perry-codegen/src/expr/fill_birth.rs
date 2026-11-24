@@ -80,7 +80,7 @@ fn plan<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<Plan<'e>> {
     if ctx.wpfacts_off || ctx.wpfacts.fill_births.is_empty() {
         return None;
     }
-    let Expr::Call { callee, .. } = e else {
+    let (Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) = e else {
         return None;
     };
     let Expr::PropertyGet {

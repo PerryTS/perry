@@ -179,7 +179,10 @@ fn expr_flags(expr: &Expr, array_id: u32, counter_id: u32, target: &mut bool, ca
     ) {
         *target = true;
     }
-    if matches!(expr, Expr::Call { .. } | Expr::New { .. }) {
+    if matches!(
+        expr,
+        Expr::Call { .. } | Expr::RegionCall { .. } | Expr::New { .. }
+    ) {
         *call = true;
     }
     if !matches!(expr, Expr::Closure { .. }) {

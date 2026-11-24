@@ -36,7 +36,7 @@ fn checked_reader_call(
     expr: &Expr,
     counter_id: u32,
 ) -> Option<(String, String, Vec<u32>)> {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return None;
     };
     let Expr::PropertyGet {
@@ -174,11 +174,16 @@ fn match_candidate(
         None => None,
     };
 
-    let Expr::Call {
+    let (Expr::Call {
         callee: callback,
         args: callback_args,
         ..
-    } = (match callback_stmt {
+    }
+    | Expr::RegionCall {
+        callee: callback,
+        args: callback_args,
+        ..
+    }) = (match callback_stmt {
         Stmt::Expr(expr) => expr,
         _ => return None,
     })

@@ -13,7 +13,7 @@ type Binding = (bool, u32); // global/local namespaces are distinct
 fn seed<'a>(expr: &'a Expr, facts: &'a ModuleDispatchFacts) -> Option<&'a str> {
     match expr {
         Expr::New { class_name, .. } => Some(class_name),
-        Expr::Call { callee, .. } => match callee.as_ref() {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
             Expr::FuncRef(id) => facts.return_shape_class(*id),
             Expr::LocalGet(id) => facts
                 .closure_binding_func(*id)
@@ -86,7 +86,7 @@ pub(crate) fn anon_receiver_added_keys(
             Expr::Update { id, .. } => {
                 writes.insert((false, *id));
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 let func = match callee.as_ref() {
                     Expr::FuncRef(id) => Some(*id),
                     Expr::LocalGet(id) => facts.closure_binding_func(*id),

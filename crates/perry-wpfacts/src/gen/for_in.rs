@@ -823,7 +823,9 @@ impl<'a> Gen<'a> {
                     for_each_stmt_deep(&f.body, &mut note);
                 }
                 w.each_expr(&mut |e| {
-                    let Expr::Call { callee, args, .. } = e else {
+                    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) =
+                        e
+                    else {
                         return;
                     };
                     let fid = match callee.as_ref() {

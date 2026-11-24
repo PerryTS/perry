@@ -174,6 +174,14 @@ pub enum Expr {
         /// Diagnostic source coordinates (SWC 1-based, end exclusive); ignored by stable hashing.
         byte_end: u32,
     },
+    /// The call of a split region function (perry-codegen split_regions.rs):
+    /// `callee` is the region's `FuncRef`, `args` its live-in `LocalGet`s.
+    /// Compiler-built plumbing with no source construct: lowered and modeled
+    /// as the direct call it is, and no site of any kind.
+    RegionCall {
+        callee: Box<Expr>,
+        args: Vec<Expr>,
+    },
 
     /// Function call with spread arguments (e.g., fn(a, ...arr, b))
     CallSpread {

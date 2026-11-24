@@ -563,7 +563,7 @@ impl<'a, R: Fn(&Expr) -> Option<NumericCallable<'a>>> Proof<'a, '_, R> {
                     a.merge(self.expr(right, env)?)
                 }
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if matches!(callee.as_ref(), Expr::LocalGet(id) if env.contains_key(id)) {
                     return None; // symbolic numeric inputs are never callable
                 }

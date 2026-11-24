@@ -12,7 +12,7 @@ fn value_proof(e: &Expr) -> bool {
         // A direct, argument-free function effect cannot carry this receiver
         // as an argument. It may allocate/collect; final facts are validated
         // only after it returns. Receiver/property dispatch stays unsupported.
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             matches!(callee.as_ref(), Expr::FuncRef(_)) && args.is_empty()
         }
         Expr::Undefined

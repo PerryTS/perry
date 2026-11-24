@@ -473,7 +473,7 @@ fn i32_chain_magnitude_bits(e: &Expr, env: I32ChainEnv<'_>) -> Option<u32> {
             op: UnaryOp::BitNot,
             operand,
         } => i32_chain_magnitude_bits(operand, env).map(|_| I32_CHAIN_LEAF_BITS),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             let Expr::FuncRef(fid) = callee.as_ref() else {
                 return None;
             };
@@ -864,7 +864,7 @@ fn region_i32_chain_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
             op: UnaryOp::BitNot,
             operand,
         } => region_i32_chain_magnitude_bits(ctx, operand).map(|_| I32_CHAIN_LEAF_BITS),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             let Expr::FuncRef(fid) = callee.as_ref() else {
                 return None;
             };
@@ -1010,7 +1010,7 @@ fn native_expr_kind(e: &Expr) -> &'static str {
         Expr::BooleanCoerce(_) => "BooleanCoerce",
         Expr::MathImul(_, _) => "MathImul",
         Expr::Binary { .. } => "Binary",
-        Expr::Call { .. } => "Call",
+        Expr::Call { .. } | Expr::RegionCall { .. } => "Call",
         Expr::Uint8ArrayGet { .. } => "Uint8ArrayGet",
         Expr::BufferIndexGet { .. } => "BufferIndexGet",
         Expr::IndexGet { .. } | Expr::RegionOut { .. } => "IndexGet",
@@ -1094,7 +1094,7 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
         } => {
             super::lower_bitwise_operand_i32(ctx, operand)?.map(|v| ctx.block().xor(I32, &v, "-1"))
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             let fid = if let Expr::FuncRef(id) = callee.as_ref() {
                 *id
             } else {
@@ -1546,7 +1546,7 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         }
         // Clamp-pattern calls: emit @llvm.smax.i32 / @llvm.smin.i32 directly
         // in i32, no double round-trip. Produces vectorizable IR.
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             let fid = if let Expr::FuncRef(id) = callee.as_ref() {
                 *id
             } else {

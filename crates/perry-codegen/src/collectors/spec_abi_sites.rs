@@ -152,8 +152,10 @@ pub(crate) fn index_alias_writers(stmts: &[Stmt], params: &[Param]) -> HashMap<u
             (candidates.contains(&id)
                 && values.iter().flatten().any(|value| match value {
                     Expr::LocalGet(_) => true,
-                    Expr::Call { callee, .. } => matches!(callee.as_ref(),
-                        Expr::PropertyGet { property, .. } if property == "charCodeAt"),
+                    Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
+                        matches!(callee.as_ref(),
+                        Expr::PropertyGet { property, .. } if property == "charCodeAt")
+                    }
                     _ => false,
                 })
                 && !scan.other_bindings.contains(&id)
@@ -1259,7 +1261,7 @@ fn judge_expr(
     ready: &HashSet<u32>,
     out: &mut HashMap<u32, Vec<Vec<SpecParamRep>>>,
 ) {
-    if let Expr::Call { callee, args, .. } = e {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = e {
         if let Expr::FuncRef(fid) = callee.as_ref() {
             let judged: Vec<SpecParamRep> = args
                 .iter()
@@ -1500,7 +1502,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
 
     fn scan_expr(expr: &Expr, param_id: u32, uses: &mut Uses) {
         match expr {
-            Expr::Call { .. } | Expr::New { .. } => {
+            Expr::Call { .. } | Expr::RegionCall { .. } | Expr::New { .. } => {
                 uses.call = true;
                 perry_hir::walker::walk_expr_children(expr, &mut |child| {
                     scan_expr(child, param_id, uses)

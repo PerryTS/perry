@@ -465,7 +465,7 @@ impl Scan {
                 self.store_roots[self.current].push(Some(*set_id));
                 self.expr_children(e, Use::Value);
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 match callee.as_ref() {
                     // A method call hands the receiver over as `this`.
                     Expr::PropertyGet { object, .. }

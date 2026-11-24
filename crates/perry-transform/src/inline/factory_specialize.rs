@@ -531,7 +531,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         // important because the post-rewrite expression may itself contain
         // a Call we don't want to recurse into a second time.
         match expr {
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 rewrite_call_init(
                     callee,
                     factory_targets,
@@ -732,8 +732,13 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         }
         // Now detect the factory pattern at THIS level.
         let curried_call = match expr {
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if let Expr::Call {
+                    callee: outer_callee,
+                    args: outer_args,
+                    ..
+                }
+                | Expr::RegionCall {
                     callee: outer_callee,
                     args: outer_args,
                     ..
@@ -773,7 +778,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         }
 
         let direct_call = match expr {
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if let Expr::FuncRef(fn_id) = callee.as_ref() {
                     Some((*fn_id, args.clone()))
                 } else {

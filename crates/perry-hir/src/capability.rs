@@ -275,7 +275,9 @@ fn required_capability(expr: &Expr) -> Option<(&'static str, &'static str)> {
         Expr::ChildProcessKillProcess(_) => ("proc:exec", "child_process.killProcess"),
 
         // net:fetch
-        Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }
+        Expr::Call { callee, .. }
+        | Expr::RegionCall { callee, .. }
+        | Expr::CallSpread { callee, .. }
             if callee.is_global_fetch_callee() =>
         {
             ("net:fetch", "fetch")

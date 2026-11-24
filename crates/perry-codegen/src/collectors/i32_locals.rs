@@ -102,7 +102,7 @@ pub fn is_strictly_i32_bounded_expr(
             op,
             BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr
         ),
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 clamp_fn_ids.contains(fid)
             } else {
@@ -1386,7 +1386,7 @@ pub fn collect_localset_ids_in_expr_filtered(
                 walk(a, out);
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             walk(callee, out);
             for a in args {
                 walk(a, out);
