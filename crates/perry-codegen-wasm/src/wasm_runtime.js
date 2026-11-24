@@ -2409,8 +2409,9 @@ const __memDispatch = {
     const obj = Object.create(proto);
     return props === undefined ? obj : Object.defineProperties(obj, __hostDescriptors(props));
   },
-  // The key is converted once, before the descriptor's getters run.
+  // The target is checked, then the key converted once, before the descriptor's getters run.
   object_define_property: (obj, key, desc) => {
+    if (!__holdsProperties(obj)) return Object.defineProperty(obj, key, desc);
     const k = __holdsProperties(key) ? Reflect.ownKeys({ [key]: 0 })[0] : key;
     return Object.defineProperty(obj, k, __hostDescriptor(desc));
   },
