@@ -480,6 +480,10 @@ pub struct Gen<'a> {
     /// rule, a copy, a store, a call argument); any other is a
     /// sign-observing use (`gen/zero_sign.rs`). Taken by `expr`.
     pub zs_ok: bool,
+    /// The compound `o.k op= v` read being walked (13.15.3 step 2): the
+    /// PropertySet's value's `PropertyGet` of the same key at the store's
+    /// offset. It is the compound's `UpdateGet` site, not a read site.
+    pub(crate) compound_get: Option<*const perry_hir::Expr>,
     /// Negative control (`PERRY_FACTS_SABOTAGE=leavingwrite`): every
     /// branch's writes are dropped from the reads after it, also a branch
     /// that falls through to them.
@@ -690,6 +694,8 @@ impl<'a> Gen<'a> {
         }
         m.cur_src = NO_NODE;
         m.cur_why = u32::MAX;
+        m.stop_top =
+            crate::topstop::StopTop::from_env(modules.iter().map(|(p, _)| p.to_string()).collect());
         m.rel_phase = b'G';
         // Capture initialization origins too, before any solver propagation.
         // This state exists only for an explicitly requested diagnostic dump.
@@ -904,6 +910,7 @@ impl<'a> Gen<'a> {
             name_folds: true,
             leaving_writes: true,
             zs_ok: false,
+            compound_get: None,
             leaving_write_sabotage: false,
             jumps: 0,
             tries: 0,
@@ -1788,7 +1795,11 @@ impl<'a> Gen<'a> {
             Some(perry_hir::Expr::PropertyGet { object, .. }) => {
                 !matches!(object.as_ref(), perry_hir::Expr::GlobalGet(0))
             }
-            Some(perry_hir::Expr::IndexGet { .. } | perry_hir::Expr::StaticFieldGet { .. }) => true,
+            Some(
+                perry_hir::Expr::IndexGet { .. }
+                | perry_hir::Expr::RegionOut { .. }
+                | perry_hir::Expr::StaticFieldGet { .. },
+            ) => true,
             _ => false,
         };
         let binding = c.extends_name.as_deref().filter(|_| !member);
@@ -2097,6 +2108,12 @@ impl<'a> Gen<'a> {
             return n;
         }
         let n = self.m.node_named("local", || format!("local({mi},{id})"));
+        // A declared local (a parameter too) stands at its declaration.
+        if self.m.stop_top.is_some() {
+            if let Some(sp) = self.modules[mi as usize].1.local_source_spans.get(&id) {
+                self.m.stop_top.as_mut().unwrap().node_pos[n as usize] = (mi, sp.start);
+            }
+        }
         self.m.own(n);
         self.mods[mi as usize].locals.insert(id, n);
         #[cfg(test)]

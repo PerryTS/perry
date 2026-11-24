@@ -756,8 +756,8 @@ fn scan_stmts(
             }
             Stmt::Expr(e) => scan_expr(e, depth, ctx, out),
             Stmt::Throw(e) => scan_expr(e, depth, "throw", out),
-            Stmt::Return(Some(e)) => scan_return(e, depth, out),
-            Stmt::Return(None) => {}
+            Stmt::Return(Some(e), _) => scan_return(e, depth, out),
+            Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,
@@ -813,6 +813,7 @@ fn scan_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 scan_expr(discriminant, depth, "switch discriminant", out);
                 for c in cases {
@@ -882,6 +883,7 @@ fn scan_return_result(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             scan_expr(condition, depth, RETURNED_OPERAND, out);
             scan_return_result(then_expr, depth, false, sources, out);
@@ -931,7 +933,7 @@ fn scan_expr(e: &Expr, depth: u32, ctx: &'static str, out: &mut Vec<NewSite>) {
                 scan_expr(a, depth, arg_ctx, out);
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             scan_expr(callee, depth, ctx, out);
             for a in args {
                 scan_expr(a, depth, "call argument", out);

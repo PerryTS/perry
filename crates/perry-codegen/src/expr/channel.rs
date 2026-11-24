@@ -164,6 +164,7 @@ pub(crate) fn try_match_channel_reduction(
                     op: BinaryOp::Add,
                     left,
                     right,
+                    ..
                 } => (left.as_ref(), right.as_ref()),
                 _ => {
                     all_match = false;
@@ -180,6 +181,7 @@ pub(crate) fn try_match_channel_reduction(
                     op: BinaryOp::Mul,
                     left,
                     right,
+                    ..
                 } => (left.as_ref(), right.as_ref()),
                 _ => {
                     all_match = false;
@@ -211,6 +213,7 @@ pub(crate) fn try_match_channel_reduction(
                     op: BinaryOp::Add,
                     left,
                     right,
+                    ..
                 } => {
                     if let Expr::Integer(n) = right.as_ref() {
                         match i32::try_from(*n) {

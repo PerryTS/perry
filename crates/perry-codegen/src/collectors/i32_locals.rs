@@ -102,7 +102,7 @@ pub fn is_strictly_i32_bounded_expr(
             op,
             BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr
         ),
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 clamp_fn_ids.contains(fid)
             } else {
@@ -135,8 +135,8 @@ pub fn is_strictly_i32_bounded_expr(
         // seeds `integer_locals` (`collect_int_ta_load_let_ids`); admitting
         // it as a STRICT write lets `let l = P[0]; l = (l ^ P[i & 7]) | 0`
         // qualify for the canonical-i32 slot.
-        Expr::IndexGet { object, .. } => match object.as_ref() {
-            Expr::IndexGet { object: inner, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => match object.as_ref() {
+            Expr::IndexGet { object: inner, .. } | Expr::RegionOut { object: inner, .. } => {
                 matches!(inner.as_ref(), Expr::LocalGet(id) if flat_const_ids.contains(id))
             }
             Expr::LocalGet(id) => {
@@ -338,7 +338,7 @@ fn walk_writes_for_unsigned_i32(
             Stmt::Expr(e) | Stmt::Throw(e) => {
                 walk_writes_in_expr_for_unsigned_i32(e, saw_any, disqualified);
             }
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     walk_writes_in_expr_for_unsigned_i32(e, saw_any, disqualified);
                 }
@@ -396,6 +396,7 @@ fn walk_writes_for_unsigned_i32(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 walk_writes_in_expr_for_unsigned_i32(discriminant, saw_any, disqualified);
                 for c in cases {
@@ -492,7 +493,7 @@ pub fn walk_writes_for_strict(
                     out,
                 );
             }
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     walk_writes_in_expr_for_strict(
                         e,
@@ -650,6 +651,7 @@ pub fn walk_writes_for_strict(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 walk_writes_in_expr_for_strict(
                     discriminant,
@@ -774,8 +776,8 @@ pub fn is_flat_const_indexget(
 ) -> bool {
     use perry_hir::Expr;
     match e {
-        Expr::IndexGet { object, .. } => match object.as_ref() {
-            Expr::IndexGet { object: inner, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => match object.as_ref() {
+            Expr::IndexGet { object: inner, .. } | Expr::RegionOut { object: inner, .. } => {
                 matches!(inner.as_ref(), Expr::LocalGet(id) if flat_const_ids.contains(id))
             }
             Expr::LocalGet(id) => flat_row_alias_ids.contains(id),
@@ -1015,7 +1017,7 @@ pub fn collect_localset_ids_in_stmts_filtered(
                 flat_row_alias_ids,
                 clamp_fn_ids,
             ),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     collect_localset_ids_in_expr_filtered(
                         e,
@@ -1190,6 +1192,7 @@ pub fn collect_localset_ids_in_stmts_filtered(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 collect_localset_ids_in_expr_filtered(
                     discriminant,
@@ -1288,7 +1291,7 @@ pub fn collect_localset_ids_in_expr_filtered(
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
@@ -1383,7 +1386,7 @@ pub fn collect_localset_ids_in_expr_filtered(
                 walk(a, out);
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             walk(callee, out);
             for a in args {
                 walk(a, out);
@@ -1409,6 +1412,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             walk(condition, out);
             walk(then_expr, out);
@@ -1420,7 +1424,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             walk(value, out);
         }
         Expr::PropertyUpdate { object, .. } => walk(object, out),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             walk(object, out);
             walk(index, out);
         }
@@ -1614,7 +1618,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             walk(property, out);
             walk(object, out);
         }
-        Expr::SuperCall(args)
+        Expr::SuperCall(args, _)
         | Expr::SuperMethodCall { args, .. }
         | Expr::StaticMethodCall { args, .. } => {
             for a in args {
@@ -1650,6 +1654,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             key,
             receiver,
             args,
+            ..
         } => {
             walk(home, out);
             walk(key, out);

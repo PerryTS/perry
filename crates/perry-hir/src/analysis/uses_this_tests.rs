@@ -8,13 +8,14 @@ fn statement_expression_positions_preserve_lexical_bindings() {
         let leaf = || vec![Stmt::Expr(expr.clone())];
         let cases = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 0,
                 name: "x".into(),
                 ty: Type::Any,
                 mutable: true,
                 init: Some(expr.clone()),
             },
-            Stmt::Return(Some(expr.clone())),
+            Stmt::Return(Some(expr.clone()), 0),
             Stmt::Throw(expr.clone()),
             Stmt::If {
                 condition: expr.clone(),
@@ -79,12 +80,14 @@ fn statement_expression_positions_preserve_lexical_bindings() {
                 }),
             },
             Stmt::Try {
+                byte_offset: 0,
                 body: leaf(),
                 catch: None,
                 finally: None,
                 forof_completion: None,
             },
             Stmt::Try {
+                byte_offset: 0,
                 body: vec![],
                 catch: Some(CatchClause {
                     param: None,
@@ -94,16 +97,19 @@ fn statement_expression_positions_preserve_lexical_bindings() {
                 forof_completion: None,
             },
             Stmt::Try {
+                byte_offset: 0,
                 body: vec![],
                 catch: None,
                 finally: Some(leaf()),
                 forof_completion: None,
             },
             Stmt::Switch {
+                byte_offset: 0,
                 discriminant: expr.clone(),
                 cases: vec![],
             },
             Stmt::Switch {
+                byte_offset: 0,
                 discriminant: Expr::Number(0.0),
                 cases: vec![SwitchCase {
                     test: Some(expr.clone()),
@@ -111,6 +117,7 @@ fn statement_expression_positions_preserve_lexical_bindings() {
                 }],
             },
             Stmt::Switch {
+                byte_offset: 0,
                 discriminant: Expr::Number(0.0),
                 cases: vec![SwitchCase {
                     test: None,
@@ -136,7 +143,7 @@ fn statement_expression_positions_preserve_lexical_bindings() {
 #[test]
 fn statement_leaves_have_no_lexical_binding_dependency() {
     for stmt in [
-        Stmt::Return(None),
+        Stmt::Return(None, 0),
         Stmt::Break,
         Stmt::Continue,
         Stmt::LabeledBreak("outer".into()),
@@ -145,6 +152,7 @@ fn statement_leaves_have_no_lexical_binding_dependency() {
         Stmt::PreallocateTdzBoxes(vec![]),
         Stmt::ReleaseBoxes(vec![]),
         Stmt::Let {
+            byte_offset: 0,
             id: 0,
             name: "x".into(),
             ty: Type::Any,
@@ -166,6 +174,7 @@ fn nested_closures_propagate_only_captured_bindings() {
     for captures_this in [false, true] {
         for captures_new_target in [false, true] {
             let nested = Expr::Closure {
+                byte_offset: 0,
                 func_id: 99,
                 params: vec![],
                 return_type: Type::Any,

@@ -9,6 +9,7 @@ fn read_ir(class: &str, dedicated: bool, global: bool) -> String {
 fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition: bool) -> String {
     let mut module = Module::new("byte_scan.ts");
     let param = |id, ty| Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -35,6 +36,7 @@ fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition
     };
     let read = if addition {
         Expr::Binary {
+            byte_offset: 0,
             op: perry_hir::BinaryOp::Add,
             left: Box::new(read),
             right: Box::new(Expr::Integer(1)),
@@ -44,6 +46,7 @@ fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition
     };
     if global {
         module.init.push(Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "table".into(),
             ty: Type::Named(class.into()),
@@ -52,6 +55,7 @@ fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition
         });
     }
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "read".into(),
         type_params: vec![],
@@ -72,11 +76,11 @@ fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition
                         type_args: vec![],
                         byte_offset: 0,
                     }),
-                    Stmt::Return(Some(read)),
+                    Stmt::Return(Some(read), 0),
                 ],
             }]
         } else {
-            vec![Stmt::Return(Some(read))]
+            vec![Stmt::Return(Some(read), 0)]
         },
         is_async: false,
         is_generator: false,
@@ -185,6 +189,7 @@ fn byte_scanning_reuses_the_number_loop_scope() {
             for live_length in [false, true] {
                 let mut module = Module::new("scan_index.ts");
                 let param = |id, ty| Param {
+                    byte_offset: 0,
                     id,
                     name: format!("p{id}"),
                     ty,
@@ -194,6 +199,7 @@ fn byte_scanning_reuses_the_number_loop_scope() {
                     arguments_object: None,
                 };
                 module.functions.push(Function {
+                    byte_offset: 0,
                     id: 1,
                     name: "scan".into(),
                     type_params: vec![],
@@ -206,6 +212,7 @@ fn byte_scanning_reuses_the_number_loop_scope() {
                         Stmt::For {
                             init: None,
                             condition: Some(Expr::Compare {
+                                byte_offset: 0,
                                 op: CompareOp::Lt,
                                 left: Box::new(Expr::LocalGet(2)),
                                 right: Box::new(Expr::Integer(8)),
@@ -220,7 +227,7 @@ fn byte_scanning_reuses_the_number_loop_scope() {
                                 index: Box::new(Expr::LocalGet(2)),
                             })],
                         },
-                        Stmt::Return(Some(Expr::LocalGet(2))),
+                        Stmt::Return(Some(Expr::LocalGet(2)), 0),
                     ],
                     is_async: false,
                     is_generator: false,

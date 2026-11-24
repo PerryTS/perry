@@ -62,7 +62,8 @@ pub(crate) fn witness(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<()> {
     if !crate::verify_facts::enabled() || ctx.wpfacts_off {
         return Ok(());
     }
-    let Expr::IndexGet { object, index, .. } = expr else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr
+    else {
         return Ok(());
     };
     let Expr::LocalGet(id) = object.as_ref() else {

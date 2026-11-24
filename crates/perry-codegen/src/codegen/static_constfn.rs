@@ -160,7 +160,7 @@ pub(crate) fn collect_literal_finals(
         if let Expr::Closure { body, .. } = e {
             stmts(body, module, prefix, reps, widths, out);
         }
-        if let Expr::Call { callee, args, .. } = e {
+        if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = e {
             if let Expr::Closure { params, body, .. } = callee.as_ref() {
                 // An IIFE binds its parameters to its arguments and runs its
                 // body once: walk that body once, with the bindings, then the
@@ -333,7 +333,7 @@ pub(crate) fn collect_literal_finals(
                 }
             }
             match stmt {
-                Stmt::Let { init, .. } | Stmt::Return(init) => {
+                Stmt::Let { init, .. } | Stmt::Return(init, _) => {
                     if let Some(e) = init {
                         expr(e, m, p, r, w, out);
                     }
@@ -386,6 +386,7 @@ pub(crate) fn collect_literal_finals(
                 Stmt::Switch {
                     discriminant,
                     cases,
+                    ..
                 } => {
                     expr(discriminant, m, p, r, w, out);
                     for c in cases {
@@ -497,7 +498,7 @@ impl ObjectSource {
                 Expr::LocalGet(id) => Some(Self::Property(*id, property.clone())),
                 _ => None,
             },
-            Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
                 Expr::LocalGet(id) => Some(Self::CallLocal(*id)),
                 Expr::FuncRef(id) => Some(Self::CallFunction(*id)),
                 Expr::Closure { body, .. } => Self::returned(body),
@@ -508,7 +509,7 @@ impl ObjectSource {
     }
     fn returned(body: &[Stmt]) -> Option<Self> {
         match body.last()? {
-            Stmt::Return(Some(value)) => Self::of(value),
+            Stmt::Return(Some(value), _) => Self::of(value),
             _ => None,
         }
     }

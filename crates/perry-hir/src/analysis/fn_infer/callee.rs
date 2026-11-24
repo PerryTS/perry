@@ -123,7 +123,7 @@ fn val(e: &Expr, st: &St) -> Callees {
         Expr::PropertyGet { property, .. } => {
             st.props.get(property).cloned().unwrap_or(Callees::Unknown)
         }
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             let mut acc = Callees::None;
             match val(callee, st) {
                 Callees::Set(s) => {
@@ -157,7 +157,7 @@ fn round(st: &St, m: &Module, units: &[Unit<'_>], anon: &HashMap<&str, Vec<&str>
             Stmt::Let {
                 id, init: Some(e), ..
             } => sets.push((*id, val(e, st))),
-            Stmt::Return(Some(e)) => rets = rets.join(&val(e, st)),
+            Stmt::Return(Some(e), _) => rets = rets.join(&val(e, st)),
             _ => {}
         };
         let mut esets: Vec<(LocalId, Callees)> = Vec::new();
@@ -254,7 +254,7 @@ pub(super) fn infer_callees(m: &Module, units: &[Unit<'_>]) -> CalleeFacts {
         } => {
             out.new_sites.insert(*byte_offset, val(callee, &st));
         }
-        Expr::Call { callee, .. }
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::LocalGet(_) | Expr::GlobalGet(_) | Expr::PropertyGet { .. }

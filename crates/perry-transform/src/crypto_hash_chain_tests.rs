@@ -4,10 +4,12 @@ use perry_hir::Param;
 
 fn function(body: Vec<Stmt>, is_async: bool) -> Function {
     Function {
+        byte_offset: 0,
         id: 1,
         name: "f".into(),
         type_params: vec![],
         params: vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "x".into(),
             ty: Type::Any,
@@ -67,6 +69,7 @@ fn create_hmac(alg: &str) -> Expr {
 
 fn let_h(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: "h".into(),
         ty: Type::Named("Hash".into()),
@@ -128,7 +131,7 @@ fn inline_chain_with_several_updates_lowers_to_one_frame_state() {
         "digest",
         vec![s("base64")],
     );
-    let out = run_fn(vec![Stmt::Return(Some(chain))]);
+    let out = run_fn(vec![Stmt::Return(Some(chain), 0)]);
     assert_handle_free(&out);
     let expected = call(
         crypto(),
@@ -150,7 +153,7 @@ fn inline_chain_with_several_updates_lowers_to_one_frame_state() {
             s("base64"),
         ],
     );
-    assert_eq!(dbg(&out), dbg(&[Stmt::Return(Some(expected))]));
+    assert_eq!(dbg(&out), dbg(&[Stmt::Return(Some(expected), 0)]));
 }
 
 #[test]
@@ -160,7 +163,7 @@ fn inline_hmac_chain_with_no_digest_encoding_is_rewritten() {
         "digest",
         vec![],
     );
-    let out = run_fn(vec![Stmt::Return(Some(chain))]);
+    let out = run_fn(vec![Stmt::Return(Some(chain), 0)]);
     assert_handle_free(&out);
     assert!(dbg(&out).contains(CHAIN_INIT_HMAC));
 }
@@ -172,7 +175,7 @@ fn literal_sha256_fast_path_is_left_to_its_direct_helper() {
         "digest",
         vec![s("hex")],
     );
-    assert_unchanged(vec![Stmt::Return(Some(chain))]);
+    assert_unchanged(vec![Stmt::Return(Some(chain), 0)]);
 }
 
 #[test]
@@ -181,12 +184,12 @@ fn inline_chain_awaiting_in_an_argument_keeps_the_handle() {
         call(
             create_hash("sha1"),
             "update",
-            vec![Expr::Await(Box::new(x()))],
+            vec![Expr::Await(Box::new(x()), 0)],
         ),
         "digest",
         vec![s("hex")],
     );
-    let body = vec![Stmt::Return(Some(chain))];
+    let body = vec![Stmt::Return(Some(chain), 0)];
     let before = dbg(&body);
     assert_eq!(dbg(&run_fn_async(body, true)), before);
 }
@@ -197,7 +200,7 @@ fn block_local_hash_used_only_by_update_and_digest_is_rewritten() {
     let body = vec![
         let_h(2, create_hash("sha1")),
         Stmt::Expr(call(h(2), "update", vec![x()])),
-        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")]))),
+        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")])), 0),
     ];
     let out = run_fn(body);
     assert_handle_free(&out);
@@ -231,6 +234,7 @@ fn jwa_sequence_shape_is_rewritten() {
     let body = vec![
         let_h(2, create_hmac("sha256")),
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "sig".into(),
             ty: Type::Any,
@@ -240,7 +244,7 @@ fn jwa_sequence_shape_is_rewritten() {
                 call(h(2), "digest", vec![s("base64")]),
             ])),
         },
-        Stmt::Return(Some(Expr::LocalGet(3))),
+        Stmt::Return(Some(Expr::LocalGet(3)), 0),
     ];
     assert_handle_free(&run_fn(body));
 }
@@ -254,7 +258,7 @@ fn update_in_a_nested_branch_before_digest_is_rewritten() {
             then_branch: vec![Stmt::Expr(call(h(2), "update", vec![x()]))],
             else_branch: None,
         },
-        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")]))),
+        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")])), 0),
     ];
     assert_handle_free(&run_fn(body));
 }
@@ -270,7 +274,7 @@ fn hash_passed_to_a_function_escapes() {
             type_args: vec![],
             byte_offset: 0,
         }),
-        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")]))),
+        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")])), 0),
     ];
     assert_unchanged(body);
 }
@@ -280,7 +284,7 @@ fn stored_hash_escapes() {
     let body = vec![
         let_h(2, create_hash("sha1")),
         Stmt::Expr(Expr::LocalSet(1, Box::new(h(2)))),
-        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")]))),
+        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")])), 0),
     ];
     assert_unchanged(body);
 }
@@ -290,7 +294,7 @@ fn returned_hash_escapes() {
     let body = vec![
         let_h(2, create_hash("sha1")),
         Stmt::Expr(call(h(2), "update", vec![x()])),
-        Stmt::Return(Some(h(2))),
+        Stmt::Return(Some(h(2)), 0),
     ];
     assert_unchanged(body);
 }
@@ -300,13 +304,14 @@ fn copy_escapes() {
     let body = vec![
         let_h(2, create_hash("sha1")),
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "c".into(),
             ty: Type::Any,
             mutable: false,
             init: Some(call(h(2), "copy", vec![])),
         },
-        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")]))),
+        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")])), 0),
     ];
     assert_unchanged(body);
 }
@@ -317,7 +322,7 @@ fn stream_use_escapes() {
         let_h(2, create_hash("sha1")),
         Stmt::Expr(call(h(2), "write", vec![x()])),
         Stmt::Expr(call(h(2), "end", vec![])),
-        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")]))),
+        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")])), 0),
     ];
     assert_unchanged(body);
 }
@@ -328,13 +333,14 @@ fn update_result_used_as_a_value_escapes() {
     let body = vec![
         let_h(2, create_hash("sha1")),
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "r".into(),
             ty: Type::Any,
             mutable: false,
             init: Some(call(h(2), "update", vec![x()])),
         },
-        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")]))),
+        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")])), 0),
     ];
     assert_unchanged(body);
 }
@@ -342,10 +348,11 @@ fn update_result_used_as_a_value_escapes() {
 #[test]
 fn hash_captured_by_a_closure_escapes() {
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 9,
         params: vec![],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(call(h(2), "digest", vec![s("hex")])))],
+        body: vec![Stmt::Return(Some(call(h(2), "digest", vec![s("hex")])), 0)],
         captures: vec![2],
         mutable_captures: vec![],
         captures_this: false,
@@ -360,7 +367,7 @@ fn hash_captured_by_a_closure_escapes() {
     let body = vec![
         let_h(2, create_hash("sha1")),
         Stmt::Expr(call(h(2), "update", vec![x()])),
-        Stmt::Return(Some(closure)),
+        Stmt::Return(Some(closure), 0),
     ];
     assert_unchanged(body);
 }
@@ -369,8 +376,8 @@ fn hash_captured_by_a_closure_escapes() {
 fn await_between_declaration_and_digest_keeps_the_handle() {
     let body = vec![
         let_h(2, create_hash("sha1")),
-        Stmt::Expr(Expr::Await(Box::new(x()))),
-        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")]))),
+        Stmt::Expr(Expr::Await(Box::new(x()), 0)),
+        Stmt::Return(Some(call(h(2), "digest", vec![s("hex")])), 0),
     ];
     let before = dbg(&body);
     assert_eq!(dbg(&run_fn_async(body, true)), before);
@@ -384,11 +391,11 @@ fn reference_from_another_function_escapes() {
     module.functions.push(function(
         vec![
             let_h(2, create_hash("sha1")),
-            Stmt::Return(Some(call(h(2), "digest", vec![s("hex")]))),
+            Stmt::Return(Some(call(h(2), "digest", vec![s("hex")])), 0),
         ],
         false,
     ));
-    let mut other = function(vec![Stmt::Return(Some(h(2)))], false);
+    let mut other = function(vec![Stmt::Return(Some(h(2)), 0)], false);
     other.id = 2;
     module.functions.push(other);
     let before = dbg(&module.functions[0].body);
@@ -456,6 +463,7 @@ fn module_init_nested_var_keeps_the_handle() {
 
 fn closure(func_id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
     Expr::Closure {
+        byte_offset: 0,
         func_id,
         params,
         return_type: Type::Any,
@@ -475,6 +483,7 @@ fn closure(func_id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>
 
 fn plain_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,
@@ -488,6 +497,7 @@ fn plain_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
 /// signer closure with a hoisted `var hmac`.
 fn cjs_module(factory_name: &str, extra: Vec<Stmt>) -> Vec<Stmt> {
     let require_param = Param {
+        byte_offset: 0,
         id: 30,
         name: "specifier".into(),
         ty: Type::Any,
@@ -513,7 +523,7 @@ fn cjs_module(factory_name: &str, extra: Vec<Stmt>) -> Vec<Stmt> {
                 call(h(47), "digest", vec![s("base64")]),
             ]),
         ),
-        Stmt::Return(Some(h(48))),
+        Stmt::Return(Some(h(48)), 0),
     ];
     let mut factory_body = vec![
         plain_let(

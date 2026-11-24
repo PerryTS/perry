@@ -55,6 +55,7 @@ fn set_type() -> Type {
 
 fn module_with(body: Vec<Stmt>) -> Module {
     Module {
+        byte_offset: 0,
         name: "typed_collection_receiver_guard.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -64,6 +65,7 @@ fn module_with(body: Vec<Stmt>) -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -133,6 +135,7 @@ fn call_lines_with_successor<'a>(ir: &'a str, name: &str) -> Vec<(&'a str, &'a s
 fn map_get_guards_its_receiver_before_the_runtime_call() {
     let ir = ir_for(vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "m".to_string(),
             ty: map_type(),
@@ -180,6 +183,7 @@ fn map_get_guards_its_receiver_before_the_runtime_call() {
 fn set_add_guards_its_receiver_before_the_runtime_call() {
     let ir = ir_for(vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "s".to_string(),
             ty: set_type(),

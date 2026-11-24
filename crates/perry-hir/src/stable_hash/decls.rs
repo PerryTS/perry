@@ -98,6 +98,7 @@ impl SH for ClassField {
             is_private,
             is_readonly,
             decorators,
+            byte_offset: _,
         } = self;
         (*origin as u8).hash(h);
         name.hash(h);
@@ -241,6 +242,7 @@ impl SH for Decorator {
             args,
             is_factory,
             is_reflect_metadata,
+            byte_offset: _,
         } = self;
         name.hash(h);
         args.hash(h);
@@ -267,6 +269,7 @@ impl SH for Function {
             decorators,
             was_plain_async,
             was_unrolled,
+            ..
         } = self;
         id.hash(h);
         name.hash(h);
@@ -296,6 +299,7 @@ impl SH for Param {
             decorators,
             is_rest,
             arguments_object,
+            byte_offset: _,
         } = self;
         id.hash(h);
         name.hash(h);

@@ -22,7 +22,7 @@ fn native_owned_typed_array_fallback_reasons_are_explicit() {
                 int(8),
             ),
             Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(1)))),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert!(
@@ -55,7 +55,7 @@ fn native_owned_typed_array_fallback_reasons_are_explicit() {
                 local(3),
             ),
             Stmt::Expr(Expr::LocalSet(3, Box::new(int(4)))),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert!(
@@ -87,13 +87,14 @@ fn native_owned_typed_array_fallback_reasons_are_explicit() {
                 int(8),
             ),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "alias".to_string(),
                 ty: Type::Named("Float64Array".to_string()),
                 mutable: false,
                 init: Some(local(2)),
             },
-            Stmt::Return(Some(index_get(3, int(0)))),
+            Stmt::Return(Some(index_get(3, int(0))), 0),
         ],
     );
     assert!(
@@ -128,7 +129,7 @@ fn native_owned_typed_array_fallback_reasons_are_explicit() {
                 1,
                 Box::new(Expr::NativeArenaAlloc(Box::new(int(64)))),
             )),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert!(
@@ -164,7 +165,7 @@ fn native_owned_typed_array_fallback_reasons_are_explicit() {
                 vec![local(2)],
                 Type::Number,
             )),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert!(
@@ -201,7 +202,7 @@ fn uint8_clamped_typed_array_store_records_runtime_fallback() {
             byte_offset: 0,
             byte_end: 0,
         }),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let artifact = compile_artifact_json("artifact_uint8_clamped_store_fallback.ts", body);
@@ -235,6 +236,7 @@ fn typed_array_alias_read_keeps_the_proven_view() {
             int(8),
         ),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "alias".to_string(),
             ty: Type::Named("Uint16Array".to_string()),
@@ -242,7 +244,7 @@ fn typed_array_alias_read_keeps_the_proven_view() {
             init: Some(local(1)),
         },
         for_loop(3, int(8), vec![Stmt::Expr(index_get(2, local(3)))]),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let artifact = compile_artifact_json("artifact_typed_array_alias_view.ts", body);
@@ -285,6 +287,7 @@ fn alias_of_an_exposed_typed_array_records_runtime_fallback() {
             property: "buffer".to_string(),
         }),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "alias".to_string(),
             ty: Type::Named("Uint16Array".to_string()),
@@ -292,7 +295,7 @@ fn alias_of_an_exposed_typed_array_records_runtime_fallback() {
             init: Some(local(1)),
         },
         for_loop(3, int(8), vec![Stmt::Expr(index_get(2, local(3)))]),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let artifact = compile_artifact_json("artifact_typed_array_alias_fallback.ts", body);
@@ -315,6 +318,7 @@ fn alias_of_an_exposed_typed_array_records_runtime_fallback() {
 fn reassigned_typed_array_store_records_runtime_fallback() {
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "array".to_string(),
             ty: Type::Named("Int32Array".to_string()),
@@ -332,7 +336,7 @@ fn reassigned_typed_array_store_records_runtime_fallback() {
             }),
         )),
         array_set(1, int(0), int(42)),
-        Stmt::Return(Some(index_get(1, int(0)))),
+        Stmt::Return(Some(index_get(1, int(0))), 0),
     ];
 
     let artifact = compile_artifact_json("artifact_typed_array_reassign_fallback.ts", body);

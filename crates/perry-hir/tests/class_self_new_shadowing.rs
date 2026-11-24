@@ -23,6 +23,7 @@ fn constructs_own_class(module: &perry_hir::Module, ret: &Expr, class_name: &str
             condition,
             then_expr,
             else_expr,
+            ..
         } if matches!(condition.as_ref(), Expr::ClassIsFirstEvaluation { .. }) => {
             let outer: Vec<_> = module
                 .init
@@ -74,7 +75,7 @@ fn class_self_new_wins_over_same_named_outer_local() {
     assert!(
         instance.body.iter().any(|stmt| matches!(
             stmt,
-            Stmt::Return(Some(ret)) if constructs_own_class(&module, ret, "h")
+            Stmt::Return(Some(ret), _) if constructs_own_class(&module, ret, "h")
         )),
         "class self-construction must bind to the class, not the outer local: {:#?}",
         instance.body
@@ -111,7 +112,7 @@ fn collision_renamed_class_self_new_uses_unique_class_name() {
     assert!(
         instance.body.iter().any(|stmt| matches!(
             stmt,
-            Stmt::Return(Some(ret)) if constructs_own_class(&module, ret, &class.name)
+            Stmt::Return(Some(ret), _) if constructs_own_class(&module, ret, &class.name)
         )),
         "renamed class self-construction must use its unique name: {:#?}",
         instance.body
@@ -143,7 +144,7 @@ fn method_parameter_shadows_class_self_name() {
     assert!(
         make.body.iter().any(|stmt| matches!(
             stmt,
-            Stmt::Return(Some(Expr::NewDynamic { callee, .. }))
+            Stmt::Return(Some(Expr::NewDynamic { callee, .. }), _)
                 if matches!(callee.as_ref(), Expr::LocalGet(id) if *id == parameter_id)
         )),
         "method parameter C must shadow the class's inner name: {:#?}",
@@ -191,7 +192,7 @@ fn method_local_declaration_shadows_class_self_name() {
     assert!(
         make.body.iter().any(|stmt| matches!(
             stmt,
-            Stmt::Return(Some(Expr::NewDynamic { callee, .. }))
+            Stmt::Return(Some(Expr::NewDynamic { callee, .. }), _)
                 if matches!(callee.as_ref(), Expr::LocalGet(id) if *id == local_id)
         )),
         "method-local C must shadow the class's inner name: {:#?}",
@@ -222,7 +223,7 @@ fn named_class_expression_self_new_uses_unique_class_name() {
     assert!(
         instance.body.iter().any(|stmt| matches!(
             stmt,
-            Stmt::Return(Some(Expr::New { class_name, .. })) if class_name == &class.name
+            Stmt::Return(Some(Expr::New { class_name, .. }), _) if class_name == &class.name
         )),
         "named class-expression self-construction must use its unique name: {:#?}",
         instance.body

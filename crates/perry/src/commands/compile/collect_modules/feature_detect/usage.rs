@@ -7,7 +7,7 @@ use perry_hir::{Expr, Stmt};
 /// New statement variants must explicitly declare their children here.
 fn stmt_any_expr<'a>(stmt: &'a Stmt, predicate: &mut impl FnMut(&'a Expr, bool) -> bool) -> bool {
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             init.as_ref().is_some_and(|e| predicate(e, false))
         }
         Stmt::Expr(expr) => predicate(expr, true),
@@ -55,6 +55,7 @@ fn stmt_any_expr<'a>(stmt: &'a Stmt, predicate: &mut impl FnMut(&'a Expr, bool) 
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             predicate(discriminant, false)
                 || cases.iter().any(|c| {

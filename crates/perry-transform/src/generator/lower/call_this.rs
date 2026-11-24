@@ -15,10 +15,10 @@ pub(crate) fn generator_stmt_uses_call_this(stmt: &Stmt) -> bool {
             init: Some(expr), ..
         } => generator_expr_uses_call_this(expr),
         Stmt::Let { init: None, .. } => false,
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+        Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
             generator_expr_uses_call_this(expr)
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -77,6 +77,7 @@ pub(crate) fn generator_stmt_uses_call_this(stmt: &Stmt) -> bool {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             generator_expr_uses_call_this(discriminant)
                 || cases.iter().any(|case| {
@@ -92,7 +93,7 @@ pub(crate) fn generator_stmt_uses_call_this(stmt: &Stmt) -> bool {
 pub(crate) fn generator_expr_uses_call_this(expr: &Expr) -> bool {
     match expr {
         Expr::This
-        | Expr::SuperCall(_)
+        | Expr::SuperCall(_, _)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperPropertyGet { .. }
         // A guarded class environment selects its evaluation through the

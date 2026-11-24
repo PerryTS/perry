@@ -381,7 +381,7 @@ fn returned_capture(
     ctx: &FnCtx<'_>,
     body: &[perry_hir::Stmt],
 ) -> Option<crate::fn_info::ReturnedCapture> {
-    let [perry_hir::Stmt::Return(Some(perry_hir::Expr::LocalGet(id)))] = body else {
+    let [perry_hir::Stmt::Return(Some(perry_hir::Expr::LocalGet(id)), _)] = body else {
         return None;
     };
     let &index = ctx.closure_captures.get(id)?;
@@ -1113,6 +1113,7 @@ pub(super) fn compile_closure(
         });
 
     let mut ctx = FnCtx {
+        compound_get: None,
         for_in_facts: Default::default(),
         for_in_snapshots: Default::default(),
         for_in_keys_locals: Default::default(),

@@ -10,10 +10,13 @@ pub(crate) struct IteratorRecordPlan {
     array: LocalId,
     index: LocalId,
     scalars: Option<Vec<LocalId>>,
+    /// The destructuring pattern or for-of statement this record serves.
+    byte_offset: u32,
 }
 
-fn runtime(method: &str, args: Vec<Expr>) -> Expr {
+fn runtime(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -23,8 +26,13 @@ fn runtime(method: &str, args: Vec<Expr>) -> Expr {
 }
 
 impl IteratorRecordPlan {
-    pub(crate) fn new(ctx: &mut LoweringContext, source: Expr, out: &mut Vec<Stmt>) -> Self {
-        Self::new_typed(ctx, source, Type::Any, out)
+    pub(crate) fn new(
+        ctx: &mut LoweringContext,
+        source: Expr,
+        out: &mut Vec<Stmt>,
+        byte_offset: u32,
+    ) -> Self {
+        Self::new_typed(ctx, source, Type::Any, out, byte_offset)
     }
 
     pub(crate) fn new_typed(
@@ -32,6 +40,7 @@ impl IteratorRecordPlan {
         source: Expr,
         hint: Type,
         out: &mut Vec<Stmt>,
+        byte_offset: u32,
     ) -> Self {
         fn local(
             ctx: &mut LoweringContext,
@@ -48,6 +57,7 @@ impl IteratorRecordPlan {
             };
             ctx.locals.push((name.clone(), id, ty.clone()));
             out.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name,
                 ty,
@@ -67,15 +77,19 @@ impl IteratorRecordPlan {
             out,
             Type::Boolean,
             false,
-            runtime("arrayRecordNeedsIterator", {
-                let mut args = vec![Expr::LocalSet(source, Box::new(Expr::LocalGet(source)))];
-                // A counted consumer's entry also reports the packed layout
-                // admission of the head it resolves.
-                if numeric_candidate {
-                    args.push(Expr::Bool(true));
-                }
-                args
-            }),
+            runtime(
+                "arrayRecordNeedsIterator",
+                {
+                    let mut args = vec![Expr::LocalSet(source, Box::new(Expr::LocalGet(source)))];
+                    // A counted consumer's entry also reports the packed layout
+                    // admission of the head it resolves.
+                    if numeric_candidate {
+                        args.push(Expr::Bool(true));
+                    }
+                    args
+                },
+                byte_offset,
+            ),
         );
         // The source already owns the record. Reusing its actual Any value
         // keeps indexed property lowering on runtime facts rather than an
@@ -88,7 +102,7 @@ impl IteratorRecordPlan {
             out,
             Type::Number,
             true,
-            runtime("arrayRecordIndex", vec![Expr::Integer(0)]),
+            runtime("arrayRecordIndex", vec![Expr::Integer(0)], byte_offset),
         );
         Self {
             use_iter,
@@ -96,6 +110,7 @@ impl IteratorRecordPlan {
             array,
             index,
             scalars: None,
+            byte_offset,
         }
     }
 
@@ -106,6 +121,7 @@ impl IteratorRecordPlan {
         ctx: &mut LoweringContext,
         values: Vec<Expr>,
         out: &mut Vec<Stmt>,
+        byte_offset: u32,
     ) -> Self {
         let mut scalars = Vec::with_capacity(values.len());
         for value in values {
@@ -113,6 +129,7 @@ impl IteratorRecordPlan {
             let name = format!("__iterator_literal_{id}");
             ctx.locals.push((name.clone(), id, Type::Any));
             out.push(Stmt::Let {
+                byte_offset,
                 id,
                 name,
                 ty: Type::Any,
@@ -125,22 +142,26 @@ impl IteratorRecordPlan {
         let name = format!("__iterator_record_{use_iter}");
         ctx.locals.push((name.clone(), use_iter, Type::Boolean));
         out.push(Stmt::Let {
+            byte_offset,
             id: use_iter,
             name,
             ty: Type::Boolean,
             mutable: false,
-            init: Some(runtime("arrayRecordNeedsIterator", vec![])),
+            init: Some(runtime("arrayRecordNeedsIterator", vec![], byte_offset)),
         });
         let source = ctx.fresh_local();
         let name = format!("__iterator_record_{source}");
         ctx.locals.push((name.clone(), source, Type::Any));
         out.push(Stmt::Let {
+            byte_offset,
             id: source,
             name,
             ty: Type::Any,
             mutable: true,
             init: Some(Expr::Conditional {
+                byte_offset,
                 condition: Box::new(Expr::Compare {
+                    byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(use_iter)),
                     right: Box::new(Expr::Bool(true)),
@@ -148,6 +169,7 @@ impl IteratorRecordPlan {
                 then_expr: Box::new(runtime(
                     "arrayRecordLiteral",
                     scalars.iter().map(|id| Expr::LocalGet(*id)).collect(),
+                    byte_offset,
                 )),
                 else_expr: Box::new(Expr::Undefined),
             }),
@@ -156,11 +178,16 @@ impl IteratorRecordPlan {
         let name = format!("__idx_{index}");
         ctx.locals.push((name.clone(), index, Type::Number));
         out.push(Stmt::Let {
+            byte_offset,
             id: index,
             name,
             ty: Type::Number,
             mutable: true,
-            init: Some(runtime("arrayRecordIndex", vec![Expr::Integer(0)])),
+            init: Some(runtime(
+                "arrayRecordIndex",
+                vec![Expr::Integer(0)],
+                byte_offset,
+            )),
         });
         Self {
             use_iter,
@@ -168,13 +195,18 @@ impl IteratorRecordPlan {
             array: source,
             index,
             scalars: Some(scalars),
+            byte_offset,
         }
     }
 
     fn length(&self) -> Expr {
         match &self.scalars {
             Some(values) => Expr::Integer(values.len() as i64),
-            None => runtime("arrayRecordLength", vec![Expr::LocalGet(self.array)]),
+            None => runtime(
+                "arrayRecordLength",
+                vec![Expr::LocalGet(self.array)],
+                self.byte_offset,
+            ),
         }
     }
 
@@ -187,7 +219,9 @@ impl IteratorRecordPlan {
             return init.iter().enumerate().rev().fold(
                 Expr::LocalGet(*last),
                 |otherwise, (i, id)| Expr::Conditional {
+                    byte_offset: self.byte_offset,
                     condition: Box::new(Expr::Compare {
+                        byte_offset: self.byte_offset,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(self.index)),
                         right: Box::new(Expr::Integer(i as i64)),
@@ -199,12 +233,13 @@ impl IteratorRecordPlan {
         }
         Expr::IndexGet {
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset: self.byte_offset,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(self.array)),
             index: Box::new(runtime(
                 "arrayRecordIndex",
                 vec![Expr::LocalGet(self.index)],
+                self.byte_offset,
             )),
         }
     }
@@ -214,11 +249,13 @@ impl IteratorRecordPlan {
             // Close may expose the original built-in iterator, even when next
             // was replaced after entry. Materialize only for an observable return.
             return Expr::Conditional {
-                condition: Box::new(runtime("arrayRecordCloseAbsent", vec![])),
+                byte_offset: self.byte_offset,
+                condition: Box::new(runtime("arrayRecordCloseAbsent", vec![], self.byte_offset)),
                 then_expr: Box::new(Expr::Undefined),
                 else_expr: Box::new(runtime(
                     "arrayRecordLiteral",
                     values.iter().map(|id| Expr::LocalGet(*id)).collect(),
+                    self.byte_offset,
                 )),
             };
         }
@@ -244,6 +281,7 @@ impl IteratorRecordPlan {
         // A constructed predicate carries Boolean evidence without asking the
         // generic bare-binding truthiness path to trust a declaration.
         Expr::Compare {
+            byte_offset: self.byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(self.use_iter)),
             right: Box::new(Expr::Bool(true)),
@@ -252,6 +290,7 @@ impl IteratorRecordPlan {
 
     pub(crate) fn guarded_get_iterator(&mut self, payload: LocalId) -> Expr {
         let value = Expr::Conditional {
+            byte_offset: self.byte_offset,
             condition: Box::new(self.iterator_mode()),
             then_expr: Box::new(Expr::GetIterator(Box::new(Expr::LocalGet(self.source)))),
             else_expr: Box::new(Expr::LocalGet(self.source)),
@@ -267,13 +306,18 @@ impl IteratorRecordPlan {
                 Expr::LocalSet(payload, Box::new(value)),
                 Expr::LocalSet(self.source, Box::new(Expr::Undefined)),
             ],
+            self.byte_offset,
         )
     }
 
     pub(crate) fn next_init(&self, iter_id: LocalId) -> Expr {
         Expr::Conditional {
+            byte_offset: self.byte_offset,
             condition: Box::new(self.iterator_mode()),
-            then_expr: Box::new(crate::lower::iterator_next_method_call(iter_id)),
+            then_expr: Box::new(crate::lower::iterator_next_method_call(
+                iter_id,
+                self.byte_offset,
+            )),
             else_expr: Box::new(Expr::Undefined),
         }
     }
@@ -311,6 +355,7 @@ impl IteratorRecordPlan {
                 ])
             };
             return Expr::Conditional {
+                byte_offset: self.byte_offset,
                 condition: Box::new(self.iterator_mode()),
                 then_expr: Box::new(protocol),
                 else_expr: Box::new(indexed),
@@ -336,10 +381,13 @@ impl IteratorRecordPlan {
         success.push(advance);
         success.push(Expr::Bool(false));
         Expr::Conditional {
+            byte_offset: self.byte_offset,
             condition: Box::new(self.iterator_mode()),
             then_expr: Box::new(protocol),
             else_expr: Box::new(Expr::Conditional {
+                byte_offset: self.byte_offset,
                 condition: Box::new(Expr::Compare {
+                    byte_offset: self.byte_offset,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(self.index)),
                     right: Box::new(self.length()),
@@ -407,8 +455,10 @@ impl IteratorRecordPlan {
                                 },
                                 Expr::Bool(throwing),
                             ],
+                            plan.byte_offset,
                         );
                         *expr = Expr::Conditional {
+                            byte_offset: plan.byte_offset,
                             condition: Box::new(plan.iterator_mode()),
                             then_expr: Box::new(expr.clone()),
                             else_expr: Box::new(array_close),
@@ -431,8 +481,10 @@ impl IteratorRecordPlan {
         for stmt in &mut body {
             self.rewrite(stmt, Some(iter_id), false);
             walk_stmt(stmt, &mut |expr| {
-                fn cursor_after_get(expr: &mut Expr) {
-                    crate::walker::walk_expr_children_mut(expr, &mut cursor_after_get);
+                fn cursor_after_get(expr: &mut Expr, byte_offset: u32) {
+                    crate::walker::walk_expr_children_mut(expr, &mut |e| {
+                        cursor_after_get(e, byte_offset)
+                    });
                     if let Expr::NativeMethodCall {
                         module,
                         method,
@@ -442,6 +494,7 @@ impl IteratorRecordPlan {
                     {
                         if module == "__perry_runtime" && method == "arrayRecordClose" {
                             args[1] = Expr::Binary {
+                                byte_offset,
                                 op: BinaryOp::Add,
                                 left: Box::new(args[1].clone()),
                                 right: Box::new(Expr::Integer(1)),
@@ -449,7 +502,7 @@ impl IteratorRecordPlan {
                         }
                     }
                 }
-                cursor_after_get(expr);
+                cursor_after_get(expr, self.byte_offset);
             });
         }
         let next = ctx.fresh_local();
@@ -463,6 +516,7 @@ impl IteratorRecordPlan {
             catch,
             mut finally,
             forof_completion,
+            ..
         }) = body.pop()
         else {
             unreachable!("record loop requires its completion handler");
@@ -482,9 +536,10 @@ impl IteratorRecordPlan {
                 self.iterator_mode(),
                 self.length(),
                 Expr::LocalGet(self.index),
-                crate::lower::iterator_step_call(iter_id, next, value_id),
+                crate::lower::iterator_step_call(iter_id, next, value_id, self.byte_offset),
                 Expr::LocalSet(state, Box::new(Expr::Number(2.0))),
             ],
+            self.byte_offset,
         );
         let mut stepped_body = vec![
             Stmt::Expr(Expr::LocalSet(
@@ -496,6 +551,7 @@ impl IteratorRecordPlan {
                         Expr::LocalGet(value_id),
                         self.element(),
                     ],
+                    self.byte_offset,
                 )),
             )),
             Stmt::Expr(Expr::LocalSet(state, Box::new(Expr::Number(0.0)))),
@@ -503,6 +559,7 @@ impl IteratorRecordPlan {
         stepped_body.extend(body);
         finally.get_or_insert_with(Vec::new).push(Stmt::If {
             condition: Expr::Compare {
+                byte_offset: self.byte_offset,
                 op: CompareOp::Ne,
                 left: Box::new(Expr::LocalGet(state)),
                 right: Box::new(Expr::Number(0.0)),
@@ -512,6 +569,7 @@ impl IteratorRecordPlan {
         });
         vec![
             Stmt::Let {
+                byte_offset: self.byte_offset,
                 id: next,
                 name,
                 ty: Type::Any,
@@ -519,6 +577,7 @@ impl IteratorRecordPlan {
                 init: Some(self.next_init(iter_id)),
             },
             Stmt::Let {
+                byte_offset: self.byte_offset,
                 id: value_id,
                 name: format!("__iterator_value_{value_id}"),
                 ty: Type::Any,
@@ -527,15 +586,22 @@ impl IteratorRecordPlan {
             },
             state_init,
             Stmt::Try {
+                byte_offset: self.byte_offset,
                 body: vec![Stmt::For {
                     init: Some(Box::new(Stmt::Let {
+                        byte_offset: self.byte_offset,
                         id: self.index,
                         name: format!("__idx_{}", self.index),
                         ty: Type::Number,
                         mutable: true,
-                        init: Some(runtime("arrayRecordIndex", vec![Expr::Integer(0)])),
+                        init: Some(runtime(
+                            "arrayRecordIndex",
+                            vec![Expr::Integer(0)],
+                            self.byte_offset,
+                        )),
                     })),
                     condition: Some(Expr::Compare {
+                        byte_offset: self.byte_offset,
                         op: CompareOp::Lt,
                         left: Box::new(Expr::LocalGet(self.index)),
                         right: Box::new(bound),
@@ -550,6 +616,7 @@ impl IteratorRecordPlan {
                                 prefix: false,
                             },
                         ],
+                        self.byte_offset,
                     )),
                     body: stepped_body,
                 }],
@@ -563,7 +630,7 @@ impl IteratorRecordPlan {
 
 fn walk_stmt(stmt: &mut Stmt, f: &mut impl FnMut(&mut Expr)) {
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 f(e);
             }
@@ -633,6 +700,7 @@ fn walk_stmt(stmt: &mut Stmt, f: &mut impl FnMut(&mut Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -666,6 +734,7 @@ mod tests {
             &mut ctx,
             vec![Expr::Integer(1), Expr::Integer(2)],
             &mut setup,
+            0,
         );
         assert_eq!(plan.scalars.as_ref().unwrap().len(), 2);
         assert!(
@@ -724,7 +793,7 @@ mod tests {
     fn array_record_guards_allocations_and_reads_live_length() {
         let mut ctx = LoweringContext::new("array_record.ts");
         let mut setup = Vec::new();
-        let mut plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![], None), &mut setup);
+        let mut plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![], None), &mut setup, 0);
         assert_eq!(
             plan.array, plan.source,
             "the indexed record must reuse the source rather than a declared-array alias"
@@ -766,8 +835,8 @@ mod tests {
         );
 
         assert!(matches!(value.as_ref(), Expr::Conditional {
-            condition, then_expr, else_expr,
-        } if matches!(condition.as_ref(), Expr::Compare { op: CompareOp::Eq, left, right }
+            condition, then_expr, else_expr, ..
+        } if matches!(condition.as_ref(), Expr::Compare { op: CompareOp::Eq, left, right, .. }
                 if matches!(left.as_ref(), Expr::LocalGet(id) if *id == plan.use_iter)
                     && matches!(right.as_ref(), Expr::Bool(true)))
             && matches!(then_expr.as_ref(), Expr::GetIterator(_))
@@ -775,13 +844,13 @@ mod tests {
 
         assert!(
             matches!(plan.next_init(99), Expr::Conditional { condition, then_expr, .. }
-            if matches!(condition.as_ref(), Expr::Compare { op: CompareOp::Eq, left, right }
+            if matches!(condition.as_ref(), Expr::Compare { op: CompareOp::Eq, left, right, .. }
                 if matches!(left.as_ref(), Expr::LocalGet(id) if *id == plan.use_iter)
                     && matches!(right.as_ref(), Expr::Bool(true)))
             && matches!(then_expr.as_ref(), Expr::NativeMethodCall { method, .. } if method == "iteratorNextMethod"))
         );
         let Expr::Conditional { else_expr, .. } =
-            plan.step(crate::lower::iterator_step_call(99, 100, 101))
+            plan.step(crate::lower::iterator_step_call(99, 100, 101, 0))
         else {
             panic!()
         };
@@ -806,7 +875,7 @@ mod tests {
         };
         assert!(
             matches!(&success[0], Expr::LocalSet(101, element) if matches!(element.as_ref(),
-            Expr::IndexGet { index, .. } if matches!(index.as_ref(),
+            Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(),
                 Expr::NativeMethodCall { method, .. } if method == "arrayRecordIndex")))
         );
         assert!(
@@ -920,8 +989,9 @@ mod tests {
             &mut ctx,
             vec![Expr::Integer(10), Expr::Integer(20)],
             &mut setup,
+            0,
         );
-        let first = plan.step_at(crate::lower::iterator_step_call(99, 100, 101), Some(0));
+        let first = plan.step_at(crate::lower::iterator_step_call(99, 100, 101, 0), Some(0));
         let Expr::Conditional { else_expr, .. } = first else {
             panic!()
         };
@@ -932,7 +1002,7 @@ mod tests {
             if matches!(value.as_ref(), Expr::LocalGet(id) if *id == plan.scalars.as_ref().unwrap()[0])));
         assert!(matches!(&success[1], Expr::LocalSet(id, value)
             if *id == plan.index && matches!(value.as_ref(), Expr::Integer(1))));
-        let exhausted = plan.step_at(crate::lower::iterator_step_call(99, 100, 101), Some(2));
+        let exhausted = plan.step_at(crate::lower::iterator_step_call(99, 100, 101, 0), Some(2));
         assert!(!format!("{exhausted:?}").contains("IndexGet"));
         assert!(matches!(exhausted, Expr::Conditional { else_expr, .. }
             if matches!(else_expr.as_ref(), Expr::Sequence(body)
@@ -948,12 +1018,13 @@ mod tests {
             Expr::Undefined,
             Type::Array(Box::new(Type::Number)),
             &mut setup,
+            0,
         );
         assert!(matches!(&setup[1], Stmt::Let {
             init: Some(Expr::NativeMethodCall { args, .. }), .. }
             if matches!(args.last(), Some(Expr::Bool(true)))));
 
-        let _general = IteratorRecordPlan::new(&mut ctx, Expr::Undefined, &mut setup);
+        let _general = IteratorRecordPlan::new(&mut ctx, Expr::Undefined, &mut setup, 0);
         assert!(matches!(&setup[4], Stmt::Let {
             init: Some(Expr::NativeMethodCall { args, .. }), .. }
             if !matches!(args.last(), Some(Expr::Bool(true)))));
@@ -976,15 +1047,17 @@ mod tests {
     fn array_record_counted_step_preserves_continue_and_close_state() {
         let mut ctx = LoweringContext::new("array_record.ts");
         let mut setup = Vec::new();
-        let plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![], None), &mut setup);
+        let plan = IteratorRecordPlan::new(&mut ctx, Expr::Array(vec![], None), &mut setup, 0);
         let state = ctx.fresh_local();
         let lowered = plan.drive(
             &mut ctx,
             99,
             100,
             vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: state,
                         name: "completion".into(),
                         ty: Type::Number,
@@ -1100,6 +1173,7 @@ mod tests {
                                 op: CompareOp::Eq,
                                 left,
                                 right,
+                                ..
                             } = &args[1]
                             else {
                                 panic!("mutable private done must become a constructed predicate");

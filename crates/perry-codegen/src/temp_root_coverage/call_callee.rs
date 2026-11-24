@@ -83,6 +83,7 @@ fn operand_comes_from_a_temp_root(fn_ir: &str, consumer: &str, n: usize) -> bool
 /// is the argument that puts nothing in the callee's window.
 fn any_local(id: u32, name: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -103,6 +104,7 @@ fn any_local(id: u32, name: &str) -> Stmt {
 /// the slot and makes the rooting question apply at all.
 fn callee_local(id: u32, name: &str, ty: Type) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -134,6 +136,7 @@ fn closure_call_ir(name: &str, arg: Expr) -> String {
             callee_local(0, "stage", stage_type()),
             any_local(1, "rec"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "out".to_string(),
                 ty: Type::Any,
@@ -159,6 +162,7 @@ fn dynamic_new_ir(name: &str, arg: Expr) -> String {
             callee_local(0, "ctor", Type::Any),
             any_local(1, "x"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "inst".to_string(),
                 ty: Type::Any,

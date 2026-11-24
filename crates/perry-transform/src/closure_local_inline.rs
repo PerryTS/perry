@@ -267,7 +267,7 @@ fn arrow_candidate(
     {
         return None;
     }
-    let [Stmt::Return(Some(expr))] = body.as_slice() else {
+    let [Stmt::Return(Some(expr), _)] = body.as_slice() else {
         return None;
     };
     // #10567: a param captured by a closure NESTED inside `expr` (e.g. `(f,
@@ -400,7 +400,7 @@ fn collect_uses_in_stmt(stmt: &Stmt, set: &[LocalId], uses: &mut Uses) {
 
 fn collect_uses(expr: &Expr, set: &[LocalId], uses: &mut Uses) {
     match expr {
-        Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)) =>
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)) =>
         {
             uses.calls += 1;
             if args.len() != uses.arity || !args.iter().all(|a| uses.writes.is_stable_arg(a)) {
@@ -455,9 +455,9 @@ fn rewrite_calls(
     body_expr: &Expr,
     next_local_id: &mut LocalId,
 ) {
-    let is_target = matches!(expr, Expr::Call { callee, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)));
+    let is_target = matches!(expr, Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)));
     if is_target {
-        let Expr::Call { args, .. } = expr else {
+        let (Expr::Call { args, .. } | Expr::RegionCall { args, .. }) = expr else {
             unreachable!()
         };
         // Arity was checked during collection; a mismatch here means the
@@ -548,6 +548,7 @@ fn guarded_default_binding(stmt: &Stmt) -> Option<LocalId> {
         op: CompareOp::Eq,
         left,
         right,
+        ..
     } = condition
     else {
         return None;
@@ -612,7 +613,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e);
             }
@@ -639,6 +640,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -666,7 +668,7 @@ pub(crate) fn for_each_expr_in_stmt_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut 
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e);
             }
@@ -693,6 +695,7 @@ pub(crate) fn for_each_expr_in_stmt_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut 
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -798,6 +801,7 @@ mod tests {
 
     fn param(id: LocalId, name: &str) -> Param {
         Param {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             ty: Type::Any,
@@ -810,10 +814,11 @@ mod tests {
 
     fn arrow(func_id: u32, params: Vec<Param>, ret: Expr, captures_this: bool) -> Expr {
         Expr::Closure {
+            byte_offset: 0,
             func_id,
             params,
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(ret))],
+            body: vec![Stmt::Return(Some(ret), 0)],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
             captures_this,
@@ -855,6 +860,7 @@ mod tests {
     fn guard(id: LocalId, default: Expr) -> Stmt {
         Stmt::If {
             condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(id)),
                 right: Box::new(Expr::Undefined),
@@ -874,6 +880,7 @@ mod tests {
     fn inlines_a_called_arrow_local_and_drops_its_dead_default_guard() {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "exists".into(),
                 ty: Type::Any,
@@ -916,6 +923,7 @@ mod tests {
     fn rewrites_calls_inside_nested_statement_lists() {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "exists".into(),
                 ty: Type::Any,
@@ -960,6 +968,7 @@ mod tests {
         const ALIAS: LocalId = 20;
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "exists".into(),
                 ty: Type::Any,
@@ -975,6 +984,7 @@ mod tests {
             Stmt::DoWhile {
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: ALIAS,
                         name: "exists".into(),
                         ty: Type::Any,
@@ -1013,6 +1023,7 @@ mod tests {
     fn a_non_call_use_keeps_the_closure() {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "f".into(),
                 ty: Type::Any,
@@ -1051,6 +1062,7 @@ mod tests {
             Stmt::PreallocateTdzBoxes(vec![F]),
             Stmt::Expr(earlier),
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "later".into(),
                 ty: Type::Any,
@@ -1070,6 +1082,7 @@ mod tests {
             Stmt::PreallocateTdzBoxes(vec![F]),
             Stmt::Expr(call_local(F, vec![Expr::Integer(1)])),
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "later".into(),
                 ty: Type::Any,
@@ -1088,6 +1101,7 @@ mod tests {
         // Non-trivial argument: the arrow would duplicate or reorder effects.
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "f".into(),
                 ty: Type::Any,
@@ -1104,28 +1118,33 @@ mod tests {
         // Captured by a nested closure that calls it later.
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "f".into(),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(arrow(1, vec![], Expr::Integer(1), false)),
             },
-            Stmt::Return(Some(Expr::Closure {
-                func_id: 2,
-                params: vec![],
-                return_type: Type::Any,
-                body: vec![Stmt::Return(Some(call_local(F, vec![])))],
-                captures: vec![F],
-                mutable_captures: vec![],
-                captures_this: false,
-                captures_new_target: false,
-                construct_only: false,
-                enclosing_class: None,
-                is_arrow: true,
-                is_async: false,
-                is_generator: false,
-                is_strict: true,
-            })),
+            Stmt::Return(
+                Some(Expr::Closure {
+                    byte_offset: 0,
+                    func_id: 2,
+                    params: vec![],
+                    return_type: Type::Any,
+                    body: vec![Stmt::Return(Some(call_local(F, vec![])), 0)],
+                    captures: vec![F],
+                    mutable_captures: vec![],
+                    captures_this: false,
+                    captures_new_target: false,
+                    construct_only: false,
+                    enclosing_class: None,
+                    is_arrow: true,
+                    is_async: false,
+                    is_generator: false,
+                    is_strict: true,
+                }),
+                0,
+            ),
         ];
         let before = stmts.clone();
         let mut next = 100;
@@ -1137,6 +1156,7 @@ mod tests {
     fn a_guard_on_a_reassigned_binding_stays() {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "n".into(),
                 ty: Type::Any,
@@ -1163,6 +1183,7 @@ mod tests {
     fn keeps_the_let_when_a_call_has_a_different_arity() {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "e485".into(),
                 ty: Type::Any,
@@ -1182,6 +1203,7 @@ mod tests {
     fn keeps_the_let_when_a_call_passes_fewer_arguments() {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "f".into(),
                 ty: Type::Any,
@@ -1198,6 +1220,7 @@ mod tests {
 
     fn let_f(init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id: F,
             name: "f".into(),
             ty: Type::Any,
@@ -1296,12 +1319,13 @@ mod tests {
 
     fn function_calling_f() -> Function {
         Function {
+            byte_offset: 0,
             id: 3,
             name: "h".to_string(),
             type_params: Vec::new(),
             params: Vec::new(),
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(call_local(F, vec![])))],
+            body: vec![Stmt::Return(Some(call_local(F, vec![])), 0)],
             is_async: false,
             is_generator: false,
             is_strict: true,

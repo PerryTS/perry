@@ -80,9 +80,9 @@ pub fn stores(body: &[Stmt]) -> BTreeMap<usize, bool> {
 fn is_rooted(e: &Expr, rooted: &BTreeSet<Local>) -> bool {
     match e {
         Expr::This => true,
-        Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
-            is_rooted(object, rooted)
-        }
+        Expr::PropertyGet { object, .. }
+        | Expr::IndexGet { object, .. }
+        | Expr::RegionOut { object, .. } => is_rooted(object, rooted),
         Expr::LocalGet(id) => rooted.contains(id),
         Expr::LocalSet(_, v) => is_rooted(v, rooted),
         _ => false,
@@ -91,9 +91,9 @@ fn is_rooted(e: &Expr, rooted: &BTreeSet<Local>) -> bool {
 
 fn is_deep(e: &Expr, rooted: &BTreeSet<Local>, deep: &BTreeSet<Local>) -> bool {
     match e {
-        Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
-            is_rooted(object, rooted)
-        }
+        Expr::PropertyGet { object, .. }
+        | Expr::IndexGet { object, .. }
+        | Expr::RegionOut { object, .. } => is_rooted(object, rooted),
         Expr::LocalGet(id) => deep.contains(id),
         Expr::LocalSet(_, v) => is_deep(v, rooted, deep),
         _ => false,

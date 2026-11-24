@@ -125,8 +125,10 @@ impl LoweringContext {
                     _ => unreachable!(),
                 };
                 return Expr::Closure {
+                    byte_offset: ident.span.lo.0,
                     func_id,
                     params: vec![Param {
+                        byte_offset: ident.span.lo.0,
                         id: param_id,
                         name: "__x".to_string(),
                         ty: Type::Any,
@@ -136,7 +138,7 @@ impl LoweringContext {
                         arguments_object: None,
                     }],
                     return_type: Type::Any,
-                    body: vec![Stmt::Return(Some(coerce_body))],
+                    body: vec![Stmt::Return(Some(coerce_body), ident.span.lo.0)],
                     captures: vec![],
                     mutable_captures: vec![],
                     captures_this: false,
@@ -877,6 +879,7 @@ impl LoweringContext {
     pub(crate) fn synthesize_anon_shape_class(
         &mut self,
         field_shapes: &[(String, Type)],
+        byte_offset: u32,
     ) -> String {
         // Canonical shape key: each field as `name:tag` joined by ',' in source
         // order. Different declaration orders -> different classes (preserves
@@ -907,7 +910,7 @@ impl LoweringContext {
             shape_key.push_str(tag(ty));
             shape_key.push(',');
         }
-        self.mint_anon_shape_class(shape_key, field_shapes, 0)
+        self.mint_anon_shape_class(shape_key, field_shapes, 0, byte_offset)
     }
 
     /// #6812 (w16): mint a UNIQUE per-source-site 0-field anon-shape class
@@ -930,7 +933,7 @@ impl LoweringContext {
         width_hint: u32,
     ) -> String {
         let site_key = format!("@empty-site:{}:{}", self.baked_source_path(), byte_offset);
-        self.mint_anon_shape_class(site_key, &[], width_hint)
+        self.mint_anon_shape_class(site_key, &[], width_hint, byte_offset)
     }
 
     fn mint_anon_shape_class(
@@ -938,6 +941,9 @@ impl LoweringContext {
         shape_key: String,
         field_shapes: &[(String, Type)],
         alloc_width_hint: u32,
+        // Source offset of the construct that mints the class; its
+        // synthesized constructor stands there.
+        byte_offset: u32,
     ) -> String {
         // Field names in source order, so a call-site can recover a config
         // object's keys after the literal is lowered to `New { class_name }`.
@@ -979,6 +985,7 @@ impl LoweringContext {
         let fields: Vec<ClassField> = field_shapes
             .iter()
             .map(|(name, ty)| ClassField {
+                byte_offset: byte_offset,
                 origin: crate::ClassFieldOrigin::Definition,
                 name: name.clone(),
                 key_expr: None,
@@ -1001,6 +1008,7 @@ impl LoweringContext {
         for (name, ty) in field_shapes {
             let param_id = self.fresh_local();
             ctor_params.push(Param {
+                byte_offset: byte_offset,
                 id: param_id,
                 name: name.clone(),
                 ty: ty.clone(),
@@ -1013,11 +1021,12 @@ impl LoweringContext {
                 object: Box::new(Expr::This),
                 property: name.clone(),
                 value: Box::new(Expr::LocalGet(param_id)),
-                byte_offset: 0,
+                byte_offset,
                 byte_end: 0,
             }));
         }
         let constructor = Function {
+            byte_offset: byte_offset,
             id: self.fresh_func(),
             name: "constructor".to_string(),
             type_params: Vec::new(),
@@ -1087,6 +1096,7 @@ impl LoweringContext {
         &mut self,
         keys: &[String],
         null_proto: bool,
+        byte_offset: u32,
     ) -> String {
         let shape_key = format!("@declared-keys:{null_proto}:{}", keys.join("\u{0}"));
         if let Some(existing) = self.anon_shape_classes.get(&shape_key) {
@@ -1107,6 +1117,7 @@ impl LoweringContext {
         let fields: Vec<ClassField> = keys
             .iter()
             .map(|name| ClassField {
+                byte_offset: byte_offset,
                 origin: crate::ClassFieldOrigin::Declared,
                 name: name.clone(),
                 key_expr: None,

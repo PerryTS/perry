@@ -13,6 +13,7 @@ fn get(object: Expr, key: &str) -> Expr {
 
 fn compare(op: CompareOp, left: Expr, right: Expr) -> Expr {
     Expr::Compare {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -21,6 +22,7 @@ fn compare(op: CompareOp, left: Expr, right: Expr) -> Expr {
 
 fn ir(body: Vec<Stmt>, in_loop: bool) -> String {
     let param = |id| Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Any,
@@ -30,6 +32,7 @@ fn ir(body: Vec<Stmt>, in_loop: bool) -> String {
         arguments_object: None,
     };
     let protected = Stmt::Try {
+        byte_offset: 0,
         body,
         catch: Some(CatchClause {
             param: None,
@@ -48,6 +51,7 @@ fn ir(body: Vec<Stmt>, in_loop: bool) -> String {
     };
     let mut module = Module::new("bounded_numeric");
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: Vec::new(),
@@ -167,6 +171,7 @@ fn an_observable_call_before_a_field_comparison_has_no_reused_region() {
 #[test]
 fn captured_mutable_receiver_keeps_semantic_field_reads() {
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 2,
         params: vec![],
         return_type: Type::Any,

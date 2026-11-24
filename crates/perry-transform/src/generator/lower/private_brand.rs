@@ -169,9 +169,11 @@ fn wrap_closures(expr: &mut Expr, this_usable: bool, cx: &mut Cx, captures_out: 
         is_arrow,
         is_async,
         is_generator,
+        byte_offset,
         ..
     } = expr
     {
+        let closure_offset = *byte_offset;
         let inner_this = !*is_arrow || *captures_this;
         process_body(body, inner_this, cx);
         if *is_arrow
@@ -184,6 +186,7 @@ fn wrap_closures(expr: &mut Expr, this_usable: bool, cx: &mut Cx, captures_out: 
         }
         let brand_id = alloc_local(cx.next_local_id);
         captures_out.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: brand_id,
             name: "__private_brand".into(),
             ty: Type::Any,
@@ -206,6 +209,7 @@ fn wrap_closures(expr: &mut Expr, this_usable: bool, cx: &mut Cx, captures_out: 
                 brand_id,
             )))),
             Stmt::Try {
+                byte_offset: closure_offset,
                 body: original,
                 catch: None,
                 finally: Some(vec![Stmt::Expr(Expr::PrivateLexicalBrandPop)]),
@@ -226,7 +230,14 @@ pub(super) fn restore_in_continuations(
     next_local_id: &mut u32,
 ) {
     visit_body(body, &mut |expr| {
-        if let Expr::Closure { captures, body, .. } = expr {
+        if let Expr::Closure {
+            captures,
+            body,
+            byte_offset,
+            ..
+        } = expr
+        {
+            let closure_offset = *byte_offset;
             if captures.contains(&brand_id) {
                 // Generator lowering runs after the source finally/return
                 // normalization pass. Explicitly clean up normal returns too;
@@ -240,6 +251,7 @@ pub(super) fn restore_in_continuations(
                         brand_id,
                     )))),
                     Stmt::Try {
+                        byte_offset: closure_offset,
                         body: resume,
                         catch: None,
                         finally: Some(vec![Stmt::Expr(Expr::PrivateLexicalBrandPop)]),
@@ -257,6 +269,7 @@ mod tests {
 
     fn closure(is_arrow: bool, body: Vec<Stmt>) -> Expr {
         Expr::Closure {
+            byte_offset: 0,
             func_id: 40,
             params: vec![],
             return_type: Type::Any,
@@ -293,9 +306,9 @@ mod tests {
     #[test]
     fn plain_functions_in_class_bodies_capture_their_evaluation() {
         let mut body = vec![
-            Stmt::Expr(closure(false, vec![Stmt::Return(Some(private_read()))])),
-            Stmt::Expr(closure(true, vec![Stmt::Return(Some(private_read()))])),
-            Stmt::Expr(closure(false, vec![Stmt::Return(Some(Expr::Undefined))])),
+            Stmt::Expr(closure(false, vec![Stmt::Return(Some(private_read()), 0)])),
+            Stmt::Expr(closure(true, vec![Stmt::Return(Some(private_read()), 0)])),
+            Stmt::Expr(closure(false, vec![Stmt::Return(Some(Expr::Undefined), 0)])),
         ];
         let mut next = 100;
         let blocked = std::collections::HashSet::new();
@@ -351,7 +364,7 @@ mod tests {
                 panic!("expected closure");
             };
             assert!(captures.is_empty());
-            assert!(matches!(body.as_slice(), [Stmt::Return(_)]));
+            assert!(matches!(body.as_slice(), [Stmt::Return(_, _)]));
         }
         // Inside an arrow that does not capture `this`, the capture must not
         // introduce a `this` read.
@@ -359,7 +372,7 @@ mod tests {
             true,
             vec![Stmt::Expr(closure(
                 false,
-                vec![Stmt::Return(Some(private_read()))],
+                vec![Stmt::Return(Some(private_read()), 0)],
             ))],
         ))];
         process_body(&mut in_arrow, true, &mut cx);
@@ -381,9 +394,9 @@ mod tests {
     fn closures_in_expression_only_positions_are_never_wrapped() {
         let mut ctor_copy = vec![Stmt::Expr(closure(
             false,
-            vec![Stmt::Return(Some(private_read()))],
+            vec![Stmt::Return(Some(private_read()), 0)],
         ))];
-        let mut field_init = closure(false, vec![Stmt::Return(Some(private_read()))]);
+        let mut field_init = closure(false, vec![Stmt::Return(Some(private_read()), 0)]);
         let mut blocked = std::collections::HashSet::new();
         collect_direct_closures(&field_init, &mut blocked);
         let mut next = 100;
@@ -403,13 +416,13 @@ mod tests {
                 panic!()
             };
             assert!(captures.is_empty());
-            assert!(matches!(body.as_slice(), [Stmt::Return(_)]));
+            assert!(matches!(body.as_slice(), [Stmt::Return(_, _)]));
         }
     }
 
     fn assert_return_cleanup(body: &mut Vec<Stmt>) {
         for index in 0..body.len() {
-            if matches!(body[index], Stmt::Return(_)) {
+            if matches!(body[index], Stmt::Return(_, _)) {
                 assert!(
                     index > 0
                         && matches!(&body[index - 1], Stmt::Expr(Expr::PrivateLexicalBrandPop)),
@@ -426,12 +439,14 @@ mod tests {
     fn private_generator_continuations_restore_captured_environment() {
         for is_async in [false, true] {
             let mut function = Function {
+                byte_offset: 0,
                 id: 1,
                 name: "gen".into(),
                 type_params: vec![],
                 params: vec![],
                 return_type: Type::Any,
                 body: vec![Stmt::Expr(Expr::Yield {
+                    byte_offset: 0,
                     delegate: false,
                     value: Some(Box::new(Expr::PrivateGuard {
                         class_name: "C".into(),
@@ -491,11 +506,12 @@ mod tests {
 }
 
 fn pop_before_return(stmt: &mut Stmt, next_local_id: &mut u32) {
-    if let Stmt::Return(value) = stmt {
+    if let Stmt::Return(value, off) = stmt {
         let mut sequence = Vec::new();
         let result = value.take().map(|value| {
             let id = alloc_local(next_local_id);
             sequence.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name: "__gen_private_result".into(),
                 ty: Type::Any,
@@ -505,7 +521,7 @@ fn pop_before_return(stmt: &mut Stmt, next_local_id: &mut u32) {
             Expr::LocalGet(id)
         });
         sequence.push(Stmt::Expr(Expr::PrivateLexicalBrandPop));
-        sequence.push(Stmt::Return(result));
+        sequence.push(Stmt::Return(result, *off));
         *stmt = Stmt::If {
             condition: Expr::Bool(true),
             then_branch: sequence,

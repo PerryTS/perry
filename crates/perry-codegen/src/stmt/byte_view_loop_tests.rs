@@ -17,8 +17,10 @@ fn ir_labelled(extra: Vec<Stmt>, label: Option<&str>) -> String {
         array: Box::new(Expr::LocalGet(1)),
         index: Box::new(Expr::LocalGet(2)),
         value: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::BitAnd,
             left: Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(element()),
                 right: Box::new(Expr::Integer(1)),
@@ -28,10 +30,12 @@ fn ir_labelled(extra: Vec<Stmt>, label: Option<&str>) -> String {
     })];
     body.extend(extra);
     m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "inc".into(),
         type_params: vec![],
         params: vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "buf".into(),
             ty: Type::Named("Buffer".into()),
@@ -46,6 +50,7 @@ fn ir_labelled(extra: Vec<Stmt>, label: Option<&str>) -> String {
                 label,
                 Stmt::For {
                     init: Some(Box::new(Stmt::Let {
+                        byte_offset: 0,
                         id: 2,
                         name: "i".into(),
                         ty: Type::Number,
@@ -53,6 +58,7 @@ fn ir_labelled(extra: Vec<Stmt>, label: Option<&str>) -> String {
                         init: Some(Expr::Integer(0)),
                     })),
                     condition: Some(Expr::Compare {
+                        byte_offset: 0,
                         op: CompareOp::Lt,
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::PropertyGet {
@@ -70,7 +76,7 @@ fn ir_labelled(extra: Vec<Stmt>, label: Option<&str>) -> String {
                     body,
                 },
             ),
-            Stmt::Return(Some(Expr::Integer(0))),
+            Stmt::Return(Some(Expr::Integer(0)), 0),
         ],
         is_async: false,
         is_generator: false,

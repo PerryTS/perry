@@ -279,6 +279,7 @@ fn closed(
                 | Expr::PropertySet { object, .. }
                 | Expr::PropertyUpdate { object, .. }
                 | Expr::IndexGet { object, .. }
+                | Expr::RegionOut { object, .. }
                 | Expr::IndexSet { object, .. }
                 | Expr::IndexUpdate { object, .. } => member(object, 1),
                 Expr::PutValueSet {
@@ -287,12 +288,13 @@ fn closed(
                 _ => {}
             }
             match e {
-                Expr::Call { callee, args, .. } => {
+                Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                     if let Some(id) = perry_hir::tdz_check::checked_binding(e) {
                         uses.entry((false, id)).or_default().checks += 1;
                     }
-                    if let Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } =
-                        &**callee
+                    if let Expr::PropertyGet { object, .. }
+                    | Expr::IndexGet { object, .. }
+                    | Expr::RegionOut { object, .. } = &**callee
                     {
                         if let Some(k) = key(object) {
                             uses.entry(k).or_default().receivers += 1;

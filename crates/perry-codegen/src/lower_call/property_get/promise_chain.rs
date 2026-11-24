@@ -49,7 +49,7 @@ pub(crate) fn try_lower_promise_chain_method(
                         callee: inner_callee,
                         args: inner_args,
                         ..
-                    } = object
+                    } | Expr::RegionCall { callee: inner_callee, args: inner_args, .. } = object
                     {
                         if let Expr::PropertyGet {
                             object: inner_object,

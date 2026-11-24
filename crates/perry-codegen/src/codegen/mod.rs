@@ -315,10 +315,10 @@ mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
-    DirectAbi, ElisionFacts, FactsArrRep, FactsBody, FactsClass, FactsElemRep, FactsElementRead,
-    FactsEnc, FactsField, FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr,
-    FactsNumericFunction, FactsRecRep, FactsRecordBirth, FactsRecordFn, FactsRecordLanes,
-    FactsRecordLayout, FactsRecv, FactsRep, FactsSignature, ProgramFactsView,
+    AccessorKind, DirectAbi, ElisionFacts, FactsArrRep, FactsBody, FactsClass, FactsElemRep,
+    FactsElementRead, FactsEnc, FactsField, FactsFieldReadCall, FactsIndexedOwner,
+    FactsNumericExpr, FactsNumericFunction, FactsRecRep, FactsRecordBirth, FactsRecordFn,
+    FactsRecordLanes, FactsRecordLayout, FactsRecv, FactsRep, FactsSignature, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;
@@ -871,6 +871,7 @@ fn lower_module(
                     ic.field_names
                         .iter()
                         .map(|name| perry_hir::ClassField {
+                            byte_offset: 0, /*HPOS*/
                             origin: perry_hir::ClassFieldOrigin::Definition,
                             name: name.clone(),
                             key_expr: None,
@@ -909,6 +910,7 @@ fn lower_module(
             .iter()
             .enumerate()
             .map(|(index, prop)| perry_hir::Function {
+                byte_offset: 0, /*HPOS*/
                 id: 0,
                 name: format!("get_{}", prop),
                 type_params: Vec::new(),
@@ -934,6 +936,7 @@ fn lower_module(
             .setter_names
             .iter()
             .map(|prop| perry_hir::Function {
+                byte_offset: 0, /*HPOS*/
                 id: 0,
                 name: format!("set_{}", prop),
                 type_params: Vec::new(),
@@ -976,6 +979,7 @@ fn lower_module(
                 .iter()
                 .enumerate()
                 .map(|(i, name)| perry_hir::ClassField {
+                    byte_offset: 0, /*HPOS*/
                     origin: perry_hir::ClassFieldOrigin::Definition,
                     name: name.clone(),
                     key_expr: None,
@@ -1001,6 +1005,7 @@ fn lower_module(
                 .iter()
                 .enumerate()
                 .map(|(index, m)| perry_hir::Function {
+                    byte_offset: 0, /*HPOS*/
                     id: 0,
                     name: m.clone(),
                     type_params: Vec::new(),
@@ -1085,6 +1090,7 @@ fn lower_module(
                                 && has_rest
                                 && !has_user_rest;
                             perry_hir::Param {
+                                byte_offset: 0, /*HPOS*/
                                 id: param_index as perry_hir::types::LocalId,
                                 name: format!("arg{param_index}"),
                                 ty: perry_hir::types::Type::Any,
@@ -1103,6 +1109,7 @@ fn lower_module(
                         })
                         .collect();
                     perry_hir::Function {
+                        byte_offset: 0, /*HPOS*/
                         id: 0,
                         name: name.clone(),
                         type_params: Vec::new(),
@@ -4264,7 +4271,10 @@ fn lower_module(
     // the inliner would erase its call before the backend emits the real work.
     if hir.async_init_function.is_some() {
         let id = entry_outline::max_func_id(hir) + 1;
+        // The completion phase stands at the module construct, like the
+        // resumable body it finishes.
         let finish = perry_hir::Function {
+            byte_offset: hir.byte_offset,
             id,
             name: "async module completion".into(),
             type_params: Vec::new(),

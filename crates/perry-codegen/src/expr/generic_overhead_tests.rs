@@ -7,6 +7,7 @@ use perry_hir::{CompareOp, Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -20,6 +21,7 @@ fn param(id: u32, ty: Type) -> Param {
 fn probe_ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
     let mut module = Module::new("cost_test");
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 99,
         name: "sink".into(),
         ty: Type::Any,
@@ -27,6 +29,7 @@ fn probe_ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
         init: Some(Expr::Number(0.0)),
     });
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: vec![],
@@ -70,7 +73,7 @@ fn global_store_ir(value: Expr, ty: Type) -> String {
         vec![param(1, ty)],
         vec![
             Stmt::Expr(Expr::LocalSet(99, Box::new(value))),
-            Stmt::Return(Some(Expr::LocalGet(99))),
+            Stmt::Return(Some(Expr::LocalGet(99)), 0),
         ],
     )
 }
@@ -86,6 +89,7 @@ fn scalar_global_stores_keep_the_store_without_root_shading() {
         Expr::Null,
         Expr::Undefined,
         Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(1)),
             right: Box::new(Expr::Null),
@@ -134,6 +138,7 @@ fn capture_store_ir() -> String {
     let mut module = Module::new("capture_cost");
     let mut body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "captured".into(),
             ty: Type::Any,
@@ -141,11 +146,13 @@ fn capture_store_ir() -> String {
             init: Some(Expr::String("before".into())),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "write".into(),
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Closure {
+                byte_offset: 0,
                 func_id: 3,
                 params: vec![],
                 return_type: Type::Any,
@@ -170,7 +177,7 @@ fn capture_store_ir() -> String {
     // than the shared box path. Its closure therefore writes the capture
     // through js_closure_set_capture_bits, the owner this probe exercises.
     let init = body.remove(0);
-    body.push(Stmt::Return(Some(Expr::LocalGet(2))));
+    body.push(Stmt::Return(Some(Expr::LocalGet(2)), 0));
     let body = vec![Stmt::For {
         init: Some(Box::new(init)),
         condition: Some(Expr::LocalGet(1)),
@@ -178,6 +185,7 @@ fn capture_store_ir() -> String {
         body,
     }];
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "capture_probe".into(),
         type_params: vec![],

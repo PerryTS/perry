@@ -83,7 +83,7 @@ fn method_call_publication_refuses_an_ineligible_twin() {
     for c in &mut hir.classes {
         for f in &mut c.methods {
             for st in &mut f.body {
-                if let perry_hir::Stmt::Return(Some(e)) = st {
+                if let perry_hir::Stmt::Return(Some(e), _) = st {
                     same_offset(e, offset);
                 }
             }
