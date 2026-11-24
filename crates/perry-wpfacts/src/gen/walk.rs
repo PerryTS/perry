@@ -472,9 +472,18 @@ impl<'a> Gen<'a> {
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (true, 0);
         let list_saved = self.list_enter_body();
+        // The whole top-level body is one narrowing body; a unit's slice of
+        // it is not (its locals are the whole body's).
+        let top = self
+            .unit_view(mi as usize)
+            .is_none()
+            .then(|| self.narrow_enter_top(mi, init_fn));
         for s in self.init_of(mi as usize) {
             self.stmt(&fx, s);
             self.name_enum_object(mi, s);
+        }
+        if let Some(top) = top {
+            self.narrow_exit_body(top);
         }
         (self.order_ok, self.loop_depth) = saved;
         self.list_body = list_saved;

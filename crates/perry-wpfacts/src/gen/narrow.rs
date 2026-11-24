@@ -558,9 +558,44 @@ impl<'a> Gen<'a> {
         body: &[Stmt],
         captures: &[u32],
     ) -> Scope {
+        self.narrow_enter(mi, f, params, body, captures, None)
+    }
+
+    /// A module's top-level body (`init_fn`): its locals are the top-level
+    /// `let`s, which the module's functions and class members name too, so
+    /// a local one of them writes is not the body's own.
+    pub(crate) fn narrow_enter_top(&mut self, mi: u32, f: FnIdx) -> Scope {
+        let m = self.modules[mi as usize].1;
+        let mut outside = crate::pts::FxHashSet::default();
+        let mut note = |e: &Expr| {
+            if let Expr::LocalSet(l, _) | Expr::Update { id: l, .. } = e {
+                outside.insert(*l);
+            }
+        };
+        for func in &m.functions {
+            perry_hir::tdz_check::for_each_function_expr(func, &mut note);
+        }
+        for c in &m.classes {
+            perry_hir::tdz_check::for_each_class_expr(c, &mut note);
+        }
+        self.narrow_enter(mi, f, &[], &m.init, &[], Some(&outside))
+    }
+
+    fn narrow_enter(
+        &mut self,
+        mi: u32,
+        f: FnIdx,
+        params: &[perry_hir::Param],
+        body: &[Stmt],
+        captures: &[u32],
+        outside: Option<&crate::pts::FxHashSet<u32>>,
+    ) -> Scope {
         let mut own = Vec::new();
         let scope = (self.int_ranges || self.guard_presence).then(|| {
             let mut ls = scope_locals(params, body);
+            if let Some(outside) = outside {
+                ls.retain(|id| !outside.contains(id));
+            }
             // `this` of a body with its own binding (not an arrow's, which
             // is its enclosing body's).
             // PERRY_WPF_NO_THIS_HOST: diagnostic switch (default off) that
