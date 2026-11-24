@@ -1520,13 +1520,14 @@ export function navstackPop(navStack: Widget): void;
  * fragment of the page, a modifier key, or a page the history refuses, such as `file://`).
  *
  * On macOS, iOS, visionOS, Android, GTK4 and Windows, a Text whose click opens an `http`,
- * `https`, `mailto` or `tel` URL in its default app; any other `href` does nothing. On
- * tvOS and watchOS the text cannot be activated.
+ * `https`, `mailto` or `tel` URL in its default app; any other `href` does nothing. It
+ * takes no keyboard focus. On tvOS and watchOS the text cannot be activated.
  */
 export function Link(text: string, href: string): Widget;
 /**
  * Push `path` onto the session history and notify every `routerOnChange` listener. Throws
- * where the history refuses it (another origin, or a `file://` page). No-op on native.
+ * where the history refuses it (another origin or, from `file://`, another file). No-op on
+ * native.
  */
 export function routerNavigate(path: string): void;
 /**

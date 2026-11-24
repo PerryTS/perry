@@ -924,9 +924,42 @@ winListeners.popstate.forEach(fn => fn({}));
         ),
         concat!(
             "start /directory/42?x=1\npush /requests\nroute /requests\n",
-            "push /helpers\nroute /helpers\nHelpers /helpers prevented=true\n",
+            "push http://h.test/helpers\nroute /helpers\nHelpers /helpers prevented=true\n",
             "Elsewhere https://other.example/x prevented=false\nroute /requests"
         )
+    );
+}
+
+// A listener that navigates (a redirect) leaves every listener on the new route, and a
+// path starting with "//" reaches the history as this page's, not as another host's.
+#[test]
+fn router_listeners_end_on_the_current_route_and_links_push_their_own_url() {
+    let dom = format!(
+        "{WIDGET_DOM}{}",
+        r#"
+globalThis.location = { pathname: "/a", search: "", hash: "", href: "http://h.test/a", origin: "http://h.test" };
+globalThis.history = { pushState(_state, _title, path) {
+  const u = new URL(path, location.href);
+  Object.assign(location, { pathname: u.pathname, search: u.search, hash: u.hash, href: u.href });
+} };
+"#
+    );
+    assert_eq!(
+        run_web_source_with_dom(
+            r#"
+import { Link, routerNavigate, routerOnChange } from "perry/ui";
+routerOnChange((path: string) => { if (path === "/private") routerNavigate("/login"); });
+routerOnChange((path: string) => { console.log("route " + path); });
+routerNavigate("/private");
+Link("slashes", "http://h.test//h.test/next");
+"#,
+            &dom,
+            r#"
+const a = [...uiHandles.values()].find(e => e.tagName === "A");
+a.listeners.click[0]({ button: 0, defaultPrevented: false, preventDefault() {} });
+"#
+        ),
+        "route /login\nroute /login\nroute //h.test/next"
     );
 }
 
@@ -978,7 +1011,7 @@ console.log(click("next"));
     let modified = "next=false next=false next=false next=false next=false\nnext=false\n";
     assert_eq!(
         run("http://h.test/a", "console.log('push ' + path);"),
-        format!("push /next\nroute /a\nnext=true mail=false tel=false file=false frag=false\n{modified}push /next\nroute /a\nnext=true\nnext=false")
+        format!("push http://h.test/next\nroute /a\nnext=true mail=false tel=false file=false frag=false\n{modified}push http://h.test/next\nroute /a\nnext=true\nnext=false")
     );
     for (page, push) in [
         ("file:///a/index.html", "console.log('push ' + path);"),

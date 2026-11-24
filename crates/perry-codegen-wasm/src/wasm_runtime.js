@@ -4722,14 +4722,14 @@ function perry_ui_router_current_path() {
   return location.pathname + location.search + location.hash;
 }
 function notifyRouteListeners() {
-  const path = perry_ui_router_current_path();
-  for (const cb of routeListeners) callWasmClosure(cb, path);
+  // Read per call: a listener that navigates moves the route under the rest.
+  for (const cb of routeListeners) callWasmClosure(cb, perry_ui_router_current_path());
 }
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("popstate", notifyRouteListeners);
 }
-function pushRoute(path) {
-  if (path !== perry_ui_router_current_path()) history.pushState(null, "", path);
+function pushRoute(path, url = path) {
+  if (path !== perry_ui_router_current_path()) history.pushState(null, "", url);
 }
 function perry_ui_router_navigate(path) {
   pushRoute(String(path));
@@ -4751,7 +4751,7 @@ function perry_ui_link_create(text, href) {
     if (!/^https?:$/.test(url.protocol) || url.origin !== location.origin) return;
     // The browser scrolls to a fragment of this page and fires popstate itself.
     if (url.hash && url.pathname === location.pathname && url.search === location.search) return;
-    try { pushRoute(url.pathname + url.search + url.hash); } catch (_) { return; }
+    try { pushRoute(url.pathname + url.search + url.hash, url.href); } catch (_) { return; }
     e.preventDefault();
     notifyRouteListeners();
   });

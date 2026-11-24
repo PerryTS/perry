@@ -79,7 +79,7 @@ modifier key or middle click, or a page opened from `file://`. The router keeps
 the current route, `location.pathname + search + hash`:
 
 - `routerNavigate(path)` pushes `path` onto the session history. It throws where
-  the history refuses the path: another origin, or a `file://` page.
+  the history refuses the URL: another origin or, from `file://`, another file.
 - `routerOnChange(cb)` calls `cb(path)` after `routerNavigate`, a `Link` click,
   or back/forward. A listener stays for the page's life: register one per app.
 - `routerCurrentPath()` returns the current route, so a deep link opens on the
@@ -96,7 +96,8 @@ VStack(8, [Link("Requests", "/requests"), Link("Helpers", "/helpers"), view]);
 Native backends have no URL: `routerNavigate` and `routerOnChange` do nothing,
 and `routerCurrentPath()` returns `""`. A `Link` there is a Text whose click opens
 an `http`, `https`, `mailto` or `tel` URL in its default app; any other `href` does
-nothing. On tvOS and watchOS the text cannot be activated.
+nothing. Like any clickable Text it takes no keyboard focus. On tvOS and watchOS
+the text cannot be activated.
 
 ## Spacer
 
