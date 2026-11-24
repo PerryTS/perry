@@ -372,3 +372,45 @@ fn proxy_new_target_prototype_comes_from_its_get() {
     site(t, "", &format!("{f}Reflect.construct(F, [payload], px);"), false).unwrap();
     site(t, "", &format!("{f}Reflect.construct(F, [1], px);"), true).unwrap();
 }
+
+/// Rule PXENUM: for-in over an object whose chain holds a Proxy (14.7.5.9
+/// EnumerateObjectProperties) runs the Proxy's ownKeys,
+/// getOwnPropertyDescriptor and getPrototypeOf traps; the body's `o[k]`
+/// reaching it is its [[Get]] with receiver `o` (the get trap).
+#[test]
+fn proxy_on_a_for_in_chain_runs_its_traps() {
+    let body = "const o: any = Object.create(px); for (const k in o) { console.log(o[k]); }";
+    for h in [
+        "ownKeys(t: any) { external(payload); return []; }",
+        "getOwnPropertyDescriptor(t: any, k: any) { external(payload); return undefined; }",
+        "getPrototypeOf(t: any) { external(payload); return null; }",
+        "get(t: any, k: any, r: any) { external(payload); return 1; }",
+    ] {
+        site("{ a: 1 }", h, body, false).unwrap_or_else(|e| panic!("{h}: {e}"));
+    }
+    let h = "get(t: any, k: any, r: any) { external(r.z); return 1; }";
+    let op = "const o: any = Object.create(px); o.z = payload; for (const k in o) { console.log(o[k]); }";
+    site("{ a: 1 }", h, op, false).unwrap();
+    site("{ a: 1 }", "", body, true).unwrap();
+    site("{ a: 1 }", "get(t: any, k: any, r: any) { return 1; }", body, true).unwrap();
+}
+
+/// Rule PXSUPER: `super.m()` whose home object's prototype is a Proxy
+/// (`Object.setPrototypeOf( B.prototype, px )`) is px.[[Get]]("m", this)
+/// (13.3.7.3, 10.5.8): the get trap with receiver `this`, or the forward;
+/// the value is called with `this`.
+#[test]
+fn proxy_super_home_prototype_runs_its_get() {
+    let cls = "class A { m() { return 1; } }\nclass B extends A { n() { return super.m(); } }\nObject.setPrototypeOf(B.prototype, px);\n";
+    let t = "{ m() { return 1; } }";
+    let h = "get(t: any, k: any, r: any) { external(payload); return t[k]; }";
+    site(t, h, &format!("{cls}new B().n();"), false).unwrap();
+    let h = "get(t: any, k: any, r: any) { return t[k]; }";
+    site(t, h, &format!("{cls}new B().n();"), true).unwrap();
+    let h = "get(t: any, k: any, r: any) { external(r.q); return t[k]; }";
+    site(t, h, &format!("{cls}const b: any = new B(); b.q = payload; b.n();"), false).unwrap();
+    site("{ m() { external(payload); } }", "", &format!("{cls}new B().n();"), false).unwrap();
+    let t = "{ m(this: any) { external(this.q); } }";
+    site(t, "", &format!("{cls}const b: any = new B(); b.q = payload; b.n();"), false).unwrap();
+    site(t, "", &format!("{cls}const b: any = new B(); b.q = 1; b.n();"), true).unwrap();
+}

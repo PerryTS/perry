@@ -976,6 +976,28 @@ impl Model {
         );
     }
 
+    /// Rule PXSUPER: `super.key` whose home object's prototype is Proxy `p`
+    /// (13.3.7.3 MakeSuperPropertyReference: the base is
+    /// HomeObject.[[GetPrototypeOf]](), the Receiver `this` = `origin`):
+    /// GetValue is p.[[Get]](key, this) (10.5.8: the get trap with receiver
+    /// `this`, the forward to the target with the same receiver), a call
+    /// calls that value with `this`, PutValue is p.[[Set]](key, V, this)
+    /// (`proxy_chain_set`), a lookup the chain walk.
+    pub(crate) fn proxy_super(&mut self, p: u32, origin: Tok, key: Key, act: ChainAct) {
+        match act {
+            ChainAct::Load(dst, _) => {
+                let g = self.proxy_get_r(p, key, NO_NODE, origin);
+                self.edge(g, dst);
+            }
+            ChainAct::Call(call) => {
+                let g = self.proxy_get_r(p, key, NO_NODE, origin);
+                self.bind_via(g, call, origin);
+            }
+            ChainAct::Store(src, region) => self.proxy_chain_set(p, origin, key, src, region),
+            ChainAct::Lookup { .. } => self.proxy_chain_walk(p, origin, key, act),
+        }
+    }
+
     /// Rule PXCHAIN: a per-receiver walk of `origin` (`Cons::Chain`)
     /// reaching Proxy `p`. A lookup (B.2.2.4/5) runs the
     /// `getOwnPropertyDescriptor` and `getPrototypeOf` traps
@@ -1946,6 +1968,12 @@ impl Model {
             | Cons::TopIfTop { .. }
             | Cons::ForInMeet { .. }
             | Cons::ThisInst { .. }
+            // `ProtoValues` on a prototype node that holds the Proxy: the
+            // Proxy itself is that [[Prototype]] value (what a
+            // [[GetPrototypeOf]] of the object holding it returns, a
+            // `super` home object's included); no internal method of the
+            // Proxy runs.
+            | Cons::ProtoValues { .. }
             // `Object.create( p )` (20.1.2.2, OrdinaryObjectCreate 10.1.12):
             // `p` becomes the new object's [[Prototype]]; no internal method
             // of `p` runs. The operations that later reach it on the chain
@@ -1965,7 +1993,13 @@ impl Model {
             // Proxy: an object key is no constant (ToPropertyKey is its own
             // rule), the computed-key definition.
             | Cons::DefineAnyKey { .. }
-            | Cons::DefineKeyed { .. } => {
+            | Cons::DefineKeyed { .. }
+            // Rule PXSUPER: the Proxy as the home object's prototype of a
+            // `super.key` (its [[GetPrototypeOf]] result: the lookup starts
+            // at it, `super_lookup`), or as the `this` of one (the
+            // Receiver: the lookup itself is on the home prototype).
+            | Cons::SuperFrom { .. }
+            | Cons::Super { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
@@ -2024,6 +2058,21 @@ impl Model {
             // (`for_in_every_key`); its `p[k]` reads are [[Get]]s (the Load
             // arm), the enumeration itself `proxy_own_keys`.
             Cons::ForInKeys { ft, call } => self.for_in_every_key(call, ft),
+            // Rule PXENUM: for-in over an object whose chain holds the Proxy
+            // (14.7.5.9 EnumerateObjectProperties): the walk reaching it
+            // runs its [[OwnPropertyKeys]], [[GetOwnProperty]] and
+            // [[GetPrototypeOf]] (`proxy_own_keys`: the ownKeys,
+            // getOwnPropertyDescriptor and getPrototypeOf traps and the walk
+            // on), and the body's `of[k]` read reaching it is OrdinaryGet's
+            // step 3, p.[[Get]](k, of) (`proxy_chain_get`: the get trap with
+            // receiver `of`, the forward the target's own and chain).
+            Cons::EnumChain { key, dst, of, .. } => {
+                let r = self.reason("for-in: a Proxy on the chain of the enumerated object");
+                self.proxy_own_keys(p, r);
+                let recv = self.proxy_chain_recv(p);
+                self.add_tok(recv, of);
+                self.proxy_chain_get(p, key, dst, of, false);
+            }
             // Rule PK on a Proxy (Object.getOwnPropertyNames): its own
             // keys are what its ownKeys trap (or the target's own) returns
             // (10.5.11 [[OwnPropertyKeys]]), kept to Strings (20.1.2.10):

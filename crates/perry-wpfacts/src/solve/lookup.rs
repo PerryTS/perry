@@ -1870,6 +1870,11 @@ impl Model {
             self.chain_step(0, origin, TOP, key, act);
             return;
         }
+        // Rule PXSUPER: a Proxy home prototype runs its [[Get]] / [[Set]]
+        // with Receiver `this` (`proxy_super`).
+        if let TokKind::Proxy(p) = self.toks[start as usize] {
+            return self.proxy_super(p, origin, key, act);
+        }
         match act {
             ChainAct::Load(dst, _) if self.is_array_length(start, key) => {
                 self.add_prim(dst, prim::NUM);
