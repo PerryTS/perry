@@ -25,6 +25,7 @@ fn record_primitives_keep_only_opaque_values_in_pointer_slots() {
         .iter()
         .enumerate()
         .map(|(i, (method, ty))| Stmt::Let {
+            byte_offset: 0,
             id: i as u32 + 1,
             name: format!("value{i}"),
             ty: ty.clone(),

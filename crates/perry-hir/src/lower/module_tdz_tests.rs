@@ -10,6 +10,7 @@ const Y: LocalId = 8;
 
 fn let_stmt(id: LocalId, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -386,6 +387,7 @@ fn a_var_binding_is_never_touched() {
 
 fn var_stmt(id: LocalId, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,

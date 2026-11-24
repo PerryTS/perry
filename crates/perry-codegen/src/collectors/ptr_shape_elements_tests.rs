@@ -83,6 +83,7 @@ fn new_c() -> Expr {
 /// `const <name> = new C();`
 fn let_c(id: u32, name: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Named("C".to_string()),
@@ -102,6 +103,7 @@ fn let_arr(id: u32, name: &str) -> Stmt {
 
 fn let_arr_ty(id: u32, name: &str, ty: Type) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -159,6 +161,7 @@ fn bounded_loop(idx: u32, arr: u32, body: Vec<Stmt>) -> Stmt {
 fn bounded_loop_cond(idx: u32, condition: Expr, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: 0,
             id: idx,
             name: format!("i{idx}"),
             ty: Type::Number,
@@ -187,6 +190,7 @@ fn guarded_for_of(
     fast_body: Vec<Stmt>,
 ) -> Stmt {
     let mut lazy = vec![Stmt::Let {
+        byte_offset: 0,
         id: iterator,
         name: format!("__iterator_{iterator}"),
         ty: Type::Any,
@@ -199,6 +203,7 @@ fn guarded_for_of(
         then_branch: lazy,
         else_branch: Some(vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: fast_alias,
                 name: format!("__arr_{fast_alias}"),
                 ty: Type::Array(Box::new(Type::Named("C".to_string()))),
@@ -217,6 +222,7 @@ fn let_elem(id: u32, name: &str, arr: u32, idx: u32) -> Stmt {
 
 fn let_elem_ty(id: u32, name: &str, arr: u32, idx: u32, ty: Type) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -811,6 +817,7 @@ fn a_non_empty_array_literal_is_not_a_seed() {
     let classes = classes_of(&cs);
     let stmts = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "rows".to_string(),
             ty: Type::Array(Box::new(Type::Named("C".to_string()))),
@@ -834,6 +841,7 @@ fn a_reassignable_array_binding_is_not_a_seed() {
     let classes = classes_of(&cs);
     let stmts = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "rows".to_string(),
             ty: Type::Array(Box::new(Type::Named("C".to_string()))),
@@ -898,6 +906,7 @@ fn unbounded_element_read_is_not_provenance() {
         // the read is identical to the licensed one and the ONLY thing
         // denying it is the absence of a bounding loop.
         Stmt::Let {
+            byte_offset: 0,
             id: 5,
             name: "j".to_string(),
             ty: Type::Number,
@@ -962,6 +971,7 @@ fn a_loop_bounded_by_a_non_array_length_does_not_license_the_read() {
         let_arr(1, "rows"),
         push(1, new_c()),
         Stmt::Let {
+            byte_offset: 0,
             id: 8,
             name: "other".to_string(),
             ty: Type::Any,
@@ -1166,6 +1176,7 @@ fn an_unlicensed_element_binding_denies_the_array() {
         push(1, Expr::LocalGet(2)),
         // `const stray = rows[0];` — literal index, no bounding loop.
         Stmt::Let {
+            byte_offset: 0,
             id: 7,
             name: "stray".to_string(),
             ty: Type::Named("C".to_string()),
@@ -1214,6 +1225,7 @@ fn reads_through_an_array_alias_are_licensed() {
         push(1, Expr::LocalGet(2)),
         // `const __arr = rows;` — the for-of desugar's alias binding.
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "__arr_3".to_string(),
             ty: Type::Array(Box::new(Type::Named("C".to_string()))),
@@ -1469,6 +1481,7 @@ fn group_integrity_drops_the_aliases_of_a_dropped_member() {
         // `const a = row;` — an alias, which the ptr_shape alias pre-pass
         // tracks and hands the same fact to.
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "a".to_string(),
             ty: Type::Named("C".to_string()),

@@ -20,6 +20,7 @@ fn param(id: u32, name: &str) -> Param {
 
 fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,

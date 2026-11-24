@@ -92,6 +92,7 @@ fn scalar_loop(poison: Option<Expr>) -> String {
     assert!(class.is_literal_shape());
     let mut body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "o".into(),
             ty: Type::Named(name.into()),

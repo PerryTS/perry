@@ -292,6 +292,7 @@ mod tests {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "a".to_string(),
                     ty: Type::Any,

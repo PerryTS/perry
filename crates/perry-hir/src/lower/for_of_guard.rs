@@ -147,6 +147,7 @@ pub(crate) fn admitted_typed_array_holder(
     let name = format!("{TEMP_PREFIX}ta_{id}");
     ctx.locals.push((name.clone(), id, Type::Any));
     out.push(Stmt::Let {
+        byte_offset,
         id,
         name,
         ty: Type::Any,
@@ -272,6 +273,7 @@ fn source_for_of(
         ctx.locals
             .push((source_name.clone(), source, source_ty.clone()));
         out.push(Stmt::Let {
+            byte_offset: stmt.span.lo.0,
             id: source,
             name: source_name.clone(),
             ty: source_ty.clone(),
@@ -331,6 +333,7 @@ fn source_for_of(
         ctx.pop_block_scope(body_scope);
         let body = body?;
         let mut loop_body = vec![Stmt::Let {
+            byte_offset: stmt.span.lo.0,
             id: x,
             name,
             ty: element_ty,
@@ -346,6 +349,7 @@ fn source_for_of(
         loop_body.extend(body);
         let counted = Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: stmt.span.lo.0,
                 id: counter,
                 name: counter_name,
                 ty: Type::Number,
@@ -380,6 +384,7 @@ fn source_for_of(
             protocol_source = format!("{TEMP_PREFIX}any_{any}");
             ctx.locals.push((protocol_source.clone(), any, Type::Any));
             protocol.push(Stmt::Let {
+                byte_offset: stmt.span.lo.0,
                 id: any,
                 name: protocol_source.clone(),
                 ty: Type::Any,
@@ -432,6 +437,7 @@ fn source_for_of(
         } else {
             vec![
                 Stmt::Let {
+                    byte_offset: stmt.span.lo.0,
                     id: array,
                     name: array_name,
                     ty: array_ty,
@@ -561,6 +567,7 @@ fn literal_for_of(
             let name = format!("{TEMP_PREFIX}{id}");
             ctx.locals.push((name.clone(), id, Type::Any));
             out.push(Stmt::Let {
+                byte_offset: stmt.span.lo.0,
                 id,
                 name: name.clone(),
                 ty: Type::Any,
@@ -599,6 +606,7 @@ fn literal_for_of(
             };
         }
         let mut loop_body = vec![Stmt::Let {
+            byte_offset: stmt.span.lo.0,
             id: x,
             name,
             ty: Type::Any,
@@ -608,6 +616,7 @@ fn literal_for_of(
         loop_body.extend(body);
         let counted = Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: stmt.span.lo.0,
                 id: counter,
                 name: counter_name,
                 ty: Type::Number,

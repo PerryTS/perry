@@ -11,6 +11,7 @@ use perry_hir::{CatchClause, Param, SwitchCase};
 
 fn let_mut(id: u32, init: Option<Expr>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: HirType::Number,
@@ -21,6 +22,7 @@ fn let_mut(id: u32, init: Option<Expr>) -> Stmt {
 
 fn let_const(id: u32, value: i64) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("c{id}"),
         ty: HirType::Number,
@@ -537,6 +539,7 @@ fn a_written_bound_is_not_a_constant() {
     // reassigned, so it cannot serve as a compile-time bound.
     let stmts = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "LIMIT".into(),
             ty: HirType::Number,

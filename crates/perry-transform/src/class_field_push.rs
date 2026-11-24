@@ -91,6 +91,7 @@ fn rewrite(
             i..i,
             [
                 Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id,
                     name: "__field_push_receiver".into(),
                     ty,

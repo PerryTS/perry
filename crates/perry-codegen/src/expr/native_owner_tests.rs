@@ -16,6 +16,7 @@ fn param(id: u32, ty: Type) -> Param {
 }
 fn local(id: u32, ty: Type, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty,

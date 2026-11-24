@@ -23,6 +23,7 @@ fn ir() -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "short".into(),
                 ty: Type::Number,
@@ -44,6 +45,7 @@ fn ir() -> String {
                 }),
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 4,
                         name: "c".into(),
                         ty: Type::Any,

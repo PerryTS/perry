@@ -249,6 +249,7 @@ mod tests {
 
     fn let_array(id: u32, elements: Vec<Expr>) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("a{id}"),
             ty: Type::Any,

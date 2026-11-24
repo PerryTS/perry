@@ -14,6 +14,7 @@ fn stmt_may_expose(stmt: &Stmt, id: u32) -> bool {
 
 fn let_stmt(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Any,

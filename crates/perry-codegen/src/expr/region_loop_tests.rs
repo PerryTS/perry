@@ -84,6 +84,7 @@ fn loop_ir_with_bound(name: &str, body: Vec<Stmt>, result: Expr, bound: Expr) ->
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: H,
                 name: "h".to_string(),
                 ty: Type::Any,
@@ -92,6 +93,7 @@ fn loop_ir_with_bound(name: &str, body: Vec<Stmt>, result: Expr, bound: Expr) ->
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: I,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -733,6 +735,7 @@ fn a_region_number_local_is_admitted_only_in_f() {
     const TEMP: u32 = 6;
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: TEMP,
             name: "temp".to_string(),
             ty: Type::Any,
@@ -790,6 +793,7 @@ fn flow_derived_number_local_constant_bound_avoids_recheck() {
     const TEMP: u32 = 6;
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: TEMP,
             name: "temp".to_string(),
             ty: Type::Any,
@@ -869,6 +873,7 @@ fn invariant_boxed_bound_has_strict_entry_and_generic_fallback() {
     const TEMP: u32 = 6;
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: TEMP,
             name: "temp".to_string(),
             ty: Type::Any,

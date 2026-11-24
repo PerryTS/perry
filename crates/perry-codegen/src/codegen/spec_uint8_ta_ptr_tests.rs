@@ -19,6 +19,7 @@ const TABLE: u32 = 20;
 
 fn local(id: u32, name: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -151,6 +152,7 @@ fn specialized_clone_ir(
     module.functions.push(function);
     module.init.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: TABLE,
             name: "table".to_string(),
             ty: Type::Named("Uint8Array".to_string()),

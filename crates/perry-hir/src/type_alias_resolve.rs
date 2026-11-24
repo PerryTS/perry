@@ -843,6 +843,7 @@ mod tests {
             }],
             return_type: Type::Named("ComponentId".into()),
             body: vec![Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "x".into(),
                 ty: id_ty.clone(),
@@ -853,6 +854,7 @@ mod tests {
                     params: vec![],
                     return_type: id_ty.clone(),
                     body: vec![Stmt::Let {
+                        byte_offset: 0,
                         id: 2,
                         name: "y".into(),
                         ty: id_ty.clone(),

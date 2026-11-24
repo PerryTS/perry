@@ -640,6 +640,7 @@ mod tests {
                     "byte_local_owner",
                     vec![
                         Stmt::Let {
+                            byte_offset: 0,
                             id: 1,
                             name: "bytes".into(),
                             ty: Type::Named("Uint32Array".into()),
@@ -650,6 +651,7 @@ mod tests {
                             }),
                         },
                         Stmt::Let {
+                            byte_offset: 0,
                             id: 2,
                             name: "alias".into(),
                             ty: Type::Named("Uint32Array".into()),

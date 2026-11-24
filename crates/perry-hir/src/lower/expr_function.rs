@@ -287,6 +287,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
             let id = ctx.define_local(name.clone(), Type::Any);
             ctx.var_hoisted_ids.insert(id);
             param_eval_var_stmts.push(Stmt::Let {
+                byte_offset: arrow.span.lo.0,
                 id,
                 name,
                 ty: Type::Any,
@@ -561,6 +562,7 @@ fn lower_named_fn_expr(
     let wrapper_func_id = ctx.fresh_func();
     let body = vec![
         Stmt::Let {
+            byte_offset: fn_expr.function.span.lo.0,
             id: self_id,
             name: own_name,
             ty: Type::Any,
@@ -927,6 +929,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                                 // loop body's `hasOwnProperty.call(o, propName)`
                                 // saw `undefined` and dropped every prop.
                                 nested_var_prologue.push(Stmt::Let {
+                                    byte_offset: fn_expr.function.span.lo.0,
                                     id,
                                     name,
                                     ty,
@@ -1071,6 +1074,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                     // later reuses the slot via the var-redeclaration
                     // path).
                     nested_var_prologue.push(Stmt::Let {
+                        byte_offset: fn_expr.function.span.lo.0,
                         id,
                         name,
                         ty: Type::Any,
@@ -1124,6 +1128,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
                         ctx.define_local(name.clone(), Type::Any)
                     };
                 nested_var_prologue.push(Stmt::Let {
+                    byte_offset: fn_expr.function.span.lo.0,
                     id,
                     name: name.clone(),
                     ty: Type::Any,
@@ -1625,6 +1630,7 @@ pub(crate) fn apply_class_expr_capture_refreshes(
     for (owner, ids, env_class, byte_offset) in entries {
         if seen_owners.insert(owner) {
             owner_lets.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: owner,
                 name: format!("__perry_class_expr_capture_owner_{owner}"),
                 ty: crate::types::Type::Any,

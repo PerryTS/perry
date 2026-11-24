@@ -98,6 +98,7 @@ pub(super) fn lower(
         return Ok(false);
     }
     let candidate_init = Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: *counter,
         name: String::new(),
         ty: perry_hir::types::Type::Number,
@@ -474,6 +475,7 @@ mod tests {
     }
     fn local(id: u32, ty: Type, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("record_{id}"),
             ty,
@@ -822,6 +824,7 @@ mod tests {
                     )),
                     Stmt::Expr(Expr::LocalSet(4, Box::new(Expr::Number(0.0)))),
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 8,
                         name: "word".into(),
                         ty: Type::String,
@@ -903,6 +906,7 @@ mod tests {
             }),
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 3,
                     name: "x".into(),
                     ty: Type::Number,

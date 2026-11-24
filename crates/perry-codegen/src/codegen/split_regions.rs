@@ -1108,6 +1108,7 @@ fn try_extract(
         let value = retype(id, value, ctx);
         if let Some((_, name, ty, mutable)) = top_lets.iter().find(|t| t.0 == id) {
             Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name: name.clone(),
                 ty: ty.clone(),
@@ -1122,6 +1123,7 @@ fn try_extract(
     for id in &decl_in_parent {
         if let Some((_, name, ty, _)) = top_lets.iter().find(|t| t.0 == *id) {
             calls.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: *id,
                 name: name.clone(),
                 ty: ty.clone(),
@@ -1142,6 +1144,7 @@ fn try_extract(
         _ => {
             let tmp = sh.fresh_local(u32::MAX);
             calls.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: tmp,
                 name: "__region_out".to_string(),
                 ty: Type::Any,

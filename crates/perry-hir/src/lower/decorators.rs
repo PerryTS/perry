@@ -271,6 +271,7 @@ fn append_decorator_invocations_inner(
         if dec.is_factory {
             let temp_id = ctx.fresh_local();
             out.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: temp_id,
                 name: format!("__perry_dec_{}", temp_id),
                 ty: Type::Function(FunctionType {
@@ -306,6 +307,7 @@ fn append_decorator_invocations_inner(
             Some(class_name) => {
                 let ret_id = ctx.fresh_local();
                 out.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: ret_id,
                     name: format!("__perry_dec_ret_{}", ret_id),
                     ty: Type::Any,

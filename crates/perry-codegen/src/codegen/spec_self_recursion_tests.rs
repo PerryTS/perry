@@ -115,6 +115,7 @@ fn guarded_recursive_module(lhs: Expr, rhs: Expr) -> Module {
     let mut module = recursive_module(lhs, rhs);
     module.init.clear();
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 20,
         name: "k".to_string(),
         ty: Type::Any,

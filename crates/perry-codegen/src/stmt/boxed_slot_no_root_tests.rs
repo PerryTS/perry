@@ -102,6 +102,7 @@ fn module_with_boxed_local() -> Module {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ACC,
                 name: "acc".to_string(),
                 ty: Type::Any,
@@ -109,6 +110,7 @@ fn module_with_boxed_local() -> Module {
                 init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: BUMP,
                 name: "bump".to_string(),
                 ty: Type::Any,
@@ -135,6 +137,7 @@ fn module_with_boxed_local() -> Module {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: PLAIN,
                 name: "plain".to_string(),
                 ty: Type::Any,

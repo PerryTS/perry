@@ -120,6 +120,7 @@ fn iterator_next_value_stmts(
     let (step_id, step_name) = fresh_destruct_local(ctx, Type::Boolean);
     let mut pull_next = vec![
         Stmt::Let {
+            byte_offset,
             id: step_id,
             name: step_name,
             ty: Type::Boolean,
@@ -213,6 +214,7 @@ pub(crate) fn lower_array_pattern_binding(
 ) -> Result<()> {
     let (iter_id, iter_name) = fresh_destruct_local(ctx, Type::Any);
     result.push(Stmt::Let {
+        byte_offset: arr_pat.span.lo.0,
         id: iter_id,
         name: iter_name,
         ty: Type::Any,
@@ -221,6 +223,7 @@ pub(crate) fn lower_array_pattern_binding(
     });
     let (next_id, next_name) = fresh_destruct_local(ctx, Type::Any);
     result.push(Stmt::Let {
+        byte_offset: arr_pat.span.lo.0,
         id: next_id,
         name: next_name,
         ty: Type::Any,
@@ -229,6 +232,7 @@ pub(crate) fn lower_array_pattern_binding(
     });
     let (done_id, done_name) = fresh_destruct_local(ctx, Type::Boolean);
     result.push(Stmt::Let {
+        byte_offset: arr_pat.span.lo.0,
         id: done_id,
         name: done_name,
         ty: Type::Boolean,
@@ -244,6 +248,7 @@ pub(crate) fn lower_array_pattern_binding(
             None => {
                 let (value_id, value_name) = fresh_destruct_local(ctx, Type::Any);
                 body.push(Stmt::Let {
+                    byte_offset: arr_pat.span.lo.0,
                     id: value_id,
                     name: value_name,
                     ty: Type::Any,
@@ -269,6 +274,7 @@ pub(crate) fn lower_array_pattern_binding(
                 if track_step_failure {
                     let (saved_done_id, rest_done_name) = fresh_destruct_local(ctx, Type::Boolean);
                     body.push(Stmt::Let {
+                        byte_offset: arr_pat.span.lo.0,
                         id: saved_done_id,
                         name: rest_done_name,
                         ty: Type::Boolean,
@@ -308,6 +314,7 @@ pub(crate) fn lower_array_pattern_binding(
             Some(elem_pat) => {
                 let (value_id, value_name) = fresh_destruct_local(ctx, Type::Any);
                 body.push(Stmt::Let {
+                    byte_offset: arr_pat.span.lo.0,
                     id: value_id,
                     name: value_name,
                     ty: Type::Any,
@@ -597,6 +604,7 @@ pub(crate) fn lower_pattern_binding_into(
                 ctx.mark_local_immutable(id);
             }
             result.push(Stmt::Let {
+                byte_offset: pat.span().lo.0,
                 id,
                 name,
                 ty,
@@ -614,6 +622,7 @@ pub(crate) fn lower_pattern_binding_into(
             let tmp_name = format!("__destruct_{}", tmp_id);
             ctx.locals.push((tmp_name.clone(), tmp_id, Type::Any));
             result.push(Stmt::Let {
+                byte_offset: pat.span().lo.0,
                 id: tmp_id,
                 name: tmp_name,
                 ty: Type::Any,
@@ -683,6 +692,7 @@ pub(crate) fn lower_pattern_binding_into(
             // arm ignores (it reads `args.first()` only), so emitted output is
             // unchanged when the flag is off.
             result.push(Stmt::Let {
+                byte_offset: pat.span().lo.0,
                 id: tmp_id,
                 name: tmp_name,
                 ty: obj_ty,
@@ -774,6 +784,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 let index_expr = lower_expr(ctx, &computed.expr)?;
                                 let (key_id, key_name) = fresh_destruct_local(ctx, Type::Any);
                                 result.push(Stmt::Let {
+                                    byte_offset: pat.span().lo.0,
                                     id: key_id,
                                     name: key_name,
                                     ty: Type::Any,
@@ -879,6 +890,7 @@ pub(crate) fn lower_pattern_binding_into(
                             ctx.locals
                                 .push((val_tmp_name.clone(), val_tmp_id, Type::Any));
                             result.push(Stmt::Let {
+                                byte_offset: pat.span().lo.0,
                                 id: val_tmp_id,
                                 name: val_tmp_name,
                                 ty: Type::Any,
@@ -910,6 +922,7 @@ pub(crate) fn lower_pattern_binding_into(
                             }
                         };
                         result.push(Stmt::Let {
+                            byte_offset: pat.span().lo.0,
                             id,
                             name,
                             ty,
@@ -941,6 +954,7 @@ pub(crate) fn lower_pattern_binding_into(
                             // source.
                             let (rest_id, rest_name) = fresh_destruct_local(ctx, Type::Any);
                             result.push(Stmt::Let {
+                                byte_offset: pat.span().lo.0,
                                 id: rest_id,
                                 name: rest_name,
                                 ty: Type::Any,

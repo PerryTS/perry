@@ -166,6 +166,7 @@ fn constructor_body_arithmetic_is_a_first_write() {
         vec![number_param(1)],
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "t".to_string(),
                 ty: Type::Any,

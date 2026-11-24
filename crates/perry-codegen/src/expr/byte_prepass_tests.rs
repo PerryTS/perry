@@ -107,6 +107,7 @@ fn unregistered_writes_and_intrinsics_resolve_per_access() {
                 let mut body = vec![];
                 if local {
                     body.push(Stmt::Let {
+                        byte_offset: 0,
                         id: 1,
                         name: "view".into(),
                         ty: Type::Named(class.into()),
@@ -199,6 +200,7 @@ fn loop_writes_register_before_local_initializers_and_callbacks() {
             let mut loop_stmts = vec![];
             if local {
                 loop_stmts.push(Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "view".into(),
                     ty: Type::Named("Uint8Array".into()),
@@ -380,6 +382,7 @@ fn shared_and_native_byte_views_take_the_runtime_arm() {
             module.functions.push(function(
                 vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 4,
                         name: "owner".into(),
                         ty: Type::Any,
@@ -387,6 +390,7 @@ fn shared_and_native_byte_views_take_the_runtime_arm() {
                         init: Some(owner),
                     },
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 1,
                         name: "view".into(),
                         ty: Type::Named(if buffer { "Buffer" } else { "Uint8Array" }.into()),
@@ -450,6 +454,7 @@ fn shared_and_native_byte_views_take_the_runtime_arm() {
 fn reassigned_module_table_cannot_get_a_fixed_receiver() {
     let mut module = Module::new("reassigned.ts");
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "table".into(),
         ty: Type::Named("Uint8Array".into()),

@@ -53,6 +53,7 @@ fn ir(module: &Module) -> String {
 fn closure_value_call_ir(file: &str, argc: usize) -> String {
     let mut module = Module::new(file);
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         ty: function_type(argc),

@@ -346,6 +346,7 @@ fn indirect_closure_module(site_count: u32, call_in_loop: bool) -> Module {
 
     for i in 0..site_count {
         m.init.push(Stmt::Let {
+            byte_offset: 0,
             id: STAGE_LOCAL_BASE + i,
             name: format!("stage_{i}"),
             ty: Type::Any,

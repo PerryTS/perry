@@ -566,6 +566,7 @@ fn idxset_inbounds_ir_for_target(target: Option<&str>) -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ARR_ID,
                 name: "a".to_string(),
                 ty: Type::Any,
@@ -574,6 +575,7 @@ fn idxset_inbounds_ir_for_target(target: Option<&str>) -> String {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: IDX_ID,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -627,6 +629,7 @@ fn idxset_recv_global_ir() -> String {
     const G_ID: u32 = 30;
     let mut m = Module::new("idxset_recv_global_census.ts");
     m.init = vec![Stmt::Let {
+        byte_offset: 0,
         id: G_ID,
         name: "g".to_string(),
         // An ARRAY-typed global is what keeps the store on the typed lane at
@@ -655,6 +658,7 @@ fn idxset_recv_global_ir() -> String {
         body: vec![
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: IDX_ID,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -755,6 +759,7 @@ fn idxset_recv_captured_ir() -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ARR_ID,
                 name: "a".to_string(),
                 ty: Type::Any,
@@ -762,6 +767,7 @@ fn idxset_recv_captured_ir() -> String {
                 init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: FILL_ID,
                 name: "fill".to_string(),
                 ty: Type::Any,
@@ -773,6 +779,7 @@ fn idxset_recv_captured_ir() -> String {
                     return_type: Type::Any,
                     body: vec![Stmt::For {
                         init: Some(Box::new(Stmt::Let {
+                            byte_offset: 0,
                             id: IDX_ID,
                             name: "i".to_string(),
                             ty: Type::Number,
@@ -846,6 +853,7 @@ fn apush_ir() -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ARR_ID,
                 name: "a".to_string(),
                 ty: Type::Any,
@@ -1022,6 +1030,7 @@ fn idxset_bounded_ir_with(quiet: bool) -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ARR_ID,
                 name: "a".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
@@ -1030,6 +1039,7 @@ fn idxset_bounded_ir_with(quiet: bool) -> String {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: IDX_ID,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -1211,6 +1221,7 @@ fn generator_state_ir() -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "confined".into(),
                 ty: Type::Any,

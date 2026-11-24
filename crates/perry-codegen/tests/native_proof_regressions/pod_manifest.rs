@@ -59,6 +59,7 @@ fn nested_pod_initializers_and_local_assignments_preserve_value_semantics() {
                 ],
             ),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "copy".to_string(),
                 ty: packet_ty,
@@ -112,6 +113,7 @@ fn pod_local_assigned_to_any_stays_at_the_managed_boundary() {
         vec![
             pod_let(1, "packet", packet_ty, vec![("tag", int(7))]),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "managed".to_string(),
                 ty: Type::Any,
@@ -163,6 +165,7 @@ fn checked_native_scalar_conversions_keep_dynamic_pod_initializers_native() {
         "checked_native_scalar_pod_init.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "input".to_string(),
                 ty: Type::Number,
@@ -287,6 +290,7 @@ fn mismatched_checked_native_scalar_conversion_does_not_prove_pod_field() {
         "mismatched_checked_native_scalar_pod_init.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "input".to_string(),
                 ty: Type::Number,
@@ -597,6 +601,7 @@ fn native_pod_view_explicit_public_type_lowers_without_left_hand_annotation() {
         vec![
             native_arena_owner_let(1, "owner", int(4096), false),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "view".to_string(),
                 ty: view_ty.clone(),
@@ -632,6 +637,7 @@ fn native_pod_view_length_survives_immutable_local_alias() {
             native_arena_owner_let(1, "owner", int(4096), false),
             native_pod_view_let(2, "direct", view_ty.clone(), 1, int(0), int(8)),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "alias".to_string(),
                 ty: view_ty,
@@ -677,6 +683,7 @@ fn native_pod_view_embedded_type_survives_any_expected_type() {
         vec![
             native_arena_owner_let(1, "owner", int(4096), false),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "view".to_string(),
                 ty: Type::Any,

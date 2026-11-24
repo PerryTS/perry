@@ -446,6 +446,7 @@ mod tests {
             let mut m = fixture();
             if alias {
                 m.init.push(Stmt::Let {
+                    byte_offset: 0,
                     id: 90,
                     name: "alias".into(),
                     ty: Type::Any,
@@ -553,6 +554,7 @@ mod tests {
             };
             m.init = vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 90,
                     name: "arbitrary_source_name".into(),
                     ty: Type::Any,
@@ -564,6 +566,7 @@ mod tests {
             match mode {
                 1 => m.init.push(Stmt::Return(Some(Expr::LocalGet(90)), 0)),
                 2 => m.init.push(Stmt::Let {
+                    byte_offset: 0,
                     id: 91,
                     name: "alias".into(),
                     ty: Type::Any,

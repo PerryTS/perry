@@ -138,6 +138,7 @@ pub(crate) fn lower_module_decl(
                     }
                     let id = ctx.define_local(local.clone(), Type::Any);
                     module.init.push(Stmt::Let {
+                        byte_offset: import_decl.span.lo.0,
                         id,
                         name: local,
                         ty: Type::Any,
@@ -1261,6 +1262,7 @@ pub(crate) fn lower_module_decl(
                             };
                             ctx.record_local_source_span(id, decl.name.span());
                             module.init.push(Stmt::Let {
+                                byte_offset: decl.span.lo.0,
                                 id,
                                 name: name.clone(),
                                 ty,
@@ -1340,6 +1342,7 @@ pub(crate) fn lower_module_decl(
                             };
                             ctx.record_local_source_span(id, decl.name.span());
                             module.init.push(Stmt::Let {
+                                byte_offset: decl.span.lo.0,
                                 id,
                                 name: name.clone(),
                                 ty,
@@ -1649,7 +1652,9 @@ pub(crate) fn lower_module_decl(
                         }
 
                         let local = default_export_binding::materialize_native_default_alias(
-                            ctx, module, &local,
+                            ctx,
+                            module,
+                            &local,
                             named.span.lo.0,
                         );
                         module.exports.push(Export::Named {
@@ -2022,6 +2027,7 @@ pub(crate) fn lower_module_decl(
                 // For other expressions (closures, calls, etc.), create a synthetic "default" variable
                 let id = ctx.define_local("default".to_string(), Type::Any);
                 module.init.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id,
                     name: "default".to_string(),
                     ty: Type::Any,

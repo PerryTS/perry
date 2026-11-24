@@ -279,6 +279,7 @@ fn rewrite_run(run: &mut [Stmt], next_local_id: &mut LocalId) -> Vec<(usize, Stm
         hoists.push((
             at,
             Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name: format!("__perry_cse_{}_{}", key.1, id),
                 // `Any` — the hoist must not claim knowledge the read did not

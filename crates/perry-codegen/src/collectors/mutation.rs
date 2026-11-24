@@ -637,6 +637,7 @@ mod tests {
 
     fn row_alias(id: u32, array_id: u32) -> perry_hir::Stmt {
         perry_hir::Stmt::Let {
+            byte_offset: 0,
             id,
             name: "row".to_string(),
             ty: perry_hir::types::Type::Any,
@@ -786,6 +787,7 @@ mod tests {
         let nested = perry_hir::Stmt::While {
             condition: Expr::Bool(true),
             body: vec![perry_hir::Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "x".to_string(),
                 ty: perry_hir::types::Type::Number,

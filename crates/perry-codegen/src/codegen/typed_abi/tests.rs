@@ -116,6 +116,7 @@ fn f64_clone_accepts_raw_i32_locals_before_numeric_return() {
         vec![param(10, "n", Type::Number), param(11, "i", Type::Int32)],
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 12,
                 name: "mask".to_string(),
                 ty: Type::Int32,

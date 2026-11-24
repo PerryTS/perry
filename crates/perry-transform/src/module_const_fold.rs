@@ -609,6 +609,7 @@ mod string_initializer_tests {
 
     fn let_const(id: u32, mutable: bool, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("k{id}"),
             ty: Type::Any,
@@ -760,6 +761,7 @@ mod tests {
     fn module_with_const(mutable: bool, init: Expr) -> Module {
         let mut m = Module::new("types.ts");
         m.init.push(Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "COMPONENT_ID_MAX".to_string(),
             ty: Type::Number,
@@ -864,6 +866,7 @@ mod tests {
     fn a_const_string_key_read_becomes_a_property_get() {
         let mut m = Module::new("k.ts");
         m.init.push(Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "K".to_string(),
             ty: Type::String,
@@ -993,6 +996,7 @@ mod tests {
 
     fn local_const_k(id: u32, lit: &str) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: "K".to_string(),
             ty: Type::String,
@@ -1130,6 +1134,7 @@ mod tests {
             is_strict: true,
         });
         let mutable = Stmt::Let {
+            byte_offset: 0,
             id: 5,
             name: "K".to_string(),
             ty: Type::String,
@@ -1137,6 +1142,7 @@ mod tests {
             init: Some(Expr::String("c".to_string())),
         };
         let computed = Stmt::Let {
+            byte_offset: 0,
             id: 5,
             name: "K".to_string(),
             ty: Type::String,

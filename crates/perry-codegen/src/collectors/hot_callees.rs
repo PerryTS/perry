@@ -907,6 +907,7 @@ mod recursion_participant_tests {
     fn expanded_field_push(recv_id: u32) -> Vec<Stmt> {
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: recv_id,
                 name: FIELD_PUSH_RECEIVER_NAME.to_string(),
                 ty: Type::Any,

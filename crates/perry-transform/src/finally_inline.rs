@@ -264,6 +264,7 @@ fn process_stmts(
                         let id = *next_local_id;
                         *next_local_id += 1;
                         out.push(Stmt::Let {
+                            byte_offset: 0, /*HPOS*/
                             id,
                             name: format!("__finally_ret_{}", id),
                             ty: Type::Any,
@@ -354,6 +355,7 @@ fn process_stmts(
                     body.insert(
                         0,
                         Stmt::Let {
+                            byte_offset: 0, /*HPOS*/
                             id,
                             name: format!("__finally_exited_{}", id),
                             ty: Type::Boolean,

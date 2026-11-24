@@ -87,6 +87,7 @@ fn native_owned_typed_array_fallback_reasons_are_explicit() {
                 int(8),
             ),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "alias".to_string(),
                 ty: Type::Named("Float64Array".to_string()),
@@ -235,6 +236,7 @@ fn typed_array_alias_read_keeps_the_proven_view() {
             int(8),
         ),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "alias".to_string(),
             ty: Type::Named("Uint16Array".to_string()),
@@ -285,6 +287,7 @@ fn alias_of_an_exposed_typed_array_records_runtime_fallback() {
             property: "buffer".to_string(),
         }),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "alias".to_string(),
             ty: Type::Named("Uint16Array".to_string()),
@@ -315,6 +318,7 @@ fn alias_of_an_exposed_typed_array_records_runtime_fallback() {
 fn reassigned_typed_array_store_records_runtime_fallback() {
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "array".to_string(),
             ty: Type::Named("Int32Array".to_string()),

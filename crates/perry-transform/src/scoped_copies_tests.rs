@@ -24,6 +24,7 @@ fn function(body: Vec<Stmt>) -> Function {
 
 fn bind(id: u32, ty: Type, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty,

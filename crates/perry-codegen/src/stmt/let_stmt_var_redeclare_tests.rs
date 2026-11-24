@@ -32,6 +32,7 @@ fn var_redeclared_numeric_array_compare_against_void_stays_boxed() {
             // Body-entry predefine: `var arr;` before the real declaration
             // runs — declared `Any`, matching what hoisting emits.
             Stmt::Let {
+                byte_offset: 0,
                 id: ARR,
                 name: "arr".to_string(),
                 ty: Type::Any,
@@ -41,6 +42,7 @@ fn var_redeclared_numeric_array_compare_against_void_stays_boxed() {
             // The real declaration: same id, now a proven `Array(Number)`.
             // This is the REDECLARATION path in `lower_let` (#1803).
             Stmt::Let {
+                byte_offset: 0,
                 id: ARR,
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -48,6 +50,7 @@ fn var_redeclared_numeric_array_compare_against_void_stays_boxed() {
                 init: Some(Expr::Array(vec![Expr::Integer(0)], None)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: R,
                 name: "r".to_string(),
                 ty: Type::Any,
@@ -93,6 +96,7 @@ fn let_numeric_array_compare_against_void_stays_boxed() {
         "let_void_compare",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ARR,
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -100,6 +104,7 @@ fn let_numeric_array_compare_against_void_stays_boxed() {
                 init: Some(Expr::Array(vec![Expr::Integer(0)], None)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: R,
                 name: "r".to_string(),
                 ty: Type::Any,

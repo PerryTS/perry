@@ -1813,6 +1813,7 @@ fn a_put_value_set_key_is_re_derived_below_the_value() {
         "put_value_set_key.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 0,
                 name: "o".to_string(),
                 ty: perry_hir::types::Type::Any,

@@ -1128,6 +1128,7 @@ mod region_number_tests {
 
     fn let_read(id: u32) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("n{id}"),
             ty: perry_hir::types::Type::Any,

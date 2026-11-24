@@ -71,6 +71,7 @@ fn module_ir(quiet: bool) -> String {
         byte_offset: 0,
     }));
     let counter = Stmt::Let {
+        byte_offset: 0,
         id: I,
         name: "i".to_string(),
         ty: Type::Number,
@@ -121,6 +122,7 @@ fn module_ir(quiet: bool) -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: S,
                 name: "s".to_string(),
                 ty: Type::Any,

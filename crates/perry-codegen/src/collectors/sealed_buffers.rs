@@ -961,6 +961,7 @@ mod proven_read_tests {
     fn module() -> Module {
         let mut hir = Module::new("sealed_proven_read");
         hir.init.push(Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "buf".to_string(),
             ty: Type::Named("Buffer".to_string()),

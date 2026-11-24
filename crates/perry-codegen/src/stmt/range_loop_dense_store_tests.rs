@@ -90,6 +90,7 @@ fn accumulate() -> Stmt {
 
 fn alias(id: u32, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -127,6 +128,7 @@ fn module_ir_with_x(body: Vec<Stmt>, x_arg: Expr) -> String {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: S,
                 name: "s".to_string(),
                 ty: Type::Number,
@@ -135,6 +137,7 @@ fn module_ir_with_x(body: Vec<Stmt>, x_arg: Expr) -> String {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: I,
                     name: "i".to_string(),
                     ty: Type::Number,

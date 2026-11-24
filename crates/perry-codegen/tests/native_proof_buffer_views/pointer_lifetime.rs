@@ -215,6 +215,7 @@ fn backing_buffer_exposure_invalidates_copied_view_alias_group() {
             int(1),
         ),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "alias".to_string(),
             ty: Type::Named("Uint32Array".to_string()),

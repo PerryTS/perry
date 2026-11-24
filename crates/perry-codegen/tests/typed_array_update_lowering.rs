@@ -55,6 +55,7 @@ fn module_with_update(receiver: (Type, Expr), op: BinaryOp, prefix: bool) -> Mod
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "a".to_string(),
                 ty,

@@ -65,6 +65,7 @@ fn tdz_finally_allocates_on_normal_and_exception_paths() {
         finally: Some(vec![
             Stmt::PreallocateTdzBoxes(vec![10]),
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "value".into(),
                 ty: Type::Any,

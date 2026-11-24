@@ -140,6 +140,7 @@ fn native_abi_dynamic_array_assignment_passes_its_own_strictness() {
             "dynamic_array_abi",
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "array".into(),
                     ty: Type::Array(Box::new(Type::Number)),
@@ -147,6 +148,7 @@ fn native_abi_dynamic_array_assignment_passes_its_own_strictness() {
                     init: Some(Expr::Array(vec![Expr::Number(0.0)], None)),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "key".into(),
                     ty: Type::Any,

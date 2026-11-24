@@ -56,6 +56,7 @@ fn stamp_self_constructions(ctx: &mut LoweringContext, class_name: &str, body: &
     body.insert(
         0,
         Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: eval_id,
             name: "__perry_class_env_evaluation".to_string(),
             ty: Type::Any,
@@ -611,6 +612,7 @@ pub fn synthesize_class_captures(
                 }
             };
             prologue.push(Stmt::Let {
+                byte_offset: class_offset,
                 id: new_id,
                 name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 ty,
@@ -743,6 +745,7 @@ pub fn synthesize_class_captures(
             let new_id = ctx.fresh_local();
             id_map.insert(outer_id, new_id);
             prologue.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: new_id,
                 name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 ty: captured_outer_types
@@ -790,6 +793,7 @@ pub fn synthesize_class_captures(
             let new_id = ctx.fresh_local();
             id_map.insert(outer_id, new_id);
             prologue.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: new_id,
                 name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 ty: captured_outer_types
@@ -841,6 +845,7 @@ pub fn synthesize_class_captures(
             let new_id = ctx.fresh_local();
             id_map.insert(outer_id, new_id);
             prologue.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: new_id,
                 name: crate::cap_fields::cap_field_name(cap_salt, outer_id),
                 ty: captured_outer_types

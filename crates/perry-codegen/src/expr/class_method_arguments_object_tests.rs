@@ -239,6 +239,7 @@ fn module_with_tail(tail: Param) -> Module {
     }];
     m.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: RECV_ID,
             name: "t".to_string(),
             ty: Type::Named("T".to_string()),

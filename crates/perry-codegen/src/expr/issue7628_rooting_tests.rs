@@ -129,6 +129,7 @@ fn assert_operand_reread_below(ir: &str, writer: &str, n: usize, reader: &str, w
 fn with_object_local(tail: Stmt) -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 0,
             name: "o".to_string(),
             ty: Type::Any,
@@ -289,6 +290,7 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
         "issue7628_result_no_root",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 0,
                 name: "nums".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),

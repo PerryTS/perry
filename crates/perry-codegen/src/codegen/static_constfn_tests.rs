@@ -849,6 +849,7 @@ fn completed_builder_publishes_the_spill_layout_and_declared_callee() {
     function.return_type = Type::Number;
     module.functions.push(function);
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "N".into(),
         ty: Type::Any,
@@ -872,6 +873,7 @@ fn completed_builder_publishes_the_spill_layout_and_declared_callee() {
         byte_end: 0,
     }));
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 51,
         name: "original".into(),
         ty: Type::Any,
@@ -982,6 +984,7 @@ fn fused_private_method_probe_never_matches_a_zero_word() {
     let mut module = Module::new("private_probe.ts");
     module.classes = vec![c];
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "o".into(),
         ty: Type::Any,

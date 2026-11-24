@@ -185,6 +185,7 @@ fn ir_for(name: &str, init: Vec<Stmt>) -> String {
 
 fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -428,6 +429,7 @@ fn numeric_only_scalar_replaced_array_emits_no_rooting() {
 fn scalar_replaced_split_parts_are_bound() {
     let _pin = NativeRootsPin::shadow();
     let source = Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "s".to_string(),
         ty: Type::String,

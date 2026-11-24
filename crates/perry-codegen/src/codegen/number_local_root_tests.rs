@@ -194,6 +194,7 @@ fn closure_module() -> Module {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 21,
                 name: "flags".into(),
                 ty: Type::Number,
@@ -201,6 +202,7 @@ fn closure_module() -> Module {
                 init: Some(Expr::Integer(0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 22,
                 name: "any".into(),
                 ty: Type::Any,

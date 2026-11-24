@@ -595,6 +595,7 @@ pub(crate) fn build_yield_star_return_routes(
 
         // let __m = iterator.return;
         let read_method = Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: m_id,
             name: "__yield_star_ret_m".to_string(),
             ty: Type::Any,
@@ -635,6 +636,7 @@ pub(crate) fn build_yield_star_return_routes(
         };
         // let __r = await __m.call(iterator, v);
         let call_ret = Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: r_id,
             name: "__yield_star_ret_r".to_string(),
             ty: Type::Any,
@@ -715,6 +717,7 @@ pub(crate) fn build_yield_star_return_routes(
                 ))];
             }
             let call_ret = Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: r_id,
                 name: "__yield_star_ret_r".to_string(),
                 ty: Type::Any,
@@ -865,6 +868,7 @@ pub(crate) fn build_yield_star_throw_routes(
 
         // let __m = iterator.throw;
         let read_method = Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: m_id,
             name: "__yield_star_throw_m".to_string(),
             ty: Type::Any,
@@ -886,6 +890,7 @@ pub(crate) fn build_yield_star_throw_routes(
         //   }
         //   throw new TypeError("The iterator does not provide a 'throw' method");
         let read_return = Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: ret_m_id,
             name: "__yield_star_close_m".to_string(),
             ty: Type::Any,
@@ -916,6 +921,7 @@ pub(crate) fn build_yield_star_throw_routes(
             },
             then_branch: vec![
                 Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: ic_id,
                     name: "__yield_star_close_r".to_string(),
                     ty: Type::Any,

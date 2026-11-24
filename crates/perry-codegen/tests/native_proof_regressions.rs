@@ -508,6 +508,7 @@ fn manifest_pod_view_abi(
 
 fn pod_let(id: u32, name: &str, ty: Type, fields: Vec<(&str, Expr)>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -523,6 +524,7 @@ fn pod_let(id: u32, name: &str, ty: Type, fields: Vec<(&str, Expr)>) -> Stmt {
 
 fn number_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -533,6 +535,7 @@ fn number_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
 
 fn string_let(id: u32, name: &str, value: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::String,
@@ -557,6 +560,7 @@ fn set_type(value: Type) -> Type {
 
 fn buffer_let(id: u32, name: &str, size: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Named("Buffer".to_string()),
@@ -572,6 +576,7 @@ fn buffer_let(id: u32, name: &str, size: Expr) -> Stmt {
 #[allow(dead_code)] // shared HIR-builder vocabulary retained for sibling regressions
 fn typed_array_let(id: u32, name: &str, class_name: &str, kind: u8, length: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Named(class_name.to_string()),
@@ -591,6 +596,7 @@ fn uint8array_computed_string_key_uses_complete_set_dispatch() {
         // canonical receiver-aware setter, and its assigned value remains
         // available to the enclosing expression.
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "assigned".to_string(),
             ty: Type::Number,
@@ -643,6 +649,7 @@ fn uint8array_computed_string_key_uses_complete_set_dispatch() {
 
 fn native_arena_owner_let(id: u32, name: &str, byte_length: Expr, mutable: bool) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -660,6 +667,7 @@ fn native_pod_view_let(
     count: Expr,
 ) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -683,6 +691,7 @@ fn native_arena_view_let(
     length: Expr,
 ) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Named(class_name.to_string()),
@@ -698,6 +707,7 @@ fn native_arena_view_let(
 
 fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Array(Box::new(Type::Number)),
@@ -708,6 +718,7 @@ fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
 
 fn int32_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Array(Box::new(Type::Int32)),
@@ -718,6 +729,7 @@ fn int32_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
 
 fn u32_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Array(Box::new(Type::Named("PerryU32".to_string()))),
@@ -943,6 +955,7 @@ fn local_type_hints_never_answer_truthiness() {
         // Erased declarations can lie at the initializer without any later
         // LocalSet for the reassignment collector to find.
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "declared_number_holds_string".to_string(),
             ty: Type::Number,
@@ -951,6 +964,7 @@ fn local_type_hints_never_answer_truthiness() {
         },
         truthiness_probe(local(1)),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "declared_boolean_holds_number".to_string(),
             ty: Type::Boolean,
@@ -960,6 +974,7 @@ fn local_type_hints_never_answer_truthiness() {
         truthiness_probe(local(2)),
         // Initializer refinement is equally stale after a write.
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "refined_number_reassigned".to_string(),
             ty: Type::Any,
@@ -986,6 +1001,7 @@ fn local_type_hints_never_answer_truthiness() {
 fn array_isarray_reassigned_local_uses_runtime_predicate() {
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "number_to_array".to_string(),
             ty: Type::Any,
@@ -995,6 +1011,7 @@ fn array_isarray_reassigned_local_uses_runtime_predicate() {
         Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Array(vec![int(1)], None)))),
         Stmt::Expr(Expr::ArrayIsArray(Box::new(local(1)))),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "array_to_number".to_string(),
             ty: Type::Any,
@@ -1004,6 +1021,7 @@ fn array_isarray_reassigned_local_uses_runtime_predicate() {
         Stmt::Expr(Expr::LocalSet(2, Box::new(int(0)))),
         Stmt::Expr(Expr::ArrayIsArray(Box::new(local(2)))),
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "unchanged_array".to_string(),
             ty: Type::Any,
@@ -2228,6 +2246,7 @@ fn scalar_replaced_raw_f64_field_store_keeps_numeric_array_fallback_boxed() {
         Type::Number,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "packet".to_string(),
                 ty: packet_ty,
@@ -2241,11 +2260,7 @@ fn scalar_replaced_raw_f64_field_store_keeps_numeric_array_fallback_boxed() {
             Stmt::Expr(Expr::PropertySet {
                 object: Box::new(local(2)),
                 property: "gain".to_string(),
-                value: Box::new(Expr::index_get_at(
-                    Box::new(local(3)),
-                    Box::new(int(0)),
-                    0,
-                )),
+                value: Box::new(Expr::index_get_at(Box::new(local(3)), Box::new(int(0)), 0)),
                 byte_offset: 0,
                 byte_end: 0,
             }),
@@ -2453,6 +2468,7 @@ fn representation_first_numeric_reassignment_keeps_a_by_construction_f64_proof()
     };
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "total".to_string(),
             ty: Type::Number,
@@ -2461,6 +2477,7 @@ fn representation_first_numeric_reassignment_keeps_a_by_construction_f64_proof()
         },
         Stmt::Expr(Expr::LocalSet(1, Box::new(add_total))),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "scaled".to_string(),
             ty: Type::Number,
@@ -2546,6 +2563,7 @@ fn representation_first_boolean_reassignment_drops_local_i1_proof() {
     };
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "flag".to_string(),
             ty: Type::Boolean,
@@ -2554,6 +2572,7 @@ fn representation_first_boolean_reassignment_drops_local_i1_proof() {
         },
         Stmt::Expr(Expr::LocalSet(1, Box::new(not_flag))),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "cmp".to_string(),
             ty: Type::Boolean,
@@ -2561,6 +2580,7 @@ fn representation_first_boolean_reassignment_drops_local_i1_proof() {
             init: Some(numeric_cmp),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "same".to_string(),
             ty: Type::Boolean,
@@ -2649,6 +2669,7 @@ fn representation_first_boolean_reassignment_drops_local_i1_proof() {
 fn artifact_records_uint8array_buffer_alloc_length_as_native_buffer_len() {
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "bytes".to_string(),
             ty: Type::Named("Uint8Array".to_string()),
@@ -2913,6 +2934,7 @@ fn bigint_binary_result_live_across_collection_keeps_a_precise_root() {
         Type::BigInt,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "value".to_string(),
                 ty: Type::BigInt,
@@ -3149,6 +3171,7 @@ fn packed_f64_loop_store_update_versions_with_side_exit() {
 /// `store_not_fact_eligible`, so it cannot carry this regression.
 fn untyped_array_let(id: u32, name: &str, len: i64) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Generic {
@@ -3187,6 +3210,7 @@ fn untyped_array_let(id: u32, name: &str, len: i64) -> Stmt {
 /// guessed.
 fn compound_alias_body(array_id: u32, counter_id: u32, base_temp: u32, key_temp: u32) -> Vec<Stmt> {
     let alias = |id: u32, name: &str, init: Expr| Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -4105,6 +4129,7 @@ fn map_string_number_set_has_use_string_key_specialization() {
             string_let(2, "key", "key"),
             number_let(3, "value", false, number(7.0)),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Number),
@@ -4185,6 +4210,7 @@ fn map_number_key_set_get_has_delete_use_guarded_number_key_specialization() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::Number, Type::Boolean),
@@ -4197,6 +4223,7 @@ fn map_number_key_set_get_has_delete_use_guarded_number_key_specialization() {
                 value: Box::new(local(3)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 4,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -4270,6 +4297,7 @@ fn map_number_key_string_value_set_uses_string_ref_until_slot() {
         vec![
             string_let(3, "value", "value"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::Number, Type::String),
@@ -4365,6 +4393,7 @@ fn map_number_key_string_value_rejects_unproven_value() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::Number, Type::String),
@@ -4431,6 +4460,7 @@ fn map_string_key_has_delete_specialize_independent_of_value_type() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Boolean),
@@ -4443,6 +4473,7 @@ fn map_string_key_has_delete_specialize_independent_of_value_type() {
                 value: Box::new(Expr::Bool(true)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 4,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -4505,6 +4536,7 @@ fn map_string_boolean_param_without_native_i1_proof_uses_generic_value_helper() 
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Boolean),
@@ -4552,6 +4584,7 @@ fn map_string_int32_set_uses_typed_i32_value_helper() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Int32),
@@ -4606,6 +4639,7 @@ fn map_string_int32_param_without_native_i32_proof_uses_f64_helper() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Int32),
@@ -4675,6 +4709,7 @@ fn map_string_u32_set_uses_typed_u32_value_helper() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Named("PerryU32".to_string())),
@@ -4729,6 +4764,7 @@ fn map_string_u32_param_without_native_u32_proof_uses_generic_value_helper() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Named("PerryU32".to_string())),
@@ -4772,6 +4808,7 @@ fn map_string_f32_set_uses_typed_f32_value_helper() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Named("PerryF32".to_string())),
@@ -4826,6 +4863,7 @@ fn map_string_f32_param_without_native_f32_proof_uses_generic_value_helper() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Named("PerryF32".to_string())),
@@ -4870,6 +4908,7 @@ fn map_string_string_set_uses_typed_string_value_helper() {
             string_let(2, "key", "key"),
             string_let(3, "value", "value"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::String),
@@ -4920,6 +4959,7 @@ fn map_string_any_set_uses_generic_value_string_key_helper() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Any),
@@ -4969,6 +5009,7 @@ fn map_unproven_number_key_keeps_generic_fallback() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::Number, Type::Boolean),
@@ -4981,6 +5022,7 @@ fn map_unproven_number_key_keeps_generic_fallback() {
                 value: Box::new(local(3)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 4,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -5051,6 +5093,7 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Boolean),
@@ -5063,6 +5106,7 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
                 value: Box::new(Expr::Bool(true)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 4,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -5158,6 +5202,7 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Boolean),
@@ -5216,6 +5261,7 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Int32),
@@ -5281,6 +5327,7 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Named("PerryU32".to_string())),
@@ -5346,6 +5393,7 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Named("PerryF32".to_string())),
@@ -5412,6 +5460,7 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
             string_let(2, "key", "key"),
             string_let(3, "value", "value"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::String),
@@ -5477,6 +5526,7 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Any),
@@ -5519,6 +5569,7 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
             string_let(2, "key", "key"),
             number_let(3, "value", false, number(7.0)),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::String, Type::Number),
@@ -5576,6 +5627,7 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::Boolean, Type::Boolean),
@@ -5588,6 +5640,7 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
                 value: Box::new(local(3)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 4,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -5670,6 +5723,7 @@ fn artifact_records_map_string_key_helper_selection_and_rejection() {
         Type::Number,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::Boolean, Type::Number),
@@ -5729,6 +5783,7 @@ fn artifact_records_map_number_key_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::Number, Type::Boolean),
@@ -5741,6 +5796,7 @@ fn artifact_records_map_number_key_helper_selection_and_rejection() {
                 value: Box::new(Expr::Bool(true)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 4,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -5838,6 +5894,7 @@ fn artifact_records_map_number_key_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "m".to_string(),
                 ty: map_type(Type::Number, Type::Boolean),
@@ -5881,6 +5938,7 @@ fn set_string_add_has_delete_use_string_specialization() {
         vec![
             string_let(2, "value", "value"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::String),
@@ -5892,6 +5950,7 @@ fn set_string_add_has_delete_use_string_specialization() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -5950,6 +6009,7 @@ fn set_number_add_has_delete_use_guarded_number_specialization() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Number),
@@ -5961,6 +6021,7 @@ fn set_number_add_has_delete_use_guarded_number_specialization() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -6016,6 +6077,7 @@ fn set_number_specialization_rejects_unproven_value() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Number),
@@ -6063,6 +6125,7 @@ fn set_int32_add_has_delete_use_i32_specialization() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Int32),
@@ -6074,6 +6137,7 @@ fn set_int32_add_has_delete_use_i32_specialization() {
                 value: Box::new(Expr::Integer(42)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -6128,6 +6192,7 @@ fn set_int32_param_without_native_i32_proof_uses_generic_helpers() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Int32),
@@ -6139,6 +6204,7 @@ fn set_int32_param_without_native_i32_proof_uses_generic_helpers() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -6221,6 +6287,7 @@ fn set_u32_add_has_delete_use_u32_specialization() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Named("PerryU32".to_string())),
@@ -6232,6 +6299,7 @@ fn set_u32_add_has_delete_use_u32_specialization() {
                 value: Box::new(Expr::Integer(4_000_000_000)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -6286,6 +6354,7 @@ fn set_u32_param_without_native_u32_proof_uses_generic_helpers() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Named("PerryU32".to_string())),
@@ -6297,6 +6366,7 @@ fn set_u32_param_without_native_u32_proof_uses_generic_helpers() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -6351,6 +6421,7 @@ fn set_f32_add_has_delete_use_f32_specialization() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Named("PerryF32".to_string())),
@@ -6362,6 +6433,7 @@ fn set_f32_add_has_delete_use_f32_specialization() {
                 value: Box::new(Expr::Number(1.5)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -6416,6 +6488,7 @@ fn set_f32_param_without_native_f32_proof_uses_generic_helpers() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Named("PerryF32".to_string())),
@@ -6427,6 +6500,7 @@ fn set_f32_param_without_native_f32_proof_uses_generic_helpers() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -6481,6 +6555,7 @@ fn set_boolean_add_has_delete_use_bool_specialization() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Boolean),
@@ -6492,6 +6567,7 @@ fn set_boolean_add_has_delete_use_bool_specialization() {
                 value: Box::new(Expr::Bool(true)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -6546,6 +6622,7 @@ fn set_boolean_param_without_native_i1_proof_uses_generic_helpers() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Boolean),
@@ -6557,6 +6634,7 @@ fn set_boolean_param_without_native_i1_proof_uses_generic_helpers() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -6612,6 +6690,7 @@ fn artifact_records_set_string_key_helper_selection_and_rejection() {
         vec![
             string_let(2, "value", "value"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::String),
@@ -6623,6 +6702,7 @@ fn artifact_records_set_string_key_helper_selection_and_rejection() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -6720,6 +6800,7 @@ fn artifact_records_set_string_key_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Any),
@@ -6731,6 +6812,7 @@ fn artifact_records_set_string_key_helper_selection_and_rejection() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -6794,6 +6876,7 @@ fn artifact_records_set_number_value_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Number),
@@ -6805,6 +6888,7 @@ fn artifact_records_set_number_value_helper_selection_and_rejection() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -6905,6 +6989,7 @@ fn artifact_records_set_number_value_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Number),
@@ -6953,6 +7038,7 @@ fn artifact_records_set_int32_value_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Int32),
@@ -6964,6 +7050,7 @@ fn artifact_records_set_int32_value_helper_selection_and_rejection() {
                 value: Box::new(Expr::Integer(7)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -7026,6 +7113,7 @@ fn artifact_records_set_int32_value_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Int32),
@@ -7037,6 +7125,7 @@ fn artifact_records_set_int32_value_helper_selection_and_rejection() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -7104,6 +7193,7 @@ fn artifact_records_set_u32_value_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Named("PerryU32".to_string())),
@@ -7115,6 +7205,7 @@ fn artifact_records_set_u32_value_helper_selection_and_rejection() {
                 value: Box::new(Expr::Integer(4_000_000_000)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -7177,6 +7268,7 @@ fn artifact_records_set_u32_value_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Named("PerryU32".to_string())),
@@ -7188,6 +7280,7 @@ fn artifact_records_set_u32_value_helper_selection_and_rejection() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -7255,6 +7348,7 @@ fn artifact_records_set_f32_value_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Named("PerryF32".to_string())),
@@ -7266,6 +7360,7 @@ fn artifact_records_set_f32_value_helper_selection_and_rejection() {
                 value: Box::new(Expr::Number(1.5)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -7328,6 +7423,7 @@ fn artifact_records_set_f32_value_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Named("PerryF32".to_string())),
@@ -7339,6 +7435,7 @@ fn artifact_records_set_f32_value_helper_selection_and_rejection() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -7406,6 +7503,7 @@ fn artifact_records_set_boolean_value_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Boolean),
@@ -7417,6 +7515,7 @@ fn artifact_records_set_boolean_value_helper_selection_and_rejection() {
                 value: Box::new(Expr::Bool(true)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -7479,6 +7578,7 @@ fn artifact_records_set_boolean_value_helper_selection_and_rejection() {
         Type::Boolean,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: set_type(Type::Boolean),
@@ -7490,6 +7590,7 @@ fn artifact_records_set_boolean_value_helper_selection_and_rejection() {
                 value: Box::new(local(2)),
             }),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "present".to_string(),
                 ty: Type::Boolean,
@@ -7957,6 +8058,7 @@ fn artifact_records_direct_i1_to_js_value_bits_for_write_barrier() {
         vec![
             string_let(2, "key", "key"),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "value".to_string(),
                 ty: Type::Boolean,
@@ -8051,6 +8153,7 @@ fn boxed_local_capture_module(name: &str) -> Module {
         name,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "cell".to_string(),
                 ty: Type::Any,
@@ -8058,6 +8161,7 @@ fn boxed_local_capture_module(name: &str) -> Module {
                 init: Some(Expr::Array(Vec::new(), None)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 11,
                 name: "writer".to_string(),
                 ty: Type::Any,
@@ -8093,6 +8197,7 @@ fn boxed_local_storage_module(name: &str, init: Expr, replacement: Expr) -> Modu
         name,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "cell".to_string(),
                 ty: Type::Any,
@@ -8100,6 +8205,7 @@ fn boxed_local_storage_module(name: &str, init: Expr, replacement: Expr) -> Modu
                 init: Some(init),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 11,
                 name: "writer".to_string(),
                 ty: Type::Any,
@@ -8515,6 +8621,7 @@ fn tdz_numeric_const_read_is_not_constant_folded() {
         Stmt::PreallocateTdzBoxes(vec![9]),
         Stmt::Expr(Expr::LocalGet(9)),
         Stmt::Let {
+            byte_offset: 0,
             id: 9,
             name: "value".to_string(),
             ty: Type::Number,
@@ -8562,6 +8669,7 @@ fn module_tdz_check_reads_the_sentinel_seeded_global_not_the_folded_constant() {
     )];
     let mut fixture = module("module_tdz_check.ts", body);
     fixture.init = vec![Stmt::Let {
+        byte_offset: 0,
         id: 9,
         name: "value".to_string(),
         ty: Type::Number,
@@ -8751,6 +8859,7 @@ fn compiler_private_async_control_body() -> Vec<Stmt> {
     vec![
         Stmt::PreallocateBoxes(vec![10, 11, 12]),
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "__gen_state".to_string(),
             ty: Type::Number,
@@ -8758,6 +8867,7 @@ fn compiler_private_async_control_body() -> Vec<Stmt> {
             init: Some(Expr::Number(0.0)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 11,
             name: "__gen_done".to_string(),
             ty: Type::Boolean,
@@ -8765,6 +8875,7 @@ fn compiler_private_async_control_body() -> Vec<Stmt> {
             init: Some(Expr::Bool(false)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 12,
             name: "__gen_executing".to_string(),
             ty: Type::Boolean,
@@ -8797,6 +8908,7 @@ fn compiler_private_async_iter_result_f64_body() -> Vec<Stmt> {
     vec![
         Stmt::Expr(Expr::IterResultSet(Box::new(Expr::Number(41.5)), false)),
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "__step_value".to_string(),
             ty: Type::Number,
@@ -8811,6 +8923,7 @@ fn compiler_private_async_iter_result_i1_body() -> Vec<Stmt> {
     vec![
         Stmt::Expr(Expr::IterResultSet(Box::new(Expr::Bool(true)), false)),
         Stmt::Let {
+            byte_offset: 0,
             id: 21,
             name: "__step_bool".to_string(),
             ty: Type::Boolean,
@@ -9299,6 +9412,7 @@ fn typed_f64_clone_test_module(use_any_param: bool) -> Module {
                 return_type: Type::Number,
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 5,
                         name: "denom".to_string(),
                         ty: Type::Number,
@@ -9458,6 +9572,7 @@ fn typed_f64_i32_local_clone_test_module() -> Module {
     module.functions[0].params = vec![param(1, "a", Type::Number), param(2, "b", Type::Int32)];
     module.functions[0].body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 5,
             name: "mask".to_string(),
             ty: Type::Int32,
@@ -9518,6 +9633,7 @@ fn typed_i1_clone_test_module_named(name: &str) -> Module {
                 return_type: Type::Boolean,
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 5,
                         name: "not_b".to_string(),
                         ty: Type::Boolean,
@@ -9639,6 +9755,7 @@ fn typed_string_clone_test_module(case: &str) -> Module {
                 return_type: Type::String,
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 5,
                         name: "copy".to_string(),
                         ty: Type::String,
@@ -9767,6 +9884,7 @@ fn typed_i1_numeric_predicate_module() -> Module {
                 return_type: Type::Boolean,
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 5,
                         name: "delta".to_string(),
                         ty: Type::Number,
@@ -9965,6 +10083,7 @@ fn typed_i32_return_module(case: &str) -> Module {
             Type::Int32,
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 5,
                     name: "mixed".to_string(),
                     ty: Type::Int32,
@@ -10185,6 +10304,7 @@ fn typed_f64_method_clone_module() -> Module {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 25,
                 name: "denom".to_string(),
                 ty: Type::Number,
@@ -10255,6 +10375,7 @@ fn typed_f64_i32_local_method_clone_module() -> Module {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 25,
                 name: "mask".to_string(),
                 ty: Type::Int32,
@@ -10438,6 +10559,7 @@ fn typed_f64_receiver_method_positive_module() -> Module {
         2110,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 25,
                 name: "sum".to_string(),
                 ty: Type::Number,
@@ -10647,6 +10769,7 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
         }
         "capture" => {
             prefix.push(Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "scale".to_string(),
                 ty: Type::Number,
@@ -10663,6 +10786,7 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
         }
         "mutable_capture" => {
             prefix.push(Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "scale".to_string(),
                 ty: Type::Number,
@@ -10684,6 +10808,7 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
     let mut body = prefix;
     body.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "adder".to_string(),
             ty: Type::Function(perry_hir::types::FunctionType {
@@ -10703,6 +10828,7 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
                 return_type: Type::Number,
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 33,
                         name: "sum".to_string(),
                         ty: Type::Number,
@@ -10778,6 +10904,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
         "eligible" => {}
         "capture" => {
             prefix.push(Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "mask".to_string(),
                 ty: Type::Int32,
@@ -10827,6 +10954,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
         }
         "mutable_capture" => {
             prefix.push(Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "mask".to_string(),
                 ty: Type::Int32,
@@ -10851,6 +10979,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
     let mut body = prefix;
     body.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "mix_i32".to_string(),
             ty: local_ty,
@@ -10862,6 +10991,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
                 return_type: return_type.clone(),
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 33,
                         name: "mixed".to_string(),
                         ty: first_let_ty,
@@ -10929,6 +11059,7 @@ fn typed_i1_method_clone_module(case: &str) -> Module {
         return_type: Type::Boolean,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 25,
                 name: "not_b".to_string(),
                 ty: Type::Boolean,
@@ -11038,6 +11169,7 @@ fn typed_i32_method_clone_module(case: &str) -> Module {
         return_type,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 25,
                 name: "mixed".to_string(),
                 ty: first_let_ty,
@@ -11099,6 +11231,7 @@ fn typed_string_method_clone_module(case: &str) -> Module {
     let mut return_type = Type::String;
     let mut body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 25,
             name: "copy".to_string(),
             ty: Type::String,
@@ -11196,6 +11329,7 @@ fn typed_i1_numeric_predicate_method_module() -> Module {
         return_type: Type::Boolean,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 25,
                 name: "delta".to_string(),
                 ty: Type::Number,
@@ -11313,6 +11447,7 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
         }
         "capture" => {
             prefix.push(Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "enabled".to_string(),
                 ty: Type::Boolean,
@@ -11329,6 +11464,7 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
         }
         "mutable_capture" => {
             prefix.push(Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "enabled".to_string(),
                 ty: Type::Boolean,
@@ -11353,6 +11489,7 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
     let mut body = prefix;
     body.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "pred".to_string(),
             ty: local_ty,
@@ -11364,6 +11501,7 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
                 return_type: Type::Boolean,
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 33,
                         name: "pred_base".to_string(),
                         ty: Type::Boolean,
@@ -11424,6 +11562,7 @@ fn typed_string_closure_clone_module(case: &str) -> Module {
         }
         "capture" => {
             prefix.push(Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "captured".to_string(),
                 ty: Type::String,
@@ -11435,6 +11574,7 @@ fn typed_string_closure_clone_module(case: &str) -> Module {
         }
         "mutable_capture" => {
             prefix.push(Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "captured".to_string(),
                 ty: Type::String,
@@ -11454,6 +11594,7 @@ fn typed_string_closure_clone_module(case: &str) -> Module {
     let mut body = prefix;
     body.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "id".to_string(),
             ty: local_ty,
@@ -11465,6 +11606,7 @@ fn typed_string_closure_clone_module(case: &str) -> Module {
                 return_type: Type::String,
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 33,
                         name: "copy".to_string(),
                         ty: Type::String,
@@ -11592,6 +11734,7 @@ fn scalar_method_summary_module() -> Module {
         Type::Number,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 20,
                 name: "p".to_string(),
                 ty: Type::Named("Point".to_string()),
@@ -11636,6 +11779,7 @@ fn scalar_field_initializer_module() -> Module {
         Type::Number,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 20,
                 name: "holder".to_string(),
                 ty: Type::Named("Holder".to_string()),
@@ -11753,6 +11897,7 @@ fn scalar_method_field_write_module() -> Module {
         Type::Number,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 20,
                 name: "counter".to_string(),
                 ty: Type::Named("Counter".to_string()),
@@ -11817,6 +11962,7 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 130,
                 name: "shifted".to_string(),
                 ty: Type::Number,
@@ -11834,6 +11980,7 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 131,
                 name: "scaled".to_string(),
                 ty: Type::Number,
@@ -11864,6 +12011,7 @@ fn scalar_method_numeric_local_temp_module(case: &str, mutable_temp: bool) -> Mo
     });
     module.functions[0].body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "p".to_string(),
             ty: Type::Named("Point".to_string()),
@@ -11916,6 +12064,7 @@ fn scalar_method_boolean_predicate_module() -> Module {
     module.functions[0].return_type = Type::Boolean;
     module.functions[0].body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "p".to_string(),
             ty: Type::Named("Point".to_string()),
@@ -11973,6 +12122,7 @@ fn scalar_method_boolean_public_numeric_arg_module(case: &str, arg_ty: Type) -> 
     module.functions[0].params = vec![param(70, "limit", arg_ty)];
     module.functions[0].body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "p".to_string(),
             ty: Type::Named("Point".to_string()),
@@ -12014,6 +12164,7 @@ fn scalar_method_boolean_public_numeric_expr_arg_module() -> Module {
     ];
     module.functions[0].body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "p".to_string(),
             ty: Type::Named("Point".to_string()),
@@ -12162,6 +12313,7 @@ fn scalar_method_int32_bitwise_module(case: &str, field_ty: Type, arg_ty: Type) 
         Type::Int32,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 20,
                 name: "flags".to_string(),
                 ty: Type::Named("Flags".to_string()),
@@ -12228,6 +12380,7 @@ fn scalar_method_int32_bitwise_local_temp_module() -> Module {
     let mut module = scalar_method_int32_bitwise_module("local_temp", Type::Int32, Type::Int32);
     module.classes[0].methods[0].body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 130,
             name: "mixed".to_string(),
             ty: Type::Int32,
@@ -12245,6 +12398,7 @@ fn scalar_method_int32_bitwise_local_temp_module() -> Module {
             }),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 131,
             name: "shifted".to_string(),
             ty: Type::Int32,
@@ -12428,6 +12582,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
             module.functions[0].params = vec![param(70, "limit", Type::Any)];
             module.functions[0].body = vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 20,
                     name: "p".to_string(),
                     ty: Type::Named("Point".to_string()),
@@ -12462,6 +12617,7 @@ fn scalar_method_boolean_negative_module(case: &str) -> Module {
             module.functions[0].params = vec![param(70, "limit", Type::Any)];
             module.functions[0].body = vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 20,
                     name: "p".to_string(),
                     ty: Type::Named("Point".to_string()),
@@ -16542,10 +16698,14 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
     // with `arr: number[]` written through the generic PutValue form.
     let arr = 1u32;
     let i = 2u32;
-    let read_arr_i =
-        Expr::index_get_at(Box::new(Expr::LocalGet(arr)), Box::new(Expr::LocalGet(i)), 0);
+    let read_arr_i = Expr::index_get_at(
+        Box::new(Expr::LocalGet(arr)),
+        Box::new(Expr::LocalGet(i)),
+        0,
+    );
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: arr,
             name: "arr".to_string(),
             ty: Type::Array(Box::new(Type::Number)),
@@ -16569,6 +16729,7 @@ fn put_value_set_index_keeps_the_numeric_array_fast_path() {
         }),
         Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: i,
                 name: "i".to_string(),
                 ty: Type::Any,
@@ -16723,6 +16884,7 @@ fn immutable_string_key_reuses_static_write_pic() {
         Type::Any,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: key,
                 name: "key".to_string(),
                 ty: Type::String,
@@ -16764,6 +16926,7 @@ fn module_global_immutable_string_key_reuses_static_write_pic() {
     );
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: key,
             name: "key".to_string(),
             ty: Type::String,
@@ -16771,6 +16934,7 @@ fn module_global_immutable_string_key_reuses_static_write_pic() {
             init: Some(Expr::String("x".to_string())),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: object,
             name: "object".to_string(),
             ty: Type::Any,
@@ -16811,6 +16975,7 @@ fn mutable_string_key_rejects_static_write_pic() {
         Type::Any,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: key,
                 name: "key".to_string(),
                 ty: Type::String,
@@ -16950,6 +17115,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
 
     let loop_body = |field_count: usize| {
         let mut inner_body = vec![Stmt::Let {
+            byte_offset: 0,
             id: object,
             name: "object".to_string(),
             ty: Type::Any,
@@ -16976,6 +17142,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
         }
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: objects,
                 name: "objects".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
@@ -16984,6 +17151,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: outer,
                     name: "outer".to_string(),
                     ty: Type::Number,
@@ -17003,6 +17171,7 @@ fn nested_same_shape_object_writes_version_one_through_four_fields() {
                 }),
                 body: vec![Stmt::For {
                     init: Some(Box::new(Stmt::Let {
+                        byte_offset: 0,
                         id: inner,
                         name: "inner".to_string(),
                         ty: Type::Number,
@@ -17262,6 +17431,7 @@ fn element_to_element_numeric_store_takes_the_inline_guard_tier() {
     let arr = 1u32;
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: arr,
             name: "arr".to_string(),
             ty: Type::Array(Box::new(Type::Number)),
@@ -17548,6 +17718,7 @@ fn packed_clone_reads_a_foreign_counter_without_the_feedback_call() {
     let body = vec![
         number_array_let(1, "arr", vec![1, 2, 3, 4, 5, 6, 7, 8]),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "sum".to_string(),
             ty: Type::Number,

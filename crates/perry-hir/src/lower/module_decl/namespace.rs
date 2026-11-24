@@ -205,6 +205,7 @@ fn namespace_object(
                     _ => Expr::Object(Vec::new()),
                 };
                 module.init.push(Stmt::Let {
+                    byte_offset,
                     id,
                     name: name.to_string(),
                     ty: Type::Any,
@@ -271,6 +272,7 @@ fn lower_namespace_block(
         merged => {
             let id = ctx.define_local(alias.clone(), Type::Any);
             module.init.push(Stmt::Let {
+                byte_offset: ts_module.span.lo.0,
                 id,
                 name: alias.clone(),
                 ty: Type::Any,

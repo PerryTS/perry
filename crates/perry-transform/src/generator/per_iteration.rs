@@ -535,6 +535,7 @@ fn walk_snapshot(
         for (orig, snap) in pairs {
             introduced.insert(snap);
             out.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: snap,
                 name: format!("__periter_{}", snap),
                 ty: Type::Any,
@@ -1072,6 +1073,7 @@ fn declare_forward_cell(stmts: &mut [Stmt], id: LocalId) -> Option<(String, Type
             ty,
             mutable,
             init,
+            ..
         } = stmt
         {
             if *declared == id {
@@ -1143,6 +1145,7 @@ fn hoist_forward_cell_inits(
                 hoisted.checked.insert(id, name.clone());
             }
             predeclared.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name,
                 ty,
@@ -1458,6 +1461,7 @@ mod tests {
             condition: Expr::Bool(true),
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id,
                     name: "value".into(),
                     ty: Type::Any,
@@ -1481,6 +1485,7 @@ mod tests {
             update: None,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id,
                     name: "value".into(),
                     ty: Type::Any,
@@ -1546,6 +1551,7 @@ mod tests {
         let mut loop_body = vec![
             prealloc,
             Stmt::Let {
+                byte_offset: 0,
                 id: read,
                 name: "read".into(),
                 ty: Type::Any,
@@ -1556,6 +1562,7 @@ mod tests {
         let mut rest = between;
         rest.extend([
             Stmt::Let {
+                byte_offset: 0,
                 id: x,
                 name: "x".into(),
                 ty: Type::Any,

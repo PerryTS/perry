@@ -405,6 +405,7 @@ mod tests {
             vec![2],
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 3,
                     name: "z".into(),
                     ty: Type::Number,

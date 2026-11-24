@@ -519,6 +519,7 @@ mod tests {
 
     fn let_int(id: u32, v: i64) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{id}"),
             ty: Type::Number,
@@ -636,6 +637,7 @@ mod tests {
     fn rejects_non_literal_init() {
         let stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "a".into(),
                 ty: Type::Number,

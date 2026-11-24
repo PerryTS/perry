@@ -12,6 +12,7 @@ fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 }
 fn local(id: u32, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: if matches!(&init, Expr::TypedArrayNew { .. }) {

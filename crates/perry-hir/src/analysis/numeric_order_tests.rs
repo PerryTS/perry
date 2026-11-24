@@ -139,6 +139,7 @@ fn sign_proof_accepts_control_flow_coercions_aliases_and_both_directions() {
         Some(NumericOrder::Ascending)
     );
     let mut body = vec![Stmt::Let {
+        byte_offset: 0,
         id: 50,
         name: "d".into(),
         ty: Type::String,
@@ -306,6 +307,7 @@ fn signed_zero_joins_do_not_invent_an_exact_reciprocal_sign() {
     };
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 50,
             name: "scale".into(),
             ty: Type::Any,

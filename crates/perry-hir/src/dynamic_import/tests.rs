@@ -535,6 +535,7 @@ fn collect_param_string_literal_union_from_type_alias() {
 fn collect_consts_skips_mutated() {
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "stable".into(),
         ty: crate::types::Type::String,
@@ -542,6 +543,7 @@ fn collect_consts_skips_mutated() {
         init: Some(Expr::String("./a.ts".into())),
     });
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 2,
         name: "mutated".into(),
         ty: crate::types::Type::String,
@@ -563,6 +565,7 @@ fn collect_includes_unreassigned_let_but_drops_reassigned() {
     // const; a reassigned one still falls back to Unresolved.
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "stableLet".into(),
         ty: crate::types::Type::String,
@@ -570,6 +573,7 @@ fn collect_includes_unreassigned_let_but_drops_reassigned() {
         init: Some(Expr::String("./a.ts".into())),
     });
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 2,
         name: "reassignedLet".into(),
         ty: crate::types::Type::String,
@@ -590,6 +594,7 @@ fn resolve_unreassigned_let_ternary_union() {
     // The #1674 acceptance shape: `let p = cond ? './a.ts' : './b.ts'`.
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "p".into(),
         ty: crate::types::Type::String,
@@ -616,6 +621,7 @@ fn resolve_unreassigned_let_ternary_union() {
 fn resolve_reassigned_local_literal_candidates() {
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "p".into(),
         ty: Type::String,
@@ -694,6 +700,7 @@ fn resolve_path_join_over_replaced_dirname() {
 fn resolve_cjs_path_default_join_over_replaced_dirname_local() {
     let mut module = Module::new("node-pty-windows-conout");
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 81,
         name: "scriptPath".into(),
         ty: Type::String,
@@ -890,6 +897,7 @@ fn resolve_web_worker_url_relative_to_import_meta() {
 fn reassigned_local_candidates_drop_mixed_dynamic_defs() {
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "p".into(),
         ty: Type::String,
@@ -925,6 +933,7 @@ fn resolve_closure_local_const_specifier() {
         params: vec![],
         return_type: Type::Any,
         body: vec![Stmt::Let {
+            byte_offset: 0,
             id: 9,
             name: "cfWorkers".into(),
             ty: Type::String,
@@ -963,6 +972,7 @@ fn collect_consts_invalidates_closure_mutation() {
     // from the const map (the mutation scan descends into closures, #1725).
     let mut m = Module::new("t");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "p".into(),
         ty: Type::String,
@@ -1237,6 +1247,7 @@ fn flatten_explicit_reexport_through_export_all_reaches_ultimate_owner() {
     // emits, so the dependency corpus fails at link time.
     let mut leaf = Module::new("leaf");
     leaf.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "NEVER".into(),
         ty: Type::Any,
@@ -1248,6 +1259,7 @@ fn flatten_explicit_reexport_through_export_all_reaches_ultimate_owner() {
         exported: "NEVER".into(),
     });
     leaf.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 2,
         name: "_null".into(),
         ty: Type::Any,

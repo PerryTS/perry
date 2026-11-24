@@ -110,6 +110,7 @@ fn navstack_emits_state_driven_branches() {
     // ])});
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "route".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -172,6 +173,7 @@ fn navstack_no_state_falls_back_to_first_route() {
     // the first route only with a developer-facing hint comment.
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 7,
         name: "x".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -208,6 +210,7 @@ fn navstack_no_state_falls_back_to_first_route() {
 fn navstack_empty_routes_emits_empty_column_with_comment() {
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "route".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -230,6 +233,7 @@ fn navstack_set_in_closure_rewrites_to_settext() {
     // path so navigation actually triggers a re-render.
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "route".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -308,6 +312,7 @@ fn state_text_emits_reactive_text_with_synth_id() {
     // const count = state(0); App({body: count.text()});
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "count".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -329,6 +334,7 @@ fn state_set_in_closure_rewrites_to_settext() {
     // App({body: Button("+", () => count.set(5))});
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "count".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -385,6 +391,7 @@ fn state_set_in_closure_rewrites_to_settext() {
 fn multiple_state_decls_get_unique_ids() {
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "count".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -392,6 +399,7 @@ fn multiple_state_decls_get_unique_ids() {
         init: Some(state_call(Expr::Number(0.0))),
     });
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 2,
         name: "name".to_string(),
         ty: perry_hir::types::Type::Any,

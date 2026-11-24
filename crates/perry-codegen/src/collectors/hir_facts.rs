@@ -2296,6 +2296,7 @@ mod tests {
 
     fn const_let(id: u32, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{}", id),
             ty: Type::Named("Uint8Array".into()),
@@ -2306,6 +2307,7 @@ mod tests {
 
     fn const_number_let(id: u32, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{}", id),
             ty: Type::Number,
@@ -2324,6 +2326,7 @@ mod tests {
 
     fn mutable_number_let(id: u32, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{}", id),
             ty: Type::Number,
@@ -2334,6 +2337,7 @@ mod tests {
 
     fn number_array_let(id: u32, values: &[i64]) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("a{}", id),
             ty: Type::Array(Box::new(Type::Number)),
@@ -2347,6 +2351,7 @@ mod tests {
 
     fn int32_array_let(id: u32, values: &[i64]) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("a{}", id),
             ty: Type::Array(Box::new(Type::Int32)),
@@ -2360,6 +2365,7 @@ mod tests {
 
     fn u32_array_let(id: u32, values: &[i64]) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("a{}", id),
             ty: Type::Array(Box::new(Type::Named("PerryU32".to_string()))),
@@ -2373,6 +2379,7 @@ mod tests {
 
     fn alias_let(id: u32, source_id: u32) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("alias{}", id),
             ty: Type::Any,
@@ -2578,6 +2585,7 @@ mod tests {
             let mut stmts = Vec::new();
             if rebind {
                 stmts.push(Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "n".into(),
                     ty: Type::Number,
@@ -2755,6 +2763,7 @@ mod tests {
                 int32_array_let(1, &[1, 2, 3]),
                 number_array_let(2, &[1, 2, 3]),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 3,
                     name: "fractional".to_string(),
                     ty: Type::Array(Box::new(Type::Int32)),
@@ -2781,6 +2790,7 @@ mod tests {
                 u32_array_let(1, &[0, 4_000_000_000]),
                 int32_array_let(2, &[0, 1]),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 3,
                     name: "negative".to_string(),
                     ty: Type::Array(Box::new(Type::Named("PerryU32".to_string()))),
@@ -2810,6 +2820,7 @@ mod tests {
                 0,
             )),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "o".to_string(),
                 ty: Type::Any,
@@ -2953,6 +2964,7 @@ mod tests {
             &[
                 number_array_let(1, &[1, 2, 3]),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "box".to_string(),
                     ty: Type::Array(Box::new(Type::Array(Box::new(Type::Number)))),
@@ -3313,6 +3325,7 @@ mod tests {
             arguments_object: None,
         };
         let any_const = |id: u32, init: Expr| Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{id}"),
             ty: Type::Any,

@@ -210,6 +210,7 @@ const I: u32 = 3;
 
 fn let_stmt(id: u32, name: &str, ty: Type, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,

@@ -323,6 +323,7 @@ pub(crate) fn probe_body_symbol(ir: &str, module_name: &str) -> String {
 
 pub(crate) fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,

@@ -135,34 +135,35 @@ fn apply_lexical(
                 _ => None,
             })
             .collect();
-        let mut after: Vec<(usize, LocalId, String)> = module
+        let mut after: Vec<(usize, LocalId, String, u32)> = module
             .init
             .iter()
             .enumerate()
             .filter_map(|(index, stmt)| match stmt {
-                Stmt::Let { id, name, .. }
-                    if decl.get(id).is_some_and(|(at, _)| *at == index)
-                        && exported.contains(name.as_str()) =>
+                Stmt::Let {
+                    id,
+                    name,
+                    byte_offset,
+                    ..
+                } if decl.get(id).is_some_and(|(at, _)| *at == index)
+                    && exported.contains(name.as_str()) =>
                 {
-                    Some((index, *id, name.clone()))
+                    Some((index, *id, name.clone(), *byte_offset))
                 }
                 _ => None,
             })
             .collect();
         after.sort_by_key(|(index, ..)| std::cmp::Reverse(*index));
-        for (index, id, name) in after {
+        for (index, id, name, at) in after {
             if let Stmt::Let {
                 init: init @ None, ..
             } = &mut module.init[index]
             {
                 *init = Some(Expr::Undefined);
             }
-            module.init.insert(
-                index + 1,
-                Stmt::Expr(tdz_check::check(
-                    id, &name, 0, /*HPOS Let: the declaration's offset*/
-                )),
-            );
+            module
+                .init
+                .insert(index + 1, Stmt::Expr(tdz_check::check(id, &name, at)));
         }
     }
     // A checked `let x;` must end its dead zone when the declaration runs:
@@ -201,6 +202,7 @@ fn early_read_vars(
             if !facts.lexical_ids.contains(id) {
                 decl.entry(*id).or_insert_with(|| {
                     let placeholder = Stmt::Let {
+                        byte_offset: 0, /*HPOS*/
                         id: *id,
                         name: name.clone(),
                         ty: ty.clone(),
@@ -794,31 +796,15 @@ fn guard(expr: &mut Expr, rw: &Rw<'_>, at: u32) {
     let taken = std::mem::replace(expr, Expr::Undefined);
     *expr = match (taken, rw.direct_throws) {
         // PutValue throws after the right-hand side has been evaluated.
-        (Expr::LocalSet(_, value), true) => Expr::Sequence(vec![
-            *value,
-            tdz_check::throw(
-                name, at
-            ),
-        ]),
+        (Expr::LocalSet(_, value), true) => {
+            Expr::Sequence(vec![*value, tdz_check::throw(name, at)])
+        }
         (Expr::LocalSet(id, value), false) => {
-            Expr::LocalSet(
-                id,
-                Box::new(tdz_check::check_then(
-                    id, name, *value,
-                    at
-                )),
-            )
+            Expr::LocalSet(id, Box::new(tdz_check::check_then(id, name, *value, at)))
         }
         // Every other access reads the binding before anything else runs.
-        (_, true) => tdz_check::throw(
-            name, at
-        ),
-        (access, false) => Expr::Sequence(vec![
-            tdz_check::check(
-                id, name, at
-            ),
-            access,
-        ]),
+        (_, true) => tdz_check::throw(name, at),
+        (access, false) => Expr::Sequence(vec![tdz_check::check(id, name, at), access]),
     };
 }
 
