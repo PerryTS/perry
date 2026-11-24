@@ -567,3 +567,17 @@ fn the_array_join_sabotage_types_a_mixed_binding() {
     assert_eq!(exported(Some("vrarrjoin")), (2, false));
     assert_eq!(exported(None), (0, true));
 }
+
+#[test]
+fn a_record_array_in_a_function_body_is_admitted() {
+    // The reads after `const xs = []` and `const x = ...` see the
+    // assignment's version node (`Gen::narrow_assigned`): reads of the
+    // same name, typed by the binding as at top level.
+    for body in [
+        "let s = 0;\nfor (const x of xs) s += x.a;\nconsole.log(s);",
+        "const x = xs[0];\nconsole.log(x === undefined ? 0 : x.a);",
+    ] {
+        let src = format!("function main() {{ {U}{XS}{body} }}\nmain();\n");
+        assert_eq!(verdict(&src, &["a", "b"], on()).as_deref(), Ok("a:f64,b:imm"), "{src}");
+    }
+}
