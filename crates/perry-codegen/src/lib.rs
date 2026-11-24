@@ -26,6 +26,7 @@ pub(crate) mod collectors;
 pub use collectors::life_census::enabled as life_census_enabled;
 pub(crate) mod concat_site_cache;
 pub mod debug_info;
+pub mod debug_units;
 #[cfg(feature = "llvm-inprocess")]
 pub(crate) mod dialect;
 pub(crate) mod eh_mode;

@@ -127,6 +127,12 @@ impl TempPathGuard {
     pub(super) fn push(&mut self, path: &Path) {
         self.paths.push(path.to_path_buf());
     }
+
+    /// Stop owning `released`; another owner removes them.
+    #[cfg(not(target_os = "windows"))]
+    pub(super) fn release(&mut self, released: &[std::path::PathBuf]) {
+        self.paths.retain(|path| !released.contains(path));
+    }
 }
 
 impl Drop for TempPathGuard {

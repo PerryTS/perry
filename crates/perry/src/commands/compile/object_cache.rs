@@ -1518,6 +1518,9 @@ impl ObjectCache {
     /// but not reported — the cache is strictly an optimization.
     pub fn store_and_get_path(&self, key: u64, bytes: &[u8]) -> Option<PathBuf> {
         let path = self.path_for(key)?;
+        if perry_codegen::debug_units::names_retained_unit(bytes) {
+            return None;
+        }
 
         // Write to a unique tmp path in the same directory, then rename.
         // The tmp name mixes the key with a nanosecond timestamp so two
