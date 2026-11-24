@@ -2371,6 +2371,7 @@ const __memDispatch = {
   object_super_get: (home, receiver, key) => __superGet(home, key, receiver),
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
+    if (typeof obj === 'symbol') return obj[key];
     if (!__holdsProperties(obj)) return undefined;
     return obj[key];
   },

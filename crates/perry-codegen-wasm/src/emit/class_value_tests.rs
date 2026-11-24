@@ -291,8 +291,10 @@ const s = Symbol("k");
 const u = Symbol();
 console.log(typeof s, s.description, s.toString(), Symbol.keyFor(Symbol.for("g")));
 console.log(String(u.description), u.toString(), String(Symbol.keyFor(s)), s === Symbol("k"));
+const key = "description";
+console.log((s as any)[key]);
 "#
         ),
-        "symbol k Symbol(k) g\nundefined Symbol() undefined false"
+        "symbol k Symbol(k) g\nundefined Symbol() undefined false\nk"
     );
 }
