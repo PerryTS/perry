@@ -116,6 +116,12 @@ fn expression(module: &Module, expr: &Expr) -> bool {
         // A retained regex value exposes its constructor and compile method,
         // even through a computed key whose annotation claims to be numeric.
         Expr::RegExp { .. } => return true,
+        // A glob's POSIX classes (`[[:alpha:]]`) compile to Unicode property classes.
+        Expr::PathMatchesGlob(..)
+        | Expr::PathWin32 {
+            method: perry_hir::PathWin32Method::MatchesGlob,
+            ..
+        } => return true,
         Expr::ObjectGetPrototypeOf(_)
         | Expr::ReflectGetPrototypeOf(_)
         | Expr::ObjectSetPrototypeOf(_, _)
@@ -227,6 +233,8 @@ mod tests {
         for source in [
             r"/\p{L}/u.test('é');",
             r"/[[a-z]--[q]]/v.test('a');",
+            r"import * as path from 'node:path'; path.matchesGlob('a', process.argv[2]);",
+            r"import * as path from 'node:path'; path.win32.matchesGlob('a', process.argv[2]);",
             r"/(?<α>a)/.test('a');",
             r"/(?<\u03b1>a)/.test('a');",
             r"/k/iu.test('K');",
