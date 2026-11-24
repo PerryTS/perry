@@ -1282,6 +1282,9 @@ mod random_uuid_v7;
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;
 
+#[path = "overwritten_call_tests.rs"]
+mod overwritten_call;
+
 #[path = "object_is_tests.rs"]
 mod object_is;
 
