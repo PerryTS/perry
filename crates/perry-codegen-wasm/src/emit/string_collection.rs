@@ -157,6 +157,8 @@ impl WasmModuleEmitter {
             "array_forEach",
             "array_reduce",
             "array_find",
+            "array_find_last",
+            "array_find_last_index",
             "array_find_index",
             "array_sort",
             "array_some",

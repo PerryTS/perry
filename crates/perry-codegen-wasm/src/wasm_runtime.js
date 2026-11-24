@@ -2725,6 +2725,22 @@ const __memDispatch = {
     for (let i = 0; i < arr.length; i++) { if (__bitsToJsValue(call(__jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr)))) return i; }
     return -1;
   },
+  array_find_last: (arr, cb) => {
+    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    if (!call) return undefined;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (__bitsToJsValue(call(__jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr)))) return arr[i];
+    }
+    return undefined;
+  },
+  array_find_last_index: (arr, cb) => {
+    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    if (!call) return -1;
+    for (let i = arr.length - 1; i >= 0; i--) {
+      if (__bitsToJsValue(call(__jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr)))) return i;
+    }
+    return -1;
+  },
   array_sort: (arr, cb) => {
     if (!Array.isArray(arr)) return arr;
     if (cb === undefined || cb === null) { arr.sort(); return arr; }
