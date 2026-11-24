@@ -1,0 +1,1 @@
+`--target web`: `node:path` answers as Node's does — `sep`, `delimiter`, `normalize`, `relative`, `parse`, `format`, `toNamespacedPath`, `matchesGlob`, multi-argument `resolve` and every `path.win32` function return values instead of `undefined`, `resolve` resolves against `process.cwd()`, and `basename` honors its suffix, in synchronous and async bodies (#15307).
