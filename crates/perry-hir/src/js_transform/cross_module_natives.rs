@@ -893,7 +893,7 @@ pub fn fix_native_instance_expr(
         Expr::PropertyUpdate { object, .. } => {
             fix_native_instance_expr(object, native_instances, local_id_instances);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             fix_native_instance_expr(object, native_instances, local_id_instances);
             fix_native_instance_expr(index, native_instances, local_id_instances);
         }

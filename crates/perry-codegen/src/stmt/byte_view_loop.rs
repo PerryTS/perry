@@ -120,6 +120,7 @@ impl Walk<'_, '_> {
                 self.expr(value)
             }
             Expr::IndexGet { object, index, .. }
+            | Expr::RegionOut { object, index, .. }
             | Expr::Uint8ArrayGet {
                 array: object,
                 index,

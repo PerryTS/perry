@@ -911,7 +911,7 @@ fn lower_arithmetic_operand(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<(String,
             return Ok((canonical, true));
         }
     }
-    if let Expr::IndexGet { object, index, .. } = expr {
+    if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr {
         if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
             let number = super::rest_elems::Want::Number;
             let value = super::rest_elems::lower_read(ctx, expr, floor, number)?;

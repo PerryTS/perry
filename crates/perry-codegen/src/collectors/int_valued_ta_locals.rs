@@ -148,7 +148,7 @@ fn is_i32_image_seed_read(
     types: &HashMap<u32, HirType>,
     guarded_number_array_params: &HashSet<u32>,
 ) -> bool {
-    matches!(e, Expr::IndexGet { object, .. }
+    matches!(e, Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
         if receiver_is_int_kind_ta(object, types)
             || receiver_is_guarded_number_array(object, guarded_number_array_params))
 }
@@ -209,7 +209,7 @@ fn write_is_i32_producing_safe(
         Expr::Uint8ArrayGet { index, .. } => uint8array_get_is_byte_read(index, numeric_locals),
         Expr::BufferIndexGet { .. } => true,
         // Int-kind typed-array element read (possibly OOB → `undefined`).
-        Expr::IndexGet { object, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
             receiver_is_int_kind_ta(object, types)
                 || receiver_is_guarded_number_array(object, guarded_number_array_params)
         }
@@ -277,7 +277,7 @@ fn write_establishes_exact_i32(
 ) -> bool {
     match e {
         Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             receiver_is_int_kind_ta(object, types)
                 && matches!(object.as_ref(), Expr::LocalGet(arr)
                 if matches!(
@@ -354,7 +354,7 @@ fn additive_write_admissible(
         Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
         Expr::LocalGet(id) => pool.contains(id),
         // In-bounds-proven int-kind typed-array read: never `undefined`.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             receiver_is_int_kind_ta(object, types)
                 && matches!(object.as_ref(), Expr::LocalGet(arr)
                 if matches!(
@@ -413,7 +413,7 @@ pub(super) fn write_establishes_number(
         } => true,
         Expr::MathImul(_, _) => true,
         // In-bounds-PROVEN int-kind typed-array read: never `undefined`.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             receiver_is_int_kind_ta(object, types)
                 && matches!(object.as_ref(), Expr::LocalGet(arr)
                 if matches!(
@@ -838,7 +838,7 @@ pub fn collect_int_valued_ta_locals(
                 let Some((seed, _)) = writes.first() else {
                     return false;
                 };
-                let Expr::IndexGet { object, .. } = seed else {
+                let (Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }) = seed else {
                     return false;
                 };
                 receiver_is_guarded_number_array(object, guarded_number_array_params)
@@ -1685,7 +1685,7 @@ fn observe_additive_rhs(
         // In-bounds-proven typed-array read operand: its INDEX is walked with
         // the strict (non-coercing) rule — a wrapped image used as an index
         // would be disqualifying, exactly as in ordinary code.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             observe(object, false, cands, types, additive, exact_i32, disq);
             observe(index, false, cands, types, additive, exact_i32, disq);
         }

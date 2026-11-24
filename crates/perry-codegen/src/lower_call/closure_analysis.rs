@@ -239,7 +239,7 @@ fn find_outer_writes_expr(
         Expr::PropertyGet { object, .. } => {
             find_outer_writes_expr(object, inner_ids, out);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             find_outer_writes_expr(object, inner_ids, out);
             find_outer_writes_expr(index, inner_ids, out);
         }

@@ -270,19 +270,23 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Uint8ArrayLength(_) | Expr::BufferLength(_) => true,
         // An element of a folded flat-const int table lowers to
         // `sitofp i32 -> double` (issue #50): a raw Number by representation.
-        Expr::IndexGet { object, index, .. }
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
             if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() =>
         {
             true
         }
-        Expr::IndexGet { .. }
+        Expr::IndexGet { .. } | Expr::RegionOut { .. }
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e) =>
         {
             true
         }
         // I32 at rest B2: a present at-rest slot is decoded to its int32
         // Number (`rest_elems::number_read`).
-        Expr::IndexGet { .. } if crate::expr::rest_elems::number_read(ctx, e) => true,
+        Expr::IndexGet { .. } | Expr::RegionOut { .. }
+            if crate::expr::rest_elems::number_read(ctx, e) =>
+        {
+            true
+        }
         Expr::LocalGet(id) => {
             local_is_number(ctx, *id)
                 || ctx.integer_locals.contains(id)
@@ -588,7 +592,7 @@ pub(crate) fn is_numeric_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // Without this, `sum + arr[i]` in a hot loop wraps the element
         // load in `js_number_coerce` which blocks LLVM's vectorizer
         // and adds a function call per iteration.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             // #6750 follow-up: a masked-index read covered by an ACTIVE
             // masked-window fact (dense range-loop / straight-line-region
             // fast copy) is a guard-proven numeric element load, even when
@@ -801,13 +805,17 @@ pub(crate) fn expr_produces_canonical_raw_f64(ctx: &FnCtx<'_>, e: &Expr) -> bool
                 && !ctx.closure_captures.contains_key(id)
                 && !ctx.module_globals.contains_key(id)
         }
-        Expr::IndexGet { .. }
+        Expr::IndexGet { .. } | Expr::RegionOut { .. }
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, e) =>
         {
             true
         }
         // I32 at rest B2: the decoded word of a present at-rest slot.
-        Expr::IndexGet { .. } if crate::expr::rest_elems::number_read(ctx, e) => true,
+        Expr::IndexGet { .. } | Expr::RegionOut { .. }
+            if crate::expr::rest_elems::number_read(ctx, e) =>
+        {
+            true
+        }
         // #10777: a `Ptr<Shape>`-proven receiver whose field is in the fact's
         // `numeric_fields` already lowers to a BARE `load double` —
         // `expr/property_get.rs` and `expr/property_get/helpers.rs` emit
@@ -1094,9 +1102,11 @@ pub(crate) fn is_provably_not_bigint(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. } => {
             crate::expr::ta_element_read::byte_read_is_numeric(ctx, e)
         }
-        Expr::IndexGet { object, .. } => receiver_class_name(ctx, object)
-            .as_deref()
-            .is_some_and(is_numeric_typed_array_class),
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
+            receiver_class_name(ctx, object)
+                .as_deref()
+                .is_some_and(is_numeric_typed_array_class)
+        }
 
         // (`Expr::Binary` / `Expr::Unary` are handled structurally above.)
 

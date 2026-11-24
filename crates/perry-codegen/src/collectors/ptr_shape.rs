@@ -1263,7 +1263,9 @@ impl<'a> UseWalk<'a> {
                     if self.element_seeded.contains(id)
                         && matches!(
                             init.as_ref(),
-                            Some(Expr::IndexGet { .. } | Expr::LocalGet(_))
+                            Some(
+                                Expr::IndexGet { .. } | Expr::RegionOut { .. } | Expr::LocalGet(_)
+                            )
                         )
                     {
                         return;
@@ -1636,7 +1638,9 @@ impl<'a> UseWalk<'a> {
             // Barriers / hard escapes on a tracked member itself.
             Expr::Delete(inner) => {
                 match inner.as_ref() {
-                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+                    Expr::PropertyGet { object, .. }
+                    | Expr::IndexGet { object, .. }
+                    | Expr::RegionOut { object, .. } => {
                         if let Expr::LocalGet(id) = object.as_ref() {
                             if self.tracked_root(*id).is_some() {
                                 self.disq(*id, report::ESC_DELETE);

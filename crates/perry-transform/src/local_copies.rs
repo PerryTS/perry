@@ -88,6 +88,7 @@ fn inspect_expr(expr: &Expr, uses: &mut Uses) -> bool {
         | Expr::PropertyGet { .. }
         | Expr::PropertySet { .. }
         | Expr::IndexGet { .. }
+        | Expr::RegionOut { .. }
         | Expr::IndexSet { .. }
         | Expr::Array(_, _) => {}
         _ => return false,

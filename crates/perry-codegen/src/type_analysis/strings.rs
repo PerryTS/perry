@@ -511,7 +511,10 @@ pub(crate) fn is_declared_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
     matches!(
         e,
-        Expr::PropertyGet { .. } | Expr::Call { .. } | Expr::IndexGet { .. }
+        Expr::PropertyGet { .. }
+            | Expr::Call { .. }
+            | Expr::IndexGet { .. }
+            | Expr::RegionOut { .. }
     ) && matches!(
         static_type_of(ctx, e),
         Some(HirType::String) | Some(HirType::StringLiteral(_))
@@ -656,7 +659,7 @@ pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> b
         Expr::PropertyGet {
             object, property, ..
         } if is_process_namespace_version_property(object, property) => true,
-        Expr::PropertyGet { .. } | Expr::IndexGet { .. } => matches!(
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. } | Expr::RegionOut { .. } => matches!(
             crate::lower_call::guarded_path_type(ctx, e),
             Some(HirType::String | HirType::StringLiteral(_))
         ),
@@ -713,7 +716,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // a string-typed receiver returns a single-character string,
         // so the tokenizer pattern `input[pos] >= "0"` routes through
         // string comparison.
-        Expr::IndexGet { object, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
             match static_type_of(ctx, object) {
                 Some(HirType::Array(elem)) if matches!(*elem, HirType::String) => true,
                 Some(HirType::String) => true,

@@ -1212,7 +1212,7 @@ pub fn inline_calls_in_expr(
             }
             exact_receiver_facts.clear();
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             let mut earlier = EarlierOperands::default();
             hoisted.extend(ordered!(object, &mut earlier));
             hoisted.extend(ordered!(index, &mut earlier));

@@ -62,6 +62,7 @@ fn static_member(e: &Expr) -> Option<(&Expr, std::borrow::Cow<'_, str>)> {
             object, property, ..
         } => Some((object, property.as_str().into())),
         Expr::IndexGet { object, index, .. }
+        | Expr::RegionOut { object, index, .. }
         | Expr::IndexSet { object, index, .. }
         | Expr::IndexUpdate { object, index, .. } => Some((object, const_str(index)?.into())),
         _ => None,
@@ -72,6 +73,7 @@ fn static_member(e: &Expr) -> Option<(&Expr, std::borrow::Cow<'_, str>)> {
 fn computed_receiver(e: &Expr) -> Option<&Expr> {
     match e {
         Expr::IndexGet { object, index, .. }
+        | Expr::RegionOut { object, index, .. }
         | Expr::IndexSet { object, index, .. }
         | Expr::IndexUpdate { object, index, .. }
             if const_str(index).is_none() =>
@@ -119,8 +121,10 @@ impl Scan<'_, '_, '_> {
     /// The global `e` names (`Uint8Array`, `globalThis.process`).
     fn named_global<'e>(&self, e: &'e Expr) -> Option<std::borrow::Cow<'e, str>> {
         let (object, key) = static_member(e)?;
-        (matches!(e, Expr::PropertyGet { .. } | Expr::IndexGet { .. })
-            && (self.sentinel(object) || self.global_object(object))
+        (matches!(
+            e,
+            Expr::PropertyGet { .. } | Expr::IndexGet { .. } | Expr::RegionOut { .. }
+        ) && (self.sentinel(object) || self.global_object(object))
             && !matches!(&*key, "globalThis" | "global"))
         .then_some(key)
     }
@@ -339,7 +343,10 @@ impl Scan<'_, '_, '_> {
                 // Its member was observed by the parent.
             } else if self.used_in_place.contains(&addr(e)) {
                 self.global_in_place(&name);
-            } else if matches!(e, Expr::PropertyGet { .. } | Expr::IndexGet { .. }) {
+            } else if matches!(
+                e,
+                Expr::PropertyGet { .. } | Expr::IndexGet { .. } | Expr::RegionOut { .. }
+            ) {
                 self.global_value(&name);
             }
         }

@@ -135,8 +135,8 @@ pub fn is_strictly_i32_bounded_expr(
         // seeds `integer_locals` (`collect_int_ta_load_let_ids`); admitting
         // it as a STRICT write lets `let l = P[0]; l = (l ^ P[i & 7]) | 0`
         // qualify for the canonical-i32 slot.
-        Expr::IndexGet { object, .. } => match object.as_ref() {
-            Expr::IndexGet { object: inner, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => match object.as_ref() {
+            Expr::IndexGet { object: inner, .. } | Expr::RegionOut { object: inner, .. } => {
                 matches!(inner.as_ref(), Expr::LocalGet(id) if flat_const_ids.contains(id))
             }
             Expr::LocalGet(id) => {
@@ -776,8 +776,8 @@ pub fn is_flat_const_indexget(
 ) -> bool {
     use perry_hir::Expr;
     match e {
-        Expr::IndexGet { object, .. } => match object.as_ref() {
-            Expr::IndexGet { object: inner, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => match object.as_ref() {
+            Expr::IndexGet { object: inner, .. } | Expr::RegionOut { object: inner, .. } => {
                 matches!(inner.as_ref(), Expr::LocalGet(id) if flat_const_ids.contains(id))
             }
             Expr::LocalGet(id) => flat_row_alias_ids.contains(id),
@@ -1424,7 +1424,7 @@ pub fn collect_localset_ids_in_expr_filtered(
             walk(value, out);
         }
         Expr::PropertyUpdate { object, .. } => walk(object, out),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             walk(object, out);
             walk(index, out);
         }

@@ -21,13 +21,17 @@ impl JsEmitter {
             return false;
         }
         let (access, args) = match else_expr.as_ref() {
-            Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id) => {
+            Expr::PropertyGet { object, .. }
+            | Expr::IndexGet { object, .. }
+            | Expr::RegionOut { object, .. }
+                if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id) =>
+            {
                 (else_expr.as_ref(), None)
             }
             Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(local) if *local == id) => {
                 (callee.as_ref(), Some(args))
             }
-            Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id)) => {
+            Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id)) => {
                 (callee.as_ref(), Some(args))
             }
             _ => return false,
@@ -41,7 +45,7 @@ impl JsEmitter {
                 self.output.push_str(&self.quote_string(property));
                 self.output.push(']');
             }
-            Expr::IndexGet { index, .. } => {
+            Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } => {
                 self.output.push('[');
                 self.emit_expr(index);
                 self.output.push(']');
@@ -358,7 +362,7 @@ impl JsEmitter {
             }
 
             // --- Index access ---
-            Expr::IndexGet { object, index , .. } => {
+            Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. } => {
                 self.emit_expr(object);
                 self.output.push('[');
                 self.emit_expr(index);

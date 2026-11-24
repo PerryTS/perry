@@ -34,7 +34,9 @@ fn match_u32_bitset_test(expr: &Expr) -> Option<(u32, u32)> {
     else {
         return None;
     };
-    let Expr::IndexGet { object, index, .. } = left.as_ref() else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) =
+        left.as_ref()
+    else {
         return None;
     };
     let Expr::LocalGet(mask_id) = object.as_ref() else {

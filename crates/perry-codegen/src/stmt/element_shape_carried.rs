@@ -150,7 +150,7 @@ pub(super) fn expr_reads_local(expr: &Expr, id: u32) -> bool {
         | Expr::MathSign(value)
         | Expr::MathF16round(value) => expr_reads_local(value, id),
         Expr::PropertyGet { object, .. } => expr_reads_local(object, id),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             expr_reads_local(object, id) || expr_reads_local(index, id)
         }
         Expr::Conditional {

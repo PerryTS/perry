@@ -179,7 +179,8 @@ fn step_of(c: Local, e: &Expr) -> Option<usize> {
         Expr::LocalSet(_, v) => v.as_ref(),
         x => x,
     };
-    let Expr::IndexGet { object, index, .. } = read else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = read
+    else {
         return None;
     };
     let Expr::NativeMethodCall {

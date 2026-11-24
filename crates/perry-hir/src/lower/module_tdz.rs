@@ -822,7 +822,9 @@ fn guard(expr: &mut Expr, rw: &Rw<'_>) {
 /// true, so the check is lifted to `(check, delete x.p)`.
 fn lift_check(expr: &mut Expr) {
     let first = match expr {
-        Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => object.as_mut(),
+        Expr::PropertyGet { object, .. }
+        | Expr::IndexGet { object, .. }
+        | Expr::RegionOut { object, .. } => object.as_mut(),
         Expr::Delete(operand) => operand.as_mut(),
         Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => callee.as_mut(),
         _ => return,

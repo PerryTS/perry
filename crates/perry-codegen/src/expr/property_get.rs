@@ -181,7 +181,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
     } = expr
     {
         if property == "length" {
-            if let Expr::IndexGet { object, index, .. } = object.as_ref() {
+            if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) =
+                object.as_ref()
+            {
                 if let (Expr::LocalGet(id), Some(index)) =
                     (object.as_ref(), crate::collectors::const_index(index))
                 {

@@ -170,6 +170,7 @@ fn expression(module: &Module, expr: &Expr) -> bool {
             return true
         }
         Expr::IndexGet { index, .. }
+        | Expr::RegionOut { index, .. }
         | Expr::ReflectGet { key: index, .. }
         | Expr::ReflectGetOwnPropertyDescriptor { key: index, .. }
         | Expr::ObjectGetOwnPropertyDescriptor(_, index)

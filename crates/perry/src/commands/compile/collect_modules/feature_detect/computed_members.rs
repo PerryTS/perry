@@ -80,6 +80,7 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
     let mut caps = Capabilities::default();
     for_each_expr(module, &mut |expr| {
         if let Expr::IndexGet { index, .. }
+        | Expr::RegionOut { index, .. }
         | Expr::ReflectGet { key: index, .. }
         | Expr::ReflectGetOwnPropertyDescriptor { key: index, .. }
         | Expr::ObjectGetOwnPropertyDescriptor(_, index) = expr
@@ -126,7 +127,7 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
             Expr::PropertyGet { property, .. } if property == "Bun" => caps.bun_files = true,
             // Numeric and literal keys do not hide a new API name. Literal
             // readableWebStream is already selected by the ordinary detector.
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 caps.opaque_members |= opaque_key(index, &types)
                     && api_receiver(object, &types, module, native_modules);
                 caps.date_members |= opaque_key(index, &types)
@@ -433,11 +434,12 @@ fn only_member_reads(module: &Module, id: u32) -> bool {
         // A method call can mutate its receiver; it is not a passive read.
         if let Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } = expr {
             reads += usize::from(matches!(callee.as_ref(),
-                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                 if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id)));
         }
         let object = match expr {
             Expr::IndexGet { object, .. }
+            | Expr::RegionOut { object, .. }
             | Expr::PropertyGet { object, .. }
             | Expr::ReflectGet { target: object, .. }
             | Expr::ReflectGetOwnPropertyDescriptor { target: object, .. }

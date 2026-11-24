@@ -713,7 +713,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(value);
                 self.intern_string(property);
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 self.collect_strings_in_expr(object);
                 self.collect_strings_in_expr(index);
             }

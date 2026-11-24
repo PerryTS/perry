@@ -167,7 +167,7 @@ fn walk<'a>(cond: &Expr, then_branch: &'a [Stmt]) -> Option<Walk<'a>> {
     }
     let (binding, body) = loop_body.split_first()?;
     let Stmt::Let {
-        init: Some(Expr::IndexGet { object, index, .. }),
+        init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
         ..
     } = binding
     else {

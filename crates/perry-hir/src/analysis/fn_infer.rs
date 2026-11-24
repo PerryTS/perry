@@ -489,11 +489,13 @@ fn ty_of(e: &Expr, env: &Env<'_>, cx: &Ctx<'_>) -> Type {
                 _ => Type::Any,
             }
         }
-        Expr::IndexGet { object, .. } => match ty_of(object, env, cx) {
-            Type::Array(el) if !cx.cfg.strict => join(&el, &Type::Void),
-            Type::String | Type::StringLiteral(_) => join(&Type::String, &Type::Void),
-            _ => Type::Any,
-        },
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
+            match ty_of(object, env, cx) {
+                Type::Array(el) if !cx.cfg.strict => join(&el, &Type::Void),
+                Type::String | Type::StringLiteral(_) => join(&Type::String, &Type::Void),
+                _ => Type::Any,
+            }
+        }
         _ => infer_expr_type(e, env),
     }
 }
@@ -1710,6 +1712,7 @@ fn unit_stats(cx: &Ctx<'_>, st: &State, ui: usize) -> FnStats {
             | Expr::PropertySet { object, .. }
             | Expr::PropertyUpdate { object, .. }
             | Expr::IndexGet { object, .. }
+            | Expr::RegionOut { object, .. }
             | Expr::IndexSet { object, .. } => Some(object.as_ref()),
             _ => None,
         };

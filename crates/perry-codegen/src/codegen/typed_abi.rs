@@ -340,7 +340,7 @@ pub(crate) fn typed_arg_is_guard_candidate(
         // separately proven outer Array kind intentionally erases its element
         // details to `Any`. The consumer still validates/coerces the live
         // result before using a raw representation.
-        Expr::IndexGet { object, index, .. }
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
             if crate::type_analysis::is_numeric_expr(ctx, index) =>
         {
             let Expr::LocalGet(array_id) = object.as_ref() else {
@@ -617,7 +617,7 @@ pub(crate) fn nonnegative_index_fast_array_params(
         },
         Stmt::Let {
             id: value_id,
-            init: Some(Expr::IndexGet { object, index, .. }),
+            init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
             ..
         },
         Stmt::If {

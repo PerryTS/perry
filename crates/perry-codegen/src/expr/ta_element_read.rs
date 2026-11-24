@@ -81,7 +81,9 @@ pub(crate) fn byte_read_is_numeric(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     let (object, index) = match expr {
         Expr::Uint8ArrayGet { array, index } => (array, index),
         Expr::BufferIndexGet { buffer, index } => (buffer, index),
-        Expr::IndexGet { object, index, .. } if receiver_kind(ctx, object) == Some(1) => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
+            if receiver_kind(ctx, object) == Some(1) =>
+        {
             (object, index)
         }
         _ => return false,

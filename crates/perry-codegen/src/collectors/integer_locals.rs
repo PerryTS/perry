@@ -291,7 +291,7 @@ fn scan_ta_view_escapes_expr(e: &perry_hir::Expr, views: &mut HashMap<u32, i64>)
     use perry_hir::Expr;
     match e {
         // Receiver position of an element access is the one allowed use.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             if !matches!(object.as_ref(), Expr::LocalGet(_)) {
                 scan_ta_view_escapes_expr(object, views);
             }
@@ -354,7 +354,7 @@ fn scan_ta_view_escapes_expr(e: &perry_hir::Expr, views: &mut HashMap<u32, i64>)
 /// static window is inside `[0, length)` — an integer by construction.
 pub(crate) fn is_proven_int_ta_load(views: &HashMap<u32, i64>, e: &perry_hir::Expr) -> bool {
     use perry_hir::Expr;
-    let Expr::IndexGet { object, index, .. } = e else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e else {
         return false;
     };
     let Expr::LocalGet(id) = object.as_ref() else {
@@ -1031,8 +1031,8 @@ fn int32_producing_deps(
         // Issue #50 bridge: element access on a flat-const 2D int array
         // produces i32. The flat-const facts are immutable within this
         // analysis (never-mutated module consts), so no local deps.
-        Expr::IndexGet { object, .. } => match object.as_ref() {
-            Expr::IndexGet { object: inner, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => match object.as_ref() {
+            Expr::IndexGet { object: inner, .. } | Expr::RegionOut { object: inner, .. } => {
                 matches!(inner.as_ref(), Expr::LocalGet(id) if flat_const_ids.contains(id))
             }
             Expr::LocalGet(id) => flat_row_alias_ids.contains(id),
@@ -1243,7 +1243,7 @@ pub fn collect_flat_row_aliases(
         match s {
             Stmt::Let {
                 id,
-                init: Some(Expr::IndexGet { object, .. }),
+                init: Some(Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }),
                 mutable: false,
                 ..
             } => {
@@ -1396,8 +1396,8 @@ pub fn is_int32_producing_expr(
         // produces i32. Two shapes:
         //   - inline `X[i][j]`: IndexGet(IndexGet(LocalGet(X), i), j)
         //   - aliased `krow[j]`: IndexGet(LocalGet(alias), j)
-        Expr::IndexGet { object, .. } => match object.as_ref() {
-            Expr::IndexGet { object: inner, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => match object.as_ref() {
+            Expr::IndexGet { object: inner, .. } | Expr::RegionOut { object: inner, .. } => {
                 matches!(inner.as_ref(), Expr::LocalGet(id) if flat_const_ids.contains(id))
             }
             Expr::LocalGet(id) => flat_row_alias_ids.contains(id),

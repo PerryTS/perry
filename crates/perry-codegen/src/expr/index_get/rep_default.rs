@@ -103,7 +103,8 @@ pub(crate) fn try_lower(
     let Some((read, key, default)) = admit(ctx, left, right) else {
         return Ok(None);
     };
-    let Expr::IndexGet { object, index, .. } = left else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = left
+    else {
         return Ok(None);
     };
     let (object, index) = (object.as_ref(), index.as_ref());

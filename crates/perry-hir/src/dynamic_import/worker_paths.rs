@@ -288,8 +288,10 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
                 }
                 self.call(callee, args, depth + 1)
             }
-            Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
-                if let Expr::IndexGet { index, .. } = expr {
+            Expr::PropertyGet { object, .. }
+            | Expr::IndexGet { object, .. }
+            | Expr::RegionOut { object, .. } => {
+                if let (Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. }) = expr {
                     self.pure_selector(index, depth + 1)?;
                 }
                 self.registry(object, depth + 1)

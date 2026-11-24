@@ -273,6 +273,15 @@ pub enum Expr {
         /// Ignored by stable hashing and structural equality.
         element_offset: u32,
     },
+    /// Output `k` of a split region, read back from the region call's
+    /// result array (`__region_out[k]`, perry-codegen split_regions.rs).
+    /// Compiler-built plumbing with no source construct: an element read of
+    /// `object` at `index` (always `Number(k)`), lowered and modeled as that
+    /// read is, and no site of any kind.
+    RegionOut {
+        object: Box<Expr>,
+        index: Box<Expr>,
+    },
     IndexSet {
         object: Box<Expr>,
         index: Box<Expr>,

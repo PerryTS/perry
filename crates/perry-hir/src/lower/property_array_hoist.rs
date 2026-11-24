@@ -333,7 +333,7 @@ fn expr_is_hoist_safe(expr: &Expr, scan: &Scan<'_>) -> bool {
                 .is_none_or(|st| st.read_ok(object, property))
                 && expr_is_hoist_safe(object, scan)
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             scan.strict.as_ref().is_none_or(|st| st.element_ok(object))
                 && expr_is_hoist_safe(object, scan)
                 && expr_is_hoist_safe(index, scan)
@@ -373,7 +373,9 @@ fn expr_reads_property(expr: &Expr, recv: Recv, property: &str) -> bool {
 /// The offset of the first `RECV.PROP` read in evaluation order: the hoisted
 /// read is that read, run once before the loop, and stands at it.
 fn stmts_first_read(stmts: &[Stmt], recv: Recv, property: &str) -> Option<u32> {
-    stmts.iter().find_map(|s| stmt_first_read(s, recv, property))
+    stmts
+        .iter()
+        .find_map(|s| stmt_first_read(s, recv, property))
 }
 
 fn stmt_first_read(stmt: &Stmt, recv: Recv, property: &str) -> Option<u32> {
@@ -425,7 +427,9 @@ fn expr_first_read(expr: &Expr, recv: Recv, property: &str) -> Option<u32> {
     let e = |x: &Expr| expr_first_read(x, recv, property);
     match expr {
         Expr::PropertyGet { object, .. } => e(object),
-        Expr::IndexGet { object, index, .. } => e(object).or_else(|| e(index)),
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            e(object).or_else(|| e(index))
+        }
         Expr::Binary { left, right, .. }
         | Expr::Logical { left, right, .. }
         | Expr::Compare { left, right, .. } => e(left).or_else(|| e(right)),
@@ -855,7 +859,11 @@ fn hoist_this_for(
         // hoisted read is that read and stands at it.
         let Some(read_offset) = expr_first_read(&cond, Recv::This, field)
             .or_else(|| stmts_first_read(&body, Recv::This, field))
-            .or_else(|| update.as_ref().and_then(|u| expr_first_read(u, Recv::This, field)))
+            .or_else(|| {
+                update
+                    .as_ref()
+                    .and_then(|u| expr_first_read(u, Recv::This, field))
+            })
         else {
             continue;
         };

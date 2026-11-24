@@ -120,9 +120,11 @@ fn number_operand_reads(e: &Expr, out: &mut Vec<(usize, Recv, String)>) {
             }
             return;
         }
-        Expr::IndexGet { .. } | Expr::Call { .. } | Expr::CallSpread { .. } | Expr::New { .. } => {
-            return
-        }
+        Expr::IndexGet { .. }
+        | Expr::RegionOut { .. }
+        | Expr::Call { .. }
+        | Expr::CallSpread { .. }
+        | Expr::New { .. } => return,
         Expr::Conditional {
             then_expr,
             else_expr,
@@ -150,7 +152,7 @@ fn number_operand_locals(e: &Expr, out: &mut HashSet<u32>) {
             out.insert(*id);
             return;
         }
-        Expr::PropertyGet { .. } | Expr::IndexGet { .. } => return,
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. } | Expr::RegionOut { .. } => return,
         _ => {}
     }
     perry_hir::walker::walk_expr_children(e, &mut |child| number_operand_locals(child, out));
@@ -449,7 +451,7 @@ impl Planner<'_, '_> {
             // An element read of a region array with a static index range is
             // bare while the facts are fresh: it runs no JS, so it stales
             // nothing. Any other element read is today's tower.
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 st = self.expr(object, st);
                 st = self.expr(index, st);
                 self.stale(e, &mut st);
