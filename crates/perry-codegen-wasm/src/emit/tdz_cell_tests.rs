@@ -115,3 +115,23 @@ console.log(held(), traps);
         "1 0"
     );
 }
+
+// The mark of a dead zone is no string key, so a program's Object.prototype cannot supply it
+// to an initialized cell. Expected output is Node's.
+#[test]
+fn object_prototype_does_not_mark_a_cell() {
+    assert_eq!(
+        run_web_source(
+            r#"
+(Object.prototype as any).tdz = "poison";
+function bump(a: number): number {
+  const add = () => { a += 1; };
+  add();
+  return a;
+}
+console.log(bump(1));
+"#
+        ),
+        "2"
+    );
+}
