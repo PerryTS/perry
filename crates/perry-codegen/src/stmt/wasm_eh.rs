@@ -107,7 +107,9 @@ mod tests {
             })
         };
         module.init.push(Stmt::Try {
+            byte_offset: 0,
             body: vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![Stmt::Throw(Expr::Number(42.0))],
                 catch: catch(),
                 finally: None,

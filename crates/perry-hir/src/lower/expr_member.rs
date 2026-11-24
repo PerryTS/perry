@@ -275,8 +275,14 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "main" => Expr::Bool(ctx.is_entry_module),
                     "dirname" => Expr::String(dirname),
                     "filename" => Expr::String(filename),
-                    "require" => super::expr_misc::import_meta_require_value(ctx, crate::lower::member_token(member)),
-                    "resolve" => super::expr_misc::import_meta_resolve_value(ctx, crate::lower::member_token(member)),
+                    "require" => super::expr_misc::import_meta_require_value(
+                        ctx,
+                        crate::lower::member_token(member),
+                    ),
+                    "resolve" => super::expr_misc::import_meta_resolve_value(
+                        ctx,
+                        crate::lower::member_token(member),
+                    ),
                     // Unknown property — undefined matches the spec'd
                     // "missing property on a frozen object" behavior of
                     // import.meta in Node / Bun.
@@ -423,7 +429,9 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         Some(("process.namespace", None))
                     )
                 {
-                    if let Some(expr) = process_metadata_native_property(prop, crate::lower::member_token(member)) {
+                    if let Some(expr) =
+                        process_metadata_native_property(prop, crate::lower::member_token(member))
+                    {
                         return Ok(expr);
                     }
                 }
@@ -498,7 +506,12 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // .includes(name)) now does the right thing instead
                     // of crashing on the 0.0 sentinel.
                     "moduleLoadList" => return Ok(Expr::Array(vec![], None)),
-                    "finalization" => return Ok(process_native_property("finalization", crate::lower::member_token(member))),
+                    "finalization" => {
+                        return Ok(process_native_property(
+                            "finalization",
+                            crate::lower::member_token(member),
+                        ))
+                    }
                     // #1379: process.config — object describing build-time
                     // config (`{ variables, target_defaults }` in Node).
                     // Perry has no `node-gyp`-style build to surface, but
@@ -523,7 +536,12 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "allowedNodeEnvironmentFlags" => {
                         return Ok(process_allowed_node_flags_literal())
                     }
-                    "report" => return Ok(process_native_property("report", crate::lower::member_token(member))),
+                    "report" => {
+                        return Ok(process_native_property(
+                            "report",
+                            crate::lower::member_token(member),
+                        ))
+                    }
                     // #1346: process.argv0 / execPath / title — Node
                     // documents these as strings (program-invocation
                     // name / resolved-binary path / OS-displayed
@@ -636,7 +654,9 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let prop = prop_ident.sym.as_ref();
                 if prop != "sourceMapsEnabled" {
-                    if let Some(expr) = process_metadata_native_property(prop, crate::lower::member_token(member)) {
+                    if let Some(expr) =
+                        process_metadata_native_property(prop, crate::lower::member_token(member))
+                    {
                         return Ok(expr);
                     }
                 }
@@ -670,7 +690,12 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         })
                     }
                     "moduleLoadList" => return Ok(Expr::Array(vec![], None)),
-                    "finalization" => return Ok(process_native_property("finalization", crate::lower::member_token(member))),
+                    "finalization" => {
+                        return Ok(process_native_property(
+                            "finalization",
+                            crate::lower::member_token(member),
+                        ))
+                    }
                     "config" => {
                         return Ok(Expr::Object(vec![
                             ("variables".to_string(), Expr::Object(Vec::new())),
@@ -680,7 +705,12 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "allowedNodeEnvironmentFlags" => {
                         return Ok(process_allowed_node_flags_literal())
                     }
-                    "report" => return Ok(process_native_property("report", crate::lower::member_token(member))),
+                    "report" => {
+                        return Ok(process_native_property(
+                            "report",
+                            crate::lower::member_token(member),
+                        ))
+                    }
                     "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
                             element_offset: 0,

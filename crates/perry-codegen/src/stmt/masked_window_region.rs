@@ -120,8 +120,7 @@ pub(super) struct MaskedWindowRegion {
 /// region scan off plain arithmetic runs.
 fn stmt_has_masked_read(stmt: &Stmt) -> bool {
     fn expr_has(expr: &Expr) -> bool {
-        if let Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } = expr
-        {
+        if let Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } = expr {
             if matches!(object.as_ref(), Expr::LocalGet(_))
                 && crate::collectors::static_index_window(index).is_some()
             {

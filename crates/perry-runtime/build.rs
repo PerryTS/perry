@@ -691,6 +691,12 @@ fn main() {
     // landing-pad shim `perry_trap.ll`; WASI catches through the wasm
     // catchpad shim `perry_wasm_trap.ll` (#13337), with no setjmp.
     println!("cargo:rerun-if-changed=src/ffi/perry_trap.ll");
+    // The crate is an rlib: the flag reaches only its test executables, whose
+    // single-threaded run uses the main thread (1 MiB by default on Windows,
+    // less than an unoptimized realm bootstrap takes).
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc") {
+        println!("cargo:rustc-link-arg=/STACK:8388608");
+    }
     // WASI uses the standardized wasm EH proposal (try_table/throw_ref), the
     // same lowering as generated code.
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("wasi") {

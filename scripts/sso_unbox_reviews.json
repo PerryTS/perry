@@ -273,7 +273,7 @@
       "path": "crates/perry-runtime/src/layout_slot.rs",
       "function": "js_object_rest_get",
       "body_sha256": "e58d8efc89ba36cd1795475d64311735f31e35dcbdccfaf385f01ecc2d390975",
-      "claim": "Reviewed 2026-11-15 (introduced by 7ac81a80bf, #14436): the only caller is codegen's complete_get in perry-codegen/src/expr/rest_fields.rs, whose key operand is key_box: a load from the property's string-literal handle global. Literals are always heap strings, so the masked key is a heap header.",
+      "claim": "Reviewed 2026-11-15 (introduced by 7ac81a80bf, #14436): the only caller is codegen's complete_get in perry-codegen/src/expr/rest_fields.rs, whose key operand is key_box: a load from the property's string-literal handle global. Literals are always heap strings, so the masked key is a heap header. Re-reviewed 2026-11-24: site_slot lost its offset-0 gate; complete_get and key_box are unchanged.",
       "rule": "mask-cast",
       "support_files": [
         "crates/perry-codegen/src/expr/rest_fields.rs"
@@ -385,7 +385,7 @@
     "crates/perry-runtime/src/object/property_ops/put_value.rs": "ff25dbdcced834a1a9704b95b70b1baf7bd018b793d18c789efc1cd328318269",
     "crates/perry-runtime/src/array/join.rs": "c292af7990171f08b140aad3a2c88dd775dd47d098ad5e2f6f1a1e37a5785041",
     "crates/perry-runtime/src/dgram/listeners.rs": "8e447c1cbf5278a055f8770b5415db63d937ff7b4a70705d65253240f071d7dd",
-    "crates/perry-codegen/src/expr/rest_fields.rs": "0abb789418c1fc86124833220846588ed33120c0a66bde5662db41255e608b8d",
+    "crates/perry-codegen/src/expr/rest_fields.rs": "133e1e67724b834c501f174831215a1a89ff79adcede5b4a9e2979c102a4318a",
     "crates/perry-runtime/src/object/layout_probe/computed.rs": "661f84bc6bcd4b228c57b611cba3fe1548fb49415142d920036045f34ac89cf0"
   }
 }
