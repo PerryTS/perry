@@ -6,12 +6,68 @@ impl Model {
         match *c {
             // An observation for the value-record derive: no flow.
             Cons::Identity { .. } => {}
-            // `k in o`: no flow on an ordinary object (a Proxy's `has` trap:
-            // `solve/proxy.rs`).
-            Cons::HasProp { .. } => {}
+            // `k in o`: no flow on an ordinary object; OrdinaryHasProperty
+            // (10.1.7.1 step 3) goes on with parent.[[HasProperty]]: the same
+            // rule on the object's prototype closure (once per object, key
+            // and key node), where a Proxy runs its `has` trap (rule
+            // PXCHAIN, `solve/proxy.rs`). The closure holds every link, so
+            // its ordinary links add nothing.
+            Cons::HasProp { key, idx } => {
+                if !self.chain_has_nodes.contains(&n) {
+                    for &t in toks {
+                        if t != TOP && self.chain_has_done.insert((t, key, idx)) {
+                            let cp = self.cp(t);
+                            self.chain_has_nodes.insert(cp);
+                            self.cons(cp, Cons::HasProp { key, idx });
+                        }
+                    }
+                }
+            }
+            // Rule PXCHAIN: only a Proxy in the closure acts (`proxy_apply`).
+            Cons::ChainSet { .. } | Cons::ChainRecv { .. } => {}
+            // Rule PXDEFINE: an ordinary object's definition is the store
+            // itself; only a Proxy runs a trap (`proxy_apply`).
+            Cons::DefineOwn { .. } => {}
+            // Rule PXRECV: a Proxy's forward to the ordinary objects of its
+            // target, with the original receiver (a Proxy target: `proxy_apply`).
+            Cons::FwdLoad {
+                key,
+                idx,
+                dst,
+                recv,
+            } => {
+                for &q in toks {
+                    self.prov_tok(pv, q);
+                    if idx == NO_NODE {
+                        self.load_from(recv, q, key, dst);
+                    } else {
+                        self.idx_load_from(recv, idx, q, dst, 0, false, false);
+                    }
+                }
+            }
+            Cons::FwdStore {
+                key,
+                src,
+                site,
+                region,
+                recv,
+            } => {
+                self.store_at = Some(n);
+                self.store_region = Some(region);
+                self.store_recv = Some(recv);
+                for &q in toks {
+                    self.prov_tok(pv, q);
+                    self.store_into(q, key, src, site);
+                }
+                self.store_at = None;
+                self.store_region = None;
+                self.store_recv = None;
+            }
             // `Object.hasOwn(o, k)` and kin: no flow on an ordinary object (a
             // Proxy's `getOwnPropertyDescriptor` trap: `solve/proxy.rs`).
             Cons::OwnProp { .. } => {}
+            // Rule PXINV: only a Proxy acts (`proxy_apply`).
+            Cons::DeleteIdx { .. } | Cons::Meta { .. } => {}
             Cons::Load { key, dst } => {
                 // The token loop (⊤ first) runs before the primitive load, so a ⊤
                 // receiver's read keeps the receiver's own root cause instead of being
@@ -239,6 +295,15 @@ impl Model {
                         region,
                         n,
                         "unknown code may throw in the region (an operation on ⊤)",
+                    );
+                }
+            }
+            Cons::HandRaise { region } => {
+                if !toks.is_empty() {
+                    self.raise_top(
+                        region,
+                        n,
+                        "a native hands a value to unknown code, which may throw",
                     );
                 }
             }
@@ -502,6 +567,7 @@ impl Model {
                         Some(self.tok(TokKind::Builtin(BuiltinNs::SharedArrayBuffer)))
                     }
                     guard::NOT_OBJECT_CTOR => Some(self.tok(TokKind::Builtin(BuiltinNs::Object))),
+                    guard::NOT_ERROR_CTOR => Some(self.tok(TokKind::Builtin(BuiltinNs::Error))),
                     _ => None,
                 };
                 // A marker beside its values is no value (DECISIONS 74):
@@ -623,6 +689,26 @@ impl Model {
             Cons::NotObjectProto { dst } => {
                 for &t in toks {
                     if !matches!(self.toks[t as usize], TokKind::ObjectProto) {
+                        self.add_tok(dst, t);
+                    }
+                }
+                if prim != 0 {
+                    let strs = self.nodes[n as usize].strs;
+                    let saved = self.cur_range.replace(self.rg(n));
+                    self.add_s(dst, &[], prim, strs);
+                    self.cur_range = saved;
+                }
+            }
+            // Rule NOT-ERROR (`solve/not_error.rs`): every value but the
+            // ones whose chain surely reaches `%Error.prototype%`; a dropped
+            // token is held for `settle_not_error`.
+            Cons::NotError { hook, dst } => {
+                for &t in toks {
+                    if self.not_error_drops(t, hook) {
+                        if self.not_error_seen.insert((t, hook, dst)) {
+                            self.not_error_held.push((t, hook, dst));
+                        }
+                    } else {
                         self.add_tok(dst, t);
                     }
                 }
@@ -1243,7 +1329,7 @@ impl Model {
                         let v = self.stopped_shared.entry(q).or_default();
                         v.push((key, dst, builtin));
                     } else {
-                        let up = self.cv_of(q, key, builtin);
+                        let up = self.cv_up(q, key, builtin);
                         self.edge(up, dst);
                     }
                 }
@@ -1371,7 +1457,33 @@ impl Model {
                         // gives: the model's object stays apart from the
                         // instance (the result is ⊤) and leaves, with what
                         // the construction put into it.
+                        // A realm constructor that declares what it does
+                        // (ECMA-262 10.1.13 OrdinaryCreateFromConstructor):
+                        // its declaration runs on the instance under
+                        // construction, whose prototype chain is NewTarget's.
+                        TokKind::BuiltinFn(Native::Member { identity, .. })
+                            if origin != TOP
+                                && !self.unit_mode
+                                && builtins::declared_super_construct(identity).is_some() =>
+                        {
+                            let e = builtins::declared_super_construct(identity).expect("guarded");
+                            self.with_native(call, |m, call| {
+                                builtins::run_super_construct(m, e, call, origin)
+                            });
+                        }
                         TokKind::BuiltinFn(_) | TokKind::Builtin(_) => {
+                            if origin != TOP {
+                                let what = match &self.toks[parent as usize] {
+                                    TokKind::BuiltinFn(Native::Member { identity, .. }) => {
+                                        identity.to_string()
+                                    }
+                                    _ => self.tok_name(parent),
+                                };
+                                let r = self.reason(&format!(
+                                    "E21 realm parent constructor {what} declares no construct effects"
+                                ));
+                                self.mark_hard(origin, Hard::E21NativeParent, r);
+                            }
                             let c = self.calls[call as usize].clone();
                             let made = self.node_l("super-builtin-construct");
                             let key = (crate::summary::MK_SUPER_BUILTIN, parent, 0);
@@ -1806,6 +1918,7 @@ impl Model {
                                     idx,
                                     Cons::IdxKey {
                                         obj: TOP,
+                                        origin: TOP,
                                         prim: p,
                                         dst,
                                         shape,
@@ -1892,9 +2005,9 @@ impl Model {
                         } else {
                             self.chain_active = true;
                             self.cons(up, link);
-                            while let Some((n2, c2)) = self.chain_q.pop() {
+                            while let Some((n2, c2, i2)) = self.chain_q.pop() {
                                 if !self.aborted {
-                                    self.replay_cons(n2, c2);
+                                    self.replay_cons(n2, c2, i2);
                                 }
                             }
                             self.chain_active = false;
@@ -1965,6 +2078,7 @@ impl Model {
                 prim: recv,
                 dst,
                 shape,
+                ..
             } => {
                 // Rule NUM-KEY-PRIM (ECMA-262 7.3.2 GetV, 7.1.19
                 // ToPropertyKey, 6.1.6.1.20 Number::toString): `p[k]` of a
@@ -2010,7 +2124,11 @@ impl Model {
                 }
             }
             Cons::IdxKey {
-                obj, dst, shape, ..
+                obj,
+                origin,
+                dst,
+                shape,
+                ..
             } => {
                 let named = index_needs_general_key(toks, prim);
                 // Rule M3: a key of string constants and known prefixes
@@ -2058,13 +2176,13 @@ impl Model {
                                     // property "1" (10.1.8.1 OrdinaryGet).
                                     false => Key::Named(a),
                                 };
-                                self.load_from(obj, obj, key, dst);
+                                self.load_from(origin, obj, key, dst);
                             }
                         }
                     }
                     None => {
                         if named && self.idx_done.insert((n, obj, dst, 1)) {
-                            self.load_from(obj, obj, Key::Any(shape), dst);
+                            self.load_from(origin, obj, Key::Any(shape), dst);
                         }
                     }
                 }
@@ -2126,7 +2244,7 @@ impl Model {
                     if prim & bit != 0 && self.idx_done.insert((n, obj, dst, 2 + bit)) {
                         for k in keys {
                             let a = self.atom(k);
-                            self.load_program_key(obj, a, dst);
+                            self.load_program_key_from(origin, obj, a, dst);
                         }
                     }
                 }
@@ -2796,29 +2914,33 @@ impl Model {
                 agg,
                 region,
             } => {
-                let fired = self.nodes[agg as usize].cons.iter().any(|c| {
-                    matches!(
-                        c,
+                // Rule R2: `%o` formats its argument with depth 4
+                // (util_format.rs:415), every other specifier under the
+                // call's limit.
+                let floor = if self.may_hold_pct_o(n) {
+                    INSPECT_PCT_O_LIMIT
+                } else {
+                    INSPECT_DEFAULT_LIMIT
+                };
+                let fired = self.nodes[agg as usize]
+                    .cons
+                    .iter()
+                    .filter_map(|c| match c {
                         Cons::Implicit {
-                            proto: Protocol::Inspect,
+                            proto: Protocol::Inspect(at),
                             ..
-                        }
-                    )
-                });
+                        } => Some(at.limit),
+                        _ => None,
+                    })
+                    .max()
+                    .is_some_and(|l| l >= floor.max(self.inspect_raised));
                 if !fired && self.may_hold_percent(n) {
                     // `PERRY_WPF_IMPLSRC=1`: the first argument that lets
                     // the specifiers consume (its tokens and String entries).
                     if crate::solve::implsrc_on() {
                         self.console_pct_why(n);
                     }
-                    self.cons(
-                        agg,
-                        Cons::Implicit {
-                            reason,
-                            proto: Protocol::Inspect,
-                            region,
-                        },
-                    );
+                    self.console_inspect(agg, reason, false, region, floor, true);
                 }
             }
             Cons::ObjTagProbe { t, key } => {

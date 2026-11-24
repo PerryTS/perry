@@ -232,6 +232,8 @@ impl Model {
         if !self.virt_protos.contains_key(&t) {
             if let Some(tm) = self.tmpl_of(t) {
                 let tp = &self.tmpls[tm as usize];
+                // A realm birth's declared own field (`realm_born`) is made
+                // as a literal's is.
                 if matches!(
                     tp.kind,
                     crate::model::TmplKind::Lit { .. }
@@ -239,7 +241,8 @@ impl Model {
                             literal_shape: true,
                             ..
                         }
-                ) {
+                ) || self.realm_born.contains(&tm)
+                {
                     return !self.keys_unsure.contains(&tm)
                         && !self.inst_lose.contains(&tm)
                         && (tp.definite.contains(&a) || self.spread_sure(tm, a));
@@ -789,6 +792,15 @@ impl Model {
         self.flush_shadowed_classes(&[tm]);
     }
 
+    /// EvaluateCall's GetV then Call (ECMA-262 13.3.6.1, 7.3.20) of the
+    /// method call `call` on object `t` under `key`: it calls what [[Get]]
+    /// of the key on `t` reads, with `t` as `this`.
+    pub(crate) fn call_read_member(&mut self, t: Tok, key: Key, call: CallId) {
+        let callee = self.node_l("builtin-function-read");
+        self.load_from(t, t, key, callee);
+        self.bind_via(callee, call, t);
+    }
+
     /// dst ⊇ value of `key` read on object `t` (receiver `origin`).
     pub fn load_from(&mut self, origin: Tok, t: Tok, key: Key, dst: NodeId) {
         #[cfg(test)]
@@ -950,7 +962,8 @@ impl Model {
         let present = closed
             || match (key, self.tmpl_of(t)) {
                 (Key::Named(a), Some(tm)) => {
-                    let sure = self.tmpls[tm as usize].kind.is_fact_unit()
+                    let sure = (self.tmpls[tm as usize].kind.is_fact_unit()
+                        || self.realm_born.contains(&tm))
                         && !self.keys_unsure.contains(&tm)
                         && (self.tmpls[tm as usize].definite.contains(&a)
                             || self.spread_sure(tm, a)
@@ -1111,7 +1124,7 @@ impl Model {
             // members in `tok_load`; a prototype the program gave it
             // (`Object.setPrototypeOf`) is on its chain: its values.
             if crate::builtins::ordinary_box(self, t) || crate::builtins::array_chain(self, t) {
-                let cv = self.cv_of(t, key, false);
+                let cv = self.cv_recv(origin, t, key, false);
                 self.edge(cv, dst);
             }
             return;
@@ -1131,7 +1144,7 @@ impl Model {
             }
         }
         // The prototype chain's values, shared by every receiver of `t`.
-        let cv = self.cv_of(t, key, !shadow);
+        let cv = self.cv_recv(origin, t, key, !shadow);
         if defined || first {
             // A rule on the chain node, not an edge into a relay: an
             // observation node feeds only observation nodes (`edge`), and
@@ -1278,6 +1291,12 @@ impl Model {
     /// members under any key, a key a store into ⊤ wrote on an intrinsic
     /// prototype (`Cons::PlainKey`), and accessors that key may name.
     pub(crate) fn plain_key(&mut self, t: Tok, act: ChainAct) {
+        self.plain_key_from(t, t, act)
+    }
+
+    /// `plain_key` with receiver `origin` (rule PXRECV): `this` of the
+    /// accessors it runs, the receiver passed to a Proxy on `t`'s chain.
+    pub(crate) fn plain_key_from(&mut self, origin: Tok, t: Tok, act: ChainAct) {
         if t == TOP || (self.is_marker(t) && !self.virt_protos.contains_key(&t)) {
             return;
         }
@@ -1292,17 +1311,17 @@ impl Model {
             ChainAct::Call(_) => IDX_PLAIN_CALL,
         };
         if self.idx_done.insert((cp, t, at, tag)) {
-            self.cons(cp, Cons::PlainKey { origin: t, act });
+            self.cons(cp, Cons::PlainKey { origin, act });
             // An accessor under a numeric name (one under a computed key
             // made the object's fields ⊤ already).
             if self.numeric_accessor {
-                self.accessor_walk(t, t, Key::any(), act);
+                self.accessor_walk(origin, t, Key::any(), act);
             } else {
                 let num = self.atom(NUM_KEY);
                 self.visits
                     .entry(t)
                     .or_default()
-                    .insert((t, Key::Named(num), act));
+                    .insert((origin, Key::Named(num), act));
             }
         }
     }
@@ -1347,16 +1366,21 @@ impl Model {
     /// field and its program prototype chain, else `undefined`. The builtin
     /// member approximation (`tok_load`) has nothing under it.
     pub fn load_program_key(&mut self, t: Tok, a: Atom, dst: NodeId) {
+        self.load_program_key_from(t, t, a, dst)
+    }
+
+    /// `load_program_key` with receiver `origin` (rule PXRECV).
+    pub fn load_program_key_from(&mut self, origin: Tok, t: Tok, a: Atom, dst: NodeId) {
         if t == TOP || matches!(self.toks[t as usize], TokKind::BuiltinFn(_)) {
-            return self.load_from(t, t, Key::Named(a), dst);
+            return self.load_from(origin, t, Key::Named(a), dst);
         }
         self.mark_use(t, crate::model::MARK_READ);
         self.add_prim(dst, prim::UNDEF);
         let f = self.field_r(t, a);
         self.edge(f, dst);
-        let cv = self.cv(t, Key::Named(a));
+        let cv = self.cv_recv(origin, t, Key::Named(a), true);
         self.edge(cv, dst);
-        self.accessor_walk(t, t, Key::Named(a), ChainAct::Load(dst, self.thrown));
+        self.accessor_walk(origin, t, Key::Named(a), ChainAct::Load(dst, self.thrown));
     }
 
     /// Accessors run with the receiver as `this`. Named keys an accessor
@@ -1554,6 +1578,19 @@ impl Model {
     /// `cv`, with the builtin prototypes' members or (`builtin` false)
     /// with the program prototypes' values only.
     pub fn cv_of(&mut self, t: Tok, key: Key, builtin: bool) -> NodeId {
+        self.cv_recv(t, t, key, builtin)
+    }
+
+    /// `cv_of` of `t` read with receiver `origin` (rule PXRECV: a Proxy's
+    /// forward): a Proxy on `t`'s chain is passed `origin`.
+    pub fn cv_recv(&mut self, origin: Tok, t: Tok, key: Key, builtin: bool) -> NodeId {
+        self.note_chain_recv_at(t, origin);
+        self.cv_up(t, key, builtin)
+    }
+
+    /// `cv_of` of a prototype `t` on a receiver's chain (the next link of a
+    /// `ChainUnion`): `t` is no receiver of it.
+    pub(super) fn cv_up(&mut self, t: Tok, key: Key, builtin: bool) -> NodeId {
         if let Some(&n) = self.cv_nodes.get(&(t, key, builtin)) {
             return n;
         }
@@ -1840,6 +1877,8 @@ impl Model {
 
     /// `super.key` from receiver `origin`: the lookup starts at `start`.
     pub(super) fn super_lookup(&mut self, origin: Tok, start: Tok, key: Key, act: ChainAct) {
+        // The Receiver of `super.key` is `this` (13.3.7.3 MakeSuperPropertyReference).
+        self.note_chain_recv(origin);
         if start == TOP {
             self.chain_step(0, origin, TOP, key, act);
             return;
@@ -1922,7 +1961,7 @@ impl Model {
         }
         if let Some(v) = self.stopped_shared.remove(&p) {
             for (key, dst, builtin) in v {
-                let up = self.cv_of(p, key, builtin);
+                let up = self.cv_up(p, key, builtin);
                 self.edge(up, dst);
             }
         }

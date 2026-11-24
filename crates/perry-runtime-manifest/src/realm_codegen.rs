@@ -27,7 +27,10 @@ pub fn generate(runtime_src: &Path, out: &Path) -> Result<RealmManifest, String>
                 .collect::<Vec<_>>()
                 .join(", ")
         );
-        writeln!(rust,"crate::realm_manifest::RealmEntry {{ name: {:?}, kind: crate::realm_manifest::RealmKind::{:?}, births: &{:?}, module: {}, facts: {:?}, effects: {effects}, own: {own}, proto: {:?} }},",d.name,d.kind,d.births,module,serde_json::to_string(d).unwrap(),d.prototype).unwrap();
+        let value = d.value.as_ref().map_or("None".into(), |v| {
+            format!("Some(crate::realm_manifest::RealmOwnValue::{})", v.emit_own_value())
+        });
+        writeln!(rust,"crate::realm_manifest::RealmEntry {{ name: {:?}, kind: crate::realm_manifest::RealmKind::{:?}, births: &{:?}, module: {}, facts: {:?}, effects: {effects}, own: {own}, proto: {:?}, value: {value} }},",d.name,d.kind,d.births,module,serde_json::to_string(d).unwrap(),d.prototype).unwrap();
     }
     rust.push_str("];\n");
     std::fs::write(out.join("realm_table.rs"), rust).map_err(|e| e.to_string())?;

@@ -13,7 +13,8 @@ use super::*;
 fn verdict(proto: &str, read: &str) -> Verdict {
     let src = format!(
         r#"
-        const h: any = (globalThis as any).hostFn();
+        declare function external(x?: unknown): any;
+        const h: any = external();
         {proto}
         Object.setPrototypeOf(h, P);
         class Svc {{ size = 3; }}
@@ -55,7 +56,7 @@ fn an_unknown_prototype_writes_no_index_key() {
     // DEC 250: the runtime refuses the relink of a builtin prototype and an
     // index add on it, so a prototype of unknown keys is no index read's
     // source (the named `greet` tests above stay open).
-    let v = verdict("const P: any = (globalThis as any).hostProto();", "size");
+    let v = verdict("const P: any = external();", "size");
     assert!(proven(&v), "{v:?}");
 }
 
@@ -111,7 +112,7 @@ fn a_created_prototype_with_a_computed_accessor_writes_no_index_key() {
 #[test]
 fn a_created_prototype_from_unknown_descriptors_writes_no_index_key() {
     let v = verdict(
-        "const P: any = Object.create(Object.prototype, (globalThis as any).hostDescs());",
+        "const P: any = Object.create(Object.prototype, external());",
         "size",
     );
     assert!(proven(&v), "{v:?}");

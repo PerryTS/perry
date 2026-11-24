@@ -235,6 +235,10 @@ impl Model {
     /// ([`Model::fnproto_write`], [`Model::fnproto_borrow_write`]). `key` `None`: an operation whose key the
     /// model does not keep (a definition, a deletion).
     pub fn note_fnproto_write(&mut self, t: Tok, key: Option<Key>, what: &str) {
+        // P-N1: whole program, ⊤ is never `%Object.prototype%`.
+        if t == TOP && !self.foreign_code() {
+            return;
+        }
         if !(t == TOP || matches!(self.toks[t as usize], TokKind::ObjectProto)) {
             return;
         }
@@ -350,6 +354,63 @@ impl Model {
         }
     }
 
+    /// Code the analysis does not see may run beside the program: per unit
+    /// (the other units), an unseen module, or the linked interpreter. All
+    /// three are known before the solve. Only then may a value the analysis
+    /// does not model be a built-in prototype, a built-in constructor or the
+    /// global object (premise P-N1, owner 2026-11-23: whole program, the
+    /// program reaches an intrinsic only by its name, by a declared builtin
+    /// result or by modeled reflection).
+    pub(crate) fn foreign_code(&self) -> bool {
+        self.unit_mode || self.unseen_module_runs || self.interp_linked
+    }
+
+    /// Code other than the program and the runtime may name the realm: per
+    /// unit, beside an unseen module, or once interpreted code runs. Only
+    /// then does unknown code hold the realm (`hold_realm`). Whole program
+    /// under the closed world (owner 2026-11-14) and R-GLOBAL (2026-11-18),
+    /// unknown code is the runtime, which names intrinsics only through its
+    /// declared reads: a call or `new` of an unknown value holds nothing.
+    pub(crate) fn realm_nameable(&self) -> bool {
+        self.unit_mode || self.unseen_module_runs || self.interp_runs
+    }
+
+    /// An escape reason a builtin contract states: the builtin that holds
+    /// the value acts on it only as its declaration says (owner premise
+    /// Phase B, 2026-11-23), and the solve models those acts. Every other
+    /// escape hands the value to code the analysis does not model (a ⊤ or
+    /// opaque callee, an unknown setter or getter, `instanceof` with an
+    /// unknown right-hand side, a Proxy handler, code no declaration
+    /// describes, ...): what it is handed may be written under any key.
+    pub fn contract_reason(&mut self, s: &str) -> u32 {
+        let r = self.reason(s);
+        self.contract_reasons.insert(r);
+        r
+    }
+
+    /// Does an escape with `reason` hand the value to code that may write
+    /// it beyond a contract? Every escape whose reason no builtin contract
+    /// states (`contract_reason`) does, and every escape beside foreign code.
+    pub(crate) fn writes_any(&self, reason: u32) -> bool {
+        self.foreign_code() || !self.contract_reasons.contains(&reason)
+    }
+
+    /// `t` escaped to code that may write it under any key.
+    #[inline]
+    pub fn is_escaped_writer(&self, t: Tok) -> bool {
+        self.esc_writer_bits
+            .get((t >> 6) as usize)
+            .is_some_and(|w| w & (1 << (t & 63)) != 0)
+    }
+
+    /// Why `t` is held by code that may write it under any key
+    /// (`is_escaped_writer`), if it is. A value handed only by a builtin
+    /// contract has none: that code writes it only as the contract states
+    /// (Phase B, owner 2026-11-23), and the solve models those writes.
+    pub fn writer_escape_why(&self, t: Tok) -> Option<String> {
+        self.esc_writer_why.get(&t).map(|&r| self.reasons[r as usize].clone())
+    }
+
     pub fn reason(&mut self, s: &str) -> u32 {
         if let Some(&r) = self.reason_index.get(s) {
             return r;
@@ -402,12 +463,14 @@ impl Model {
         v
     }
 
+    #[track_caller]
     pub fn node(&mut self, name: impl FnOnce() -> String) -> NodeId {
         self.node_named("other", name)
     }
 
     /// A node with a static label (diagnostics: the biggest points-to sets
     /// are reported by label).
+    #[track_caller]
     pub fn node_named(&mut self, label: &'static str, name: impl FnOnce() -> String) -> NodeId {
         let id = self.nodes.len() as NodeId;
         if self.max_nodes != 0 && self.nodes.len() > self.max_nodes {
@@ -421,6 +484,30 @@ impl Model {
         }
         self.node_fn.push(NO_FN);
         self.labels.push(label);
+        if let Some(s) = self.stop_top.as_mut() {
+            // The program position of the expression the node stands for:
+            // generation's, else that of the expression that attached the
+            // rule being applied (`StopTop::cur_pos`).
+            let p = s.cur_pos();
+            s.node_pos.resize(id as usize + 1, crate::topstop::NOPOS);
+            s.node_pos[id as usize] = p;
+            let at = std::panic::Location::caller();
+            if p == crate::topstop::NOPOS {
+                *s.nopos.entry(at).or_default() += 1;
+            }
+            // Made outside a program expression: the node whose rule runs
+            // (else the escape's node, else the sender) made it.
+            let from = match (s.rule, s.esc.last()) {
+                (Some((rn, c)), _) => (rn, Some(c)),
+                (None, Some(&(_, _, sink))) if sink != NO_NODE => (sink, None),
+                _ => (self.cur_src, None),
+            };
+            s.node_from.resize(id as usize + 1, (NO_NODE, None));
+            if s.gen_pos == crate::topstop::NOPOS {
+                s.node_from[id as usize] = from;
+                s.node_at.insert(id, at);
+            }
+        }
         if self.relations.is_some() {
             self.node_names.push(name());
         }
@@ -432,6 +519,7 @@ impl Model {
         self.node_fn[n as usize] = self.cur_fn;
     }
 
+    #[track_caller]
     pub fn node_l(&mut self, label: &'static str) -> NodeId {
         self.node_named(label, || label.to_string())
     }
@@ -959,9 +1047,12 @@ impl Model {
             self.note_inst(t, false);
         }
         if new & MARK_ESCAPE != 0 && !described {
-            self.set_marker_top(t);
+            self.set_marker_top(t, "a marker of another unit's value escapes (its use MARK_ESCAPE, no described contract): it reads as ⊤ from now on (DECISIONS 42)");
             if let Some(&r) = self.marker_reach.get(&t) {
-                self.set_marker_top(r);
+                self.set_marker_top(
+                    r,
+                    "the reach marker of an escaped argument marker reads as ⊤ (DECISIONS 42)",
+                );
             }
             // What it reaches under a key is what unknown code stored
             // there: no ⊤ beside the marker says so (DECISIONS 119). So is
@@ -978,7 +1069,7 @@ impl Model {
                     .filter(|&r| !self.marker_is_top(r))
                     .collect();
                 for r in rs {
-                    self.set_marker_top(r);
+                    self.set_marker_top(r, "a keyed reach / path step below an escaped marker reads as ⊤ (DECISIONS 119, 158)");
                     stack.push(r);
                 }
             }
@@ -1028,7 +1119,10 @@ impl Model {
         self.keyed_reach.entry(t).or_default().push((a, r));
         // An escaped marker's keyed reach reads as ⊤ too (DECISIONS 119).
         if self.marker_is_top(t) {
-            self.set_marker_top(r);
+            self.set_marker_top(
+                r,
+                "a new keyed reach of a marker that reads as ⊤ reads as ⊤ (DECISIONS 119)",
+            );
         }
         match self.param_marker.get(&t).copied() {
             Some(fi) => {
@@ -1131,7 +1225,10 @@ impl Model {
                 self.path_parent.insert(s, (t, k));
                 self.path_steps.entry(t).or_default().push(s);
                 if self.marker_is_top(t) {
-                    self.set_marker_top(s);
+                    self.set_marker_top(
+                        s,
+                        "a new path step of a marker that reads as ⊤ reads as ⊤ (DECISIONS 158)",
+                    );
                 }
                 s
             }
@@ -1294,12 +1391,17 @@ impl Model {
         }
     }
 
-    pub(crate) fn set_marker_top(&mut self, t: Tok) {
+    #[track_caller]
+    pub(crate) fn set_marker_top(&mut self, t: Tok, why: &str) {
         let w = (t >> 6) as usize;
         if self.marker_top.len() <= w {
             self.marker_top.resize(w + 1, 0);
         }
+        let fresh = self.marker_top[w] & (1 << (t & 63)) == 0;
         self.marker_top[w] |= 1 << (t & 63);
+        if fresh && self.stop_top.is_some() {
+            self.top_marker_created(t, why, std::panic::Location::caller());
+        }
     }
 
     /// A marker that reads as ⊤ (DECISIONS 42).

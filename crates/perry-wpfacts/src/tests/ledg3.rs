@@ -12,6 +12,7 @@ fn site(causes: &[u64], store: bool) -> Refused {
         part: 0,
         store,
         why: None,
+        site: String::new(),
     }
 }
 

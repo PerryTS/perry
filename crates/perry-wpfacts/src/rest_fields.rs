@@ -92,11 +92,13 @@ fn use_of(m: &Model, c: &Cons, reads: &FxHashSet<NodeId>) -> Option<String> {
         Cons::MCall { .. }
         | Cons::Identity { .. }
         | Cons::Raise { .. }
+        | Cons::HandRaise { .. }
         | Cons::Guard { .. }
         | Cons::Defined { .. }
         | Cons::NotNullish { .. }
         | Cons::NotBuffer { .. }
         | Cons::NotObjectProto { .. }
+        | Cons::NotError { .. }
         | Cons::NotRegExp { .. }
         | Cons::NotNull { .. }
         | Cons::RecordEntry { .. }

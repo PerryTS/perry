@@ -18,6 +18,7 @@ use super::*;
 fn src(extra: &str) -> String {
     format!(
         r#"
+        declare function external(x?: unknown): any;
         declare const w: boolean;
         const plain: any = {{ x: 1 }};
         function readAny(o: any, k: string) {{ return o[k]; }}
@@ -84,8 +85,14 @@ fn a_concatenation_whose_shape_excludes_proto_gives_nothing() {
 
 #[test]
 fn a_proto_constant_gives_the_prototype() {
-    // (c1) the give stays where the program spells `__proto__`.
-    assert!(!no_give(r#"via(recv, { cacheKey: "__proto__" }, box);"#));
+    // (c1) the give stays where the program spells `__proto__`: `recv`'s
+    // chain reaches `box`. `recv` holds builtin functions and namespaces,
+    // whose given prototype is exact (GP1, `gives_exactly`, the
+    // `proto_node` link): only program lookups read `box`'s chain, so its
+    // members keep their facts.
+    let extra = r#"via(recv, { cacheKey: "__proto__" }, box);"#;
+    assert!(chain_reads_box(extra));
+    assert!(no_give(extra));
 }
 
 #[test]
@@ -105,7 +112,7 @@ fn an_any_key_string_store_into_the_resolver_is_any_string() {
 #[test]
 fn an_escaped_resolver_is_any_string() {
     // (c3) unknown code holds `R1` and may write its field.
-    assert!(!no_give("(globalThis as any).hostFn(R1);"));
+    assert!(!no_give("external(R1);"));
 }
 
 #[test]
@@ -139,4 +146,32 @@ fn eight_constants_stay_names() {
         }
         setCached(recv, pick(Date.now()), box);"#
     ));
+}
+/// The `.size` read of `viaChain` (what `recv`'s chain holds under `svc`)
+/// sees `Svc`: the store gave `box` as `recv`'s prototype.
+fn chain_reads_box(extra: &str) -> bool {
+    let s = src(&format!(
+        "{extra}\nconst viaChain = (recv as any).svc; console.log(viaChain.size);"
+    ));
+    let at = s.find("viaChain.size").expect("marker") as u32;
+    let pf = facts(&s);
+    let site = pf
+        .sites
+        .iter()
+        .find(|x| x.key == "size" && x.byte_offset >= at && x.byte_offset < at + 16)
+        .unwrap_or_else(|| panic!("viaChain.size in\n{}", pf.dump_text()));
+    site.receivers.iter().any(|r| r.ends_with(":Svc"))
+}
+
+#[test]
+fn a_named_proto_store_gives_the_chain_exactly() {
+    assert!(!chain_reads_box(""), "control: no store, no chain to box");
+    for extra in [
+        r#"via(recv, { cacheKey: "__proto__" }, box);"#,
+        r#"setCached(recv, "__proto__", box);"#,
+        r#"recv["__proto__"] = box;"#,
+        r#"recv.__proto__ = box;"#,
+    ] {
+        assert!(chain_reads_box(extra), "{extra}");
+    }
 }

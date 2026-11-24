@@ -330,9 +330,9 @@ pub(crate) fn install_prototype(proto: *mut crate::object::ObjectHeader) {
         crate::event_target::prototype::accessor(proto, name, func, None, true)
     };
     get("hardwareConcurrency", crate::fn_info!(#[realm("Navigator.prototype.hardwareConcurrency.<get>", effects = { returns(prim(num)) })] export crate::navigator::get_hardware_concurrency, 0; with_name("get hardwareConcurrency"), with_flags(crate::closure::FN_BUILTIN)));
-    get("locks", crate::fn_info!(#[realm("Navigator.prototype.locks.<get>")] export crate::navigator::get_locks, 0; with_name("get locks"), with_flags(crate::closure::FN_BUILTIN)));
+    get("locks", crate::fn_info!(#[realm("Navigator.prototype.locks.<get>", effects = { returns(fresh(Object.prototype)) })] export crate::navigator::get_locks, 0; with_name("get locks"), with_flags(crate::closure::FN_BUILTIN)));
     get("language", crate::fn_info!(#[realm("Navigator.prototype.language.<get>", effects = { returns(prim(str)) })] export crate::navigator::get_language, 0; with_name("get language"), with_flags(crate::closure::FN_BUILTIN)));
-    get("languages", crate::fn_info!(#[realm("Navigator.prototype.languages.<get>")] export crate::navigator::get_languages, 0; with_name("get languages"), with_flags(crate::closure::FN_BUILTIN)));
+    get("languages", crate::fn_info!(#[realm("Navigator.prototype.languages.<get>", effects = { returns(fresh(Array.prototype, elems = [prim(str)])) })] export crate::navigator::get_languages, 0; with_name("get languages"), with_flags(crate::closure::FN_BUILTIN)));
     get("userAgent", crate::fn_info!(#[realm("Navigator.prototype.userAgent.<get>", effects = { returns(prim(str)) })] export crate::navigator::get_user_agent, 0; with_name("get userAgent"), with_flags(crate::closure::FN_BUILTIN)));
     get("platform", crate::fn_info!(#[realm("Navigator.prototype.platform.<get>", effects = { returns(prim(str)) })] export crate::navigator::get_platform, 0; with_name("get platform"), with_flags(crate::closure::FN_BUILTIN)));
 }

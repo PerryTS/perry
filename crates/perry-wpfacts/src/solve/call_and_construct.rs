@@ -142,11 +142,15 @@ impl Model {
         }
         match self.toks[t as usize] {
             TokKind::Top | TokKind::BuiltinFn(_) => unreachable!(),
-            // PROXY2: a call of a Proxy reaches `proxy_apply` (degrade there);
-            // a direct one takes today's path too.
+            // Rule PXAPPLY: a direct call of a Proxy is its [[Call]]
+            // (`proxy_call`: the apply trap or the forward, once its
+            // target is callable).
             TokKind::Proxy(p) => {
-                self.proxy_degrade(p, "call");
-                self.call_tok(call, TOP, this_tok);
+                let c = match this_tok {
+                    Some(this) => Cons::CallThis { call, this },
+                    None => Cons::Call { call },
+                };
+                self.proxy_call(NO_NODE, c, p);
             }
             TokKind::Func(f, _) => {
                 self.bind_args(call, t);
@@ -309,7 +313,7 @@ impl Model {
     /// the call's own `this` escapes too.
     pub(super) fn unknown_callee_args(&mut self, call: CallId, t: Tok, sink_this: bool) {
         self.diagnostic_callee(call, t);
-        if !self.realm_held && self.prov.is_some() {
+        if !self.realm_held && self.realm_nameable() && self.prov.is_some() {
             self.why_hold(
                 if t == TOP {
                     "callee-top"
@@ -333,8 +337,9 @@ impl Model {
                 crate::unksrc::held(kind, &why, call, f);
             }
         }
-        // Unknown code runs, handed values or not: it holds the realm.
-        if !self.realm_held {
+        // Unknown code runs, handed values or not: it holds the realm where
+        // code beside the program may name it (`realm_nameable`).
+        if !self.realm_held && self.realm_nameable() {
             let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
             if self.keysnap.is_some() {
                 self.keysnap_at(
@@ -997,7 +1002,7 @@ impl Model {
                         crate::unksrc::held(kind, &why, call, f);
                     }
                 }
-                if !self.realm_held {
+                if !self.realm_held && self.realm_nameable() {
                     let r = self.reason("an intrinsic of the realm: unknown code holds the realm");
                     if self.keysnap.is_some() {
                         self.keysnap_at(
@@ -1518,6 +1523,8 @@ impl Model {
         }
         // A described namespace method is the ordinary member value,
         // called with its receiver. Its aliases use the very same model.
+        // (A host object's key no rule describes: `builtins::ns_method`'s
+        // last arm, `call_read_member`.)
         if !self.unit_mode {
             if let (TokKind::Builtin(ns), Key::Named(a)) = (&self.toks[t as usize], key) {
                 if builtins::namespace_native(self, t, *ns, &self.atoms[a as usize]).is_some()

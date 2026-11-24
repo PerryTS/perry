@@ -384,6 +384,7 @@ impl Model {
                 | Cons::Falsy { dst }
                 | Cons::NotBuffer { dst, .. }
                 | Cons::NotObjectProto { dst }
+                | Cons::NotError { dst, .. }
                 | Cons::NotRegExp { dst }
                 | Cons::NotNull { dst }
  | Cons::RecordEntry { dst }
@@ -701,6 +702,13 @@ impl Model {
     /// `solver_call` without the chain key (`solver_call_keyed` keys it).
     pub(crate) fn solver_call_raw(&mut self, by: CallId, cs: CallSite) -> CallId {
         let id = self.calls.len() as CallId;
+        // Diagnostics (the stop switch): the result and throw nodes a
+        // native model makes for the call carry the program position of
+        // the program call it runs for (`made_root`), when they have none.
+        if self.stop_top.is_some() {
+            let root = self.made_root.get(&by).copied().unwrap_or(by);
+            self.solver_call_pos(root, by, &[cs.ret, cs.region]);
+        }
         self.calls.push(cs);
         self.solver_made += 1;
         let root = self.made_root.get(&by).copied().unwrap_or(by);

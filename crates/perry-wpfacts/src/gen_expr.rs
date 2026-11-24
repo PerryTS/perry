@@ -819,7 +819,21 @@ impl<'a> Gen<'a> {
         let seq = self.expr_seq;
         self.expr_seq += 1;
         let member_ops = self.member_ops.len();
+        let pos0 = match self.m.stop_top.as_mut() {
+            Some(s) => {
+                let p0 = s.gen_pos;
+                if let Some(o) = crate::topstop::expr_offset(e) {
+                    s.gen_pos = (fx.module, o);
+                    s.fn_pos.entry(fx.f as u32).or_insert((fx.module, o));
+                }
+                Some(p0)
+            }
+            None => None,
+        };
         let n = self.expr_inner(fx, e);
+        if let (Some(p0), Some(s)) = (pos0, self.m.stop_top.as_mut()) {
+            s.gen_pos = p0;
+        }
         self.member_op_class(fx.module, e, member_ops);
         // A namespace pair's argument (`namespace_pair`): the pair is built
         // from one argument list (perry-hir `try_patched_builtin_call`), so
@@ -1380,13 +1394,11 @@ impl<'a> Gen<'a> {
                 let dst = self.private_getter_or_load(mi, object, o, a);
                 // S8: on the global sentinel a name the main realm does not
                 // declare is [[Get]] on the global object (`loads::tok_load`);
-                // in a module a Worker may run, the Worker global's own
-                // native of that name (perry-stdlib worker_threads
-                // worker_surface.rs: `postMessage`, `addEventListener`, …)
-                // may be the value as well: unknown to the model.
+                // in a module a Worker may run, also what the Worker global's
+                // own member of that name holds, as the realm declares it
+                // (`builtins::worker_global_member`).
                 if self.bare_user_global(mi, object, property) && self.m.worker_side_module(mi) {
-                    self.m.add_top(dst, |_| format!("Worker global {property}"));
-                    self.m.add_prim(dst, prim::ALL);
+                    crate::builtins::worker_global_member(&mut self.m, property, dst);
                 }
                 self.field_reads.push(dst);
                 if *byte_offset != 0 {
@@ -1929,6 +1941,7 @@ impl<'a> Gen<'a> {
                                 reason: r,
                             },
                         );
+                        self.m.cons(o, Cons::DeleteIdx { idx: k, reason: r });
                     }
                     other => {
                         let _ = self.expr(fx, other);

@@ -126,6 +126,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::Falsy { dst }
         | Cons::NotBuffer { dst, .. }
         | Cons::NotObjectProto { dst }
+        | Cons::NotError { dst, .. }
         | Cons::NotRegExp { dst }
         | Cons::ProtoObjects { dst }
         | Cons::NotNull { dst }
@@ -163,10 +164,12 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::ArrayLenArg { .. }
         | Cons::CaseMap { .. }
         | Cons::ConsoleFormat { .. }
-        | Cons::Raise { .. }
+        | Cons::Raise { .. } | Cons::HandRaise { .. }
         | Cons::Identity { .. }
         | Cons::HasProp { .. }
         | Cons::OwnProp { .. }
+        | Cons::DeleteIdx { .. }
+        | Cons::Meta { .. }
         | Cons::Hard { .. }
         | Cons::TopIfTop { .. }
         | Cons::OwnTest { .. }
@@ -210,6 +213,11 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::AnyAccessors { .. }
         | Cons::UnnamedSet { .. }
         | Cons::StoreTopProto { .. }
+        | Cons::ChainSet { .. }
+        | Cons::ChainRecv { .. }
+        | Cons::FwdLoad { .. }
+        | Cons::FwdStore { .. }
+        | Cons::DefineOwn { .. }
         | Cons::SuperCtor { .. }
         | Cons::SuperCtorParent { .. }
         | Cons::Accessor { .. }

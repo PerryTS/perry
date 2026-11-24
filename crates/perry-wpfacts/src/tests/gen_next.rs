@@ -20,6 +20,7 @@ fn facts_of(src: &str) -> ProgramFacts {
 fn facts_and_sources(src: &str) -> (ProgramFacts, Vec<u32>) {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         class Alt {{ other = 1; size = 4; }}
         class Called {{ value: any; constructor(v: any) {{ this.value = v; }} }}
@@ -277,7 +278,7 @@ fn gen_next_fact_u5_generator_or_array() {
 
 #[test]
 fn gen_next_fact_u6_escaped_generator_object() {
-    excluded("const it: any = gen(); (globalThis as any).hook(it); for (const s of it) { console.log(g(s)); break; }");
+    excluded("const it: any = gen(); external(it); for (const s of it) { console.log(g(s)); break; }");
 }
 
 /// `for await` makes no for-of record: no site the fact could name.
@@ -351,6 +352,7 @@ fn step_payloads(src: &str) -> Vec<bool> {
     let ast = perry_parser::parse_typescript(
         &format!(
             r#"
+        declare function external(x?: unknown): any;
             class Svc {{ size = 3; }}
             class Alt {{ other = 1; size = 4; }}
             class Called {{ value: any; constructor(v: any) {{ this.value = v; }} }}

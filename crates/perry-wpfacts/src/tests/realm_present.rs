@@ -18,6 +18,7 @@ const UNDEF: u16 = 0x10;
 fn xv(body: &str) -> (u16, bool, Vec<String>) {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         const k: any = process.argv[2];
         const holder: any = {{ xv: 0 }};
         {body}
@@ -74,7 +75,7 @@ fn a_reachable_write_or_delete_keeps_undefined() {
         "(Math as any).max = undefined; const x: any = Math.max; holder.xv = x;",
         "delete (Math as any).max; const x: any = Math.max; holder.xv = x;",
         "(globalThis as any)[k] = undefined; const x: any = Int8Array; holder.xv = x;",
-        "(globalThis as any).hostGet()(globalThis); const x: any = Int8Array; holder.xv = x;",
+        "external()(globalThis); const x: any = Int8Array; holder.xv = x;",
         "const x: any = (globalThis as any).someUndeclared; holder.xv = x;",
     ]
     .into_iter()

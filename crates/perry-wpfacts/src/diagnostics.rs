@@ -338,6 +338,7 @@ impl Model {
     }
     /// ROOTS2: a ⊤ seed into a field of escaped `holder`.
     #[track_caller]
+    #[track_caller]
     pub(crate) fn add_top_held(
         &mut self,
         n: NodeId,

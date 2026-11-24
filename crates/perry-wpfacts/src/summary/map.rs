@@ -48,6 +48,8 @@ pub fn map_cons(
             key,
             idx: if idx == NO_NODE { NO_NODE } else { n(idx) },
         },
+        DeleteIdx { idx, reason } => DeleteIdx { idx: n(idx), reason },
+        Meta { op, reason } => Meta { op, reason },
         LenIndex { lo, hi } => LenIndex { lo, hi },
         LenPermuted { t } => LenPermuted { t },
         CjsPublish { dst } => CjsPublish { dst: n(dst) },
@@ -90,6 +92,7 @@ pub fn map_cons(
         },
         TopSink { reason } => TopSink { reason },
         Raise { region } => Raise { region: n(region) },
+        HandRaise { region } => HandRaise { region: n(region) },
         RuntimeStore { reason, retained } => RuntimeStore { reason, retained },
         HandOver { reason, ctor, arg } => HandOver { reason, ctor, arg },
         OwnOnly { f, dst } => OwnOnly { f, dst: n(dst) },
@@ -153,6 +156,10 @@ pub fn map_cons(
             dst: n(dst),
         },
         NotObjectProto { dst } => NotObjectProto { dst: n(dst) },
+        NotError { hook, dst } => NotError {
+            hook: n(hook),
+            dst: n(dst),
+        },
         Objects { dst } => Objects { dst: n(dst) },
         TopIfAny { dst, from, reason } => TopIfAny {
             dst: n(dst),
@@ -238,6 +245,47 @@ pub fn map_cons(
         StoreTopProto { origin, src } => StoreTopProto {
             origin,
             src: n(src),
+        },
+        ChainSet {
+            origin,
+            key,
+            src,
+            region,
+        } => ChainSet {
+            origin,
+            key,
+            src: n(src),
+            region: n(region),
+        },
+        ChainRecv { origin } => ChainRecv { origin },
+        FwdLoad {
+            key,
+            idx,
+            dst,
+            recv,
+        } => FwdLoad {
+            key,
+            idx: if idx == NO_NODE { NO_NODE } else { n(idx) },
+            dst: n(dst),
+            recv,
+        },
+        FwdStore {
+            key,
+            src,
+            site,
+            region,
+            recv,
+        } => FwdStore {
+            key,
+            src: n(src),
+            site,
+            region: n(region),
+            recv,
+        },
+        DefineOwn { key, value, region } => DefineOwn {
+            key,
+            value: n(value),
+            region: n(region),
         },
         Super { start, key, act } => Super {
             start,
@@ -342,11 +390,13 @@ pub fn map_cons(
         },
         IdxKey {
             obj,
+            origin,
             prim,
             dst,
             shape,
         } => IdxKey {
             obj,
+            origin,
             prim,
             dst: n(dst),
             shape,
@@ -690,6 +740,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | Falsy { .. }
             | NotBuffer { .. }
             | NotObjectProto { .. }
+            | NotError { .. }
             | NotRegExp { .. }
             | ProtoObjects { .. }
             | NotNull { .. }

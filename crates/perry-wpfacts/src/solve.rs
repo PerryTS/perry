@@ -13,6 +13,7 @@ mod copy;
 mod define;
 mod lookup;
 pub(crate) mod map_vals;
+mod not_error;
 mod own_read;
 mod record_entry;
 
@@ -46,9 +47,11 @@ mod virt;
 
 // Property-key ranges come from value deltas, not source annotations. Keep
 // computed reads and calls on the same partition of ToPropertyKey's inputs.
-/// An escaped value (unknown code holds it) that is no parameter or
+/// An escaped value that code no contract describes holds (it may write
+/// any key of it, `Model::is_escaped_writer`) and that is no parameter or
 /// argument marker: beside ⊤ it is that ⊤, since every rule does to ⊤ at
-/// least what it does to the value. The one predicate of the arrival rule
+/// least what it does to the value. A value handed only by contract is not:
+/// a program store through ⊤ beside it must still write it. The one predicate of the arrival rule
 /// (`add_tokens_s`, with the markers that read as ⊤, DECISIONS 42), of ⊤'s
 /// arrival at a node that lists the value, and of a ⊤ node's pop.
 pub(crate) fn escaped_beside_top<V>(
@@ -210,7 +213,7 @@ impl Model {
             // is an escaped value (`Model::top_beside`): unknown code holds
             // it, so beside ⊤ it is that ⊤.
             if marker_top_bit(&self.marker_top, t)
-                || escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+                || escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t)
             {
                 later.push(t);
                 continue;
@@ -257,14 +260,12 @@ impl Model {
                     .pts
                     .to_sorted()
                     .into_iter()
-                    .filter(|&t| {
-                        escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
-                    })
+                    .filter(|&t| escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t))
                     .collect();
                 self.ledger_again_beside_top(n, &gone);
             }
             let node = &mut self.nodes[n as usize];
-            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let (esc, pm, ab) = (&self.esc_writer_bits, &self.param_marker, &self.arg_bits);
             let old = std::mem::take(&mut node.pts);
             let before = old.len();
             node.pts = self
@@ -296,6 +297,9 @@ impl Model {
             if let Some(l) = self.ledger.as_mut() {
                 l.top_seed(n, self.cur_why, std::panic::Location::caller());
             }
+        }
+        if top_new && self.stop_top.is_some() {
+            self.top_created(n, std::panic::Location::caller());
         }
         if self.pts_entries & 0xfffff == 0 && self.pts_entries != 0 {
             if self
@@ -359,6 +363,7 @@ impl Model {
         !matches!(
             c,
             Cons::Raise { .. }
+                | Cons::HandRaise { .. }
                 | Cons::Identity { .. }
                 | Cons::Guard { .. }
                 | Cons::Defined { .. }
@@ -368,6 +373,7 @@ impl Model {
                 | Cons::Falsy { .. }
                 | Cons::NotBuffer { .. }
                 | Cons::NotObjectProto { .. }
+                | Cons::NotError { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
@@ -411,6 +417,7 @@ impl Model {
     /// Unknown code may run in `region` (a ⊤ or opaque callee, an operation
     /// on ⊤, a native handing a value to unknown code): it may throw anything
     /// it holds there.
+    #[track_caller]
     pub fn raise_top(&mut self, region: NodeId, from: NodeId, why: &'static str) {
         if region == u32::MAX || self.nodes[region as usize].pts.contains_tok(TOP) {
             return;
@@ -721,9 +728,7 @@ impl Model {
         for (reason, retained) in sinks {
             let root = l.enter_sink(n);
             for &t in toks {
-                if retained != Some(t)
-                    && escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
-                {
+                if retained != Some(t) && escaped_beside_top(&self.esc_writer_bits, &self.param_marker, &self.arg_bits, t) {
                     l.again(t, reason, std::panic::Location::caller());
                 }
             }
@@ -731,6 +736,7 @@ impl Model {
         }
     }
 
+    #[track_caller]
     pub fn add_tok(&mut self, n: NodeId, t: Tok) {
         self.add_tok_arm(n, t, "")
     }
@@ -806,6 +812,15 @@ impl Model {
     /// unmodeled thing; only interned in explain mode (diagnostics).
     #[track_caller]
     pub fn add_top(&mut self, n: NodeId, why: impl FnOnce(&Self) -> String) {
+        if self.stop_top.is_some() && !self.explain && self.diagnostic.is_none() {
+            // `add_top_inner` without diagnostics, the origin's name kept
+            // for `top_created`.
+            let w = why(self);
+            let old = self.stop_top.as_mut().unwrap().why.replace(w);
+            self.add_tok(n, TOP);
+            self.stop_top.as_mut().unwrap().why = old;
+            return;
+        }
         if self.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
             let w = why(self);
             let at = std::panic::Location::caller();
@@ -873,6 +888,16 @@ impl Model {
         }
     }
 
+    /// The shared ⊤ holder (`top_tok_node`); under `PERRY_FACTS_STOP_ON_TOP`
+    /// a named one (`top_val`), so the creation is reported with its origin.
+    #[track_caller]
+    pub fn top_src(&mut self, why: &str) -> NodeId {
+        if self.stop_top.is_some() {
+            return self.top_val(why);
+        }
+        self.top_tok_node
+    }
+
     /// A node holding only ⊤ (all kinds) for one named unmodeled origin.
     #[track_caller]
     pub fn top_val(&mut self, why: &str) -> NodeId {
@@ -880,6 +905,20 @@ impl Model {
             crate::unksrc::note("topval", why, u32::MAX, self.cur_fn as u32);
         }
         // Explain and the dump name each origin: its own node.
+        if let Some(s) = self.stop_top.as_ref() {
+            // One holder per creation point, named (`topstop`).
+            let p = s.cur_pos();
+            let n = self.node_l("TOPVAL");
+            let at = std::panic::Location::caller();
+            self.stop_top
+                .as_mut()
+                .unwrap()
+                .topvals
+                .insert(n, (why.to_string(), at, p));
+            self.add_tok(n, TOP);
+            self.add_prim(n, prim::ALL);
+            return n;
+        }
         if !self.explain && self.diagnostic.is_none() {
             return self.top_tok_node;
         }
@@ -969,6 +1008,8 @@ impl Model {
                 Cons::Identity { .. }
                     | Cons::HasProp { .. }
                     | Cons::OwnProp { .. }
+                    | Cons::DeleteIdx { .. }
+                    | Cons::Meta { .. }
                     | Cons::ThisTo { .. }
                     | Cons::CallArgs { .. }
                     | Cons::RetInto { .. }
@@ -1003,6 +1044,11 @@ impl Model {
             }
         }
         self.nodes[n as usize].cons.push(c);
+        let ci = self.nodes[n as usize].cons.len() as u32 - 1;
+        if let Some(s) = self.stop_top.as_mut() {
+            let p = s.cur_pos();
+            s.cons_pos.insert((n, ci), p);
+        }
         if let Some(region) = self.gen_region.filter(|_| Self::may_run_code(&c)) {
             let cs = &self.nodes[n as usize].cons;
             let seen = cs
@@ -1023,14 +1069,14 @@ impl Model {
         self.own_refuted_cons(n, c);
         if defer {
             // SKINROOT27: replayed by the draining EnumChain (`Model::chain_q`).
-            self.chain_q.push((n, c));
+            self.chain_q.push((n, c, ci));
             return;
         }
-        self.replay_cons(n, c);
+        self.replay_cons(n, c, ci);
     }
 
     /// Apply the attached constraint `c` of `n` to what `n` holds now.
-    pub(crate) fn replay_cons(&mut self, n: NodeId, c: Cons) {
+    pub(crate) fn replay_cons(&mut self, n: NodeId, c: Cons, ci: u32) {
         let prim = self.nodes[n as usize].prim;
         if self.nodes[n as usize].pts.is_empty() && prim == 0 {
             return;
@@ -1056,7 +1102,11 @@ impl Model {
         } else {
             0
         };
+        let rule0 = self.stop_top.as_mut().map(|s| s.enter_rule(n, c, ci));
         self.with_s(|m| m.apply(n, &c, &toks, prim));
+        if let (Some(r0), Some(s)) = (rule0, self.stop_top.as_mut()) {
+            (s.rule, s.rule_pos) = r0;
+        }
         (self.prov_mode, self.prov_rule) = pv;
         if on {
             self.prov_in_set(pin);
@@ -1092,7 +1142,7 @@ impl Model {
         self.late_esc_at = self.work.get();
         let mut members = Vec::new();
         for n in 0..self.nodes.len() {
-            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let (esc, pm, ab) = (&self.esc_writer_bits, &self.param_marker, &self.arg_bits);
             let cover = |t: Tok| escaped_beside_top(esc, pm, ab, t);
             let node = &mut self.nodes[n];
             if !node.pts.contains_tok(TOP) {
@@ -1116,7 +1166,7 @@ impl Model {
                 let gone: Vec<Tok> = members.iter().copied().filter(|&t| cover(t)).collect();
                 self.ledger_again_beside_top(n as NodeId, &gone);
             }
-            let (esc, pm, ab) = (&self.esc_bits, &self.param_marker, &self.arg_bits);
+            let (esc, pm, ab) = (&self.esc_writer_bits, &self.param_marker, &self.arg_bits);
             let cover = |t: Tok| escaped_beside_top(esc, pm, ab, t);
             let node = &mut self.nodes[n];
             let old = std::mem::take(&mut node.pts);
@@ -1155,6 +1205,7 @@ impl Model {
                     && !self.settle_define()
                     && !self.settle_proto_first()
                     && !self.settle_record_entry()
+                    && !self.settle_not_error()
                     && !self.settle_ta_len()
                     && !crate::builtins::settle_native_given(self)
                 {
@@ -1320,7 +1371,11 @@ impl Model {
                     (self.prov_mode, self.prov_rule) = (crate::provenance::PM_RULE, Some((n, c)));
                     self.prov_in_set(0);
                 }
+                let rule0 = self.stop_top.as_mut().map(|s| s.enter_rule(n, c, i as u32));
                 self.apply_tokens(n, &c, Tokens::Pending(&delta), p);
+                if let (Some(r0), Some(s)) = (rule0, self.stop_top.as_mut()) {
+                    (s.rule, s.rule_pos) = r0;
+                }
             }
             delta.clear();
         }
@@ -1548,6 +1603,29 @@ impl Model {
         self.apply_tokens_on(n, c, toks, prim);
     }
     fn apply_tokens_on(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
+        if crate::hold_ledger::blast()
+            && self.ledger.as_ref().is_some_and(|l| l.cur == u32::MAX)
+            && toks.iter().any(|&t| t == crate::model::TOP)
+        {
+            let k = self.top_origin_id(n);
+            let rest: Vec<Tok> = toks
+                .iter()
+                .copied()
+                .filter(|&t| t != crate::model::TOP)
+                .collect();
+            if !rest.is_empty() || prim != 0 {
+                self.apply_tokens_on_b(n, c, Tokens::Slice(&rest), prim);
+            }
+            let saved = self.ledger.as_mut().unwrap().enter_top(k);
+            self.apply_tokens_on_b(n, c, Tokens::Slice(&[crate::model::TOP]), 0);
+            if let Some(l) = self.ledger.as_mut() {
+                l.leave(saved);
+            }
+            return;
+        }
+        self.apply_tokens_on_b(n, c, toks, prim);
+    }
+    fn apply_tokens_on_b(&mut self, n: NodeId, c: &Cons, toks: Tokens<'_>, prim: u16) {
         if let Some(d) = self.diagnostic.as_mut() {
             let saved = (d.cur_call.take(), d.cause_node.replace(n));
             self.apply_tokens_in(n, c, toks, prim);
@@ -1614,6 +1692,32 @@ impl Model {
                 },
                 _ => None,
             };
+            // One realm constructor (ECMA-262 13.3.7.1): the chain is the
+            // class's prototype, then the realm prototype; `super()` runs
+            // the constructor's declared construct effects on the instance
+            // (`run_super_construct`), else the instance is E21.
+            let realm = match toks.as_slice() {
+                [t] if !null && one.is_none() => match &self.toks[*t as usize] {
+                    TokKind::BuiltinFn(crate::model::Native::Member { identity, .. }) => {
+                        Some(identity.to_string())
+                    }
+                    TokKind::Builtin(_) => Some(self.tok_name(*t)),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(identity) = realm {
+                self.parent_unsettled.insert(tm);
+                if self.unit_mode || crate::builtins::declared_super_construct(&identity).is_none()
+                {
+                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                    let r = self.reason(&format!(
+                        "E21 realm parent constructor {identity} declares no construct effects"
+                    ));
+                    self.mark_hard(inst, Hard::E21NativeParent, r);
+                }
+                continue;
+            }
             match one {
                 Some(p) => self.tmpls[tm as usize].parent = Some(p),
                 None => {
@@ -1875,15 +1979,28 @@ impl Model {
                 d.store_top.entry(n).or_insert(c);
             }
         }
+        // The native's region gets what that code may throw once a value
+        // reaches `n` (HandRaise), not when the sink is attached: an empty
+        // slot (`fetch(url)`: no `init`, no `init.body`) hands nothing.
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
-            self.raise_top(
-                region,
-                n,
-                "a native hands a value to unknown code, which may throw",
-            );
+            let seen = self.nodes[n as usize]
+                .cons
+                .iter()
+                .any(|x| matches!(x, Cons::HandRaise { region: r } if *r == region));
+            if region != u32::MAX && !seen {
+                self.cons(n, Cons::HandRaise { region });
+            }
         }
-        if self.sunk_nodes.insert(n) {
+        // Per level: a node sunk with a contract reason is sunk again with
+        // a writer reason (`Model::writes_any`), never the other way.
+        let first = if self.writes_any(reason) {
+            self.sunk_nodes.insert(n);
+            self.sunk_writer_nodes.insert(n)
+        } else {
+            !self.sunk_writer_nodes.contains(&n) && self.sunk_nodes.insert(n)
+        };
+        if first {
             self.cons(n, Cons::TopSink { reason });
         }
     }
@@ -1952,6 +2069,10 @@ impl Model {
             return None;
         }
         let throw = self.node_l("implicit-throw");
+        if let Some(s) = self.stop_top.as_mut() {
+            let p = s.cur_pos();
+            s.throw_pos.insert(throw, p);
+        }
         self.implicit_done.insert((t, proto), throw);
         self.edge(throw, region);
         Some(throw)
@@ -1968,25 +2089,183 @@ impl Model {
     /// `(t, proto)` is the region of the touch's calls and of the touches it
     /// runs in turn, and feeds the region of every request.
     pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol, region: NodeId) {
+        // The touch runs at its request's program position: the rule's,
+        // else that of the touch whose region it feeds (`throw_pos`), else
+        // the region's own (the console.* call's throw region).
+        let saved = self.stop_top.as_mut().map(|s| {
+            let mut p = s.cur_pos();
+            if p == crate::topstop::NOPOS {
+                p = s
+                    .throw_pos
+                    .get(&region)
+                    .copied()
+                    .or_else(|| s.node_pos.get(region as usize).copied())
+                    .unwrap_or(crate::topstop::NOPOS);
+            }
+            std::mem::replace(&mut s.req_pos, p)
+        });
+        self.implicit_in(t, reason, proto, region);
+        if let (Some(p), Some(s)) = (saved, self.stop_top.as_mut()) {
+            s.req_pos = p;
+        }
+    }
+
+    /// Rule R2 (perry-runtime builtins/formatting.rs): how the formatter
+    /// treats the depth of value `t`.
+    fn inspect_shape(&self, t: Tok) -> InspectShape {
+        match &self.toks[t as usize] {
+            // GC_TYPE_CLOSURE (formatting.rs:820, format_function_for_console
+            // / format_class_for_console): no limit check, own properties at
+            // depth 1. `Object.prototype` stands for every builtin prototype,
+            // `Function.prototype` among them; a builtin namespace whose chain
+            // is not `Object.prototype` is a constructor or function.
+            TokKind::Func(..)
+            | TokKind::ClassObj(_)
+            | TokKind::Bound(_)
+            | TokKind::BuiltinFn(_)
+            | TokKind::ObjectProto => InspectShape::Function,
+            TokKind::Builtin(ns) if !builtins::ns_is_ordinary(*ns) => InspectShape::Function,
+            TokKind::NativeProto(name, _) if name == "Function" => InspectShape::Function,
+            // GC_TYPE_ERROR (formatting.rs:720, errors.rs:90), a Promise
+            // (:821) and a weak collection (`format_weak_wrapper`, :803):
+            // members at depth + 1 with no limit check.
+            TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
+                TmplKind::BObj {
+                    what: "Error" | "Promise" | "WeakMap" | "WeakSet",
+                    ..
+                } => InspectShape::Unchecked,
+                _ => InspectShape::Ordinary,
+            },
+            _ => InspectShape::Ordinary,
+        }
+    }
+
+    /// The protocols run on what touch `proto` reads, an inspection's at
+    /// `shown` (rule R2).
+    fn touches_at(proto: Protocol, shown: Option<InspectAt>) -> Vec<Protocol> {
+        proto
+            .read_touches()
+            .iter()
+            .map(|&p| match (p, shown) {
+                (Protocol::InspectShown(_), Some(at)) => Protocol::InspectShown(at),
+                _ => p,
+            })
+            .collect()
+    }
+
+    /// A console call's formatter request on node `n` (rule R2): shown
+    /// (`InspectShown`) or consumable by a specifier (`Inspect`), at depth 0
+    /// under the call's own limit `floor`. An `ambient` call sets no limit
+    /// of its own: it runs under the limit of the extent it runs in, at
+    /// least `floor` (`inspect_raised`).
+    pub(crate) fn console_inspect(
+        &mut self,
+        n: NodeId,
+        reason: u32,
+        shown: bool,
+        region: NodeId,
+        floor: u8,
+        ambient: bool,
+    ) {
+        let mut limit = floor;
+        if ambient {
+            self.inspect_reqs.push((n, reason, shown, region, floor));
+            limit = limit.max(self.inspect_raised);
+        }
+        self.console_inspect_at(n, reason, shown, region, limit);
+    }
+
+    fn console_inspect_at(
+        &mut self,
+        n: NodeId,
+        reason: u32,
+        shown: bool,
+        region: NodeId,
+        limit: u8,
+    ) {
+        let at = InspectAt::arg(limit.max(INSPECT_DEFAULT_LIMIT));
+        let proto = if shown {
+            Protocol::InspectShown(at)
+        } else {
+            Protocol::Inspect(at)
+        };
+        self.cons(
+            n,
+            Cons::Implicit {
+                reason,
+                proto,
+                region,
+            },
+        );
+    }
+
+    /// A touch under raised limit `limit` may run program code (a hook, a
+    /// getter): a console call that code makes formats under `limit`
+    /// (`InspectDepthLimitGuard` holds for the dynamic extent). Every
+    /// ambient console request is re-issued under it (monotone).
+    fn raise_inspect_limit(&mut self, limit: u8) {
+        let limit = limit.min(INSPECT_HARD_CAP);
+        if limit <= self.inspect_raised.max(INSPECT_DEFAULT_LIMIT) {
+            return;
+        }
+        self.inspect_raised = limit;
+        let reqs = self.inspect_reqs.clone();
+        for (n, reason, shown, region, floor) in reqs {
+            if floor < limit {
+                self.console_inspect_at(n, reason, shown, region, limit);
+            }
+        }
+    }
+
+    fn implicit_in(&mut self, t: Tok, reason: u32, proto: Protocol, region: NodeId) {
         // A Proxy's ToPrimitive runs its [[Get]]s (`proxy_to_primitive`),
         // the formatter shows it running no trap (`proxy_inspect_shown`),
         // JSON serializes it through its internal methods (`proxy_json`).
         if let TokKind::Proxy(p) = self.toks[t as usize] {
             match proto {
                 Protocol::ToPrimitive => return self.proxy_to_primitive(p, reason, region),
-                Protocol::InspectShown => return self.proxy_inspect_shown(p, reason, region),
+                Protocol::InspectShown(at) => {
+                    return self.proxy_inspect_shown(p, at, reason, region)
+                }
                 Protocol::Json => return self.proxy_json(p, reason, region),
-                Protocol::Inspect => return self.proxy_inspect(p, reason, region),
+                Protocol::Inspect(at) => return self.proxy_inspect(p, at, reason, region),
                 _ => {}
             }
         }
+        // Rule R2: the formatter reads a value only down to the inspect
+        // depth limit (`InspectAt`): past the hard cap nothing; an ordinary
+        // object past the limit prints `[Object]` with no read and no hook
+        // lookup; a function's own values are at depth 1; an Error's, a
+        // Promise's and a weak collection's are read with no limit check.
+        let shown = match proto.inspect_at() {
+            None => None,
+            Some(at) => {
+                if at.depth > INSPECT_HARD_CAP {
+                    return;
+                }
+                let next = if t == TOP || self.is_marker(t) {
+                    at.member()
+                } else {
+                    match self.inspect_shape(t) {
+                        InspectShape::Function => at.fn_member(),
+                        InspectShape::Unchecked => at.member(),
+                        InspectShape::Ordinary if at.depth > at.limit => return,
+                        InspectShape::Ordinary => at.member(),
+                    }
+                };
+                if at.limit > INSPECT_DEFAULT_LIMIT && t != TOP {
+                    self.raise_inspect_limit(at.limit);
+                }
+                Some(next)
+            }
+        };
         // I32 at rest (PR B): a protocol touch reads elements undecoded.
         self.rest_used(t);
         // The formatter's `%j` serializes the ARGUMENT (JSON.stringify,
         // 25.5.2.1): its own values are serialized by that touch's own
         // reads, never a value only the formatter shows (a chain member,
         // a class's `prototype`).
-        if proto == Protocol::Inspect {
+        if matches!(proto, Protocol::Inspect(_)) {
             self.implicit(t, reason, Protocol::Json, region);
         }
         // The touch looks up and calls the protocol's keys and reads its
@@ -2082,7 +2361,7 @@ impl Model {
             self.nodes[dst as usize].frame = home;
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::Load { key, dst });
-            for &proto in proto.read_touches() {
+            for proto in Self::touches_at(proto, shown) {
                 self.cons(
                     dst,
                     Cons::Implicit {
@@ -2101,7 +2380,7 @@ impl Model {
             self.nodes[dst as usize].frame = home;
             self.nodes[dst as usize].sink = true;
             self.cons(recv, Cons::OwnValues { dst });
-            for &proto in proto.read_touches() {
+            for proto in Self::touches_at(proto, shown) {
                 self.cons(
                     dst,
                     Cons::Implicit {
@@ -2111,6 +2390,31 @@ impl Model {
                     },
                 );
             }
+            self.add_tok(recv, t);
+        }
+        // An Error's `errors` elements (errors.rs:77 format_error_array) are
+        // shown one level below the array, with no limit check either.
+        if let (Some(at), true) = (shown, self.native_error_tok(t)) {
+            let key = Key::Named(self.atom("errors"));
+            let ek = self.elem_key();
+            let recv = self.node_l("implicit-recv");
+            let arr = self.node_l("implicit-read");
+            let dst = self.node_l("implicit-read");
+            for n in [recv, arr, dst] {
+                self.nodes[n as usize].frame = home;
+            }
+            self.nodes[arr as usize].sink = true;
+            self.nodes[dst as usize].sink = true;
+            self.cons(recv, Cons::Load { key, dst: arr });
+            self.cons(arr, Cons::Load { key: ek, dst });
+            self.cons(
+                dst,
+                Cons::Implicit {
+                    reason,
+                    proto: Protocol::InspectShown(at.member()),
+                    region: throw,
+                },
+            );
             self.add_tok(recv, t);
         }
         // `t instanceof C` for the constructors on its chain: `C`'s
@@ -2356,4 +2660,16 @@ pub(crate) fn grow_rule_range(node: &mut Node, iv: Iv) -> bool {
     };
     node.drange = true;
     true
+}
+
+/// How the runtime's formatter treats a value's depth (rule R2,
+/// `Model::inspect_shape`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum InspectShape {
+    /// Read only at a depth within the limit; members one level deeper.
+    Ordinary,
+    /// Read at any depth within the hard cap; own values at depth 1.
+    Function,
+    /// Read at any depth within the hard cap; members one level deeper.
+    Unchecked,
 }

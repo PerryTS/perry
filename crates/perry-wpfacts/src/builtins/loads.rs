@@ -120,7 +120,7 @@ pub(super) fn family_load(
     {
         m.add_prim(dst, prim::UNDEF);
     }
-    family_member(m, fam, what, a, dst);
+    family_member(m, Some(t), fam, what, a, dst);
     // Described or not, a key a store into ⊤ may have written onto the
     // chain reads what was stored, unless the read is final (DEC 250).
     if !intrinsic_unwritten(m, fam, what, a, NativeMiss::Load(dst)) {
@@ -147,9 +147,13 @@ fn regexp_literal_source(m: &mut Model, t: Tok, name: &str) -> Option<StrSet> {
 /// `dst` ⊇ the described member `a` of family `fam`'s intrinsic chain (of a
 /// value of kind `what`), as the realm defines it: the native, the data
 /// kinds, the constructor, the prototype. What a store wrote there is the
-/// caller's (`family_load` per key, `family_any` once for any key).
+/// caller's (`family_load` per key, `family_any` once for any key). An
+/// accessor's getter runs on receiver `t` (its declaration, `getter_load`);
+/// with no receiver (`chain_any_node`: one node for every value of the
+/// family) an accessor reads the undeclared getter's result.
 pub(super) fn family_member(
     m: &mut Model,
+    t: Option<Tok>,
     fam: Family,
     what: Option<&'static str>,
     a: Atom,
@@ -166,7 +170,12 @@ pub(super) fn family_member(
     match members::member(fam, &name) {
         // An accessor of the realm (a getter the model lists as a method):
         // the getter's result, never the getter or a method.
-        Some(Mem::Fn) if realm_accessor(m, fam, what, &name) => undeclared_getter_result(m, dst),
+        Some(Mem::Fn) if realm_accessor(m, fam, what, &name) => {
+            match (t, declared_accessor(m, fam, what, &name)) {
+                (Some(t), Some(e)) => super::effects::getter_load(m, e, t, a, dst),
+                _ => undeclared_getter_result(m, dst),
+            }
+        }
         Some(Mem::Fn) => {
             let bf = match member_native(m, fam, what, &name) {
                 Some(n) => {
@@ -716,7 +725,7 @@ pub(super) fn ns_load(m: &mut Model, t: Tok, ns: BuiltinNs, a: Atom, dst: NodeId
         // else `undefined` (ECMA-262 10.1.8.1 OrdinaryGet), never a builtin
         // function the realm does not name.
         Some(Mem::Fn) if !m.unit_mode && m.native_shape(t).is_some() => {
-            family_member(m, members::ns_chain(ns), None, a, dst);
+            family_member(m, Some(t), members::ns_chain(ns), None, a, dst);
             m.add_prim(dst, prim::UNDEF);
             if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                 opaque_member(m, dst);
@@ -982,6 +991,13 @@ fn realm_global_object(m: &Model, n: &str) -> bool {
     n == "navigator" && !m.unit_mode
 }
 
+/// REALMVAL: `n` is an own member of the global object's realm declaration
+/// (`%Global%`, the generated table: fetch_globals.rs `realm_decl!`); any
+/// other name is a program key or inherited from `Object.prototype`.
+fn global_own_declared(n: &str) -> bool {
+    members::realm_entry("%Global%").is_some_and(|e| e.own.iter().any(|p| !p.symbol && p.key == n))
+}
+
 pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
     crate::family_reach::tok(m, t, key);
     // G2: a node module's export equal to a global a native reads by name
@@ -1001,6 +1017,26 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         Key::Named(a) => Some(m.atoms[a as usize].clone()),
         Key::Any(_) => None,
     };
+    // PN150 what-if (env PERRY_PN150_INSPECT=1): the `[util.inspect.custom]`
+    // hook key on a node module object or `process` reads as INSPECT-REALM
+    // reads it on an undescribed namespace: absent (perry-runtime
+    // formatting.rs inspect_custom_hook: an own Symbol entry or a program
+    // class vtable slot; no realm object has either), opaque once written.
+    if pn150_inspect()
+        && !m.unit_mode
+        && name.as_deref() == Some(crate::model::INSPECT_CUSTOM_METHOD)
+        && matches!(
+            m.toks[t as usize],
+            TokKind::Builtin(BuiltinNs::Module(_) | BuiltinNs::Process)
+        )
+    {
+        let Key::Named(a) = key else { unreachable!() };
+        if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+            return opaque_member(m, dst);
+        }
+        m.add_prim(dst, prim::UNDEF);
+        return;
+    }
     match m.toks[t as usize].clone() {
         TokKind::Builtin(BuiltinNs::Other) => match name.as_deref() {
             Some(n) => {
@@ -1018,7 +1054,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     m.load_from(g, g, key, dst);
                 } else if matches!(n, "undefined" | "NaN" | "Infinity") {
                     m.add_prim(dst, prim::NUM | prim::UNDEF);
-                } else if !m.unit_mode && super::native_protocol::sentinel_user_global(m, n) {
+                } else if !m.unit_mode {
                     // S8: a name the realm declares neither on the global
                     // object nor on its chain: the read is [[Get]](globalThis,
                     // n) (ECMA-262 9.1.1.4.6 GetBindingValue of the global
@@ -1026,12 +1062,21 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     // ReferenceError, 9.1.1.2.6), as the unresolved name's is
                     // (rule G). In a module a Worker may run, generation adds
                     // the Worker global's native (`gen_expr`, PropertyGet).
+                    // REALMVAL: any other name too (a realm member the arms
+                    // above do not route, a Console method name): the global
+                    // object's [[Get]] reads its declared value.
                     let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                     tok_load(m, g, key, dst);
                 } else {
                     m.add_top(dst, |_| format!("global {n}"));
                     m.add_prim(dst, prim::ALL);
                 }
+            }
+            // REALMVAL: a computed name on the sentinel is [[Get]] of the
+            // global object under it (`global_shaped_read`).
+            None if !m.unit_mode => {
+                let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+                tok_load(m, g, key, dst);
             }
             None => {
                 m.add_top(dst, |_| "global[computed]".into());
@@ -1040,7 +1085,7 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
         },
         TokKind::Builtin(BuiltinNs::GlobalThis) => {
             match name.as_deref() {
-                Some(n) if global_user_key(m, n) => {
+                Some(n) if global_user_key(m, n) || (!m.unit_mode && !global_own_declared(n)) => {
                     let Key::Named(a) = key else { unreachable!() };
                     if super::native_protocol::global_any_names(m, n) {
                         super::native_protocol::global_any_read(m, n, dst);
@@ -1104,8 +1149,28 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     }
                     ns_load(m, t, BuiltinNs::GlobalThis, a, dst);
                 }
-                None if matches!(key, Key::Any(s) if s != 0) && !m.unit_mode => {
+                // REALMVAL: a computed key, shaped or not, reads the union of
+                // the declared members and program keys it may spell.
+                None if !m.unit_mode => {
                     global_shaped_read(m, t, key, dst);
+                }
+                // PN151 what-if (env PERRY_PN151_GLOBVAL=1): the global
+                // object's own value properties (ECMA-262 19.1). NaN and
+                // Infinity are numbers, undefined is undefined; all three are
+                // {writable:false, configurable:false} (perry-runtime
+                // global_this/populate.rs:827), so no store changes them.
+                // globalThis/global name the global object itself, plus what
+                // was stored there (declared_global_load).
+                Some("NaN" | "Infinity") if !m.unit_mode => m.add_prim(dst, prim::NUM),
+                Some("undefined") if !m.unit_mode => m.add_prim(dst, prim::UNDEF),
+                Some(n @ ("globalThis" | "global")) if !m.unit_mode => {
+                    declared_global_load(m, t, t, n, dst)
+                }
+                Some(n) if hostval_global(m, t, key, n, dst) => {}
+                // REALMVAL: every member %Global% owns has a value side
+                // (RealmManifest::validate) that an arm above reads.
+                Some(n) if !m.unit_mode => {
+                    unreachable!("REALMVAL: %Global% member `{n}` has no modelled value")
                 }
                 _ => {
                     // A host global, or under a computed key any global: the
@@ -1139,6 +1204,14 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 m.edge(u, dst);
                 m.add_prim(dst, prim::UNDEF | prim::NULL);
             }
+            _ if hostval_load(m, t, "require", key, name.as_deref(), dst) => {}
+            _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
+            // REALMVAL: every member the `require` declaration gives has a
+            // value side (RealmManifest::validate) that an arm above reads.
+            _ if !m.unit_mode => unreachable!(
+                "REALMVAL: require member `{}` has no modelled value",
+                name.as_deref().unwrap_or("[computed]")
+            ),
             _ => {
                 let bf = builtin_fn(m, "require.<x>");
                 m.add_tok(dst, bf);
@@ -1195,6 +1268,13 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                     let Key::Named(a) = key else { unreachable!() };
                     ns_load(m, t, BuiltinNs::Process, a, dst);
                 }
+                _ if hostval_load(m, t, "process", key, name.as_deref(), dst) => {}
+                _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
+                // REALMVAL: as `require` above, for the process declaration.
+                _ if !m.unit_mode => unreachable!(
+                    "REALMVAL: process member `{}` has no modelled value",
+                    name.as_deref().unwrap_or("[computed]")
+                ),
                 _ => {
                     m.add_top(dst, |_| {
                         format!("process.{}", name.as_deref().unwrap_or("[computed]"))
@@ -1237,6 +1317,14 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 }
                 super::effects::getter_load(m, e, t, a, dst);
             }
+            _ if hostval_load(m, t, module, key, name.as_deref(), dst) => {}
+            _ if pn151_ruleb_load(m, t, key, name.as_deref(), dst) => {}
+            // REALMVAL: as `require` above, for the module's namespace
+            // declaration.
+            _ if !m.unit_mode => unreachable!(
+                "REALMVAL: {module} member `{}` has no modelled value",
+                name.as_deref().unwrap_or("[computed]")
+            ),
             _ => {
                 m.add_top(dst, |_| {
                     format!(
@@ -1252,6 +1340,16 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             if name.as_deref() == Some("prototype") =>
         {
             m.add_prim(dst, prim::UNDEF)
+        }
+        // `Object.prototype`'s methods are builtin functions (10.3, no
+        // `prototype`): under a computed key, their own data (`name`,
+        // `length`) and the members of `Function.prototype`'s chain the key
+        // may spell, as for a builtin function value.
+        TokKind::Builtin(BuiltinNs::ObjectProtoMethod | BuiltinNs::ObjectProtoOwn(_))
+            if name.is_none() =>
+        {
+            m.add_prim(dst, prim::ALL);
+            family_any(m, Some(t), Family::Function, None, key, dst);
         }
         TokKind::Builtin(ns) => match name.as_deref() {
             Some("@@__perry_wk_species")
@@ -1363,6 +1461,18 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
                 };
                 m.add_tok(dst, bf);
                 // Final on a `Function.prototype`-only chain (DEC 250).
+                if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
+                    opaque_member(m, dst);
+                }
+            }
+            // An accessor the realm declares on `Function.prototype`
+            // (`caller`, `arguments`: %ThrowTypeError%, ECMA-262 10.2.4): no
+            // program function owns the key (17.1: a strict function never
+            // gets one), so the read runs the declared getter on the
+            // function.
+            Some(n) if realm_accessor(m, Family::Function, None, n) => {
+                let Key::Named(a) = key else { unreachable!() };
+                family_member(m, Some(t), Family::Function, None, a, dst);
                 if !locked_chain_read(m, t, a) && !intrinsic_miss(m, a, NativeMiss::Load(dst)) {
                     opaque_member(m, dst);
                 }
@@ -1685,11 +1795,9 @@ pub fn tok_load(m: &mut Model, t: Tok, key: Key, dst: NodeId) {
             }
         }
         TokKind::Top => {}
-        // PROXY2: only `solve/proxy.rs` models a Proxy: today's path.
-        TokKind::Proxy(p) => {
-            m.proxy_degrade(p, "family read");
-            m.add_tok(dst, TOP);
-        }
+        // A read of `key` off the Proxy itself: its [[Get]] (10.5.8, the
+        // `get` trap and the forward), with the Proxy as the receiver.
+        TokKind::Proxy(p) => m.proxy_get_into(p, key, NO_NODE, dst),
     }
 }
 
@@ -1815,4 +1923,310 @@ pub fn declared_setter_store(m: &mut Model, t: Tok, key: Key, src: NodeId) {
     if let Some(e) = super::effects::declared_setter(what, &name) {
         super::effects::setter_store(m, e, t, src);
     }
+}
+
+fn pn150_inspect() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_PN150_INSPECT").is_some_and(|v| v == "1"))
+}
+
+pub(crate) fn pn151_diag() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("PERRY_PN151_DIAG").is_some_and(|v| v == "1"))
+}
+
+/// PN151 diagnostic: print each (arm, name) once.
+pub(crate) fn pn151_note(arm: &str, n: &str) {
+    if !pn151_diag() {
+        return;
+    }
+    static SEEN: std::sync::Mutex<Option<std::collections::HashSet<String>>> =
+        std::sync::Mutex::new(None);
+    let k = format!("{arm} {n}");
+    let mut g = SEEN.lock().unwrap();
+    if g.get_or_insert_with(Default::default).insert(k.clone()) {
+        eprintln!("PN151DIAG {k}");
+    }
+}
+
+/// PN151 what-if Rule B (env PERRY_PN151_RULEB=1): a node module object or
+/// `process` is described by its realm declaration (realm-v1.json, dumped
+/// from the runtime; its shape lists own and inherited keys). A named key
+/// the declaration lacks is absent: `undefined`, or what a write of the key
+/// stored (`opaque_written`). A computed key reads each declared key it may
+/// spell by name, plus any written key (`STAR_KEY`), plus `undefined`. A key
+/// the declaration has but no arm models stays today's ⊤ (returns false).
+fn pn151_ruleb_load(m: &mut Model, t: Tok, key: Key, name: Option<&str>, dst: NodeId) -> bool {
+    if m.unit_mode || m.native_shape(t).is_none() {
+        return false;
+    }
+    match key {
+        Key::Named(a) => {
+            if m.native_property(t, name.expect("named")).is_some() {
+                return false;
+            }
+            if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            } else {
+                m.add_prim(dst, prim::UNDEF);
+            }
+            true
+        }
+        Key::Any(_) => {
+            let names: Vec<String> = m
+                .native_shape(t)
+                .expect("checked")
+                .properties
+                .iter()
+                .map(|p| match p.key.strip_prefix("@@") {
+                    Some(wk) => format!("{WK_PREFIX}{wk}"),
+                    None => p.key.to_string(),
+                })
+                .filter(|n| !Model::proto_link(n) && m.key_may_name_str(key, n))
+                .collect();
+            for n in names {
+                let a = m.atom(&n);
+                tok_load(m, t, Key::Named(a), dst);
+            }
+            let star = m.atom(crate::STAR_KEY);
+            if opaque_written(m, t, star, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            }
+            m.add_prim(dst, prim::UNDEF);
+            true
+        }
+    }
+}
+
+/// HOSTVAL what-if (env PERRY_HOSTVAL=1): a member of a host object the
+/// runtime makes reads the value the runtime's realm declaration gives it
+/// (realm-v1.json, generated from the `realm_decl!` sites of the runtime
+/// source: `process` at perry-runtime object/native_module.rs:860). A data
+/// member is a primitive of its declared kind, another declared namespace
+/// object (`process.stdout`), or a declared native function; a write of the
+/// key (`opaque_written`) makes the read opaque. On a namespace the model has
+/// no shape for (`process.stdout`, `Temporal.Now`), a key its declaration
+/// chain lacks reads `undefined` (10.1.8.1) and a computed key reads every
+/// declared key it may spell. An accessor without declared effects and a
+/// runtime-computed value (`target(process.arch)`) stay unknown.
+fn hostval_load(
+    m: &mut Model,
+    t: Tok,
+    owner: &str,
+    key: Key,
+    name: Option<&str>,
+    dst: NodeId,
+) -> bool {
+    if m.unit_mode {
+        return false;
+    }
+    let Some(e) = members::realm_entry(owner) else {
+        return false;
+    };
+    let shapeless = m.native_shape(t).is_none();
+    match key {
+        Key::Named(a) => hostval_member(m, t, e, a, name.expect("named"), shapeless, dst),
+        Key::Any(_) if shapeless => {
+            let mut keys = Vec::new();
+            let mut at = Some(e);
+            while let Some(d) = at {
+                for o in d.own {
+                    if !o.symbol && !Model::proto_link(o.key) && m.key_may_name_str(key, o.key) {
+                        keys.push(o.key);
+                    }
+                }
+                at = d.proto.and_then(members::realm_entry);
+            }
+            for k in keys {
+                let a = m.atom(k);
+                tok_load(m, t, Key::Named(a), dst);
+            }
+            let star = m.atom(crate::STAR_KEY);
+            if opaque_written(m, t, star, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            }
+            m.add_prim(dst, prim::UNDEF);
+            true
+        }
+        Key::Any(_) => false,
+    }
+}
+
+fn hostval_member(
+    m: &mut Model,
+    t: Tok,
+    e: &'static perry_hir::realm_manifest::RealmEntry,
+    a: Atom,
+    n: &str,
+    absent_ok: bool,
+    dst: NodeId,
+) -> bool {
+    use perry_hir::realm_manifest::{RealmKind as K, RealmOwnValue as V};
+    let (o, holder) = match members::realm_chain_find(e, n) {
+        members::RealmFind::Absent if absent_ok => (None, None),
+        members::RealmFind::Absent => return false,
+        members::RealmFind::Own(o, at) => (Some(o), Some(at)),
+    };
+    // `__proto__` reached on the chain at `Object.prototype` is its
+    // accessor (ECMA-262 B.2.2.1.1), whose getter returns the receiver's
+    // [[Prototype]]: the prototype the realm declares for this object
+    // (`RealmEntry::proto`), `null` where it declares none.
+    if n == "__proto__"
+        && holder.is_some_and(|h| h.name == "Object.prototype")
+        && matches!(o.map(|o| &o.value), Some(V::Accessor { .. }))
+    {
+        if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+            opaque_member(m, dst);
+        } else {
+            realm_proto_value(m, e.proto, dst);
+        }
+        return true;
+    }
+    // An accessor the object holds or inherits whose getter the realm
+    // declares with its effects (`process.allowedNodeEnvironmentFlags
+    // .size`: `Set.prototype.size.<get>`, `returns(prim(num))`): the
+    // declared result on this object.
+    if let Some(perry_hir::realm_manifest::RealmOwn {
+        value: V::Accessor { get: Some(g), .. },
+        ..
+    }) = o
+    {
+        let declared = g
+            .strip_suffix(".<get>")
+            .and_then(|g| g.rsplit_once('.'))
+            .and_then(|(proto, k)| super::effects::declared_getter(proto, k));
+        if let Some(getter) = declared {
+            if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            } else {
+                super::effects::getter_load(m, getter, t, a, dst);
+            }
+            return true;
+        }
+    }
+    let model: Option<Tok> = match o {
+        None => None,
+        Some(o) if realm_prim(o).is_some() => None,
+        Some(o) => match o.value {
+            V::Reference(r) => match members::realm_entry(r).map(|d| (d.kind, d.name)) {
+                Some((K::Namespace, name)) => {
+                    Some(m.tok(TokKind::Builtin(BuiltinNs::Module(name))))
+                }
+                Some((K::Function | K::Method | K::Constructor, name)) => {
+                    Some(m.tok(TokKind::BuiltinFn(Native::Member {
+                        identity: name,
+                        holder: None,
+                    })))
+                }
+                _ => return false,
+            },
+            _ => return false,
+        },
+    };
+    if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+        opaque_member(m, dst);
+        return true;
+    }
+    pn151_note("hostval", n);
+    match (o, model) {
+        (None, _) => m.add_prim(dst, prim::UNDEF),
+        (Some(_), Some(tok)) => m.add_tok(dst, tok),
+        (Some(o), None) => m.add_prim(dst, realm_prim(o).expect("prim")),
+    }
+    true
+}
+
+/// The realm's name of a member the Worker global holds beside the main
+/// realm's global members (`%WorkerGlobal%.<name>`, perry-stdlib
+/// worker_threads/worker_surface.rs `install_web_worker_globals`).
+pub const WORKER_GLOBAL_PREFIX: &str = "%WorkerGlobal%.";
+
+/// S8 in a module a Worker may run: what the Worker global's own member
+/// `n` holds, beside [[Get]] on the main realm's global object (the caller's
+/// load). The realm declares each member the runtime installs on the
+/// Worker's global object, by its full name: a native (`postMessage`,
+/// `addEventListener`, `removeEventListener`, `close`: that function
+/// value, `Native::Member` of its realm name), `self` (an alias of the
+/// global object itself) and the handlers' first value (`onmessage`:
+/// `null`). A name it does not declare adds nothing: the Worker global is
+/// the main realm's global object there. A write under the key by code
+/// the model does not see (now, or later in the solve: the replay) is the
+/// opaque member instead; a program store is read by the caller's load.
+pub fn worker_global_member(m: &mut Model, n: &str, dst: NodeId) {
+    use perry_hir::realm_manifest::RealmKind as K;
+    let Some(e) = members::realm_entry(&format!("{WORKER_GLOBAL_PREFIX}{n}")) else {
+        return;
+    };
+    let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+    let a = m.atom(n);
+    if opaque_written(m, g, a, NativeMiss::Load(dst)) {
+        opaque_member(m, dst);
+        return;
+    }
+    match (e.kind, e.value) {
+        (K::Function | K::Method, _) => {
+            let t = m.tok(TokKind::BuiltinFn(Native::Member {
+                identity: e.name,
+                holder: None,
+            }));
+            m.add_tok(dst, t);
+        }
+        (K::Alias, _) if e.births == ["%Global%"] => m.add_tok(dst, g),
+        (K::Constant, Some(v)) => {
+            let own = perry_hir::realm_manifest::RealmOwn {
+                key: e.name,
+                symbol: false,
+                value: v,
+            };
+            match realm_prim(&own) {
+                Some(p) => m.add_prim(dst, p),
+                None => unreachable!("REALMVAL: {} holds no primitive ({v:?})", e.name),
+            }
+        }
+        _ => unreachable!("REALMVAL: Worker global member {} has no modelled value", e.name),
+    }
+}
+
+/// The value of a realm object's [[Prototype]] named `proto` (a realm
+/// entry name: `Object.prototype`, `EventEmitter.prototype`): that
+/// builtin's prototype object as the model holds it (the tokens of
+/// `family_proto_value`), `null` for none.
+fn realm_proto_value(m: &mut Model, proto: Option<&str>, dst: NodeId) {
+    let Some(p) = proto else {
+        m.add_prim(dst, prim::NULL);
+        return;
+    };
+    let base = p.strip_suffix(".prototype").unwrap_or(p);
+    let tok = match base {
+        "Object" => m.tok(TokKind::ObjectProto),
+        _ => match ns_by_name(base).and_then(|ns| builtin_proto_tok(m, ns)) {
+            Some(t) => t,
+            None => native_proto(m, base),
+        },
+    };
+    m.add_tok(dst, tok);
+}
+
+/// HOSTVAL on the global object: an own member the `%Global%` declaration
+/// gives a modelled value (`hostval_member`), and `__proto__` (the
+/// `Object.prototype.__proto__` getter, ECMA-262 B.2.2.1.1), which on the
+/// global object reads its [[Prototype]]: `Object.prototype` (realm dump
+/// `$global.prototype`, realm-dumps/full.jsonl), unless written.
+fn hostval_global(m: &mut Model, t: Tok, key: Key, n: &str, dst: NodeId) -> bool {
+    if m.unit_mode {
+        return false;
+    }
+    let Key::Named(a) = key else { return false };
+    if n == "__proto__" {
+        if opaque_written(m, t, a, NativeMiss::Load(dst)) {
+            opaque_member(m, dst);
+        } else {
+            family_proto_value(m, Family::Object, None, dst);
+        }
+        return true;
+    }
+    let Some(e) = members::realm_entry("%Global%") else {
+        return false;
+    };
+    hostval_member(m, t, e, a, n, false, dst)
 }

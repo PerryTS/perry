@@ -1088,10 +1088,9 @@ fn template_facts(
     m.tok(TokKind::Obj(tm, NO_CTX));
     let ts = m.tmpl_toks(tm);
     let tpl = m.tmpls[tm as usize].clone();
-    let escape = ts
-        .iter()
-        .find_map(|t| m.escaped.get(t))
-        .map(|r| m.reasons[*r as usize].clone());
+    // Only code that may write a token beyond a builtin contract changes
+    // its layout; a contract writes only what it states (Phase B).
+    let escape = ts.iter().find_map(|&t| m.writer_escape_why(t));
     let hard = ts
         .iter()
         .find_map(|t| m.hard.get(t))
@@ -1160,14 +1159,9 @@ fn template_facts(
             });
         }
         if p != m.tok_index[&TokKind::ObjectProto] {
-            if let Some(r) = m.escaped.get(&p) {
-                chain_problem.get_or_insert_with(|| {
-                    format!(
-                        "prototype {} escapes: {}",
-                        m.tok_name(p),
-                        m.reasons[*r as usize]
-                    )
-                });
+            if let Some(r) = m.writer_escape_why(p) {
+                chain_problem
+                    .get_or_insert_with(|| format!("prototype {} escapes: {r}", m.tok_name(p)));
             }
         }
         if let Some(ks) = m.accessor_keys.get(&p) {
@@ -1800,6 +1794,20 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                     let (r2, _, v2, f2, t2) =
                         judge(m, &by_id, &runtime, s, &key, &[it], 0, top_recv);
                     if matches!(v2, Verdict::T0Mono | Verdict::T0Set) {
+                        if m.stop_top.is_some() {
+                            // TOPSTOP2: what the unguarded set held (the
+                            // site's `top=1` says only "E0 by the guard").
+                            let held: Vec<String> =
+                                toks.iter().take(6).map(|&t| m.tok_words(t)).collect();
+                            eprintln!(
+                                "TOPSTOP e0-guard: {} .{} unguarded top={} {:?}; unguarded receivers [{}] prims {prim:#x}",
+                                m.pos_text((s.module as u32, s.byte_offset as u32)),
+                                key,
+                                top,
+                                verdict,
+                                held.join("; ")
+                            );
+                        }
                         (receivers, top, verdict, fixed_shape, targets) =
                             (r2, true, Verdict::E0, f2, t2);
                     }
@@ -1859,6 +1867,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
                     }
                 });
                 ledger_refused.push(crate::hold_ledger::Refused {
+                    site: format!("{path}\t{}\t{key}\t{}", s.byte_offset, store as u8),
                     roots,
                     full,
                     causes,
@@ -4161,9 +4170,8 @@ fn own_data_or_absent_why(m: &Model, t: Tok, key: &str, a: Atom) -> Result<(), S
     if relinked && !m.json_relink.contains(&t) {
         return Err("__proto__ relink".into());
     }
-    if m.is_escaped(t) {
-        let why = m.escaped.get(&t).map(|r| m.reasons[*r as usize].clone());
-        return Err(format!("escape: {}", why.unwrap_or_default()));
+    if let Some(why) = m.writer_escape_why(t) {
+        return Err(format!("escape: {why}"));
     }
     if let Some((k, r)) = m.hard.get(&t) {
         return Err(format!("hard: {} {}", k.code(), m.reasons[*r as usize]));

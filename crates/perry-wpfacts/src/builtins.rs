@@ -36,8 +36,8 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_proto_method, declared_static, run_construct,
-    run_function, run_member,
+    declared_construct, declared_member, declared_proto_method, declared_static,
+    declared_super_construct, run_construct, run_function, run_member, run_super_construct,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -357,8 +357,9 @@ fn unknown_method_at(m: &mut Model, call: CallId, why: &str, proto: Option<usize
             crate::unksrc::held("method", why, call, f);
         }
     }
-    // Unknown code runs, handed values or not: it holds the realm.
-    if !m.realm_held {
+    // Unknown code runs, handed values or not: it holds the realm where code
+    // beside the program may name it (`Model::realm_nameable`).
+    if !m.realm_held && m.realm_nameable() {
         let r = m.reason("an intrinsic of the realm: unknown code holds the realm");
         if m.keysnap.is_some() {
             m.keysnap_at(
@@ -524,6 +525,38 @@ fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
         m.add_tok(f, ab);
     }
     t
+}
+
+/// Rule PXDEFINE: the descriptor object a `defineProperty` trap call
+/// `call` is passed (10.5.6 step 6, 6.2.6.4 FromPropertyDescriptor of the
+/// data descriptor of an ordinary [[Set]], 10.1.9.2 steps 2.d / 2.e): a new
+/// ordinary object, one per trap call, with `value` ⊇ `value`, the Boolean
+/// `writable`, `enumerable`, `configurable` (step 2.e; 2.d passes `value`
+/// alone) and no `get` / `set`.
+pub(crate) fn trap_descriptor(m: &mut Model, call: CallId, value: NodeId) -> Tok {
+    let tm = site_template(m, call, "descriptor", false, false);
+    let ctx = m.birth_ctx(call);
+    let t = m.site_tok(tm, ctx);
+    let va = m.atom("value");
+    let fv = m.field(t, va);
+    m.edge(value, fv);
+    for name in ["writable", "enumerable", "configurable"] {
+        let a = m.atom(name);
+        let f = m.field(t, a);
+        m.add_prim(f, prim::BOOL | prim::UNDEF);
+    }
+    for name in ["get", "set"] {
+        let a = m.atom(name);
+        let f = m.field(t, a);
+        m.add_prim(f, prim::UNDEF);
+    }
+    t
+}
+
+/// Rule PXAPPLY: the argument list Array a Proxy trap is passed
+/// (CreateArrayFromList, 7.3.16), born at `call`.
+pub(crate) fn trap_args_array(m: &mut Model, call: CallId) -> Tok {
+    site_tmpl_born(m, call, "Array", false, false)
 }
 
 /// The view of `what` born at `call` whose [[ViewedArrayBuffer]] its
@@ -2591,6 +2624,12 @@ pub(super) fn family_any(
         Some(_) => {
             let n = chain_any_node(m, fam, what, key);
             m.edge(n, dst);
+            // An accessor's getter runs on the value read (`of`), as its
+            // named read does: its result depends on the receiver, so it
+            // is no part of the shared chain node.
+            for a in chain_accessors(m, fam, what, key) {
+                loads::family_member(m, of, fam, what, a, dst);
+            }
         }
         None => {
             family_ctor(m, fam, dst);
@@ -2644,14 +2683,40 @@ fn chain_any_node(m: &mut Model, fam: Family, what: Option<&'static str>, key: K
             object_method = true;
             continue;
         }
+        if matches!(members::member(fam, name), Some(Mem::Fn)) && realm_accessor(m, fam, what, name)
+        {
+            continue;
+        }
         let a = m.atom(name);
-        loads::family_member(m, fam, what, a, n);
+        loads::family_member(m, None, fam, what, a, n);
     }
     if object_method {
         let f = m.tok(TokKind::Builtin(BuiltinNs::ObjectProtoMethod));
         m.add_tok(n, f);
     }
     n
+}
+
+/// The accessors of family `fam`'s intrinsic chain (of a value of kind
+/// `what`) whose names computed key `key` may spell: their getters run per
+/// receiver (`family_any`), never in the shared `chain_any_node`.
+fn chain_accessors(m: &mut Model, fam: Family, what: Option<&'static str>, key: Key) -> Vec<Atom> {
+    let mut out = vec![];
+    for name in members::chain_names(fam).into_iter().flatten() {
+        if Model::proto_link(name) || !m.key_may_name_str(key, name) {
+            continue;
+        }
+        if members::own(fam, name).is_none()
+            && matches!(members::member(Family::Object, name), Some(Mem::Fn))
+        {
+            continue;
+        }
+        if matches!(members::member(fam, name), Some(Mem::Fn)) && realm_accessor(m, fam, what, name)
+        {
+            out.push(m.atom(name));
+        }
+    }
+    out
 }
 
 /// The OPTIMISTIC JSON-key read (`Model::json_key_optimistic`) of the
@@ -3148,6 +3213,10 @@ pub(crate) fn builtin_value_sets(m: &Model, t: Tok, a: Atom) -> bool {
 /// until a store reaches `gate` (the member's key, or `STAR_KEY` for a method
 /// that reads other members of its receiver), then an unknown method of the
 /// host (`this`). A write later in the solve replays it (`NativeMiss::Call`).
+/// A write of the member's own key whose stored values every record names
+/// calls those values (one that is not callable throws: ECMA-262 7.3.14
+/// Call, its arguments reach no one), beside the native where the write did
+/// not happen (`native_protocol::answer_stored`, as the replay does).
 fn host_call(
     m: &mut Model,
     h: BuiltinNs,
@@ -3158,6 +3227,13 @@ fn host_call(
 ) {
     let t = m.tok(TokKind::Builtin(h));
     let a = m.atom(gate);
+    if gate == n
+        && host_written(m, h, a)
+        && native_protocol::answer_stored(m, t, a, NativeMiss::Call(t, call))
+    {
+        native(m);
+        return;
+    }
     if host_written(m, h, a) {
         // Census: the call hangs off the write that opened the gate, as a
         // replay does.
@@ -3178,13 +3254,16 @@ fn host_call(
 /// A host stream's own `write(chunk, encoding?, cb?)` (node's Writable,
 /// perry's `process_stdout_write_stub`): it returns a boolean and hands its
 /// receiver to no one. It keeps a binary chunk and the callback in the
-/// stream's state, which the program can read back (`writableBuffer`,
-/// `_writableState`), so the arguments reach unknown code. It reads other
+/// stream's state and writes no key of them (`contract_reason`: Phase B,
+/// owner 2026-11-23); beside foreign code they reach code that may write
+/// them (`writes_any`). It reads other
 /// members of its receiver (`_write`, `_writableState`, `emit`, ...): a store
 /// under any key of the stream ends this (`host_call`'s `STAR_KEY` gate).
 fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
     let c = m.calls[call as usize].clone();
-    let r = m.reason(&format!(
+    // The stream's contract: it keeps the chunk and the callback, and the
+    // program reads them back; no one writes them under any key.
+    let r = m.contract_reason(&format!(
         "argument of host {h:?}.write (kept by the stream)"
     ));
     for &a in c.args.iter().chain(c.spread.iter()) {
@@ -3206,6 +3285,13 @@ fn stream_write(m: &mut Model, h: BuiltinNs, call: CallId) {
 /// `args[0]` when no spread precedes it (`CallSite::first_arg_fixed`); else
 /// a spread's elements may be the first as well as later ones. Every other
 /// method keeps `Protocol::Inspect` on each argument but a lone first one.
+/// Rule R2: builtin namespace `ns` is an ordinary object (its chain ends
+/// at `Object.prototype`), which the formatter shows only within the inspect
+/// depth limit; any other is a function or of unknown kind.
+pub(crate) fn ns_is_ordinary(ns: BuiltinNs) -> bool {
+    members::ns_chain(ns) == Family::Object
+}
+
 fn console_args(m: &mut Model, call: CallId, name: &str) {
     let c = m.calls[call as usize].clone();
     let r = m.reason("console argument (formatted by the runtime)");
@@ -3217,31 +3303,22 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
         elems.push(dst);
     }
     if !matches!(name, "log" | "info" | "debug" | "error" | "warn" | "trace") {
+        // Rule R2: `console.dir(x, opts)` formats under the options' depth
+        // (console.rs:1738 `decode_dir_depth_option`): any value up to
+        // Infinity, which the solver keeps no constant of, so the hard cap.
+        // Every other method sets no limit of its own (ambient).
+        let dir_opts = name == "dir" && (c.args.len() >= 2 || !c.spread.is_empty());
+        let (floor, ambient) = if dir_opts {
+            (INSPECT_HARD_CAP, false)
+        } else {
+            (INSPECT_DEFAULT_LIMIT, true)
+        };
         for (i, &a) in c.args.iter().enumerate() {
             let first = i == 0 && c.spread.is_empty();
-            let proto = if first {
-                Protocol::InspectShown
-            } else {
-                Protocol::Inspect
-            };
-            m.cons(
-                a,
-                Cons::Implicit {
-                    reason: r,
-                    proto,
-                    region: c.region,
-                },
-            );
+            m.console_inspect(a, r, first, c.region, floor, ambient);
         }
         for &d in &elems {
-            m.cons(
-                d,
-                Cons::Implicit {
-                    reason: r,
-                    proto: Protocol::Inspect,
-                    region: c.region,
-                },
-            );
+            m.console_inspect(d, r, false, c.region, floor, ambient);
         }
         ret_prim(m, call, prim::UNDEF);
         return;
@@ -3282,14 +3359,7 @@ fn console_args(m: &mut Model, call: CallId, name: &str) {
         later.push(d);
     }
     for &a in c.args.iter().chain(&elems) {
-        m.cons(
-            a,
-            Cons::Implicit {
-                reason: r,
-                proto: Protocol::InspectShown,
-                region: c.region,
-            },
-        );
+        m.console_inspect(a, r, true, c.region, INSPECT_DEFAULT_LIMIT, true);
     }
     if !later.is_empty() {
         let agg = m.node_l("console-consumable");
@@ -3664,12 +3734,14 @@ fn ns_method_inner(
             match (name, arg(m, call, 0)) {
                 // Rule PK: the own names of the argument.
                 ("getOwnPropertyNames", Some(o)) => m.cons(o, Cons::OwnNames { dst: fa }),
+                // Rule EK: its own enumerable String keys (7.3.23).
+                ("keys", Some(o)) => m.cons(o, Cons::OwnKeys { dst: fa }),
                 ("getOwnPropertySymbols", _) => m.add_prim(fa, prim::SYMBOL),
                 _ => m.add_prim(fa, prim::STR),
             }
             ret_tok(m, call, pb);
         }
-        (BuiltinNs::Object, "values" | "entries") => {
+        (BuiltinNs::Object, "values") => {
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
             // Own enumerable values only (EnumerableOwnProperties): no
@@ -3678,21 +3750,41 @@ fn ns_method_inner(
                 m.cons(o, Cons::OwnValues { dst: fa });
             }
             m.add_prim(fa, prim::STR);
-            if name == "entries" {
-                m.add_tok(fa, arr);
+            ret_tok(m, call, arr);
+        }
+        // Each entry is CreateArrayFromList(« key, value ») (ECMA-262 7.3.23
+        // step 4.a.ii.2.b), a new ordinary Array: index 0 the key (rule EK,
+        // `Cons::OwnKeys`), index 1 the value, each its own slot, as
+        // `Gen` models a direct `Object.entries` call.
+        (BuiltinNs::Object, "entries") => {
+            let arr = site_tmpl(m, call, "Array");
+            let fa = m.field_any(arr);
+            if let Some(o) = arg(m, call, 0) {
+                let pair = site_tmpl_born(m, call, "entry", true, false);
+                if let Some(tm) = m.tmpl_of(pair) {
+                    m.ordinary_arrays.insert(tm);
+                }
+                let ks = m.node_l("ownkeys");
+                m.cons(o, Cons::OwnKeys { dst: ks });
+                let k0 = m.index_slot(pair, 0);
+                m.edge(ks, k0);
+                let vs = m.node_l("ownvalues");
+                m.cons(o, Cons::OwnValues { dst: vs });
+                let v1 = m.index_slot(pair, 1);
+                m.edge(vs, v1);
+                m.add_tok(fa, pair);
             }
             ret_tok(m, call, arr);
         }
         (BuiltinNs::Object, "freeze" | "seal" | "preventExtensions") => {
             if let Some(o) = arg(m, call, 0) {
                 let r = m.reason("E8 Object.freeze (as a value call)");
-                m.cons(
-                    o,
-                    Cons::Hard {
-                        kind: Hard::E8Freeze,
-                        reason: r,
-                    },
-                );
+                let kind = match name {
+                    "freeze" => Hard::E8Freeze,
+                    "seal" => Hard::E8Seal,
+                    _ => Hard::E8PreventExtensions,
+                };
+                m.cons(o, Cons::Hard { kind, reason: r });
                 let ret = m.calls[call as usize].ret;
                 m.edge(o, ret);
             }
@@ -3706,6 +3798,9 @@ fn ns_method_inner(
             ret_prim(m, call, prim::BOOL);
         }
         (BuiltinNs::Object, "isFrozen" | "isSealed" | "isExtensible") => {
+            if let Some(o) = arg(m, call, 0) {
+                is_extensible_ops(m, o, name != "isExtensible");
+            }
             ret_prim(m, call, prim::BOOL);
         }
         // 20.1.2.13: ToObject(O), ToPropertyKey(P), then O.[[GetOwnProperty]](P):
@@ -4172,6 +4267,27 @@ fn ns_method_inner(
         // runs, nothing is handed on, the realm is not held.
         (BuiltinNs::TypedArray | BuiltinNs::TypedArrayKind(_), "from" | "of")
             if this_no_constructor(m, call) => {}
+        // A host object no namespace model describes (`ns_statics` lists no
+        // members: the global object, `process`, `require`, a host namespace
+        // or node module object such as `Atomics`, `Intl`, `node:fs`), under
+        // a key no arm above models: a method call on it (a program call, a
+        // protocol's lookup such as SerializeJSONProperty's `toJSON`,
+        // ECMA-262 25.5.2.2 step 2) is EvaluateCall's GetV then Call
+        // (13.3.6.1, 7.3.20): it calls what [[Get]] of the key reads, which
+        // the realm declaration answers for every key in whole-program mode
+        // (`loads::tok_load`, REALMVAL: a key it lacks reads `undefined`, or
+        // what a write stored). A call of the member's own value
+        // (`identified`) is that value's call, not a lookup.
+        (_, n)
+            if !identified
+                && !m.unit_mode
+                && ns != BuiltinNs::Other
+                && members::ns_statics(ns).members.is_none() =>
+        {
+            let t = m.tok(TokKind::Builtin(ns));
+            let a = m.atom(n);
+            m.call_read_member(t, Key::Named(a), call)
+        }
         (_, n) => {
             let recv = if statics_ignore_this(ns) && members::ns_own_fn(ns, n) {
                 Recv::Ignored
@@ -4186,6 +4302,36 @@ fn ns_method_inner(
                 recv,
             )
         }
+    }
+}
+
+/// A call of the Worker global's own native `n` (`%WorkerGlobal%.<n>`,
+/// perry-stdlib worker_threads/worker_surface.rs; S8 binds a bare call in a
+/// module a Worker may run to it, `loads::worker_global_member`). Each
+/// ignores `this`:
+/// - `postMessage(v, transfer)` is Worker.postMessage's structured clone
+///   (`js_worker_threads_post_message`): its model (`worker_post_message`).
+/// - `removeEventListener(type, cb)` compares `cb` with the parent port's
+///   listeners (message_port.rs `remove_event_listener`; a string `type`
+///   only, no conversion): calls nothing, `undefined`.
+/// - `close()` sets the thread's close flag: calls nothing, `undefined`.
+/// - `addEventListener(type, cb)` registers `cb` on the parent port, which
+///   calls it with a message event of what the parent posts: the
+///   worker-side message input, which no model describes (as a handler
+///   stored under `onmessage`, `members::global_runtime_reads`): `cb` is
+///   handed to code the model does not see.
+pub(crate) fn worker_global_call(m: &mut Model, n: &str, call: CallId) {
+    match n {
+        "postMessage" => collections::worker_post_message(m, call),
+        "removeEventListener" | "close" => ret_prim(m, call, prim::UNDEF),
+        "addEventListener" => unknown_method_at(
+            m,
+            call,
+            "argument of Worker global addEventListener (worker-side message input)",
+            None,
+            Recv::Ignored,
+        ),
+        _ => unreachable!("REALMVAL: Worker global native {n} has no model"),
     }
 }
 
@@ -4488,4 +4634,36 @@ fn error_tok(m: &mut Model, call: CallId) -> Tok {
 /// past the 285M bound; BATCHB31): the rule waits for that cost's fix.
 fn promise_all_index() -> bool {
     std::env::var("PERRY_FACTS_PROMISE_ALL_INDEX").as_deref() == Ok("1")
+}
+
+/// Rule PXINV: O.[[IsExtensible]]() of what `o` holds (`Object.isExtensible`,
+/// `Reflect.isExtensible`), and with `integrity` TestIntegrityLevel's
+/// (7.3.16) O.[[OwnPropertyKeys]]() and O.[[GetOwnProperty]](k) of each key
+/// (`Object.isFrozen` / `isSealed`). An ordinary object runs no code there;
+/// a Proxy runs its traps (`Cons::Meta`, `Cons::OwnProp`).
+pub(crate) fn is_extensible_ops(m: &mut Model, o: NodeId, integrity: bool) {
+    let reason = m.reason("[[IsExtensible]] / TestIntegrityLevel");
+    m.cons(
+        o,
+        Cons::Meta {
+            op: MetaOp::IsExtensible,
+            reason,
+        },
+    );
+    if integrity {
+        m.cons(
+            o,
+            Cons::Meta {
+                op: MetaOp::OwnKeys,
+                reason,
+            },
+        );
+        m.cons(
+            o,
+            Cons::OwnProp {
+                key: Key::any(),
+                idx: NO_NODE,
+            },
+        );
+    }
 }

@@ -34,6 +34,7 @@ const ESCAPED_ELSEWHERE: [&str; 2] = ["Blob.prototype", "Response.prototype"];
 fn read(wrapper: &str, read: &str, give: &str) -> crate::ProgramFacts {
     facts(&format!(
         r#"
+        declare function external(x?: unknown): any;
         class R {{ y = 1; }}
         const o: any = {{ m(a: any) {{ return a.y; }} }};
         const r: any = new R();
@@ -77,7 +78,7 @@ fn a_value_stored_on_the_chain_is_read() {
         ("/a/", "w[Symbol.toStringTag]", "P[Symbol.toStringTag]"),
         ("Blob.prototype", "w.then", "P.then"),
     ] {
-        let pf = read(w, r, &format!("{k} = (globalThis as any).hostFn();"));
+        let pf = read(w, r, &format!("{k} = external();"));
         assert!(escape(&pf).is_some(), "{w} {r}\n{}", pf.dump_text());
     }
 }

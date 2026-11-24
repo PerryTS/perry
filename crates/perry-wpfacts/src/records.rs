@@ -202,7 +202,7 @@ fn sanctioned(p: Protocol) -> bool {
     matches!(
         p,
         Protocol::ToPrimitive
-            | Protocol::Inspect
+            | Protocol::Inspect(_)
             | Protocol::ShallowInspect
             | Protocol::Json
             | Protocol::OwnKeys
@@ -232,7 +232,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
     match c {
         // `k in o` (no flow; before PROXY2 it made no constraint at all).
         Cons::HasProp { .. } => Allowed,
-        Cons::OwnProp { .. } => Allowed,
+        Cons::OwnProp { .. } | Cons::DeleteIdx { .. } | Cons::Meta { .. } => Allowed,
         Cons::Identity { route } => match route {
             IdentityRoute::JsonReplacer => Reject(R5Protocol("JsonReplacer".into())),
             r => Reject(R4Identity(r.name().into())),
@@ -269,6 +269,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::NotNullish { .. }
         | Cons::NotBuffer { .. }
         | Cons::NotObjectProto { .. }
+        | Cons::NotError { .. }
         | Cons::NotRegExp { .. }
         | Cons::NotNull { .. }
  | Cons::RecordEntry { .. }
@@ -278,7 +279,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::Range { .. }
         | Cons::Defined { .. }
         | Cons::TopIfTop { .. }
-        | Cons::Raise { .. }
+        | Cons::Raise { .. } | Cons::HandRaise { .. }
         // It reads the node's Strings only (rule CONSOLE-PCT).
         | Cons::ConsoleFormat { .. } => Allowed,
         // Arithmetic and coercion: ToPrimitive on the record.
@@ -348,6 +349,11 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::NativeParent { .. }
         | Cons::PlainKey { .. }
         | Cons::StoreTopProto { .. }
+        | Cons::ChainSet { .. }
+        | Cons::ChainRecv { .. }
+        | Cons::FwdLoad { .. }
+        | Cons::FwdStore { .. }
+        | Cons::DefineOwn { .. }
         | Cons::HolderStep { .. }
         | Cons::VisitHolders { .. }
         | Cons::VisitStop { .. }
@@ -420,6 +426,7 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         | Cons::NotNullish { .. }
         | Cons::NotBuffer { .. }
         | Cons::NotObjectProto { .. }
+        | Cons::NotError { .. }
         | Cons::NotRegExp { .. }
         | Cons::NotNull { .. }
         | Cons::RecordEntry { .. }
@@ -429,7 +436,8 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         | Cons::Range { .. }
         | Cons::Defined { .. }
         | Cons::TopIfTop { .. }
-        | Cons::Raise { .. } => Use::Allowed,
+        | Cons::Raise { .. }
+        | Cons::HandRaise { .. } => Use::Allowed,
         Cons::ArgInto { call, .. } | Cons::RetInto { call, .. } => Use::TypedCall(*call),
         Cons::MCall { key, .. } | Cons::Load { key, .. } | Cons::FieldTruthy { key, .. } => {
             op(named(key))
@@ -795,7 +803,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 regions.insert(n as NodeId);
             }
             for c in &node.cons {
-                if let Cons::Raise { region } = c {
+                if let Cons::Raise { region } | Cons::HandRaise { region } = c {
                     regions.insert(*region);
                 }
             }
@@ -1356,6 +1364,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     | Cons::NotNullish { .. }
                                     | Cons::NotBuffer { .. }
                                     | Cons::NotObjectProto { .. }
+                                    | Cons::NotError { .. }
                                     | Cons::NotRegExp { .. }
                                     | Cons::NotNull { .. }
                                     | Cons::RecordEntry { .. }
@@ -1365,6 +1374,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     | Cons::Defined { .. }
                                     | Cons::TopIfTop { .. }
                                     | Cons::Raise { .. }
+                                    | Cons::HandRaise { .. }
                                     | Cons::BirthField { .. }
                             )
                             || matches!(k, Cons::Implicit { proto, .. } if sanctioned(*proto))
@@ -1924,6 +1934,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::NotNullish { .. }
                 | Cons::NotBuffer { .. }
                 | Cons::NotObjectProto { .. }
+                | Cons::NotError { .. }
                 | Cons::NotRegExp { .. }
                 | Cons::NotNull { .. }
                 | Cons::RecordEntry { .. }
@@ -1934,6 +1945,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::Defined { .. }
                 | Cons::TopIfTop { .. }
                 | Cons::Raise { .. }
+                | Cons::HandRaise { .. }
                 | Cons::ArgInto { .. }
                 | Cons::Arith { .. }
                 | Cons::Plus { .. }

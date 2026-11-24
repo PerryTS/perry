@@ -10,10 +10,10 @@
 use super::*;
 
 const CLASSES: &str = r#"
-    (globalThis as any).hostTake = (_x: any) => {};
-    class C { constructor(a?: any) { (globalThis as any).hostTake(a); (globalThis as any).hostTake(this); } }
+        declare function external(x?: unknown): any;
+    class C { constructor(a?: any) { external(a); external(this); } }
     class D extends C {}
-    class S { static k(a: any) { (globalThis as any).hostTake(a); } constructor(a?: any) { (globalThis as any).hostTake(a); } }
+    class S { static k(a: any) { external(a); } constructor(a?: any) { external(a); } }
     class Svc { marker = 3; }
     function g(a: any) { return a.marker; }
     function pick(x: any) { return x; }
@@ -66,7 +66,7 @@ fn a_derived_class_or_one_with_a_static_called_without_new_throws() {
 /// in the callee keeps the unknown call.
 #[test]
 fn an_unknown_value_beside_the_class_keeps_the_unknown_call() {
-    let k = "(Math.random() < 2 ? C : (globalThis as any).hostGet())";
+    let k = "(Math.random() < 2 ? C : external())";
     for b in plain_calls(k) {
         assert!(!proven(&b), "{b}");
     }

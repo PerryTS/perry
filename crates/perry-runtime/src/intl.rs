@@ -1788,7 +1788,7 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
         // `format` is an accessor (getter) per ECMA-402, not a plain method.
         &[(
             "format",
-            crate::fn_info!(#[realm("Intl.NumberFormat.prototype.format.<get>")] export crate::intl::number_format::number_format_format_getter_thunk, 0; with_name("get format"), with_declared(0)),
+            crate::fn_info!(#[realm("Intl.NumberFormat.prototype.format.<get>", effects = { returns(islot(this, boundFormat)) })] export crate::intl::number_format::number_format_format_getter_thunk, 0; with_name("get format"), with_declared(0)),
         )],
     );
     install_constructor(
@@ -1821,7 +1821,7 @@ fn install_intl_namespace_members(ns_obj: *mut ObjectHeader) {
         ],
         &[(
             "format",
-            crate::fn_info!(#[realm("Intl.DateTimeFormat.prototype.format.<get>")] export crate::intl::date_collator::date_time_format_format_getter_thunk, 0; with_name("get format"), with_declared(0)),
+            crate::fn_info!(#[realm("Intl.DateTimeFormat.prototype.format.<get>", effects = { returns(islot(this, boundFormat)) })] export crate::intl::date_collator::date_time_format_format_getter_thunk, 0; with_name("get format"), with_declared(0)),
         )],
     );
     install_constructor(

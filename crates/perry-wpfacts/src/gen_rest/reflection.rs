@@ -112,10 +112,30 @@ impl<'a> Gen<'a> {
                                 reason: r,
                             },
                         );
+                        self.m.cons(o, Cons::DeleteIdx { idx: kn, reason: r });
                     }
                 }
                 self.raise_on(o);
                 self.prim_node(prim::BOOL)
+            }
+            // Rule PXAPPLY: the HIR's call and `new` of a Proxy local
+            // (`p( ... )`, `new p( ... )`): the value's [[Call]] with
+            // `this` undefined and its [[Construct]] with newTarget = the
+            // value, as for any callee value (`solve/proxy.rs`
+            // `proxy_call`).
+            Expr::ProxyApply { proxy, args } => {
+                let c = self.expr(fx, proxy);
+                let a = self.evaluate_all(fx, args);
+                let (call, ret) = self.new_call(ThisArg::Undef, a, vec![]);
+                self.m.cons(c, Cons::Call { call });
+                ret
+            }
+            Expr::ProxyConstruct { proxy, args } => {
+                let c = self.expr(fx, proxy);
+                let a = self.evaluate_all(fx, args);
+                let (call, ret) = self.new_call(ThisArg::Undef, a, vec![]);
+                self.m.cons(c, Cons::New { call });
+                ret
             }
             Expr::ProxyRevocable { target, handler } => {
                 // E9: the target is reached only through traps; the proxy
@@ -250,6 +270,7 @@ impl<'a> Gen<'a> {
                         reason: r,
                     },
                 );
+                self.m.cons(t, Cons::DeleteIdx { idx: k, reason: r });
                 self.prim_node(prim::BOOL)
             }
             Expr::ReflectApply {

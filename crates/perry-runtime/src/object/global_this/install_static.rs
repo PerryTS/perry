@@ -772,12 +772,12 @@ pub(crate) fn install_builtin_constructor_statics(
             );
             s.method(
                 "timeout",
-                crate::fn_info!(#[realm(AbortSignal.timeout, effects = { coerce(arg(0), ToPrimitive); calls(islot(result, onabort), this = result, args = [fresh(Event.prototype)]); stores(fresh); returns(fresh(AbortSignal.prototype, slots = {reason: fresh(DOMException.prototype)})) })] export crate::object::global_this::install_static::abort_signal_timeout_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(AbortSignal.timeout, effects = { coerce(arg(0), ToPrimitive); calls(islot(result, onabort), this = result, args = [fresh(Event.prototype, slots = {target: result})]); stores(fresh); returns(fresh(AbortSignal.prototype, slots = {reason: fresh(DOMException.prototype)})) })] export crate::object::global_this::install_static::abort_signal_timeout_thunk, 1; with_declared(1)),
                 1,
             );
             s.method(
                 "any",
-                crate::fn_info!(#[realm(AbortSignal.any, effects = { coerce(arg(0), Iterate); calls(islot(result, onabort), this = result, args = [fresh(Event.prototype)]); stores(fresh); returns(fresh(AbortSignal.prototype, slots = {reason: islot(elems(arg(0)), reason)})) })] export crate::object::global_this::install_static::abort_signal_any_thunk, 1; with_declared(1)),
+                crate::fn_info!(#[realm(AbortSignal.any, effects = { coerce(arg(0), Iterate); calls(islot(result, onabort), this = result, args = [fresh(Event.prototype, slots = {target: result})]); stores(fresh); returns(fresh(AbortSignal.prototype, slots = {reason: islot(elems(arg(0)), reason)})) })] export crate::object::global_this::install_static::abort_signal_any_thunk, 1; with_declared(1)),
                 1,
             );
         }

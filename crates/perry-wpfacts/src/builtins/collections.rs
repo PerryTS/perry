@@ -1194,6 +1194,10 @@ fn array_like_model(m: &mut Model, t: Tok, name: &str) -> NodeId {
                 reason,
             },
         );
+        // DeletePropertyOrThrow(O, ToString(index)): an index String.
+        let idx = m.node_l("array-method-delete-key");
+        m.add_prim(idx, prim::STR);
+        m.cons(recv, Cons::DeleteIdx { idx, reason });
     }
     if name == "concat" {
         let k = Key::Named(m.atom(&format!("{WK_PREFIX}isConcatSpreadable")));

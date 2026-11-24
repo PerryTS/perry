@@ -97,7 +97,7 @@ fn a_method_on_a_foreign_primitive_this_throws_and_sinks_no_argument() {
 fn a_maybe_unknown_callee_on_a_primitive_this_still_hands_the_argument_over() {
     let src = unseen(
         "class P { x: number; constructor() { this.x = 1; } }\n\
-         const g: any = process.argv.length > 8 ? Number.prototype.toString : (globalThis as any).hostFn;\n\
+         const g: any = process.argv.length > 8 ? Number.prototype.toString : external();\n\
          function tf(s: any, a: any) { return g.call(s, a); }\n\
          const p = new P();\n\
          try { console.log(tf(\"1\", p)); } catch (e) {}\n\

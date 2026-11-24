@@ -218,12 +218,12 @@ pub(crate) fn install_buffer_prototype_members(proto: *mut ObjectHeader) {
         install_buffer_prototype_getter(
             proto,
             "parent",
-            crate::fn_info!(#[realm("Buffer.prototype.parent.<get>", constructible = true)] export crate::object::native_module::callable_exports::buffer_prototype_parent_getter_thunk, 0; with_name("get parent"), with_declared(0)),
+            crate::fn_info!(#[realm("Buffer.prototype.parent.<get>", constructible = true, effects = { returns(islot(this, ViewedArrayBuffer) | prim(undefined)) })] export crate::object::native_module::callable_exports::buffer_prototype_parent_getter_thunk, 0; with_name("get parent"), with_declared(0)),
         );
         install_buffer_prototype_getter(
             proto,
             "offset",
-            crate::fn_info!(#[realm("Buffer.prototype.offset.<get>", constructible = true)] export crate::object::native_module::callable_exports::buffer_prototype_offset_getter_thunk, 0; with_name("get offset"), with_declared(0)),
+            crate::fn_info!(#[realm("Buffer.prototype.offset.<get>", constructible = true, effects = { returns(prim(num) | prim(undefined)) })] export crate::object::native_module::callable_exports::buffer_prototype_offset_getter_thunk, 0; with_name("get offset"), with_declared(0)),
         );
         // Complete: seal it and publish it as family `Buffer`, so the
         // program's first write of it sets its shadow bit, which the name

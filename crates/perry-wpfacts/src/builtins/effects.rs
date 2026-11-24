@@ -125,6 +125,21 @@ pub(crate) fn declared_member(name: &str) -> Option<&'static RealmEntry> {
     (interpretable(e.effects) && !names_this(e.effects)).then_some(e)
 }
 
+/// The host function value a `native(path)` operand names: the realm's
+/// function, method or constructor of that path (`node:fs.FileReadStream`,
+/// the constructor `fs.ReadStream` and `fs.FileReadStream` hold), whether or
+/// not the runtime declares what a call of it does. The operand
+/// is the value, never a call: a call of it runs its declaration when it
+/// has one (`declared_member`) and takes the undeclared native's path
+/// otherwise, as every other reference to it does (`hostval_member`).
+pub(crate) fn native_value(path: &str) -> Option<&'static RealmEntry> {
+    use perry_hir::realm_manifest::RealmKind as K;
+    declared_member(path).or_else(|| {
+        super::members::realm_entry(path)
+            .filter(|e| matches!(e.kind, K::Function | K::Method | K::Constructor))
+    })
+}
+
 /// The declaration of the bound_method constructor `name`
 /// (`node:inspector.Session`) whose effects the runtime declares at its
 /// body (`declared_member`): what `new` of it does, in forms `run_construct`
@@ -138,6 +153,13 @@ pub(crate) fn declared_construct(name: &str) -> Option<&'static RealmEntry> {
             declared_at(owner, key).filter(|e| !names_this(e.effects))
         })
         .filter(|e| e.kind == RealmKind::Constructor && !names_callee(e.effects))
+}
+
+/// The declaration `super(...)` into realm constructor `identity` runs
+/// (`run_super_construct`): a module or host constructor's
+/// (`declared_construct`), else the global constructor's (`declared_ctor`).
+pub(crate) fn declared_super_construct(identity: &str) -> Option<&'static RealmEntry> {
+    declared_construct(identity).or_else(|| declared_ctor(identity))
 }
 
 fn by_proto() -> &'static ByProto {
@@ -188,14 +210,14 @@ fn names_root(effects: &[RealmEffect], root: RealmSlotRoot) -> bool {
                 .iter()
                 .chain(reject.iter())
                 .any(|v| operand(v, slot, root)),
-            RealmOperand::Native(_) => false,
+            RealmOperand::Native(_) | RealmOperand::Namespace(_) => false,
             RealmOperand::Species { of, args, elems } => {
                 slot(of) || args.iter().any(|a| operand(a, slot, root)) || elems.iter().any(slot)
             }
             RealmOperand::Union(us) => us.iter().any(|u| operand(u, slot, root)),
             // BoundFunctionCreate binds the receiver.
             RealmOperand::Bound => root == RealmSlotRoot::This,
-            RealmOperand::Json | RealmOperand::Unknown => false,
+            RealmOperand::Json | RealmOperand::Unknown | RealmOperand::Never => false,
         }
     }
     let operand = |o: &RealmOperand| operand(o, &slot, root);
@@ -390,9 +412,11 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
                 (match (&proto[..], elems.is_empty(), fields.is_empty()) {
                     (_, true, true) => true,
                     ("Array.prototype", _, true) => elems.iter().all(operand),
-                    ("Object.prototype", true, _) => {
-                        fields.iter().all(|f| operand_in(&f.value, true))
-                    }
+                    ("Array.prototype", _, false) => false,
+                    // An ordinary object, or another prototype's object
+                    // with own data fields (a PerformanceMark's `name`,
+                    // `entryType`, `startTime`, `duration`).
+                    (_, true, false) => fields.iter().all(|f| operand_in(&f.value, true)),
                     _ => false,
                 }) && slots.iter().all(|f| operand(&f.value))
             }
@@ -401,11 +425,16 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
             }
             // A host function value whose own declaration runs.
             RealmOperand::Native(path) => {
-                declared_member(path).is_some_and(|e| field || !names_callee(e.effects))
+                native_value(path).is_some_and(|e| field || !names_callee(e.effects))
             }
+            // The realm's one namespace object of that path.
+            RealmOperand::Namespace(path) => super::members::realm_entry(path)
+                .is_some_and(|d| d.kind == perry_hir::realm_manifest::RealmKind::Namespace),
             RealmOperand::Species { .. } | RealmOperand::Bound => false,
             RealmOperand::Union(us) => us.iter().all(|u| operand_in(u, field)),
             RealmOperand::Json | RealmOperand::Unknown => true,
+            // No value at all: a whole result only (the manifest's check).
+            RealmOperand::Never => true,
         }
     }
     !effects.is_empty()
@@ -483,6 +512,11 @@ struct Run {
     c: CallSite,
     recv: Option<NodeId>,
     returned: Vec<NodeId>,
+    /// `super(...)` into this constructor (ECMA-262 13.3.7.1): the instance
+    /// under construction, the object OrdinaryCreateFromConstructor makes
+    /// with NewTarget's prototype (10.1.13). The declared result's `fresh`
+    /// is this object, and `result` names it.
+    new_target: Option<Tok>,
 }
 
 impl Run {
@@ -519,7 +553,14 @@ impl Run {
                     v.nodes.push(spread_elems(m, s));
                 }
             }
-            RealmSlotRoot::Result => v.nodes.push(self.c.ret),
+            RealmSlotRoot::Result => match self.new_target {
+                Some(t) => {
+                    let n = m.node_l("super-construct-result");
+                    m.add_tok(n, t);
+                    v.nodes.push(n);
+                }
+                None => v.nodes.push(self.c.ret),
+            },
             RealmSlotRoot::Returned(n) => v.nodes.extend(self.returned.get(n as usize)),
             RealmSlotRoot::Callee => {
                 let f = self
@@ -589,6 +630,20 @@ impl Run {
                     spread: vec![],
                 }
             }
+            // The prototype of the values of the slot the step is taken in.
+            (r, [inner @ .., RealmSlotStep::Proto]) => {
+                let of = RealmSlot {
+                    root: r,
+                    steps: Cow::Owned(inner.to_vec()),
+                };
+                let Some(n) = self.node(m, &of) else {
+                    return Vals::default();
+                };
+                Vals {
+                    nodes: vec![self.proto_of(m, n)],
+                    spread: vec![],
+                }
+            }
             // A step over a slot more than one deep: the same step on the
             // values of the slot it is taken in.
             (r, [inner @ .., last]) if !inner.is_empty() => {
@@ -604,7 +659,7 @@ impl Run {
                         nodes: vec![],
                         spread: vec![n],
                     },
-                    RealmSlotStep::Iterated | RealmSlotStep::OwnValues => {
+                    RealmSlotStep::Iterated | RealmSlotStep::OwnValues | RealmSlotStep::Proto => {
                         unreachable!("a value step is taken above")
                     }
                     st @ (RealmSlotStep::Field(_)
@@ -676,6 +731,10 @@ impl Run {
                     nodes: vec![self.value_step(m, base, st)],
                     spread: vec![],
                 },
+                RealmSlotStep::Proto => Vals {
+                    nodes: vec![self.proto_of(m, base)],
+                    spread: vec![],
+                },
                 st @ (RealmSlotStep::Field(_)
                 | RealmSlotStep::Internal(_)
                 | RealmSlotStep::StrKey) => {
@@ -690,6 +749,17 @@ impl Run {
             };
         }
         cur
+    }
+
+    /// `proto(n)`: ToObject of `n`'s values (ECMA-262 7.1.18: a primitive's
+    /// wrapper, born at this call; `null` and `undefined` throw), then
+    /// [[GetPrototypeOf]] of each (`Cons::ProtoOf`, as
+    /// `Object.getPrototypeOf` reads it): an object or `null`.
+    fn proto_of(&mut self, m: &mut Model, n: NodeId) -> NodeId {
+        let o = super::to_object(m, n, self.call);
+        let dst = m.node_l("native-proto");
+        m.cons(o, Cons::ProtoOf { dst });
+        dst
     }
 
     /// The values step `st` takes from node `n`: what iterating it yields
@@ -756,9 +826,20 @@ impl Run {
                 m.add_tok(n, p);
                 n
             }
+            // The namespace object the realm declares there: the token every
+            // other reference to it is (`Builtin(Module(name))`).
+            RealmOperand::Namespace(path) => {
+                let name = super::members::realm_entry(path)
+                    .expect("interpretable() takes a declared namespace only")
+                    .name;
+                let t = m.tok(TokKind::Builtin(BuiltinNs::Module(name)));
+                let n = m.node_l("native-namespace");
+                m.add_tok(n, t);
+                n
+            }
             RealmOperand::Native(path) => {
-                let identity = declared_member(path)
-                    .expect("interpretable() takes a declared native only")
+                let identity = native_value(path)
+                    .expect("interpretable() takes a realm native only")
                     .name;
                 let f = m.tok(TokKind::BuiltinFn(crate::model::Native::Member {
                     identity,
@@ -780,6 +861,8 @@ impl Run {
                 unreachable!("interpretable() takes species as a result only")
             }
             RealmOperand::Bound => unreachable!("interpretable() takes bound as a result only"),
+            // The manifest admits `never` as a whole result only.
+            RealmOperand::Never => unreachable!("never is a whole result only"),
             // What JSON.parse makes (`builtins::json_value`).
             RealmOperand::Json => {
                 let n = m.node_l("native-json");
@@ -815,8 +898,14 @@ impl Run {
         elems: &[RealmOperand],
         fields: &[RealmField],
     ) -> Tok {
+        // `own`: an object of the realm prototype itself (no hand model
+        // makes one), whose declared fields are its definite birth keys.
+        let mut own = false;
         let what = match proto {
-            _ if !fields.is_empty() => "hostrecord",
+            // An ordinary object, with or without own fields
+            // (`navigator.locks`).
+            Cow::Borrowed("Object.prototype") => "hostrecord",
+            Cow::Owned(p) if p == "Object.prototype" => "hostrecord",
             Cow::Borrowed("Array.prototype") => "Array",
             // The Date object `new Date(t)` makes (constructors.rs).
             Cow::Borrowed("Date.prototype") => "Date",
@@ -831,7 +920,10 @@ impl Run {
             // is the one `new URLSearchParams()` makes (constructors.rs),
             // with its modelled members (WHATWG URL 6.2).
             Cow::Borrowed("URLSearchParams.prototype") => "URLSearchParams",
-            Cow::Borrowed(p) => p,
+            Cow::Borrowed(p) => {
+                own = true;
+                p
+            }
             Cow::Owned(p) if p == "Array.prototype" => "Array",
             Cow::Owned(_) => "builtin",
         };
@@ -849,6 +941,25 @@ impl Run {
             let v = self.held(m, &f.value, out);
             m.edge(v, at);
         }
+        // The birth defines its fields as own data properties
+        // (CreateDataProperty, as a literal's), before any program code
+        // sees the object: definite birth keys of the template, kept only
+        // where every declared birth of the template defines them.
+        if let (true, Some(tm)) = (own, m.tmpl_of(out)) {
+            let keys: Vec<Atom> = fields.iter().map(|f| m.atom(&f.key)).collect();
+            let first = m.realm_born.insert(tm);
+            let tp = &mut m.tmpls[tm as usize];
+            if first {
+                tp.definite = keys.clone();
+            } else {
+                tp.definite.retain(|a| keys.contains(a));
+            }
+            for a in keys {
+                if !tp.birth_keys.contains(&a) {
+                    tp.birth_keys.push(a);
+                }
+            }
+        }
         out
     }
 
@@ -860,7 +971,7 @@ impl Run {
         match o {
             RealmOperand::Native(path) => {
                 let e =
-                    declared_member(path).expect("interpretable() takes a declared native only");
+                    native_value(path).expect("interpretable() takes a realm native only");
                 if !names_callee(e.effects) {
                     return self.operand(m, o);
                 }
@@ -937,6 +1048,31 @@ impl Run {
                 let v = self.slot(m, s);
                 flow(m, &v, self.c.ret);
             }
+            // `super(...)`: the object made is the instance under
+            // construction; the declared fields and slots are its own.
+            RealmOperand::Fresh {
+                elems,
+                fields,
+                slots,
+                ..
+            } if self.new_target.is_some() => {
+                let out = self.new_target.expect("guarded");
+                if !elems.is_empty() {
+                    let ofa = m.field_any(out);
+                    for e in elems.iter() {
+                        let v = self.operand(m, e);
+                        m.edge(v, ofa);
+                    }
+                }
+                for f in fields.iter() {
+                    let key = m.atom(&f.key);
+                    let at = m.field(out, key);
+                    let v = self.held(m, &f.value, out);
+                    m.edge(v, at);
+                }
+                self.slots(m, out, slots);
+                ret_tok(m, self.call, out);
+            }
             RealmOperand::Fresh {
                 proto,
                 elems,
@@ -951,7 +1087,10 @@ impl Run {
                 let p = self.promise(m, value, reject);
                 ret_tok(m, self.call, p);
             }
-            RealmOperand::Native(_) | RealmOperand::Json | RealmOperand::Unknown => {
+            RealmOperand::Native(_)
+            | RealmOperand::Namespace(_)
+            | RealmOperand::Json
+            | RealmOperand::Unknown => {
                 let n = self.operand(m, o);
                 m.edge(n, self.c.ret);
             }
@@ -960,6 +1099,9 @@ impl Run {
                     self.returns(m, u);
                 }
             }
+            // The call returns no value on any path: it throws (a realm
+            // TypeError, THROWN-REALM's), so nothing reaches the result.
+            RealmOperand::Never => {}
             // A constructor declaration never binds (`names_this`): a bound
             // function always has its receiver as the target.
             RealmOperand::Bound => {
@@ -1013,7 +1155,10 @@ fn step_key(m: &mut Model, st: &RealmSlotStep) -> Key {
         RealmSlotStep::Internal(k) => Key::Named(internal_atom(m, k)),
         // Read back: any String key (the exclusion is the store's).
         RealmSlotStep::StrKey => Key::any(),
-        RealmSlotStep::Elems | RealmSlotStep::Iterated | RealmSlotStep::OwnValues => {
+        RealmSlotStep::Elems
+        | RealmSlotStep::Iterated
+        | RealmSlotStep::OwnValues
+        | RealmSlotStep::Proto => {
             unreachable!("an elements or value step has no key")
         }
     }
@@ -1040,25 +1185,37 @@ fn flow(m: &mut Model, v: &Vals, dst: NodeId) {
 /// `call` into declared native `entry` with receiver token `t`: each
 /// declared effect, in declaration order.
 pub(crate) fn run_native(m: &mut Model, entry: &'static RealmEntry, t: Tok, call: CallId) {
-    run(m, entry, Some(t), None, call)
+    run(m, entry, Some(t), None, call, None)
 }
 
 /// `call` of declared native function value `f` (`declared_member`):
 /// each declared effect, with `f` as the receiver token and as `callee`.
 pub(crate) fn run_member(m: &mut Model, entry: &'static RealmEntry, f: Tok, call: CallId) {
-    run(m, entry, Some(f), Some(f), call)
+    run(m, entry, Some(f), Some(f), call, None)
 }
 
 /// `new Name(...)` at `call` of a declared global constructor
 /// (`declared_ctor`): each declared effect, with no receiver.
 pub(crate) fn run_construct(m: &mut Model, entry: &'static RealmEntry, call: CallId) {
-    run(m, entry, None, None, call)
+    run(m, entry, None, None, call, None)
 }
 
 /// `call` of a declared global function (`declared_function`): each
 /// declared effect, with no receiver.
 pub(crate) fn run_function(m: &mut Model, entry: &'static RealmEntry, call: CallId) {
-    run(m, entry, None, None, call)
+    run(m, entry, None, None, call, None)
+}
+
+/// `super(...)` at `call` into declared constructor `entry`
+/// (`declared_construct`): each declared effect, with no receiver, the
+/// object it makes being `inst`, the instance under construction.
+pub(crate) fn run_super_construct(
+    m: &mut Model,
+    entry: &'static RealmEntry,
+    call: CallId,
+    inst: Tok,
+) {
+    run(m, entry, None, None, call, Some(inst))
 }
 
 fn run(
@@ -1067,6 +1224,7 @@ fn run(
     t: Option<Tok>,
     callee: Option<Tok>,
     call: CallId,
+    new_target: Option<Tok>,
 ) {
     crate::family_reach::run(m, entry.name);
     if let Some(p) = m.prof.as_mut() {
@@ -1084,6 +1242,7 @@ fn run(
         c: m.calls[call as usize].clone(),
         recv: None,
         returned: Vec::new(),
+        new_target,
     };
     for e in entry.effects.iter() {
         match e {
@@ -1379,6 +1538,7 @@ fn slot_text(s: &RealmSlot) -> String {
             RealmSlotStep::Iterated => format!("iterated({out})"),
             RealmSlotStep::OwnValues => format!("values({out})"),
             RealmSlotStep::StrKey => format!("strkey({out})"),
+            RealmSlotStep::Proto => format!("proto({out})"),
             RealmSlotStep::Field(k) => format!("field({out}, {k})"),
             RealmSlotStep::Internal(k) => format!("islot({out}, {k})"),
         };
