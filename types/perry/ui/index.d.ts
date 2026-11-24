@@ -580,7 +580,10 @@ export function Section(title: string, children: Widget[]): Widget;
  * A collapsible section: `title` is always shown, and the children attached with
  * `widgetAddChild` show when the reader expands it. Web: `<details>`/`<summary>`,
  * collapsed at first. Native backends show `Section(title)`, always expanded, with no
- * control to collapse it.
+ * control to collapse it and with the limits of `Section`: on macOS the children are not
+ * laid out and cannot be reordered or cleared; on iOS, tvOS, visionOS and Android the
+ * title counts as the first child; on GTK4 the children cannot be reordered; on watchOS
+ * the title is not drawn.
  */
 export function Disclosure(title: string): Widget;
 
