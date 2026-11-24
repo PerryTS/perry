@@ -567,7 +567,6 @@ impl<'a> Gen<'a> {
             None => self.expr(fx, inner),
         };
         let pa = self.member_atom(inner, p);
-        if *byte_offset != 0 {
             self.read_sites.push(ReadSite {
                 global_get: false,
                 access: crate::derive::Access::Read,
@@ -579,7 +578,6 @@ impl<'a> Gen<'a> {
                 value_call: false,
                 func: fx.f,
             });
-        }
         let o = self.load(e, Key::Named(pa));
         if self.diagnostic.is_some() {
             self.diagnostic_expr(fx, object, o);
@@ -1377,7 +1375,7 @@ impl<'a> Gen<'a> {
                 // (`Cons::ProtoKey`), so that a builtin namespace's prototype
                 // member is the native it names.
                 if let Some((e, o, a)) = self.proto_member(fx, object, property) {
-                    if *byte_offset != 0 && !component {
+                    if !component {
                         self.read_sites.push(ReadSite {
                             global_get: false,
                             access: crate::derive::Access::Read,
@@ -1399,7 +1397,7 @@ impl<'a> Gen<'a> {
                     None => self.expr(fx, object),
                 };
                 let a = self.member_atom(object, property);
-                if *byte_offset != 0 && !component {
+                if !component {
                     self.read_sites.push(ReadSite {
                         global_get: false,
                         access: crate::derive::Access::Read,
@@ -1430,7 +1428,7 @@ impl<'a> Gen<'a> {
                     self.m.add_prim(dst, prim::ALL);
                 }
                 self.field_reads.push(dst);
-                if *byte_offset != 0 && !component {
+                if !component {
                     self.load_sites.push((mi, *byte_offset, a, dst));
                 }
                 dst

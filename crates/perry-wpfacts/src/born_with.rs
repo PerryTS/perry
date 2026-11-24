@@ -104,8 +104,7 @@ pub(crate) fn runs(ss: &[Stmt]) -> Vec<Run> {
                     let Expr::LocalGet(x) = object.as_ref() else {
                         break;
                     };
-                    let quiet = *byte_offset != 0
-                        && args.iter().all(|a| match a {
+                    let quiet = args.iter().all(|a| match a {
                             Expr::LocalGet(l) => *l != e,
                             Expr::Closure { .. } => true,
                             a => literal(a),

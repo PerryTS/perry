@@ -92,7 +92,7 @@ fn plan<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<Plan<'e>> {
         return None;
     };
     let offset = *member;
-    if property != "fill" || offset == 0 {
+    if property != "fill" {
         return None;
     }
     let len = *ctx.wpfacts.fill_births.get(&offset)?;

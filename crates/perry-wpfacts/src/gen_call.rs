@@ -247,8 +247,7 @@ impl<'a> Gen<'a> {
                 };
                 // The method site is the callee member read's identity.
                 let (off, end) = (*pb, *pe);
-                let rec = (off != 0).then(|| self.call_sites_at.len());
-                if off != 0 {
+                let rec = self.call_sites_at.len();
                     self.call_sites_at.push(crate::signatures::CallSiteRec {
                         module: fx.module,
                         offset: off,
@@ -258,8 +257,6 @@ impl<'a> Gen<'a> {
                         callee: None,
                         call: crate::model::NO_CTX,
                     });
-                }
-                if off != 0 {
                     self.read_sites.push(ReadSite {
                         global_get,
                         access: crate::derive::Access::Read,
@@ -271,7 +268,6 @@ impl<'a> Gen<'a> {
                         value_call: callee_v.is_some(),
                         func: fx.f,
                     });
-                }
                 let this = if global_get {
                     ThisArg::Undef
                 } else {
@@ -286,9 +282,7 @@ impl<'a> Gen<'a> {
                 {
                     f.fill_site = self.m.calls[call as usize].site;
                 }
-                if let Some(i) = rec {
-                    self.call_sites_at[i].call = call;
-                }
+                    self.call_sites_at[rec].call = call;
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
@@ -296,9 +290,7 @@ impl<'a> Gen<'a> {
                 match callee_v {
                     Some(callee) => self.m.cons(callee, Cons::Call { call }),
                     None => {
-                        if off != 0 {
                             self.m.named_calls.insert(call, (a, o));
-                        }
                         self.m.cons(
                             o,
                             Cons::MCall {
