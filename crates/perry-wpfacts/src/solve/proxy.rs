@@ -162,6 +162,8 @@ pub enum ProxyOp {
     /// Rule PXCHAIN: a receiver's read or call under a computed key that
     /// may be an index (`Cons::PlainKey`) reaching the Proxy.
     Plain(Tok, ChainAct),
+    /// Rule PXESC: the Proxy reached unknown code (`proxy_escape`).
+    Escape,
 }
 
 impl Model {
@@ -234,6 +236,54 @@ impl Model {
         self.cons(target, Cons::TopSink { reason: r });
         let rh = self.reason("E9 Proxy handler");
         self.sink_node(handler, rh);
+    }
+
+    /// Rule PXESC: Proxy `p` reaches unknown code (an escape, a ⊤ sink, a
+    /// reflecting runtime helper): that code may run every internal method
+    /// of it (ECMA-262 10.5.1-10.5.13) with operands of its own. Each trap
+    /// runs as the operation calls it: `this` = the handler, the target its
+    /// first argument, the key any String or Symbol (ToPropertyKey's), each
+    /// other operand (a value, a descriptor, a Receiver, a thisArgument, an
+    /// argument list, a newTarget) unknown, and its result goes back to that
+    /// code. Each forward is the same internal method of the target with
+    /// those operands, which is the target's own escape: the target
+    /// escapes (a Proxy target runs this rule in turn). Once per Proxy.
+    pub(crate) fn proxy_escape(&mut self, p: u32, reason: u32) {
+        if self.proxy_made(p, ProxyOp::Escape) {
+            return;
+        }
+        let t = self.proxies[p as usize].target;
+        let unk = self.node_l("proxy-escape-operand");
+        self.add_top(unk, |m| {
+            format!(
+                "operand of an escaped Proxy's trap: {}",
+                m.reasons[reason as usize]
+            )
+        });
+        self.add_prim(unk, prim::ALL);
+        let k = self.proxy_key_arg(Key::any(), NO_NODE);
+        let ret = self.node_l("proxy-escape-ret");
+        self.sink_node(ret, reason);
+        let any = Some(Key::any());
+        let traps: [(&str, Option<Key>, Vec<NodeId>); 13] = [
+            ("getPrototypeOf", None, vec![t]),
+            ("setPrototypeOf", None, vec![t, unk]),
+            ("isExtensible", None, vec![t]),
+            ("preventExtensions", None, vec![t]),
+            ("getOwnPropertyDescriptor", any, vec![t, k]),
+            ("defineProperty", any, vec![t, k, unk]),
+            ("has", any, vec![t, k]),
+            ("get", any, vec![t, k, unk]),
+            ("set", any, vec![t, k, unk, unk]),
+            ("deleteProperty", any, vec![t, k]),
+            ("ownKeys", None, vec![t]),
+            ("apply", None, vec![t, unk, unk]),
+            ("construct", None, vec![t, unk, unk]),
+        ];
+        for (name, key, args) in traps {
+            self.proxy_trap(p, name, key, args, ret);
+        }
+        self.sink_node(t, reason);
     }
 
     /// The key argument a trap receives: ToPropertyKey's result (a String
@@ -2151,6 +2201,23 @@ impl Model {
                 kind: Hard::E9Proxy | Hard::E15With | Hard::B3Transfer,
                 ..
             } => {}
+            // Rule PXESC: a ⊤ sink and a store the runtime keeps (unknown
+            // code holds what reaches them: `escape`), and a reflecting
+            // runtime helper (`Protocol::Any`: it may run anything on its
+            // operand, as it may call a function handed to it) give the Proxy
+            // to unknown code: its escape (`proxy_escape`).
+            Cons::TopSink { .. } | Cons::RuntimeStore { .. } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
+            }
+            Cons::Implicit {
+                reason,
+                proto: Protocol::Any,
+                ..
+            } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.escape(t, reason);
+            }
             // Another protocol touch: its hold names the protocol and the
             // touch's own reason.
             Cons::Implicit { reason, proto, .. } => {

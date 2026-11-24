@@ -451,3 +451,26 @@ fn proxy_structured_clone_runs_no_trap() {
     let h = "get(t: any, k: any) { external(payload); return t[k]; }";
     site("{ a: 1 }", h, "try { structuredClone(px); } catch (e) {}", true).unwrap();
 }
+
+/// Rule PXESC: a Proxy that reaches unknown code may have every internal
+/// method run there with unknown operands: each trap runs with `this` = the
+/// handler and the target, and the target escapes (the forwards). A
+/// builtin run with `this` = the Proxy (`Array.prototype[@@iterator]`,
+/// `Function.prototype[@@hasInstance]`) and a receiver handed to unknown
+/// code reach it so; no Proxy part is held (E9).
+#[test]
+fn proxy_escape_runs_its_traps_with_unknown_operands() {
+    let has = "has(t: any, k: any) { external(payload); return true; }";
+    site("{ a: 1 }", has, "external(px);", false).unwrap();
+    site("{ a: 1 }", "", "external(px);", true).unwrap();
+    site("{ a: payload }", "", "external(px);", false).unwrap();
+    let op = "for (const x of px) { console.log(x); }";
+    site("[1]", "", op, true).unwrap();
+    site("[1]", "get(t: any, k: any) { return t[k]; }", op, true).unwrap();
+    let op = "console.log(({}) instanceof px);";
+    site("class {}", "", op, true).unwrap();
+    site("class {}", "get(t: any, k: any) { return t[k]; }", op, true).unwrap();
+    let th = "apply(t: any, th: any, a: any) { external(th); return 1; }";
+    site(FN, th, "({ m: px, q: payload }).m();", false).unwrap();
+    site(FN, th, "({ m: px, q: 1 }).m();", true).unwrap();
+}

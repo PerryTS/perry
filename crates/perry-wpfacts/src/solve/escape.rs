@@ -1439,8 +1439,9 @@ impl Model {
                     self.escape(c, reason);
                 }
             }
-            // PROXY2: unknown code may run any operation on a Proxy.
-            TokKind::Proxy(p) => self.proxy_degrade(p, "escape"),
+            // Rule PXESC: unknown code may run any internal method of a
+            // Proxy (`proxy_escape`).
+            TokKind::Proxy(p) => self.proxy_escape(p, reason),
             TokKind::Bound(b) => {
                 let (target, bthis, bargs) = self.bound[b as usize].clone();
                 for n in [target, bthis].into_iter().chain(bargs) {
