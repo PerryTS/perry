@@ -37,3 +37,31 @@ setTimeout((...r: any[]) => console.log("timer " + r.length), 0);
         "3 0 1:2,3 1: 2|a,2 3 0 1/2,3 1/ 3 12\n3,3\n3 3 3\nasync 3\nfrom async 3 1: 2\nthen 1\ntimer 0"
     );
 }
+
+// A constructor's rest parameter receives the arguments from its position on as one array:
+// on `new`, through an inherited (synthesized) constructor, from an explicit `super(...)`,
+// through a class value, for a class declared in a function and on `new` in an async body.
+// Expected output is Node's.
+#[test]
+fn a_constructor_rest_parameter_receives_its_arguments_as_an_array() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class P { n: number; a: number[]; constructor(first: number, ...rest: number[]) { this.n = rest.length; this.a = rest; } }
+class OnlyRest { a: number[]; constructor(...rest: number[]) { this.a = rest; } }
+class D extends P {}
+class E extends P { constructor(x: number) { super(x, x + 1, x + 2); } }
+const p = new P(1, 2, 3, 4);
+console.log(p.n, p.a.join(","), new P(1).n, new OnlyRest().a.length, new OnlyRest(5, 6).a.join(","));
+console.log(new D(1, 2, 3).a.join(","), new E(7).a.join(","));
+const Q: any = P;
+console.log(new Q(1, 2, 3, 4).a.join(","));
+function local(v: number) { class L { r: number[]; constructor(...r: number[]) { this.r = r; } } return new L(v, v); }
+console.log(local(9).r.join(","));
+async function inAsync() { return new OnlyRest(1, 8, 9).a.join(",") + " " + new P(1, 8, 9).a.join(",") + " " + new OnlyRest().a.length + new P(1).n + new D(1).n; }
+inAsync().then((v) => console.log("async " + v));
+"#
+        ),
+        "3 2,3,4 0 0 5,6\n2,3 8,9\n2,3,4\n9,9\nasync 1,8,9 8,9 000"
+    );
+}

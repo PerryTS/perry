@@ -388,7 +388,10 @@ impl<'a> FuncEmitCtx<'a> {
                 if let Some(ctor_idx) = ctor {
                     // Stack: [instance_handle]
                     let ctor_args: &[Expr] = if forwarded { &[] } else { args };
-                    for arg in ctor_args {
+                    let ctor_args = self
+                        .emitter
+                        .with_rest_packed_after_receiver(ctor_idx, ctor_args);
+                    for arg in ctor_args.iter() {
                         self.emit_expr(func, arg);
                     }
                     // Keep the operand stack aligned with the ctor's arity: pad
@@ -462,15 +465,25 @@ impl<'a> FuncEmitCtx<'a> {
                             let forwarded = implicit.contains(parent_name)
                                 && !implicit.contains(current_class)
                                 && self.host_base_parent(current_class).is_some();
+                            // A synthesized constructor's own parameters are already the
+                            // parent's, a rest one packed.
+                            let passes_params_on =
+                                self.emitter.forwarding_ctor_classes.contains(current_class);
                             if forwarded {
                                 func.instruction(&Instruction::LocalGet(0));
                                 self.emit_host_super_init(func, args);
                                 func.instruction(&Instruction::Drop);
                             }
                             let ctor_args: &[Expr] = if forwarded { &[] } else { args };
+                            let ctor_args = if passes_params_on {
+                                std::borrow::Cow::Borrowed(ctor_args)
+                            } else {
+                                self.emitter
+                                    .with_rest_packed_after_receiver(ctor_idx, ctor_args)
+                            };
                             // Call parent constructor with this + args
                             func.instruction(&Instruction::LocalGet(0)); // this
-                            for arg in ctor_args {
+                            for arg in ctor_args.iter() {
                                 self.emit_expr(func, arg);
                             }
                             if let Some(&expected) = self.emitter.func_param_counts.get(&ctor_idx) {

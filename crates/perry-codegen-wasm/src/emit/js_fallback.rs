@@ -1305,15 +1305,9 @@ impl WasmModuleEmitter {
                 };
                 let mut call_args = vec![format!("f64ToU64({})", instance)];
                 call_args.extend(args_js.iter().map(|a| format!("f64ToU64({})", a)));
-                // A WASM i64 parameter rejects a missing (undefined) argument, so pad
-                // to the constructor's arity. Excess arguments are still evaluated and
-                // the export ignores them.
-                if let Some(&expected) = self.func_param_counts.get(&ctor_idx) {
-                    while call_args.len() < expected {
-                        call_args.push("TAG_UNDEFINED".to_string());
-                    }
-                }
-                // Through the callback boundary: an exception the constructor raised
+                // Through the callback boundary, which packs a rest parameter's arguments
+                // and pads missing ones to the constructor's arity (excess ones are still
+                // evaluated, and the export ignores them): an exception the constructor raised
                 // under an enclosing WASM `try` is left pending, and this rethrows it
                 // here instead of handing back `this` as if it had succeeded.
                 format!(

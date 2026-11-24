@@ -1,0 +1,1 @@
+`--target web`: a constructor rest parameter (`constructor(a, ...rest)`) receives the remaining arguments as an array on `new`, through an inherited constructor and from `super(...)`, instead of the first extra argument (#15292).
