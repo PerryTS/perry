@@ -59,6 +59,7 @@ fn looped(body: Vec<Stmt>) -> Module {
         return_type: Type::Void,
         body: vec![Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: I,
                 name: "i".to_string(),
                 ty: Type::Number,

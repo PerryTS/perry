@@ -72,6 +72,7 @@ fn untyped_accumulate(value: Expr) -> Stmt {
 /// `const index = i % n;`
 fn derived_index_stmt(modulus: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: U_INDEX_ID,
         name: "index".to_string(),
         ty: Type::Any,
@@ -136,6 +137,7 @@ fn untyped_param_module(rows_ty: Type, sum_ty: Type, body: Vec<Stmt>) -> Module 
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: U_SUM_ID,
                 name: "sum".to_string(),
                 ty: sum_ty,
@@ -143,6 +145,7 @@ fn untyped_param_module(rows_ty: Type, sum_ty: Type, body: Vec<Stmt>) -> Module 
                 init: Some(Expr::Integer(0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: U_LIMIT_ID,
                 name: "limit".to_string(),
                 ty: Type::Number,
@@ -156,6 +159,7 @@ fn untyped_param_module(rows_ty: Type, sum_ty: Type, body: Vec<Stmt>) -> Module 
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: U_COUNTER_ID,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -441,6 +445,7 @@ fn a_modulo_index_with_the_operands_swapped_declines() {
         Type::Number,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: U_INDEX_ID,
                 name: "index".to_string(),
                 ty: Type::Any,

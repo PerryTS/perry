@@ -631,6 +631,7 @@ fn dylib_closures_keep_native_roots() {
     let _native = crate::codegen::helpers::NativeRootsPin::native();
     let mut module = empty_module();
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 0,
         name: "parse_query".to_string(),
         ty: Type::Any,
@@ -642,6 +643,7 @@ fn dylib_closures_keep_native_roots() {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "result".to_string(),
                     ty: Type::Array(Box::new(Type::Any)),

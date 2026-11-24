@@ -845,6 +845,7 @@ mod tests {
 
     fn let_counter(init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "i".to_string(),
             ty: perry_hir::types::Type::Any,

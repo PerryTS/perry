@@ -803,6 +803,7 @@ mod tests {
     fn shared_array_buffer_provenance_rejects_let_and_function_bindings() {
         let mut let_module = Module::new("sab_let_shadow.ts");
         let_module.init.push(Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "SharedArrayBuffer".to_string(),
             ty: Type::Any,

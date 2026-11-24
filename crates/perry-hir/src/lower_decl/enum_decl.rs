@@ -111,6 +111,7 @@ pub(crate) fn enum_value_binding(
     let computed = own.iter().any(|m| matches!(m.value, EnumValue::Computed));
     let stmt = if existing.is_none() && !computed {
         Stmt::Let {
+            byte_offset: decl.span.lo.0,
             id,
             name: name.to_string(),
             ty: Type::Any,
@@ -192,6 +193,7 @@ pub(crate) fn enum_value_binding(
         } else {
             stores.push(Expr::LocalGet(id));
             Stmt::Let {
+                byte_offset: decl.span.lo.0,
                 id,
                 name: name.to_string(),
                 ty: Type::Any,

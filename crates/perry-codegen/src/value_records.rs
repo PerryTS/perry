@@ -663,6 +663,7 @@ fn seq(mut list: Vec<Expr>, value: Expr) -> Expr {
 
 fn let_stmt(id: LocalId, name: String, ty: Type, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name,
         ty,

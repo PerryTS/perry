@@ -1302,6 +1302,7 @@ mod elision_tests {
         // `var a = 5` re-declaring the parameter reuses its id.
         assert_eq!(
             with(Stmt::Let {
+                byte_offset: 0,
                 id: A,
                 name: "a".to_string(),
                 ty: Type::Any,

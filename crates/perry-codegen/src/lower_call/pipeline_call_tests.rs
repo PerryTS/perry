@@ -51,6 +51,7 @@ fn alias_call_ir(mutable: bool) -> String {
         Vec::new(),
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 20,
                 name: "idf".to_string(),
                 ty: Type::Any,

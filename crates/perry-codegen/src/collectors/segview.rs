@@ -978,6 +978,7 @@ fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
 
 fn let_any(id: u32, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name: name.to_string(),
         ty: perry_hir::types::Type::Any,
@@ -1152,6 +1153,7 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
                     // `O` is bound only for the decline arm, and every use is
                     // guarded, so on acceptance it is undefined and never read.
                     let bind = Stmt::Let {
+                        byte_offset: 0, /*HPOS*/
                         id: seg_id,
                         name: seg_name,
                         ty: perry_hir::types::Type::Any,
@@ -1173,6 +1175,7 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
                 }
                 None => {
                     let bind = Stmt::Let {
+                        byte_offset: 0, /*HPOS*/
                         id: seg_id,
                         name: seg_name,
                         ty: perry_hir::types::Type::Any,

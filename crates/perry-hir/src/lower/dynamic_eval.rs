@@ -78,6 +78,7 @@ pub(crate) fn enter_function(
     ctx.push_with_env_at(id, mark);
     ctx.dynamic_eval_scopes.push((id, mark));
     Some(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name: "__perry_eval_scope".to_string(),
         ty: Type::Any,

@@ -144,6 +144,7 @@ fn eq(l: Expr, r: Expr) -> Expr {
 
 fn let_(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("l{id}"),
         ty: Type::Any,

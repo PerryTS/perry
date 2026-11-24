@@ -25,6 +25,7 @@ fn native_step_output_is_an_unknown_value_rooted_before_the_body() {
             ],
         };
         let let_any = |id| Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("step_{id}"),
             ty: Type::Any,

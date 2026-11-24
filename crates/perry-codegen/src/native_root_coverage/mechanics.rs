@@ -12,6 +12,7 @@ use perry_hir::{BinaryOp, CompareOp};
 fn counted_loop(body: Vec<Stmt>) -> Stmt {
     Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: 0,
             id: 90,
             name: "i".to_string(),
             ty: Type::Number,

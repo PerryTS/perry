@@ -126,6 +126,7 @@ fn emit(m: &Module) -> String {
 /// AHEAD of that const's own declaration.
 fn hoisted_writer(fn_local: u32, target: u32) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: fn_local,
         name: "t".to_string(),
         ty: Type::Any,
@@ -177,6 +178,7 @@ fn module_with_hoisted_block_fn(prealloc: bool) -> Module {
     }
     init.push(hoisted_writer(0, 1));
     init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "events".to_string(),
         ty: Type::Any,
@@ -293,6 +295,7 @@ fn a_function_local_prealloc_still_gets_its_box() {
         Stmt::PreallocateBoxes(vec![11]),
         hoisted_writer(10, 11),
         Stmt::Let {
+            byte_offset: 0,
             id: 11,
             name: "events".to_string(),
             ty: Type::Any,

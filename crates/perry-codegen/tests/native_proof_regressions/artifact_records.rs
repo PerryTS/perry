@@ -188,6 +188,7 @@ fn artifact_records_write_barrier_child_js_value_bits() {
         Type::Number,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "key".to_string(),
                 ty: Type::String,

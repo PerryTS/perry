@@ -27,6 +27,7 @@ fn scanner_ir_with(receiver_type: Type, prelude: Vec<Stmt>) -> String {
             .into_iter()
             .chain([Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "i".into(),
                     ty: Type::Number,

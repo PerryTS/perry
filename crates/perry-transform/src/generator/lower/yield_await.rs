@@ -99,6 +99,7 @@ pub(crate) fn await_async_generator_yield_operands(stmts: &mut Vec<Stmt>, next_i
             let tmp = alloc_local(next_id);
             *value = Some(Box::new(Expr::LocalGet(tmp)));
             out.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: tmp,
                 name: format!("__ayield_{}", tmp),
                 ty: Type::Any,

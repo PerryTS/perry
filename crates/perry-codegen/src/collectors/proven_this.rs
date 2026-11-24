@@ -213,6 +213,7 @@ pub(crate) fn ptr_array_cached_method(class: &Class, method: &Function) -> Optio
             continue;
         };
         prefix.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *id,
             name: format!("__perry_ptr_array_{}", field.name),
             ty: ty.clone(),

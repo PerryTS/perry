@@ -45,6 +45,7 @@ fn closure(func_id: u32, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
 
 fn let_stmt(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Any,

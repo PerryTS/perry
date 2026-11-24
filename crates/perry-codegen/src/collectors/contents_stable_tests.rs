@@ -15,6 +15,7 @@ fn literal() -> Expr {
 
 fn let_(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Any,

@@ -4931,6 +4931,7 @@ fn lower_object_array_write_versioned_for(
         )?;
         matched.outer_start += 1;
         peeled_init_stmt = Some(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *id,
             name: name.clone(),
             ty: ty.clone(),
@@ -7253,6 +7254,7 @@ fn lower_overflow_exit_for(
         ty,
         mutable,
         init: Some(start),
+        ..
     }) = init
     else {
         unreachable!("an overflow-exit counter is the loop's own `let`");
@@ -7279,6 +7281,7 @@ fn lower_overflow_exit_for(
         lower_stmt(
             ctx,
             &Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: counter_id,
                 name: name.clone(),
                 ty: ty.clone(),

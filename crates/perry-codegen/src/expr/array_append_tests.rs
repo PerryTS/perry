@@ -13,6 +13,7 @@ fn append_ir(ty: Type, value: Expr) -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 0,
                 name: "a".to_string(),
                 ty,

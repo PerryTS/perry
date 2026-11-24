@@ -107,6 +107,7 @@ fn module_with_callback(declare_source_array_param: bool) -> Module {
     module.classes = vec![row_class()];
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: ARRAY_ID,
             name: "rows".to_string(),
             ty: Type::Array(Box::new(Type::Named("Row".to_string()))),
@@ -212,6 +213,7 @@ fn module_with_some_callback(captures_this: bool) -> Module {
     module.classes = vec![row_class()];
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: ARRAY_ID,
             name: "rows".to_string(),
             ty: Type::Array(Box::new(Type::Named("Row".to_string()))),

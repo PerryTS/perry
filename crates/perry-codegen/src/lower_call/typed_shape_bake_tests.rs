@@ -243,6 +243,7 @@ fn loop_new_module_with(name: &str, f1_ty: Type, first: Expr, second: Expr) -> M
     m.classes = vec![two_field_class(name, f1_ty)];
     m.init = vec![Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: 0,
             id: I_ID,
             name: "i".to_string(),
             ty: Type::Any,
@@ -262,6 +263,7 @@ fn loop_new_module_with(name: &str, f1_ty: Type, first: Expr, second: Expr) -> M
         }),
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 20,
                 name: "x".to_string(),
                 ty: Type::Named(name.to_string()),
@@ -335,6 +337,7 @@ pub(super) fn outlined_new_module(name: &str, f1_ty: Type, second: Expr) -> Modu
     let mut module = loop_new_module(name, f1_ty, second.clone());
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "x".to_string(),
             ty: Type::Named(name.to_string()),
@@ -526,6 +529,7 @@ fn a_local_class_shadowing_an_import_keeps_its_layout_proof() {
 fn imported_pointer_layout_does_not_invent_a_consumer_typed_shape_id() {
     let mut module = Module::new("imported_shape_consumer.ts");
     module.init = vec![Stmt::Let {
+        byte_offset: 0,
         id: 20,
         name: "instance".to_string(),
         ty: Type::Named("Remote".to_string()),
@@ -560,6 +564,7 @@ fn imported_length_only_arguments_capability_uses_scalar_direct_abi() {
     let mut module = Module::new("imported_arguments_length_consumer.ts");
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "instance".to_string(),
             ty: Type::Named("Remote".to_string()),
@@ -625,6 +630,7 @@ fn imported_stub_mints_with_the_drivers_static_id_and_registers_no_slots() {
     let module = || {
         let mut module = Module::new("imported_shape_slots.ts");
         module.init = vec![Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "instance".to_string(),
             ty: Type::Named("Remote".to_string()),

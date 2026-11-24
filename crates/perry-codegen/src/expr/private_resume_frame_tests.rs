@@ -15,6 +15,7 @@ fn runtime(method: &str, args: Vec<Expr>) -> Expr {
 fn private_resume_frame_uses_parent_owner_and_nonzero_offset() {
     crate::temp_root_coverage::under_both_lowerings(|mode| {
         let let_any = |id, init| Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("frame{id}"),
             ty: Type::Any,
@@ -191,6 +192,7 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
         };
         let init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 8,
                 name: "ordinary_spelling".into(),
                 ty: Type::Any,
@@ -198,6 +200,7 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
                 init: Some(Expr::Number(0.0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 7,
                 name: "pointer".into(),
                 ty: Type::Any,
@@ -205,6 +208,7 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
                 init: Some(Expr::Undefined),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "owner".into(),
                 ty: Type::Any,
@@ -278,6 +282,7 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
 
 fn private_resume_ir(body: Vec<Stmt>) -> String {
     let let_any = |id, init| Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("frame{id}"),
         ty: Type::Any,

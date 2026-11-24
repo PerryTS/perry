@@ -535,6 +535,7 @@ fn a_guarded_number_parameter_owns_no_root_in_the_clone() {
     let mut module = recursive_module();
     module.init.clear();
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 30,
         name: "k".to_string(),
         ty: Type::Number,

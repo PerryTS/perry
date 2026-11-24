@@ -228,6 +228,7 @@ fn closure_display_module() -> Module {
     for k in 0..N {
         let func_id = 100 + k;
         m.init.push(Stmt::Let {
+            byte_offset: 0,
             id: 900 + k,
             name: format!("_f{:02}", k),
             ty: Type::Any,

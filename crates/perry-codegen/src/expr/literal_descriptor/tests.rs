@@ -86,6 +86,7 @@ fn fixture(records: usize, fields: usize) -> Module {
     let mut module = Module::new("literal_descriptor_test");
     module.classes.push(class);
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: fields as u32 + 100,
         name: "records".into(),
         ty: Type::Array(Box::new(Type::Named(class_name.into()))),
@@ -196,6 +197,7 @@ fn literal_new() -> Expr {
 
 fn literal_binding(init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: 1001,
         name: "record".into(),
         ty: Type::Any,
@@ -511,6 +513,7 @@ fn born_wide_closure_factory_uses_the_same_return_facts() {
     }
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 2003,
             name: "make".into(),
             ty: Type::Any,
@@ -590,6 +593,7 @@ fn born_wide_array_element_evidence() {
     let mut module = fixture(1, 2);
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1002,
             name: "objs".into(),
             ty: Type::Any,
@@ -615,6 +619,7 @@ fn born_wide_array_element_evidence() {
     let mut module = fixture(1, 2);
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1002,
             name: "objs".into(),
             ty: Type::Any,

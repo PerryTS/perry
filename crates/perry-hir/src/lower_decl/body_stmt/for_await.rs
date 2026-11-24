@@ -12,6 +12,7 @@ pub(super) fn lower_runtime_for_await_iterator_body(
     ctx.locals
         .push((format!("__iter_{}", iter_id), iter_id, Type::Any));
     result.push(Stmt::Let {
+        byte_offset: for_of_stmt.span.lo.0,
         id: iter_id,
         name: format!("__iter_{}", iter_id),
         ty: Type::Any,
@@ -36,6 +37,7 @@ pub(super) fn lower_runtime_for_await_iterator_body(
     };
     let next_call = Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0);
     result.push(Stmt::Let {
+        byte_offset: for_of_stmt.span.lo.0,
         id: result_id,
         name: format!("__result_{}", result_id),
         ty: Type::Any,

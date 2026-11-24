@@ -7,6 +7,7 @@ use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
 
 fn empty(id: u32) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("a{id}"),
         ty: Type::Array(Box::new(Type::Number)),
@@ -88,6 +89,7 @@ fn owned_arrays_are_only_pushed_read_and_returned() {
         byte_end: 0,
     };
     let other = |id: u32| Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("o{id}"),
         ty: Type::Any,
@@ -103,6 +105,7 @@ fn owned_arrays_are_only_pushed_read_and_returned() {
         empty(2),
         push(2),
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "alias".into(),
             ty: Type::Any,

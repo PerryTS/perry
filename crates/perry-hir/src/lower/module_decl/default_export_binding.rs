@@ -107,6 +107,7 @@ pub(super) fn materialize_native_default_alias(
     let name = format!("__perry_native_default_export_{}", ctx.fresh_local());
     let id = ctx.define_local(name.clone(), crate::types::Type::Any);
     module.init.push(crate::ir::Stmt::Let {
+        byte_offset,
         id,
         name: name.clone(),
         ty: crate::types::Type::Any,

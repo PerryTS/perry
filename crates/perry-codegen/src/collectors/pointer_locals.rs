@@ -953,6 +953,7 @@ mod tests {
     #[test]
     fn reused_closure_body_storage_does_not_carry_root_proofs() {
         let binding = |id, init| Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{id}"),
             ty: Type::Any,
@@ -1011,6 +1012,7 @@ mod tests {
         let body: Vec<Stmt> = (1..=65)
             .rev()
             .map(|id| Stmt::Let {
+                byte_offset: 0,
                 id,
                 name: format!("v{id}"),
                 ty: Type::Any,
@@ -1038,6 +1040,7 @@ mod tests {
     #[test]
     fn declared_scalar_holding_pointer_keeps_shadow_slot() {
         let stmts = vec![Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "declared_number_holds_object".to_string(),
             ty: Type::Number,
@@ -1079,6 +1082,7 @@ mod tests {
             },
         ] {
             let stmts = vec![Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "updated".into(),
                 ty: Type::Number,
@@ -1122,6 +1126,7 @@ mod tests {
     fn a_symbol_keyed_uint8array_read_keeps_its_shadow_slot() {
         let stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 0,
                 name: "u8".to_string(),
                 ty: Type::Named("Uint8Array".to_string()),
@@ -1129,6 +1134,7 @@ mod tests {
                 init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(4))))),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "it".to_string(),
                 ty: Type::Any,
@@ -1158,6 +1164,7 @@ mod tests {
     fn a_numeric_keyed_uint8array_read_still_pays_no_slot() {
         let stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 0,
                 name: "u8".to_string(),
                 ty: Type::Named("Uint8Array".to_string()),
@@ -1165,6 +1172,7 @@ mod tests {
                 init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(4))))),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "b".to_string(),
                 ty: Type::Any,
@@ -1217,6 +1225,7 @@ mod tests {
                 }
             };
             let stmts = vec![Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "held".into(),
                 ty: Type::Number,
@@ -1242,6 +1251,7 @@ mod tests {
         let mut body: Vec<Stmt> = ids
             .iter()
             .map(|&id| Stmt::Let {
+                byte_offset: 0,
                 id,
                 name: format!("n{id}"),
                 ty: Type::Number,
@@ -1360,6 +1370,7 @@ mod tests {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 3,
                     name: "mapped".to_string(),
                     ty: Type::Any,
@@ -1391,6 +1402,7 @@ mod tests {
     fn pointer_analysis_reuses_shared_hir_scalar_facts() {
         let stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "pid".to_string(),
                 ty: Type::Any,
@@ -1398,6 +1410,7 @@ mod tests {
                 init: Some(Expr::ProcessPid),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "date".to_string(),
                 ty: Type::Any,
@@ -1443,6 +1456,7 @@ mod tests {
             arguments_object: None,
         }];
         let stmts = vec![Stmt::Let {
+            byte_offset: 0,
             id: 6,
             name: "masks".to_string(),
             ty: Type::Null,
@@ -1484,6 +1498,7 @@ mod tests {
     fn a_logical_operator_over_proven_scalars_still_pays_no_slot() {
         let stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "n".to_string(),
                 ty: Type::Any,
@@ -1496,6 +1511,7 @@ mod tests {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "m".to_string(),
                 ty: Type::Any,
@@ -1540,6 +1556,7 @@ mod tests {
         for (index, init) in cases.into_iter().enumerate() {
             let id = index as u32 + 1;
             let stmts = vec![Stmt::Let {
+                byte_offset: 0,
                 id,
                 name: format!("bigint_result_{id}"),
                 ty: Type::BigInt,
@@ -1558,6 +1575,7 @@ mod tests {
     fn proven_number_arithmetic_still_avoids_shadow_slots() {
         let stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "product".to_string(),
                 ty: Type::Any,
@@ -1570,6 +1588,7 @@ mod tests {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "negative".to_string(),
                 ty: Type::Any,
@@ -1673,6 +1692,7 @@ mod tests {
     #[test]
     fn a_symbol_typed_local_gets_a_shadow_slot() {
         let stmts = vec![Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "s".to_string(),
             ty: Type::Symbol,
@@ -1693,6 +1713,7 @@ mod tests {
     fn an_element_read_of_an_array_written_in_place_keeps_its_shadow_slot() {
         let stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "a".to_string(),
                 ty: Type::Any,
@@ -1706,6 +1727,7 @@ mod tests {
                 0,
             )),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "x".to_string(),
                 ty: Type::Any,
@@ -1734,6 +1756,7 @@ mod tests {
             || Expr::index_get_at(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0)), 0);
         let stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "owner".to_string(),
                 ty: Type::Any,
@@ -1741,6 +1764,7 @@ mod tests {
                 init: Some(Expr::Array(vec![Expr::Undefined], None)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "C".to_string(),
                 ty: Type::Any,
@@ -1756,6 +1780,7 @@ mod tests {
                 ])),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "D".to_string(),
                 ty: Type::Any,
@@ -1779,6 +1804,7 @@ mod tests {
     #[test]
     fn an_inferred_symbol_local_keeps_its_shadow_slot() {
         let stmts = vec![Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "s".to_string(),
             ty: Type::Any,

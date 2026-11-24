@@ -359,6 +359,7 @@ fn module_with_local_receiver_store(class: Class, stored: Expr) -> Module {
     let mut module = module_with_new(class, vec![Expr::Number(1.0)]);
     module.functions[0].body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 5,
             name: "o".to_string(),
             ty: Type::Named(class_name.clone()),

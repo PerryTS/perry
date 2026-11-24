@@ -5,6 +5,7 @@ use perry_hir::{Expr, Function, Module, Param, Stmt};
 fn branch(initialized: bool) -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 101,
             name: "callback".into(),
             ty: Type::Any,
@@ -12,6 +13,7 @@ fn branch(initialized: bool) -> Vec<Stmt> {
             init: initialized.then_some(Expr::Integer(40)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 102,
             name: "writer".into(),
             ty: Type::Any,

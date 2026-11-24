@@ -262,6 +262,7 @@ pub(crate) fn wrap_with_gets(property: &str, fallback: Expr, envs: Vec<LocalId>)
 /// emitted just ahead of the with statement that minted it.
 pub(crate) fn with_implicit_unset_let(id: LocalId, name: String) -> Stmt {
     Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name,
         ty: Type::Any,

@@ -17,6 +17,7 @@ fn fixture(mask: i64) -> Module {
     m.classes[0].fields.push(y);
     m.classes[0].constructor = Some(assigning_ctor(&m.classes[0].fields));
     m.init[0] = Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "rows".into(),
         ty: Type::Array(Box::new(Type::Named("Counter".into()))),
@@ -46,6 +47,7 @@ fn fixture(mask: i64) -> Module {
     };
     *body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "row".into(),
             ty: Type::Named("Counter".into()),
@@ -74,6 +76,7 @@ fn fixture(mask: i64) -> Module {
     m.init.insert(
         1,
         Stmt::Let {
+            byte_offset: 0,
             id: 11,
             name: "sum".into(),
             ty: Type::Number,

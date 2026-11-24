@@ -152,6 +152,7 @@ pub(crate) fn media_call(method: &str, args: Vec<Expr>) -> Expr {
 /// Helper: Let-bind a widget to a LocalId so mutator calls can target it.
 pub(crate) fn let_widget(id: LocalId, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: perry_hir::types::Type::Any,
@@ -178,6 +179,7 @@ pub(crate) fn mutator_stmt(method: &str, args: Vec<Expr>) -> Stmt {
 /// recognizes).
 pub(crate) fn declare_const(id: LocalId, name: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: perry_hir::types::Type::Any,

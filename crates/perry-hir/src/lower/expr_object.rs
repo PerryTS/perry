@@ -971,7 +971,11 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         // property is the callable builtin instead of being dropped
                         // (which left it `undefined` — yargs shim.path.relative).
                         (
-                            super::lower_expr::native_module_binding_value(ctx, &name, ident.span.lo.0),
+                            super::lower_expr::native_module_binding_value(
+                                ctx,
+                                &name,
+                                ident.span.lo.0,
+                            ),
                             Type::Any,
                         )
                     } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
@@ -1456,6 +1460,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         let key_id = ctx.define_local(key_name.clone(), Type::Any);
                         inner_local_ids.push(key_id);
                         body.push(Stmt::Let {
+                            byte_offset: 0, /*HPOS*/
                             id: key_id,
                             name: key_name,
                             ty: Type::Any,
@@ -1466,6 +1471,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         let prop_key_id = ctx.define_local(prop_key_name.clone(), Type::Any);
                         inner_local_ids.push(prop_key_id);
                         body.push(Stmt::Let {
+                            byte_offset: 0, /*HPOS*/
                             id: prop_key_id,
                             name: prop_key_name,
                             ty: Type::Any,
@@ -1479,6 +1485,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         let value_id = ctx.define_local(value_name.clone(), Type::Any);
                         inner_local_ids.push(value_id);
                         body.push(Stmt::Let {
+                            byte_offset: 0, /*HPOS*/
                             id: value_id,
                             name: value_name,
                             ty: Type::Any,
@@ -1507,6 +1514,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         let value_id = ctx.define_local(value_name.clone(), Type::Any);
                         inner_local_ids.push(value_id);
                         body.push(Stmt::Let {
+                            byte_offset: 0, /*HPOS*/
                             id: value_id,
                             name: value_name,
                             ty: Type::Any,
@@ -1712,6 +1720,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 let key_id = ctx.define_local(key_name.clone(), Type::Any);
                 inner_local_ids.push(key_id);
                 body.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: key_id,
                     name: key_name,
                     ty: Type::Any,
@@ -1722,6 +1731,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 let prop_key_id = ctx.define_local(prop_key_name.clone(), Type::Any);
                 inner_local_ids.push(prop_key_id);
                 body.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: prop_key_id,
                     name: prop_key_name,
                     ty: Type::Any,
@@ -1735,6 +1745,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 let value_id = ctx.define_local(value_name.clone(), Type::Any);
                 inner_local_ids.push(value_id);
                 body.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: value_id,
                     name: value_name,
                     ty: Type::Any,

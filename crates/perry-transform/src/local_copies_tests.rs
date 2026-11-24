@@ -34,6 +34,7 @@ fn function(body: Vec<Stmt>) -> Function {
 
 fn alias(id: u32, src: u32) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Any,

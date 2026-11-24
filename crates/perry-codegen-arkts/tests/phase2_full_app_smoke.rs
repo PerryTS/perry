@@ -138,6 +138,7 @@ fn full_phase2_app_emits_canonical_arkui() {
     // let counter = state(0);
     let counter_id: LocalId = 100;
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: counter_id,
         name: "counter".to_string(),
         ty: Type::Any,
@@ -545,6 +546,7 @@ fn minimal_counter_app_emits_clean_page() {
     let mut m = empty_module();
     let counter_id: LocalId = 100;
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: counter_id,
         name: "c".to_string(),
         ty: Type::Any,

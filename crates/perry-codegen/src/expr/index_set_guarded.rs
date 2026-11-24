@@ -704,6 +704,7 @@ mod tests {
         let unknown_receiver = matches!(ty, Type::Any);
         let mut module = perry_hir::Module::new("terminated_guarded_store");
         module.init = vec![Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "items".into(),
             ty,

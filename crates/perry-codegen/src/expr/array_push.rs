@@ -1816,6 +1816,7 @@ mod receiver_order_tests {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 0,
                     name: "a".to_string(),
                     ty: Type::Any,
@@ -1969,6 +1970,7 @@ mod parent_gate_tests {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 0,
                     name: "a".to_string(),
                     ty: Type::Any,

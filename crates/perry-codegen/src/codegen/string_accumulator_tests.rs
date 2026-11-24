@@ -70,6 +70,7 @@ fn module(init: Expr, body: Vec<Stmt>) -> Module {
         annexb_global_undefined_names: Vec::new(),
         init_is_strict: false,
         init: vec![Stmt::Let {
+            byte_offset: 0,
             id: ACC,
             name: "output".to_string(),
             ty: Type::Any,

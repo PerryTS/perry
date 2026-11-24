@@ -578,6 +578,7 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
                 //   }
                 let first = alloc_local(next_id);
                 hoisted.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: first,
                     name: format!("__dw_first_{}", first),
                     ty: Type::Any,
@@ -640,6 +641,7 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
                 if let Some(c) = cond_taken {
                     let t = alloc_local(next_id);
                     new_body.push(Stmt::Let {
+                        byte_offset: 0, /*HPOS*/
                         id: t,
                         name: format!("__loop_cond_await_{}", t),
                         ty: Type::Any,
@@ -749,6 +751,7 @@ fn lift_scoped_temp_with_await(
         unreachable!()
     };
     let mut declaration = vec![Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name: format!("__optional_base_{id}"),
         ty: Type::Any,
@@ -827,6 +830,7 @@ fn hoist_awaits_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
         // longer comment in `hoist_awaits_avoiding_top_level`.
         hoist_fetch_with_auth_inside_await(&mut original, next_id, hoisted);
         hoisted.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id,
             name: format!("__await_{}", id),
             ty: Type::Any,
@@ -898,6 +902,7 @@ fn hoist_fetch_with_auth_inside_await(
     let id = alloc_local(next_id);
     let original = std::mem::replace(inner.as_mut(), Expr::LocalGet(id));
     hoisted.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name: format!("__await_fetch_{}", id),
         ty: Type::Any,
@@ -1051,6 +1056,7 @@ fn restructure_awaited_loop_cond(cond: Expr, body: Vec<Stmt>, next_id: &mut Loca
     let t = alloc_local(next_id);
     let mut new_body = Vec::with_capacity(body.len() + 2);
     new_body.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: t,
         name: format!("__loop_cond_await_{}", t),
         ty: Type::Any,
@@ -1097,6 +1103,7 @@ fn lift_conditional_with_await_branches(
     } = owned
     {
         hoisted.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: temp_id,
             name: format!("__cond_await_{}", temp_id),
             ty: Type::Any,
@@ -1159,6 +1166,7 @@ fn lift_logical_with_await_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: 
     } = owned
     {
         hoisted.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: temp_id,
             name: format!("__logic_await_{}", temp_id),
             ty: Type::Any,

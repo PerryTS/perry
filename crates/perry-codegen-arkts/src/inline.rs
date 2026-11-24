@@ -423,6 +423,7 @@ pub(crate) fn inline_one_call(
     for (i, param) in func.params.iter().enumerate() {
         let new_id = remap[&param.id];
         out.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: new_id,
             name: param.name.clone(),
             ty: param.ty.clone(),

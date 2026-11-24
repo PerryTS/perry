@@ -553,6 +553,7 @@ mod tests {
         let ir = read_ir(
             Expr::LocalGet(4),
             vec![Stmt::Let {
+                byte_offset: 0,
                 id: 4,
                 name: "c".into(),
                 ty: Type::Number,
@@ -587,6 +588,7 @@ mod tests {
             byte_offset: 0,
         };
         let var = |init| Stmt::Let {
+            byte_offset: 0,
             id: 4,
             name: "c".into(),
             ty: Type::Any,
@@ -622,6 +624,7 @@ mod tests {
             Expr::LocalGet(4),
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 4,
                     name: "c".into(),
                     ty: Type::Number,
@@ -673,6 +676,7 @@ mod tests {
             Expr::LocalGet(4),
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 4,
                     name: "c".into(),
                     ty: Type::Number,
@@ -714,6 +718,7 @@ mod tests {
         let ir = read_ir(
             Expr::LocalGet(2),
             vec![Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "key".into(),
                 ty: Type::Number,
@@ -753,6 +758,7 @@ mod tests {
             Expr::LocalGet(4),
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 5,
                     name: "origin".into(),
                     ty: Type::Any,
@@ -765,6 +771,7 @@ mod tests {
                     }),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 4,
                     name: "square".into(),
                     ty: Type::Any,

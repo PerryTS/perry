@@ -139,6 +139,7 @@ fn cursor_bodies(ll: &str) -> Vec<&str> {
 fn array_record_cursor_increment_keeps_full_unsigned_range() {
     let ll = ir_body(vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "__idx_3".into(),
             ty: Type::Number,
@@ -245,6 +246,7 @@ fn array_record_boolean_condition_stays_boolean_through_control_flow() {
 fn array_record_local_flow_preserves_numeric_cursor_and_boolean_entry() {
     let ll = ir_body(vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "__idx_3".into(),
             ty: Type::Number,
@@ -252,6 +254,7 @@ fn array_record_local_flow_preserves_numeric_cursor_and_boolean_entry() {
             init: Some(runtime("arrayRecordIndex", vec![Expr::Integer(0)])),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 4,
             name: "record_mode".into(),
             ty: Type::Boolean,
@@ -472,6 +475,7 @@ fn stack_record_ir(fused: bool) -> String {
         right: Box::new(Expr::Bool(true)),
     };
     let local = |id, ty, init| Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("record_{id}"),
         ty,
@@ -595,6 +599,7 @@ fn stack_record_ir(fused: bool) -> String {
                 )),
                 Stmt::Expr(Expr::LocalSet(9, Box::new(Expr::Number(1.0)))),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 10,
                     name: "element".into(),
                     ty: Type::Any,

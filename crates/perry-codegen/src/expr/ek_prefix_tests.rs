@@ -51,6 +51,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 
 fn local_array(init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: 0,
         name: "a".to_string(),
         ty: Type::Array(Box::new(Type::Any)),

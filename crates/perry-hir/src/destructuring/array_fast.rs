@@ -61,6 +61,7 @@ impl ArraySource {
     ) -> Vec<Stmt> {
         if let Self::Iterator(_) = self {
             return vec![Stmt::Let {
+                byte_offset,
                 id,
                 name,
                 ty: Type::Any,
@@ -93,6 +94,7 @@ impl ArraySource {
         ctx.locals.push((value_name.clone(), value, Type::Any));
         vec![
             Stmt::Let {
+                byte_offset,
                 id,
                 name,
                 ty,
@@ -100,6 +102,7 @@ impl ArraySource {
                 init: Some(Expr::Array(vec![], None)),
             },
             Stmt::Let {
+                byte_offset,
                 id: value,
                 name: value_name,
                 ty: Type::Any,

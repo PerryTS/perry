@@ -131,6 +131,7 @@ fn nested_header_yield_bodies() -> Vec<(&'static str, Vec<Stmt>)> {
             "if > for init",
             vec![if_global(vec![Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "t".to_string(),
                     ty: Type::Any,

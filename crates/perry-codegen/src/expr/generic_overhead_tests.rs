@@ -21,6 +21,7 @@ fn param(id: u32, ty: Type) -> Param {
 fn probe_ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
     let mut module = Module::new("cost_test");
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 99,
         name: "sink".into(),
         ty: Type::Any,
@@ -137,6 +138,7 @@ fn capture_store_ir() -> String {
     let mut module = Module::new("capture_cost");
     let mut body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "captured".into(),
             ty: Type::Any,
@@ -144,6 +146,7 @@ fn capture_store_ir() -> String {
             init: Some(Expr::String("before".into())),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "write".into(),
             ty: Type::Any,

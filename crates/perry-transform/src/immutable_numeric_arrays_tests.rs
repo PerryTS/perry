@@ -42,6 +42,7 @@ fn length() -> Expr {
 fn fixture(compound: bool, live: bool) -> Module {
     let mut m = Module::new("private_array.ts");
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "steps".into(),
         ty: Type::Array(Box::new(Type::Number)),
@@ -73,6 +74,7 @@ fn fixture(compound: bool, live: bool) -> Module {
     };
     m.functions.push(function(vec![Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "j".into(),
             ty: Type::Number,
@@ -162,6 +164,7 @@ fn aliases_exports_deletes_and_hidden_uses_decline() {
         let mut m = fixture(true, true);
         match case {
             0 => m.init.push(Stmt::Let {
+                byte_offset: 0,
                 id: 4,
                 name: "alias".into(),
                 ty: Type::Any,
@@ -302,6 +305,7 @@ fn an_unproven_read_keeps_even_length_and_other_inbounds_reads_live() {
 fn a_rejected_array_cannot_prove_another_arrays_index_range() {
     let mut m = fixture(true, true);
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 3,
         name: "other".into(),
         ty: Type::Any,

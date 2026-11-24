@@ -68,6 +68,7 @@ fn new_c() -> Expr {
 
 fn let_c(id: u32, name: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -271,6 +272,7 @@ fn call_to_a_return_shape_producer_is_provenance() {
     let classes = classes_of(&c);
     let caller = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "r".to_string(),
             ty: Type::Any,
@@ -312,6 +314,7 @@ fn returning_method_class(class_name: &str, method_id: u32) -> Class {
 
 fn method_call_result(receiver_id: u32, result_id: u32) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: result_id,
         name: "result".to_string(),
         ty: Type::Any,
@@ -349,6 +352,7 @@ fn method_return_shape_is_provenance_on_a_proven_receiver() {
     let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
     let caller = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "maker".to_string(),
             ty: Type::Named("Maker".to_string()),
@@ -393,6 +397,7 @@ fn method_result_is_dropped_when_its_receiver_proof_fails() {
     let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
     let caller = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "maker".to_string(),
             ty: Type::Named("Maker".to_string()),
@@ -436,6 +441,7 @@ fn method_return_call_audits_the_receivers_this_flow() {
     let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
     let caller = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "maker".to_string(),
             ty: Type::Named("Maker".to_string()),
@@ -484,6 +490,7 @@ fn method_return_shape_refuses_duplicate_method_declarations() {
     let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
     let caller = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "maker".to_string(),
             ty: Type::Named("Maker".to_string()),
@@ -516,6 +523,7 @@ fn method_return_shape_refuses_unproven_or_unstable_receivers() {
     let classes = HashMap::from([("C".to_string(), &c), ("Maker".to_string(), &maker)]);
     let unproven = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "maker".to_string(),
             ty: Type::Named("Maker".to_string()),
@@ -538,6 +546,7 @@ fn method_return_shape_refuses_unproven_or_unstable_receivers() {
     let unstable = super::super::collect_module_dispatch_facts(&hir);
     let proven_receiver = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "maker".to_string(),
             ty: Type::Named("Maker".to_string()),
@@ -601,6 +610,7 @@ fn imported_return_shape_is_provenance_by_exact_local_binding() {
     let caller = |callee_name: &str, local_id: u32| {
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: local_id,
                 name: "r".to_string(),
                 ty: Type::Any,
@@ -1163,6 +1173,7 @@ fn indirect_callee_is_not_seeded() {
     let classes = classes_of(&c);
     let caller = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 30,
             name: "r".to_string(),
             ty: Type::Any,
@@ -1196,6 +1207,7 @@ fn call_seeded_candidate_still_obeys_containment() {
     let classes = classes_of(&c);
     let caller = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 40,
             name: "r".to_string(),
             ty: Type::Any,
@@ -1327,6 +1339,7 @@ fn boxed_producer_local_gets_no_fact() {
 /// declaration inside a function body lowers.
 fn let_closure(id: u32, name: &str, func_id: FuncId, body: Vec<Stmt>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -1358,6 +1371,7 @@ fn let_closure(id: u32, name: &str, func_id: FuncId, body: Vec<Stmt>) -> Stmt {
 fn call_and_store(bind: u32, callee: Expr) -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id: bind,
             name: "p".to_string(),
             ty: Type::Any,
@@ -1402,6 +1416,7 @@ fn iife_module(extra_iife_stmts: Vec<Stmt>) -> Module {
     let mut hir = Module::new("t");
     hir.classes.push(class_c());
     hir.init = vec![Stmt::Let {
+        byte_offset: 0,
         id: 0,
         name: "_cjs".to_string(),
         ty: Type::Any,

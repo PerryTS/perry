@@ -478,6 +478,7 @@ fn a_module_global_self_append_uses_the_amortized_path_and_demotes_extractions()
         ],
     ));
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: GLOBAL,
         name: "module_accumulator".to_string(),
         ty: Type::String,
@@ -505,6 +506,7 @@ fn a_boxed_local_self_append_uses_the_amortized_path() {
         Vec::new(),
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ACC,
                 name: "accumulator".to_string(),
                 ty: Type::String,
@@ -514,6 +516,7 @@ fn a_boxed_local_self_append_uses_the_amortized_path() {
             // Capturing a local that is also mutated in this scope makes the
             // source binding a shared variable box.
             Stmt::Let {
+                byte_offset: 0,
                 id: READER,
                 name: "reader".to_string(),
                 ty: Type::Any,
@@ -563,6 +566,7 @@ fn a_boxed_capture_self_append_uses_the_amortized_path() {
         Vec::new(),
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ACC,
                 name: "accumulator".to_string(),
                 ty: Type::String,
@@ -570,6 +574,7 @@ fn a_boxed_capture_self_append_uses_the_amortized_path() {
                 init: Some(Expr::String(String::new())),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: APPENDER,
                 name: "append".to_string(),
                 ty: Type::Any,
@@ -660,6 +665,7 @@ fn a_module_global_numeric_capable_head_pair_does_not_select_append() {
         }],
     ));
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: GLOBAL,
         name: "lying_accumulator".to_string(),
         ty: Type::String,
@@ -728,6 +734,7 @@ fn loop_number_fixed_point_elides_assignment_string_alias_guard() {
         vec![param(1, "again", Type::Boolean)],
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "x".into(),
                 ty: Type::Any,
@@ -735,6 +742,7 @@ fn loop_number_fixed_point_elides_assignment_string_alias_guard() {
                 init: Some(Expr::Number(0.5)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 11,
                 name: "y".into(),
                 ty: Type::Any,

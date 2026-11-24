@@ -284,6 +284,7 @@ fn arena_module(call_between: bool) -> Module {
         field("size", Type::Number),
     ])];
     let mut make = vec![Stmt::Let {
+        byte_offset: 0,
         id: 4,
         name: "i".to_string(),
         ty: Type::Number,
@@ -328,6 +329,7 @@ fn arena_module(call_between: bool) -> Module {
             vec![holder_param(), param(2, "i", Type::Number)],
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 5,
                     name: "l".to_string(),
                     ty: Type::Any,

@@ -880,6 +880,7 @@ mod tests {
     fn inlines_a_called_arrow_local_and_drops_its_dead_default_guard() {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "exists".into(),
                 ty: Type::Any,
@@ -922,6 +923,7 @@ mod tests {
     fn rewrites_calls_inside_nested_statement_lists() {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "exists".into(),
                 ty: Type::Any,
@@ -966,6 +968,7 @@ mod tests {
         const ALIAS: LocalId = 20;
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "exists".into(),
                 ty: Type::Any,
@@ -981,6 +984,7 @@ mod tests {
             Stmt::DoWhile {
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: ALIAS,
                         name: "exists".into(),
                         ty: Type::Any,
@@ -1019,6 +1023,7 @@ mod tests {
     fn a_non_call_use_keeps_the_closure() {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "f".into(),
                 ty: Type::Any,
@@ -1057,6 +1062,7 @@ mod tests {
             Stmt::PreallocateTdzBoxes(vec![F]),
             Stmt::Expr(earlier),
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "later".into(),
                 ty: Type::Any,
@@ -1076,6 +1082,7 @@ mod tests {
             Stmt::PreallocateTdzBoxes(vec![F]),
             Stmt::Expr(call_local(F, vec![Expr::Integer(1)])),
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "later".into(),
                 ty: Type::Any,
@@ -1094,6 +1101,7 @@ mod tests {
         // Non-trivial argument: the arrow would duplicate or reorder effects.
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "f".into(),
                 ty: Type::Any,
@@ -1110,6 +1118,7 @@ mod tests {
         // Captured by a nested closure that calls it later.
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "f".into(),
                 ty: Type::Any,
@@ -1147,6 +1156,7 @@ mod tests {
     fn a_guard_on_a_reassigned_binding_stays() {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "n".into(),
                 ty: Type::Any,
@@ -1173,6 +1183,7 @@ mod tests {
     fn keeps_the_let_when_a_call_has_a_different_arity() {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "e485".into(),
                 ty: Type::Any,
@@ -1192,6 +1203,7 @@ mod tests {
     fn keeps_the_let_when_a_call_passes_fewer_arguments() {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F,
                 name: "f".into(),
                 ty: Type::Any,
@@ -1208,6 +1220,7 @@ mod tests {
 
     fn let_f(init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id: F,
             name: "f".into(),
             ty: Type::Any,

@@ -86,6 +86,7 @@ pub(crate) fn hoist_loop_invariant_property_array(
         byte_offset: read_offset,
     };
     let hoist = Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: hoist_id,
         name: format!("__perry_hoist_{property}"),
         ty: element_ty,
@@ -483,7 +484,9 @@ fn rewrite_stmt(stmt: &Stmt, recv: Recv, property: &str, hoist_id: u32) -> Stmt 
             ty,
             mutable,
             init,
+            ..
         } => Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *id,
             name: name.clone(),
             ty: ty.clone(),
@@ -898,6 +901,7 @@ fn hoist_this_for(
         ctx.immutable_locals.insert(hoist_id);
         hoisted_ids.push(hoist_id);
         hoists.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: hoist_id,
             name,
             ty: ty.clone(),
@@ -1004,7 +1008,9 @@ fn inline_this_calls_stmt(s: &Stmt, class: &ThisClass<'_>, used: &mut Vec<String
             ty,
             mutable,
             init,
+            ..
         } => Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *id,
             name: name.clone(),
             ty: ty.clone(),

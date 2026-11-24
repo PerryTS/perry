@@ -143,6 +143,7 @@ fn scoped_defaults_preserve_order_tdz_arity_and_skipped_initializers() {
         )],
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 200,
                 name: "outer".into(),
                 ty: Type::Any,
@@ -311,6 +312,7 @@ fn constructor_scoped_temps_survive_recursive_field_initialization_and_module_te
         specialized_from: None,
     });
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 200,
         name: "moduleValue".into(),
         ty: Type::Any,
@@ -341,6 +343,7 @@ assert.equal(calls, 2);
 fn closure_scoped_temps_are_activation_local() {
     let mut module = Module::new("scoped_temp");
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 10,
         name: "sumClosure".into(),
         ty: Type::Any,

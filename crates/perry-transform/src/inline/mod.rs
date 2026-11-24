@@ -1117,6 +1117,7 @@ mod tests {
         let mut module = Module::new("dest");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "p".to_string(),
                 ty: Type::Any,
@@ -1131,6 +1132,7 @@ mod tests {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "r".to_string(),
                 ty: Type::Any,
@@ -1337,6 +1339,7 @@ mod tests {
             is_adopted_require: false,
         });
         let call = Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "result".to_string(),
             ty: Type::Any,
@@ -1849,6 +1852,7 @@ mod tests {
         };
         let mut method_body = vec![Stmt::Expr(Expr::Integer(0)); MAX_INLINE_STMTS + 1];
         method_body.push(Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "__destruct_1".to_string(),
             ty: Type::Any,
@@ -1904,6 +1908,7 @@ mod tests {
             2,
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 10,
                     name: "result".to_string(),
                     ty: Type::Any,
@@ -1955,6 +1960,7 @@ mod tests {
         let span = perry_hir::LocalSourceSpan { start: 30, end: 35 };
         let body = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: original_id,
                 name: "boxed".into(),
                 ty: Type::Any,

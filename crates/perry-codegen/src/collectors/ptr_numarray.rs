@@ -922,6 +922,7 @@ mod tests {
 
     fn let_with(id: u32, ty: HirType, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: "a".to_string(),
             ty,

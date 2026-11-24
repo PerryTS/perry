@@ -10,6 +10,7 @@ const RESULT: u32 = 2;
 
 fn value(init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: VALUE,
         name: "value".to_string(),
         ty: Type::Any,
@@ -20,6 +21,7 @@ fn value(init: Expr) -> Stmt {
 
 fn result(init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: RESULT,
         name: "result".to_string(),
         ty: Type::Any,

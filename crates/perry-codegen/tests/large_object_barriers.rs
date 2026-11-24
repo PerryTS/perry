@@ -125,6 +125,7 @@ fn module_with_large_pointer_array_literal(element_count: usize) -> Module {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "child".to_string(),
                     ty: Type::Any,
@@ -199,6 +200,7 @@ fn module_with_large_local_array_push(element_count: usize) -> Module {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "child".to_string(),
                     ty: Type::Any,
@@ -206,6 +208,7 @@ fn module_with_large_local_array_push(element_count: usize) -> Module {
                     init: Some(Expr::Object(Vec::new())),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "arr".to_string(),
                     ty: Type::Array(Box::new(Type::Any)),

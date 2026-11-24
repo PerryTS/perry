@@ -50,6 +50,7 @@ fn ir_labelled(extra: Vec<Stmt>, label: Option<&str>) -> String {
                 label,
                 Stmt::For {
                     init: Some(Box::new(Stmt::Let {
+                        byte_offset: 0,
                         id: 2,
                         name: "i".into(),
                         ty: Type::Number,

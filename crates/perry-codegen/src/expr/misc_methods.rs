@@ -1361,6 +1361,7 @@ mod define_get_accessor_tests {
         ];
         m.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "o".to_string(),
                 ty: Type::Any,

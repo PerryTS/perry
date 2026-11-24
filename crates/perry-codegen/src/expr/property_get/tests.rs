@@ -108,6 +108,7 @@ fn module_with_nullish_read() -> Module {
     let mut m = Module::new("read.ts");
     m.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "o".to_string(),
             ty: perry_hir::types::Type::Any,
@@ -191,6 +192,7 @@ fn emit_guarded_length_read() -> String {
     let mut module = Module::new("guarded_length_read.ts");
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 11,
             name: "values".to_string(),
             ty: perry_hir::types::Type::Array(Box::new(perry_hir::types::Type::Any)),
@@ -315,6 +317,7 @@ fn typed_array_length_uses_property_semantics_after_define_property() {
     let mut module = Module::new("typed_array_length_descriptor.ts");
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "view".to_string(),
             ty: perry_hir::types::Type::Named("Uint8Array".to_string()),
@@ -349,6 +352,7 @@ fn typed_array_length_keeps_native_load_without_shape_barrier() {
     let mut module = Module::new("typed_array_length_fast.ts");
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 21,
             name: "view".to_string(),
             ty: perry_hir::types::Type::Named("Uint8Array".to_string()),
@@ -700,6 +704,7 @@ fn module_reading(property: &str) -> Module {
     let mut m = Module::new("read.ts");
     m.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "o".to_string(),
             ty: perry_hir::types::Type::Any,

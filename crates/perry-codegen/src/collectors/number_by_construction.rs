@@ -768,6 +768,7 @@ mod tests {
 
     fn let_n() -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id: N,
             name: "n".to_string(),
             ty: HirType::Number,
@@ -1184,6 +1185,7 @@ mod tests {
     fn ta_view_stmts(arr: u32, s_id: u32, x_id: u32) -> Vec<Stmt> {
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: s_id,
                 name: "s".to_string(),
                 ty: HirType::Number,
@@ -1191,6 +1193,7 @@ mod tests {
                 init: Some(Expr::Number(0.0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: x_id,
                 name: "x".to_string(),
                 ty: HirType::Number,
@@ -1263,6 +1266,7 @@ mod tests {
     fn uint8array_get_stmts(px: u32, i: u32, acc: u32) -> Vec<Stmt> {
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: px,
                 name: "px".to_string(),
                 ty: HirType::Named("Uint8Array".to_string()),
@@ -1270,6 +1274,7 @@ mod tests {
                 init: Some(Expr::Uint8ArrayNew(Some(Box::new(Expr::Integer(16))))),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: i,
                 name: "i".to_string(),
                 ty: HirType::Number,
@@ -1277,6 +1282,7 @@ mod tests {
                 init: Some(Expr::Integer(0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: acc,
                 name: "acc".to_string(),
                 ty: HirType::Number,
@@ -1372,6 +1378,7 @@ mod shape_input_tests {
 
     fn property_local(id: u32, receiver: u32, property: &str) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("value_{id}"),
             ty: HirType::Any,

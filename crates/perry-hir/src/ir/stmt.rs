@@ -14,6 +14,10 @@ pub enum Stmt {
         ty: Type,
         mutable: bool,
         init: Option<Expr>,
+        /// Source byte offset (`span.lo.0`) of the declaration this binding
+        /// belongs to; a compiler-built binding takes the offset of the
+        /// construct it is made for.
+        byte_offset: u32,
     },
     /// Expression statement
     Expr(Expr),

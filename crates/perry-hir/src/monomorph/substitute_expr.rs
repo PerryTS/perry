@@ -1167,7 +1167,9 @@ fn substitute_stmt(stmt: &Stmt, substitutions: &HashMap<String, Type>) -> Stmt {
             ty,
             mutable,
             init,
+            ..
         } => Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *id,
             name: name.clone(),
             ty: substitute_type(ty, substitutions),
