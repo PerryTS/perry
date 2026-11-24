@@ -336,6 +336,32 @@ impl Model {
                     pv.unwrap_or_else(|| "no parent_value".into())
                 )
             }
+            // K3BUILD7 step 2: `new f()` takes `f.prototype` (writable):
+            // what wrote the ⊤ there. `anytop` = f's any-key field holds ⊤
+            // (an unknown write under any key); `esc` = f escaped to a
+            // writer (and why); `fnnamed` = a ⊤ under `prototype` itself.
+            TokKind::Obj(tm, _) => match self.tmpls[*tm as usize].kind {
+                crate::model::TmplKind::FnInst { func } => {
+                    let ft = self.funcs[func as usize].token;
+                    let top = |n: NodeId| self.nodes[n as usize].pts.contains_tok(TOP);
+                    let pf = self
+                        .atom_index
+                        .get("prototype")
+                        .and_then(|&a| self.fields.get(&(ft, a)).copied());
+                    let any = self.field_any.get(&ft).copied();
+                    format!(
+                        "fninst fproto_top={} anytop={} esc={} writer={} why={}",
+                        pf.is_some_and(top),
+                        any.is_some_and(top),
+                        self.escaped.contains_key(&ft),
+                        self.esc_writer_why.contains_key(&ft),
+                        self.writer_escape_why(ft)
+                            .or_else(|| self.escaped.get(&ft).map(|&r| self.reasons[r as usize].clone()))
+                            .unwrap_or_default()
+                    )
+                }
+                ref k => format!("obj {:?}", std::mem::discriminant(k)),
+            },
             k => format!("{:?}", std::mem::discriminant(k)),
         }
     }
