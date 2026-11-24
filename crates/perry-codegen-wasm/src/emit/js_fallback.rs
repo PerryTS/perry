@@ -1453,6 +1453,30 @@ impl WasmModuleEmitter {
             Expr::ArrayIterationPatched => {
                 "fromJsValue(__memDispatch.rt_arrayIterationPatched())".to_string()
             }
+            // The array method nodes `folded_call` does not name.
+            Expr::ArrayPop(id) => {
+                let array = self.emit_js_expr(&Expr::LocalGet(*id), locals);
+                format!("fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({array}), \"pop\"), []))")
+            }
+            Expr::ArrayLikeMethod {
+                method,
+                receiver,
+                args,
+                source,
+            } => {
+                let receiver = self.emit_js_expr(receiver, locals);
+                let args_js: Vec<String> = args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+                let method = js_string_literal(method);
+                let lookup = match source {
+                    perry_hir::ir::ArrayLikeSource::Receiver => {
+                        format!("__jsMethodGet(toJsValue({receiver}), {method})")
+                    }
+                    _ => format!(
+                        "{{ r: toJsValue({receiver}), m: {method}, f: Array.prototype[{method}] }}"
+                    ),
+                };
+                format!("fromJsValue(__jsMethodInvoke({lookup}, [{}]))", host_args(&args_js))
+            }
             _ => {
                 // A folded builtin-method node (`a.map(f)`, `m.get(k)`, ...) is the call
                 // `receiver.method(...args)`, made as an unfolded method call is.

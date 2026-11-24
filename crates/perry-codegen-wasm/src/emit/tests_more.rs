@@ -1318,6 +1318,9 @@ mod parse_int_radix;
 #[path = "async_operator_tests.rs"]
 mod async_operator;
 
+#[path = "async_array_method_tests.rs"]
+mod async_array_method;
+
 #[path = "patched_builtin_tests.rs"]
 mod patched_builtin;
 
