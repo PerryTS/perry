@@ -560,6 +560,11 @@ pub struct Gen<'a> {
     /// `__forof_lit_arr_` copy) holding `Object.keys(o)` /
     /// `Object.getOwnPropertyNames(o)` of local `o`, with the key list.
     pub(crate) for_in_keys_of: FxHashMap<(u32, u32), (u32, crate::model::KeyList)>,
+    /// A keys local made by a namespace pair (`namespace_pair`): the node of
+    /// its generic arm's result (what a replaced member returns).
+    pub(crate) keys_generic: FxHashMap<(u32, u32), NodeId>,
+    /// The generic arm's result of the last namespace pair walked.
+    pub(crate) last_ns_generic: Option<NodeId>,
     /// The for-in bodies being walked: (module, loop variable, key parameter).
     pub(crate) for_in_key: Vec<(u32, u32, NodeId)>,
     /// ENUM1: the for-in loops being walked, outlined or not, whose key and
@@ -938,6 +943,8 @@ impl<'a> Gen<'a> {
             own_store_reads: Default::default(),
             own_test_recv: None,
             for_in_keys_of: FxHashMap::default(),
+            keys_generic: FxHashMap::default(),
+            last_ns_generic: None,
             for_in_key: Vec::new(),
             for_in_reads: Vec::new(),
             local_copies: FxHashMap::default(),

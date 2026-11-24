@@ -828,6 +828,7 @@ impl<'a> Gen<'a> {
         let out = self.tmp("nspair");
         self.m.edge(ri, out);
         self.m.edge(rg, out);
+        self.last_ns_generic = Some(rg);
         out
     }
 

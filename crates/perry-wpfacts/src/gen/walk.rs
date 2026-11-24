@@ -1915,7 +1915,26 @@ impl<'a> Gen<'a> {
                 // written in the loop head (a fresh Array no other code sees;
                 // the counted walk binds exactly its elements, `for_of_walk`).
                 use crate::model::KeyList;
-                let keys_src = match init {
+                // The namespace pair `NamespacePatched(Object) ? Object.keys(o)
+                // : <intrinsic>` is one call of the realm's own member while
+                // its generic arm yields nothing (`namespace_pair`): its keys
+                // are `o`'s; what a replaced member returns runs the body with
+                // every key (`Gen::keys_generic`, `for_in_body`).
+                let generic = self.last_ns_generic.take();
+                let (kinit, generic) = match init {
+                    Some(perry_hir::Expr::Conditional {
+                        condition,
+                        else_expr,
+                        ..
+                    }) if self.m.ns_pairs
+                        && matches!(condition.as_ref(), perry_hir::Expr::NamespacePatched(ns) if ns == "Object")
+                        && generic.is_some() =>
+                    {
+                        (Some(else_expr.as_ref()), generic)
+                    }
+                    _ => (init.as_ref(), None),
+                };
+                let keys_src = match kinit {
                     Some(perry_hir::Expr::ForInKeys(o)) => Some((o, KeyList::ForIn)),
                     Some(perry_hir::Expr::ObjectKeys(o)) if name.starts_with("__forof_lit_src_") => {
                         Some((o, KeyList::OwnKeys))
@@ -1930,13 +1949,19 @@ impl<'a> Gen<'a> {
                 if let Some((o, list)) = keys_src {
                     if let perry_hir::Expr::LocalGet(obj) = o.as_ref() {
                         self.for_in_keys_of.insert((fx.module, *id), (*obj, list));
+                        if let Some(g) = generic {
+                            self.keys_generic.insert((fx.module, *id), g);
+                        }
                     }
                 }
                 if let (Some(perry_hir::Expr::LocalGet(src)), true) =
-                    (init, name.starts_with("__forof_lit_arr_"))
+                    (kinit, name.starts_with("__forof_lit_arr_"))
                 {
                     if let Some(&v) = self.for_in_keys_of.get(&(fx.module, *src)) {
                         self.for_in_keys_of.insert((fx.module, *id), v);
+                    }
+                    if let Some(&g) = self.keys_generic.get(&(fx.module, *src)) {
+                        self.keys_generic.insert((fx.module, *id), g);
                     }
                 }
                 if let Some(perry_hir::Expr::LocalGet(src)) = init {

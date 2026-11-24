@@ -146,3 +146,15 @@ fn rest_array_is_one_object_per_call_site() {
     assert!(tex.prims & crate::model::prim::NUM == 0 && !tex.top, "tex {tex:?}");
     assert!(t.objs.is_empty() && !t.top, "t {t:?}");
 }
+
+#[test]
+fn own_names_loop_beside_dynamic_code_runs_per_key() {
+    // Dynamic code reaching the global scope makes each `Object.m(...)` call
+    // a namespace pair (`NamespacePatched(Object) ? Object.m(...) : <the
+    // intrinsic>`): while no replaced member returns a value, its keys are
+    // the names of the prototype and the body still runs once per key.
+    let pf = wrapped("const dyn: any = new Function(process.argv[3]);\nif (process.argv[4] === \"x\") dyn();\n");
+    let [y, _, _, v] = kinds(&pf);
+    assert!(v.objs.is_empty() && !v.top, "gl.measure() {v:?}");
+    assert!(y.objs.is_empty() && !y.top, "moveTo's y {y:?}");
+}

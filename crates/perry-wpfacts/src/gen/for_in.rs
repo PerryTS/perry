@@ -451,6 +451,38 @@ impl<'a> Gen<'a> {
                 list: f.list,
             },
         );
+        // A keys Array a namespace pair made: what a replaced member returns
+        // (its generic arm) runs the body with every key.
+        let arr = match f.bind {
+            Stmt::Let {
+                init: Some(Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }),
+                ..
+            } => match object.as_ref() {
+                Expr::LocalGet(a) => Some(*a),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some(&g) = arr.and_then(|a| self.keys_generic.get(&(mi, a))) {
+            let w = self.tmp("forin-replaced-keys");
+            let r = self.m.reason("keys of a replaced Object member");
+            self.m.cons(
+                g,
+                Cons::TopIfAny {
+                    dst: w,
+                    from: w,
+                    reason: Some(r),
+                },
+            );
+            self.m.cons(
+                gn,
+                Cons::ForInBody {
+                    obj: w,
+                    call,
+                    list: f.list,
+                },
+            );
+        }
     }
 
     /// ENUM1: the for-in of `body` (outlined or a loop) when neither its
