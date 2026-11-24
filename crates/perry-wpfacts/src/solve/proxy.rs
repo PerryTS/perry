@@ -24,10 +24,11 @@
 //! the formatter's `%j`) runs the `toJSON` [[Get]], [[OwnPropertyKeys]],
 //! [[GetOwnProperty]] and the member [[Get]]s (`proxy_json`); a console
 //! argument runs that, ToPrimitive and the unwrapped show (`proxy_inspect`).
-//! Every other operation on the token, and
-//! an escape of it, takes the path the solver had before (`degrade`): the
-//! target is hard E9 and goes to ⊤, the handler escapes, and the operation
-//! sees ⊤. The hold's reason names that first operation.
+//! PXESC: an escape of the token (unknown code, a ⊤ sink, a reflecting
+//! runtime helper) runs every trap with unknown operands and escapes the
+//! target (`proxy_escape`); a rule with no Proxy model (each named in
+//! `proxy_apply`) is that escape with the rule in its reason, its result
+//! unknown. Nothing holds the target as E9.
 
 use super::*;
 
@@ -39,7 +40,6 @@ pub(crate) const PROXY_NEW: &str = "#proxy-new";
 pub struct ProxyRec {
     pub target: NodeId,
     pub handler: NodeId,
-    pub degraded: bool,
     /// The Proxy's operations, one entry per class (`ProxyOp`): what the
     /// first use made (its trap call, its forward to the target), which
     /// every later use of the class joins.
@@ -186,7 +186,6 @@ impl Model {
                 self.proxies.push(ProxyRec {
                     target,
                     handler,
-                    degraded: false,
                     ops: Default::default(),
                     callable: false,
                     calls: Vec::new(),
@@ -210,32 +209,6 @@ impl Model {
         }
         let t = self.tok(TokKind::Proxy(p));
         self.add_tok(c.ret, t);
-    }
-
-    /// Today's path for Proxy `p` (before PROXY2): target hard E9 and ⊤,
-    /// handler escapes. Once per Proxy.
-    /// `cause` names the first operation that sent it here (the hold's
-    /// reason reads "E9 Proxy target (<cause>)").
-    pub(crate) fn proxy_degrade(&mut self, p: u32, cause: &str) {
-        if self.proxies[p as usize].degraded {
-            return;
-        }
-        self.proxies[p as usize].degraded = true;
-        let (target, handler) = (
-            self.proxies[p as usize].target,
-            self.proxies[p as usize].handler,
-        );
-        let r = self.reason(&format!("E9 Proxy target ({cause})"));
-        self.cons(
-            target,
-            Cons::Hard {
-                kind: Hard::E9Proxy,
-                reason: r,
-            },
-        );
-        self.cons(target, Cons::TopSink { reason: r });
-        let rh = self.reason("E9 Proxy handler");
-        self.sink_node(handler, rh);
     }
 
     /// Rule PXESC: Proxy `p` reaches unknown code (an escape, a ⊤ sink, a
@@ -2068,7 +2041,12 @@ impl Model {
             | Cons::StrSubstring { .. }
             | Cons::StrReplace { .. }
             | Cons::ClassReplace { .. }
-            | Cons::Captures { .. } => {
+            | Cons::Captures { .. }
+            // A run's argument and result relays (DECISIONS 44 (b)): the
+            // Proxy is a value that flows to the call's result; only the
+            // markers there map families.
+            | Cons::ArgInto { .. }
+            | Cons::RetInto { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
@@ -2218,21 +2196,83 @@ impl Model {
                 let t = self.tok(TokKind::Proxy(p));
                 self.escape(t, reason);
             }
-            // Another protocol touch: its hold names the protocol and the
-            // touch's own reason.
-            Cons::Implicit { reason, proto, .. } => {
-                let cause = format!("implicit {proto:?}: {}", self.reasons[reason as usize]);
-                self.proxy_degrade(p, &cause);
-                self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);
-            }
-            // A hard operation: its hold names the kind and the reason.
-            Cons::Hard { kind, reason } => {
-                let cause = format!("hard {}: {}", kind.code(), self.reasons[reason as usize]);
-                self.proxy_degrade(p, &cause);
-                self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);
-            }
-            _ => {
-                self.proxy_degrade(p, c.kind_name());
+            // Hard kinds no rule emits on a value node (`mark_hard` sets them
+            // on a layout): E10 (OrdinaryObjectCreate sets [[Prototype]], no
+            // internal method of the prototype runs), E11 (Reflect.construct
+            // is `Cons::ReflectNew`), E21 (the `extends` value's `prototype`
+            // [[Get]] is `Cons::NativeParent`'s) and the buffer kinds B1, B2,
+            // B4 (a Proxy has no [[ArrayBufferData]]: a TypeError before any
+            // internal method). A Proxy has no layout to mark.
+            Cons::Hard {
+                kind:
+                    Hard::E10ObjectCreate
+                    | Hard::E11ReflectConstruct
+                    | Hard::E21NativeParent
+                    | Hard::B1Exposed
+                    | Hard::B2BufferResize
+                    | Hard::B4Resizable,
+                ..
+            } => {}
+            // Rule PXESC: the rules with no Proxy model yet, each named (a new
+            // rule must take a place in this match). The operation may run
+            // any internal method of the Proxy: its escape, the rule named in
+            // the reason (`proxy_escape`: each trap with unknown operands,
+            // the target's own escape), and the rule's result is unknown.
+            Cons::Accessor { .. }
+            | Cons::AccessorKeyed { .. }
+            | Cons::AddsKeys { .. }
+            | Cons::AnnexBDefine { .. }
+            | Cons::AnnexBLookup { .. }
+            | Cons::BirthField { .. }
+            | Cons::BoundCall { .. }
+            | Cons::CallerValue { .. }
+            | Cons::CjsPublish { .. }
+            | Cons::ContractThis { .. }
+            | Cons::DefineAll { .. }
+            | Cons::DefineDesc { .. }
+            | Cons::EnumKeyAny { .. }
+            | Cons::EnumKeyStore { .. }
+            | Cons::EnumLoad { .. }
+            | Cons::ForInAcc { .. }
+            | Cons::ForInBody { .. }
+            | Cons::FromArrayLike { .. }
+            | Cons::Fulfil { .. }
+            | Cons::HandOver { .. }
+            | Cons::IdxOwnLoad { .. }
+            | Cons::Miss { .. }
+            | Cons::NativeParent { .. }
+            | Cons::NativeThis { .. }
+            | Cons::NewNamed { .. }
+            | Cons::NotBuffer { .. }
+            | Cons::NotRegExp { .. }
+            | Cons::OverrideThis { .. }
+            | Cons::OwnComputedKey { .. }
+            | Cons::OwnDescAcc { .. }
+            | Cons::OwnDescValues { .. }
+            | Cons::OwnGate { .. }
+            | Cons::OwnKeys { .. }
+            | Cons::OwnOnly { .. }
+            | Cons::OwnTest { .. }
+            | Cons::OwnValues { .. }
+            | Cons::ProtoKey { .. }
+            | Cons::ProtoKeySet { .. }
+            | Cons::RegExpPattern { .. }
+            | Cons::RequireSpec { .. }
+            | Cons::ShareBuffer { .. }
+            | Cons::Spread { .. }
+            | Cons::SpreadFrom { .. }
+            | Cons::StoreKeyed { .. }
+            | Cons::StoreOut { .. }
+            | Cons::SuperCtor { .. }
+            | Cons::SuperCtorParent { .. }
+            | Cons::ThisFrom { .. }
+            | Cons::UnnamedSet { .. }
+            | Cons::ViewedBuffer { .. }
+            | Cons::VisitHolders { .. }
+            | Cons::VisitStop { .. } => {
+                let r = self.reason(&format!("Proxy operand of rule {} (no Proxy model)", c.kind_name()));
+                let t = self.tok(TokKind::Proxy(p));
+                self.escape(t, r);
                 self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);
             }
         }

@@ -307,7 +307,7 @@ pub enum Verdict {
     /// PROXY3 (owner 2026-11-16: trap sites count as proven, in their own
     /// column): a read, call or named store whose receivers are all Proxy
     /// objects of `new Proxy( t, h )` that the solver modeled
-    /// (`solve/proxy.rs`, never degraded): the operation calls the trap read
+    /// (`solve/proxy.rs`): the operation calls the trap read
     /// from the program handler `h` with `this = h` and the spec arguments
     /// (ECMA-262 10.5.8 [[Get]], 10.5.9 [[Set]]), or forwards to `t`, and
     /// both are in the solve. The emitted operation stays the generic one
@@ -2433,7 +2433,7 @@ fn judge(
     let mut traps = 0usize;
     for &t in toks {
         match &m.toks[t as usize] {
-            TokKind::Proxy(p) if !m.proxies[*p as usize].degraded => {
+            TokKind::Proxy(_) => {
                 receivers.push(m.tok_name(t));
                 traps += 1;
             }
@@ -3280,7 +3280,7 @@ fn judge_store(
             }
             // PROXY3: a modeled Proxy object: its `set` trap or the forward
             // (10.5.9; `Verdict::ProxyTrap`).
-            TokKind::Proxy(p) if !m.proxies[*p as usize].degraded => {
+            TokKind::Proxy(_) => {
                 receivers.push(m.tok_name(t));
                 traps += 1;
             }

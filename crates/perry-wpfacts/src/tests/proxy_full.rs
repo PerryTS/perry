@@ -491,3 +491,15 @@ fn proxy_instanceof_left_runs_its_get_prototype_of() {
     let inner = format!("getPrototypeOf(t: any) {{ return new Proxy({{}}, {{ {h} }}); }}");
     site("{}", &inner, "class C {}\nconsole.log(px instanceof C);", false).unwrap();
 }
+
+/// Rule PXESC: a rule with no Proxy model yet (`Object.values`, an object
+/// spread) is the Proxy's escape, named by the rule: each trap runs with
+/// unknown operands; no Proxy part is held (E9).
+#[test]
+fn proxy_unmodeled_rule_is_its_escape() {
+    let get = "get(t: any, k: any) { external(payload); return 1; }";
+    for op in ["console.log(Object.values(px));", "console.log({ ...px });"] {
+        site("{ a: 1 }", get, op, false).unwrap();
+        site("{ a: 1 }", "", op, true).unwrap();
+    }
+}
