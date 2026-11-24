@@ -50,6 +50,7 @@ impl WasmModuleEmitter {
             "object_set",
             "object_get",
             "object_literal_define",
+            "object_literal_define_accessor",
             "object_literal_set_prototype",
             "object_set_prototype_of",
             "object_get_prototype_of",
