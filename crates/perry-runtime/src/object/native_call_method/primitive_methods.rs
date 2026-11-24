@@ -358,16 +358,10 @@ pub(super) unsafe fn dispatch_primitive(
         }
     }
 
-    if crate::web_storage::is_storage_value(object_handle.get_nanbox_f64()) {
-        let args = refreshed_args();
-        if let Some(result) = crate::web_storage::dispatch_storage_method(
-            object_handle.get_nanbox_f64(),
-            method_name,
-            &args,
-        ) {
-            return Some(result);
-        }
-    }
+    // A storage object has no by-name arm: its methods are the closures
+    // `Storage.prototype` holds (`web_storage::install_method`), so the call
+    // is the ordinary [[Get]] on its chain and a program store there (or an
+    // absent member) decides it like on any object.
 
     // #1758 / epic #1785: a class-object VALUE reaching the *dynamic*
     // dispatcher is a STATIC method call. This happens when the static

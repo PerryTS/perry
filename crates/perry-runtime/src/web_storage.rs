@@ -165,28 +165,6 @@ extern "C" fn storage_clear(_closure: *const ClosureHeader, this: crate::closure
     storage_clear_impl(kind)
 }
 
-pub(crate) fn is_storage_value(value: f64) -> bool {
-    storage_kind_from_value(value).is_some()
-}
-
-pub(crate) fn dispatch_storage_method(object: f64, method_name: &str, args: &[f64]) -> Option<f64> {
-    let kind = storage_kind_from_value(object)?;
-    let undefined = f64::from_bits(TAG_UNDEFINED);
-    let result = match method_name {
-        "clear" => storage_clear_impl(kind),
-        "getItem" => storage_get_item_impl(kind, args.first().copied().unwrap_or(undefined)),
-        "key" => storage_key_impl(kind, args.first().copied().unwrap_or(undefined)),
-        "removeItem" => storage_remove_item_impl(kind, args.first().copied().unwrap_or(undefined)),
-        "setItem" => storage_set_item_impl(
-            kind,
-            args.first().copied().unwrap_or(undefined),
-            args.get(1).copied().unwrap_or(undefined),
-        ),
-        _ => return None,
-    };
-    Some(result)
-}
-
 fn storage_get_item_impl(kind: StorageKind, key: f64) -> f64 {
     let key = js_string(key);
     with_store(kind, |store| match store.get(&key) {
