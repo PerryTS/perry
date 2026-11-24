@@ -83,7 +83,7 @@ pub(crate) unsafe fn array_prototype_to_string_override(value: f64) -> ArrayToSt
     let receiver = value_handle.get_nanbox_f64();
     let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
     let bound_handle = scope.root_nanbox_u64(bound);
-    let ret = crate::closure::native_call_value_this(
+    let ret = crate::closure::handed_call_value_this(
         bound_handle.get_nanbox_f64(),
         crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
         std::ptr::null(),
@@ -144,7 +144,7 @@ pub(crate) fn call_array_prototype_to_string_method(
         }
 
         let args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(arg_handles);
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             method_handle.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(receiver_handle.get_nanbox_f64()),
             args.as_ptr(),
@@ -178,7 +178,7 @@ pub(crate) fn array_prototype_to_string(value: f64) -> f64 {
     }
 
     unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             join_handle.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(receiver_handle.get_nanbox_f64()),
             std::ptr::null(),

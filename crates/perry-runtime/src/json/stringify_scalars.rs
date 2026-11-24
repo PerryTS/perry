@@ -188,7 +188,7 @@ pub(crate) unsafe fn bigint_apply_to_json(value: f64) -> Option<f64> {
     }
     // `toJSON(key)` receives the property key of this BigInt value (#5909).
     let key_f64_arg = super::stringify_tojson_probe::current_to_json_key_arg();
-    let result = crate::closure::native_call_value_this(
+    let result = crate::closure::handed_call_value_this(
         f64::from_bits(method_bits),
         crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
         &key_f64_arg,

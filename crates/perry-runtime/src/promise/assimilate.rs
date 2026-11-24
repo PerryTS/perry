@@ -496,7 +496,7 @@ extern "C" fn promise_resolve_thenable_job(
     ];
 
     let result = combinator_catch_js(|| unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             then_action.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(thenable.get_nanbox_f64()),
             args.as_ptr(),
@@ -593,7 +593,7 @@ pub(super) fn assimilate_via_then_property(value: f64) -> f64 {
     // Call `Get(value, "then")` as a value (own data property) with the
     // thenable as its receiver, so a non-arrow `then` body reads the right `this`.
     unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             then_handle.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
             args.as_ptr(),

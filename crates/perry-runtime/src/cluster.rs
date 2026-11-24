@@ -364,7 +364,7 @@ pub(crate) fn cluster_emit_event(event: &str, args: &[f64]) -> bool {
     for listener in listeners {
         let cb = f64::from_bits(listener.callback_bits);
         unsafe {
-            let _ = crate::closure::native_call_value_this(
+            let _ = crate::closure::handed_call_value_this(
                 cb,
                 crate::closure::JsThis::from_f64(cluster_default_value()),
                 args.as_ptr(),
@@ -1548,7 +1548,7 @@ fn emit(target: f64, event: &str, args: &[f64]) -> bool {
         }
         let cb = crate::array::js_array_get_f64(arr, i);
         unsafe {
-            let _ = crate::closure::native_call_value_this(
+            let _ = crate::closure::handed_call_value_this(
                 cb,
                 crate::closure::JsThis::from_f64(target_handle.get_nanbox_f64()),
                 args.as_ptr(),

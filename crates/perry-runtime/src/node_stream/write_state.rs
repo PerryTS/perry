@@ -405,7 +405,7 @@ pub(super) fn invoke_transform_write(stream: f64, chunk: f64, enc: f64, len: f64
         let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
         let args = [chunk, enc, cb_value];
         unsafe {
-            let _ = crate::closure::native_call_value_this(
+            let _ = crate::closure::handed_call_value_this(
                 transform,
                 crate::closure::JsThis::from_f64(stream),
                 args.as_ptr(),

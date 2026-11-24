@@ -1,8 +1,8 @@
 use super::*;
 
 use crate::closure::{
-    js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, js_native_call_value,
-    native_call_value_this, ClosureHeader, JsThis,
+    handed_call_value_this, js_closure_alloc, js_closure_get_capture_ptr,
+    js_closure_set_capture_ptr, js_native_call_value, ClosureHeader, JsThis,
 };
 use crate::string::js_string_from_bytes;
 use crate::value::JSValue;
@@ -64,7 +64,7 @@ pub(crate) fn cp_emit(target: f64, event: &str, args: &[f64]) -> bool {
         let cb = crate::array::js_array_get_f64(arr, i);
         let current_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&args);
         unsafe {
-            let _ = native_call_value_this(
+            let _ = handed_call_value_this(
                 cb,
                 JsThis::from_f64(target.get_nanbox_f64()),
                 current_args.as_ptr(),
@@ -344,7 +344,7 @@ pub(crate) extern "C" fn cp_pipe_data_thunk(
         let args = [chunk];
         unsafe {
             let _ =
-                native_call_value_this(write, JsThis::from_f64(dest), args.as_ptr(), args.len());
+                handed_call_value_this(write, JsThis::from_f64(dest), args.as_ptr(), args.len());
         }
     }
     cp_undefined()
@@ -363,7 +363,7 @@ pub(crate) extern "C" fn cp_pipe_end_thunk(
     if !crate::fs::extract_closure_ptr(end).is_null() {
         let args = [cp_undefined()];
         unsafe {
-            let _ = native_call_value_this(end, JsThis::from_f64(dest), args.as_ptr(), 0);
+            let _ = handed_call_value_this(end, JsThis::from_f64(dest), args.as_ptr(), 0);
         }
     }
     cp_undefined()

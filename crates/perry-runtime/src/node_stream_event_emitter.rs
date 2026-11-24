@@ -828,7 +828,7 @@ fn call_method(
     }
     let live_args = crate::gc::RuntimeHandleScope::refreshed_nanbox_f64_slice(&arg_handles);
     Some(unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             method,
             crate::closure::JsThis::from_f64(target.get_nanbox_f64()),
             live_args.as_ptr(),
@@ -916,7 +916,7 @@ unsafe extern "C" fn ns_once_wrapper(
         return undefined_value();
     }
     arg_handles.with_live(|live_args| {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             listener.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(target.get_nanbox_f64()),
             live_args.as_ptr(),
@@ -1216,7 +1216,7 @@ fn emit_process_warning(warning: f64, text: &str, scope: &crate::gc::RuntimeHand
     // SAFETY: the property resolved to a callable value; node calls it with the
     // process object as `this`.
     unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             callback.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(process.get_nanbox_f64()),
             [warning.get_nanbox_f64()].as_ptr(),
@@ -1573,7 +1573,7 @@ pub(super) fn call_listener_args(stream: f64, listener: f64, args: &[f64]) -> f6
         return f64::from_bits(super::TAG_UNDEFINED);
     }
     unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             listener,
             crate::closure::JsThis::from_f64(stream),
             args.as_ptr(),
@@ -1611,7 +1611,7 @@ pub(super) extern "C" fn ns_capture_rejection(
             }
         }
         unsafe {
-            crate::closure::native_call_value_this(
+            crate::closure::handed_call_value_this(
                 hook.get_nanbox_f64(),
                 crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
                 call_args.as_ptr(),

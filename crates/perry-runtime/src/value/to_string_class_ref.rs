@@ -63,7 +63,7 @@ pub(crate) unsafe fn custom_to_primitive(value: f64, hint: &[u8]) -> CustomToPri
         if !crate::closure::is_closure_ptr(method_ptr) {
             return CustomToPrimitiveOutcome::TypeError;
         }
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             method,
             crate::closure::JsThis::from_f64(receiver),
             &hint,

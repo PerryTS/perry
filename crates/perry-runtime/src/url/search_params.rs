@@ -914,7 +914,7 @@ pub extern "C" fn js_url_search_params_for_each(
             this_value,
         ];
         unsafe {
-            let _ = crate::closure::native_call_value_this(
+            let _ = crate::closure::handed_call_value_this(
                 callback,
                 crate::closure::JsThis::from_f64(this_arg_handle.get_nanbox_f64()),
                 args.as_ptr(),

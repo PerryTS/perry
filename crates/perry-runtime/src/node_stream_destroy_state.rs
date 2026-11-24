@@ -101,7 +101,7 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
             };
             let args = [destroy_arg, cb_value];
             unsafe {
-                let _ = crate::closure::native_call_value_this(
+                let _ = crate::closure::handed_call_value_this(
                     destroy,
                     crate::closure::JsThis::from_f64(stream),
                     args.as_ptr(),

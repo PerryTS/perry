@@ -653,7 +653,7 @@ pub(crate) unsafe fn call_overridden_iterator_next(
         }
         let method = scope.root_nanbox_f64(own);
         let result = crate::exception::catch_thrown(|| {
-            crate::closure::native_call_value_this(
+            crate::closure::handed_call_value_this(
                 method.get_nanbox_f64(),
                 crate::closure::JsThis::from_f64(iter.get_nanbox_f64()),
                 std::ptr::null(),
@@ -739,7 +739,7 @@ pub(crate) unsafe fn call_overridden_iterator_next(
 
     let method = scope.root_nanbox_f64(method);
     let result = crate::exception::catch_thrown(|| {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             method.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(iter.get_nanbox_f64()),
             std::ptr::null(),

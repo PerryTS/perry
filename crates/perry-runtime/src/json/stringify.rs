@@ -342,7 +342,7 @@ pub(crate) unsafe fn object_get_to_json(ptr: *const u8) -> Option<f64> {
     // record it in `TO_JSON_KEY` before recursing here.
     let key_f64_arg = current_to_json_key_arg();
 
-    let result = crate::closure::native_call_value_this(
+    let result = crate::closure::handed_call_value_this(
         f64::from_bits(bound),
         crate::closure::JsThis::from_f64(recv_handle.get_nanbox_f64()),
         &key_f64_arg,
@@ -396,7 +396,7 @@ pub(crate) unsafe fn array_get_to_json(arr: *const crate::ArrayHeader) -> Option
     let recv_handle = scope.root_nanbox_f64(recv);
     // `toJSON(key)` receives the property key of this array value (#5909).
     let key_f64_arg = current_to_json_key_arg();
-    let result = crate::closure::native_call_value_this(
+    let result = crate::closure::handed_call_value_this(
         f64::from_bits(method_bits),
         crate::closure::JsThis::from_f64(recv_handle.get_nanbox_f64()),
         &key_f64_arg,

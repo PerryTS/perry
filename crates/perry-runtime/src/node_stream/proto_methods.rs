@@ -580,7 +580,7 @@ extern "C" fn ns_base_write3(
     );
     let args = [box_pointer(list as *const u8), callback.get_nanbox_f64()];
     unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             writev.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
             args.as_ptr(),
@@ -738,7 +738,7 @@ extern "C" fn ns_transform_write3(
         box_pointer(done.get_raw_mut_ptr::<ClosureHeader>() as *const u8),
     ];
     unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             transform.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
             args.as_ptr(),
@@ -806,7 +806,7 @@ extern "C" fn ns_transform_final1(
     let done_value = box_pointer(done.get_raw_mut_ptr::<ClosureHeader>() as *const u8);
     if is_callable_value(flush.get_nanbox_f64()) && !stream_destroyed(stream.get_nanbox_f64()) {
         unsafe {
-            crate::closure::native_call_value_this(
+            crate::closure::handed_call_value_this(
                 flush.get_nanbox_f64(),
                 crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
                 &done_value,

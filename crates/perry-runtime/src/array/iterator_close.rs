@@ -24,7 +24,7 @@ fn call_protocol(iter_value: f64, arg: Option<f64>, name: &[u8]) -> Option<f64> 
     let method = scope.root_nanbox_f64(ret);
     let args = [arg.as_ref().map_or(0.0, |arg| arg.get_nanbox_f64())];
     let result = unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             method.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(iter.get_nanbox_f64()),
             if arg.is_some() {
@@ -78,7 +78,7 @@ fn iterator_delegate_step(iter: f64, next: f64, value: f64) -> f64 {
     }
     let args = [value];
     let result = unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             next,
             crate::closure::JsThis::from_f64(iter),
             args.as_ptr(),

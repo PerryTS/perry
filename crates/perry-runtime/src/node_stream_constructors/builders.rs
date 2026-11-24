@@ -991,7 +991,7 @@ extern "C" fn from_destroy(
         f64::from_bits(TAG_UNDEFINED),
     );
     unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             callback.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
             [err.get_nanbox_f64()].as_ptr(),

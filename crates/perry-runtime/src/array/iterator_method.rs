@@ -131,7 +131,7 @@ pub(super) unsafe fn read_method(
             if getter.to_bits() == TAG_UNDEFINED {
                 getter
             } else {
-                crate::closure::native_call_value_this(
+                crate::closure::handed_call_value_this(
                     getter,
                     crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
                     std::ptr::null(),
@@ -155,7 +155,7 @@ pub(super) unsafe fn iterator_from_method(value: f64, method: IteratorMethod) ->
         return super::array_values_iter(value);
     }
     if let IteratorMethod::Data(method) = method {
-        return crate::symbol::js_iterator_result_validate(crate::closure::native_call_value_this(
+        return crate::symbol::js_iterator_result_validate(crate::closure::handed_call_value_this(
             method,
             crate::closure::JsThis::from_f64(value),
             std::ptr::null(),
@@ -167,7 +167,7 @@ pub(super) unsafe fn iterator_from_method(value: f64, method: IteratorMethod) ->
     let method = read_method(&receiver, method);
     // The single explicit-this dispatcher validates Call and roots only when
     // binding needs allocation. No clone/rebind or callable probe is repeated.
-    let iter = crate::closure::native_call_value_this(
+    let iter = crate::closure::handed_call_value_this(
         method,
         crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
         std::ptr::null(),

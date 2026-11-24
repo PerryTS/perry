@@ -395,6 +395,8 @@ fn call_trap(handler: f64, trap: f64, args: &[f64]) -> f64 {
     if closure.is_null() {
         return throw_type_error("proxy trap is not a function");
     }
+    // K3 C3: a trap is a handed function; its receiver is the handler.
+    crate::closure::check_family_this(closure, handler.get_nanbox_f64());
     let undef = f64::from_bits(TAG_UNDEFINED);
     let a = |i: usize| -> f64 { args.get(i).copied().unwrap_or(undef) };
     let this = crate::closure::JsThis::from_f64(handler.get_nanbox_f64());

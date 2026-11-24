@@ -38,7 +38,7 @@ pub(in crate::node_stream) fn schedule_writable_finish(stream: f64, callback: Op
             );
             let cb_value = f64::from_bits(JSValue::pointer(done as *const u8).bits());
             unsafe {
-                let _ = crate::closure::native_call_value_this(
+                let _ = crate::closure::handed_call_value_this(
                     final_callback.get_nanbox_f64(),
                     crate::closure::JsThis::from_f64(st.get_nanbox_f64()),
                     [cb_value].as_ptr(),

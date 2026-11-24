@@ -195,7 +195,7 @@ pub(crate) unsafe fn ordinary_to_primitive_for_toprimitive(
             return time;
         }
         let method_handle = scope.root_nanbox_f64(method);
-        let result = crate::closure::native_call_value_this(
+        let result = crate::closure::handed_call_value_this(
             method_handle.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
             std::ptr::null(),
@@ -453,7 +453,7 @@ pub(crate) unsafe fn call_own_method(method: f64, receiver: f64) -> Option<f64> 
     let this_scope = crate::gc::RuntimeHandleScope::new(); // #9445
     let receiver = this_scope.root_nanbox_f64(receiver);
     let bound = crate::closure::clone_closure_rebind_this(bits, receiver.get_nanbox_f64());
-    let ret = crate::closure::native_call_value_this(
+    let ret = crate::closure::handed_call_value_this(
         f64::from_bits(bound),
         crate::closure::JsThis::from_f64(receiver.get_nanbox_f64()),
         std::ptr::null(),
@@ -630,7 +630,7 @@ unsafe fn call_method_for_primitive(
     // receiver, so rebinding is a correct no-op. Mirrors #1982.
     let recv = value_handle.get_nanbox_f64();
     let bound = crate::closure::clone_closure_rebind_this(method_bits, recv);
-    let ret = crate::closure::native_call_value_this(
+    let ret = crate::closure::handed_call_value_this(
         f64::from_bits(bound),
         crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
         std::ptr::null(),
@@ -687,7 +687,7 @@ unsafe fn call_function_method(
 
     let method_handle = scope.root_nanbox_f64(method);
     let bound = crate::closure::clone_closure_rebind_this(method_handle.get_nanbox_u64(), recv);
-    let ret = crate::closure::native_call_value_this(
+    let ret = crate::closure::handed_call_value_this(
         f64::from_bits(bound),
         crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
         std::ptr::null(),

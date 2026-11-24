@@ -1963,7 +1963,7 @@ fn js_set_foreach_impl(
             let args = [value, value, set_value];
             let cb = callback_handle.get_nanbox_f64();
             let this_v = crate::closure::JsThis::from_f64(this_handle.get_nanbox_f64());
-            let _ = crate::closure::native_call_value_this(cb, this_v, args.as_ptr(), args.len());
+            let _ = crate::closure::handed_call_value_this(cb, this_v, args.as_ptr(), args.len());
         }
     }
     let set = set_handle.get_raw_const_ptr::<SetHeader>();

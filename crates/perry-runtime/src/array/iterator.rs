@@ -496,7 +496,7 @@ fn async_from_sync_call_raw(iter: f64, method: &[u8], args: &[f64]) -> Result<Op
         };
         if callable {
             unsafe {
-                crate::closure::native_call_value_this(
+                crate::closure::handed_call_value_this(
                     method_value_h.get_nanbox_f64(),
                     crate::closure::JsThis::from_f64(iter_h.get_nanbox_f64()),
                     args_ptr,
@@ -550,7 +550,7 @@ fn async_from_sync_call_cached_raw(
             args.as_ptr()
         };
         unsafe {
-            crate::closure::native_call_value_this(
+            crate::closure::handed_call_value_this(
                 method_value,
                 crate::closure::JsThis::from_f64(iter),
                 args_ptr,
@@ -840,7 +840,7 @@ pub extern "C" fn js_get_async_iterator(value: f64) -> f64 {
                 throw_iterator_method_not_callable();
             }
             let iterator = unsafe {
-                crate::closure::native_call_value_this(
+                crate::closure::handed_call_value_this(
                     method,
                     crate::closure::JsThis::from_f64(value),
                     std::ptr::null(),
@@ -1488,7 +1488,7 @@ pub extern "C" fn js_iterator_next_result(iter_f64: f64) -> f64 {
     let next = named_field(iter_f64, b"next");
     let result = if is_callable_value(next) {
         unsafe {
-            crate::closure::native_call_value_this(
+            crate::closure::handed_call_value_this(
                 next,
                 crate::closure::JsThis::from_f64(iter_f64),
                 std::ptr::null(),
@@ -1568,7 +1568,7 @@ pub(crate) fn call_symbol_async_iterator(value: f64) -> Option<f64> {
         return None;
     }
     let iterator = unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             method,
             crate::closure::JsThis::from_f64(value),
             std::ptr::null(),

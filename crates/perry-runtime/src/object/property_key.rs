@@ -146,7 +146,7 @@ unsafe fn ordinary_to_primitive_string_key(value: f64) -> Option<f64> {
         let bound = crate::closure::clone_closure_rebind_this(method_bits, receiver);
         // Re-read: the key allocation, the method read and the clone can all
         // move the receiver.
-        let result = crate::closure::native_call_value_this(
+        let result = crate::closure::handed_call_value_this(
             f64::from_bits(bound),
             crate::closure::JsThis::from_f64(value_handle.get_nanbox_f64()),
             std::ptr::null(),
@@ -482,7 +482,7 @@ pub unsafe extern "C" fn js_object_super_call(
     let bound = crate::closure::clone_closure_rebind_this(callee_handle.get_nanbox_u64(), receiver);
     let bound_handle = scope.root_nanbox_u64(bound);
     let receiver = f64::from_bits(receiver_handle.get_nanbox_u64());
-    crate::closure::native_call_value_this(
+    crate::closure::handed_call_value_this(
         f64::from_bits(bound_handle.get_nanbox_u64()),
         crate::closure::JsThis::from_f64(receiver),
         args_ptr,

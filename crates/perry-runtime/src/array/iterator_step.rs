@@ -82,7 +82,7 @@ pub unsafe extern "C-unwind" fn js_iterator_step(iter: f64, next: f64, out: *mut
     if !crate::proxy::is_callable_function(next.get_nanbox_f64()) {
         crate::closure::throw_not_callable();
     }
-    let result = crate::closure::native_call_value_this(
+    let result = crate::closure::handed_call_value_this(
         next.get_nanbox_f64(),
         crate::closure::JsThis::from_f64(iter.get_nanbox_f64()),
         std::ptr::null(),

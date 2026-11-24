@@ -105,7 +105,7 @@ pub(in crate::node_stream) fn write_chunk_to_pipe_destinations(stream: f64, chun
         );
         let ret = if is_callable_value(write) {
             unsafe {
-                crate::closure::native_call_value_this(
+                crate::closure::handed_call_value_this(
                     write,
                     crate::closure::JsThis::from_f64(dest.get_nanbox_f64()),
                     [chunk.get_nanbox_f64()].as_ptr(),
@@ -156,7 +156,7 @@ pub(in crate::node_stream) fn end_pipe_destinations(stream: f64) {
                 );
                 if is_callable_value(end) {
                     unsafe {
-                        crate::closure::native_call_value_this(
+                        crate::closure::handed_call_value_this(
                             end,
                             crate::closure::JsThis::from_f64(dest.get_nanbox_f64()),
                             std::ptr::null(),

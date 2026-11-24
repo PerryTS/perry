@@ -72,6 +72,24 @@ pub(crate) unsafe fn native_call_value_this(
     unsafe { js_native_call_value(func_value, this, args_ptr, args_len) }
 }
 
+/// K3 C3: `native_call_value_this` for a function value the runtime or the
+/// host was HANDED and now invokes on its own (a callback with a `thisArg`,
+/// an event listener, a stream hook, a Proxy trap, a protocol method such
+/// as `next`/`toString`/`toJSON`/`then`): the receiver-family check runs
+/// first (`family::check_family_this_value`; one test when the callee has
+/// no live family). A program call (`f.call(h)`, `Reflect.apply`, a bound
+/// function, the program's own `o.m()`) keeps `native_call_value_this`.
+#[inline(always)]
+pub(crate) unsafe fn handed_call_value_this(
+    func_value: f64,
+    this: crate::closure::JsThis,
+    args_ptr: *const f64,
+    args_len: usize,
+) -> f64 {
+    super::family::check_family_this_value(func_value, this.as_f64());
+    unsafe { js_native_call_value(func_value, this, args_ptr, args_len) }
+}
+
 /// The dispatcher body, inlined only into the two `js_native_call_value`
 /// definitions (one per panic strategy).
 #[inline(always)]

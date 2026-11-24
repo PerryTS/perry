@@ -1256,7 +1256,7 @@ fn invoke_writable_write(stream: f64, chunk: f64, enc: f64, len: f64, callback: 
     let cb = crate::runtime_state_key!(b"onwrite").read_value(state.get_nanbox_f64());
     let args = [chunk.get_nanbox_f64(), enc.get_nanbox_f64(), cb];
     unsafe {
-        let _ = crate::closure::native_call_value_this(
+        let _ = crate::closure::handed_call_value_this(
             write.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
             args.as_ptr(),
@@ -1274,7 +1274,7 @@ fn invoke_writable_writev(stream: f64, chunks: f64) {
         let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
         let args = [chunks, cb_value];
         unsafe {
-            let _ = crate::closure::native_call_value_this(
+            let _ = crate::closure::handed_call_value_this(
                 writev,
                 crate::closure::JsThis::from_f64(stream),
                 args.as_ptr(),

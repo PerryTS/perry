@@ -1132,7 +1132,7 @@ pub(super) fn finish_transform_stream(stream: f64, callback: Option<f64>) -> boo
     );
     let cb_value = f64::from_bits(JSValue::pointer(cb as *const u8).bits());
     unsafe {
-        let _ = crate::closure::native_call_value_this(
+        let _ = crate::closure::handed_call_value_this(
             flush.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
             [cb_value].as_ptr(),
@@ -1437,7 +1437,7 @@ extern "C" fn construct_tick(c: *const ClosureHeader, _: crate::closure::JsThis)
     let cb = js_closure_alloc(crate::fn_info!(ns_construct_callback_done, 1), 1);
     js_closure_set_capture_f64(cb, 0, stream.get_nanbox_f64());
     unsafe {
-        crate::closure::native_call_value_this(
+        crate::closure::handed_call_value_this(
             construct.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(stream.get_nanbox_f64()),
             [box_pointer(cb.cast())].as_ptr(),
@@ -1526,7 +1526,7 @@ fn invoke_read_once_inner(stream: f64, emit_default_error: bool) {
         f64::from_bits(TAG_TRUE),
     );
     unsafe {
-        let _ = crate::closure::native_call_value_this(
+        let _ = crate::closure::handed_call_value_this(
             read.get_nanbox_f64(),
             crate::closure::JsThis::from_f64(s.get_nanbox_f64()),
             [size].as_ptr(),

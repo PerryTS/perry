@@ -53,7 +53,9 @@ pub use calln::{
 pub use direct::{DirectCall1, DirectCall2, DirectCall3, DirectCall4};
 pub use family::{check_family_this, check_family_this_value, has_family};
 
-pub(crate) use value_call::{call_compiled_body_this, native_call_value_this};
+pub(crate) use value_call::{
+    call_compiled_body_this, handed_call_value_this, native_call_value_this,
+};
 pub use value_call::{
     js_closure_call_apply_with_spread, js_closure_call_array, js_native_call_value,
 };
