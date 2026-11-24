@@ -1,9 +1,19 @@
-// The glob syntax matchesGlob accepts: dot segments, braces, classes, a trailing
-// globstar, empty patterns, and win32 drives and UNC roots. Inputs use one letter case,
+// The glob syntax matchesGlob accepts: leading dots, braces and ranges, classes,
+// negated extglobs, globstars, `.` and `..` and repeated slashes in the subject, empty
+// patterns, and win32 drives and UNC roots. Inputs use one letter case,
 // so the answer does not depend on the platform's case sensitivity.
 import * as path from "node:path";
 
 for (const [subject, pattern] of [
+  ["x/.hidden", "x/*"],
+  [".", ".*"],
+  ["a/.git/c", "a/**/c"],
+  ["f03", "f{01..3}"],
+  ["fc", "f{a..c}"],
+  ["x.ts", "!(*.js)"],
+  ["x.js", "!(*.js)"],
+  ["a/b/../c", "a/c"],
+  ["a//b", "a/b"],
   ["x/.hidden", "x/.*"],
   ["a", "a/**"],
   ["a/", "a/**"],

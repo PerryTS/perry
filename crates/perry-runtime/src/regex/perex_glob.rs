@@ -2,9 +2,9 @@
 //! filesystem strings are borrowed directly; no JS subject copy is required.
 use super::perex_api as api;
 use super::perex_memory::MemoryBudget;
-use super::perex_owner::{GcProgram, HeapSubject, OwnerError};
+use super::perex_owner::{GcProgram, OwnerError};
 use super::perex_runtime::{self as host, CaptureMode, EngineError};
-use crate::gc::{RuntimeHandle, RuntimeHandleScope};
+use crate::gc::RuntimeHandleScope;
 use perex::binding::{BoundProgram, BoundSubject, ImmutableSubject, Subject};
 use perex::Budget;
 
@@ -49,13 +49,6 @@ impl<'s> GlobProgram<'s> {
     pub(crate) fn is_match(&self, input: &str) -> Result<bool, EngineError> {
         let subject =
             BoundSubject::new(NativeText(input)).map_err(|e| EngineError::Subject(e.error))?;
-        self.test(&subject)
-    }
-
-    pub(crate) fn test_heap(&self, input: RuntimeHandle<'_>) -> Result<bool, EngineError> {
-        let owner = unsafe { HeapSubject::new(input) }
-            .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?;
-        let subject = BoundSubject::new(owner).map_err(|e| EngineError::Subject(e.error))?;
         self.test(&subject)
     }
 

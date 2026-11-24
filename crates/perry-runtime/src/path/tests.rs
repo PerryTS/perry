@@ -100,55 +100,53 @@ mod posix_parse_tests {
     }
 }
 
+// `matchesGlob` answers as Node's bundled minimatch does (Node's options, case-sensitive):
+// dot segments, `**` over hidden directories, brace ranges, negated extglobs, `.` and `..`
+// in the subject, POSIX classes, and win32 drives and UNC roots.
 #[cfg(feature = "regex-engine")]
-mod glob_tests {
-    fn glob_to_regex(pattern: &str) -> String {
-        super::super::glob_to_regex(pattern, false)
-    }
-
-    #[test]
-    fn brace_alternation_expands_to_group() {
+#[test]
+fn matches_glob_answers_like_minimatch() {
+    use super::*;
+    perex::install_unicode_properties();
+    let _suppress = crate::gc::GcSuppressScope::new();
+    for (win32, subject, pattern, expected) in [
+        (false, "x/.hidden", "x/*", false),
+        (false, ".", ".*", false),
+        (false, "a/.git/c", "a/**/c", false),
+        (false, "f03", "f{01..3}", true),
+        (false, "fc", "f{a..c}", true),
+        (false, "x.ts", "!(*.js)", true),
+        (false, "x.js", "!(*.js)", false),
+        (false, "a/b/../c", "a/c", true),
+        (false, "a//b", "a/b", true),
+        (false, "a", "a/**", false),
+        (false, "a/", "a/**", true),
+        (false, "src/a/b.ts", "src/**/*.ts", true),
+        (false, "README.md", "*.{md,txt}", true),
+        (false, "foo.jsts", "*.+(js|ts)", true),
+        (false, "foo/bar", r#"foo\*"#, true),
+        (false, "aé", "a[[:alpha:]]", true),
+        (false, "", "", true),
+        (false, "a", "{,a}", true),
+        (false, "b", "[a-c]", true),
+        (false, "d", "[!a-c]", true),
+        (false, ".x/a", "*/a", false),
+        (false, "x/y/z", "x/**/**/z", true),
+        (true, r#"c:\a\b.ts"#, "C:/a/*.ts", true),
+        (true, r#"\\srv\share\x"#, "//srv/share/*", true),
+        (true, r#"foo\bar\baz"#, "foo/*", false),
+    ] {
+        let (subject_ptr, pattern_ptr) = (string_to_js(subject), string_to_js(pattern));
+        let got = if win32 {
+            js_path_win32_matches_glob(subject_ptr, pattern_ptr)
+        } else {
+            js_path_posix_matches_glob(subject_ptr, pattern_ptr)
+        };
         assert_eq!(
-            glob_to_regex("*.{md,txt}"),
-            "^[^/]*\\.(?:md|txt)(?![\\s\\S])"
+            got == 1,
+            expected,
+            "win32={win32} {subject:?} ~ {pattern:?}"
         );
-        assert_eq!(
-            glob_to_regex("src/{app,test}.ts"),
-            "^src/(?:app|test)\\.ts(?![\\s\\S])"
-        );
-    }
-
-    #[test]
-    fn braces_without_alternation_stay_literal() {
-        assert_eq!(glob_to_regex("file.{md}"), "^file\\.\\{md\\}(?![\\s\\S])");
-    }
-
-    #[test]
-    fn extglob_positive_groups_expand() {
-        assert_eq!(
-            glob_to_regex("*.@(js|ts)"),
-            "^[^/]*\\.(?:js|ts)(?![\\s\\S])"
-        );
-        assert_eq!(
-            glob_to_regex("*.+(js|ts)"),
-            "^[^/]*\\.(?:js|ts)+(?![\\s\\S])"
-        );
-        assert_eq!(
-            glob_to_regex("*.?(js|ts)"),
-            "^[^/]*\\.(?:js|ts)?(?![\\s\\S])"
-        );
-    }
-
-    #[test]
-    fn globstar_is_segment_aware() {
-        assert_eq!(glob_to_regex("a/**/c"), "^a/(?:[^/]+/)*c(?![\\s\\S])");
-        assert_eq!(glob_to_regex("a/**"), "^a/.*(?![\\s\\S])");
-        assert_eq!(glob_to_regex("a**b"), "^a[^/]*b(?![\\s\\S])");
-    }
-
-    #[test]
-    fn pattern_backslashes_are_separators() {
-        assert_eq!(glob_to_regex("foo\\*"), "^foo/[^/]*(?![\\s\\S])");
     }
 }
 
