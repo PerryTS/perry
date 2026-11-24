@@ -1694,19 +1694,21 @@ mod tests {
                 mutable: false,
                 init: Some(Expr::Array(vec![Expr::Integer(0)], None)),
             },
-            Stmt::Expr(Expr::synthetic_index_set(
+            Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::Integer(0)),
                 Box::new(Expr::Object(Vec::new())),
+                0,
             )),
             Stmt::Let {
                 id: 2,
                 name: "x".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::synthetic_index_get(
+                init: Some(Expr::index_get_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(Expr::Integer(0)),
+                    0,
                 )),
             },
         ];
@@ -1724,7 +1726,7 @@ mod tests {
     #[test]
     fn a_boxed_class_evaluation_owner_binding_keeps_its_shadow_slot() {
         let owner_read =
-            || Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0)));
+            || Expr::index_get_at(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0)), 0);
         let stmts = vec![
             Stmt::Let {
                 id: 1,
@@ -1739,10 +1741,11 @@ mod tests {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Sequence(vec![
-                    Expr::synthetic_index_set(
+                    Expr::index_set_at(
                         Box::new(Expr::LocalGet(1)),
                         Box::new(Expr::Integer(0)),
                         Box::new(Expr::Object(Vec::new())),
+                        0,
                     ),
                     owner_read(),
                 ])),

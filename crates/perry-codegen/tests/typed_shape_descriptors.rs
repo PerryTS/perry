@@ -652,7 +652,7 @@ fn bounded_integer_array_store_module() -> Module {
                 // `js_array_fill_f64_iota_len_extend` — covered by
                 // `numeric_iota_fill_loop_uses_bulk_helper_without_barrier`
                 // below.
-                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                body: vec![Stmt::Expr(Expr::index_set_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(Expr::LocalGet(2)),
                     Box::new(Expr::Binary {
@@ -661,6 +661,7 @@ fn bounded_integer_array_store_module() -> Module {
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::Integer(1)),
                     }),
+                    0,
                 ))],
             },
             Stmt::Return(Some(Expr::LocalGet(1)), 0),
@@ -761,10 +762,11 @@ fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                body: vec![Stmt::Expr(Expr::index_set_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(Expr::LocalGet(2)),
                     Box::new(Expr::LocalGet(2)),
+                    0,
                 ))],
             },
             Stmt::Return(Some(Expr::LocalGet(1)), 0),
@@ -911,10 +913,11 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
                 mutable: true,
                 init: Some(Expr::Array(vec![Expr::Number(0.0)], None)),
             },
-            Stmt::Expr(Expr::synthetic_index_set(
+            Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(2)),
                 Box::new(Expr::Integer(0)),
                 Box::new(Expr::LocalGet(1)),
+                0,
             )),
             Stmt::Return(Some(Expr::LocalGet(2)), 0),
         ],

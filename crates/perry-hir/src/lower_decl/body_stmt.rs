@@ -559,6 +559,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     &named_statics,
                     &computed_keys,
                     &computed_statics,
+                    class_decl.class.span.lo.0,
                 );
                 let template_name = class.name.clone();
                 if fresh_binding {
@@ -2130,16 +2131,17 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         // module-init for-of arm. `use_lazy_iter` implies
                         // `!is_await`, so the await arm is always the index path.
                         let item_expr = if for_of_stmt.is_await {
-                            let raw_item_expr = Expr::synthetic_index_get(
+                            let raw_item_expr = Expr::index_get_at(
                                 Box::new(Expr::LocalGet(arr_id)),
                                 Box::new(Expr::LocalGet(idx_id)),
+                                for_of_stmt.span.lo.0,
                             );
                             Expr::Await(Box::new(raw_item_expr), for_of_stmt.span.lo.0)
                         } else {
                             if let Some(id) = binding_value {
                                 Expr::LocalGet(id)
                             } else {
-                                lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id)
+                                lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id, for_of_stmt.span.lo.0)
                             }
                         };
 
@@ -2255,6 +2257,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                         arr_id,
                                         idx_id,
                                         result_id,
+                                        for_of_stmt.span.lo.0,
                                     )),
                                 }]
                             }
@@ -2270,7 +2273,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     let mut source = if let Some(id) = binding_value {
                         Expr::LocalGet(id)
                     } else {
-                        lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id)
+                        lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id, for_of_stmt.span.lo.0)
                     };
                     if for_of_stmt.is_await && !use_lazy_iter {
                         source = Expr::Await(Box::new(source), for_of_stmt.span.lo.0);
@@ -2435,9 +2438,10 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
 
             // Lower the body and prepend the key binding/assignment
             let mut loop_body = lower_body_stmt(ctx, &for_in_stmt.body)?;
-            let key_source = Expr::synthetic_index_get(
+            let key_source = Expr::index_get_at(
                 Box::new(Expr::LocalGet(keys_id)),
                 Box::new(Expr::LocalGet(idx_id)),
+                for_in_stmt.span.lo.0,
             );
             let binding_stmts =
                 crate::lower::for_head_binding_stmts(ctx, &head_binding, key_source, Type::String)?;

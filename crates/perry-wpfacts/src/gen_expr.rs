@@ -2421,6 +2421,7 @@ impl<'a> Gen<'a> {
                 class_value,
                 captures,
                 env_class,
+                ..
             } => {
                 let cv = self.expr(fx, class_value);
                 let name = env_class.clone().unwrap_or_default();

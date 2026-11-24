@@ -1364,15 +1364,17 @@ fn typed_feedback_guards_array_index_specialization() {
         vec![param(1, "xs", array_ty)],
         Type::Number,
         vec![
-            Stmt::Expr(Expr::synthetic_index_set(
+            Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::Number(0.0)),
                 Box::new(Expr::Number(7.0)),
+                0,
             )),
             Stmt::Return(
-                Some(Expr::synthetic_index_get(
+                Some(Expr::index_get_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(Expr::Number(0.0)),
+                    0,
                 )),
                 0,
             ),
@@ -1492,10 +1494,11 @@ fn typed_feedback_inline_array_writes_note_numeric_downgrade() {
                 mutable: true,
                 init: Some(Expr::Array(vec![Expr::Number(1.0)], None)),
             },
-            Stmt::Expr(Expr::synthetic_index_set(
+            Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(2)),
                 Box::new(Expr::Number(0.0)),
                 Box::new(Expr::String("not-number".to_string())),
+                0,
             )),
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 2,
@@ -1520,7 +1523,7 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
         vec![param(1, "xs", array_ty), param(2, "i", Type::Number)],
         Type::Number,
         vec![Stmt::Return(
-            Some(Expr::synthetic_index_get(
+            Some(Expr::index_get_at(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::Binary {
                     byte_offset: 0,
@@ -1528,6 +1531,7 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::Integer(63)),
                 }),
+                0,
             )),
             0,
         )],
@@ -1560,9 +1564,10 @@ fn profile_replay_selects_numeric_read_with_guard_fallback_and_deterministic_ir(
         vec![param(1, "xs", Type::Array(Box::new(Type::Any)))],
         Type::Any,
         vec![Stmt::Return(
-            Some(Expr::synthetic_index_get(
+            Some(Expr::index_get_at(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::Number(0.0)),
+                0,
             )),
             0,
         )],

@@ -675,7 +675,7 @@ impl SH for Expr {
             Expr::TemplateRaw(e) => { tag(h, 446); e.as_ref().hash(h); }
             Expr::RegisterClassParentDynamic { class_name, parent_expr, } => { tag(h, 447); class_name.hash(h); parent_expr.as_ref().hash(h); }
             Expr::RegisterClassCaptures { class_name, captures } => { tag(h, 12241); class_name.hash(h); for c in captures { c.hash(h); } }
-            Expr::RefreshClassExprCaptures { class_value, captures, env_class } => { tag(h, 12243); class_value.as_ref().hash(h); for c in captures { c.hash(h); } env_class.hash(h); }
+            Expr::RefreshClassExprCaptures { class_value, captures, env_class, .. } => { tag(h, 12243); class_value.as_ref().hash(h); for c in captures { c.hash(h); } env_class.hash(h); }
             Expr::ClassEnvGet { class_name, index, guarded } => { tag(h, 12244); class_name.hash(h); index.hash(h); guarded.hash(h); }
             Expr::ClassEnvSet { class_name, index, value, guarded, publish } => { tag(h, 12245); class_name.hash(h); index.hash(h); value.as_ref().hash(h); guarded.hash(h); publish.hash(h); }
             Expr::ClassEnvStamp { class_name, instance, evaluation } => { tag(h, 12246); class_name.hash(h); instance.as_ref().hash(h); evaluation.as_ref().hash(h); }

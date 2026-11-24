@@ -57,7 +57,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
                     },
                     EnumValue::Computed => Expr::IndexGet {
                         element_offset: 0,
-                        byte_offset: 0,
+                        byte_offset: ident.span.lo.0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(
                             ctx.lookup_local(enum_name).expect("enum binding"),
@@ -195,7 +195,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
     } else if let Some(id) = ctx.lookup_func(&name) {
         Ok(Expr::FuncRef(id))
     } else if ctx.lookup_native_module(&name).is_some() {
-        Ok(native_module_binding_value(ctx, &name))
+        Ok(native_module_binding_value(ctx, &name, ident.span.lo.0))
     } else if let Some(orig_name) = ctx.lookup_imported_func(&name) {
         // Imported function - reference by its original exported name
         // Look up type information if available

@@ -783,7 +783,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 computed_key_temps.push(key_id);
                                 Expr::IndexGet {
                                     element_offset: 0,
-                                    byte_offset: 0,
+                                    byte_offset: computed.span.lo.0,
                                     byte_end: 0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     index: Box::new(Expr::LocalGet(key_id)),
@@ -950,7 +950,7 @@ pub(crate) fn lower_pattern_binding_into(
                             for key_id in &computed_key_temps {
                                 result.push(Stmt::Expr(Expr::Delete(Box::new(Expr::IndexGet {
                                     element_offset: 0,
-                                    byte_offset: 0,
+                                    byte_offset: rest.span.lo.0,
                                     byte_end: 0,
                                     object: Box::new(Expr::LocalGet(rest_id)),
                                     index: Box::new(Expr::LocalGet(*key_id)),

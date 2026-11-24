@@ -553,9 +553,10 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
 }
 
 fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
-    let symbol_read = Expr::synthetic_index_get(
+    let symbol_read = Expr::index_get_at(
         Box::new(Expr::LocalGet(ITEMS)),
         Box::new(Expr::LocalGet(SYMBOL)),
+        0,
     );
     let result = match field {
         Some(property) => Expr::PropertyGet {
@@ -666,9 +667,10 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
                 name: "result".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::synthetic_index_get(
+                init: Some(Expr::index_get_at(
                     Box::new(Expr::LocalGet(ITEMS)),
                     Box::new(Expr::Integer(0)),
+                    0,
                 )),
             },
         ],

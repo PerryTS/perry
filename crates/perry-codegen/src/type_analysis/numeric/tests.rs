@@ -958,9 +958,10 @@ mod symbol_keyed_element_reads {
                     name: "f".to_string(),
                     ty: Type::Any,
                     mutable: false,
-                    init: Some(Expr::synthetic_index_get(
+                    init: Some(Expr::index_get_at(
                         Box::new(Expr::LocalGet(1)),
                         Box::new(Expr::LocalGet(2)),
+                        0,
                     )),
                 },
                 truthy_return(3),
@@ -1016,9 +1017,10 @@ mod symbol_keyed_element_reads {
                     name: "v".to_string(),
                     ty: Type::Any,
                     mutable: false,
-                    init: Some(Expr::synthetic_index_get(
+                    init: Some(Expr::index_get_at(
                         Box::new(Expr::LocalGet(1)),
                         Box::new(Expr::LocalGet(2)),
+                        0,
                     )),
                 },
                 truthy_return(3),

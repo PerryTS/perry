@@ -539,9 +539,10 @@ fn the_class_keyed_arm_keeps_the_full_property_denylist() {
                 left: Box::new(Expr::LocalGet(SUM_ID)),
                 right: Box::new(Expr::PropertyGet {
                     byte_end: 0,
-                    object: Box::new(Expr::synthetic_index_get(
+                    object: Box::new(Expr::index_get_at(
                         Box::new(Expr::LocalGet(ARRAY_ID)),
                         Box::new(Expr::LocalGet(COUNTER_ID)),
+                        0,
                     )),
                     property: "length".to_string(),
                     byte_offset: 0,

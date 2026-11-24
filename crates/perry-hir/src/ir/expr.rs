@@ -629,6 +629,9 @@ pub enum Expr {
         /// The refresh then also rewrites the environment slots, so members
         /// observe a captured binding initialized after the class evaluated.
         env_class: Option<String>,
+        /// The class construct's offset (diagnostics and op identity);
+        /// ignored by stable hashing.
+        byte_offset: u32,
     },
 
     /// Read slot `index` of a class's capture ENVIRONMENT: the per-class
@@ -3095,25 +3098,33 @@ impl Expr {
 }
 
 impl Expr {
-    /// A compiler-owned indexed read with no source or verdict identity.
-    pub fn synthetic_index_get(object: Box<Expr>, index: Box<Expr>) -> Self {
+    /// A compiler-built indexed read standing at its construct's `byte_offset`
+    /// (diagnostics and op identity). It is no element site: element facts
+    /// identify source element reads only.
+    pub fn index_get_at(object: Box<Expr>, index: Box<Expr>, byte_offset: u32) -> Self {
         Self::IndexGet {
             object,
             index,
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
         }
     }
 
-    /// A compiler-owned indexed write with no source or verdict identity.
-    pub fn synthetic_index_set(object: Box<Expr>, index: Box<Expr>, value: Box<Expr>) -> Self {
+    /// A compiler-built indexed write standing at its construct's
+    /// `byte_offset`; like [`Expr::index_get_at`], no element site.
+    pub fn index_set_at(
+        object: Box<Expr>,
+        index: Box<Expr>,
+        value: Box<Expr>,
+        byte_offset: u32,
+    ) -> Self {
         Self::IndexSet {
             object,
             index,
             value,
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
         }
     }

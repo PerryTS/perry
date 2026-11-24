@@ -968,7 +968,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         // property is the callable builtin instead of being dropped
                         // (which left it `undefined` — yargs shim.path.relative).
                         (
-                            super::lower_expr::native_module_binding_value(ctx, &name),
+                            super::lower_expr::native_module_binding_value(ctx, &name, ident.span.lo.0),
                             Type::Any,
                         )
                     } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
@@ -1621,7 +1621,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         // #5242: native-module-bound shorthand (`{ relative }` from
                         // `import { relative } from 'path'`). Resolve to the builtin
                         // value instead of dropping the property.
-                        super::lower_expr::native_module_binding_value(ctx, &name)
+                        super::lower_expr::native_module_binding_value(ctx, &name, ident.span.lo.0)
                     } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                         value
                     } else {

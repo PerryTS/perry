@@ -882,9 +882,10 @@ fn bigint_typed_view_addition_is_not_numeric_by_construction() {
                 init: Some(Expr::Binary {
                     byte_offset: 0,
                     op: BinaryOp::Add,
-                    left: Box::new(Expr::synthetic_index_get(
+                    left: Box::new(Expr::index_get_at(
                         Box::new(Expr::LocalGet(view_id)),
                         Box::new(Expr::Integer(0)),
+                        0,
                     )),
                     right: Box::new(Expr::Integer(1)),
                 }),

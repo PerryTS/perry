@@ -390,7 +390,7 @@ fn emit_for_of_pattern_binding_indexed(
                 }
                 let elem_src = Expr::IndexGet {
                     element_offset: 0,
-                    byte_offset: 0,
+                    byte_offset: elem_pat.span().lo.0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(tmp_id)),
                     index: Box::new(Expr::Number(idx as f64)),
