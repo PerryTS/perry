@@ -1519,6 +1519,7 @@ pub(crate) fn hoist_compound_member_assign(
             };
             let id = ctx.fresh_local();
             stmts.push(Stmt::Let {
+                byte_offset: assign.span.lo.0,
                 id,
                 name: format!("__cmpd_{}_{}", tag, id),
                 ty,

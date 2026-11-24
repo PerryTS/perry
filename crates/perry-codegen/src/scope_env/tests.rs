@@ -7,6 +7,7 @@ use super::{group_scope_boxes, ScopeMap};
 
 fn let_num(id: u32, v: f64) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Number,
@@ -92,6 +93,7 @@ fn wide_body(n: u32) -> Vec<Stmt> {
     let ids: Vec<u32> = (10..10 + n).collect();
     let mut body: Vec<Stmt> = ids.iter().map(|&id| let_num(id, id as f64)).collect();
     body.push(Stmt::Let {
+        byte_offset: 0,
         id: 9,
         name: "f".to_string(),
         ty: Type::Any,
@@ -341,6 +343,7 @@ fn a_reassigned_scoped_array_keeps_only_a_guarded_read_claim() {
     }
     let mut module = module_with(vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "items".into(),
             ty: Type::Array(Box::new(Type::Any)),
@@ -513,6 +516,7 @@ fn group_root_clears_around_write(late: u32) -> (usize, usize) {
         let_num(10, 1.0),
         let_num(11, 2.0),
         Stmt::Let {
+            byte_offset: 0,
             id: 9,
             name: "f".to_string(),
             ty: Type::Any,

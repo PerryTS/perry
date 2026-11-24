@@ -19,6 +19,7 @@ const R: u32 = 3;
 
 fn let_any(id: u32, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,

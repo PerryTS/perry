@@ -71,6 +71,7 @@ fn mix_write() -> Stmt {
 
 fn counter_let() -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: I,
         name: "i".to_string(),
         ty: Type::Number,
@@ -123,6 +124,7 @@ fn module_ir_with(
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: H,
                 name: "h".to_string(),
                 ty: Type::Any,

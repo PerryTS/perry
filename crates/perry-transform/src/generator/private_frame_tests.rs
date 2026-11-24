@@ -25,6 +25,7 @@ fn fixture(ty: Type) -> Module {
     });
     m.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "it".into(),
             ty: Type::Any,
@@ -69,6 +70,7 @@ fn private_frame_escape_and_alias_keep_standalone_record() {
     for escape in [
         Stmt::Return(Some(Expr::LocalGet(10)), 0),
         Stmt::Let {
+            byte_offset: 0,
             id: 12,
             name: "alias".into(),
             ty: Type::Any,
@@ -256,6 +258,7 @@ fn private_frame_logging_requires_primitive_writes_not_a_number_annotation() {
     ] {
         let mut m = fixture(Type::Any);
         m.init.push(Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "logged".into(),
             ty: Type::Number,

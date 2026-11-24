@@ -49,6 +49,7 @@ fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entr
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 102,
                 name: "index".to_string(),
                 ty: Type::Number,
@@ -83,6 +84,7 @@ fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entr
     });
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "nodes".to_string(),
             ty: Type::Number,
@@ -90,6 +92,7 @@ fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entr
             init: Some(Expr::Integer(10_000)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "values".to_string(),
             ty: Type::Named("Float64Array".to_string()),

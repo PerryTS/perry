@@ -7,6 +7,7 @@ fn comparison_ir(init: Expr) -> String {
         "scopebox_identity",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "fixed".into(),
                 ty: Type::Object(Default::default()),
@@ -14,6 +15,7 @@ fn comparison_ir(init: Expr) -> String {
                 init: Some(init),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "other".into(),
                 ty: Type::Any,
@@ -72,6 +74,7 @@ fn readonly_array_claim_selects_a_runtime_guarded_indexed_read() {
         "scopebox_readonly",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "items".into(),
                 ty: Type::Generic {
@@ -107,6 +110,7 @@ fn a_local_hole_fill_checks_capacity_length_and_prototype() {
         "scopebox_hole_fill",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "items".into(),
                 ty: Type::Array(Box::new(Type::Any)),

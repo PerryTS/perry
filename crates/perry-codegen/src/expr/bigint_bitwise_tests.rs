@@ -85,6 +85,7 @@ fn function_ir(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> String {
 fn const_then_return(init: Expr, ty: Type) -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id: X,
             name: "x".to_string(),
             ty,

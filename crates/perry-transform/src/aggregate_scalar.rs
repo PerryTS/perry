@@ -528,6 +528,7 @@ fn scalarize_return_record_candidate(
         source_span_remaps.push((record_id, id));
         field_locals.insert(field.clone(), id);
         replacement_declarations.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id,
             name: format!("__perry_return_record_{record_id}_{index}"),
             ty: Type::Any,
@@ -1305,6 +1306,7 @@ fn scalarize_candidate(
             *next_local_id = next_local_id.saturating_add(1);
             source_span_remaps.push((array_id, id));
             scalar_lets.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name: format!(
                     "__perry_scalar_aggregate_{array_id}_{element_index}_{property_index}"
@@ -1771,6 +1773,7 @@ mod tests {
         let mut module = Module::new("aggregate-scalar.ts");
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "values".to_string(),
                 ty: Type::Any,
@@ -1778,6 +1781,7 @@ mod tests {
                 init: Some(Expr::Array(vec![object(10), object(20)], None)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "first".to_string(),
                 ty: Type::Any,
@@ -1944,6 +1948,7 @@ mod tests {
         };
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "result".to_string(),
                 ty: Type::Any,

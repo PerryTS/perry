@@ -29,6 +29,7 @@ fn compile(captures: u32, target: &str) -> String {
     let mut module = Module::new("fixed_birth_contract");
     let mut body: Vec<_> = (0..captures)
         .map(|id| Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("cap{id}"),
             ty: Type::Any,

@@ -304,6 +304,7 @@ mod tests {
     #[test]
     fn generator_one_state_locals_do_not_displace_shared_or_cross_state_storage() {
         let declare = |id| Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("local{id}"),
             ty: Type::Number,
@@ -350,6 +351,7 @@ mod tests {
                 num: 1,
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 1,
                         name: "client".into(),
                         ty: Type::Any,

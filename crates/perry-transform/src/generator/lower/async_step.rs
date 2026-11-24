@@ -104,6 +104,7 @@ pub fn build_async_step_driver_direct(
     // becomes a local of step; we initialize it from value_param_id
     // before running the body.
     let next_value_let = Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: next_param_id,
         name: "__val".to_string(),
         ty: any_ty.clone(),
@@ -129,6 +130,7 @@ pub fn build_async_step_driver_direct(
     let throw_arm: Vec<Stmt> = if let Some(mut routing) = throw_routing {
         rewrite_returns_to_labeled_break(&mut routing, &step_done_label);
         let mut body = vec![Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: throw_param_id,
             name: "__throw_val".to_string(),
             ty: any_ty.clone(),
@@ -235,6 +237,7 @@ pub fn build_async_step_driver_direct(
     // decline, which `AsyncStepDeclined` tests.
     let continue_in_place = vec![
         Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: awaited_id,
             name: "__step_awaited".to_string(),
             ty: any_ty.clone(),
@@ -242,6 +245,7 @@ pub fn build_async_step_driver_direct(
             init: Some(Expr::IterResultGetValue),
         },
         Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: resumed_id,
             name: "__step_resumed".to_string(),
             ty: any_ty.clone(),
@@ -315,6 +319,7 @@ pub fn build_async_step_driver_direct(
     };
     let step_body: Vec<Stmt> = vec![
         Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: step_self_id,
             name: "__step_self".to_string(),
             ty: any_ty.clone(),
@@ -379,6 +384,7 @@ pub fn build_async_step_driver_direct(
     let mut wrapper: Vec<Stmt> = Vec::with_capacity(2);
     wrapper.extend([
         Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: step_id,
             name: "__async_step".to_string(),
             ty: any_ty.clone(),

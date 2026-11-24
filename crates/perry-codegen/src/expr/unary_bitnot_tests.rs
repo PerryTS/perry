@@ -12,6 +12,7 @@ const RESULT: u32 = 3;
 
 fn erased(id: u32, name: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -22,6 +23,7 @@ fn erased(id: u32, name: &str) -> Stmt {
 
 fn result(expr: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: RESULT,
         name: "result".to_string(),
         ty: Type::Any,
@@ -154,6 +156,7 @@ fn int32_locals_fn_ir(ret: Expr) -> String {
         arguments_object: None,
     };
     let int32_const = |id: u32, from: u32| Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("l{id}"),
         ty: Type::Number,

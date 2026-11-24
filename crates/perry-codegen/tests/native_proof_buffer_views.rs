@@ -308,6 +308,7 @@ fn pod_type(fields: &[(&str, Type)]) -> Type {
 
 fn pod_let(id: u32, name: &str, ty: Type, fields: Vec<(&str, Expr)>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -323,6 +324,7 @@ fn pod_let(id: u32, name: &str, ty: Type, fields: Vec<(&str, Expr)>) -> Stmt {
 
 fn number_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -333,6 +335,7 @@ fn number_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
 
 fn buffer_let(id: u32, name: &str, size: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Named("Buffer".to_string()),
@@ -347,6 +350,7 @@ fn buffer_let(id: u32, name: &str, size: Expr) -> Stmt {
 
 fn typed_array_let(id: u32, name: &str, class_name: &str, kind: u8, length: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Named(class_name.to_string()),
@@ -360,6 +364,7 @@ fn typed_array_let(id: u32, name: &str, class_name: &str, kind: u8, length: Expr
 
 fn native_arena_owner_let(id: u32, name: &str, byte_length: Expr, mutable: bool) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -378,6 +383,7 @@ fn native_arena_view_let(
     length: Expr,
 ) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Named(class_name.to_string()),
@@ -393,6 +399,7 @@ fn native_arena_view_let(
 
 fn native_arena_owner_alias_let(id: u32, name: &str, owner_id: u32, mutable: bool) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -421,6 +428,7 @@ fn closure_type(return_type: Type) -> Type {
 
 fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Array(Box::new(Type::Number)),
@@ -1303,6 +1311,7 @@ fn bigint_typed_view_addition_keeps_dynamic_bigint_dispatch() {
             vec![
                 typed_array_let(1, "view", class_name, kind, int(1)),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "sum".to_string(),
                     ty: Type::Any,
@@ -1757,6 +1766,7 @@ fn native_owned_closure_capture_through_owner_alias_invalidates_views() {
             ),
             native_arena_owner_alias_let(3, "alias", 1, false),
             Stmt::Let {
+                byte_offset: 0,
                 id: 4,
                 name: "f".to_string(),
                 ty: closure_type(Type::Number),
@@ -1871,6 +1881,7 @@ fn uint8array_const_local_length_uses_inline_byte_get_set() {
         vec![
             number_let(1, "size", false, int(16)),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "buf".to_string(),
                 ty: Type::Named("Uint8Array".to_string()),

@@ -16,6 +16,7 @@ impl SH for Stmt {
                 ty,
                 mutable,
                 init,
+                ..
             } => {
                 tag(h, 0);
                 id.hash(h);

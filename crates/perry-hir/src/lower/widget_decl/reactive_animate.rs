@@ -186,6 +186,7 @@ pub(crate) fn try_desugar_reactive_animate(
 
     let mut outer_body: Vec<Stmt> = Vec::new();
     outer_body.push(Stmt::Let {
+        byte_offset: call.span.lo.0,
         id: widget_id,
         name: "__perry_anim_widget".to_string(),
         ty: Type::Any,

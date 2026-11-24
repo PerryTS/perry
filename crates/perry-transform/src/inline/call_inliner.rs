@@ -532,6 +532,7 @@ pub fn inline_calls_in_stmts(
                                 if let Stmt::Return(Some(ret_expr), _) = last {
                                     let e = std::mem::replace(ret_expr, Expr::Undefined);
                                     *last = Stmt::Let {
+                                        byte_offset: 0, /*HPOS*/
                                         id: let_id,
                                         name: let_name.clone(),
                                         ty: let_ty.clone(),
@@ -551,6 +552,7 @@ pub fn inline_calls_in_stmts(
                             convert_returns_in_stmts(&mut inlined_stmts, let_id);
                             let mut wrapped: Vec<Stmt> = Vec::with_capacity(2);
                             wrapped.push(Stmt::Let {
+                                byte_offset: 0, /*HPOS*/
                                 id: let_id,
                                 name: let_name.clone(),
                                 ty: let_ty.clone(),
@@ -1611,6 +1613,7 @@ pub fn build_inline_arg_bindings(
                 let fresh = *next_local_id;
                 *next_local_id += 1;
                 setup.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: fresh,
                     name: param.name.clone(),
                     ty: param.ty.clone(),
@@ -1623,6 +1626,7 @@ pub fn build_inline_arg_bindings(
             let fresh = *next_local_id;
             *next_local_id += 1;
             setup.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: fresh,
                 name: param.name.clone(),
                 ty: param.ty.clone(),
@@ -1782,6 +1786,7 @@ pub fn try_inline_simple_call(
                                     ty,
                                     mutable,
                                     init: Some(init_expr),
+                                    ..
                                 } = stmt
                                 {
                                     let new_id =
@@ -1793,6 +1798,7 @@ pub fn try_inline_simple_call(
                                     let mut new_init = init_expr.clone();
                                     substitute_locals(&mut new_init, &param_map, next_local_id);
                                     setup.push(Stmt::Let {
+                                        byte_offset: 0, /*HPOS*/
                                         id: new_id,
                                         name: name.clone(),
                                         ty: ty.clone(),

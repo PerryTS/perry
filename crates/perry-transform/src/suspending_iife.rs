@@ -71,6 +71,7 @@ pub(crate) fn inline(
     let param = &params[0];
     let id = param.id;
     let mut steps = vec![Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name: param.name.clone(),
         ty: Type::Any,

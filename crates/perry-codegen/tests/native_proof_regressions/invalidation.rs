@@ -530,6 +530,7 @@ fn inclusive_array_length_write_uses_extension_capable_index_set_path() {
 
 fn array_alias_let(id: u32, name: &str, source_id: u32) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Array(Box::new(Type::Number)),
@@ -824,6 +825,7 @@ fn guarded_put_value_store_loop_accepts_conservative_preloop_call_hazard() {
 fn mixed_layout_numeric_window_loop_uses_transactional_bulk_helper() {
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "arr".to_string(),
             ty: Type::Array(Box::new(Type::Any)),
@@ -862,6 +864,7 @@ fn mixed_layout_numeric_window_loop_uses_transactional_bulk_helper() {
 fn mixed_layout_numeric_window_accepts_runtime_validated_start_expression() {
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "arr".to_string(),
             ty: Type::Array(Box::new(Type::Any)),
@@ -869,6 +872,7 @@ fn mixed_layout_numeric_window_accepts_runtime_validated_start_expression() {
             init: Some(Expr::Array(vec![int(1), int(2), int(3)], None)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "offset".to_string(),
             ty: Type::Any,
@@ -988,6 +992,7 @@ fn indirect_array_alias_from_container_blocks_length_and_bounds_proofs() {
     let body = vec![
         number_array_let(1, "arr", vec![0, 0, 0]),
         Stmt::Let {
+            byte_offset: 0,
             id: 5,
             name: "box".to_string(),
             ty: Type::Array(Box::new(Type::Array(Box::new(Type::Number)))),
@@ -999,6 +1004,7 @@ fn indirect_array_alias_from_container_blocks_length_and_bounds_proofs() {
             length(1),
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 6,
                     name: "alias".to_string(),
                     ty: Type::Array(Box::new(Type::Number)),

@@ -223,6 +223,7 @@ fn reflect_script_var_update_expr(
             let temp_id = *next_local_id;
             *next_local_id += 1;
             temp_decls.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: temp_id,
                 name: format!("__perry_script_var_postfix_{temp_id}"),
                 ty: Type::Any,
@@ -939,6 +940,7 @@ pub fn lower_module_full_with_platform_globals(
                     ctx.var_hoisted_ids.insert(local_id);
                 }
                 module.init.push(Stmt::Let {
+                    byte_offset: fn_decl.function.span.lo.0,
                     id: local_id,
                     name: func_name.clone(),
                     ty: Type::Any,
@@ -1169,6 +1171,7 @@ pub fn lower_module_full_with_platform_globals(
                 // The nested `Stmt::Let` later reuses this slot via the
                 // redeclaration → LocalSet path in codegen's lower_let.
                 module.init.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id,
                     name,
                     ty: Type::Any,
@@ -1252,6 +1255,7 @@ pub fn lower_module_full_with_platform_globals(
                 module.annexb_global_undefined_names.push(name.clone());
             }
             module.init.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name: name.clone(),
                 ty: Type::Any,
@@ -1586,6 +1590,7 @@ pub fn lower_module_full_with_platform_globals(
                     with_implicit_unset_let(*id, name.clone())
                 } else {
                     Stmt::Let {
+                        byte_offset: 0, /*HPOS*/
                         id: *id,
                         name: name.clone(),
                         ty: Type::Any,
@@ -1606,6 +1611,7 @@ pub fn lower_module_full_with_platform_globals(
         module.init.insert(
             0,
             Stmt::Let {
+                byte_offset: require_offset,
                 id,
                 name: format!("__perry_import_meta_require_{id}"),
                 ty: Type::Any,

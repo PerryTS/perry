@@ -433,6 +433,7 @@ fn try_rewrite_single_stmt(
                     byte_offset: call_offset,
                     ..
                 }),
+            ..
         } => match callee.as_ref() {
             Expr::FuncRef(fid) if producers.contains_key(fid) => {
                 let info = producers.get(fid)?;
@@ -455,6 +456,7 @@ fn try_rewrite_single_stmt(
                     }),
                 ));
                 let let_stmt = Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: *id,
                     name: name.clone(),
                     ty: Type::Array(Box::new(info.elem_ty.clone())),

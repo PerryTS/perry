@@ -98,6 +98,7 @@ fn checked_read_method() -> Function {
                 else_branch: None,
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: VALUE_ID,
                 name: "value".to_string(),
                 ty: Type::Any,
@@ -170,6 +171,7 @@ fn shaped_reader_class() -> Class {
         Type::Any,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 14,
                 name: "value".to_string(),
                 ty: Type::Any,
@@ -232,6 +234,7 @@ fn shaped_push_class() -> Class {
             // Give the method selector a constructive nonnegative-index use;
             // the real SparseSet method has the same proof through sparse[x].
             Stmt::Let {
+                byte_offset: 0,
                 id: OBSERVED_ID,
                 name: "observed".to_string(),
                 ty: Type::Any,
@@ -314,6 +317,7 @@ fn fixture() -> Module {
         vec![
             // A literal is a call-site proof for the clone.
             Stmt::Let {
+                byte_offset: 0,
                 id: 4,
                 name: "proven".to_string(),
                 ty: Type::Any,
@@ -327,6 +331,7 @@ fn fixture() -> Module {
             // Negative and fractional constants are known precisely, but do
             // not satisfy the clone's nonnegative-i32 call boundary.
             Stmt::Let {
+                byte_offset: 0,
                 id: 5,
                 name: "negative".to_string(),
                 ty: Type::Any,
@@ -338,6 +343,7 @@ fn fixture() -> Module {
                 )),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 6,
                 name: "fractional".to_string(),
                 ty: Type::Any,
@@ -540,6 +546,7 @@ fn emit_versioned_checked_reader_loop() -> String {
         Type::Void,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: LIMIT,
                 name: "limit".to_string(),
                 ty: Type::Number,
@@ -553,6 +560,7 @@ fn emit_versioned_checked_reader_loop() -> String {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: COUNTER,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -572,6 +580,7 @@ fn emit_versioned_checked_reader_loop() -> String {
                 }),
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: ENTITY,
                         name: "entity".to_string(),
                         ty: Type::Any,
@@ -926,6 +935,7 @@ fn selector_does_not_guard_an_object_whose_field_produces_the_index() {
         Type::Any,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: DERIVED_ID,
                 name: "derived".to_string(),
                 ty: Type::Any,
@@ -958,6 +968,7 @@ fn selector_does_not_guard_an_object_whose_field_produces_the_index() {
     numeric_flow.name = "fromNumber".to_string();
     numeric_flow.params[0].ty = Type::Number;
     numeric_flow.body[0] = Stmt::Let {
+        byte_offset: 0,
         id: DERIVED_ID,
         name: "derived".to_string(),
         ty: Type::Number,

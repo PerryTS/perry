@@ -11,6 +11,7 @@ const LIAR: u32 = 3;
 
 fn proven_flag() -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: FLAG,
         name: "flag".to_string(),
         ty: Type::Boolean,
@@ -21,6 +22,7 @@ fn proven_flag() -> Stmt {
 
 fn result(expr: Expr, ty: Type) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: RESULT,
         name: "result".to_string(),
         ty,
@@ -96,6 +98,7 @@ fn proven_boolean_compare_rejects_declared_only_nested_add() {
         vec![
             proven_flag(),
             Stmt::Let {
+                byte_offset: 0,
                 id: LIAR,
                 name: "liar".to_string(),
                 ty: Type::Number,

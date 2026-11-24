@@ -46,6 +46,7 @@ fn read_ir_shape(class: &str, dedicated: bool, global: bool, key: Expr, addition
     };
     if global {
         module.init.push(Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "table".into(),
             ty: Type::Named(class.into()),

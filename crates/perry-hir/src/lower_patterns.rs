@@ -1038,6 +1038,7 @@ pub(crate) fn predeclare_implicit_assignment_targets(
         };
         if ctx.scope_depth == 0 || !ctx.sloppy_implicit_global_ids.contains(&id) {
             stmts.push(Stmt::Let {
+                byte_offset: expr.span().lo.0,
                 id,
                 name,
                 ty: Type::Any,

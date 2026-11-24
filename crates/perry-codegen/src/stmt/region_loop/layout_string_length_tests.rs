@@ -49,6 +49,7 @@ fn sum_lengths_ir_with(tree: Expr) -> String {
     ];
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 4,
             name: "h".into(),
             ty: Type::Number,
@@ -57,6 +58,7 @@ fn sum_lengths_ir_with(tree: Expr) -> String {
         },
         Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: 5,
                 name: "k".into(),
                 ty: Type::Number,

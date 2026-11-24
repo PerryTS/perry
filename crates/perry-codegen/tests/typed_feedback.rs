@@ -1310,6 +1310,7 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
         Type::Number,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "cb".to_string(),
                 ty: closure_ty,
@@ -1402,6 +1403,7 @@ fn typed_feedback_guards_numeric_array_push_specialization() {
         array_ty.clone(),
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "xs".to_string(),
                 ty: array_ty,
@@ -1488,6 +1490,7 @@ fn typed_feedback_inline_array_writes_note_numeric_downgrade() {
         Type::Any,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "xs".to_string(),
                 ty: array_ty,

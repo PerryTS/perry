@@ -236,6 +236,7 @@ mod tests {
         };
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 20,
                 name: "source_alias".into(),
                 ty: Type::Any,

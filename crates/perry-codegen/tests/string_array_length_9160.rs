@@ -41,6 +41,7 @@ fn sum_lengths() -> Function {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: TOTAL,
                 name: "total".to_string(),
                 ty: Type::Number,
@@ -49,6 +50,7 @@ fn sum_lengths() -> Function {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: COUNTER,
                     name: "i".to_string(),
                     ty: Type::Number,

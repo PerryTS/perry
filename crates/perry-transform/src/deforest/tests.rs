@@ -15,6 +15,7 @@ fn detects_simple_producer() {
         return_type: Type::Array(Box::new(Type::Number)),
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "out".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -98,6 +99,7 @@ fn synthetic_out_params_are_assigned_by_function_id() {
     first.id = 2;
     first.name = "second".to_string();
     first.body[0] = Stmt::Let {
+        byte_offset: 0,
         id: 20,
         name: "out2".to_string(),
         ty: Type::Array(Box::new(Type::Number)),
@@ -172,6 +174,7 @@ fn rejects_producer_called_inside_closure() {
         body: vec![
             // const v = helper();
             Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "v".to_string(),
                 ty: Type::Any,
@@ -215,6 +218,7 @@ fn rejects_producer_called_inside_closure() {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 31,
                 name: "generate".to_string(),
                 ty: Type::Any,
@@ -269,6 +273,7 @@ fn still_deforests_when_caller_is_not_a_closure() {
         params: vec![],
         return_type: Type::Any,
         body: vec![Stmt::Let {
+            byte_offset: 0,
             id: 30,
             name: "v".to_string(),
             ty: Type::Any,
@@ -334,6 +339,7 @@ fn deforests_producer_called_from_class_method() {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "v".to_string(),
                 ty: Type::Any,
@@ -480,6 +486,7 @@ fn producer_and_plain_caller() -> Module {
         return_type: Type::Array(Box::new(Type::Number)),
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "v".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -603,6 +610,7 @@ fn rejects_deforest_when_class_method_uses_super() {
         body: vec![
             // const v = helper();
             Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "v".to_string(),
                 ty: Type::Any,
@@ -700,6 +708,7 @@ fn still_deforests_when_method_has_no_super() {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "v".to_string(),
                 ty: Type::Any,
@@ -862,6 +871,7 @@ fn the_recursive_fuse_inside_a_producer_body_counts() {
     producer.body.insert(
         2,
         Stmt::Let {
+            byte_offset: 0,
             id: 40,
             name: "child".to_string(),
             ty: Type::Array(Box::new(Type::Number)),
@@ -879,6 +889,7 @@ fn the_recursive_fuse_inside_a_producer_body_counts() {
         3,
         Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: 41,
                 name: "j".to_string(),
                 ty: Type::Number,
@@ -951,6 +962,7 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: outer,
                 name: "outer".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -958,6 +970,7 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
                 init: Some(Expr::Array(vec![], None)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: child,
                 name: "child".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -972,6 +985,7 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: j,
                     name: "j".to_string(),
                     ty: Type::Number,
@@ -1027,6 +1041,7 @@ fn make_simple_producer() -> Function {
         return_type: Type::Array(Box::new(Type::Number)),
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "out".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),

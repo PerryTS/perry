@@ -528,6 +528,7 @@ mod tests {
     #[test]
     fn rebound_parameter_is_not_summarized() {
         let body = vec![Stmt::Let {
+            byte_offset: 0,
             id: PARAM_SIZE,
             name: "size".to_string(),
             ty: Type::Number,

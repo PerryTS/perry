@@ -12,6 +12,7 @@ const RESULT: u32 = 4;
 
 fn any_local(id: u32, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -23,6 +24,7 @@ fn any_local(id: u32, name: &str, init: Expr) -> Stmt {
 fn erased_bigint_local(id: u32, name: &str, value: &str) -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             ty: Type::Any,
@@ -64,6 +66,7 @@ fn dynamic_locals() -> Vec<Stmt> {
 
 fn result(expr: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: RESULT,
         name: "result".to_string(),
         ty: Type::Any,
@@ -276,6 +279,7 @@ fn left_chain_over_an_assigned_uncaptured_let_keeps_the_fold() {
     // assigned, but only by this activation.
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: Z,
             name: "z".into(),
             ty: Type::Any,
@@ -332,6 +336,7 @@ fn left_chain_declines_when_a_late_leaf_is_captured_and_assigned() {
     // local exemption: `z` is a local, but not one only this frame writes.
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: Z,
             name: "z".into(),
             ty: Type::Any,
@@ -339,6 +344,7 @@ fn left_chain_declines_when_a_late_leaf_is_captured_and_assigned() {
             init: Some(Expr::Integer(1)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: G,
             name: "g".into(),
             ty: Type::Any,

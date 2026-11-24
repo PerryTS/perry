@@ -212,6 +212,7 @@ fn hoist_yields_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
         let id = alloc_local(next_id);
         let original = std::mem::replace(expr, Expr::LocalGet(id));
         hoisted.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id,
             name: format!("__ygen_{}", id),
             ty: Type::Any,
@@ -343,6 +344,7 @@ fn lift_conditional_with_yield_branches(
         hoist_yields_in_expr_full(condition.as_mut(), next_id, hoisted);
 
         hoisted.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: temp_id,
             name: format!("__ycond_{}", temp_id),
             ty: Type::Any,
@@ -392,6 +394,7 @@ fn lift_logical_with_yield_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: 
 
         // let t = <left>;
         hoisted.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: temp_id,
             name: format!("__ylogic_{}", temp_id),
             ty: Type::Any,
@@ -475,6 +478,7 @@ fn lift_sequence_with_yield(expr: &mut Expr, next_id: &mut LocalId, hoisted: &mu
         stmts.push(Stmt::Expr(item));
     }
     stmts.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: temp_id,
         name: format!("__yseq_{}", temp_id),
         ty: Type::Any,

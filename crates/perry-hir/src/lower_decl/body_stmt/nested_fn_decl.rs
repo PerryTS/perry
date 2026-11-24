@@ -329,6 +329,7 @@ pub(super) fn lower_nested_fn_decl(
         is_strict,
     };
     result.push(Stmt::Let {
+        byte_offset: fn_decl.function.span.lo.0,
         id: local_id,
         name: func_name,
         ty: Type::Any,

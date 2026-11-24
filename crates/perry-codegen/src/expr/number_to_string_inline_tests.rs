@@ -199,6 +199,7 @@ fn a_string_coerced_local_reads_char_codes_inline() {
     for (label, init) in inits {
         let body = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: STR_ID,
                 name: "s".to_string(),
                 ty: Type::String,

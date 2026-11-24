@@ -22,6 +22,7 @@ fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
 }
 fn let_(id: u32, init: Expr, mutable: bool) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Any,

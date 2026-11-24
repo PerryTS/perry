@@ -6,6 +6,7 @@ use perry_hir::{
 
 fn let_stmt(id: u32, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Any,

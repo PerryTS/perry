@@ -57,6 +57,7 @@ impl IteratorRecordPlan {
             };
             ctx.locals.push((name.clone(), id, ty.clone()));
             out.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name,
                 ty,
@@ -128,6 +129,7 @@ impl IteratorRecordPlan {
             let name = format!("__iterator_literal_{id}");
             ctx.locals.push((name.clone(), id, Type::Any));
             out.push(Stmt::Let {
+                byte_offset,
                 id,
                 name,
                 ty: Type::Any,
@@ -140,6 +142,7 @@ impl IteratorRecordPlan {
         let name = format!("__iterator_record_{use_iter}");
         ctx.locals.push((name.clone(), use_iter, Type::Boolean));
         out.push(Stmt::Let {
+            byte_offset,
             id: use_iter,
             name,
             ty: Type::Boolean,
@@ -150,6 +153,7 @@ impl IteratorRecordPlan {
         let name = format!("__iterator_record_{source}");
         ctx.locals.push((name.clone(), source, Type::Any));
         out.push(Stmt::Let {
+            byte_offset,
             id: source,
             name,
             ty: Type::Any,
@@ -174,6 +178,7 @@ impl IteratorRecordPlan {
         let name = format!("__idx_{index}");
         ctx.locals.push((name.clone(), index, Type::Number));
         out.push(Stmt::Let {
+            byte_offset,
             id: index,
             name,
             ty: Type::Number,
@@ -564,6 +569,7 @@ impl IteratorRecordPlan {
         });
         vec![
             Stmt::Let {
+                byte_offset: self.byte_offset,
                 id: next,
                 name,
                 ty: Type::Any,
@@ -571,6 +577,7 @@ impl IteratorRecordPlan {
                 init: Some(self.next_init(iter_id)),
             },
             Stmt::Let {
+                byte_offset: self.byte_offset,
                 id: value_id,
                 name: format!("__iterator_value_{value_id}"),
                 ty: Type::Any,
@@ -582,6 +589,7 @@ impl IteratorRecordPlan {
                 byte_offset: self.byte_offset,
                 body: vec![Stmt::For {
                     init: Some(Box::new(Stmt::Let {
+                        byte_offset: self.byte_offset,
                         id: self.index,
                         name: format!("__idx_{}", self.index),
                         ty: Type::Number,
@@ -1049,6 +1057,7 @@ mod tests {
                 byte_offset: 0,
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: state,
                         name: "completion".into(),
                         ty: Type::Number,

@@ -98,6 +98,7 @@ fn call(local: u32, arity: usize) -> Stmt {
 fn alias_then_call() -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id: CALLBACK_ALIAS,
             name: "cb".to_string(),
             ty: callback_type(),

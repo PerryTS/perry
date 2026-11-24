@@ -24,6 +24,7 @@ fn assign(args: Vec<Expr>) -> Expr {
 fn body() -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "s".into(),
             ty: Type::String,
@@ -70,6 +71,7 @@ fn rejects_escapes_aliases_captures_and_unsupported_updates() {
     let cases = [
         Stmt::Return(Some(Expr::LocalGet(1)), 0),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "alias".into(),
             ty: Type::String,

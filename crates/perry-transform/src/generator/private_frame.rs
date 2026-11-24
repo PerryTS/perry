@@ -427,6 +427,7 @@ fn lower_list(
         let assigned = matches!(&stmts[at], Stmt::Expr(Expr::LocalSet(_, _)));
         let normalized = match &stmts[at] {
             Stmt::Expr(Expr::LocalSet(id, value)) => Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: *id,
                 name: "__owned_child".into(),
                 ty: Type::Any,
@@ -721,6 +722,7 @@ fn lower_list(
         let mut replacement = Vec::new();
         for (p, arg) in f.params.iter().zip(args) {
             replacement.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: map[&p.id],
                 name: format!("__frame_arg{}", p.id),
                 ty: Type::Any,

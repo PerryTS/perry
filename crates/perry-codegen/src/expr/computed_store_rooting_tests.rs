@@ -199,6 +199,7 @@ fn calls(ir: &str, callee: &str) -> bool {
 fn with_native_f64_view(tail: Stmt) -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "owner".to_string(),
             ty: Type::Any,
@@ -206,6 +207,7 @@ fn with_native_f64_view(tail: Stmt) -> Vec<Stmt> {
             init: Some(Expr::NativeArenaAlloc(Box::new(Expr::Integer(64)))),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 11,
             name: "view".to_string(),
             ty: Type::Named("Float64Array".to_string()),
@@ -267,6 +269,7 @@ fn arr_length_store_roots_the_receiver_across_an_allocating_rhs() {
         |value| {
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "arr".to_string(),
                     ty: Type::Array(Box::new(Type::Number)),
@@ -299,6 +302,7 @@ fn array_string_key_store_roots_both_operands_across_an_allocating_rhs() {
         |value| {
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "arr".to_string(),
                     ty: Type::Array(Box::new(Type::Any)),
@@ -306,6 +310,7 @@ fn array_string_key_store_roots_both_operands_across_an_allocating_rhs() {
                     init: Some(Expr::Array(vec![Expr::Number(1.0)], None)),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "key".to_string(),
                     ty: Type::String,
@@ -334,6 +339,7 @@ fn polymorphic_index_store_roots_both_operands_across_an_allocating_rhs() {
         |value| {
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "recv".to_string(),
                     ty: Type::Any,
@@ -341,6 +347,7 @@ fn polymorphic_index_store_roots_both_operands_across_an_allocating_rhs() {
                     init: Some(Expr::Object(Vec::new())),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "key".to_string(),
                     ty: Type::Any,
@@ -622,6 +629,7 @@ fn compile_masked_window_with_key(
         body.insert(
             0,
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "key".to_string(),
                 ty: Type::Any,
@@ -642,6 +650,7 @@ fn compile_masked_window_loop(key_ty: Type, value: Expr) -> String {
         false,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "sum".to_string(),
                 ty: Type::Number,
@@ -650,6 +659,7 @@ fn compile_masked_window_loop(key_ty: Type, value: Expr) -> String {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: 4,
                     name: "i".to_string(),
                     ty: Type::Any,
@@ -691,6 +701,7 @@ fn masked_window_index_coercion_loop(key_ty: Type) -> String {
         vec![
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: 4,
                     name: "i".to_string(),
                     ty: Type::Any,
@@ -773,6 +784,7 @@ fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
         }
     };
     let mut body = vec![Stmt::Let {
+        byte_offset: 0,
         id: 3,
         name: "sum".into(),
         ty: Type::Number,
@@ -809,6 +821,7 @@ fn masked_window_standalone_update_loop(key_ty: Type) -> String {
         true,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "sum".into(),
                 ty: Type::Number,
@@ -817,6 +830,7 @@ fn masked_window_standalone_update_loop(key_ty: Type) -> String {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: 4,
                     name: "i".into(),
                     ty: Type::Any,
@@ -851,6 +865,7 @@ fn masked_window_standalone_update_loop(key_ty: Type) -> String {
 
 fn masked_window_standalone_update_region(key_ty: Type) -> String {
     let mut body = vec![Stmt::Let {
+        byte_offset: 0,
         id: 3,
         name: "sum".into(),
         ty: Type::Number,
@@ -998,6 +1013,7 @@ fn growing_array_store_uses_the_reallocated_head_for_its_barrier() {
         "array_grow_barrier_head",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),

@@ -85,6 +85,7 @@ fn benchmark_affine() -> Expr {
 /// `const index = cursor;`
 fn cursor_alias() -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: ALIAS_ID,
         name: "index".to_string(),
         ty: Type::Number,
@@ -96,6 +97,7 @@ fn cursor_alias() -> Stmt {
 /// `const index = i % n;`
 fn modulo_index() -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: ALIAS_ID,
         name: "index".to_string(),
         ty: Type::Any,
@@ -141,6 +143,7 @@ fn access_module(body: Vec<Stmt>) -> Module {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: SUM2_ID,
                 name: "sum".to_string(),
                 ty: Type::Number,
@@ -148,6 +151,7 @@ fn access_module(body: Vec<Stmt>) -> Module {
                 init: Some(Expr::Integer(0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: CURSOR_ID,
                 name: "cursor".to_string(),
                 ty: Type::Number,
@@ -155,6 +159,7 @@ fn access_module(body: Vec<Stmt>) -> Module {
                 init: Some(Expr::Integer(0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: LIMIT2_ID,
                 name: "limit".to_string(),
                 ty: Type::Number,
@@ -168,6 +173,7 @@ fn access_module(body: Vec<Stmt>) -> Module {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: COUNTER2_ID,
                     name: "i".to_string(),
                     ty: Type::Number,

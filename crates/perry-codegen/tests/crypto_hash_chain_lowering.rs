@@ -226,6 +226,7 @@ fn hash_chain_lowers_to_frame_state_calls() {
 fn block_local_hmac_lowers_to_frame_state_calls() {
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "h".to_string(),
             ty: Type::Any,

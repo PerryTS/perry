@@ -326,6 +326,7 @@ mod tests {
 
     fn let_stmt(id: u32, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{id}"),
             ty: perry_hir::types::Type::Number,

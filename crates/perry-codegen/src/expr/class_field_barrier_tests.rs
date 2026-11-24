@@ -251,6 +251,7 @@ fn probe_module() -> Module {
         // other class-field store is the static-key store site (#12483).
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: BOXED_ID,
                 name: "b".to_string(),
                 ty: Type::Named("Boxed".to_string()),

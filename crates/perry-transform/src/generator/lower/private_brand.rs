@@ -186,6 +186,7 @@ fn wrap_closures(expr: &mut Expr, this_usable: bool, cx: &mut Cx, captures_out: 
         }
         let brand_id = alloc_local(cx.next_local_id);
         captures_out.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: brand_id,
             name: "__private_brand".into(),
             ty: Type::Any,
@@ -508,6 +509,7 @@ fn pop_before_return(stmt: &mut Stmt, next_local_id: &mut u32) {
         let result = value.take().map(|value| {
             let id = alloc_local(next_local_id);
             sequence.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name: "__gen_private_result".into(),
                 ty: Type::Any,

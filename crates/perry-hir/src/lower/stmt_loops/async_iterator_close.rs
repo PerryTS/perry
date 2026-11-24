@@ -69,6 +69,7 @@ pub(crate) fn emit_driver(
         .push((format!("__iterator_return_{method}"), method, Type::Any));
     let close = vec![
         Stmt::Let {
+            byte_offset,
             id: method,
             name: format!("__iterator_return_{method}"),
             ty: Type::Any,
@@ -145,6 +146,7 @@ fn boolean_local(ctx: &mut LoweringContext, output: &mut Vec<Stmt>, prefix: &str
     let name = format!("{prefix}_{id}");
     ctx.locals.push((name.clone(), id, Type::Boolean));
     output.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name,
         ty: Type::Boolean,

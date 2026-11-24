@@ -71,6 +71,7 @@ fn boxed() -> Class {
 
 fn bind(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Number,
@@ -82,6 +83,7 @@ fn bind(id: u32, init: Expr) -> Stmt {
 /// `let b = new Box()`
 fn owner() -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: B,
         name: "b".into(),
         ty: Type::Named("Box".into()),

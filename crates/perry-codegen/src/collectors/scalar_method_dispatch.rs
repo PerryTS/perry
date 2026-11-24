@@ -1097,6 +1097,7 @@ mod tests {
 
     fn new_receiver_stmt(class_name: &str) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id: RECEIVER,
             name: "obj".to_string(),
             ty: Type::Named(class_name.to_string()),
@@ -1288,6 +1289,7 @@ mod tests {
         const PROTO: u32 = 41;
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: PROTO,
                 name: "proto".to_string(),
                 ty: Type::Any,
@@ -1369,6 +1371,7 @@ mod tests {
         let class = summarizable_class("C");
         let mut module = Module::new("m.ts");
         module.init.push(Stmt::Let {
+            byte_offset: 0,
             id: 7,
             name: "p".to_string(),
             ty: Type::Any,

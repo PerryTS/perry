@@ -68,6 +68,7 @@ fn create_hmac(alg: &str) -> Expr {
 
 fn let_h(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: "h".into(),
         ty: Type::Named("Hash".into()),
@@ -232,6 +233,7 @@ fn jwa_sequence_shape_is_rewritten() {
     let body = vec![
         let_h(2, create_hmac("sha256")),
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "sig".into(),
             ty: Type::Any,
@@ -301,6 +303,7 @@ fn copy_escapes() {
     let body = vec![
         let_h(2, create_hash("sha1")),
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "c".into(),
             ty: Type::Any,
@@ -329,6 +332,7 @@ fn update_result_used_as_a_value_escapes() {
     let body = vec![
         let_h(2, create_hash("sha1")),
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "r".into(),
             ty: Type::Any,
@@ -476,6 +480,7 @@ fn closure(func_id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>
 
 fn plain_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,

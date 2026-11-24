@@ -69,6 +69,7 @@ pub(crate) fn lower_destructuring_assignment_stmt(
     let (tmp_id, tmp_name) = fresh_destruct_local(ctx, "destruct", Type::Any);
 
     let mut result = vec![Stmt::Let {
+        byte_offset: pat.span().lo.0,
         id: tmp_id,
         name: tmp_name,
         ty: Type::Any,
@@ -112,6 +113,7 @@ fn lower_array_assignment_from_expr(
 
     let mut result = vec![
         Stmt::Let {
+            byte_offset: arr_pat.span.lo.0,
             id: iter_id,
             name: iter_name,
             ty: Type::Any,
@@ -119,6 +121,7 @@ fn lower_array_assignment_from_expr(
             init: Some(source.iter_init(iter_id)),
         },
         Stmt::Let {
+            byte_offset: arr_pat.span.lo.0,
             id: next_id,
             name: next_name,
             ty: Type::Any,
@@ -126,6 +129,7 @@ fn lower_array_assignment_from_expr(
             init: Some(source.next_init(iter_id, arr_pat.span.lo.0)),
         },
         Stmt::Let {
+            byte_offset: arr_pat.span.lo.0,
             id: done_id,
             name: done_name,
             ty: Type::Boolean,
@@ -149,6 +153,7 @@ fn lower_array_assignment_from_expr(
             let (rest_done_id, rest_done_name) =
                 fresh_destruct_local(ctx, "destruct_rest_done", Type::Boolean);
             body.push(Stmt::Let {
+                byte_offset: arr_pat.span.lo.0,
                 id: rest_done_id,
                 name: rest_done_name,
                 ty: Type::Boolean,
@@ -182,6 +187,7 @@ fn lower_array_assignment_from_expr(
 
         let (value_id, value_name) = fresh_destruct_local(ctx, "destruct_value", Type::Any);
         body.push(Stmt::Let {
+            byte_offset: arr_pat.span.lo.0,
             id: value_id,
             name: value_name,
             ty: Type::Any,
@@ -263,6 +269,7 @@ fn iterator_next_value_stmts(
     let (step_id, step_name) = fresh_destruct_local(ctx, "destruct_step", Type::Boolean);
     let mut pull_next = vec![
         Stmt::Let {
+            byte_offset,
             id: step_id,
             name: step_name,
             ty: Type::Boolean,
@@ -360,6 +367,7 @@ fn lower_object_assignment_from_expr(
 
                 let (value_id, value_name) = fresh_destruct_local(ctx, "destruct_value", Type::Any);
                 result.push(Stmt::Let {
+                    byte_offset: obj_pat.span.lo.0,
                     id: value_id,
                     name: value_name,
                     ty: Type::Any,
@@ -373,6 +381,7 @@ fn lower_object_assignment_from_expr(
                 let name = assign.key.sym.to_string();
                 let (value_id, value_name) = fresh_destruct_local(ctx, "destruct_value", Type::Any);
                 result.push(Stmt::Let {
+                    byte_offset: obj_pat.span.lo.0,
                     id: value_id,
                     name: value_name,
                     ty: Type::Any,
@@ -440,6 +449,7 @@ fn lower_object_assignment_from_expr(
                     let (rest_id, rest_name) =
                         fresh_destruct_local(ctx, "destruct_rest", Type::Any);
                     result.push(Stmt::Let {
+                        byte_offset: obj_pat.span.lo.0,
                         id: rest_id,
                         name: rest_name,
                         ty: Type::Any,
@@ -514,6 +524,7 @@ fn object_property_get_expr(
             computed_key_temps.push(key_id);
             Ok((
                 vec![Stmt::Let {
+                    byte_offset: key.span().lo.0,
                     id: key_id,
                     name: key_name,
                     ty: Type::Any,
@@ -575,6 +586,7 @@ fn prepare_assignment_target(
                 let (object_id, object_name) =
                     fresh_destruct_local(ctx, "destruct_target", Type::Any);
                 prepare.push(Stmt::Let {
+                    byte_offset: pat.span().lo.0,
                     id: object_id,
                     name: object_name,
                     ty: Type::Any,
@@ -594,6 +606,7 @@ fn prepare_assignment_target(
                         let (key_id, key_name) =
                             fresh_destruct_local(ctx, "destruct_target_key", Type::Any);
                         prepare.push(Stmt::Let {
+                            byte_offset: pat.span().lo.0,
                             id: key_id,
                             name: key_name,
                             ty: Type::Any,

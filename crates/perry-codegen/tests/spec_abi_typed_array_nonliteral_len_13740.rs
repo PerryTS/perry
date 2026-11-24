@@ -51,6 +51,7 @@ fn sum_function() -> Function {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: S,
                 name: "s".to_string(),
                 ty: Type::Number,
@@ -59,6 +60,7 @@ fn sum_function() -> Function {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: I,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -108,6 +110,7 @@ fn module_with_len(name: &str, len: Expr) -> Module {
     module.functions.push(sum_function());
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "a".to_string(),
             ty: Type::Named("Int32Array".to_string()),

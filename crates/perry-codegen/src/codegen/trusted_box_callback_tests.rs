@@ -56,6 +56,7 @@ fn consume_function() -> Function {
 
 fn outer_function(direct_literal: bool) -> Function {
     let mut body = vec![Stmt::Let {
+        byte_offset: 0,
         id: COUNT,
         name: "count".to_string(),
         ty: Type::Number,
@@ -66,6 +67,7 @@ fn outer_function(direct_literal: bool) -> Function {
         callback()
     } else {
         body.push(Stmt::Let {
+            byte_offset: 0,
             id: CALLBACK,
             name: "callback".to_string(),
             ty: callback_type(),
@@ -324,6 +326,7 @@ fn erased_captured_closure_ir(reassigned: bool, under_applied: bool) -> String {
     outer.body = vec![
         Stmt::PreallocateBoxes(vec![CALLBACK]),
         Stmt::Let {
+            byte_offset: 0,
             id: CALLBACK,
             name: "target".into(),
             ty: Type::Any,
@@ -714,6 +717,7 @@ fn captured_scope_callee_resolution_uses_a_decoded_base() {
     outer.body = vec![
         Stmt::PreallocateBoxes(vec![COUNT, CALLBACK]),
         Stmt::Let {
+            byte_offset: 0,
             id: COUNT,
             name: "count".into(),
             ty: Type::Number,
@@ -721,6 +725,7 @@ fn captured_scope_callee_resolution_uses_a_decoded_base() {
             init: Some(Expr::Integer(0)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: CALLBACK,
             name: "callback".into(),
             ty: callback_type(),
@@ -837,6 +842,7 @@ fn captured_array_and_with_writes_decode_the_box_container() {
     let mut outer = outer_function(false);
     outer.body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: COUNT,
             name: "array".into(),
             ty: Type::Array(Box::new(Type::Number)),

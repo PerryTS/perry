@@ -77,6 +77,7 @@ fn census_storing(stored: Option<Expr>) -> WriteCensus {
     };
     module.functions.push(function(BUMP, Vec::new(), body));
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: M,
         name: "m".into(),
         ty: Type::Number,
@@ -511,6 +512,7 @@ fn a_read_in_a_loop_that_runs_code_is_late() {
         right: Box::new(Expr::LocalGet(A)),
     };
     let lets = Stmt::Let {
+        byte_offset: 0,
         id: t,
         name: "t".into(),
         ty: Type::Number,

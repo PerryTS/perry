@@ -8,6 +8,7 @@ fn statement_expression_positions_preserve_lexical_bindings() {
         let leaf = || vec![Stmt::Expr(expr.clone())];
         let cases = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 0,
                 name: "x".into(),
                 ty: Type::Any,
@@ -151,6 +152,7 @@ fn statement_leaves_have_no_lexical_binding_dependency() {
         Stmt::PreallocateTdzBoxes(vec![]),
         Stmt::ReleaseBoxes(vec![]),
         Stmt::Let {
+            byte_offset: 0,
             id: 0,
             name: "x".into(),
             ty: Type::Any,

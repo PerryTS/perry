@@ -109,6 +109,7 @@ fn setter() -> Function {
         return_type: Type::Void,
         body: vec![Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: IDX_ID,
                 name: "i".to_string(),
                 ty: Type::Number,
@@ -187,6 +188,7 @@ fn probe_module() -> Module {
     // The class method is what carries the subject; the init only has to make
     // the class reachable, so it allocates one instance and nothing else.
     m.init = vec![Stmt::Let {
+        byte_offset: 0,
         id: RECV_ID,
         name: "b".to_string(),
         ty: Type::Named("Bag".to_string()),

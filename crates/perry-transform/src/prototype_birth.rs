@@ -104,6 +104,7 @@ mod tests {
 
     fn binding(id: u32, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("binding{id}"),
             ty: Type::Any,

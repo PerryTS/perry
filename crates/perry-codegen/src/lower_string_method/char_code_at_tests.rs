@@ -20,6 +20,7 @@ fn scanner_ir(receiver_type: Type) -> String {
         return_type: Type::Any,
         body: vec![Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "i".into(),
                 ty: Type::Number,

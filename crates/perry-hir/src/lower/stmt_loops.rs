@@ -157,6 +157,7 @@ pub(crate) fn lazy_iter_for_stmts(
         .push((format!("__iter_next_{next_id}"), next_id, Type::Any));
     vec![
         Stmt::Let {
+            byte_offset,
             id: next_id,
             name: format!("__iter_next_{next_id}"),
             ty: Type::Any,
@@ -165,6 +166,7 @@ pub(crate) fn lazy_iter_for_stmts(
         },
         Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset,
                 id: result_id,
                 name: format!("__result_{}", result_id),
                 ty: Type::Any,
@@ -237,6 +239,7 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
     body.insert(
         0,
         Stmt::Let {
+            byte_offset: loop_byte_offset,
             id: state_id,
             name: state_name,
             ty: Type::Number,
@@ -305,6 +308,7 @@ fn iterator_completion_snapshot(
     let name = format!("__forof_incoming_{}", id);
     ctx.locals.push((name.clone(), id, Type::Number));
     stmts.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name,
         ty: Type::Number,
@@ -388,6 +392,7 @@ fn mark_iterator_completion_on_abrupt(
                     let name = format!("__forof_return_{}", id);
                     ctx.locals.push((name.clone(), id, Type::Any));
                     rewritten.push(Stmt::Let {
+                        byte_offset: 0, /*HPOS*/
                         id,
                         name,
                         ty: Type::Any,
@@ -599,6 +604,7 @@ fn lower_runtime_for_await_iterator(
     ctx.locals
         .push((format!("__iter_{}", iter_id), iter_id, Type::Any));
     module.init.push(Stmt::Let {
+        byte_offset: for_of_stmt.span.lo.0,
         id: iter_id,
         name: format!("__iter_{}", iter_id),
         ty: Type::Any,
@@ -623,6 +629,7 @@ fn lower_runtime_for_await_iterator(
     };
     let next_call = Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0);
     module.init.push(Stmt::Let {
+        byte_offset: for_of_stmt.span.lo.0,
         id: result_id,
         name: format!("__result_{}", result_id),
         ty: Type::Any,
@@ -856,6 +863,7 @@ pub(super) fn lower_stmt_for_of_inner(
         ctx.locals
             .push((format!("__iter_{}", iter_id), iter_id, Type::Any));
         module.init.push(Stmt::Let {
+            byte_offset: for_of_stmt.span.lo.0,
             id: iter_id,
             name: format!("__iter_{}", iter_id),
             ty: Type::Any,
@@ -889,6 +897,7 @@ pub(super) fn lower_stmt_for_of_inner(
         };
         if needs_await {
             module.init.push(Stmt::Let {
+                byte_offset: for_of_stmt.span.lo.0,
                 id: result_id,
                 name: format!("__result_{}", result_id),
                 ty: Type::Any,
@@ -923,6 +932,7 @@ pub(super) fn lower_stmt_for_of_inner(
         ctx.locals
             .push((format!("__gen_value_{value_id}"), value_id, Type::Any));
         let value_stmt = Stmt::Let {
+            byte_offset: for_of_stmt.span.lo.0,
             id: value_id,
             name: format!("__gen_value_{value_id}"),
             ty: Type::Any,
@@ -942,6 +952,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 let name = ident.id.sym.to_string();
                 let id = ctx.define_local(name.clone(), Type::Any);
                 body_stmts.push(Stmt::Let {
+                    byte_offset: for_of_stmt.span.lo.0,
                     id,
                     name,
                     ty: Type::Any,
@@ -967,6 +978,7 @@ pub(super) fn lower_stmt_for_of_inner(
             None => {
                 let id = ctx.define_local("__gen_item".to_string(), Type::Any);
                 body_stmts.push(Stmt::Let {
+                    byte_offset: for_of_stmt.span.lo.0,
                     id,
                     name: "__gen_item".to_string(),
                     ty: Type::Any,
@@ -1107,6 +1119,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 "ReadableStreamDefaultReader".to_string(),
             );
             module.init.push(Stmt::Let {
+                byte_offset: for_of_stmt.span.lo.0,
                 id: reader_id,
                 name: format!("__reader_{}", reader_id),
                 ty: Type::Any,
@@ -1139,6 +1152,7 @@ pub(super) fn lower_stmt_for_of_inner(
             ctx.locals
                 .push((format!("__res_{}", res_id), res_id, Type::Any));
             module.init.push(Stmt::Let {
+                byte_offset: for_of_stmt.span.lo.0,
                 id: res_id,
                 name: format!("__res_{}", res_id),
                 ty: Type::Any,
@@ -1163,6 +1177,7 @@ pub(super) fn lower_stmt_for_of_inner(
 
             let mut body_stmts: Vec<Stmt> = Vec::new();
             body_stmts.push(Stmt::Let {
+                byte_offset: for_of_stmt.span.lo.0,
                 id: item_id,
                 name: item_name,
                 ty: Type::Any,
@@ -1532,6 +1547,7 @@ pub(super) fn lower_stmt_for_of_inner(
         .as_mut()
         .map_or(arr_expr, |r| r.guarded_get_iterator(arr_id));
     module.init.push(Stmt::Let {
+        byte_offset: for_of_stmt.span.lo.0,
         id: arr_id,
         name: format!("__arr_{}", arr_id),
         ty: arr_type,
@@ -1698,6 +1714,7 @@ pub(super) fn lower_stmt_for_of_inner(
                             item_expr
                         };
                         vec![Stmt::Let {
+                            byte_offset: for_of_stmt.span.lo.0,
                             id,
                             name,
                             ty: elem_type.clone(),
@@ -1740,6 +1757,7 @@ pub(super) fn lower_stmt_for_of_inner(
                                     )
                                 };
                                 stmts.push(Stmt::Let {
+                                    byte_offset: for_of_stmt.span.lo.0,
                                     id,
                                     name,
                                     ty,
@@ -1787,6 +1805,7 @@ pub(super) fn lower_stmt_for_of_inner(
                     _ => {
                         let (name, id) = var_ids[0].clone();
                         vec![Stmt::Let {
+                            byte_offset: for_of_stmt.span.lo.0,
                             id,
                             name,
                             ty: Type::Any,
@@ -1812,7 +1831,13 @@ pub(super) fn lower_stmt_for_of_inner(
             let mut source = if let Some(id) = binding_value {
                 Expr::LocalGet(id)
             } else {
-                lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id, for_of_stmt.span.lo.0)
+                lazy_or_index_elem(
+                    use_lazy_iter,
+                    arr_id,
+                    idx_id,
+                    result_id,
+                    for_of_stmt.span.lo.0,
+                )
             };
             if for_of_stmt.is_await && !use_lazy_iter {
                 source = Expr::Await(Box::new(source), for_of_stmt.span.lo.0);
@@ -1827,6 +1852,7 @@ pub(super) fn lower_stmt_for_of_inner(
         let mut guarded_stmts = Vec::new();
         if let Some(id) = binding_value {
             full_body.push(Stmt::Let {
+                byte_offset: for_of_stmt.span.lo.0,
                 id,
                 name: format!("__forof_value_{id}"),
                 ty: Type::Any,
@@ -1901,6 +1927,7 @@ pub(super) fn lower_stmt_for_of_inner(
     // declined the `for…of` spelling of a loop it served in indexed form.
     module.init.push(Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: for_of_stmt.span.lo.0,
             id: idx_id,
             name: format!("__idx_{}", idx_id),
             ty: Type::Number,
@@ -1941,6 +1968,7 @@ pub(crate) fn lower_stmt_for_in(
     let obj_expr = lower_expr(ctx, &for_in_stmt.right)?;
     let obj_id = ctx.fresh_local();
     module.init.push(Stmt::Let {
+        byte_offset: for_in_stmt.span.lo.0,
         id: obj_id,
         name: format!("__forin_obj_{}", obj_id),
         ty: Type::Any,
@@ -1961,6 +1989,7 @@ pub(crate) fn lower_stmt_for_in(
 
     // Store keys array reference: let __keys = Object.keys(obj)
     module.init.push(Stmt::Let {
+        byte_offset: for_in_stmt.span.lo.0,
         id: keys_id,
         name: format!("__keys_{}", keys_id),
         ty: Type::Array(Box::new(Type::String)),
@@ -1975,6 +2004,7 @@ pub(crate) fn lower_stmt_for_in(
     // in [0, i32::MAX], the shape the integer-local, range and `i < n`
     // loop rules read, like the counter's integer literal (DYNP E18/E19).
     module.init.push(Stmt::Let {
+        byte_offset: for_in_stmt.span.lo.0,
         id: len_id,
         name: format!("__n_{}", len_id),
         ty: Type::Number,
@@ -2015,6 +2045,7 @@ pub(crate) fn lower_stmt_for_in(
     // for (let __i = 0; __i < __keys.length; __i++) { ... }
     module.init.push(Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: for_in_stmt.span.lo.0,
             id: idx_id,
             name: format!("__idx_{}", idx_id),
             ty: Type::Number,

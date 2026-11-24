@@ -416,6 +416,7 @@ fn ptr_shape_local_module() -> Module {
         Type::Number,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "total".to_string(),
                 ty: Type::Number,
@@ -423,6 +424,7 @@ fn ptr_shape_local_module() -> Module {
                 init: Some(Expr::Number(0.0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "p".to_string(),
                 ty: Type::Named("Point".to_string()),
@@ -488,6 +490,7 @@ fn array_registry_class() -> Class {
         Type::Number,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 111,
                 name: "sum".to_string(),
                 ty: Type::Number,
@@ -496,6 +499,7 @@ fn array_registry_class() -> Class {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: 112,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -558,6 +562,7 @@ fn ptr_array_cache_module() -> Module {
             Type::Number,
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 121,
                     name: "result".to_string(),
                     ty: Type::Number,
@@ -565,6 +570,7 @@ fn ptr_array_cache_module() -> Module {
                     init: Some(Expr::Number(0.0)),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 122,
                     name: "registry".to_string(),
                     ty: Type::Named("ArrayRegistry".to_string()),

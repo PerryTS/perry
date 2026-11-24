@@ -155,6 +155,7 @@ fn literal_module(closure: Expr) -> Module {
     let mut hir = Module::new("literal_method_this_test");
     hir.classes.push(anon_shape(1, SHAPE, 90, 60));
     hir.init.push(Stmt::Let {
+        byte_offset: 0,
         id: RECV,
         name: "o".to_string(),
         ty: Type::Any,

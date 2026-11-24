@@ -153,6 +153,7 @@ fn is_this_arrow(expr: &Expr) -> bool {
 
 fn cell_decl(cell: LocalId) -> Stmt {
     Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: cell,
         name: format!("__perry_super_this_{cell}"),
         ty: Type::Any,

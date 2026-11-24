@@ -911,6 +911,7 @@ fn lower_fn_body_block_stmt_inner(
     let var_slot_lets: Vec<Stmt> = hoisted_var_slots
         .into_iter()
         .map(|(name, id)| Stmt::Let {
+            byte_offset: span.lo.0,
             id,
             name,
             ty: Type::Any,
@@ -1737,6 +1738,7 @@ fn lower_stmts_using_aware_inner(
 
                 wrapped = vec![
                     Stmt::Let {
+                        byte_offset: 0, /*HPOS*/
                         id: pending,
                         name: format!("__perry_pending_{level}"),
                         ty: Type::Any,
@@ -1744,6 +1746,7 @@ fn lower_stmts_using_aware_inner(
                         init: Some(Expr::Undefined),
                     },
                     Stmt::Let {
+                        byte_offset: 0, /*HPOS*/
                         id: has,
                         name: format!("__perry_has_err_{level}"),
                         ty: Type::Any,

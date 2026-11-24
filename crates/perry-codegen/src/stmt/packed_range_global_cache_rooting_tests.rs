@@ -34,6 +34,7 @@ const J: u32 = 1;
 fn counted_store_loop(target: u32, value: Expr) -> Stmt {
     Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: 0,
             id: J,
             name: "j".to_string(),
             ty: Type::Number,
@@ -86,6 +87,7 @@ fn grown_global_module() -> Module {
     });
     m.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: D,
             name: "d".to_string(),
             ty: Type::Any,

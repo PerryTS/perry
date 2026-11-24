@@ -249,6 +249,7 @@ fn a_const_string_local_across_an_allocation_is_reloaded_from_its_handle() {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: Type::String,
@@ -256,6 +257,7 @@ fn a_const_string_local_across_an_allocation_is_reloaded_from_its_handle() {
                 init: Some(Expr::String("remat-literal-7Q".to_string())),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "o".to_string(),
                 ty: Type::Any,

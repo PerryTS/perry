@@ -219,6 +219,7 @@ fn method_calls_module(bound: Expr, extra_init: Vec<Stmt>, strict: bool) -> Modu
     m.classes = vec![counter_class()];
     let mut init = extra_init;
     init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "c".to_string(),
         ty: Type::Named("Counter".to_string()),
@@ -234,6 +235,7 @@ fn method_calls_module(bound: Expr, extra_init: Vec<Stmt>, strict: bool) -> Modu
     });
     init.push(Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: 0,
             id: 7,
             name: "i".to_string(),
             ty: Type::Any,
@@ -343,6 +345,7 @@ fn class_field_versioned_loop_fires_for_literal_bound() {
 #[test]
 fn class_field_versioned_loop_fires_for_module_scope_counter() {
     let iterations = Stmt::Let {
+        byte_offset: 0,
         id: 0,
         name: "ITERATIONS".to_string(),
         ty: Type::Number,

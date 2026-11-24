@@ -19,6 +19,7 @@ fn declared_array_read_ir(name: &str, index: Expr) -> String {
         name,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "items".to_string(),
                 ty: Type::Array(Box::new(Type::String)),
@@ -39,6 +40,7 @@ fn declared_array_read_ir(name: &str, index: Expr) -> String {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Any,
@@ -95,6 +97,7 @@ fn numeric_layout_oob_array_read_ir() -> String {
         "numeric_layout_oob_array_read",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "items".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -110,6 +113,7 @@ fn numeric_layout_oob_array_read_ir() -> String {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Number,
@@ -301,6 +305,7 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
         "unknown_dense_subclass_read",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "items".to_string(),
                 ty: Type::Any,
@@ -318,6 +323,7 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Any,
@@ -462,6 +468,7 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
             name,
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: ITEMS,
                     name: "items".to_string(),
                     ty: Type::Any,
@@ -477,6 +484,7 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
                     }),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: RESULT,
                     name: "result".to_string(),
                     ty: Type::Number,
@@ -571,6 +579,7 @@ fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
         "dynamic_symbol_read",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "items".to_string(),
                 ty: Type::Any,
@@ -588,6 +597,7 @@ fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: SYMBOL,
                 name: "componentData".to_string(),
                 ty: Type::Symbol,
@@ -595,6 +605,7 @@ fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
                 init: Some(symbol_init),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Any,
@@ -648,6 +659,7 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
         "unknown_typed_array_read_brand",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "items".to_string(),
                 ty: Type::Any,
@@ -663,6 +675,7 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Any,
@@ -781,6 +794,7 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
         "any_key_index_read",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "packed".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
@@ -796,6 +810,7 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: SPARSE,
                 name: "sparse".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
@@ -811,6 +826,7 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Any,
@@ -865,6 +881,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
         "claimed_receiver_brand",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "packed".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
@@ -880,6 +897,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: SPARSE,
                 name: "sparse".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
@@ -895,6 +913,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Any,

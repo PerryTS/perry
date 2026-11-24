@@ -797,6 +797,7 @@ pub fn transform_generator_function_with_extra_captures(
     let mut new_body: Vec<Stmt> = Vec::new();
     if let Some(id) = private_brand_id {
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id,
             name: "__gen_private_brand".to_string(),
             ty: Type::Any,
@@ -894,6 +895,7 @@ pub fn transform_generator_function_with_extra_captures(
 
     // let __state = 0
     new_body.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: state_id,
         name: "__gen_state".to_string(),
         ty: Type::Number,
@@ -903,6 +905,7 @@ pub fn transform_generator_function_with_extra_captures(
 
     // let __done = false
     new_body.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: done_id,
         name: "__gen_done".to_string(),
         ty: Type::Boolean,
@@ -911,6 +914,7 @@ pub fn transform_generator_function_with_extra_captures(
     });
 
     new_body.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: executing_id,
         name: "__gen_executing".to_string(),
         ty: Type::Boolean,
@@ -919,6 +923,7 @@ pub fn transform_generator_function_with_extra_captures(
     });
     if let Some(step_id) = step_id {
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: step_id,
             name: "__gen_step".to_string(),
             ty: Type::Number,
@@ -928,6 +933,7 @@ pub fn transform_generator_function_with_extra_captures(
     }
     if let Some(proto_ctl_id) = proto_ctl_id {
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: proto_ctl_id,
             name: "__gen_proto".to_string(),
             ty: Type::Any,
@@ -939,6 +945,7 @@ pub fn transform_generator_function_with_extra_captures(
     // #4438 B2-finally: let __pending_type = 0; let __pending_value = undefined
     if has_yielding_finally {
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: pending_type_id,
             name: "__gen_pending_type".to_string(),
             ty: Type::Number,
@@ -946,6 +953,7 @@ pub fn transform_generator_function_with_extra_captures(
             init: Some(Expr::Number(0.0)),
         });
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: pending_value_id,
             name: "__gen_pending_value".to_string(),
             ty: Type::Any,
@@ -972,6 +980,7 @@ pub fn transform_generator_function_with_extra_captures(
             continue;
         }
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *var_id,
             name: var_name.clone(),
             ty: var_ty.clone(),
@@ -982,6 +991,7 @@ pub fn transform_generator_function_with_extra_captures(
     // Also hoist any extra locals allocated during linearization (e.g. yield* delegation)
     for extra_id in &extra_local_ids {
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *extra_id,
             name: format!("__gen_tmp_{}", extra_id),
             ty: Type::Any,
@@ -992,6 +1002,7 @@ pub fn transform_generator_function_with_extra_captures(
 
     // __sent variable for two-way yield: stores value from next(val) calls
     new_body.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: sent_id,
         name: "__gen_sent".to_string(),
         ty: Type::Any,
@@ -1235,6 +1246,7 @@ pub fn transform_generator_function_with_extra_captures(
         {
             let id = alloc_local(next_local_id);
             return_resume_body.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name: "__yield_star_return_threw".to_string(),
                 ty: Type::Boolean,

@@ -226,6 +226,7 @@ fn compile_body(name: &str, body: Vec<Stmt>) -> String {
 fn with_object_local(id: u32, tail: Stmt) -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: "o".to_string(),
             ty: Type::Any,

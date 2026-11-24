@@ -32,6 +32,7 @@ fn generator_confined_captures_are_slots_and_shared_captures_are_cells() {
     }
     let mut stmts = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "state".into(),
             ty: Type::Number,
@@ -56,6 +57,7 @@ fn generator_confined_captures_are_slots_and_shared_captures_are_cells() {
     assert_eq!(numbers, HashSet::from([1]));
     assert!(booleans.is_empty());
     let user = Stmt::Let {
+        byte_offset: 0,
         id: 20,
         name: "__gen_state".into(),
         ty: Type::Number,
@@ -78,6 +80,7 @@ fn captured_closure_value_is_boxed_only_for_real_self_capture() {
     // does not. Only `self_ref` captures itself before initialization.
     let stmts = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "f".into(),
             ty: Type::Any,
@@ -85,6 +88,7 @@ fn captured_closure_value_is_boxed_only_for_real_self_capture() {
             init: Some(closure(10, 3)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "self_ref".into(),
             ty: Type::Any,

@@ -144,6 +144,7 @@ fn elided_length_and_index_reads_keep_ordinary_parameter_slots() {
 fn redeclared_parameters_keep_prologue_cells_in_named_and_expression_bodies() {
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "a".into(),
             ty: Type::Any,

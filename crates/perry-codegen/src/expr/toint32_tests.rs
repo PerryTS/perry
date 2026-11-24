@@ -239,6 +239,7 @@ fn a_toint32_result_enters_an_i32_slot_without_a_second_conversion() {
     // conversion is the identity and must not open a second diamond.
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: H,
             name: "h".to_string(),
             ty: Type::Number,

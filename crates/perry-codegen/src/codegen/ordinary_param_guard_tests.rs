@@ -257,6 +257,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 12,
                 name: "value".to_string(),
                 ty: Type::Any,
@@ -274,6 +275,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
                 })],
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 13,
                 name: "accumulator".to_string(),
                 ty: Type::Number,
@@ -332,6 +334,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
     module.functions.push(encipher);
     module.init.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "lr".to_string(),
             ty: Type::Any,
@@ -339,6 +342,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
             init: Some(Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)], None)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 21,
             name: "table".to_string(),
             ty: Type::Any,
@@ -403,6 +407,7 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
         return_type: Type::Void,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 11,
                 name: "n".to_string(),
                 ty: Type::Number,
@@ -437,6 +442,7 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
     module.functions.push(encipher);
     module.init.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "table".to_string(),
             ty: Type::Any,
@@ -498,6 +504,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 11,
                 name: "i".to_string(),
                 ty: Type::Number,
@@ -505,6 +512,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
                 init: Some(Expr::Integer(0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 12,
                 name: "sum".to_string(),
                 ty: Type::Number,
@@ -574,6 +582,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
     module.functions.push(read);
     module.init.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "table".to_string(),
             ty: Type::Any,
@@ -671,6 +680,7 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
         return_type: Type::Boolean,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 212,
                 name: "lookup".to_string(),
                 ty: map_type,
@@ -768,6 +778,7 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
         return_type: Type::Boolean,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 231,
                 name: "lookup".to_string(),
                 ty: Type::Generic {
@@ -920,6 +931,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
     ]);
     fn discriminant_let(id: u32, owner: u32) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: "kind".to_string(),
             ty: Type::Any,
@@ -1204,6 +1216,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
         // any parameter evidence, and the two bodies come out identical.
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 421,
                 name: "result".to_string(),
                 ty: Type::Any,
@@ -1355,6 +1368,7 @@ fn specialized_typed_parameter_keeps_its_own_owner_root() {
         });
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 20,
                 name: "array".into(),
                 ty: Type::Named("Float64Array".into()),

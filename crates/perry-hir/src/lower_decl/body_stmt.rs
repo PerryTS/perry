@@ -152,13 +152,16 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
 
                                             // Stmt 1: let __temp = this.field;
                                             result.push(Stmt::Let {
+                                                byte_offset: stmt.span().lo.0,
                                                 id: temp_id,
                                                 name: temp_name.clone(),
                                                 ty: Type::Array(Box::new(Type::Any)),
                                                 mutable: true,
                                                 init: Some(Expr::PropertyGet {
                                                     byte_end: 0,
-                                                    byte_offset: crate::lower::member_token(inner_member),
+                                                    byte_offset: crate::lower::member_token(
+                                                        inner_member,
+                                                    ),
                                                     object: Box::new(Expr::This),
                                                     property: field_name.clone(),
                                                 }),
@@ -609,6 +612,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                             .map(|id| Box::new(Expr::LocalGet(*id)))
                     });
                     result.push(Stmt::Let {
+                        byte_offset: stmt.span().lo.0,
                         id: class_local,
                         name: binding_name,
                         ty: Type::Any,
@@ -636,6 +640,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 // references keep resolving to the class itself.
                 if let (false, Some(id)) = (fresh_binding, forward_binding) {
                     result.push(Stmt::Let {
+                        byte_offset: stmt.span().lo.0,
                         id,
                         name: class_decl.ident.sym.to_string(),
                         ty: Type::Any,
@@ -665,6 +670,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     let class_local = ctx.define_local(class_name.clone(), Type::Any);
                     ctx.record_local_source_span(class_local, class_decl.ident.span);
                     result.push(Stmt::Let {
+                        byte_offset: stmt.span().lo.0,
                         id: class_local,
                         name: class_name.clone(),
                         ty: Type::Any,
@@ -679,6 +685,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 push_deduped_class_computed_keys(ctx, &class_decl.class, &mut result)?;
                 if let Some(id) = forward_binding {
                     result.push(Stmt::Let {
+                        byte_offset: stmt.span().lo.0,
                         id,
                         name: class_decl.ident.sym.to_string(),
                         ty: Type::Any,
@@ -789,6 +796,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     .unwrap_or_else(|| ctx.define_local(func_name.clone(), Type::Any));
                 ctx.function_valued_locals.insert(local_id);
                 result.push(Stmt::Let {
+                    byte_offset: stmt.span().lo.0,
                     id: local_id,
                     name: func_name,
                     ty: Type::Any,
@@ -934,6 +942,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                 );
                                 ctx.var_hoisted_ids.insert(id);
                                 result.push(Stmt::Let {
+                                    byte_offset: stmt.span().lo.0,
                                     id,
                                     name,
                                     ty: Type::Any,
@@ -1006,6 +1015,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                 );
                                 ctx.classic_for_lexical_bindings.insert(id);
                                 result.push(Stmt::Let {
+                                    byte_offset: stmt.span().lo.0,
                                     id,
                                     name,
                                     ty,
@@ -1058,6 +1068,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                         decl.name.span(),
                                     );
                                     Some(Box::new(Stmt::Let {
+                                        byte_offset: stmt.span().lo.0,
                                         id,
                                         name,
                                         ty,
@@ -1233,6 +1244,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 // All cases share one environment, including fallthrough.
                 let id = ctx.fresh_local();
                 result.push(Stmt::Let {
+                    byte_offset: stmt.span().lo.0,
                     id,
                     name: "__switch_discriminant".into(),
                     ty: Type::Any,
@@ -1328,6 +1340,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         "ReadableStreamDefaultReader".to_string(),
                     );
                     result.push(Stmt::Let {
+                        byte_offset: stmt.span().lo.0,
                         id: reader_id,
                         name: format!("__reader_{}", reader_id),
                         ty: Type::Any,
@@ -1360,6 +1373,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         )
                     };
                     result.push(Stmt::Let {
+                        byte_offset: stmt.span().lo.0,
                         id: res_id,
                         name: format!("__res_{}", res_id),
                         ty: Type::Any,
@@ -1384,6 +1398,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
 
                     let mut body_stmts: Vec<Stmt> = Vec::new();
                     body_stmts.push(Stmt::Let {
+                        byte_offset: stmt.span().lo.0,
                         id: item_id,
                         name: item_name,
                         ty: Type::Any,
@@ -1573,6 +1588,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 ctx.locals
                     .push((format!("__iter_{}", iter_id), iter_id, Type::Any));
                 result.push(Stmt::Let {
+                    byte_offset: stmt.span().lo.0,
                     id: iter_id,
                     name: format!("__iter_{}", iter_id),
                     ty: Type::Any,
@@ -1602,6 +1618,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 };
                 if needs_await {
                     result.push(Stmt::Let {
+                        byte_offset: stmt.span().lo.0,
                         id: result_id,
                         name: format!("__result_{}", result_id),
                         ty: Type::Any,
@@ -1631,6 +1648,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 ctx.locals
                     .push((format!("__gen_value_{value_id}"), value_id, Type::Any));
                 let value_stmt = Stmt::Let {
+                    byte_offset: stmt.span().lo.0,
                     id: value_id,
                     name: format!("__gen_value_{value_id}"),
                     ty: Type::Any,
@@ -1649,6 +1667,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                         let name = ident.id.sym.to_string();
                         let id = ctx.define_local(name.clone(), Type::Any);
                         body_stmts.push(Stmt::Let {
+                            byte_offset: stmt.span().lo.0,
                             id,
                             name,
                             ty: Type::Any,
@@ -1672,6 +1691,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     None => {
                         let item_id = ctx.define_local("__gen_item".to_string(), Type::Any);
                         body_stmts.push(Stmt::Let {
+                            byte_offset: stmt.span().lo.0,
                             id: item_id,
                             name: "__gen_item".to_string(),
                             ty: Type::Any,
@@ -1997,6 +2017,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 .as_mut()
                 .map_or(arr_expr, |r| r.guarded_get_iterator(arr_id));
             result.push(Stmt::Let {
+                byte_offset: stmt.span().lo.0,
                 id: arr_id,
                 name: format!("__arr_{}", arr_id),
                 ty: holder_type.clone(),
@@ -2141,7 +2162,13 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                             if let Some(id) = binding_value {
                                 Expr::LocalGet(id)
                             } else {
-                                lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id, for_of_stmt.span.lo.0)
+                                lazy_or_index_elem(
+                                    use_lazy_iter,
+                                    arr_id,
+                                    idx_id,
+                                    result_id,
+                                    for_of_stmt.span.lo.0,
+                                )
                             }
                         };
 
@@ -2159,6 +2186,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                     item_expr
                                 };
                                 vec![Stmt::Let {
+                                    byte_offset: stmt.span().lo.0,
                                     id,
                                     name,
                                     ty: item_hir_type.clone(),
@@ -2206,6 +2234,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                                             )
                                         };
                                         stmts.push(Stmt::Let {
+                                            byte_offset: stmt.span().lo.0,
                                             id,
                                             name,
                                             ty,
@@ -2248,6 +2277,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                             _ => {
                                 let (name, id) = var_ids[0].clone();
                                 vec![Stmt::Let {
+                                    byte_offset: stmt.span().lo.0,
                                     id,
                                     name,
                                     ty: Type::Any,
@@ -2273,7 +2303,13 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                     let mut source = if let Some(id) = binding_value {
                         Expr::LocalGet(id)
                     } else {
-                        lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id, for_of_stmt.span.lo.0)
+                        lazy_or_index_elem(
+                            use_lazy_iter,
+                            arr_id,
+                            idx_id,
+                            result_id,
+                            for_of_stmt.span.lo.0,
+                        )
                     };
                     if for_of_stmt.is_await && !use_lazy_iter {
                         source = Expr::Await(Box::new(source), for_of_stmt.span.lo.0);
@@ -2293,6 +2329,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
                 let mut guarded_stmts = Vec::new();
                 if let Some(id) = binding_value {
                     full_body.push(Stmt::Let {
+                        byte_offset: stmt.span().lo.0,
                         id,
                         name: format!("__forof_value_{id}"),
                         ty: Type::Any,
@@ -2363,6 +2400,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // optimization silently declines the `for…of` spelling.
             result.push(Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: stmt.span().lo.0,
                     id: idx_id,
                     name: format!("__idx_{}", idx_id),
                     ty: Type::Number,
@@ -2391,6 +2429,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             let obj_expr = lower_expr(ctx, &for_in_stmt.right)?;
             let obj_id = ctx.fresh_local();
             result.push(Stmt::Let {
+                byte_offset: stmt.span().lo.0,
                 id: obj_id,
                 name: format!("__forin_obj_{}", obj_id),
                 ty: Type::Any,
@@ -2405,6 +2444,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
 
             // Store keys array reference
             result.push(Stmt::Let {
+                byte_offset: stmt.span().lo.0,
                 id: keys_id,
                 name: format!("__keys_{}", keys_id),
                 ty: Type::Array(Box::new(Type::String)),
@@ -2419,6 +2459,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // in [0, i32::MAX], the shape the integer-local, range and `i < n`
             // loop rules read, like the counter's integer literal (DYNP E18/E19).
             result.push(Stmt::Let {
+                byte_offset: stmt.span().lo.0,
                 id: len_id,
                 name: format!("__n_{}", len_id),
                 ty: Type::Number,
@@ -2461,6 +2502,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             // Create the for loop
             result.push(Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: stmt.span().lo.0,
                     id: idx_id,
                     name: format!("__idx_{}", idx_id),
                     ty: Type::Number,
@@ -2562,6 +2604,7 @@ fn lower_body_stmt_impl(ctx: &mut LoweringContext, stmt: &ast::Stmt) -> Result<V
             }
             let env_id = ctx.define_local("__perry_with_env".to_string(), Type::Any);
             result.push(Stmt::Let {
+                byte_offset: stmt.span().lo.0,
                 id: env_id,
                 name: format!("__perry_with_env_{}", env_id),
                 ty: Type::Any,

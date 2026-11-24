@@ -37,6 +37,7 @@ const KEY_TEMP: u32 = 6;
 
 fn temp(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -230,6 +231,7 @@ fn declines_when_the_last_statement_is_not_an_expression() {
 fn declines_an_alias_without_an_initialiser() {
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: BASE_TEMP,
             name: "__cmpd_base_5".to_string(),
             ty: Type::Number,

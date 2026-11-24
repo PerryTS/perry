@@ -16,6 +16,7 @@ const CUR: u32 = 5;
 
 fn local(id: u32, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Any,

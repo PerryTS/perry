@@ -378,6 +378,7 @@ mod tests {
     #[test]
     fn declaration_super_home_shares_the_direct_body_but_fresh_home_needs_owner() {
         let body = vec![perry_hir::Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "home".into(),
             ty: perry_hir::types::Type::Any,

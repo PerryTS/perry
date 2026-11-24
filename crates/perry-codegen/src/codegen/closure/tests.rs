@@ -44,6 +44,7 @@ fn one_capture_closure_ir() -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 0,
                 name: "x".to_string(),
                 ty: Type::Any,
@@ -51,6 +52,7 @@ fn one_capture_closure_ir() -> String {
                 init: None,
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "f".to_string(),
                 ty: Type::Any,
@@ -114,6 +116,7 @@ fn unboxed_capture_update_ir() -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "f".to_string(),
                 ty: Type::Any,

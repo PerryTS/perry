@@ -205,6 +205,7 @@ fn scalar_object_literal_skips_pure_unobserved_initializers() {
         "scalar_object_literal_used_fields.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "obj".to_string(),
                 ty: Type::Any,
@@ -252,6 +253,7 @@ fn scalar_array_literal_skips_pure_unobserved_initializers() {
         "scalar_array_literal_used_indices.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "arr".to_string(),
                 ty: Type::Any,
@@ -301,6 +303,7 @@ fn scalar_object_literal_keeps_observable_unobserved_initializers() {
         "scalar_object_literal_observable_unused.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "obj".to_string(),
                 ty: Type::Any,
@@ -336,6 +339,7 @@ fn scalar_object_literal_keeps_initializers_read_by_update() {
         "scalar_object_literal_update_read.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "obj".to_string(),
                 ty: Type::Any,
@@ -425,6 +429,7 @@ fn number_typed_local_array_literal_keeps_runtime_layout_note() {
         "number_typed_local_array_literal.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "v".to_string(),
                 ty: Type::Number,
@@ -449,6 +454,7 @@ fn number_typed_local_array_push_keeps_layout_note_and_barrier() {
         "number_typed_local_array_push.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "v".to_string(),
                 ty: Type::Number,
@@ -456,6 +462,7 @@ fn number_typed_local_array_push_keeps_layout_note_and_barrier() {
                 init: Some(Expr::String("heap".to_string())),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -503,6 +510,7 @@ fn c262_array_spread_uses_strict_iterator_append_and_preserves_holes() {
         "c262_array_spread.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "iter".to_string(),
                 ty: Type::Any,
@@ -538,6 +546,7 @@ fn c262_array_has_own_property_uses_object_prototype_dispatch() {
         "c262_array_has_own_property.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
@@ -579,6 +588,7 @@ fn c262_addition_assignment_operands_use_dynamic_add_helper() {
         "c262_addition_order.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "y".to_string(),
                 ty: Type::Any,
@@ -611,6 +621,7 @@ fn bounded_integer_array_store_module() -> Module {
         "bounded_integer_array_store.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -622,6 +633,7 @@ fn bounded_integer_array_store_module() -> Module {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -729,6 +741,7 @@ fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
         "numeric_iota_fill_loop.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -740,6 +753,7 @@ fn numeric_iota_fill_loop_uses_bulk_helper_without_barrier() {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -800,6 +814,7 @@ fn integer_arithmetic_array_push_omits_inbounds_layout_note_and_barrier() {
         "integer_arithmetic_array_push.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -808,6 +823,7 @@ fn integer_arithmetic_array_push_omits_inbounds_layout_note_and_barrier() {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -900,6 +916,7 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
         "pointer_store_into_numeric_array.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "child".to_string(),
                 ty: Type::Any,
@@ -907,6 +924,7 @@ fn pointer_store_into_numeric_array_keeps_layout_note_and_barrier() {
                 init: Some(Expr::Object(Vec::new())),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -1005,6 +1023,7 @@ fn point_literal_uses_typed_shape_path() {
         "unboxed_point_off.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "p".to_string(),
                 ty: point_ty,

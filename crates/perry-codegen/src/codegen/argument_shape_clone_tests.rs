@@ -121,6 +121,7 @@ fn fixture() -> Module {
         .push(class(2, "Registry", vec![], vec![read]));
     module.init.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "registry".to_string(),
             ty: Type::Named("Registry".to_string()),
@@ -135,6 +136,7 @@ fn fixture() -> Module {
             }),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 11,
             name: "entity".to_string(),
             ty: Type::Named("Entity".to_string()),

@@ -14,6 +14,7 @@ fn runtime(method: &str, args: Vec<Expr>) -> Expr {
 
 pub(super) fn ir() -> String {
     let let_any = |id, init| Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("frame{id}"),
         ty: Type::Any,

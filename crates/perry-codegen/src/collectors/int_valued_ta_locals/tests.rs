@@ -3,6 +3,7 @@ use perry_hir::{BinaryOp, Expr, Param, Stmt, UpdateOp};
 
 fn let_stmt(id: u32, ty: HirType, init: Option<Expr>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty,

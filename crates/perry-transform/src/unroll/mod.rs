@@ -1144,6 +1144,7 @@ mod tests {
     fn make_for(iv_id: LocalId, lo: i64, hi: i64, body: Vec<Stmt>, op: CompareOp) -> Stmt {
         Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: iv_id,
                 name: "i".into(),
                 ty: Type::Number,
@@ -1282,6 +1283,7 @@ mod tests {
         let i = 1u32;
         let f = Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: i,
                 name: "i".into(),
                 ty: Type::Number,
@@ -1309,6 +1311,7 @@ mod tests {
         let i = 1u32;
         let f = Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: i,
                 name: "i".into(),
                 ty: Type::Number,
@@ -1421,6 +1424,7 @@ mod tests {
         let xx = 50u32;
         let body = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: xx,
                 name: "xx".into(),
                 ty: Type::Number,
@@ -1508,6 +1512,7 @@ mod tests {
         let i = 1u32;
         let t = 2u32;
         let body = vec![Stmt::Let {
+            byte_offset: 0,
             id: t,
             name: "t".into(),
             ty: Type::Number,
@@ -1552,6 +1557,7 @@ mod tests {
         let i = 1u32;
         let value = 2u32;
         let hoist = Stmt::Let {
+            byte_offset: 0,
             id: value,
             name: "value".into(),
             ty: Type::Any,
@@ -1560,6 +1566,7 @@ mod tests {
         };
         let body = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: value,
                 name: "value".into(),
                 ty: Type::Any,
@@ -1612,6 +1619,7 @@ mod tests {
         let xs = 3u32; // declared outside the loop (not refreshed)
         let body = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: x,
                 name: "x".into(),
                 ty: Type::Number,
@@ -1788,6 +1796,7 @@ mod tests {
         let x = 2u32;
         let span = LocalSourceSpan { start: 42, end: 43 };
         let body = vec![Stmt::Let {
+            byte_offset: 0,
             id: x,
             name: "x".into(),
             ty: Type::Number,

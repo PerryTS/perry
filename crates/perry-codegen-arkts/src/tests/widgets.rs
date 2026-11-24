@@ -217,6 +217,7 @@ fn local_get_escape_follows_const_binding() {
     let mut m = empty_module();
     // Simulate: const t = Text("via let"); App({body: t});
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 7,
         name: "t".to_string(),
         ty: perry_hir::types::Type::Any,

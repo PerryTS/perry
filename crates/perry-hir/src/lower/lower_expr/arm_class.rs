@@ -364,8 +364,12 @@ pub(crate) fn lower_class_expr(
             // initializers can read the self-binding before ClassExprFresh
             // returns. Empty entries materialize that local without emitting a
             // capture refresh.
-            ctx.body_class_expr_captures
-                .push((owner, ids, env_class.clone(), class_expr.class.span.lo.0));
+            ctx.body_class_expr_captures.push((
+                owner,
+                ids,
+                env_class.clone(),
+                class_expr.class.span.lo.0,
+            ));
             Some(owner)
         } else if ids.is_empty() {
             None
@@ -374,8 +378,12 @@ pub(crate) fn lower_class_expr(
                 format!("__perry_class_expr_capture_owner_{synthetic_name}"),
                 crate::types::Type::Any,
             );
-            ctx.body_class_expr_captures
-                .push((owner, ids, env_class.clone(), class_expr.class.span.lo.0));
+            ctx.body_class_expr_captures.push((
+                owner,
+                ids,
+                env_class.clone(),
+                class_expr.class.span.lo.0,
+            ));
             Some(owner)
         }
     } else {

@@ -846,6 +846,7 @@ fn lower_getter_method_in_scope(
         body.insert(
             0,
             Stmt::Let {
+                byte_offset: method.span.lo.0,
                 id: arguments_id,
                 name: "arguments".to_string(),
                 ty: Type::Any,
@@ -1044,6 +1045,7 @@ fn lower_setter_method_in_scope(
         body.insert(
             0,
             Stmt::Let {
+                byte_offset: method.span.lo.0,
                 id: arguments_id,
                 name: "arguments".to_string(),
                 ty: Type::Any,

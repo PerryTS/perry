@@ -727,6 +727,7 @@ mod tests {
 
     fn let_(id: u32, init: Option<Expr>) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{id}"),
             ty: HirType::Any,

@@ -112,6 +112,7 @@ fn probe_module(name: &str, elem: Type, body: Vec<Stmt>, update: Option<Expr>) -
         body: vec![
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: I,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -332,6 +333,7 @@ fn value_numeric_and_property_consumers_share_checked_element_reads() {
         })
     };
     let binding = || Stmt::Let {
+        byte_offset: 0,
         id: 10,
         name: "o".into(),
         ty: Type::Any,
@@ -370,6 +372,7 @@ fn value_numeric_and_property_consumers_share_checked_element_reads() {
 fn const_and_mutable_module_arrays_keep_global_roots_across_allocating_loops() {
     let base = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "o".into(),
             ty: Type::Any,
@@ -396,6 +399,7 @@ fn const_and_mutable_module_arrays_keep_global_roots_across_allocating_loops() {
         let mut m = probe_module("rarr_module_elements", ty.clone(), body, None);
         m.functions[0].params.retain(|p| p.id != A);
         m.init = vec![Stmt::Let {
+            byte_offset: 0,
             id: A,
             name: "a".into(),
             ty,

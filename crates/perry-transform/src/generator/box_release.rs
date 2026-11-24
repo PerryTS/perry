@@ -170,6 +170,7 @@ mod tests {
 
     fn awaited_let(id: LocalId) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: "v".into(),
             ty: perry_hir::types::Type::Any,
@@ -303,6 +304,7 @@ mod tests {
         let mut m = async_module(vec![
             awaited_let(50),
             Stmt::Let {
+                byte_offset: 0,
                 id: 51,
                 name: "w".into(),
                 ty: perry_hir::types::Type::Any,

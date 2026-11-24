@@ -369,6 +369,7 @@ fn proven_string_argument_representations_are_call_free() {
             module.functions[0].body.insert(
                 0,
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 102,
                     name: "known".to_string(),
                     ty: Type::Any,

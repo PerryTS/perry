@@ -54,9 +54,11 @@ fn lift_bindings(body: &mut [Stmt], declarations: &mut Vec<Stmt>) {
             ty,
             mutable,
             init,
+            ..
         } = stmt
         {
             declarations.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: *id,
                 name: name.clone(),
                 ty: ty.clone(),

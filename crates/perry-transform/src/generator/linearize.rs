@@ -813,6 +813,7 @@ pub fn linearize_body(
                 mutable,
                 ty,
                 name,
+                ..
             } if linearize_async_generator() => {
                 let await_val = (**inner).clone();
                 let this_state = *state_num;
@@ -828,6 +829,7 @@ pub fn linearize_body(
                 });
                 // Resumed value (the settled await result) arrives via __sent.
                 current.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: *id,
                     init: Some(Expr::LocalGet(sent_id)),
                     mutable: *mutable,
@@ -1007,6 +1009,7 @@ pub fn linearize_body(
             {
                 let t = alloc_local(next_local_id);
                 let mut prefix = vec![Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: t,
                     name: format!("__loop_cond_yield_{}", t),
                     ty: Type::Any,
@@ -1113,6 +1116,7 @@ pub fn linearize_body(
                 if cond_yields {
                     let t = alloc_local(next_local_id);
                     let mut prefix = vec![Stmt::Let {
+                        byte_offset: 0, /*HPOS*/
                         id: t,
                         name: format!("__loop_cond_yield_{}", t),
                         ty: Type::Any,
@@ -1833,6 +1837,7 @@ pub fn linearize_body(
                 mutable,
                 ty,
                 name,
+                ..
             } => {
                 let del_value_id = emit_yield_star_loop(
                     inner,
@@ -1850,6 +1855,7 @@ pub fn linearize_body(
                 // The iterator's final `value` (read once by `emit_yield_star_loop`
                 // as spec `IteratorValue`) becomes the value of `yield* expr`.
                 current.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: *id,
                     init: Some(Expr::LocalGet(del_value_id)),
                     mutable: *mutable,
@@ -1870,6 +1876,7 @@ pub fn linearize_body(
                 mutable,
                 ty,
                 name,
+                ..
             } => {
                 let yield_val = value
                     .as_ref()
@@ -1889,6 +1896,7 @@ pub fn linearize_body(
                 });
                 // Assign __sent (the value from next(val)) to the target local
                 current.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: *id,
                     init: Some(Expr::LocalGet(sent_id)),
                     mutable: *mutable,

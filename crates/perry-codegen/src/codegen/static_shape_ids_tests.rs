@@ -799,6 +799,7 @@ fn literal_and_declared_module() -> perry_hir::Module {
         (51, "Point", 2.0),
     ] {
         hir.init.push(Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{id}"),
             ty: Type::Any,

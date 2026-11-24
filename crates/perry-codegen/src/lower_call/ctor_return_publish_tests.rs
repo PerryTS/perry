@@ -126,6 +126,7 @@ fn module(classes: Vec<Class>, construct: &str) -> Module {
     let mut m = Module::new("ctor_return_publish.ts");
     m.classes = classes;
     m.init = vec![Stmt::Let {
+        byte_offset: 0,
         id: 20,
         name: "x".to_string(),
         ty: Type::Named(construct.to_string()),

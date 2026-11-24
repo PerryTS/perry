@@ -970,6 +970,7 @@ fn async_generator_closure_expressions_linearize_awaits() {
         let mut module = Module::new("test");
         // `const g = async function*(){...}` at module scope.
         module.init.push(Stmt::Let {
+            byte_offset: 0,
             id: 0,
             name: "g".to_string(),
             ty: Type::Any,

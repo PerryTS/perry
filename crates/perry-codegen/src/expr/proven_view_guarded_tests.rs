@@ -80,6 +80,7 @@ fn probe_functions(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Vec<(Stri
 
 fn let_(id: u32, mutable: bool, ty: Type, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty,

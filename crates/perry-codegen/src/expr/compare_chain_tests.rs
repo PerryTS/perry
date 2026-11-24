@@ -182,6 +182,7 @@ fn mixed_graph_does_not_classify_a_constructively_numeric_local() {
         }),
     };
     let local = Stmt::Let {
+        byte_offset: 0,
         id: 2,
         name: "number".into(),
         ty: Type::Any,

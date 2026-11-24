@@ -150,6 +150,7 @@ fn main_ir_for_dispatch_case(
     // A named local so the module is not optimized down to nothing; the call's
     // receiver is still the inline `makeTagged()` result.
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: RECV_LOCAL,
         name: "out".to_string(),
         ty: Type::Any,
@@ -199,6 +200,7 @@ fn main_ir_for_known_dispatch(name: &str, arg: Expr) -> String {
         .functions
         .push(empty_fn(MAKE_FN, "makeTagged", Type::Any));
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: TYPED_RECV_LOCAL,
         name: "tagged".to_string(),
         ty: Type::Named("Tagged".to_string()),
@@ -212,6 +214,7 @@ fn main_ir_for_known_dispatch(name: &str, arg: Expr) -> String {
         }),
     });
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: RECV_LOCAL,
         name: "out".to_string(),
         ty: Type::Any,

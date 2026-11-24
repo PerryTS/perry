@@ -1005,6 +1005,7 @@ mod tests {
             "forward",
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 99,
                     name: "result".to_string(),
                     ty: payload.clone(),
@@ -1064,6 +1065,7 @@ mod tests {
             return_type: Type::Number,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 51,
                     name: "number".to_string(),
                     ty: Type::Number,

@@ -299,6 +299,7 @@ fn element_shape_module(body: Vec<Stmt>, extends_name: Option<&str>) -> Module {
     m.classes = vec![node_class(extends_name)];
     m.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: ARRAY_ID,
             name: "keep".to_string(),
             ty: Type::Array(Box::new(Type::Named("Node".to_string()))),
@@ -306,6 +307,7 @@ fn element_shape_module(body: Vec<Stmt>, extends_name: Option<&str>) -> Module {
             init: Some(Expr::Array(Vec::new(), None)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: SUM_ID,
             name: "sum".to_string(),
             ty: Type::Number,
@@ -314,6 +316,7 @@ fn element_shape_module(body: Vec<Stmt>, extends_name: Option<&str>) -> Module {
         },
         Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: COUNTER_ID,
                 name: "j".to_string(),
                 ty: Type::Any,
@@ -761,6 +764,7 @@ fn a_program_with_no_qualifying_loop_pays_nothing() {
     m.classes = vec![node_class(None)];
     m.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: SUM_ID,
             name: "sum".to_string(),
             ty: Type::Number,
@@ -769,6 +773,7 @@ fn a_program_with_no_qualifying_loop_pays_nothing() {
         },
         Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: COUNTER_ID,
                 name: "j".to_string(),
                 ty: Type::Any,
@@ -1224,6 +1229,7 @@ fn element_shape_versioned_loop_declines_a_foreign_arrays_length_bound() {
     m.init.insert(
         0,
         Stmt::Let {
+            byte_offset: 0,
             id: OTHER_ARRAY_ID,
             name: "other".to_string(),
             ty: Type::Array(Box::new(Type::Number)),
@@ -1417,6 +1423,7 @@ const BINDING_ID: u32 = 9;
 /// `const r = keep[j];` (or `let r = ...` when `mutable`).
 fn binding_stmt(mutable: bool) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: BINDING_ID,
         name: "r".to_string(),
         ty: Type::Named("Node".to_string()),
@@ -1585,6 +1592,7 @@ fn element_binding_declines_a_second_array() {
     let mut m = element_shape_module(
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: BINDING_ID,
                 name: "r".to_string(),
                 ty: Type::Named("Node".to_string()),
@@ -1602,6 +1610,7 @@ fn element_binding_declines_a_second_array() {
     m.init.insert(
         1,
         Stmt::Let {
+            byte_offset: 0,
             id: OTHER_ID,
             name: "other".to_string(),
             ty: Type::Array(Box::new(Type::Named("Node".to_string()))),
@@ -1655,6 +1664,7 @@ fn an_element_binding_indexed_by_a_non_counter_declines() {
     let ir = emit(&element_shape_module(
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: BINDING_ID,
                 name: "r".to_string(),
                 ty: Type::Named("Node".to_string()),
@@ -1706,6 +1716,7 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: F_SUM_ID,
                 name: "sum".to_string(),
                 ty: Type::Number,
@@ -1714,6 +1725,7 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: F_COUNTER_ID,
                     name: "j".to_string(),
                     ty: Type::Any,
@@ -1738,6 +1750,7 @@ fn element_binding_form_through_a_parameter_gets_the_clone() {
                 }),
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: F_BINDING_ID,
                         name: "r".to_string(),
                         ty: Type::Named("Node".to_string()),

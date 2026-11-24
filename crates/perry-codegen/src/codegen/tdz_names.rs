@@ -151,6 +151,7 @@ mod tests {
     #[test]
     fn collects_nested_lexical_names_without_naming_ordinary_boxes() {
         let local = |id, name: &str| Stmt::Let {
+            byte_offset: 0,
             id,
             name: name.into(),
             ty: Type::Any,

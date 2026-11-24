@@ -572,6 +572,7 @@ mod by_name_method_closure_tests {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 5,
                     name: "base".to_string(),
                     ty: Type::Number,

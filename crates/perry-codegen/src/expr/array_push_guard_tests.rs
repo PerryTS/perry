@@ -184,6 +184,7 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
         return_type: Type::Void,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ARRAY_ID,
                 name: "keep".to_string(),
                 ty: Type::Array(Box::new(elem)),
@@ -192,6 +193,7 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: COUNTER_ID,
                     name: "j".to_string(),
                     ty: Type::Number,
@@ -561,6 +563,7 @@ fn field_push_module(field_writeback: Option<String>) -> Module {
         return_type: Type::Void,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: RECV_ID,
                 name: "__push_recv".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -844,6 +847,7 @@ fn private_module_init_field_receiver_does_not_repeat_lookup_after_argument() {
     let mut module = Module::new("class_field_push_init.ts");
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "__field_push_receiver".into(),
             ty: Type::Array(Box::new(Type::Number)),

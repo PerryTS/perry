@@ -413,6 +413,7 @@ fn unrolled(ctx: &mut FnCtx<'_>, w: &Walk<'_>, consts: &[u64]) -> Result<()> {
         ctx.loop_targets
             .push((next_label.clone(), exit_label.clone(), ctx.try_depth));
         let bound = Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *id,
             name: name.clone(),
             ty: ty.clone(),

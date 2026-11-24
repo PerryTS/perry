@@ -14,6 +14,7 @@ fn hoisted_run(ids: &[u32]) -> Vec<Stmt> {
             .map(|&other| Stmt::Expr(Expr::LocalGet(other)))
             .collect::<Vec<_>>();
         body.push(Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("f{id}"),
             ty: Type::Any,

@@ -108,6 +108,7 @@ fn scoped_binding_shadows_module_global_only_inside_body_and_restores_outer() {
     use perry_hir::types::Type;
     let mut module = Module::new("scoped");
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "outer".into(),
         ty: Type::Number,

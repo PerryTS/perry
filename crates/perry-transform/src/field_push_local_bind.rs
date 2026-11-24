@@ -127,6 +127,7 @@ fn process_stmts(stmts: &mut Vec<Stmt>, fields: &[(String, Type)], next_local_id
         let recv_id = alloc_local(next_local_id);
         let rewritten = [
             Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: recv_id,
                 name: FIELD_PUSH_RECEIVER_NAME.to_string(),
                 ty: ty.clone(),

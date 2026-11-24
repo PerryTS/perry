@@ -76,6 +76,7 @@ fn new_c() -> Expr {
 
 fn let_c(id: u32, name: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -449,6 +450,7 @@ fn alloc_rows(entries: &[crate::opt_report::Entry]) -> Vec<&crate::opt_report::E
 fn a_nested_object_literal_is_not_filed_as_a_constructor_argument() {
     let classes = HashMap::new();
     let stmts = vec![Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "outer".to_string(),
         ty: Type::Any,
@@ -480,6 +482,7 @@ fn a_real_constructor_argument_keeps_its_own_bucket() {
     classes.insert("C".to_string(), &c);
     classes.insert("Box".to_string(), &boxc);
     let stmts = vec![Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "b".to_string(),
         ty: Type::Any,

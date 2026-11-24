@@ -399,6 +399,7 @@ mod tests {
                 else_branch: None,
             }];
             let mut body = vec![Stmt::Let {
+                byte_offset: 0,
                 id: flag,
                 name: "__finally_exited_99".into(),
                 ty: Type::Boolean,
@@ -419,6 +420,7 @@ mod tests {
                 (7, Type::Any, Expr::Undefined),
             ] {
                 body.push(Stmt::Let {
+                    byte_offset: 0,
                     id,
                     name: format!("record_{id}"),
                     ty,

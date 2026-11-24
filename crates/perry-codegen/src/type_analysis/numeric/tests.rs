@@ -158,6 +158,7 @@ fn emitted_ir(module: Module) -> String {
 
 fn number_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -204,6 +205,7 @@ fn proven_string_literal_length_is_numeric_but_annotations_are_not_proofs() {
         Vec::new(),
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "label".to_string(),
                 ty: Type::StringLiteral("abc".to_string()),
@@ -236,6 +238,7 @@ fn proven_string_literal_length_is_numeric_but_annotations_are_not_proofs() {
         vec![typed_param(2, "source", Type::Any)],
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "label".to_string(),
                 ty: Type::StringLiteral("abc".to_string()),
@@ -256,6 +259,7 @@ fn proven_string_literal_length_is_numeric_but_annotations_are_not_proofs() {
         vec![typed_param(2, "source", Type::Any)],
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "label".to_string(),
                 ty: Type::StringLiteral("abc".to_string()),
@@ -720,6 +724,7 @@ fn hash_loop_ir(param_ty: Type) -> String {
         (
             Vec::new(),
             vec![Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "s".to_string(),
                 ty: Type::String,
@@ -913,6 +918,7 @@ mod symbol_keyed_element_reads {
 
     fn array_of_numbers(id: u32) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: "a".to_string(),
             ty: Type::Array(Box::new(Type::Number)),
@@ -945,6 +951,7 @@ mod symbol_keyed_element_reads {
             vec![
                 array_of_numbers(1),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "sym".to_string(),
                     ty: Type::Any,
@@ -954,6 +961,7 @@ mod symbol_keyed_element_reads {
                     )))),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 3,
                     name: "f".to_string(),
                     ty: Type::Any,
@@ -1006,6 +1014,7 @@ mod symbol_keyed_element_reads {
             vec![
                 array_of_numbers(1),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -1013,6 +1022,7 @@ mod symbol_keyed_element_reads {
                     init: Some(Expr::Integer(0)),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 3,
                     name: "v".to_string(),
                     ty: Type::Any,
@@ -1050,6 +1060,7 @@ mod number_result_tests;
 fn char_code_at_byte_store_ir(ty: Type, init: Expr) -> String {
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "s".to_string(),
             ty,

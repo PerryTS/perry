@@ -1,6 +1,7 @@
 use super::*;
 fn init() -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: 2,
         name: "m".into(),
         ty: Type::Any,
@@ -80,6 +81,7 @@ fn rejects_escapes_metadata_aliases_writes_and_multiple_captures() {
             byte_offset: 0,
         }),
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "alias".into(),
             ty: Type::Any,

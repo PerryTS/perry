@@ -562,6 +562,7 @@ fn infers_object_helper_runtime_values() {
 fn seeds_environment_from_module_declarations() {
     let mut module = Module::new("test");
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "value".to_string(),
         ty: Type::Number,
@@ -640,6 +641,7 @@ fn seeds_contextual_class_and_enum_facts_from_module() {
             key_expr: Expr::String("values".into()),
             function: Function {
                 body: vec![Stmt::Let {
+                    byte_offset: 0,
                     id: 99,
                     name: "index".into(),
                     ty: Type::Number,

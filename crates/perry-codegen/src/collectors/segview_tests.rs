@@ -54,6 +54,7 @@ fn for_of_next() -> Expr {
 
 fn let_(id: u32, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,

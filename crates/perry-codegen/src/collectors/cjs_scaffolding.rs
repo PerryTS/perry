@@ -712,6 +712,7 @@ mod tests {
 
     fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             ty: Type::Any,
@@ -724,6 +725,7 @@ mod tests {
     /// emits for `require` and `__cjs_module` and what R1 requires.
     fn let_const(id: u32, name: &str, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             ty: Type::Any,

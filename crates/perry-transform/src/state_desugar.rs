@@ -395,9 +395,11 @@ fn rewrite_init_decls(init: &mut Vec<Stmt>, bindings: &HashMap<LocalId, StateBin
                 ref ty,
                 mutable,
                 init: Some(_),
+                ..
             } if bindings.contains_key(&id) => {
                 let binding = &bindings[&id];
                 new_stmts.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id,
                     name: name.clone(),
                     ty: ty.clone(),
@@ -631,6 +633,7 @@ fn try_rewrite_foreach(
 
     // let __fe_host = VStack(0);
     body_stmts.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: host_id,
         name: format!("__fe_host_{}", host_id),
         ty: Type::Any,
@@ -648,6 +651,7 @@ fn try_rewrite_foreach(
     // __foreach_register call site sees the same SSA name as we'd want
     // to capture (avoids re-evaluating the closure construction expr).
     body_stmts.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: render_id,
         name: format!("__fe_render_{}", render_id),
         ty: Type::Any,
@@ -830,6 +834,7 @@ fn try_rewrite_navstack(
 
     // let __nav_host = NavStack();
     body_stmts.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: host_id,
         name: format!("__nav_host_{}", host_id),
         ty: Type::Any,
@@ -848,6 +853,7 @@ fn try_rewrite_navstack(
         let route_id = fresh.fresh_local();
         // let __nav_route_N = <body>;
         body_stmts.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: route_id,
             name: format!("__nav_route_{}", route_id),
             ty: Type::Any,
@@ -1126,6 +1132,7 @@ mod tests {
 
     fn state_let(id: LocalId, method: &str, initial: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("cell_{}", id),
             ty: Type::Any,

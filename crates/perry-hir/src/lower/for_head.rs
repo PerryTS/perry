@@ -124,6 +124,7 @@ pub(crate) fn for_head_binding_stmts(
 ) -> Result<Vec<Stmt>> {
     match binding {
         ForHeadBinding::DeclIdent { name, id } => Ok(vec![Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *id,
             name: name.clone(),
             ty: elem_ty,
@@ -202,6 +203,7 @@ pub(crate) fn for_head_binding_stmts(
             let tmp_name = format!("__forhead_{}", tmp_id);
             ctx.locals.push((tmp_name.clone(), tmp_id, Type::Any));
             let mut out = vec![Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: tmp_id,
                 name: tmp_name,
                 ty: Type::Any,
@@ -614,6 +616,7 @@ pub(crate) fn map_set_delete_safe_for_of(
         },
     ]);
     let mk_let = |id: LocalId, tag: &str, init: Expr| Stmt::Let {
+        byte_offset,
         id,
         name: format!("__miter_{}_{}", tag, id),
         ty: Type::Number,
