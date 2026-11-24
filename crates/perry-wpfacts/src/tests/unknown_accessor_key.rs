@@ -13,8 +13,8 @@ fn kind_verdict(define: &str, read: &str) -> Verdict {
         r#"
         declare const c: boolean;
         declare const name: string;
-        const h: any = (globalThis as any).hostFn();
-        const g: any = (globalThis as any).hostGet;
+        const h: any = (globalThis as any)[process.argv[2]]();
+        const g: any = (globalThis as any)[process.argv[2]];
         {define}
         class Node {{ kind: number; constructor(k: number) {{ this.kind = k; }} }}
         class Holder {{ a = 1; }}

@@ -93,7 +93,7 @@ fn a_written_to_primitive_is_read() {
 #[test]
 fn an_unknown_key_store_is_read() {
     let pf = converted(
-        "const k: any = (globalThis as any).hostKey(); (Float64Array.prototype as any)[k] = (globalThis as any).hostFn();",
+        "const k: any = (globalThis as any)[process.argv[2]](); (Float64Array.prototype as any)[k] = (globalThis as any)[process.argv[2]]();",
         "new Float64Array(2)",
         SET,
     );

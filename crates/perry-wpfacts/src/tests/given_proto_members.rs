@@ -119,7 +119,7 @@ fn an_unknown_receiver_hands_the_value_on() {
     let pf = facts(&format!(
         r#"{M}
 const k2 = String(Math.random());
-const b: any = (globalThis as any).hostFn();
+const b: any = (globalThis as any)[process.argv[2]]();
 const m = new M();
 b[k2] = m;
 console.log(m.run());
