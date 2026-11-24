@@ -328,6 +328,8 @@ pub(crate) fn push_len(ctx: &FnCtx<'_>, recv: &Expr) -> Option<u32> {
     else {
         return None;
     };
+    // offset 0: a `this.k` read codegen builds after facts (array_push.rs:868,
+    // collectors/proven_this.rs:220) names no site.
     if !matches!(object.as_ref(), Expr::This) || *byte_offset == 0 {
         return None;
     }

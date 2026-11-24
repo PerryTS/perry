@@ -458,7 +458,7 @@ fn mixed_reads(
                 .iter()
                 .filter(|s| s.access == crate::derive::Access::UpdateGet),
         ) {
-            if rs.byte_offset == 0 || rs.is_call || rs.value_call {
+            if rs.is_call || rs.value_call {
                 continue;
             }
             let key = m.atoms[rs.key as usize].clone();
@@ -538,7 +538,7 @@ pub(crate) fn export_reads(
             .iter()
             .filter(|s| s.access == crate::derive::Access::UpdateGet),
     ) {
-        if rs.byte_offset == 0 || rs.is_call || rs.value_call {
+        if rs.is_call || rs.value_call {
             continue;
         }
         let key = m.atoms[rs.key as usize].as_str();

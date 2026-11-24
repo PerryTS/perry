@@ -144,7 +144,7 @@ fn shape(f: &perry_hir::Function) -> Option<Shape> {
     let Expr::LocalGet(p) = index.as_ref() else {
         return None;
     };
-    if !matches!(base.as_ref(), Expr::This) || *byte_offset == 0 || *element_offset == 0 {
+    if !matches!(base.as_ref(), Expr::This) || *element_offset == 0 {
         return None;
     }
     let k = f.params.iter().position(|q| q.id == *p)?;
