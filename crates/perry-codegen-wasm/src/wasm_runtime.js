@@ -4968,6 +4968,7 @@ function perry_ui_open_file_dialog_data(accept, callback) {
     reader.onload = () => callWasmClosure(callback, file.name, String(reader.result));
     reader.readAsDataURL(file);
   });
+  input.addEventListener("cancel", () => input.remove());
   document.body.appendChild(input);
   input.click();
 }

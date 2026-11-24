@@ -1164,9 +1164,12 @@ const input = document.body.children.find(e => e.type === "file");
 input.files = [{ name: "note.txt", text: "hi there" }];
 input.dispatch("change");
 console.log("attached after pick=" + document.body.children.includes(input));
+document.body.appendChild(input);
+input.dispatch("cancel");
+console.log("attached after cancel=" + document.body.children.includes(input));
 "#
         ),
-        "click file image/*,.txt attached=true\nnote.txt data:text/plain;base64,aGkgdGhlcmU=\nattached after pick=false"
+        "click file image/*,.txt attached=true\nnote.txt data:text/plain;base64,aGkgdGhlcmU=\nattached after pick=false\nattached after cancel=false"
     );
 }
 
