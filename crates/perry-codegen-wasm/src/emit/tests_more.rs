@@ -1477,5 +1477,37 @@ for (const name of ["phone", "email", "count", "box", "pin"]) {
     );
 }
 
+// A root that `scripts/web_prerender.mjs` filled with a snapshot is emptied before the
+// live UI mounts, so the page shows one copy of the UI rather than the snapshot and it.
+#[test]
+fn app_replaces_a_prerendered_root_with_the_live_ui() {
+    let dom = format!(
+        "{WIDGET_DOM}{}",
+        r#"
+FakeElement.prototype.hasAttribute = function (name) { return name in this; };
+FakeElement.prototype.removeAttribute = function (name) { delete this[name]; };
+FakeElement.prototype.replaceChildren = function () { this.children = []; this.text = ""; };
+const root = new FakeElement("div");
+root.id = "perry-root";
+root.setAttribute("data-perry-prerendered", "");
+root.appendChild(new FakeElement("span")).text = "snapshot";
+document.getElementById = id => (id === "perry-root" ? root : null);
+"#
+    );
+    assert_eq!(
+        run_web_source_with_dom(
+            r#"
+import { App, Text, VStack } from "perry/ui";
+App({ title: "t", width: 320, height: 240, body: VStack(4, [Text("live")]) });
+"#,
+            &dom,
+            r#"
+console.log(JSON.stringify(root.textContent) + " " + root.hasAttribute("data-perry-prerendered"));
+"#
+        ),
+        "\"live\" false"
+    );
+}
+
 #[path = "array_iterator_tests.rs"]
 mod array_iterator;

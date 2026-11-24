@@ -3994,6 +3994,11 @@ function perry_ui_app_create(titleOrOpts, width, height) {
   } else { title = titleOrOpts || title; w = width || w; ht = height || ht; }
   document.title = title;
   const root = uiGetRoot();
+  // A page snapshotted by scripts/web_prerender.mjs ships its rendered DOM inside the root
+  // for crawlers and for readers before the WASM boots; the live UI replaces it.
+  if (root.hasAttribute("data-perry-prerendered")) {
+    root.replaceChildren(); root.removeAttribute("data-perry-prerendered");
+  }
   root.style.width = w + "px"; root.style.maxWidth = "100%"; root.style.height = ht + "px"; root.style.maxHeight = "100%";
   const h = uiAlloc(root);
   if (bodyH !== undefined) { const bodyEl = uiGet(bodyH); if (bodyEl) root.appendChild(bodyEl); }
