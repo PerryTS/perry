@@ -89,6 +89,25 @@ console.log([Reflect.ownKeys(new A()).join("+"), Reflect.ownKeys(A.prototype).le
     );
 }
 
+// A wrapper-object key names the same property as its primitive, and a program's own key
+// that only looks internal stays visible.
+#[test]
+fn wrapper_and_lookalike_keys() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function q() {}
+const look: any = { __perry_computed_field_key_user: 1 };
+const o: any = { x: 1 };
+const K: any = Object("x");
+const d: any = Object.getOwnPropertyDescriptor(o, K);
+console.log([Object.getOwnPropertyDescriptor(q, Object("captures") as any) === undefined, Object.hasOwn(q, Object("captures") as any), d.value, Object.hasOwn(o, K), Reflect.ownKeys(look).length, Object.hasOwn(look, "__perry_computed_field_key_user")].join(","));
+"#
+        ),
+        "true,false,1,true,1,true"
+    );
+}
+
 #[test]
 fn a_function_declaration_has_a_name() {
     assert_eq!(
@@ -110,15 +129,16 @@ fn json_stringify_omits_closures() {
         run_web_source(
             r#"
 const f = () => 1;
+class R { static r(k: string, v: any): any { return k === "n" ? f : v; } }
 const acc: any = {};
 Object.defineProperty(acc, "x", { set: (v: any) => {}, configurable: true });
-console.log(JSON.stringify(Object.getOwnPropertyDescriptor(acc, "x")));
+console.log(JSON.stringify({ n: 1, m: 2 }, R.r) + JSON.stringify(Object.getOwnPropertyDescriptor(acc, "x")));
 console.log(JSON.stringify({ f, a: [f], n: 1 }) + JSON.stringify(f) + JSON.stringify({ f, n: 1 }, ["f", "n"]) + JSON.stringify(Object.create(f)));
 console.log(JSON.stringify({ f, n: 1 }, (k, v) => (typeof v === "function" ? "fn" : v)) + JSON.stringify({ n: 1 }, (k, v) => (k === "n" ? f : v)));
 console.log(JSON.stringify({ f }, (k, v) => (JSON.stringify({ f }) === "{}" && typeof v === "function" ? "fn" : v)) + ("toJSON" in f));
 "#
         ),
-        "{\"enumerable\":false,\"configurable\":true}\n{\"a\":[null],\"n\":1}undefined{\"n\":1}{}\n{\"f\":\"fn\",\"n\":1}{}\n{\"f\":\"fn\"}false"
+        "{\"m\":2}{\"enumerable\":false,\"configurable\":true}\n{\"a\":[null],\"n\":1}undefined{\"n\":1}{}\n{\"f\":\"fn\",\"n\":1}{}\n{\"f\":\"fn\"}false"
     );
 }
 

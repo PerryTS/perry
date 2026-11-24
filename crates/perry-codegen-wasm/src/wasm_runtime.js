@@ -1969,7 +1969,7 @@ function __isInternalKey(obj, key) {
     return __internalSymbols.has(key) || (key === Symbol.hasInstance && __perryClassCtors.has(obj));
   }
   if (key === 'funcIdx' || key === 'captures') return __isPerryClosure(obj) || __classMethodFns.has(obj);
-  return typeof key === 'string' && key.startsWith('__perry_computed_field_key_');
+  return typeof key === 'string' && key.startsWith('__perry_computed_field_key_') && __perryClassCtors.has(obj);
 }
 const __classTemplates = new Map();
 let __classEnvCall = null;
@@ -2428,7 +2428,7 @@ const __memDispatch = {
   object_define_properties: (obj, props) => Object.defineProperties(obj, __hostDescriptors(props)),
   reflect_define_property: (obj, key, desc) => {
     if (!__holdsProperties(obj)) return Reflect.defineProperty(obj, key, desc);
-    const k = __holdsProperties(key) ? Reflect.ownKeys({ [key]: 0 })[0] : key;
+    const k = __memDispatch.to_property_key(key);
     return Reflect.defineProperty(obj, k, __hostDescriptor(desc));
   },
   reflect_has: (obj, key) => Reflect.has(obj, key),
@@ -2436,20 +2436,27 @@ const __memDispatch = {
   reflect_get_own_property_descriptor: (obj, key) => __holdsProperties(obj)
     ? __memDispatch.object_get_own_property_descriptor(obj, key)
     : Reflect.getOwnPropertyDescriptor(obj, key),
-  object_has_own: (obj, key) => Object.hasOwn(obj, key) && !__isInternalKey(obj, key),
+  object_has_own: (obj, key) => {
+    if (obj === null || obj === undefined) return Object.hasOwn(obj, key);
+    const k = __memDispatch.to_property_key(key);
+    return Object.hasOwn(obj, k) && !__isInternalKey(obj, k);
+  },
   object_get_own_property_names: (obj) => Object.getOwnPropertyNames(obj).filter(k => !__isInternalKey(obj, k)),
   object_get_own_property_symbols: (obj) => Object.getOwnPropertySymbols(obj).filter(k => !__isInternalKey(obj, k)),
   object_get_own_property_descriptors: (obj) => {
+    if (obj === null || obj === undefined) return Object.getOwnPropertyDescriptors(obj);
     const descs = {};
-    for (const key of [...__memDispatch.object_get_own_property_names(obj), ...__memDispatch.object_get_own_property_symbols(obj)]) {
+    for (const key of __memDispatch.reflect_own_keys(Object(obj))) {
       const value = __memDispatch.object_get_own_property_descriptor(obj, key);
       Object.defineProperty(descs, key, { value, writable: true, enumerable: true, configurable: true });
     }
     return descs;
   },
   object_get_own_property_descriptor: (obj, key) => {
-    if (__isInternalKey(obj, key)) return undefined;
-    const desc = Object.getOwnPropertyDescriptor(obj, key);
+    if (obj === null || obj === undefined) return Object.getOwnPropertyDescriptor(obj, key);
+    const k = __memDispatch.to_property_key(key);
+    if (__isInternalKey(obj, k)) return undefined;
+    const desc = Object.getOwnPropertyDescriptor(obj, k);
     if (desc && desc.set !== undefined && classStaticFieldAccessors.get(desc.get) === desc.set) {
       return { value: desc.get.call(obj), writable: true, enumerable: desc.enumerable, configurable: desc.configurable };
     }
@@ -3136,11 +3143,13 @@ const __memDispatch = {
   // closure value is omitted as a function is, through a `toJSON` its prototype has
   // only meanwhile; a replacer function gets the closure itself.
   json_stringify: (val, replacer, space) => {
-    const replace = replacer && typeof replacer.funcIdx !== 'undefined'
-      ? (key, value) => {
-        const result = callWasmClosure(replacer, key, value);
-        return __isPerryClosure(result) ? undefined : result;
-      } : replacer;
+    const call = replacer && typeof replacer.funcIdx !== 'undefined'
+      ? (_, args) => callWasmClosure(replacer, ...args)
+      : typeof replacer === 'function' && ((holder, args) => Reflect.apply(replacer, holder, args));
+    const replace = call ? function (...args) {
+      const result = call(this, args);
+      return __isPerryClosure(result) ? undefined : result;
+    } : replacer;
     const proto = __PerryClosure.prototype;
     const outer = Object.getOwnPropertyDescriptor(proto, 'toJSON');
     if (typeof replace === 'function') delete proto.toJSON;
