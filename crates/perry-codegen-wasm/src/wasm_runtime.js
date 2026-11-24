@@ -2552,7 +2552,7 @@ const __memDispatch = {
     if (fn === undefined) return Array.from(val);
     if (__typeOf(fn) !== 'function') {
       const what = fn === null ? 'object null' : typeof fn === 'string' ? `string "${fn}"`
-        : typeof fn === 'object' ? 'object' : `${typeof fn} ${String(fn)}`;
+        : ['object', 'bigint', 'symbol'].includes(typeof fn) ? typeof fn : `${typeof fn} ${fn}`;
       throw new TypeError(`${what} is not a function`);
     }
     return Array.from(val, (v, i) => {

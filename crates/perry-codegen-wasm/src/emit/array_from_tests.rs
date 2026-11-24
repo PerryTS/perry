@@ -87,7 +87,7 @@ fn array_from_with_a_non_callable_map_fn_throws_type_error() {
     assert_eq!(
         run_web_source(
             r#"
-const bad: any[] = [42, {}, "x", null];
+const bad: any[] = [42, {}, "x", null, Symbol("s")];
 function sync(): string {
   const out: string[] = [];
   for (const f of bad) {
@@ -117,6 +117,6 @@ console.log(sync());
 inAsync().then((v) => console.log(v), (e) => console.log("rejected " + e.message));
 "#
         ),
-        "true:number 42 is not a function | true:object is not a function | true:string \"x\" is not a function | true:object null is not a function | true:number 42 is not a function | [1,2]\ntrue:number 42 is not a function"
+        "true:number 42 is not a function | true:object is not a function | true:string \"x\" is not a function | true:object null is not a function | true:symbol is not a function | true:number 42 is not a function | [1,2]\ntrue:number 42 is not a function"
     );
 }
