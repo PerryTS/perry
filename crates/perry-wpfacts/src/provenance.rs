@@ -59,10 +59,10 @@ impl Prov {
         relations: bool,
         mods: impl FnOnce() -> Vec<String>,
     ) -> Option<Box<Prov>> {
-        let out = match std::env::var_os("PERRY_FACTS_DUMP") {
+        let out = match env_os("PERRY_FACTS_DUMP") {
             Some(mut path)
                 if relations
-                    && std::env::var("PERRY_FACTS_PROVENANCE").ok().as_deref() == Some("1") =>
+                    && env("PERRY_FACTS_PROVENANCE").as_deref() == Some("1") =>
             {
                 path.push(".prov");
                 match std::fs::File::create(&path) {
@@ -75,7 +75,7 @@ impl Prov {
             }
             _ => None,
         };
-        let mut stop = match std::env::var("PERRY_FACTS_STOP").ok().as_deref() {
+        let mut stop = match env("PERRY_FACTS_STOP").as_deref() {
             Some("hold") => STOP_HOLD,
             Some("realm") => STOP_REALM,
             Some("realm-all") => STOP_REALM_ALL,
@@ -85,8 +85,7 @@ impl Prov {
         // `PERRY_FACTS_STOP_SOLVE=<n>` (diagnostic): the stop applies in
         // solve n only (1 is the activation pass), so a later solve's hold
         // can be traced past an earlier one. The other solves still count.
-        let only = std::env::var("PERRY_FACTS_STOP_SOLVE")
-            .ok()
+        let only = env("PERRY_FACTS_STOP_SOLVE")
             .and_then(|s| s.parse::<u32>().ok());
         let counted = (stop != STOP_NONE && only.is_some())
             .then(|| SOLVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1);
@@ -94,7 +93,7 @@ impl Prov {
             stop = STOP_NONE;
         }
         let why = (stop != STOP_NONE
-            || std::env::var("PERRY_FACTS_WHY").ok().as_deref() == Some("1"))
+            || env("PERRY_FACTS_WHY").as_deref() == Some("1"))
         .then(|| {
             let solve = counted
                 .unwrap_or_else(|| SOLVES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1);
@@ -122,7 +121,7 @@ impl Prov {
                 sel_checked: Default::default(),
                 mints: Default::default(),
                 implicit_by: Default::default(),
-                arrive: std::env::var("PERRY_FACTS_WHY_ARRIVE").ok().as_deref() == Some("1"),
+                arrive: env("PERRY_FACTS_WHY_ARRIVE").as_deref() == Some("1"),
             }
         });
         if out.is_none() && why.is_none() {
@@ -345,7 +344,55 @@ impl Model {
 // exits with 86. Never read by the facts; unset, `Model::prov` is `None`.
 
 static SOLVES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
-static LAST: std::sync::Mutex<Vec<WhyHop>> = std::sync::Mutex::new(Vec::new());
+
+thread_local! {
+    /// The chain the last hold of this thread printed (`take_chain`).
+    static LAST: std::cell::RefCell<Vec<WhyHop>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A test's diagnostic settings (`with_env`), seen by its thread only.
+    static TEST_ENV: std::cell::RefCell<Option<Vec<(String, String)>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// A diagnostic setting: the process environment's or, inside a test's
+/// `with_env`, that test's own, so a test never changes what the tests
+/// running beside it see.
+fn env(k: &str) -> Option<String> {
+    #[cfg(test)]
+    if let Some(v) = TEST_ENV.with(|e| {
+        e.borrow()
+            .as_ref()
+            .map(|vs| vs.iter().find(|(a, _)| a == k).map(|(_, v)| v.clone()))
+    }) {
+        return v;
+    }
+    std::env::var(k).ok()
+}
+
+/// `env` for a path (not necessarily UTF-8).
+fn env_os(k: &str) -> Option<std::ffi::OsString> {
+    #[cfg(test)]
+    if TEST_ENV.with(|e| e.borrow().is_some()) {
+        return env(k).map(Into::into);
+    }
+    std::env::var_os(k)
+}
+
+/// Runs `f` with the diagnostic settings `vars` and no others (tests).
+#[cfg(test)]
+pub fn with_env<R>(vars: &[(&str, &str)], f: impl FnOnce() -> R) -> R {
+    let vs = vars
+        .iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+    let prev = TEST_ENV.with(|e| e.replace(Some(vs)));
+    let r = f();
+    TEST_ENV.with(|e| *e.borrow_mut() = prev);
+    r
+}
 
 /// A value a node holds, at the record's grain.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
@@ -398,7 +445,7 @@ pub(crate) struct Sel {
 }
 
 fn parse_sel() -> Vec<Sel> {
-    let Ok(v) = std::env::var("PERRY_FACTS_WHY_AT") else {
+    let Some(v) = env("PERRY_FACTS_WHY_AT") else {
         return Vec::new();
     };
     v.split(',')
@@ -581,7 +628,7 @@ impl std::fmt::Display for WhyHop {
 /// The chain the last hold of this process printed (tests).
 #[cfg(test)]
 pub fn take_chain() -> Vec<WhyHop> {
-    std::mem::take(&mut *LAST.lock().unwrap_or_else(|e| e.into_inner()))
+    LAST.with(|l| std::mem::take(&mut *l.borrow_mut()))
 }
 
 impl Model {
@@ -1464,7 +1511,7 @@ impl Model {
             "WHY solve={solve} END hops={} records={recs} nodes={nodes}",
             hops.len()
         );
-        *LAST.lock().unwrap_or_else(|e| e.into_inner()) = hops;
+        LAST.with(|l| *l.borrow_mut() = hops);
         if stop && !cfg!(test) {
             use std::io::Write as _;
             let _ = std::io::stderr().flush();

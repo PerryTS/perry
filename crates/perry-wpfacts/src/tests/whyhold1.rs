@@ -10,13 +10,13 @@ const SRC: &str = "declare function sink(x: any): void;\nfunction make() {\n  re
 /// so this control runs beside an unseen module (`import "unseen-host"`).
 #[test]
 fn chain_from_hold_reaches_the_seed() {
-    std::env::set_var("PERRY_FACTS_WHY", "1");
     let path = "t.ts".to_string();
     let module = perry_parser::parse_typescript(&unseen(SRC), &path).expect("parses");
     let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
     let _ = crate::provenance::take_chain();
-    let _ = crate::compute(&[(path, &hir)], &FactsConfig::default());
-    std::env::remove_var("PERRY_FACTS_WHY");
+    crate::provenance::with_env(&[("PERRY_FACTS_WHY", "1")], || {
+        crate::compute(&[(path, &hir)], &FactsConfig::default())
+    });
     let c = crate::provenance::take_chain();
     for h in &c {
         eprintln!("{h}");
@@ -59,17 +59,13 @@ fn chain_from_hold_reaches_the_seed() {
 }
 
 fn chain_with(src: &str, env: &[(&str, &str)]) -> Vec<crate::provenance::WhyHop> {
-    for (k, v) in env {
-        std::env::set_var(k, v);
-    }
     let path = "t.ts".to_string();
     let module = perry_parser::parse_typescript(src, &path).expect("parses");
     let hir = perry_hir::lower_module(&module, "t", &path).expect("lowers");
     let _ = crate::provenance::take_chain();
-    let _ = crate::compute(&[(path, &hir)], &FactsConfig::default());
-    for (k, _) in env {
-        std::env::remove_var(k);
-    }
+    crate::provenance::with_env(env, || {
+        crate::compute(&[(path, &hir)], &FactsConfig::default())
+    });
     let c = crate::provenance::take_chain();
     for h in &c {
         eprintln!("{h}");
