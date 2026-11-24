@@ -969,6 +969,18 @@ fn install_declared_static_method_bytes(class_id: u32, name: &[u8]) {
     if f.is_null() {
         return;
     }
+    // Capture zero is the method's home, the class function object, as for an
+    // evaluation's own static methods: `js_class_method_home` reads a static
+    // `super` home from it. Installed before the name, which ends the
+    // closure's pointer-free birth state.
+    // SAFETY: `f` is fresh from `js_closure_alloc` with one capture slot, and
+    // collection is suppressed.
+    unsafe {
+        crate::closure::closure_install_boxed_captures(
+            f,
+            &[crate::value::js_nanbox_pointer(ptr as i64).to_bits()],
+        );
+    }
     crate::object::native_module::set_function_name_bytes(
         crate::value::js_nanbox_pointer(f as i64),
         name,

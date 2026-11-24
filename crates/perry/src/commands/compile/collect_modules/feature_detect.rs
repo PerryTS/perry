@@ -378,7 +378,7 @@ fn module_uses_webassembly_namespace(module: &perry_hir::Module) -> bool {
         }
         // Computed keys can still be locals here, before constant propagation.
         // The caller retains the WebAssembly token guard for these reads.
-        if let (Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }) = expr {
+        if let Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } = expr {
             if is_global_receiver(object) {
                 return true;
             }

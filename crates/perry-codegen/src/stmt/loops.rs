@@ -4629,7 +4629,7 @@ fn match_object_array_write_loop(
             // #6812 (w12): `o[K[idx]] = v` — a table-driven lane. Only as
             // the SOLE store of the sole group (v1); recognized before the
             // static key forms and finalized after the loop.
-            if let (Expr::IndexGet {
+            if let Expr::IndexGet {
                 object: table_obj,
                 index: table_idx,
                 ..
@@ -4638,7 +4638,7 @@ fn match_object_array_write_loop(
                 object: table_obj,
                 index: table_idx,
                 ..
-            }) = key.as_ref()
+            } = key.as_ref()
             {
                 if let Expr::LocalGet(table_id) = table_obj.as_ref() {
                     if properties.is_empty()

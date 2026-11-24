@@ -4114,6 +4114,30 @@ function perry_ui_picker_create(callback) {
   });
   return uiAlloc(el);
 }
+// DatePicker: an `<input type="date">`, whose value is already the ISO `yyyy-MM-dd` string
+// the native backends report. `year`/`month` are 1-based; out of range defaults to 2026-01.
+function __isoDate(year, month, day) {
+  const y = (year >= 1 && year <= 9999) ? (year | 0) : 2026;
+  const m = (month >= 1 && month <= 12) ? (month | 0) : 1;
+  // A date input drops a date that does not exist, so the day stops at the month's last.
+  const d = day >= 1 ? __Math.min(day | 0, new Date(Date.UTC(y, m, 0)).getUTCDate()) : 1;
+  return String(y).padStart(4, "0") + "-" + String(m).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+}
+function perry_ui_date_picker_create(year, month, callback) {
+  const el = document.createElement("input"); el.type = "date";
+  el.value = __isoDate(year, month, 1);
+  el._perryCallback = callback;
+  el.addEventListener("change", () => {
+    if (el._perryCallback !== undefined && el.value) callWasmClosure(el._perryCallback, el.value);
+  });
+  return uiAlloc(el);
+}
+function perry_ui_date_picker_set_date(h, year, month, day) {
+  const el = uiGet(h); if (el) el.value = __isoDate(year, month, day);
+}
+function perry_ui_date_picker_get_selected_date(h) {
+  const el = uiGet(h); return el ? el.value : undefined;
+}
 function perry_ui_wheel_picker_create(callback) {
   const el = document.createElement("select");
   el.size = 5;
@@ -6045,6 +6069,7 @@ const __perryUiDispatch = {
   perry_ui_table_set_column_header, perry_ui_table_set_column_width,
   perry_ui_table_update_row_count, perry_ui_table_set_on_row_select, perry_ui_table_get_selected_row,
   perry_ui_textarea_create, perry_ui_textarea_set_string, perry_ui_textarea_get_string,
+  perry_ui_date_picker_create, perry_ui_date_picker_set_date, perry_ui_date_picker_get_selected_date,
   perry_ui_vstack_create_with_insets, perry_ui_hstack_create_with_insets,
   // Child management
   perry_ui_widget_add_child, perry_ui_widget_remove_all_children,
