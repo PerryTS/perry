@@ -132,6 +132,9 @@ impl Model {
         if self.nodes[n as usize].fam_watch == WATCH_PROTO {
             for &p in ts {
                 if p == TOP {
+                    if self.rfam.explain_off {
+                        eprintln!("K3FAMOFF_TOPPROTO\t{}\t{}", self.tok_name(h), self.proto_why(h));
+                    }
                     self.rfam.top_proto.push(h);
                     let fs: Vec<FnIdx> = self
                         .rfam
@@ -173,7 +176,18 @@ impl Model {
         if r.keys.contains(&a) {
             self.rfam_member(f, h);
         } else {
-            self.rfam_off(f, || format!("held by {h} under another key {a}"));
+            let why = if self.rfam.explain_off {
+                let homes: Vec<&str> = r.keys.iter().map(|&k| self.key_str(k)).collect();
+                format!(
+                    "held by {h} under another key {a}\t{}\t{}\t{}",
+                    self.tok_name(h),
+                    self.key_str(a),
+                    homes.join("|")
+                )
+            } else {
+                String::new()
+            };
+            self.rfam_off(f, || why);
         }
     }
 
@@ -288,6 +302,72 @@ impl Model {
     fn fam_this(&self, t: Tok) -> bool {
         !(self.rfam.no_proto && matches!(self.toks[t as usize], TokKind::Proto(_)))
             && self.escaped.contains_key(&t)
+    }
+
+    /// `PERRY_K3_FAMOFF` (report only): a key's spelling.
+    fn key_str(&self, a: Atom) -> &str {
+        if a == NO_HOME_KEY {
+            return "<any key>";
+        }
+        self.atoms.get(a as usize).map_or("<?>", |s| s.as_str())
+    }
+
+    /// `PERRY_K3_FAMOFF` (report only): where the chain of `h` comes from.
+    fn proto_why(&self, h: Tok) -> String {
+        match &self.toks[h as usize] {
+            TokKind::Proto(tm) => {
+                let t = &self.tmpls[*tm as usize];
+                let pv = t.parent_value.map(|(a, b)| {
+                    let top = |n: NodeId| self.nodes[n as usize].pts.contains_tok(TOP);
+                    format!(
+                        "parent_value {}:{} top={} prototype {}:{} top={}",
+                        a,
+                        self.labels[a as usize],
+                        top(a),
+                        b,
+                        self.labels[b as usize],
+                        top(b)
+                    )
+                });
+                format!(
+                    "static_parent={} native_parent={:?} {}",
+                    t.parent.is_some(),
+                    t.native_parent.as_ref().map(|(_, n)| n.clone()),
+                    pv.unwrap_or_else(|| "no parent_value".into())
+                )
+            }
+            k => format!("{:?}", std::mem::discriminant(k)),
+        }
+    }
+
+    /// `PERRY_K3_FAMOFF` (report only): the family sizes after the solve.
+    pub(crate) fn rfam_report(&self) {
+        if !self.rfam.explain_off {
+            return;
+        }
+        let (mut live, mut members, mut given, mut dsts) = (0usize, 0usize, 0usize, 0usize);
+        let mut big: Vec<(usize, usize, &str)> = Vec::new();
+        for (&f, r) in &self.rfam.fams {
+            if r.off {
+                continue;
+            }
+            live += 1;
+            members += r.members.len();
+            given += r.given.len() * r.dsts.len();
+            dsts += r.dsts.len() + r.watch.len();
+            big.push((r.given.len(), r.dsts.len(), self.funcs[f as usize].name.as_str()));
+        }
+        eprintln!(
+            "K3FAMOFF_SZ\tfams={}\tlive={live}\tmembers={members}\tgiven_x_dsts={given}\tthis_nodes={dsts}\ttop_proto={}\trev_proto={}\tnodes={}",
+            self.rfam.fams.len(),
+            self.rfam.top_proto.len(),
+            self.rfam.rev_proto.values().map(|v| v.len()).sum::<usize>(),
+            self.nodes.len()
+        );
+        big.sort_unstable_by(|a, b| b.cmp(a));
+        for (g, d, n) in big.into_iter().take(8) {
+            eprintln!("K3FAMOFF_BIG\t{n}\tgiven={g}\tdsts={d}");
+        }
     }
 
     /// A token `escape_this` adds itself beside the family.

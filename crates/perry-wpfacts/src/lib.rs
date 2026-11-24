@@ -1105,6 +1105,7 @@ fn compute_act<'a>(
         derive::derive(&mut g)
     };
     k3_census::write(&g);
+    g.m.rfam_report();
     // Value records (DESIGN-p4l4 §2): a verdict per literal template, after
     // the templates and sites, before any representation reads them.
     g.m.record_array_join_sabotage = cfg.sabotage.as_deref() == Some("vrarrjoin");
