@@ -18,6 +18,7 @@ impl WasmModuleEmitter {
             .collect();
         let params_str = params.join(", ");
 
+        self.js_preallocated.borrow_mut().clear();
         let mut body = String::new();
         let scoped_names = scoped_js::scoped_js_names(&func.body);
         if !scoped_names.is_empty() {
@@ -87,7 +88,9 @@ impl WasmModuleEmitter {
                     Some(init_expr) => self.emit_js_expr(init_expr, locals),
                     None => "u64ToF64(TAG_UNDEFINED)".to_string(),
                 };
-                if self.js_boxed(*id) {
+                if self.js_preallocated.borrow().contains(id) {
+                    out.push_str(&format!("{pad}    {name}.value = toJsValue({val});\n"));
+                } else if self.js_boxed(*id) {
                     out.push_str(&format!(
                         "{pad}    var {name} = {{ value: toJsValue({val}) }};\n"
                     ));
@@ -269,10 +272,17 @@ impl WasmModuleEmitter {
                 }
                 out.push_str(&format!("{pad}    }}\n"));
             }
-            // Issue #569: PreallocateBoxes is a perry-codegen-only directive
-            // — JS hoisting handles forward refs natively, so the wasm/JS
-            // backend has no equivalent to emit.
-            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
+            // A closure created before its captured binding's `Let` shares the cell made
+            // here, as in the WASM arm; a TDZ cell starts as `undefined` there too.
+            Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
+                for id in ids.iter().filter(|id| self.js_boxed(**id)) {
+                    let name = format!("__l{}", id);
+                    locals.insert(*id, name.clone());
+                    out.push_str(&format!("{pad}    var {name} = {{ value: undefined }};\n"));
+                    self.js_preallocated.borrow_mut().insert(*id);
+                }
+            }
+            Stmt::ReleaseBoxes(_) => {}
         }
     }
 
