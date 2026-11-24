@@ -259,6 +259,7 @@ pub(crate) fn variant(e: &impl std::fmt::Debug, pre: &str) -> &'static str {
 pub(crate) fn unlocated_kind(e: &perry_hir::Expr) -> Option<&'static str> {
     use perry_hir::Expr;
     Some(match e {
+        Expr::Call { byte_offset: 0, .. } if perry_hir::tdz_check::is_dead_zone_op(e) => "TdzCheck",
         Expr::Call { byte_offset: 0, .. } => "Call",
         Expr::CallSpread { byte_offset: 0, .. } => "CallSpread",
         Expr::PropertyGet { byte_offset: 0, .. } => "PropertyGet",
@@ -279,6 +280,16 @@ pub(crate) fn unlocated_kind(e: &perry_hir::Expr) -> Option<&'static str> {
         Expr::ObjectSuperMethodCall { byte_offset: 0, .. } => "ObjectSuperMethodCall",
         _ => return None,
     })
+}
+
+/// The site-identity kind of an HIR expression for the census: its variant
+/// name, except a dead-zone operation, which is its own kind (`TdzCheck`).
+pub(crate) fn expr_kind(e: &perry_hir::Expr) -> &'static str {
+    if perry_hir::tdz_check::is_dead_zone_op(e) {
+        "TdzCheck"
+    } else {
+        variant(e, "")
+    }
 }
 
 pub(crate) fn expr_offset(e: &perry_hir::Expr) -> Option<u32> {

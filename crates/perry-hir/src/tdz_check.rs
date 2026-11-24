@@ -107,6 +107,16 @@ pub fn without_checks(mut expr: &Expr) -> &Expr {
     expr
 }
 
+/// True when `expr` is a dead-zone operation (`check`, `check_then` or
+/// `throw`): an operation of its own kind, told by its runtime callee, not a
+/// call of the program (a check inside `f(x)` and the call `f(x)` are two
+/// sites that share a start).
+pub fn is_dead_zone_op(expr: &Expr) -> bool {
+    matches!(expr, Expr::Call { callee, .. }
+        if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
+            if name == TDZ_CHECK || name == TDZ_CHECK_THEN || name == TDZ_THROW))
+}
+
 /// True when `expr` is a read check `check(id)` (not `check_then`).
 pub fn is_read_check(expr: &Expr) -> bool {
     matches!(expr, Expr::Call { callee, args, .. }
