@@ -1770,6 +1770,13 @@ export function alertWithButtons(
   callback: (index: number) => void,
 ): void;
 export function openFileDialog(callback: (path: string) => void): void;
+/**
+ * Web: pick a file and receive its name and its contents as a base64 `data:` URL,
+ * which is what a page needs to upload it (`openFileDialog` gives a browser page only
+ * the name). `accept` filters the picker: "image/*", ".pdf", or "" for any file.
+ * Native backends open no dialog; read the path from `openFileDialog` instead.
+ */
+export function openFileDialogData(accept: string, callback: (name: string, dataUrl: string) => void): void;
 export function openFolderDialog(callback: (path: string) => void): void;
 export function saveFileDialog(callback: (path: string) => void, defaultName: string, extension: string): void;
 export function pollOpenFile(): string;

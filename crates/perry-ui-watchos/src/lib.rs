@@ -896,6 +896,12 @@ pub extern "C" fn perry_ui_menu_clear(_menu: i64) {}
 pub extern "C" fn perry_ui_menu_add_standard_action(_m: i64, _t: i64, _sel: i64, _s: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_open_file_dialog(_cb: f64) {}
+
+/// A file's contents as a `data:` URL is what a browser page needs to upload it; a
+/// native program reads the path from `openFileDialog` instead, so this backend opens
+/// no dialog and never calls `callback`.
+#[no_mangle]
+pub extern "C" fn perry_ui_open_file_dialog_data(_accept_ptr: i64, _callback: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_min_size(_app: i64, _w: f64, _h: f64) {}
 #[no_mangle]

@@ -17,6 +17,18 @@ cancels.
 {{#include ../../examples/ui/dialogs/snippets.ts:open-file}}
 ```
 
+On the web target the callback receives only the file's name, since a page
+cannot read a path. `openFileDialogData(accept, callback)` delivers the name and
+the contents as a base64 `data:` URL, ready for an upload request; `accept`
+filters the picker (`"image/*"`, `".pdf"`, or `""` for any file). Native
+backends open no dialog for it; read the path from `openFileDialog` instead.
+
+```typescript,no-test
+openFileDialogData("image/*", (name: string, dataUrl: string) => {
+  fetch("/api/photos", { method: "POST", body: JSON.stringify({ name, dataUrl }) });
+});
+```
+
 ## Folder Selection Dialog
 
 ```typescript

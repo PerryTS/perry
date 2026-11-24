@@ -1138,6 +1138,38 @@ console.log(el.style.width);
     );
 }
 
+// `openFileDialogData` opens a file input attached to the document and hands the
+// callback the file's name and its contents as a base64 `data:` URL.
+#[test]
+fn open_file_dialog_data_delivers_the_name_and_a_data_url() {
+    let dom = format!(
+        "{WIDGET_DOM}{}",
+        r#"
+FakeElement.prototype.click = function () { console.log("click " + this.type + " " + this.accept + " attached=" + document.body.children.includes(this)); };
+FakeElement.prototype.remove = function () { document.body.children = document.body.children.filter(c => c !== this); };
+globalThis.FileReader = class {
+  readAsDataURL(file) { this.result = "data:text/plain;base64," + Buffer.from(file.text).toString("base64"); this.onload(); }
+};
+"#
+    );
+    assert_eq!(
+        run_web_source_with_dom(
+            r#"
+import { openFileDialogData } from "perry/ui";
+openFileDialogData("image/*,.txt", (name: string, dataUrl: string) => { console.log(name + " " + dataUrl); });
+"#,
+            &dom,
+            r#"
+const input = document.body.children.find(e => e.type === "file");
+input.files = [{ name: "note.txt", text: "hi there" }];
+input.dispatch("change");
+console.log("attached after pick=" + document.body.children.includes(input));
+"#
+        ),
+        "click file image/*,.txt attached=true\nnote.txt data:text/plain;base64,aGkgdGhlcmU=\nattached after pick=false"
+    );
+}
+
 // A static method called with spread arguments receives the closure itself, not a host wrapper.
 #[test]
 fn a_spread_call_to_a_static_method_passes_closures_unchanged() {

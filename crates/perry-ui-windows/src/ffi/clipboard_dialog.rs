@@ -27,6 +27,12 @@ pub extern "C" fn perry_ui_open_file_dialog(callback: f64) {
     file_dialog::open_dialog(callback);
 }
 
+/// A file's contents as a `data:` URL is what a browser page needs to upload it; a
+/// native program reads the path from `openFileDialog` instead, so this backend opens
+/// no dialog and never calls `callback`.
+#[no_mangle]
+pub extern "C" fn perry_ui_open_file_dialog_data(_accept_ptr: i64, _callback: f64) {}
+
 /// Open a folder dialog.
 #[no_mangle]
 pub extern "C" fn perry_ui_open_folder_dialog(callback: f64) {
