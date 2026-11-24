@@ -60,7 +60,7 @@ third_party/windows-winui/windows-reactor/src/bindings.rs	26441
 # Upstream Windows Reactor backend; preserve layout for vendor comparisons.
 third_party/windows-winui/windows-reactor/src/winui/backend/mod.rs	4035
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
-crates/perry-wpfacts/src/derive.rs	3760
+crates/perry-wpfacts/src/derive.rs	3773
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
 crates/perry-wpfacts/src/builtins.rs	3132
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
