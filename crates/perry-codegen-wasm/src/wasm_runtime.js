@@ -2538,9 +2538,16 @@ const __memDispatch = {
   array_is_array: (val) => Array.isArray(val) ? 1 : 0,
   array_from: (val) => Array.from(val),
   // `Array.from(value, mapFn, thisArg)`: mapFn receives (element, index), with `this`
-  // bound to thisArg.
-  array_from_mapped: (val, fn, thisArg) =>
-    Array.from(val, (v, i) => __memDispatch.reflect_apply(fn, thisArg, [v, i])),
+  // bound to thisArg. An undefined mapFn maps nothing. An exception mapFn left pending
+  // is thrown here, so the host stops and closes the iterator.
+  array_from_mapped: (val, fn, thisArg) => {
+    if (fn === undefined) return Array.from(val);
+    return Array.from(val, (v, i) => {
+      const mapped = __memDispatch.reflect_apply(fn, thisArg, [v, i]);
+      __memDispatch.propagate_exception(true);
+      return mapped;
+    });
+  },
   // `[...source]`: any iterable source (a Set, a Map, an iterator) spreads its values.
   // One push per value: `push(...source)` passes each value as an argument and
   // overflows the stack for a large source.
