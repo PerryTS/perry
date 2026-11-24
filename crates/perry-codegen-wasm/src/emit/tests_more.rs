@@ -1303,6 +1303,9 @@ mod object_key;
 #[path = "object_prototype_method_tests.rs"]
 mod object_prototype_method;
 
+#[path = "string_position_tests.rs"]
+mod string_position;
+
 #[path = "class_descriptor_tests.rs"]
 mod class_descriptor;
 
