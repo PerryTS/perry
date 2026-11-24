@@ -14,12 +14,13 @@ function c() { return JSON.stringify({ k: a(), m: b() }); }
 console.log(c());
 "#;
 
-fn compile(dir: &Path, units: &str, output: &str) -> (String, String) {
+fn compile(dir: &Path, units: &str, output: &str, flags: &[&str]) -> (String, String) {
     let exe = dir.join(output);
     let compile = Command::new(env!("CARGO_BIN_EXE_perry"))
         .current_dir(dir)
         .args(["compile", "main.ts", "--debug-symbols", "-o"])
         .arg(&exe)
+        .args(flags)
         .env("PERRY_CODEGEN_UNITS", units)
         .env("TMPDIR", dir.join("tmp"))
         .output()
@@ -40,8 +41,10 @@ fn split_units_keep_their_debug_info() {
     std::fs::create_dir(dir.path().join("tmp")).expect("create TMPDIR");
     std::fs::write(dir.path().join("main.ts"), SOURCE).expect("write entry");
 
+    // A `--no-link` build shares the object cache with the linking builds below.
+    compile(dir.path(), "4", "object.o", &["--no-link"]);
     for (units, output) in [("1", "whole"), ("4", "cold"), ("4", "warm")] {
-        let (stderr, lines) = compile(dir.path(), units, output);
+        let (stderr, lines) = compile(dir.path(), units, output, &[]);
         assert!(
             !stderr.contains("unable to open object file"),
             "{output}: {stderr}"

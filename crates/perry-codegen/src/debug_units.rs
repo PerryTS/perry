@@ -6,25 +6,28 @@
 use std::path::PathBuf;
 use std::sync::Mutex;
 
-static RETAINED: Mutex<Option<Vec<PathBuf>>> = Mutex::new(None);
+/// Live guards, and the objects they retain.
+static RETAINED: Mutex<(usize, Vec<PathBuf>)> = Mutex::new((0, Vec::new()));
 
-/// While alive, merged unit objects stay on disk; dropping it removes them.
+/// While one is alive, merged unit objects stay on disk; dropping the last one
+/// removes them.
 pub struct RetainUnitObjects(());
 
 impl RetainUnitObjects {
     pub fn begin() -> Self {
-        RETAINED
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .get_or_insert_default();
+        RETAINED.lock().unwrap_or_else(|e| e.into_inner()).0 += 1;
         Self(())
     }
 }
 
 impl Drop for RetainUnitObjects {
     fn drop(&mut self) {
-        let retained = RETAINED.lock().unwrap_or_else(|e| e.into_inner()).take();
-        for path in retained.unwrap_or_default() {
+        let mut retained = RETAINED.lock().unwrap_or_else(|e| e.into_inner());
+        retained.0 -= 1;
+        if retained.0 > 0 {
+            return;
+        }
+        for path in std::mem::take(&mut retained.1) {
             let _ = std::fs::remove_file(path);
         }
     }
@@ -33,13 +36,12 @@ impl Drop for RetainUnitObjects {
 /// Take ownership of `paths`, or return `false` when nothing retains them.
 #[cfg(not(target_os = "windows"))]
 pub(crate) fn retain(paths: &[PathBuf]) -> bool {
-    match RETAINED.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
-        Some(retained) => {
-            retained.extend_from_slice(paths);
-            true
-        }
-        None => false,
+    let mut retained = RETAINED.lock().unwrap_or_else(|e| e.into_inner());
+    if retained.0 == 0 {
+        return false;
     }
+    retained.1.extend_from_slice(paths);
+    true
 }
 
 pub(crate) fn unit_object_name(nonce: u64, index: usize) -> String {
@@ -56,8 +58,8 @@ pub fn names_retained_unit(object: &[u8]) -> bool {
     if RETAINED
         .lock()
         .unwrap_or_else(|e| e.into_inner())
-        .as_ref()
-        .is_none_or(Vec::is_empty)
+        .1
+        .is_empty()
     {
         return false;
     }
@@ -85,7 +87,7 @@ mod tests {
     }
 
     #[test]
-    fn unit_objects_live_until_the_guard_drops() {
+    fn unit_objects_live_until_the_last_guard_drops() {
         let units = [unit("cgu_a"), unit("cgu_b")];
 
         let unretained = crate::linker::merge_unit_objects(&units).expect("merge");
@@ -101,7 +103,9 @@ mod tests {
             !names_retained_unit(&units[0]),
             "an unmerged object carries its own DWARF"
         );
-        let paths = RETAINED.lock().unwrap().clone().expect("guard is alive");
+        let paths = RETAINED.lock().unwrap().1.clone();
+
+        drop(RetainUnitObjects::begin());
         assert!(paths.len() >= 2 && paths.iter().all(|path| path.is_file()));
 
         drop(guard);

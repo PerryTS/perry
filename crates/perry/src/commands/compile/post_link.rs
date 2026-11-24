@@ -98,7 +98,9 @@ pub(super) fn begin_debug_symbols(
     if args.debug_symbols && std::env::var_os("PERRY_DEBUG_SYMBOLS").is_none() {
         std::env::set_var("PERRY_DEBUG_SYMBOLS", "1");
     }
-    (!args.no_link && wants_macos_dsym(args.target.as_deref()))
+    // Held for `--no-link` too: its objects must stay out of the cache a linking
+    // build reads.
+    wants_macos_dsym(args.target.as_deref())
         .then(perry_codegen::debug_units::RetainUnitObjects::begin)
 }
 
