@@ -360,7 +360,7 @@ thread_local! {
 /// A diagnostic setting: the process environment's or, inside a test's
 /// `with_env`, that test's own, so a test never changes what the tests
 /// running beside it see.
-fn env(k: &str) -> Option<String> {
+pub(crate) fn env(k: &str) -> Option<String> {
     #[cfg(test)]
     if let Some(v) = TEST_ENV.with(|e| {
         e.borrow()

@@ -94,9 +94,7 @@ pub(crate) struct Ctx {
 /// Read where a model is made and where the ledger is written (a test sets
 /// it for one solve).
 pub(crate) fn path() -> Option<String> {
-    std::env::var("PERRY_FACTS_LEDGER")
-        .ok()
-        .filter(|v| !v.is_empty())
+    crate::provenance::env("PERRY_FACTS_LEDGER").filter(|v| !v.is_empty())
 }
 
 pub(crate) fn blast() -> bool {

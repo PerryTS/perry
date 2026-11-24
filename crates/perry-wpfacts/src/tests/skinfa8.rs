@@ -14,10 +14,7 @@
 use super::*;
 
 fn with_index<T>(f: impl FnOnce() -> T) -> T {
-    std::env::set_var("PERRY_FACTS_PROMISE_ALL_INDEX", "1");
-    let v = f();
-    std::env::remove_var("PERRY_FACTS_PROMISE_ALL_INDEX");
-    v
+    crate::provenance::with_env(&[("PERRY_FACTS_PROMISE_ALL_INDEX", "1")], f)
 }
 
 fn src(tail: &str) -> String {

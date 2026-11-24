@@ -4891,7 +4891,7 @@ fn error_tok(m: &mut Model, call: CallId) -> Tok {
 /// per-primitive Mesh holds 10,942 objects instead of 278, work 103M ->
 /// past the 285M bound; BATCHB31): the rule waits for that cost's fix.
 fn promise_all_index() -> bool {
-    std::env::var("PERRY_FACTS_PROMISE_ALL_INDEX").as_deref() == Ok("1")
+    crate::provenance::env("PERRY_FACTS_PROMISE_ALL_INDEX").as_deref() == Some("1")
 }
 
 /// Rule PXINV: O.[[IsExtensible]]() of what `o` holds (`Object.isExtensible`,
