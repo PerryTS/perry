@@ -2254,6 +2254,8 @@ pub struct Model {
     pub top_node: NodeId,
     pub prim_nodes: [NodeId; 8],
     pub all_prim_node: NodeId,
+    /// The new targets of the program's `Reflect.construct` calls.
+    pub reflect_new_targets: NodeId,
     pub top_tok_node: NodeId,
     pub wl: std::collections::VecDeque<NodeId>,
     pub(crate) pending: crate::delta::EventQueue,

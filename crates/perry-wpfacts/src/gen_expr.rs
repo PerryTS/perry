@@ -2299,7 +2299,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(c, Cons::New { call });
                 ret
             }
-            Expr::NewTarget => self.m.top_val("new.target"),
+            Expr::NewTarget => self.new_target_value(fx),
             Expr::ClassRef(name) => self.class_value(mi, name),
             Expr::EnumMember {
                 enum_name,

@@ -215,6 +215,7 @@ mod native_target_accessor;
 mod native_user_code;
 mod nested_site_fold;
 mod new_namespace_object;
+mod new_target_value;
 mod null_proto_box_key;
 mod num_key;
 mod numeric_key_names;

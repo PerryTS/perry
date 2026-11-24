@@ -558,7 +558,7 @@ impl<'a> Gen<'a> {
             ret: info.ret,
             class: fx.class,
             ctor_of: None,
-            new_target: fx.new_target,
+            new_target: if fn_ctor { Some(f) } else { fx.new_target },
             fn_ctor,
         };
         if !self.walked.contains(&f) {
