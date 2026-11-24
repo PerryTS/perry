@@ -3920,6 +3920,7 @@ input[type="range"] { width: 100%; }
 hr { border: none; border-top: 1px solid #ddd; margin: 4px 0; }
 fieldset { border: 1px solid #ddd; border-radius: 8px; padding: 12px; }
 legend { font-weight: 600; padding: 0 6px; }
+details::details-content { display: flex; flex-direction: column; gap: inherit; }
 progress { width: 100%; }
   `;
   document.head.appendChild(s);
@@ -4158,10 +4159,21 @@ function perry_ui_form_create() {
 function perry_ui_section_create(title, children) {
   const el = document.createElement("fieldset");
   el.style.display = "flex"; el.style.flexDirection = "column"; el.style.gap = "8px";
-  if (title) { const lg = document.createElement("legend"); lg.textContent = title; el.appendChild(lg); }
+  if (title) { const lg = document.createElement("legend"); lg.textContent = title; el.appendChild(lg); el._perryTitle = lg; }
   const h = uiAlloc(el);
   if (Array.isArray(children)) { for (var i = 0; i < children.length; i++) { var c = uiGet(children[i]); if (c) el.appendChild(c); } }
   return h;
+}
+// Disclosure: a `<details>` whose `<summary>` is the title; children added with
+// widgetAddChild show when the reader expands it.
+function perry_ui_disclosure_create(title) {
+  const el = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = title === undefined ? "" : String(title);
+  el.appendChild(summary);
+  el._perryTitle = summary;
+  el.style.gap = "8px";
+  return uiAlloc(el);
 }
 function perry_ui_navigationstack_create() {
   const el = document.createElement("div");
@@ -4267,18 +4279,24 @@ function perry_ui_widget_add_child(parentH, childH) {
   const p = uiGet(parentH), c = uiGet(childH);
   if (p && c) p.appendChild(c);
 }
-function perry_ui_widget_remove_all_children(h) { const el = uiGet(h); if (el) el.innerHTML = ""; }
+// The widgets added to `el`: a Section's legend or a Disclosure's summary is its title.
+function uiChildren(el) { return Array.from(el.children).filter(c => c !== el._perryTitle); }
+function perry_ui_widget_remove_all_children(h) {
+  const el = uiGet(h); if (!el) return;
+  if (el._perryTitle) uiChildren(el).forEach(c => el.removeChild(c));
+  else el.innerHTML = "";
+}
 function perry_ui_widget_remove_child(parentH, childH) {
   const p = uiGet(parentH), c = uiGet(childH);
   if (p && c && p.contains(c)) p.removeChild(c);
 }
 function perry_ui_widget_reorder_child(parentH, fromIdx, toIdx) {
   const p = uiGet(parentH); if (!p) return;
-  const children = Array.from(p.children);
+  const children = uiChildren(p);
   if (fromIdx >= 0 && fromIdx < children.length) {
-    const child = children[fromIdx]; p.removeChild(child);
-    if (toIdx >= p.children.length) p.appendChild(child);
-    else p.insertBefore(child, p.children[toIdx]);
+    const [child] = children.splice(fromIdx, 1); p.removeChild(child);
+    if (toIdx >= children.length) p.appendChild(child);
+    else p.insertBefore(child, children[toIdx]);
   }
 }
 function perry_ui_widget_add_overlay(parentH, overlayH) {
@@ -6085,6 +6103,7 @@ const __perryUiDispatch = {
   perry_ui_divider_create, perry_ui_progressview_create, perry_ui_image_create, perry_ui_picker_create,
   perry_ui_wheel_picker_create,
   perry_ui_form_create, perry_ui_section_create, perry_ui_navigationstack_create, perry_ui_canvas_create,
+  perry_ui_disclosure_create,
   perry_ui_bloomview_create, perry_ui_bloomview_get_hwnd,
   perry_ui_lazyvstack_create, perry_ui_lazyvstack_update, perry_ui_table_create,
   perry_ui_table_set_column_header, perry_ui_table_set_column_width,

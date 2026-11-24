@@ -217,6 +217,7 @@ pub(crate) fn is_widget_factory(name: &str) -> bool {
             | "Calendar"
             | "ProgressView"
             | "Section"
+            | "Disclosure"
             | "Tabs"
             | "Modal"
             | "Dialog"

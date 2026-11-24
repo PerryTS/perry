@@ -169,7 +169,7 @@ pub(crate) fn emit_widget(
                 // Calendar's CalendarPicker grid).
                 "DatePicker" => emit_date_picker(args, callbacks),
                 "ProgressView" => emit_progressview(args),
-                "Section" => emit_section(
+                "Section" | "Disclosure" => emit_section(
                     args,
                     bindings,
                     depth,

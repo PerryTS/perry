@@ -182,6 +182,26 @@ Group controls into labelled sections. Perry has no `Form()` widget — use a
 {{#include ../../examples/ui/widgets/sections.ts}}
 ```
 
+`Disclosure(title)` is a section the reader can collapse: the title is always
+shown, and the children attached with `widgetAddChild` show when it is
+expanded. The web target renders `<details>`/`<summary>`, collapsed at first.
+Native backends show `Section(title)`, always expanded, with no control to
+collapse it and with the limits of `Section`:
+
+- macOS: the children are not laid out and overlap, and `widgetReorderChild` and
+  `widgetClearChildren` do nothing.
+- iOS, tvOS, visionOS and Android: the title is the first child, so
+  `widgetReorderChild` counts it and `widgetClearChildren` removes it.
+- GTK4: `widgetReorderChild` does nothing.
+- watchOS: the title is not drawn.
+
+```typescript,no-test
+import { Disclosure, Text, widgetAddChild } from "perry/ui";
+
+const more = Disclosure("More details");
+widgetAddChild(more, Text("Bring gloves and a raincoat."));
+```
+
 ## Mobile widgets (issue #553)
 
 ### BottomNavigation

@@ -25,6 +25,9 @@ const WIDGET_DOM: &str = r#"
 class FakeElement {
   constructor(tag) { this.tagName = tag.toUpperCase(); this.children = []; this.style = {}; this.listeners = {}; this.text = ""; }
   appendChild(child) { this.children.push(child); return child; }
+  insertBefore(child, next) { this.children.splice(this.children.indexOf(next), 0, child); return child; }
+  removeChild(child) { this.children.splice(this.children.indexOf(child), 1); return child; }
+  contains(child) { return this === child || this.descendants().includes(child); }
   addEventListener(type, fn) { (this.listeners[type] ??= []).push(fn); }
   dispatch(type) { for (const fn of this.listeners[type] ?? []) fn({ type, target: this }); }
   get textContent() { return this.text + this.children.map(c => c.textContent).join(""); }
@@ -1004,6 +1007,67 @@ console.log(fieldset.children.map(c => c.tagName + ":" + c.textContent).join(" "
 "#
         ),
         "LEGEND:Contact SPAN:phone SPAN:email"
+    );
+}
+
+#[test]
+fn disclosure_is_details_with_the_title_as_summary() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Disclosure, Text, widgetAddChild } from "perry/ui";
+const more = Disclosure("More details");
+widgetAddChild(more, Text("gloves"));
+widgetAddChild(more, Text("raincoat"));
+"#,
+            r#"
+const details = [...uiHandles.values()].find(e => e.tagName === "DETAILS");
+console.log(details.children.map(c => c.tagName + ":" + c.textContent).join(" "));
+"#
+        ),
+        "SUMMARY:More details SPAN:gloves SPAN:raincoat"
+    );
+}
+
+// The title of a Section or a Disclosure is not one of its children: indices start at
+// the first child, and clearing the children keeps the title.
+#[test]
+fn a_section_or_disclosure_title_is_not_a_child() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Disclosure, Section, Text, widgetAddChild, widgetClearChildren, widgetRemoveChild, widgetReorderChild } from "perry/ui";
+for (const make of [(t: string) => Section(t), (t: string) => Disclosure(t)]) {
+  const box = (title: string) => {
+    const w = make(title);
+    for (const t of ["a", "b", "c"]) widgetAddChild(w, Text(t));
+    return w;
+  };
+  widgetReorderChild(box("0 to 1"), 0, 1);
+  widgetReorderChild(box("2 to 0"), 2, 0);
+  widgetReorderChild(box("0 to 9"), 0, 9);
+  widgetReorderChild(box("3 to 0"), 3, 0);
+  const removed = make("removed");
+  const gone = Text("a");
+  widgetAddChild(removed, gone);
+  widgetAddChild(removed, Text("b"));
+  widgetRemoveChild(removed, gone);
+  widgetClearChildren(box("cleared"));
+  const refilled = box("refilled");
+  widgetClearChildren(refilled);
+  widgetAddChild(refilled, Text("d"));
+}
+"#,
+            r#"
+for (const tag of ["FIELDSET", "DETAILS"]) {
+  const boxes = [...uiHandles.values()].filter(e => e.tagName === tag);
+  console.log(boxes.map(e => e.children.map(c => c.textContent).join(" ")).join(", "));
+}
+"#
+        ),
+        ["0 to 1 b a c, 2 to 0 c a b, 0 to 9 b c a, 3 to 0 a b c, removed b, cleared, refilled d";
+            2]
+            .join("\n")
     );
 }
 

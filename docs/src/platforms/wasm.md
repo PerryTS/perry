@@ -73,6 +73,7 @@ Perry widgets map to HTML elements:
 | `HStack` | `<div>` (flexbox row) |
 | `ZStack` | `<div>` (position: relative + absolute children) |
 | `ScrollView` | `<div>` (overflow: auto) |
+| `Disclosure` | `<details>` with a `<summary>` |
 | `Canvas` | `<canvas>` (2D context) |
 | `Table` | `<table>` |
 | `Divider` | `<hr>` |

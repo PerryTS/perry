@@ -198,6 +198,13 @@ pub extern "C" fn perry_ui_section_create(title_ptr: i64) -> i64 {
     tree::register_node(node)
 }
 
+/// The collapsible `<details>` exists on the web target only; here a Disclosure is a
+/// Section, always expanded.
+#[no_mangle]
+pub extern "C" fn perry_ui_disclosure_create(title_ptr: i64) -> i64 {
+    perry_ui_section_create(title_ptr)
+}
+
 // =============================================================================
 // TextArea
 // =============================================================================
