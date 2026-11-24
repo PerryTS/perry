@@ -355,13 +355,49 @@ pub(crate) fn missing_target_message(
     )
 }
 
+/// The commands that build `archive` for `triple` in a perry checkout: the
+/// [`install_hint`] of a perry that cannot verify a package download.
+/// `triple` is the search's explicit target: without one it looks in
+/// target/release, with one in that triple's directory.
+pub(crate) fn source_build_commands(archive: &str, triple: Option<&str>) -> String {
+    let stem = archive
+        .strip_suffix(".a")
+        .or_else(|| archive.strip_suffix(".lib"))
+        .unwrap_or(archive);
+    let stem = stem.strip_prefix("lib").unwrap_or(stem);
+    let (target_flag, dir) = match triple {
+        Some(triple) => (
+            format!(" --target {triple}"),
+            format!("target/{triple}/release"),
+        ),
+        None => (String::new(), "target/release".to_string()),
+    };
+    let build = if let Some(wasi) = triple.filter(|t| t.starts_with("wasm32-")) {
+        format!("scripts/wasi_build_runtime.sh {wasi}   (in a perry checkout)")
+    } else if matches!(stem, "perry_runtime" | "perry_stdlib") {
+        format!(
+            "cargo build --release -p perry-runtime-static -p perry-stdlib-static{target_flag}   (in a perry checkout)\n  \
+             scripts/gc_call_effects/sidecars.sh {dir}"
+        )
+    } else {
+        format!(
+            "cargo build --release -p {}{target_flag}   (in a perry checkout)",
+            stem.replace('_', "-")
+        )
+    };
+    format!(
+        "{build}\nand, unless perry runs from that checkout's root, set PERRY_RUNTIME_DIR to its {dir} directory"
+    )
+}
+
 /// "Install them:" with the pinned npm command (when perry runs from an npm
-/// install), the `perry target add` command, and every root that was found
-/// but rejected, with why.
+/// install), the given command (`perry target add`, or
+/// [`source_build_commands`]), and every root that was found but rejected,
+/// with why.
 pub(crate) fn install_hint(
     kind: PackageKind,
     triple: &str,
-    perry_command: &str,
+    command: &str,
     exe: Option<&Path>,
     home: Option<&Path>,
     me: PerryIdentity<'_>,
@@ -380,7 +416,7 @@ pub(crate) fn install_hint(
         }
         None => {}
     }
-    out.push_str(&format!("  {perry_command}\n"));
+    out.push_str(&format!("  {command}\n"));
     for root in discover(kind, triple, exe, home, me) {
         if let Err(rejected) = &root.status {
             let found = rejected

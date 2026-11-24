@@ -399,7 +399,7 @@ fn fetch_kind_with(
     } else {
         std::env::remove_var(NO_AUTO_FETCH_ENV);
     }
-    let out = fetch_package(kind, triple, ME, exe, home, test_keys);
+    let out = fetch_package(kind, triple, "", ME, exe, home, test_keys);
     std::env::remove_var(RELEASE_MIRROR_ENV);
     std::env::remove_var(NO_AUTO_FETCH_ENV);
     out
@@ -898,4 +898,59 @@ fn each_host_kind_refusal_names_its_package_and_manual_command() {
         );
         assert!(message.contains(NO_AUTO_FETCH_ENV), "{message}");
     }
+}
+
+/// The refusal of a perry built without update keys, which can install no
+/// package.
+fn keyless_refusal(no_fetch: bool, exe: Option<&Path>) -> String {
+    let (_t, root) = tree();
+    let home = root.join("home");
+    if no_fetch {
+        std::env::set_var(NO_AUTO_FETCH_ENV, "1");
+    } else {
+        std::env::remove_var(NO_AUTO_FETCH_ENV);
+    }
+    let out = fetch_package(
+        PackageKind::Ui,
+        HOST_TRIPLE,
+        "cargo build --release -p perry-ui-fixture",
+        ME,
+        exe,
+        Some(&home),
+        || bail!("no trusted keys"),
+    );
+    std::env::remove_var(NO_AUTO_FETCH_ENV);
+    let Some(PackageFetch::Refused(message)) = out else {
+        panic!("a perry without keys refuses")
+    };
+    assert!(!home.join(".perry").exists(), "nothing was fetched");
+    message
+}
+
+#[test]
+fn a_perry_without_update_keys_names_the_source_build() {
+    for no_fetch in [false, true] {
+        let message = keyless_refusal(no_fetch, None);
+        assert!(
+            message.contains("  cargo build --release -p perry-ui-fixture\n"),
+            "{message}"
+        );
+        assert!(!message.contains("perry target add"), "{message}");
+    }
+}
+
+#[test]
+fn an_npm_perry_without_update_keys_keeps_the_npm_install() {
+    let (_t, root) = tree();
+    let exe = root.join(
+        "prefix/lib/node_modules/@perryts/perry/node_modules/@perryts/perry-linux-x64/bin/perry",
+    );
+    fs::create_dir_all(exe.parent().unwrap()).unwrap();
+    fs::write(&exe, b"").unwrap();
+    let message = keyless_refusal(false, Some(&exe));
+    assert!(
+        message.contains("npm install -g @perryts/perry-ui-"),
+        "{message}"
+    );
+    assert!(!message.contains("cargo build"), "{message}");
 }

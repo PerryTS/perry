@@ -260,8 +260,8 @@ fn fetcher<'a>(
     calls: &'a RefCell<Vec<(PackageKind, String)>>,
     home: &'a Path,
     install: bool,
-) -> impl FnOnce(PackageKind, &str) -> Option<PackageFetch> + 'a {
-    move |kind, triple| {
+) -> impl FnOnce(PackageKind, &str, &str) -> Option<PackageFetch> + 'a {
+    move |kind, triple, _| {
         calls.borrow_mut().push((kind, triple.to_string()));
         if !install {
             return Some(PackageFetch::Refused("not today".into()));
@@ -479,8 +479,8 @@ fn installing<'a>(
     calls: &'a RefCell<Vec<(PackageKind, String)>>,
     home: &'a Path,
     archive: &'a str,
-) -> impl FnOnce(PackageKind, &str) -> Option<PackageFetch> + 'a {
-    move |kind, triple| {
+) -> impl FnOnce(PackageKind, &str, &str) -> Option<PackageFetch> + 'a {
+    move |kind, triple, _| {
         calls.borrow_mut().push((kind, triple.to_string()));
         let dest = package(
             &perry_home_root(home, kind, env!("CARGO_PKG_VERSION"), triple),
@@ -529,7 +529,7 @@ fn a_host_ui_or_wasm_host_miss_fetches_only_its_kind_once() {
             found.link
         );
         // The next lookup finds the installed package and fetches nothing.
-        let again = locate_or_fetch_from(name, None, Some(&exe), Some(&home), |_, _| {
+        let again = locate_or_fetch_from(name, None, Some(&exe), Some(&home), |_, _, _| {
             panic!("{name}: fetched again")
         });
         assert_eq!(again.map(|l| l.link).ok(), Some(found.link), "{name}");
