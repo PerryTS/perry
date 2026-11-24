@@ -466,16 +466,18 @@ fn render_definition(
     };
     // Preserve the C layout while emitting two independent 32-bit values.
     // A masked 64-bit symbol difference is not a portable object relocation.
+    // `<2 x i32>` keeps the i64's 8-byte alignment on ILP32, where
+    // `{ i32, i32 }` would pack the field and `own_slots` 4 bytes early.
     let compressed_in_mask = source_in_mask && source_encoding.as_ref().unwrap().2.is_some();
     let info_type = if compressed_in_mask {
-        INFO_TYPE.strip_suffix("i64, i16 }").unwrap().to_string() + "{ i32, i32 }, i16 }"
+        INFO_TYPE.strip_suffix("i64, i16 }").unwrap().to_string() + "<2 x i32>, i16 }"
     } else {
         INFO_TYPE.to_string()
     };
     let mask_field = if compressed_in_mask {
         let (delta, _, offset) = source_encoding.as_ref().unwrap();
         format!(
-            "{{ i32, i32 }} {{ i32 trunc (i64 {delta} to i32), i32 {} }}",
+            "<2 x i32> <i32 trunc (i64 {delta} to i32), i32 {}>",
             offset.unwrap()
         )
     } else {
@@ -640,9 +642,62 @@ mod tests {
                 assert!(ir.contains(", i32, i32, i32, i32, i32, i32 }"), "{ir}");
                 assert!(ir.contains("i32 31, i32 79, i32 0, i32 trunc"), "{ir}");
             } else {
-                assert!(ir.contains("i16, { i32, i32 }, i16 }, i32, i32 }"), "{ir}");
+                assert!(ir.contains("i16, <2 x i32>, i16 }, i32, i32 }"), "{ir}");
                 assert!(ir.contains("ptr null, i32 79, i16"), "{ir}");
             }
+        }
+    }
+
+    #[cfg(feature = "llvm-inprocess")]
+    #[test]
+    fn compressed_source_info_keeps_the_runtime_layout_on_every_pointer_width() {
+        use inkwell::{context::Context, targets::TargetData};
+        let mut state = FnInfoState::default();
+        let facts = state.facts_mut("compressed");
+        facts.source = Some(RetainedSource {
+            global: "frames".into(),
+            offset: 13,
+            decoded_offset: Some(31),
+            byte_len: 79,
+            is_non_strict_ordinary: false,
+        });
+        let line = state
+            .render_globals(|_| defined(1, "internal"), [], true)
+            .join("\n");
+        let ir = format!("@frames = external global i8\ndeclare void @compressed()\n{line}\n");
+        for (layout, size, mask) in [
+            (
+                "e-p:64:64-i64:64",
+                crate::runtime_abi::JS_FUNCTION_INFO_SIZE,
+                56,
+            ),
+            (
+                "e-p:32:32-i64:64",
+                crate::runtime_abi::JS_FUNCTION_INFO_SIZE_ILP32,
+                48,
+            ),
+        ] {
+            let context = Context::create();
+            let module = crate::inprocess::parse_ir_text(&context, &ir, "info_layout").unwrap();
+            let ty = module
+                .get_global("compressed$info")
+                .unwrap()
+                .get_initializer()
+                .unwrap()
+                .into_struct_value()
+                .get_type();
+            let data = TargetData::create(layout);
+            assert_eq!(data.get_abi_size(&ty), size as u64, "{layout}: {ir}");
+            assert_eq!(
+                data.offset_of_element(&ty, 12),
+                Some(mask),
+                "{layout}: {ir}"
+            );
+            assert_eq!(
+                data.offset_of_element(&ty, 13),
+                Some(mask + 8),
+                "{layout}: {ir}"
+            );
         }
     }
 
