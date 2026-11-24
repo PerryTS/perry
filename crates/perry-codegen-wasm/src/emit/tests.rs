@@ -51,13 +51,30 @@ fn run_web_ui_source_then(source: &str, after_boot: &str) -> String {
 }
 
 fn run_web_source_with_dom(source: &str, dom: &str, after_boot: &str) -> String {
-    let ast = perry_parser::parse_typescript(source, "splice.ts").unwrap();
-    let mut module = perry_hir::lower::lower_module(&ast, "splice", "splice.ts").unwrap();
-    // The HIR transforms `perry --target web` runs before wasm emission.
-    perry_transform::inline_finally_into_returns(&mut module);
-    perry_transform::transform_generators_without_private_frames(&mut module);
-    let html =
-        crate::compile_modules_to_wasm_html(&[("splice".into(), module)], "splice", false).unwrap();
+    run_web_modules_with_dom(&[("splice", source)], dom, after_boot)
+}
+
+/// Compiles `(name, source)` modules, importable as `./<name>`, into one program
+/// whose entry is the last module, and runs it as `run_web_source` does.
+fn run_web_modules(modules: &[(&str, &str)]) -> String {
+    run_web_modules_with_dom(modules, STUB_DOM, "")
+}
+
+fn run_web_modules_with_dom(modules: &[(&str, &str)], dom: &str, after_boot: &str) -> String {
+    let modules: Vec<_> = modules
+        .iter()
+        .map(|(name, source)| {
+            let path = format!("{name}.ts");
+            let ast = perry_parser::parse_typescript(source, &path).unwrap();
+            let mut module = perry_hir::lower::lower_module(&ast, name, &path).unwrap();
+            // The HIR transforms `perry --target web` runs before wasm emission.
+            perry_transform::inline_finally_into_returns(&mut module);
+            perry_transform::transform_generators_without_private_frames(&mut module);
+            (path, module)
+        })
+        .collect();
+    let entry = modules.last().unwrap().1.name.clone();
+    let html = crate::compile_modules_to_wasm_html(&modules, &entry, false).unwrap();
     let runtime = html
         .split("<script>")
         .nth(1)

@@ -726,7 +726,11 @@ fn elision_for(
             );
             // ACCBUILD2 P3: the named sites proven to call one accessor.
             // Every record at an offset must agree, or the offset is left out.
-            let mut refused: std::collections::BTreeSet<(bool, u32, String)> = Default::default();
+            let mut refused: std::collections::BTreeSet<(
+                u32,
+                String,
+                perry_codegen::AccessorKind,
+            )> = Default::default();
             for s in pf
                 .sites
                 .iter()
@@ -756,22 +760,27 @@ fn elision_for(
                         .map(|(sym, _)| (cid, sym, nullish)),
                     _ => None,
                 };
-                let map = if set {
-                    &mut out.accessor_sets
-                } else {
-                    &mut out.accessor_gets
+                // A site is (module, start, kind): a compound's GetValue
+                // is never an ordinary read's record, nor the reverse.
+                let kind = match s.access {
+                    perry_wpfacts::derive::Access::Set { .. } => perry_codegen::AccessorKind::Set,
+                    perry_wpfacts::derive::Access::UpdateGet => {
+                        perry_codegen::AccessorKind::UpdateGet
+                    }
+                    perry_wpfacts::derive::Access::Read => perry_codegen::AccessorKind::Get,
                 };
-                let at = (s.byte_offset, s.key.clone());
+                let map = &mut out.accessors;
+                let at = (s.byte_offset, s.key.clone(), kind);
                 match holder {
-                    Some(h) if !refused.contains(&(set, at.0, at.1.clone())) => {
+                    Some(h) if !refused.contains(&at) => {
                         if *map.entry(at.clone()).or_insert_with(|| h.clone()) != h {
                             map.remove(&at);
-                            refused.insert((set, at.0, at.1));
+                            refused.insert(at);
                         }
                     }
                     _ => {
                         map.remove(&at);
-                        refused.insert((set, at.0, at.1));
+                        refused.insert(at);
                     }
                 }
             }
@@ -1727,3 +1736,7 @@ fn facts_rep(r: perry_wpfacts::Rep) -> perry_codegen::FactsRep {
 #[cfg(test)]
 #[path = "program_facts/method_call_tests.rs"]
 mod method_call_tests;
+
+#[cfg(test)]
+#[path = "program_facts/accessor_kind_tests.rs"]
+mod accessor_kind_tests;

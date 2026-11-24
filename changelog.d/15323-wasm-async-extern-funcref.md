@@ -1,0 +1,1 @@
+On the web target, inside an async function body, a function imported from another module and used as a value is a callable function, the same value a synchronous body and the exporting module see; calling it threw `Cannot convert 1 to a BigInt` (#15302).

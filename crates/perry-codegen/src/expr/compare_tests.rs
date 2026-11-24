@@ -35,6 +35,7 @@ fn cmp_ir(name: &str, op: CompareOp, lhs: Expr, rhs: Expr) -> String {
         name,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: X,
                 name: "x".to_string(),
                 ty: Type::Any,
@@ -46,6 +47,7 @@ fn cmp_ir(name: &str, op: CompareOp, lhs: Expr, rhs: Expr) -> String {
                 init: Some(Expr::Undefined),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: Y,
                 name: "y".to_string(),
                 ty: Type::Any,
@@ -53,11 +55,13 @@ fn cmp_ir(name: &str, op: CompareOp, lhs: Expr, rhs: Expr) -> String {
                 init: Some(Expr::Undefined),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: R,
                 name: "r".to_string(),
                 ty: Type::Any,
                 mutable: true,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op,
                     left: Box::new(lhs),
                     right: Box::new(rhs),
@@ -116,6 +120,7 @@ fn strict_eq_against_a_proven_symbol_is_raw_identity() {
         "streq_proven_symbol",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: X,
                 name: "value".to_string(),
                 ty: Type::Any,
@@ -123,6 +128,7 @@ fn strict_eq_against_a_proven_symbol_is_raw_identity() {
                 init: Some(Expr::Undefined),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: Y,
                 name: "sentinel".to_string(),
                 // The proof must come from the initializer, not this erased
@@ -132,11 +138,13 @@ fn strict_eq_against_a_proven_symbol_is_raw_identity() {
                 init: Some(Expr::SymbolNew(None)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: R,
                 name: "r".to_string(),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::LocalGet(Y)),
@@ -160,6 +168,7 @@ fn loose_eq_against_a_proven_symbol_keeps_the_coercing_helper() {
         "looseeq_proven_symbol",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: X,
                 name: "value".to_string(),
                 ty: Type::Any,
@@ -167,6 +176,7 @@ fn loose_eq_against_a_proven_symbol_keeps_the_coercing_helper() {
                 init: Some(Expr::Undefined),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: Y,
                 name: "sentinel".to_string(),
                 ty: Type::Any,
@@ -174,11 +184,13 @@ fn loose_eq_against_a_proven_symbol_keeps_the_coercing_helper() {
                 init: Some(Expr::SymbolNew(None)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: R,
                 name: "r".to_string(),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::LooseEq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::LocalGet(Y)),
@@ -195,6 +207,7 @@ fn a_symbol_annotation_without_symbol_provenance_keeps_js_eq() {
         "streq_lying_symbol_annotation",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: X,
                 name: "value".to_string(),
                 ty: Type::Any,
@@ -202,6 +215,7 @@ fn a_symbol_annotation_without_symbol_provenance_keeps_js_eq() {
                 init: Some(Expr::Undefined),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: Y,
                 name: "not_really_a_symbol".to_string(),
                 ty: Type::Symbol,
@@ -209,11 +223,13 @@ fn a_symbol_annotation_without_symbol_provenance_keeps_js_eq() {
                 init: Some(Expr::Object(vec![("x".to_string(), Expr::Number(1.0))])),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: R,
                 name: "r".to_string(),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::LocalGet(Y)),
@@ -233,6 +249,7 @@ fn a_reassigned_symbol_constructor_local_keeps_js_eq() {
         "streq_reassigned_symbol_local",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: X,
                 name: "value".to_string(),
                 ty: Type::Any,
@@ -240,6 +257,7 @@ fn a_reassigned_symbol_constructor_local_keeps_js_eq() {
                 init: Some(Expr::Undefined),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: Y,
                 name: "sentinel".to_string(),
                 ty: Type::Any,
@@ -255,11 +273,13 @@ fn a_reassigned_symbol_constructor_local_keeps_js_eq() {
                 Box::new(Expr::Object(vec![("x".to_string(), Expr::Number(1.0))])),
             )),
             Stmt::Let {
+                byte_offset: 0,
                 id: R,
                 name: "r".to_string(),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::LocalGet(Y)),
@@ -338,6 +358,7 @@ fn strict_eq_reuses_a_non_pointer_left_operand_across_an_allocating_right_operan
         "streq_reused_primitive",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: X,
                 name: "x".to_string(),
                 ty: Type::Number,
@@ -345,11 +366,13 @@ fn strict_eq_reuses_a_non_pointer_left_operand_across_an_allocating_right_operan
                 init: Some(Expr::Number(1.0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: R,
                 name: "r".to_string(),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::Object(vec![("right".to_string(), Expr::Number(2.0))])),
@@ -526,6 +549,7 @@ fn string_vs_generic_key_uses_the_identity_first_dispatch() {
         "streq_generic_key",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: X,
                 name: "stored".to_string(),
                 ty: Type::String,
@@ -533,6 +557,7 @@ fn string_vs_generic_key_uses_the_identity_first_dispatch() {
                 init: Some(Expr::String("stored".to_string())),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: Y,
                 name: "key".to_string(),
                 ty: Type::TypeVar("K".to_string()),
@@ -540,11 +565,13 @@ fn string_vs_generic_key_uses_the_identity_first_dispatch() {
                 init: Some(Expr::Undefined),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: R,
                 name: "same".to_string(),
                 ty: Type::Boolean,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::LocalGet(Y)),
@@ -569,6 +596,7 @@ fn string_equality_inlines_short_heap_content_checks_before_the_helper() {
         "streq_short_heap",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: X,
                 name: "left".to_string(),
                 ty: Type::String,
@@ -576,6 +604,7 @@ fn string_equality_inlines_short_heap_content_checks_before_the_helper() {
                 init: Some(Expr::String("left".to_string())),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: Y,
                 name: "right".to_string(),
                 ty: Type::String,
@@ -583,11 +612,13 @@ fn string_equality_inlines_short_heap_content_checks_before_the_helper() {
                 init: Some(Expr::String("right".to_string())),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: R,
                 name: "same".to_string(),
                 ty: Type::Boolean,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::LocalGet(Y)),

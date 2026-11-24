@@ -81,6 +81,7 @@ fn options(target: Option<&str>) -> CompileOptions {
 
 fn call(method: &str, args: Vec<Expr>) -> Stmt {
     Stmt::Expr(Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "perry/ios".to_string(),
         class_name: None,
         object: None,
@@ -92,6 +93,7 @@ fn call(method: &str, args: Vec<Expr>) -> Stmt {
 fn module(body: Vec<Stmt>) -> Module {
     let mut module = Module::new("ios_platform_api_probe");
     module.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),

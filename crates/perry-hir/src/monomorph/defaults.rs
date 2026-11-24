@@ -121,7 +121,7 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, cx: &DefaultFill) {
             }
         }
         Stmt::Expr(expr) => fill_defaults_in_expr(expr, cx),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(e) = expr {
                 fill_defaults_in_expr(e, cx);
             }
@@ -183,6 +183,7 @@ fn fill_defaults_in_stmt(stmt: &mut Stmt, cx: &DefaultFill) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             fill_defaults_in_expr(discriminant, cx);
             for case in cases {
@@ -266,12 +267,13 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             fill_defaults_in_expr(condition, cx);
             fill_defaults_in_expr(then_expr, cx);
             fill_defaults_in_expr(else_expr, cx);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             fill_defaults_in_expr(callee, cx);
             for arg in args.iter_mut() {
                 fill_defaults_in_expr(arg, cx);
@@ -309,7 +311,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
                 fill_defaults_in_expr(val, cx);
             }
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             fill_defaults_in_expr(object, cx);
             fill_defaults_in_expr(index, cx);
         }
@@ -333,7 +335,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
         Expr::PropertyUpdate { object, .. } => {
             fill_defaults_in_expr(object, cx);
         }
-        Expr::Await(inner) => {
+        Expr::Await(inner, _) => {
             fill_defaults_in_expr(inner, cx);
         }
         Expr::TypeOf(inner) => {
@@ -434,6 +436,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
             key,
             receiver,
             args,
+            ..
         } => {
             fill_defaults_in_expr(home, cx);
             fill_defaults_in_expr(key, cx);
@@ -442,7 +445,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
                 fill_defaults_in_expr(arg, cx);
             }
         }
-        Expr::SuperCall(args) => {
+        Expr::SuperCall(args, _) => {
             for arg in args {
                 fill_defaults_in_expr(arg, cx);
             }

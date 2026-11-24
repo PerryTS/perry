@@ -16,6 +16,7 @@ const I: u32 = 103;
 
 fn param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -42,6 +43,7 @@ fn sum_function() -> Function {
         index: local(I),
     };
     Function {
+        byte_offset: 0,
         id: 7,
         name: "sum".to_string(),
         type_params: Vec::new(),
@@ -49,6 +51,7 @@ fn sum_function() -> Function {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: S,
                 name: "s".to_string(),
                 ty: Type::Number,
@@ -57,6 +60,7 @@ fn sum_function() -> Function {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: I,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -64,6 +68,7 @@ fn sum_function() -> Function {
                     init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: local(I),
                     right: local(N),
@@ -71,6 +76,7 @@ fn sum_function() -> Function {
                 update: Some(Expr::LocalSet(
                     I,
                     Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Add,
                         left: local(I),
                         right: Box::new(Expr::Integer(1)),
@@ -79,13 +85,14 @@ fn sum_function() -> Function {
                 body: vec![Stmt::Expr(Expr::LocalSet(
                     S,
                     Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Add,
                         left: local(S),
                         right: Box::new(read),
                     }),
                 ))],
             },
-            Stmt::Return(Some(Expr::LocalGet(S))),
+            Stmt::Return(Some(Expr::LocalGet(S)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -104,6 +111,7 @@ fn module_with_len(name: &str, len: Expr) -> Module {
     module.functions.push(sum_function());
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "a".to_string(),
             ty: Type::Named("Int32Array".to_string()),
@@ -174,6 +182,7 @@ fn non_literal_length_typed_array_param_keeps_number_accumulator() {
     let ir = compile(&module_with_len(
         "spec_ta_len_shift_13740.ts",
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Shl,
             left: Box::new(Expr::Integer(1)),
             right: Box::new(Expr::Integer(20)),

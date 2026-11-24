@@ -29,19 +29,13 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "regexp_new", 2);
             }
             // --- Global builtins ---
+            // An omitted radix reaches the bridge as `undefined`, which `parseInt` reads
+            // as "detect": a `0x` prefix is hexadecimal, anything else decimal.
             Expr::ParseInt { string, radix } => {
-                self.emit_expr(func, string);
-                let _ = radix; // TODO: radix support
-                self.emit_frame_begin(func, 1);
-                func.instruction(&Instruction::LocalSet(self.temp_local));
-                self.emit_slot_addr(func, 0);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
-                self.emit_memcall(func, "parse_int", 1);
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, string);
+                self.emit_store_arg(func, 1, radix.as_deref().unwrap_or(&Expr::Undefined));
+                self.emit_memcall(func, "parse_int", 2);
             }
             Expr::ParseFloat(val) => {
                 self.emit_frame_begin(func, 1);

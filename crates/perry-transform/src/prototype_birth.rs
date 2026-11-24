@@ -83,10 +83,12 @@ fn pretenure_literal_seed(expr: &mut Expr) {
         }
         // Computed keys, accessors and spreads use a source-ordered builder.
         // Touch only its seed, preserving every observable operation.
-        Expr::Call { callee, args, .. } if args.len() == 1 => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
+            if args.len() == 1 =>
+        {
             if let Expr::Closure { params, body, .. } = callee.as_ref() {
                 if params.len() == 1
-                    && matches!(body.last(), Some(Stmt::Return(Some(Expr::LocalGet(id))))
+                    && matches!(body.last(), Some(Stmt::Return(Some(Expr::LocalGet(id)), _))
                         if *id == params[0].id)
                 {
                     pretenure_literal_seed(&mut args[0]);
@@ -104,6 +106,7 @@ mod tests {
 
     fn binding(id: u32, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("binding{id}"),
             ty: Type::Any,
@@ -123,7 +126,7 @@ mod tests {
         ];
         run(&mut module);
         assert!(
-            matches!(&module.init[0], Stmt::Let { init: Some(Expr::Call { callee, .. }), .. }
+            matches!(&module.init[0], Stmt::Let { init: Some(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }), .. }
             if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
                 if name == "js_object_literal_prototype_birth"))
         );

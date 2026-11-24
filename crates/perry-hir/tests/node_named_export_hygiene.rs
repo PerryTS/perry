@@ -80,7 +80,7 @@ fn invalid_node_named_imports_are_rejected() {
         ),
         (
             "crypto",
-            r#"import { sha256, randomUUIDv7 } from "node:crypto"; console.log(sha256, randomUUIDv7);"#,
+            r#"import { sha256, md5 } from "node:crypto"; console.log(sha256, md5);"#,
         ),
     ];
 
@@ -157,6 +157,8 @@ fn valid_node_named_imports_keep_compiling() {
         r#"import { default as pathDefault } from "node:path"; console.log(pathDefault.join("a", "b"));"#,
         r#"import { Readable, Writable, compose, default as streamDefault } from "node:stream"; console.log(Readable, Writable, compose, streamDefault);"#,
         r#"import { randomBytes, randomUUID, createHash } from "node:crypto"; console.log(randomBytes, randomUUID, createHash);"#,
+        // Node 26 (the `.node-version` pin) exports `randomUUIDv7`.
+        r#"import { randomUUIDv7 } from "crypto"; console.log(randomUUIDv7());"#,
     ];
 
     let mut failures = Vec::new();
@@ -382,7 +384,7 @@ fn imported_worker_messaging_constructors_keep_worker_threads_routing() {
     };
     assert!(
         matches!(initializer("a"), Some(Expr::NativeMethodCall {
-            module, class_name: None, object: None, method, args,
+            module, class_name: None, object: None, method, args, ..
         }) if module == "worker_threads" && method == "MessageChannel" && args.is_empty()),
         "MessageChannel should call the worker_threads native factory: {module:#?}"
     );

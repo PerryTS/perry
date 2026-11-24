@@ -3,6 +3,7 @@ use perry_hir::Stmt;
 
 fn native(method: &str) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -24,6 +25,7 @@ fn record_primitives_keep_only_opaque_values_in_pointer_slots() {
         .iter()
         .enumerate()
         .map(|(i, (method, ty))| Stmt::Let {
+            byte_offset: 0,
             id: i as u32 + 1,
             name: format!("value{i}"),
             ty: ty.clone(),

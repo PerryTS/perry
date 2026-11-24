@@ -7,6 +7,7 @@ use perry_hir::{Expr, Module, ModuleInitKind, Stmt};
 
 fn empty(id: u32) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("a{id}"),
         ty: Type::Array(Box::new(Type::Number)),
@@ -88,6 +89,7 @@ fn owned_arrays_are_only_pushed_read_and_returned() {
         byte_end: 0,
     };
     let other = |id: u32| Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("o{id}"),
         ty: Type::Any,
@@ -103,6 +105,7 @@ fn owned_arrays_are_only_pushed_read_and_returned() {
         empty(2),
         push(2),
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "alias".into(),
             ty: Type::Any,
@@ -122,7 +125,7 @@ fn owned_arrays_are_only_pushed_read_and_returned() {
         // Not bound to an array literal: not owned.
         other(5),
         push(5),
-        Stmt::Return(Some(get(1))),
+        Stmt::Return(Some(get(1)), 0),
     ]);
     let mut got: Vec<u32> = loop_pushed_arrays(&m).owned.into_iter().collect();
     got.sort_unstable();
@@ -134,6 +137,7 @@ fn an_array_another_body_mentions_is_not_owned() {
     let mut m = module(vec![empty(1), looped(vec![push(1)]), empty(2), push(2)]);
     // A module function pushing into the module-level array 1.
     m.functions.push(perry_hir::Function {
+        byte_offset: 0,
         id: 0,
         name: "addTop".into(),
         type_params: Vec::new(),

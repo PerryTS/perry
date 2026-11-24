@@ -891,7 +891,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- ExternFuncRef as a value --------
         // The Call path in `lower_call.rs` dispatches `Expr::Call { callee:
-        // ExternFuncRef, .. }` directly to the cross-module symbol. When
+        // ExternFuncRef, .. } | Expr::RegionCall { callee: // ExternFuncRef, .. }` directly to the cross-module symbol. When
         // an imported function appears as a STANDALONE value — `if
         // (this.ffi.setCursors)` truthiness check, `someFn === otherFn`
         // equality comparison, or being passed as a callback — we route

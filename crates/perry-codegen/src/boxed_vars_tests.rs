@@ -4,10 +4,11 @@ use perry_hir::{Expr, Stmt};
 
 fn closure(func_id: u32, captured_id: u32) -> Expr {
     Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::LocalGet(captured_id)))],
+        body: vec![Stmt::Return(Some(Expr::LocalGet(captured_id)), 0)],
         captures: vec![captured_id],
         mutable_captures: Vec::new(),
         captures_this: false,
@@ -32,19 +33,23 @@ fn generator_confined_captures_are_slots_and_shared_captures_are_cells() {
     }
     let mut stmts = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "state".into(),
             ty: Type::Number,
             mutable: true,
             init: Some(Expr::Number(0.0)),
         },
-        Stmt::Return(Some(Expr::LinkGeneratorPrototype {
-            obj: Box::new(state),
-            is_async: false,
-            fixed_state: true,
-            i32_controls: vec![1],
-            i1_controls: vec![],
-        })),
+        Stmt::Return(
+            Some(Expr::LinkGeneratorPrototype {
+                obj: Box::new(state),
+                is_async: false,
+                fixed_state: true,
+                i32_controls: vec![1],
+                i1_controls: vec![],
+            }),
+            0,
+        ),
     ];
     assert!(!collect_boxed_vars(&stmts).contains(&1));
     let mut numbers = HashSet::new();
@@ -53,6 +58,7 @@ fn generator_confined_captures_are_slots_and_shared_captures_are_cells() {
     assert_eq!(numbers, HashSet::from([1]));
     assert!(booleans.is_empty());
     let user = Stmt::Let {
+        byte_offset: 0,
         id: 20,
         name: "__gen_state".into(),
         ty: Type::Number,
@@ -75,6 +81,7 @@ fn captured_closure_value_is_boxed_only_for_real_self_capture() {
     // does not. Only `self_ref` captures itself before initialization.
     let stmts = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "f".into(),
             ty: Type::Any,
@@ -82,6 +89,7 @@ fn captured_closure_value_is_boxed_only_for_real_self_capture() {
             init: Some(closure(10, 3)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "self_ref".into(),
             ty: Type::Any,

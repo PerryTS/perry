@@ -2,13 +2,17 @@ use perry_hir::{types::Type, Expr, Function, Module, Stmt};
 
 fn literal(captures: u32) -> Expr {
     Expr::Closure {
+        byte_offset: 0,
         func_id: 100,
         params: Vec::new(),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::Array(
-            (0..captures).map(Expr::LocalGet).collect(),
-            None,
-        )))],
+        body: vec![Stmt::Return(
+            Some(Expr::Array(
+                (0..captures).map(Expr::LocalGet).collect(),
+                None,
+            )),
+            0,
+        )],
         captures: (0..captures).collect(),
         mutable_captures: Vec::new(),
         captures_this: false,
@@ -26,6 +30,7 @@ fn compile(captures: u32, target: &str) -> String {
     let mut module = Module::new("fixed_birth_contract");
     let mut body: Vec<_> = (0..captures)
         .map(|id| Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("cap{id}"),
             ty: Type::Any,
@@ -33,8 +38,9 @@ fn compile(captures: u32, target: &str) -> String {
             init: Some(Expr::Object(Vec::new())),
         })
         .collect();
-    body.push(Stmt::Return(Some(literal(captures))));
+    body.push(Stmt::Return(Some(literal(captures)), 0));
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "make".into(),
         type_params: Vec::new(),

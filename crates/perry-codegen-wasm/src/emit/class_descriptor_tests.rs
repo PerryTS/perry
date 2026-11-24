@@ -176,9 +176,15 @@ const hash = "#label";
 class C { __get_status() { return 1; } get status() { return 2; } static __get_s() { return 3; } static get s() { return 4; } get [hash]() { return 5; } static get [hash]() { return 6; } }
 const c: any = new C(), K: any = C;
 console.log([typeof Object.getOwnPropertyDescriptor(C.prototype, "__get_status")!.value, c.__get_status(), c.status, K.__get_s(), K.s, c[hash], K[hash]].join(","));
+class Key { __get_toString() { return () => "wrong"; } get toString() { return () => "right"; } }
+class Plain { __get_toString() { return () => "wrong"; } toString() { return "plain"; } }
+const o: any = {};
+o[new Key() as any] = 1;
+o[new Plain() as any] = 2;
+console.log(Object.keys(o).join(","));
 "##
         ),
-        "function,1,2,3,4,5,6"
+        "function,1,2,3,4,5,6\nright,plain"
     );
 }
 

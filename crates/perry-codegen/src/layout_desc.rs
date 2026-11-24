@@ -608,7 +608,7 @@ fn walk_stmts<'a>(body: &'a [Stmt], out: &mut Vec<&'a [(String, Expr)]>) {
             Stmt::Let { init: Some(e), .. }
             | Stmt::Expr(e)
             | Stmt::Throw(e)
-            | Stmt::Return(Some(e)) => walk_expr(e, out),
+            | Stmt::Return(Some(e), _) => walk_expr(e, out),
             Stmt::If {
                 condition,
                 then_branch,
@@ -659,6 +659,7 @@ fn walk_stmts<'a>(body: &'a [Stmt], out: &mut Vec<&'a [(String, Expr)]>) {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 walk_expr(discriminant, out);
                 for c in cases {

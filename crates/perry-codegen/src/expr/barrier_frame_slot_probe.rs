@@ -3,6 +3,7 @@ use perry_hir::{Expr, Param, Stmt};
 
 fn runtime(method: &str, args: Vec<Expr>) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -13,6 +14,7 @@ fn runtime(method: &str, args: Vec<Expr>) -> Expr {
 
 pub(super) fn ir() -> String {
     let let_any = |id, init| Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("frame{id}"),
         ty: Type::Any,
@@ -22,6 +24,7 @@ pub(super) fn ir() -> String {
     let params = [100, 101]
         .into_iter()
         .map(|id| Param {
+            byte_offset: 0,
             id,
             name: format!("p{id}"),
             ty: Type::Any,
@@ -37,9 +40,10 @@ pub(super) fn ir() -> String {
             Box::new(Expr::Array(vec![Expr::Number(4.0)], Default::default())),
         )),
         Stmt::Expr(Expr::LocalSet(5, Box::new(Expr::Number(0.0)))),
-        Stmt::Return(Some(Expr::LocalGet(7))),
+        Stmt::Return(Some(Expr::LocalGet(7)), 0),
     ];
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 1,
         params,
         return_type: Type::Any,

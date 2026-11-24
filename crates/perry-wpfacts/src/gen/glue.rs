@@ -334,6 +334,7 @@ impl<'a> Gen<'a> {
                 }
                 match &source_args[2] {
                     Expr::IndexGet { object, index, .. }
+                    | Expr::RegionOut { object, index, .. }
                         if matches!(object.as_ref(), Expr::LocalGet(_))
                             && matches!(index.as_ref(), Expr::NativeMethodCall { method, .. } if method == "arrayRecordIndex") =>
                     {

@@ -30,7 +30,7 @@ impl OutUsageAnalyzer {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.visit_expr(e),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     self.visit_expr(e);
                 }
@@ -98,6 +98,7 @@ impl OutUsageAnalyzer {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.visit_expr(discriminant);
                 for c in cases {
@@ -143,7 +144,7 @@ impl OutUsageAnalyzer {
                 // Safe: out.length read.
                 return;
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 if matches!(object.as_ref(), Expr::LocalGet(id) if *id == self.out_id) {
                     // Safe: out[idx] read. Still need to visit index
                     // because it might contain its own out-references.

@@ -279,7 +279,7 @@ fn stmt_is_this_free_expr(stmt: &Stmt) -> bool {
 /// Is `stmt` a `super(...)` whose arguments cannot observe `this`?
 fn stmt_is_safe_super_call(stmt: &Stmt, param_ids: &std::collections::HashSet<u32>) -> bool {
     match stmt {
-        Stmt::Expr(Expr::SuperCall(args)) => args
+        Stmt::Expr(Expr::SuperCall(args, _)) => args
             .iter()
             .all(|a| prologue_rhs_cannot_observe_this(a, param_ids)),
         _ => false,

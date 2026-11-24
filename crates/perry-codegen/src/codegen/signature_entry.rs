@@ -34,28 +34,30 @@ use crate::types::{LlvmType, DOUBLE, I1, I32, I64};
 use crate::verify_facts::Fact;
 
 thread_local! {
-    /// The byte offset of the direct call being lowered (`with_direct_call`).
-    static DIRECT_CALL: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// The site of the direct call being lowered (`with_direct_call`).
+    static DIRECT_CALL: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
 }
 
-/// Lower direct call `f` with its own byte offset visible to
-/// `try_emit_typed_call` (the `typed_calls` key is the call's HIR offset).
-pub(crate) fn with_direct_call<R>(byte_offset: u32, f: impl FnOnce() -> R) -> R {
-    let saved = DIRECT_CALL.with(|s| s.replace(byte_offset));
+/// Lower direct call `f` with its own site visible to `try_emit_typed_call`
+/// (the `typed_calls` key is the call's HIR offset; a split region's call
+/// has no site).
+pub(crate) fn with_direct_call<R>(site: Option<u32>, f: impl FnOnce() -> R) -> R {
+    let saved = DIRECT_CALL.with(|s| s.replace(site));
     let out = f();
     DIRECT_CALL.with(|s| s.set(saved));
     out
 }
 
-/// The byte offset of the direct call being lowered (0: none).
-pub(crate) fn direct_call_offset() -> u32 {
+/// The site of the direct call being lowered (`None`: no call, or one with
+/// no site).
+pub(crate) fn direct_call_offset() -> Option<u32> {
     DIRECT_CALL.with(|s| s.get())
 }
 
 thread_local! {
     /// ONCHG2: the facts site offset of the named method call being lowered
     /// (`with_method_site`).
-    static METHOD_SITE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static METHOD_SITE: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
 }
 
 /// Lower the named method call `o.k(args)` with its facts site offset
@@ -64,7 +66,7 @@ thread_local! {
 /// calls in the arguments set and restore their own.
 pub(crate) fn with_method_site<R>(callee: &Expr, f: impl FnOnce() -> R) -> R {
     let off = match callee {
-        Expr::PropertyGet { byte_offset, .. } if *byte_offset != 0 => *byte_offset,
+        Expr::PropertyGet { byte_offset, .. } => Some(*byte_offset),
         _ => direct_call_offset(),
     };
     let saved = METHOD_SITE.with(|s| s.replace(off));
@@ -74,7 +76,7 @@ pub(crate) fn with_method_site<R>(callee: &Expr, f: impl FnOnce() -> R) -> R {
 }
 
 /// The facts site offset of the named method call being lowered (0: none).
-pub(crate) fn method_site_offset() -> u32 {
+pub(crate) fn method_site_offset() -> Option<u32> {
     METHOD_SITE.with(|s| s.get())
 }
 
@@ -95,6 +97,7 @@ pub(crate) fn is_default_prologue(s: &Stmt, id: u32) -> bool {
                 op: CompareOp::Eq,
                 left,
                 right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -815,9 +818,8 @@ pub(crate) fn try_emit_typed_call(
     args: &[Expr],
     lowered: &[String],
 ) -> Option<String> {
-    let offset = DIRECT_CALL.with(|s| s.get());
-    if offset == 0
-        || ctx.wpfacts_off
+    let offset = DIRECT_CALL.with(|s| s.get())?;
+    if ctx.wpfacts_off
         || ctx.wpfacts.interp_guard
         || ctx.wpfacts.typed_calls.get(&offset) != Some(&fid)
     {
@@ -885,12 +887,8 @@ pub(crate) fn try_lower_typed_method_call(
     else {
         return Ok(None);
     };
-    let offset = if *byte_offset != 0 {
-        *byte_offset
-    } else {
-        DIRECT_CALL.with(|s| s.get())
-    };
-    if offset == 0 || ctx.wpfacts_off || ctx.wpfacts.interp_guard {
+    let offset = *byte_offset;
+    if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
         return Ok(None);
     }
     let Some(&mid) = ctx.wpfacts.typed_calls.get(&offset) else {

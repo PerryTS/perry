@@ -154,18 +154,32 @@ fn member_evaluation(receiver: f64, cid: u32) -> Option<u64> {
         Some(receiver),
     ];
     for candidate in candidates.into_iter().flatten() {
-        let found = if super::class_registry::is_class_object_value(candidate)
-            || super::class_ref_id(candidate).is_some()
-        {
-            super::capture_owner_for_template(candidate, cid)
-        } else {
-            super::field_get_set::class_evaluation_of(candidate, cid)
-        };
-        if let Some(evaluation) = found {
+        if let Some(evaluation) = recorded_evaluation(candidate, cid) {
             return Some(evaluation.to_bits());
         }
     }
     subclass_instance_evaluation(receiver, cid)
+}
+
+fn recorded_evaluation(candidate: f64, cid: u32) -> Option<f64> {
+    if super::class_registry::is_class_object_value(candidate)
+        || super::class_ref_id(candidate).is_some()
+    {
+        super::capture_owner_for_template(candidate, cid)
+    } else {
+        super::field_get_set::class_evaluation_of(candidate, cid)
+    }
+}
+
+/// Codegen FFI: the evaluation of class `cid` that owns the method a direct
+/// call runs on `receiver` (its ordinary lookup found it there). A direct call
+/// names no method value, and the caller's lexical evaluation is not the
+/// callee's, so only the receiver answers; the template's own class otherwise.
+#[no_mangle]
+pub extern "C" fn js_class_direct_method_owner(receiver: f64, cid: u32) -> f64 {
+    recorded_evaluation(receiver, cid)
+        .or_else(|| subclass_instance_evaluation(receiver, cid).map(f64::from_bits))
+        .unwrap_or_else(|| super::class_constructor_ref_value(cid))
 }
 
 /// An instance with no recorded brand whose own class is a SUBCLASS of the
@@ -325,4 +339,6 @@ mod keepalive {
     static STAMP: unsafe extern "C" fn(f64, u32, f64) -> f64 = super::js_class_env_stamp;
     #[used(compiler)]
     static CURRENT: extern "C" fn(f64, u32) -> f64 = super::js_class_env_current;
+    #[used(compiler)]
+    static DIRECT_OWNER: extern "C" fn(f64, u32) -> f64 = super::js_class_direct_method_owner;
 }

@@ -44,7 +44,7 @@ fn user_method(module: &Module, receiver: &Expr, property: &str) -> bool {
                     && constructor
                         .body
                         .iter()
-                        .all(|stmt| matches!(stmt, Stmt::Return(None | Some(Expr::This))))
+                        .all(|stmt| matches!(stmt, Stmt::Return(None | Some(Expr::This), _)))
             })
             && class
                 .methods

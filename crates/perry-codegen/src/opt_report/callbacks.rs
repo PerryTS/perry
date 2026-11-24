@@ -46,7 +46,7 @@ fn scan_stmts(stmts: &[Stmt]) {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => scan_expr(e),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     scan_expr(e);
                 }
@@ -100,6 +100,7 @@ fn scan_stmts(stmts: &[Stmt]) {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 scan_expr(discriminant);
                 for c in cases {

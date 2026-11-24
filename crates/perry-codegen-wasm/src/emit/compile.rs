@@ -830,6 +830,17 @@ impl WasmModuleEmitter {
                     self.class_ctor_map
                         .insert(class.name.clone(), user_func_idx);
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.record_rest_param(user_func_idx, 1, &ctor.params);
+                    let cap_params = ctor
+                        .params
+                        .iter()
+                        .filter(|p| perry_hir::cap_fields::is_cap_field_name(&p.name))
+                        .map(|p| (p.name.clone(), p.id))
+                        .collect();
+                    self.ctor_cap_params.insert(class.name.clone(), cap_params);
+                    if class.constructor.is_none() {
+                        self.forwarding_ctor_classes.insert(class.name.clone());
+                    }
                     user_func_idx += 1;
                 }
                 // Instance methods: params = this + declared params
@@ -1833,6 +1844,30 @@ impl WasmModuleEmitter {
             args.get(slot..).unwrap_or_default().to_vec(),
             None,
         ));
+        std::borrow::Cow::Owned(packed)
+    }
+
+    /// `with_rest_packed` for a call of `idx` whose receiver is passed ahead of
+    /// `args`, as `new` and `super(...)` pass a constructor's `this`. The last `caps`
+    /// arguments are the class's captures, whose parameters follow the rest one.
+    pub(super) fn with_rest_packed_after_receiver<'e>(
+        &self,
+        idx: u32,
+        args: &'e [Expr],
+        caps: u32,
+    ) -> std::borrow::Cow<'e, [Expr]> {
+        let Some(&slot) = self.rest_params.get(&idx) else {
+            return std::borrow::Cow::Borrowed(args);
+        };
+        let slot = slot.saturating_sub(1);
+        let (args, captures) = args.split_at(args.len().saturating_sub(caps as usize));
+        let mut packed: Vec<Expr> = args.iter().take(slot).cloned().collect();
+        packed.resize(slot, Expr::Undefined);
+        packed.push(Expr::Array(
+            args.get(slot..).unwrap_or_default().to_vec(),
+            None,
+        ));
+        packed.extend_from_slice(captures);
         std::borrow::Cow::Owned(packed)
     }
 }

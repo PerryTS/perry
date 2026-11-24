@@ -6,7 +6,12 @@
 //! solve that meets its first hold starts again with the realm held from
 //! its seed (`Model::restart_on_hold`): the least fixpoint of the held rules.
 //! Test: the same program with the unknown call first or last gives the
-//! same model and the same verdicts.
+//! same model and the same verdicts. The call reads `items` and `m` after
+//! their initialization in both places: placed before the `var`s run, it
+//! would hand the unknown code their hoisted `undefined` (ECMA-262
+//! 14.3.2), a different program, whose `items` binding holds `undefined`
+//! beside the array (the for-of driver's `length` read, a site of its own
+//! at the loop, then names the TypeError arm).
 use super::*;
 
 fn program(first: &str, last: &str) -> String {
@@ -15,12 +20,12 @@ fn program(first: &str, last: &str) -> String {
 class Box {{ v: any; constructor(v: any) {{ this.v = v; }} get(): any {{ return this.v; }} }}
 var k: any = process.argv[2];
 function go(xs: any, mm: any) {{ const g: any = (globalThis as any)[k]; g(xs, mm); }}
+var items: any[] = [];
+var m = new Map<any, any>();
 {first}
 function wrap(x: any): any {{ return new Box(x); }}
 function deep(n: number, x: any): any {{ return n > 0 ? deep(n - 1, wrap(x)) : x; }}
-var items: any[] = [];
 for (let i = 0; i < 4; i++) items.push(deep(3, {{ i }}));
-var m = new Map<any, any>();
 items.forEach((it) => m.set(it, it.get()));
 m.forEach((v, kk) => {{ const e = new Error(String(v)); items.push(e); }});
 const p = Promise.resolve(items).then((xs) => xs);

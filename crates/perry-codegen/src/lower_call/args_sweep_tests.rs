@@ -33,6 +33,7 @@ fn collecting(key: &str) -> Expr {
 fn compile_stmt(stmt: Expr) -> String {
     let mut module = Module::new("args_sweep_test.ts");
     module.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
@@ -93,6 +94,7 @@ fn native(
     args: Vec<Expr>,
 ) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset: 0,
         module: module.to_string(),
         class_name: class.map(str::to_string),
         object: object.map(Box::new),

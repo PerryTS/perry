@@ -203,7 +203,7 @@ impl Rewrite<'_> {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.expr(e);
                 }
@@ -258,6 +258,7 @@ impl Rewrite<'_> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant);
                 for case in cases {

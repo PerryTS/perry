@@ -181,10 +181,7 @@ pub(crate) fn collect(
     // tells them apart.
     type Sites<K> = BTreeMap<(u32, u32, K), Option<&'static str>>;
     let mut reads: Sites<String> = BTreeMap::new();
-    for s in sites
-        .iter()
-        .filter(|s| !s.is_call && !s.access.is_store() && s.byte_offset != 0)
-    {
+    for s in sites.iter().filter(|s| !s.is_call && !s.access.is_store()) {
         let why = match s.verdict {
             Verdict::OwnLength
             | Verdict::NativeMember

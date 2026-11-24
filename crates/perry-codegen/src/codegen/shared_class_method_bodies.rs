@@ -2,7 +2,7 @@
 use crate::module::LlModule;
 use crate::types::{DOUBLE, I32, I64};
 
-pub(super) fn share(module: &mut LlModule, public: &str, class_id: u32) {
+pub(super) fn share(module: &mut LlModule, public: &str, class_id: u32, is_static: bool) {
     let owner_name = super::helpers::generator_method_owner_name(public);
     let generic = super::typed_abi::generic_method_body_name(public);
     let body_name = if module.function_named(&generic).is_some() {
@@ -20,7 +20,18 @@ pub(super) fn share(module: &mut LlModule, public: &str, class_id: u32) {
     wrapper.set_gc_effects(module.gc_effects());
     wrapper.enable_shadow_frame(0);
     let b = wrapper.create_block("entry");
-    let owner = b.call(DOUBLE, "js_class_value", &[(I32, &class_id.to_string())]);
+    let cid = class_id.to_string();
+    // An instance method's receiver (the first parameter) selects the
+    // evaluation, as the callable entry's captured class does.
+    let owner = if is_static {
+        b.call(DOUBLE, "js_class_value", &[(I32, &cid)])
+    } else {
+        b.call(
+            DOUBLE,
+            "js_class_direct_method_owner",
+            &[(DOUBLE, params[0].1.as_str()), (I32, &cid)],
+        )
+    };
     let owner = crate::expr::unbox_to_i64(b, &owner);
     let mut args = vec![(I64, owner.as_str())];
     args.extend(params.iter().map(|(ty, name)| (*ty, name.as_str())));
@@ -47,7 +58,7 @@ mod tests {
     #[test]
     fn fresh_direct_calls_and_callable_entries_keep_one_implementation() {
         let mut m = LlModule::new("x86_64-unknown-linux-gnu");
-        m.declare_function("js_class_value", DOUBLE, &[I32]);
+        m.declare_function("js_class_direct_method_owner", DOUBLE, &[DOUBLE, I32]);
         m.declare_function("discarded_body_work", DOUBLE, &[]);
         let f = m.define_function("method", DOUBLE, vec![(DOUBLE, "%this_arg".into())]);
         let b = f.create_block("entry");
@@ -59,9 +70,10 @@ mod tests {
             vec![(I64, "%owner".into()), (DOUBLE, "%this_arg".into())],
         );
         f.create_block("entry").ret(DOUBLE, "%this_arg");
-        share(&mut m, "method", 123);
+        share(&mut m, "method", 123, false);
         let ir = m.to_ir();
         assert!(!ir.contains("call double @discarded_body_work"));
+        assert!(ir.contains("@js_class_direct_method_owner(double %this_arg, i32 123)"));
         assert!(ir.contains("call double @method$generator_owner(i64 "));
         assert!(
             m.function_named("method$generator_owner")

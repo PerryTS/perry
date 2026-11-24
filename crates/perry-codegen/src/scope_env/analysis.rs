@@ -150,7 +150,7 @@ impl Analyzer<'_> {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e, num),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.expr(e, num);
                 }
@@ -212,6 +212,7 @@ impl Analyzer<'_> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant, num);
                 for case in cases {
@@ -312,7 +313,7 @@ pub(super) fn stmt_exprs<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
         Stmt::Let { init: Some(e), .. }
         | Stmt::Expr(e)
         | Stmt::Throw(e)
-        | Stmt::Return(Some(e)) => f(e),
+        | Stmt::Return(Some(e), _) => f(e),
         Stmt::If { condition, .. }
         | Stmt::While { condition, .. }
         | Stmt::DoWhile { condition, .. } => f(condition),
@@ -329,6 +330,7 @@ pub(super) fn stmt_exprs<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for case in cases {

@@ -91,7 +91,9 @@ pub(crate) fn index_is_exact_i32_shape(ctx: &FnCtx<'_>, index: &Expr) -> bool {
         // slot rep) — including `U32`, whose bit pattern compares correctly
         // under the unsigned bounds check when read BARE.
         Expr::LocalGet(id) => ctx.local_slot_reps.contains_key(id),
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add) => {
             match (left.as_ref(), right.as_ref()) {
                 (Expr::LocalGet(id), Expr::Integer(c)) | (Expr::Integer(c), Expr::LocalGet(id)) => {
                     // SIGNED reps only: a `U32` local's value near 2^32 is a
@@ -215,7 +217,8 @@ fn lower_checked_index(ctx: &mut FnCtx<'_>, index: &Expr) -> Result<String> {
 }
 
 pub(crate) fn is_proven_u32_view_read(ctx: &FnCtx<'_>, value: &Expr) -> bool {
-    let Expr::IndexGet { object, index, .. } = value else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = value
+    else {
         return false;
     };
     let Expr::LocalGet(id) = object.as_ref() else {

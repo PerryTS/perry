@@ -283,7 +283,9 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "array_flat", 1);
                 true
             }
-            "toString" => {
+            // With arguments (`n.toString(16)`) the call goes to the receiver's own
+            // method, which reads them; `jsvalue_to_string` takes the receiver alone.
+            "toString" if args.is_empty() => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, object);
                 self.emit_memcall(func, "jsvalue_to_string", 1);

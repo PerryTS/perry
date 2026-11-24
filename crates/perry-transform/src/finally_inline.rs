@@ -208,8 +208,9 @@ pub fn inline_finally_into_returns(module: &mut Module) {
 // This binding is fresh and this pass writes only Boolean literals to it.
 // Keep that constructor evidence in the condition rather than asking codegen
 // to trust a user binding's erased Boolean annotation.
-fn exited_test(id: LocalId) -> Expr {
+fn exited_test(id: LocalId, byte_offset: u32) -> Expr {
     Expr::Compare {
+        byte_offset,
         op: perry_hir::CompareOp::Eq,
         left: Box::new(Expr::LocalGet(id)),
         right: Box::new(Expr::Bool(true)),
@@ -251,7 +252,7 @@ fn process_stmts(
         });
 
         match stmt {
-            Stmt::Return(value) if !enclosing.is_empty() => {
+            Stmt::Return(value, off) if !enclosing.is_empty() => {
                 // Hoist the return operand into a fresh `let` so it
                 // evaluates BEFORE the inlined finally body. Critical
                 // for `return await foo()` (issue #536's pool.query
@@ -263,6 +264,7 @@ fn process_stmts(
                         let id = *next_local_id;
                         *next_local_id += 1;
                         out.push(Stmt::Let {
+                            byte_offset: 0, /*HPOS*/
                             id,
                             name: format!("__finally_ret_{}", id),
                             ty: Type::Any,
@@ -285,7 +287,7 @@ fn process_stmts(
                     label_depths,
                     next_local_id,
                 );
-                out.push(Stmt::Return(return_value));
+                out.push(Stmt::Return(return_value, off));
             }
             Stmt::Break => {
                 inline_finallies_for_break(
@@ -338,6 +340,7 @@ fn process_stmts(
                 mut catch,
                 mut finally,
                 forof_completion,
+                byte_offset,
             } => {
                 // Inlined outer finallies still sit inside inner try EH
                 // regions. Guard their preserved copies and catches so a
@@ -352,6 +355,7 @@ fn process_stmts(
                     body.insert(
                         0,
                         Stmt::Let {
+                            byte_offset: 0, /*HPOS*/
                             id,
                             name: format!("__finally_exited_{}", id),
                             ty: Type::Boolean,
@@ -366,7 +370,7 @@ fn process_stmts(
                         finally = Some(vec![Stmt::If {
                             condition: Expr::Unary {
                                 op: perry_hir::UnaryOp::Not,
-                                operand: Box::new(exited_test(id)),
+                                operand: Box::new(exited_test(id, byte_offset)),
                             },
                             then_branch: once,
                             else_branch: None,
@@ -418,7 +422,7 @@ fn process_stmts(
                             }
                         };
                         c.body = vec![Stmt::If {
-                            condition: exited_test(id),
+                            condition: exited_test(id, byte_offset),
                             then_branch: vec![Stmt::Throw(Expr::LocalGet(err_id))],
                             else_branch: Some(std::mem::take(&mut c.body)),
                         }];
@@ -436,6 +440,7 @@ fn process_stmts(
                     f
                 });
                 out.push(Stmt::Try {
+                    byte_offset,
                     body,
                     catch,
                     finally: new_finally,
@@ -575,6 +580,7 @@ fn process_stmts(
             Stmt::Switch {
                 discriminant,
                 mut cases,
+                byte_offset,
             } => {
                 for case in cases.iter_mut() {
                     process_stmts(
@@ -587,6 +593,7 @@ fn process_stmts(
                     );
                 }
                 out.push(Stmt::Switch {
+                    byte_offset,
                     discriminant,
                     cases,
                 });
@@ -730,7 +737,7 @@ fn inline_finallies_for_labeled(
 fn walk_stmt_exprs<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
     match stmt {
         Stmt::Let { init: Some(e), .. } => f(e),
-        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => f(e),
+        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => f(e),
         // Only the statement's OWN operand expressions. Descending into a nested
         // statement list here would visit its closures a SECOND time, because
         // `process_stmts` recurses into every one of these bodies itself and calls
@@ -774,6 +781,7 @@ fn walk_stmt_exprs<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -815,14 +823,15 @@ mod exit_tests {
     #[test]
     fn generated_exit_guards_keep_boolean_constructor_evidence() {
         let mut body = vec![Stmt::Try {
+            byte_offset: 0,
             body: vec![Stmt::If {
                 condition: Expr::LocalGet(1),
-                then_branch: vec![Stmt::Return(Some(Expr::Number(7.0)))],
+                then_branch: vec![Stmt::Return(Some(Expr::Number(7.0)), 0)],
                 else_branch: None,
             }],
             catch: Some(perry_hir::CatchClause {
                 param: Some((2, "error".into())),
-                body: vec![Stmt::Return(Some(Expr::Number(9.0)))],
+                body: vec![Stmt::Return(Some(Expr::Number(9.0)), 0)],
             }),
             finally: Some(vec![Stmt::Expr(Expr::Number(5.0))]),
             forof_completion: None,
@@ -860,7 +869,7 @@ mod exit_tests {
             panic!("catch guard");
         };
         assert!(matches!(condition, Expr::Compare {
-            op: perry_hir::CompareOp::Eq, left, right
+            op: perry_hir::CompareOp::Eq, left, right, ..
         } if matches!(left.as_ref(), Expr::LocalGet(3)) && matches!(right.as_ref(), Expr::Bool(true))));
         let Stmt::If {
             condition: Expr::Unary { operand, .. },
@@ -870,7 +879,7 @@ mod exit_tests {
             panic!("finally guard");
         };
         assert!(matches!(operand.as_ref(), Expr::Compare {
-            op: perry_hir::CompareOp::Eq, left, right
+            op: perry_hir::CompareOp::Eq, left, right, ..
         } if matches!(left.as_ref(), Expr::LocalGet(3)) && matches!(right.as_ref(), Expr::Bool(true))));
     }
 }

@@ -46,7 +46,7 @@ fn expression(expr: &Expr, discarded: bool) -> bool {
             return true
         }
         Expr::PropertyGet { property, .. } if property == "process" => return true,
-        Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::String(key) if key == "process") => {
+        Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(), Expr::String(key) if key == "process") => {
             return true
         }
         Expr::NativeMethodCall {
@@ -64,7 +64,7 @@ fn expression(expr: &Expr, discarded: bool) -> bool {
                 return true;
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()

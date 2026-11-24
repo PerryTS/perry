@@ -42,7 +42,8 @@ pub(super) fn constructor_of(
         let args = params.iter().map(|p| Expr::LocalGet(p.id)).collect();
         return Some(Constructor {
             params,
-            body: vec![Stmt::Expr(Expr::SuperCall(args))],
+            // The wasm emitter's forwarding constructor: no source, no facts.
+            body: vec![Stmt::Expr(Expr::SuperCall(args, 0))],
         });
     }
     class
@@ -348,10 +349,12 @@ impl WasmModuleEmitter {
         // A derived class initializes its fields when `super()` returns, so the parent
         // constructor sees none of them; a base class initializes them on entry. A
         // `super()` nested below the top level falls back to entry.
-        let super_at = ctor
-            .body
-            .iter()
-            .position(|stmt| matches!(stmt, Stmt::Expr(Expr::SuperCall(_))));
+        let super_at = ctor.body.iter().position(|stmt| {
+            matches!(
+                stmt,
+                Stmt::Expr(Expr::SuperCall(_, _) | Expr::SuperCallSpread(_))
+            )
+        });
         if super_at.is_none() {
             emit_field_inits(&mut func);
         }

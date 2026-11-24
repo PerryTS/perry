@@ -42,10 +42,10 @@ impl<'hir> ClosureWrites<'hir> {
                         self.collect_expr_writes(init, writes);
                     }
                 }
-                Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+                Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                     self.collect_expr_writes(expr, writes);
                 }
-                Stmt::Return(None)
+                Stmt::Return(None, _)
                 | Stmt::Break
                 | Stmt::Continue
                 | Stmt::LabeledBreak(_)
@@ -115,6 +115,7 @@ impl<'hir> ClosureWrites<'hir> {
                 Stmt::Switch {
                     discriminant,
                     cases,
+                    ..
                 } => {
                     self.collect_expr_writes(discriminant, writes);
                     for case in cases {

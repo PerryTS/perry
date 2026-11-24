@@ -93,6 +93,19 @@ impl Model {
             }
             node.succ.push(b);
         }
+        // The edge's program position (the operation that made it).
+        if self.stop_top.is_some() {
+            let p = self.stop_top.as_ref().unwrap().cur_pos();
+            if p == crate::topstop::NOPOS {
+                self.note_nopos(std::panic::Location::caller(), "edge");
+            } else {
+                self.stop_top
+                    .as_mut()
+                    .unwrap()
+                    .edge_pos
+                    .insert((a as u64) << 32 | b as u64, p);
+            }
+        }
         if let Some(tp) = self.term_preds.as_mut() {
             if let Some(v) = tp.get_mut(&b) {
                 v.push(a);
@@ -283,6 +296,11 @@ impl Model {
         self.pts_entries += batch.len() as u64;
         if top && self.diagnostic.is_some() {
             self.diagnostic_predecessor(dst, src, self.cur_why);
+        }
+        if top && self.stop_top.is_some() {
+            let saved = std::mem::replace(&mut self.cur_src, src);
+            self.top_created(dst, std::panic::Location::caller());
+            self.cur_src = saved;
         }
         if top && self.explain {
             self.top_pred

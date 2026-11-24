@@ -2,6 +2,7 @@ use super::*;
 
 fn graph_function(id: FuncId, dependencies: &[FuncId]) -> Function {
     Function {
+        byte_offset: 0,
         id,
         name: format!("f{id}"),
         type_params: Vec::new(),

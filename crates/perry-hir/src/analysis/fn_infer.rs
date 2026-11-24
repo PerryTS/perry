@@ -382,16 +382,18 @@ fn ty_of(e: &Expr, env: &Env<'_>, cx: &Ctx<'_>) -> Type {
             is_async: false,
             is_generator: false,
         }),
-        Expr::Call { callee, .. } => match call_target(callee, env, cx) {
-            Some(fid) => env.st.rets.get(&fid).cloned().unwrap_or(Type::Never),
-            None => {
-                if cx.cfg.strict {
-                    Type::Any
-                } else {
-                    infer_expr_type(e, env)
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
+            match call_target(callee, env, cx) {
+                Some(fid) => env.st.rets.get(&fid).cloned().unwrap_or(Type::Never),
+                None => {
+                    if cx.cfg.strict {
+                        Type::Any
+                    } else {
+                        infer_expr_type(e, env)
+                    }
                 }
             }
-        },
+        }
         Expr::New { class_name, .. } if cx.classes.contains(class_name) => {
             Type::Named(class_name.clone())
         }
@@ -409,7 +411,9 @@ fn ty_of(e: &Expr, env: &Env<'_>, cx: &Ctx<'_>) -> Type {
                 None => infer_expr_type(e, env),
             },
         },
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let l = ty_of(left, env, cx);
             let r = ty_of(right, env, cx);
             if matches!(l, Type::Never) || matches!(r, Type::Never) {
@@ -444,7 +448,9 @@ fn ty_of(e: &Expr, env: &Env<'_>, cx: &Ctx<'_>) -> Type {
             else_expr,
             ..
         } => join(&ty_of(then_expr, env, cx), &ty_of(else_expr, env, cx)),
-        Expr::Logical { op, left, right } => {
+        Expr::Logical {
+            op, left, right, ..
+        } => {
             let l = ty_of(left, env, cx);
             let r = ty_of(right, env, cx);
             match op {
@@ -485,11 +491,13 @@ fn ty_of(e: &Expr, env: &Env<'_>, cx: &Ctx<'_>) -> Type {
                 _ => Type::Any,
             }
         }
-        Expr::IndexGet { object, .. } => match ty_of(object, env, cx) {
-            Type::Array(el) if !cx.cfg.strict => join(&el, &Type::Void),
-            Type::String | Type::StringLiteral(_) => join(&Type::String, &Type::Void),
-            _ => Type::Any,
-        },
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
+            match ty_of(object, env, cx) {
+                Type::Array(el) if !cx.cfg.strict => join(&el, &Type::Void),
+                Type::String | Type::StringLiteral(_) => join(&Type::String, &Type::Void),
+                _ => Type::Any,
+            }
+        }
         _ => infer_expr_type(e, env),
     }
 }
@@ -664,7 +672,7 @@ fn for_each_stmt_expr<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
                 f(e)
             }
         }
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e)
             }
@@ -734,6 +742,7 @@ fn for_each_stmt_expr<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -819,7 +828,7 @@ fn walk_stmts<'a>(
         }
         // Expressions directly owned by this statement (not nested stmts).
         match s {
-            Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => walk_local(e, on_expr),
+            Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => walk_local(e, on_expr),
             Stmt::Expr(e) | Stmt::Throw(e) => walk_local(e, on_expr),
             Stmt::If { condition, .. }
             | Stmt::While { condition, .. }
@@ -837,6 +846,7 @@ fn walk_stmts<'a>(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 walk_local(discriminant, on_expr);
                 for c in cases {
@@ -1471,7 +1481,7 @@ fn round(cx: &Ctx<'_>, st: &State, m: &Module) -> State {
                 };
                 lets.push((*id, t));
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 rets.push(match e {
                     Some(e) => ty_of(e, &env, cx),
                     None => Type::Void,
@@ -1503,7 +1513,7 @@ fn round(cx: &Ctx<'_>, st: &State, m: &Module) -> State {
                 let k = this_store_key(e).unwrap_or_default();
                 fsets.push(((c.to_string(), k), ty_of(value, &env, cx)));
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if let Some(fid) = call_target(callee, &env, cx) {
                     calls.push((fid, args.iter().map(|a| ty_of(a, &env, cx)).collect()));
                     // A local handed to a callee whose parameter is concrete
@@ -1519,11 +1529,12 @@ fn round(cx: &Ctx<'_>, st: &State, m: &Module) -> State {
                     }
                 }
             }
-            Expr::Compare { op, left, right }
-                if matches!(
-                    op,
-                    CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
-                ) =>
+            Expr::Compare {
+                op, left, right, ..
+            } if matches!(
+                op,
+                CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
+            ) =>
             {
                 for (side, other) in [(left, right), (right, left)] {
                     if let Expr::LocalGet(id) = side.as_ref() {
@@ -1547,7 +1558,9 @@ fn round(cx: &Ctx<'_>, st: &State, m: &Module) -> State {
                     calls.push((fid, args.iter().map(|a| ty_of(a, &env, cx)).collect()));
                 }
             }
-            Expr::Binary { op, left, right } if !matches!(op, BinaryOp::Add) => {
+            Expr::Binary {
+                op, left, right, ..
+            } if !matches!(op, BinaryOp::Add) => {
                 for side in [left, right] {
                     if let Expr::LocalGet(id) = side.as_ref() {
                         hint_v.push((*id, Type::Number));
@@ -1557,7 +1570,7 @@ fn round(cx: &Ctx<'_>, st: &State, m: &Module) -> State {
             _ => {}
         };
         walk_stmts(body, &mut on_stmt, &mut on_expr);
-        if let Some(Stmt::Return(_)) | Some(Stmt::Throw(_)) = body.last() {
+        if let Some(Stmt::Return(_, _)) | Some(Stmt::Throw(_)) = body.last() {
             falls_off = false;
         }
         for (id, t) in lets.into_iter().chain(sets) {
@@ -1701,6 +1714,7 @@ fn unit_stats(cx: &Ctx<'_>, st: &State, ui: usize) -> FnStats {
             | Expr::PropertySet { object, .. }
             | Expr::PropertyUpdate { object, .. }
             | Expr::IndexGet { object, .. }
+            | Expr::RegionOut { object, .. }
             | Expr::IndexSet { object, .. } => Some(object.as_ref()),
             _ => None,
         };
@@ -1717,11 +1731,12 @@ fn unit_stats(cx: &Ctx<'_>, st: &State, ui: usize) -> FnStats {
         }
         let operands = match e {
             Expr::Binary { left, right, .. } => Some((left, right)),
-            Expr::Compare { op, left, right }
-                if matches!(
-                    op,
-                    CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
-                ) =>
+            Expr::Compare {
+                op, left, right, ..
+            } if matches!(
+                op,
+                CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge
+            ) =>
             {
                 Some((left, right))
             }

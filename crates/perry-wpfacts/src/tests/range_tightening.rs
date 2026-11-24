@@ -61,21 +61,18 @@ fn probe() -> String {
 #[test]
 fn a_sum_of_two_counters_is_their_hull() {
     let calls = keys(&probe(), FactsConfig::default());
-    assert_eq!(call(&calls, "this.at(r * 16)"), (Some((0, 112)), true));
-    assert_eq!(call(&calls, "this.at(r * 16 + f)"), (Some((0, 119)), true));
-    assert_eq!(call(&calls, "this.at(r + f)"), (Some((0, 14)), true));
-    assert_eq!(
-        call(&calls, "this.at(r * 16 - f + 7)"),
-        (Some((0, 119)), true)
-    );
+    assert_eq!(call(&calls, "at(r * 16)"), (Some((0, 112)), true));
+    assert_eq!(call(&calls, "at(r * 16 + f)"), (Some((0, 119)), true));
+    assert_eq!(call(&calls, "at(r + f)"), (Some((0, 14)), true));
+    assert_eq!(call(&calls, "at(r * 16 - f + 7)"), (Some((0, 119)), true));
 }
 
 #[test]
 fn a_write_in_a_branch_that_leaves_keeps_the_narrowed_reads() {
     let calls = keys(&probe(), FactsConfig::default());
-    assert_eq!(call(&calls, "this.at(q + 0)"), (Some((0, 127)), true));
-    assert_eq!(call(&calls, "this.at(q - 0)"), (Some((0, 127)), true));
-    assert_eq!(call(&calls, "this.at(q * 1)"), (Some((0, 127)), true));
+    assert_eq!(call(&calls, "at(q + 0)"), (Some((0, 127)), true));
+    assert_eq!(call(&calls, "at(q - 0)"), (Some((0, 127)), true));
+    assert_eq!(call(&calls, "at(q * 1)"), (Some((0, 127)), true));
 }
 
 #[test]
@@ -87,9 +84,9 @@ fn the_switches_off_give_the_widened_intervals_back() {
             ..Default::default()
         },
     );
-    let (k, _) = call(&rules_off, "this.at(r + f)");
+    let (k, _) = call(&rules_off, "at(r + f)");
     assert!(k.is_some_and(|(_, hi)| hi > 14), "{k:?}");
-    let (k, in_floor) = call(&rules_off, "this.at(r * 16 + f)");
+    let (k, in_floor) = call(&rules_off, "at(r * 16 + f)");
     assert!(k.is_some_and(|(_, hi)| hi > 127) && !in_floor, "{k:?}");
     let writes_off = keys(
         &probe(),
@@ -98,10 +95,10 @@ fn the_switches_off_give_the_widened_intervals_back() {
             ..Default::default()
         },
     );
-    let (k, in_floor) = call(&writes_off, "this.at(q + 0)");
+    let (k, in_floor) = call(&writes_off, "at(q + 0)");
     assert!(k.is_some_and(|(_, hi)| hi > 127) && !in_floor, "{k:?}");
     // A bare `continue` writes nothing: narrowed either way.
-    assert_eq!(call(&writes_off, "this.at(q - 0)"), (Some((0, 127)), true));
+    assert_eq!(call(&writes_off, "at(q - 0)"), (Some((0, 127)), true));
 }
 
 /// Negative controls: a write that reaches a later read keeps it wide.
@@ -121,15 +118,15 @@ fn a_write_that_reaches_a_later_read_keeps_it_wide() {
     let calls = keys(&reaching(), FactsConfig::default());
     for (text, reach) in [
         // `q + 7` falls through to the read.
-        ("this.at(q + 0)", 134),
+        ("at(q + 0)", 134),
         // The `break` lands after the `switch`, before the read.
-        ("this.at(q - 0)", 327),
+        ("at(q - 0)", 327),
         // The `finally` runs after the `continue`.
-        ("this.at(q * 1)", 327),
+        ("at(q * 1)", 327),
         // A labeled jump is not followed (conservative).
-        ("this.at(q | 0)", 327),
+        ("at(q | 0)", 327),
         // The sum's hull is past the floor.
-        ("this.at(r * 16 + f + 9)", 128),
+        ("at(r * 16 + f + 9)", 128),
     ] {
         let (k, in_floor) = call(&calls, text);
         assert!(
@@ -148,7 +145,7 @@ fn the_sabotage_arms_claim_a_read_in_the_floor_that_is_not() {
             ..Default::default()
         },
     );
-    assert!(call(&leaving, "this.at(q + 0)").1, "{leaving:?}");
+    assert!(call(&leaving, "at(q + 0)").1, "{leaving:?}");
     let exact = keys(
         &reaching(),
         FactsConfig {
@@ -156,5 +153,5 @@ fn the_sabotage_arms_claim_a_read_in_the_floor_that_is_not() {
             ..Default::default()
         },
     );
-    assert!(call(&exact, "this.at(r * 16 + f + 9)").1, "{exact:?}");
+    assert!(call(&exact, "at(r * 16 + f + 9)").1, "{exact:?}");
 }

@@ -349,7 +349,7 @@ fn collect_keys_from_stmt(
             init: Some(expr), ..
         }
         | Stmt::Expr(expr)
-        | Stmt::Return(Some(expr))
+        | Stmt::Return(Some(expr), _)
         | Stmt::Throw(expr) => {
             collect_keys_from_expr(expr, key_to_idx, keys);
         }
@@ -407,6 +407,7 @@ fn collect_keys_from_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             collect_keys_from_expr(discriminant, key_to_idx, keys);
             for case in cases {
@@ -417,7 +418,7 @@ fn collect_keys_from_stmt(
             }
         }
         Stmt::Let { init: None, .. }
-        | Stmt::Return(None)
+        | Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -540,7 +541,7 @@ fn replace_in_stmt(
             init: Some(expr), ..
         }
         | Stmt::Expr(expr)
-        | Stmt::Return(Some(expr))
+        | Stmt::Return(Some(expr), _)
         | Stmt::Throw(expr) => {
             replace_in_expr(expr, key_to_idx, plural_info, plural_param_map, anon_shapes);
         }
@@ -648,6 +649,7 @@ fn replace_in_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             replace_in_expr(
                 discriminant,
@@ -670,7 +672,7 @@ fn replace_in_stmt(
             }
         }
         Stmt::Let { init: None, .. }
-        | Stmt::Return(None)
+        | Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -762,6 +764,7 @@ mod tests {
 
     fn t(key: &str) -> Expr {
         Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "perry/i18n".into(),
             class_name: None,
             object: None,
@@ -826,6 +829,7 @@ mod tests {
 
     fn class_function(name: &str, key: &str, id: u32) -> perry_hir::Function {
         perry_hir::Function {
+            byte_offset: 0,
             id,
             name: name.into(),
             type_params: Vec::new(),
@@ -999,8 +1003,10 @@ mod tests {
     #[test]
     fn traverses_closure_bodies_and_parameter_defaults() {
         let expr = Expr::Closure {
+            byte_offset: 0,
             func_id: 0,
             params: vec![perry_hir::Param {
+                byte_offset: 0,
                 id: 0,
                 name: "arg".into(),
                 ty: perry_hir::types::Type::String,
