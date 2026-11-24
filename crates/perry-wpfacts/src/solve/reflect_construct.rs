@@ -47,11 +47,9 @@ impl Model {
 
     pub(crate) fn reflect_construct(&mut self, call: CallId, target: Tok, new_target: Tok) {
         if !self.sum.ready {
-            self.sum
-                .deferred
-                .push(crate::summary::Deferred::ReflectConstruct(
-                    call, target, new_target,
-                ));
+            self.defer(crate::summary::Deferred::ReflectConstruct(
+                call, target, new_target,
+            ));
             return;
         }
         self.add_tok(self.reflect_new_targets, new_target);
