@@ -1192,6 +1192,7 @@ impl WasmModuleEmitter {
             Expr::DateToUTCString(d) => {
                 self.emit_js_bridge_call("date_to_utc_string", &[d], locals)
             }
+            Expr::CryptoRandomUUID => self.emit_js_bridge_call("crypto_random_uuid", &[], locals),
             // `new` on a constructor value (`new Map<K, V>([...])` among others) and the Map and
             // Set nodes call the bridges their WASM arms call (`emit/expr/classes.rs`,
             // `emit/expr/map_set.rs`).

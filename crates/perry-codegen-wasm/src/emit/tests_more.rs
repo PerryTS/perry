@@ -1270,6 +1270,9 @@ mod class_value;
 #[path = "weak_ref_tests.rs"]
 mod weak_ref;
 
+#[path = "async_random_uuid_tests.rs"]
+mod async_random_uuid;
+
 #[path = "function_value_tests.rs"]
 mod function_value;
 
