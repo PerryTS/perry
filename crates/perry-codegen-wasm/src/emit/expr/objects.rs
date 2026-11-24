@@ -5,8 +5,43 @@
 
 use super::*;
 
+/// The bridge an own-property reflection call runs, with its arguments in order. WASM
+/// and async (JS) bodies call the same one.
+pub(in crate::emit) fn reflection_bridge(expr: &Expr) -> Option<(&'static str, Vec<&Expr>)> {
+    Some(match expr {
+        Expr::ObjectGetOwnPropertyDescriptor(obj, key) => {
+            ("object_get_own_property_descriptor", vec![obj, key])
+        }
+        Expr::ObjectGetOwnPropertyDescriptors(obj) => {
+            ("object_get_own_property_descriptors", vec![obj])
+        }
+        Expr::ObjectGetOwnPropertyNames(obj) => ("object_get_own_property_names", vec![obj]),
+        Expr::ObjectGetOwnPropertySymbols(obj) => ("object_get_own_property_symbols", vec![obj]),
+        Expr::ObjectHasOwn(obj, key) => ("object_has_own", vec![obj, key]),
+        Expr::ReflectHas { target, key } => ("reflect_has", vec![target, key]),
+        Expr::ReflectOwnKeys(target) => ("reflect_own_keys", vec![target]),
+        Expr::ReflectGetOwnPropertyDescriptor { target, key } => {
+            ("reflect_get_own_property_descriptor", vec![target, key])
+        }
+        Expr::ReflectDefineProperty {
+            target,
+            key,
+            descriptor,
+        } => ("reflect_define_property", vec![target, key, descriptor]),
+        _ => return None,
+    })
+}
+
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_objects(&mut self, func: &mut Function, expr: &Expr) -> bool {
+        if let Some((bridge, args)) = reflection_bridge(expr) {
+            self.emit_frame_begin(func, args.len() as u32);
+            for (slot, arg) in args.iter().enumerate() {
+                self.emit_store_arg(func, slot as u32, arg);
+            }
+            self.emit_memcall(func, bridge, args.len() as u32);
+            return true;
+        }
         match expr {
             // `super[key](args)` in an object-literal method: `home` is the literal, and
             // the lookup starts at its [[Prototype]]. A class method's home is its class.
@@ -75,12 +110,6 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 0, obj);
                 self.emit_store_arg(func, 1, props);
                 self.emit_memcall(func, "object_define_properties", 2);
-            }
-            Expr::ObjectGetOwnPropertyDescriptor(obj, key) => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, obj);
-                self.emit_store_arg(func, 1, key);
-                self.emit_memcall(func, "object_get_own_property_descriptor", 2);
             }
             Expr::ObjectSetPrototypeOf(obj, proto) => {
                 self.emit_frame_begin(func, 2);
@@ -239,16 +268,7 @@ impl<'a> FuncEmitCtx<'a> {
                     // mirroring the ExternFuncRef value arm in classes.rs.
                     // (Direct calls take the fast path in calls.rs instead.)
                     if let Some(&func_idx) = self.emitter.imported_ns_funcs.get(&key) {
-                        let table_idx = self
-                            .emitter
-                            .func_to_table_idx
-                            .get(&func_idx)
-                            .copied()
-                            .unwrap_or(func_idx);
-                        self.emit_frame_begin(func, 2);
-                        self.emit_store_const(func, 0, table_idx as f64);
-                        self.emit_store_const(func, 1, self.emitter.fn_proto_code(func_idx));
-                        self.emit_memcall(func, "function_value", 2);
+                        self.emit_function_value(func, func_idx);
                         return true;
                     }
                 }

@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1975 entries across 105 modules
+// Coverage: 1976 entries across 105 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -1148,6 +1148,8 @@ declare module "crypto" {
   export function randomInt(...args: any[]): any;
   /** stdlib */
   export function randomUUID(...args: any[]): any;
+  /** stdlib */
+  export function randomUUIDv7(...args: any[]): any;
   /** stdlib */
   export function scrypt(...args: any[]): any;
   /** stdlib */

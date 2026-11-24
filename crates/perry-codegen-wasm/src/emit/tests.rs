@@ -51,13 +51,30 @@ fn run_web_ui_source_then(source: &str, after_boot: &str) -> String {
 }
 
 fn run_web_source_with_dom(source: &str, dom: &str, after_boot: &str) -> String {
-    let ast = perry_parser::parse_typescript(source, "splice.ts").unwrap();
-    let mut module = perry_hir::lower::lower_module(&ast, "splice", "splice.ts").unwrap();
-    // The HIR transforms `perry --target web` runs before wasm emission.
-    perry_transform::inline_finally_into_returns(&mut module);
-    perry_transform::transform_generators_without_private_frames(&mut module);
-    let html =
-        crate::compile_modules_to_wasm_html(&[("splice".into(), module)], "splice", false).unwrap();
+    run_web_modules_with_dom(&[("splice", source)], dom, after_boot)
+}
+
+/// Compiles `(name, source)` modules, importable as `./<name>`, into one program
+/// whose entry is the last module, and runs it as `run_web_source` does.
+fn run_web_modules(modules: &[(&str, &str)]) -> String {
+    run_web_modules_with_dom(modules, STUB_DOM, "")
+}
+
+fn run_web_modules_with_dom(modules: &[(&str, &str)], dom: &str, after_boot: &str) -> String {
+    let modules: Vec<_> = modules
+        .iter()
+        .map(|(name, source)| {
+            let path = format!("{name}.ts");
+            let ast = perry_parser::parse_typescript(source, &path).unwrap();
+            let mut module = perry_hir::lower::lower_module(&ast, name, &path).unwrap();
+            // The HIR transforms `perry --target web` runs before wasm emission.
+            perry_transform::inline_finally_into_returns(&mut module);
+            perry_transform::transform_generators_without_private_frames(&mut module);
+            (path, module)
+        })
+        .collect();
+    let entry = modules.last().unwrap().1.name.clone();
+    let html = crate::compile_modules_to_wasm_html(&modules, &entry, false).unwrap();
     let runtime = html
         .split("<script>")
         .nth(1)
@@ -1036,6 +1053,34 @@ select.dispatch("change");
 "#
         ),
         "picker 1"
+    );
+}
+
+// The web DatePicker reports the ISO `yyyy-MM-dd` string the native backends report;
+// an out-of-range year or month falls back to 2026-01, and a day past the month's end
+// is the month's last.
+#[test]
+fn date_picker_reports_and_sets_an_iso_date() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { DatePicker, datePickerGetSelectedDate, datePickerSetDate } from "perry/ui";
+const picker = DatePicker(2026, 11, (iso: string) => { console.log("changed " + iso + " " + typeof iso); });
+console.log(datePickerGetSelectedDate(picker));
+datePickerSetDate(picker, 2027, 2, 9);
+console.log(datePickerGetSelectedDate(picker));
+datePickerSetDate(picker, 2028, 2, 31);
+console.log(datePickerGetSelectedDate(picker));
+const fallback = DatePicker(0, 13, (iso: string) => {});
+console.log(datePickerGetSelectedDate(fallback));
+"#,
+            r#"
+const input = [...uiHandles.values()].find(e => e.tagName === "INPUT" && e.type === "date");
+input.value = "2026-11-12";
+input.dispatch("change");
+"#
+        ),
+        "2026-11-01\n2027-02-09\n2028-02-29\n2026-01-01\nchanged 2026-11-12 string"
     );
 }
 

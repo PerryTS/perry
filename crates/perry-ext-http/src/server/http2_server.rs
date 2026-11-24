@@ -69,10 +69,10 @@ pub(crate) use turnloop_glue::{
     complete_turnloop_ping, complete_turnloop_settings, mark_turnloop_client_connected,
     mark_turnloop_session_closed, mark_turnloop_settings_acked, mark_turnloop_stream_closed,
     queue_turnloop_client_body, queue_turnloop_client_response, queue_turnloop_goaway,
-    queue_turnloop_remote_settings, queue_turnloop_session_error, queue_turnloop_stream_error,
-    queue_turnloop_stream_reset, register_turnloop_server_session, register_turnloop_stream_handle,
-    server_has_stream_listener, socket_of_session, turnloop_conn_of_session,
-    turnloop_target_of_stream,
+    queue_turnloop_remote_settings, queue_turnloop_session_error, queue_turnloop_session_tls_error,
+    queue_turnloop_stream_cancel, queue_turnloop_stream_error, queue_turnloop_stream_reset,
+    register_turnloop_server_session, register_turnloop_stream_handle, server_has_stream_listener,
+    socket_of_session, turnloop_conn_of_session, turnloop_target_of_stream,
 };
 
 pub(crate) static H2_PENDING_EVENTS: std::sync::LazyLock<Mutex<Vec<Http2PendingEvent>>> =
@@ -298,6 +298,9 @@ pub(crate) enum Http2PendingEvent {
     ClientError {
         handle: i64,
         message: String,
+        /// Node's `err.code`. With one, `'error'` gets an `Error` carrying it;
+        /// without one, the bare message string.
+        code: Option<String>,
     },
 }
 

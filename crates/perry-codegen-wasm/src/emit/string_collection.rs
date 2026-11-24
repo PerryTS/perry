@@ -50,6 +50,7 @@ impl WasmModuleEmitter {
             "object_set",
             "object_get",
             "object_literal_define",
+            "object_literal_define_accessor",
             "object_literal_set_prototype",
             "object_set_prototype_of",
             "object_get_prototype_of",
@@ -67,6 +68,14 @@ impl WasmModuleEmitter {
             "object_define_property",
             "object_define_properties",
             "object_get_own_property_descriptor",
+            "object_get_own_property_descriptors",
+            "object_get_own_property_names",
+            "object_get_own_property_symbols",
+            "object_has_own",
+            "reflect_define_property",
+            "reflect_get_own_property_descriptor",
+            "reflect_has",
+            "reflect_own_keys",
             "object_entries",
             "object_rest",
             "object_has_property",
@@ -164,6 +173,8 @@ impl WasmModuleEmitter {
             "array_forEach",
             "array_reduce",
             "array_find",
+            "array_find_last",
+            "array_find_last_index",
             "array_find_index",
             "array_sort",
             "array_reduce_right",
@@ -204,14 +215,17 @@ impl WasmModuleEmitter {
             "class_static_define",
             "class_static_this",
             "class_init_computed_field",
+            "class_init_field",
             "to_property_key",
             "reflect_apply",
             "class_set_method",
             "class_set_static_method",
+            "class_set_accessor",
             "class_static_method_this",
             "class_call_method",
             "class_super_get",
             "class_super_call",
+            "super_call_spread",
             "class_get_field",
             "class_set_field",
             "generator_new",
@@ -342,6 +356,7 @@ impl WasmModuleEmitter {
             "searchparams_delete",
             "searchparams_to_string",
             "crypto_random_uuid",
+            "crypto_random_uuidv7",
             "crypto_random_bytes",
             "path_join",
             "path_dirname",
@@ -469,7 +484,6 @@ impl WasmModuleEmitter {
             }
             for (name, getter) in &class.getters {
                 self.intern_string(name);
-                self.intern_string(&format!("__get_{}", name));
                 for param in &getter.params {
                     if let Some(default) = &param.default {
                         self.collect_strings_in_expr(default);
@@ -479,7 +493,6 @@ impl WasmModuleEmitter {
             }
             for (name, setter) in &class.setters {
                 self.intern_string(name);
-                self.intern_string(&format!("__set_{}", name));
                 for param in &setter.params {
                     if let Some(default) = &param.default {
                         self.collect_strings_in_expr(default);

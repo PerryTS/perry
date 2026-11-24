@@ -33,19 +33,16 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "string_substring", 3);
                 true
             }
+            // The receiver's type is not known here, so these bridges take every argument
+            // and hand a non-string receiver (an array, a class instance) its own method.
             "indexOf" if !args.is_empty() => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, object);
-                self.emit_store_arg(func, 1, &args[0]);
-                self.emit_memcall(func, "string_indexOf", 2);
+                self.emit_receiver_and_args(func, object, args);
+                self.emit_memcall(func, "string_indexOf", args.len() as u32 + 1);
                 true
             }
             "slice" if args.len() >= 2 => {
-                self.emit_frame_begin(func, 3);
-                self.emit_store_arg(func, 0, object);
-                self.emit_store_arg(func, 1, &args[0]);
-                self.emit_store_arg(func, 2, &args[1]);
-                self.emit_memcall(func, "string_slice", 3);
+                self.emit_receiver_and_args(func, object, args);
+                self.emit_memcall(func, "string_slice", args.len() as u32 + 1);
                 true
             }
             "toLowerCase" if args.is_empty() => {
@@ -67,45 +64,18 @@ impl<'a> FuncEmitCtx<'a> {
                 true
             }
             "includes" if !args.is_empty() => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, object);
-                self.emit_store_arg(func, 1, &args[0]);
-                self.emit_memcall_i32(func, "string_includes", 2);
-                func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-                    ValType::I64,
-                )));
-                func.instruction(&Instruction::I64Const(TAG_TRUE as i64));
-                func.instruction(&Instruction::Else);
-                func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
-                func.instruction(&Instruction::End);
+                self.emit_receiver_and_args(func, object, args);
+                self.emit_memcall(func, "string_includes", args.len() as u32 + 1);
                 true
             }
             "startsWith" if !args.is_empty() => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, object);
-                self.emit_store_arg(func, 1, &args[0]);
-                self.emit_memcall_i32(func, "string_startsWith", 2);
-                func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-                    ValType::I64,
-                )));
-                func.instruction(&Instruction::I64Const(TAG_TRUE as i64));
-                func.instruction(&Instruction::Else);
-                func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
-                func.instruction(&Instruction::End);
+                self.emit_receiver_and_args(func, object, args);
+                self.emit_memcall(func, "string_startsWith", args.len() as u32 + 1);
                 true
             }
             "endsWith" if !args.is_empty() => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, object);
-                self.emit_store_arg(func, 1, &args[0]);
-                self.emit_memcall_i32(func, "string_endsWith", 2);
-                func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
-                    ValType::I64,
-                )));
-                func.instruction(&Instruction::I64Const(TAG_TRUE as i64));
-                func.instruction(&Instruction::Else);
-                func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
-                func.instruction(&Instruction::End);
+                self.emit_receiver_and_args(func, object, args);
+                self.emit_memcall(func, "string_endsWith", args.len() as u32 + 1);
                 true
             }
             "replace" if args.len() >= 2 => {
@@ -283,7 +253,9 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "array_flat", 1);
                 true
             }
-            "toString" => {
+            // With arguments (`n.toString(16)`) the call goes to the receiver's own
+            // method, which reads them; `jsvalue_to_string` takes the receiver alone.
+            "toString" if args.is_empty() => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, object);
                 self.emit_memcall(func, "jsvalue_to_string", 1);
@@ -334,6 +306,15 @@ impl<'a> FuncEmitCtx<'a> {
                 true
             }
             _ => false,
+        }
+    }
+
+    /// Opens a frame holding `object` then every argument, for a bridge that reads them all.
+    fn emit_receiver_and_args(&mut self, func: &mut Function, object: &Expr, args: &[Expr]) {
+        self.emit_frame_begin(func, args.len() as u32 + 1);
+        self.emit_store_arg(func, 0, object);
+        for (i, arg) in args.iter().enumerate() {
+            self.emit_store_arg(func, i as u32 + 1, arg);
         }
     }
 }

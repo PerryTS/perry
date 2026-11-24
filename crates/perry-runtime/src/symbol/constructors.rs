@@ -176,7 +176,7 @@ pub unsafe extern "C" fn js_symbol_computed_member(ctor_f64: f64, key_f64: f64) 
 }
 
 /// The well-known-symbol member names surfaced on the `Symbol` constructor. Kept
-/// in sync with `is_well_known_symbol_member` in perry-hir's `expr_member.rs`
+/// in sync with `well_known_symbol_member` in perry-hir's `expr_member.rs`
 /// (the dot / string-literal fold) so all three forms — `Symbol.iterator`,
 /// `Symbol["iterator"]`, `Symbol[name]` — resolve to the same cached symbol.
 fn is_well_known_symbol_member_name(name: &str) -> bool {

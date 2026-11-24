@@ -1,0 +1,1 @@
+On `--target web`, `includes`, `indexOf`, `startsWith`, `endsWith` and two-argument `slice` read their position argument, and the same calls on an array or class instance typed `any` run that receiver's own method instead of the string one; array `indexOf` / `includes` honour `fromIndex` (#15380).

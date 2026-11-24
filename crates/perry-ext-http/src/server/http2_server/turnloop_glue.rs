@@ -162,6 +162,22 @@ pub(crate) fn queue_turnloop_session_error(session_handle: i64, code: &str) {
     push_h2_event(Http2PendingEvent::ClientError {
         handle: session_handle,
         message: code.to_string(),
+        code: None,
+    });
+}
+
+/// The client session's TLS handshake failed. Node's `'error'` is an `Error`
+/// whose `.code` is the cause, e.g. `DEPTH_ZERO_SELF_SIGNED_CERT`; `failure` is
+/// the session's `"CODE: text"` failure.
+pub(crate) fn queue_turnloop_session_tls_error(session_handle: i64, failure: &str) {
+    if session_handle == 0 {
+        return;
+    }
+    let (code, message) = perry_ext_net::turnloop_tls::node_failure(failure);
+    push_h2_event(Http2PendingEvent::ClientError {
+        handle: session_handle,
+        message,
+        code: Some(code.to_string()),
     });
 }
 
@@ -282,6 +298,21 @@ pub(crate) fn queue_turnloop_stream_error(stream_handle: i64, message: &str) {
     push_h2_event(Http2PendingEvent::ClientError {
         handle: stream_handle,
         message: message.to_string(),
+        code: None,
+    });
+}
+
+/// A client stream that never opened because its session failed first: Node's
+/// `ERR_HTTP2_STREAM_CANCEL`, naming the session's failure as the cause.
+pub(crate) fn queue_turnloop_stream_cancel(stream_handle: i64, cause: &str) {
+    if stream_handle == 0 {
+        return;
+    }
+    mark_turnloop_stream_closed(stream_handle);
+    push_h2_event(Http2PendingEvent::ClientError {
+        handle: stream_handle,
+        message: format!("The pending stream has been canceled (caused by: {cause})"),
+        code: Some("ERR_HTTP2_STREAM_CANCEL".to_string()),
     });
 }
 

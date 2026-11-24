@@ -205,10 +205,13 @@ pub unsafe extern "C" fn js_node_http2_connect(
     // preface went to a TLS listener and the peer answered
     // `InvalidContentType`.
     if crate::server::turnloop_h2::enabled() {
+        // Each option read can collect and move the options object.
+        let roots = perry_ffi::TransientRootScope::enter();
+        let options = roots.root_nanbox(options_f64);
         let tls = secure.then(|| crate::server::turnloop_h2::ClientTls {
-            servername: host.clone(),
-            verify: client_reject_unauthorized(options_f64),
-            ca: client_ca_material(options_f64),
+            servername: client_servername(options.get()).unwrap_or_else(|| host.clone()),
+            verify: client_reject_unauthorized(options.get()),
+            ca: client_ca_material(options.get()),
         });
         if let Some(conn_id) =
             crate::server::turnloop_h2::connect_client(session_handle, &host, port, tls)
@@ -247,6 +250,7 @@ pub(crate) fn decline_client_session(session_handle: i64) {
     push_h2_event(Http2PendingEvent::ClientError {
         handle: session_handle,
         message: NO_LOOP_MESSAGE.to_string(),
+        code: None,
     });
 }
 
@@ -265,6 +269,18 @@ unsafe fn client_reject_unauthorized(options: f64) -> bool {
         return true;
     }
     value.to_bool()
+}
+
+/// `options.servername`: the name sent as SNI and verified against the
+/// certificate in place of the authority's host. Anything but a non-empty
+/// string falls back to the host.
+unsafe fn client_servername(options: f64) -> Option<String> {
+    let value =
+        perry_ffi::object_field_by_name(JsValue::from_bits(options.to_bits()), "servername");
+    if !value.is_any_string() {
+        return None;
+    }
+    jsvalue_to_owned_string(f64::from_bits(value.bits())).filter(|name| !name.is_empty())
 }
 
 /// `options.ca` — a PEM string, a Buffer, or an array of either.
@@ -471,6 +487,7 @@ pub(crate) fn start_client_request(stream_handle: i64, body: Vec<u8>) {
     push_h2_event(Http2PendingEvent::ClientError {
         handle: stream_handle,
         message: "HTTP/2 session is not connected".to_string(),
+        code: None,
     });
 }
 
@@ -513,9 +530,9 @@ mod tests {
         events
             .iter()
             .filter_map(|event| match event {
-                Http2PendingEvent::ClientError { handle: h, message } if *h == handle => {
-                    Some(message.clone())
-                }
+                Http2PendingEvent::ClientError {
+                    handle: h, message, ..
+                } if *h == handle => Some(message.clone()),
                 _ => None,
             })
             .collect()
@@ -628,6 +645,88 @@ mod tests {
         );
         assert!(session.closed && session.destroyed);
         assert_eq!(errors_for(handle), vec![NO_LOOP_MESSAGE.to_string()]);
+    }
+
+    /// A failed TLS handshake reaches the session's `'error'` as Node's
+    /// `Error`: the cause code becomes `.code`, not part of a bare string.
+    #[test]
+    fn a_tls_failure_errors_the_session_with_its_code() {
+        let handle = register_handle(client_session(0));
+        crate::server::http2_server::queue_turnloop_session_tls_error(
+            handle,
+            "DEPTH_ZERO_SELF_SIGNED_CERT: invalid peer certificate: UnknownIssuer",
+        );
+        let events = H2_PENDING_EVENTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let queued: Vec<(String, Option<String>)> = events
+            .iter()
+            .filter_map(|event| match event {
+                Http2PendingEvent::ClientError {
+                    handle: h,
+                    message,
+                    code,
+                } if *h == handle => Some((message.clone(), code.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            queued,
+            vec![(
+                "invalid peer certificate: UnknownIssuer".to_string(),
+                Some("DEPTH_ZERO_SELF_SIGNED_CERT".to_string())
+            )]
+        );
+    }
+
+    /// A request cancelled before its stream opened gets Node's
+    /// `ERR_HTTP2_STREAM_CANCEL`, naming the session's failure, and is closed.
+    #[test]
+    fn a_cancelled_pending_request_errors_with_the_cancel_code() {
+        let session_handle = register_handle(client_session(0));
+        let stream_handle = register_handle(Http2StreamHandle {
+            session_handle,
+            id: 0,
+            pending: true,
+            closed: false,
+            destroyed: false,
+            aborted: false,
+            rst_code: 0,
+            headers_sent: false,
+            sent_headers: Vec::new(),
+            request_headers: HashMap::new(),
+            listeners: HashMap::new(),
+            encoding: None,
+            response_status: 0,
+            response_headers: Vec::new(),
+            turnloop_conn: 0,
+            turnloop_responded: false,
+            request_started: true,
+        });
+        crate::server::http2_server::queue_turnloop_stream_cancel(stream_handle, "ECONNREFUSED");
+        let events = H2_PENDING_EVENTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let queued: Vec<(String, Option<String>)> = events
+            .iter()
+            .filter_map(|event| match event {
+                Http2PendingEvent::ClientError {
+                    handle: h,
+                    message,
+                    code,
+                } if *h == stream_handle => Some((message.clone(), code.clone())),
+                _ => None,
+            })
+            .collect();
+        drop(events);
+        assert_eq!(
+            queued,
+            vec![(
+                "The pending stream has been canceled (caused by: ECONNREFUSED)".to_string(),
+                Some("ERR_HTTP2_STREAM_CANCEL".to_string())
+            )]
+        );
+        assert!(get_handle::<Http2StreamHandle>(stream_handle).is_some_and(|s| s.closed));
     }
 
     /// The per-request half of the deleted `h2` fallback: `session.request()` on

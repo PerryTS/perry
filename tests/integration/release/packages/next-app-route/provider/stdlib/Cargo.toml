@@ -8,6 +8,10 @@ name = "perry_next_stdlib_provider"
 crate-type = ["staticlib"]
 
 [dependencies]
+# The app's generated feature installer calls `js_stdlib_install_<feature>`
+# for every stdlib feature the program selects (perry
+# `commands/stdlib_installs.rs`), so this list must cover each one, or the
+# app image fails to load.
 perry-stdlib-core = { package = "perry-stdlib", path = "../../../../../../../crates/perry-stdlib", default-features = false, features = [
   "http-client",
   "database",
@@ -18,11 +22,13 @@ perry-stdlib-core = { package = "perry-stdlib", path = "../../../../../../../cra
   "ids",
   "html-parser",
   "bundled-events",
+  "external-http-client-pump",
   "external-http-server-pump",
   "external-net-pump",
   # The external socket wrapper references the stdlib TLS preflight hook even
   # for a plain HTTP application; retain it without bundling duplicate sockets.
   "external-net-tls",
+  "external-tls-server",
   "external-ws-pump",
   "external-zlib-pump",
 ] }

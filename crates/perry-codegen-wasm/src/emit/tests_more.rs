@@ -604,6 +604,27 @@ console.log(lit.out.join(","), lit instanceof Object);
     );
 }
 
+// `some`, `every`, `findLast` and `findLastIndex` on an array, which HIR folds into
+// their own nodes, call the callback with (element, index, array) and reject a
+// non-callable one. Expected output is Node's.
+#[test]
+fn folded_some_every_and_find_last_match_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const a = [1, 2, 3];
+const k = 2;
+console.log(a.some((v) => v > 2), a.some((v, i) => v < i), a.every((v) => v > 0), a.every((v, i) => v > i + 1));
+console.log(a.findLast((v) => v < 3), a.findLastIndex((v) => v < 3), a.findLast((v) => v > 9), a.findLastIndex((v) => v > 9));
+console.log([].some((v) => true), [].every((v) => false), a.some((v) => v === k), a.findLast((v, i, arr) => arr.length === 3 && i === 0));
+const name = (f: () => any) => { try { return String(f()); } catch (e: any) { return e.name; } };
+console.log(name(() => a.findLast(null as any)), name(() => a.findLastIndex(1 as any)), name(() => a.some(null as any)), name(() => a.every(1 as any)));
+"#
+        ),
+        "true false true false\n2 1 undefined -1\nfalse true true 1\nTypeError TypeError TypeError TypeError"
+    );
+}
+
 // `join` converts each element as Array.prototype.join does: a nested array joins with
 // ",", null and undefined are empty strings, an undefined separator is ",". Expected
 // output is Node's.
@@ -1249,20 +1270,47 @@ mod class_value;
 #[path = "weak_ref_tests.rs"]
 mod weak_ref;
 
+#[path = "async_random_uuid_tests.rs"]
+mod async_random_uuid;
+
 #[path = "function_value_tests.rs"]
 mod function_value;
+
+#[path = "random_uuid_v7_tests.rs"]
+mod random_uuid_v7;
 
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;
 
+#[path = "overwritten_call_tests.rs"]
+mod overwritten_call;
+
 #[path = "object_is_tests.rs"]
 mod object_is;
+
+#[path = "number_to_string_radix_tests.rs"]
+mod number_to_string_radix;
 
 #[path = "object_create_tests.rs"]
 mod object_create;
 
+#[path = "reflection_tests.rs"]
+mod reflection;
+
+#[path = "object_accessor_tests.rs"]
+mod object_accessor;
+
+#[path = "object_key_tests.rs"]
+mod object_key;
+
 #[path = "object_prototype_method_tests.rs"]
 mod object_prototype_method;
+
+#[path = "string_position_tests.rs"]
+mod string_position;
+
+#[path = "class_descriptor_tests.rs"]
+mod class_descriptor;
 
 #[path = "class_prototype_tests.rs"]
 mod class_prototype;
@@ -1282,8 +1330,14 @@ mod thread_callback;
 #[path = "math_minmax_tests.rs"]
 mod math_minmax;
 
+#[path = "parse_int_radix_tests.rs"]
+mod parse_int_radix;
+
 #[path = "async_operator_tests.rs"]
 mod async_operator;
+
+#[path = "async_array_method_tests.rs"]
+mod async_array_method;
 
 #[path = "patched_builtin_tests.rs"]
 mod patched_builtin;

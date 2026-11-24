@@ -2,6 +2,32 @@
 
 use super::run_web_source;
 
+// An async body calls a function with no return value, and another async function
+// with and without its optional argument. Expected output is Node's.
+#[test]
+fn async_body_calls_a_void_function_and_an_async_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function note(label: string, value: unknown) {
+  console.log(label, JSON.stringify(value));
+}
+async function inner(x: number, y?: number): Promise<number> {
+  return x + (y ?? 10);
+}
+async function outer(): Promise<string> {
+  note("note", [1, 2]);
+  const a = await inner(1);
+  const b = await inner(1, 2);
+  return a + " " + b;
+}
+outer().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "note [1,2]\n11 3"
+    );
+}
+
 // An async body computes `**`, the bitwise and shift operators (compound assignments
 // included), unary `~` / `+`, and `in` as a synchronous one does, and runs `for...in`,
 // whose lowering uses `&` and `in`; `in` evaluates its property before its object in
@@ -191,5 +217,69 @@ arrays().then((v) => console.log(v), (e) => console.log("threw " + e.message));
 "#
         ),
         "4|2|3,3|2,true,false,1,2,6,1|2|3,30|10|20,6,2,true"
+    );
+}
+
+// A function that throws inside an async body started under a synchronous `try` rejects
+// that body, at the call, whether or not it returns a value. Expected output is Node's.
+#[test]
+fn async_body_stops_at_a_throwing_call_under_a_synchronous_try() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function bad(x: number) { if (x) throw new Error("void " + x); }
+function badValue(x: number): number { if (x) throw new Error("value " + x); return 1; }
+function optional(a: number, b?: number) { return a + "/" + b; }
+async function caught(): Promise<string> {
+  try { bad(1); return "no throw"; } catch (e: any) { return "caught " + e.message; }
+}
+async function rejected(): Promise<string> { return "no throw " + badValue(2) + optional(1); }
+try {
+  caught().then((v) => console.log(v));
+  rejected().then((v) => console.log(v), (e) => console.log("rejected " + e.message));
+  console.log("after");
+} catch (e: any) { console.log("sync " + e.message); }
+async function calls(): Promise<string> { return optional(1) + " " + optional(1, 2); }
+calls().then((v) => console.log(v));
+"#
+        ),
+        "after\ncaught void 1\nrejected value 2\n1/undefined 1/2"
+    );
+}
+
+// An async function's promise holds the host value its body returned, so a host callback
+// (`console.log`, `String`) and `Promise.all` read it as a compiled one does, and a
+// returned promise is adopted. Expected output is Node's.
+#[test]
+fn async_function_result_reaches_a_host_callback() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function str() { return "x"; }
+async function num() { return 1.5; }
+async function nan() { return 0 / 0; }
+async function yes() { return true; }
+async function nul() { return null; }
+async function arr() { return ["a", 1]; }
+async function bare(c: boolean) { if (c) return; return "unreached"; }
+async function end() {}
+async function param(v: any) { return v; }
+async function nested() { return str(); }
+async function inTry() { try { return "t"; } finally { await num(); } }
+async function awaits() { return [await str(), await nested(), await yes(), await nul(), await bare(true)].join(); }
+async function fails() { throw "f"; }
+function show(v: any) { return typeof v + ":" + String(v); }
+str().then(console.log)
+  .then(() => Promise.all([str().then(String), num().then(String), nan().then(String), yes().then(String), nul().then(String),
+    arr().then(String), bare(true).then(String), end().then(String), param("p").then(String),
+    nested().then(String), inTry().then(String), awaits().then(String), fails().catch(String)]))
+  .then((v) => console.log(v.join(" ")))
+  .then(() => Promise.all([str(), num(), yes(), nul(), end(), nested(), param("p")]))
+  .then((v) => console.log(v.map(show).join(" ")))
+  .then(() => arr().then((v) => console.log(v[0], v.length)))
+  .then(null, (e) => console.log("threw " + e.message));
+"#
+        ),
+        "x\nx 1.5 NaN true null a,1 undefined undefined p x t x,x,true,, f\nstring:x number:1.5 boolean:true object:null undefined:undefined string:x string:p\na 2"
     );
 }

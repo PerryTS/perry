@@ -1,0 +1,1 @@
+`http2`: a client session whose TLS handshake fails (an untrusted or self-signed certificate, a hostname mismatch) emits `'error'` with an `Error` whose `.code` names the cause, such as `DEPTH_ZERO_SELF_SIGNED_CERT`, before `'close'`, instead of closing silently (#14680).

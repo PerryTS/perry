@@ -1315,30 +1315,20 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
     })
 }
 
-/// The registration key `js_to_property_key(<symbol>)` (or the bare symbol) of
-/// a symbol the compiler knows (`Expr::known_symbol`).
-fn known_symbol_key(key: &Expr) -> bool {
-    let key = match key {
-        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
-            if args.len() == 1
-                && matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == "js_to_property_key") =>
-        {
-            &args[0]
-        }
-        key => key,
-    };
-    key.known_symbol().is_some()
-}
-
-/// Whether the declaration of `class_name` names this known-symbol instance
-/// member (`class_declarations::declared_symbol_member`). A per-evaluation
-/// template's declaration names none, so its registration must name it.
-fn declares_symbol(ctx: &FnCtx<'_>, class_name: &str, key: &Expr) -> bool {
-    known_symbol_key(key)
-        && ctx
-            .class_ids
-            .get(class_name)
-            .is_none_or(|cid| !ctx.program_layouts.fresh_templates.contains(cid))
+/// Whether the declaration of `class_name` names the instance member
+/// `function` (`class_declarations::declared_symbol_member`). The member decides,
+/// not the registration's key: a fold after lowering can leave a known symbol
+/// in the registration alone, and that member is named by nothing else. A
+/// per-evaluation template's declaration names none, so its registration must.
+fn declares_symbol(ctx: &FnCtx<'_>, class_name: &str, function: u32) -> bool {
+    ctx.classes.get(class_name).is_some_and(|c| {
+        c.computed_members
+            .iter()
+            .any(|m| m.function.id == function && !m.is_static && m.known_symbol().is_some())
+    }) && ctx
+        .class_ids
+        .get(class_name)
+        .is_none_or(|cid| !ctx.program_layouts.fresh_templates.contains(cid))
 }
 
 /// Re-reads a class expression evaluation's class object, NaN-boxed.
@@ -1368,7 +1358,8 @@ pub(crate) fn lower_computed_member_registration(
         } => {
             // Named by its declaration: its key is a constant, so its
             // definition evaluates nothing.
-            if !*is_static && owner.is_none() && declares_symbol(ctx, class_name, key_expr) {
+            if !*is_static && owner.is_none() && declares_symbol(ctx, class_name, *definition_order)
+            {
                 return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
             }
             let key_v = lower_expr(ctx, key_expr)?;
@@ -1441,7 +1432,8 @@ pub(crate) fn lower_computed_member_registration(
             is_static,
             definition_order,
         } => {
-            if !*is_static && owner.is_none() && declares_symbol(ctx, class_name, key_expr) {
+            if !*is_static && owner.is_none() && declares_symbol(ctx, class_name, *definition_order)
+            {
                 return Ok(double_literal(f64::from_bits(0x7FFC_0000_0000_0001)));
             }
             let key_v = lower_expr(ctx, key_expr)?;
