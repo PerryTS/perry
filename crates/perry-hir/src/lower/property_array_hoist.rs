@@ -77,13 +77,16 @@ pub(crate) fn hoist_loop_invariant_property_array(
     let hoist_id = ctx.define_local(format!("__perry_hoist_{property}"), element_ty.clone());
     ctx.immutable_locals.insert(hoist_id);
 
+    // The condition's read runs first: the hoisted read is that read.
+    let read_offset = expr_first_read(condition, recv, &property)?;
     let init = Expr::PropertyGet {
         byte_end: 0,
         object: Box::new(Expr::LocalGet(recv_id)),
         property: property.clone(),
-        byte_offset: 0,
+        byte_offset: read_offset,
     };
     let hoist = Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: hoist_id,
         name: format!("__perry_hoist_{property}"),
         ty: element_ty,
@@ -286,7 +289,7 @@ fn stmt_is_hoist_safe(stmt: &Stmt, scan: &Scan<'_>) -> bool {
         // Leaving the loop early is fine: the hoisted `Let` is evaluated
         // before the loop either way, and the property read it replaces was
         // never reached on this path.
-        Stmt::Return(value) => value.as_ref().is_none_or(|e| expr_is_hoist_safe(e, scan)),
+        Stmt::Return(value, _) => value.as_ref().is_none_or(|e| expr_is_hoist_safe(e, scan)),
         Stmt::Throw(value) => expr_is_hoist_safe(value, scan),
         Stmt::Break | Stmt::Continue => true,
         Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => true,
@@ -331,7 +334,7 @@ fn expr_is_hoist_safe(expr: &Expr, scan: &Scan<'_>) -> bool {
                 .is_none_or(|st| st.read_ok(object, property))
                 && expr_is_hoist_safe(object, scan)
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             scan.strict.as_ref().is_none_or(|st| st.element_ok(object))
                 && expr_is_hoist_safe(object, scan)
                 && expr_is_hoist_safe(index, scan)
@@ -348,6 +351,7 @@ fn expr_is_hoist_safe(expr: &Expr, scan: &Scan<'_>) -> bool {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             expr_is_hoist_safe(condition, scan)
                 && expr_is_hoist_safe(then_expr, scan)
@@ -360,87 +364,89 @@ fn expr_is_hoist_safe(expr: &Expr, scan: &Scan<'_>) -> bool {
 }
 
 fn stmt_reads_property(stmt: &Stmt, recv: Recv, property: &str) -> bool {
+    stmt_first_read(stmt, recv, property).is_some()
+}
+
+fn expr_reads_property(expr: &Expr, recv: Recv, property: &str) -> bool {
+    expr_first_read(expr, recv, property).is_some()
+}
+
+/// The offset of the first `RECV.PROP` read in evaluation order: the hoisted
+/// read is that read, run once before the loop, and stands at it.
+fn stmts_first_read(stmts: &[Stmt], recv: Recv, property: &str) -> Option<u32> {
+    stmts
+        .iter()
+        .find_map(|s| stmt_first_read(s, recv, property))
+}
+
+fn stmt_first_read(stmt: &Stmt, recv: Recv, property: &str) -> Option<u32> {
+    let e = |x: &Expr| expr_first_read(x, recv, property);
     match stmt {
-        Stmt::Expr(expr) => expr_reads_property(expr, recv, property),
-        Stmt::Let { init, .. } => init
-            .as_ref()
-            .is_some_and(|expr| expr_reads_property(expr, recv, property)),
+        Stmt::Expr(expr) => e(expr),
+        Stmt::Let { init, .. } => init.as_ref().and_then(e),
         Stmt::If {
             condition,
             then_branch,
             else_branch,
-        } => {
-            expr_reads_property(condition, recv, property)
-                || then_branch
-                    .iter()
-                    .any(|s| stmt_reads_property(s, recv, property))
-                || else_branch
+        } => e(condition)
+            .or_else(|| stmts_first_read(then_branch, recv, property))
+            .or_else(|| {
+                else_branch
                     .as_ref()
-                    .is_some_and(|b| b.iter().any(|s| stmt_reads_property(s, recv, property)))
+                    .and_then(|b| stmts_first_read(b, recv, property))
+            }),
+        Stmt::While { condition, body } => {
+            e(condition).or_else(|| stmts_first_read(body, recv, property))
         }
-        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            expr_reads_property(condition, recv, property)
-                || body.iter().any(|s| stmt_reads_property(s, recv, property))
+        Stmt::DoWhile { body, condition } => {
+            stmts_first_read(body, recv, property).or_else(|| e(condition))
         }
         Stmt::For {
             init,
             condition,
             update,
             body,
-        } => {
-            init.as_ref()
-                .is_some_and(|s| stmt_reads_property(s, recv, property))
-                || condition
-                    .as_ref()
-                    .is_some_and(|e| expr_reads_property(e, recv, property))
-                || update
-                    .as_ref()
-                    .is_some_and(|e| expr_reads_property(e, recv, property))
-                || body.iter().any(|s| stmt_reads_property(s, recv, property))
-        }
-        Stmt::Labeled { body, .. } => stmt_reads_property(body, recv, property),
-        Stmt::Return(value) => value
+        } => init
             .as_ref()
-            .is_some_and(|e| expr_reads_property(e, recv, property)),
-        Stmt::Throw(value) => expr_reads_property(value, recv, property),
-        _ => false,
+            .and_then(|s| stmt_first_read(s, recv, property))
+            .or_else(|| condition.as_ref().and_then(e))
+            .or_else(|| stmts_first_read(body, recv, property))
+            .or_else(|| update.as_ref().and_then(e)),
+        Stmt::Labeled { body, .. } => stmt_first_read(body, recv, property),
+        Stmt::Return(value, _) => value.as_ref().and_then(e),
+        Stmt::Throw(value) => e(value),
+        _ => None,
     }
 }
 
-fn expr_reads_property(expr: &Expr, recv: Recv, property: &str) -> bool {
-    if is_target_property(expr, recv, property) {
-        return true;
+fn expr_first_read(expr: &Expr, recv: Recv, property: &str) -> Option<u32> {
+    if let Expr::PropertyGet { byte_offset, .. } = expr {
+        if is_target_property(expr, recv, property) {
+            return Some(*byte_offset);
+        }
     }
+    let e = |x: &Expr| expr_first_read(x, recv, property);
     match expr {
-        Expr::PropertyGet { object, .. } => expr_reads_property(object, recv, property),
-        Expr::IndexGet { object, index, .. } => {
-            expr_reads_property(object, recv, property)
-                || expr_reads_property(index, recv, property)
+        Expr::PropertyGet { object, .. } => e(object),
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            e(object).or_else(|| e(index))
         }
         Expr::Binary { left, right, .. }
         | Expr::Logical { left, right, .. }
-        | Expr::Compare { left, right, .. } => {
-            expr_reads_property(left, recv, property) || expr_reads_property(right, recv, property)
-        }
-        Expr::Unary { operand, .. } => expr_reads_property(operand, recv, property),
-        Expr::NumberCoerce(inner) | Expr::BooleanCoerce(inner) => {
-            expr_reads_property(inner, recv, property)
-        }
-        Expr::LocalSet(_, value) => expr_reads_property(value, recv, property),
-        Expr::PropertySet { object, value, .. } => {
-            expr_reads_property(object, recv, property)
-                || expr_reads_property(value, recv, property)
-        }
+        | Expr::Compare { left, right, .. } => e(left).or_else(|| e(right)),
+        Expr::Unary { operand, .. } => e(operand),
+        Expr::NumberCoerce(inner) | Expr::BooleanCoerce(inner) => e(inner),
+        Expr::LocalSet(_, value) => e(value),
+        Expr::PropertySet { object, value, .. } => e(object).or_else(|| e(value)),
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
-        } => {
-            expr_reads_property(condition, recv, property)
-                || expr_reads_property(then_expr, recv, property)
-                || expr_reads_property(else_expr, recv, property)
-        }
-        _ => false,
+            ..
+        } => e(condition)
+            .or_else(|| e(then_expr))
+            .or_else(|| e(else_expr)),
+        _ => None,
     }
 }
 
@@ -478,7 +484,9 @@ fn rewrite_stmt(stmt: &Stmt, recv: Recv, property: &str, hoist_id: u32) -> Stmt 
             ty,
             mutable,
             init,
+            ..
         } => Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *id,
             name: name.clone(),
             ty: ty.clone(),
@@ -535,10 +543,11 @@ fn rewrite_stmt(stmt: &Stmt, recv: Recv, property: &str, hoist_id: u32) -> Stmt 
             label: label.clone(),
             body: Box::new(rewrite_stmt(body, recv, property, hoist_id)),
         },
-        Stmt::Return(value) => Stmt::Return(
+        Stmt::Return(value, off) => Stmt::Return(
             value
                 .as_ref()
                 .map(|e| rewrite_expr(e, recv, property, hoist_id)),
+            *off,
         ),
         Stmt::Throw(value) => Stmt::Throw(rewrite_expr(value, recv, property, hoist_id)),
         other => other.clone(),
@@ -583,17 +592,35 @@ fn rewrite_expr(expr: &Expr, recv: Recv, property: &str, hoist_id: u32) -> Expr 
             object: rec(object),
             index: rec(index),
         },
-        Expr::Binary { op, left, right } => Expr::Binary {
+        Expr::Binary {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => Expr::Binary {
+            byte_offset: *byte_offset,
             op: *op,
             left: rec(left),
             right: rec(right),
         },
-        Expr::Logical { op, left, right } => Expr::Logical {
+        Expr::Logical {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => Expr::Logical {
+            byte_offset: *byte_offset,
             op: *op,
             left: rec(left),
             right: rec(right),
         },
-        Expr::Compare { op, left, right } => Expr::Compare {
+        Expr::Compare {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => Expr::Compare {
+            byte_offset: *byte_offset,
             op: *op,
             left: rec(left),
             right: rec(right),
@@ -622,7 +649,9 @@ fn rewrite_expr(expr: &Expr, recv: Recv, property: &str, hoist_id: u32) -> Expr 
             condition,
             then_expr,
             else_expr,
+            ..
         } => Expr::Conditional {
+            byte_offset: 0, /*HPOS*/
             condition: rec(condition),
             then_expr: rec(then_expr),
             else_expr: rec(else_expr),
@@ -714,7 +743,7 @@ pub(crate) fn hoist_this_array_fields(
         .filter(|m| !m.is_async && !m.is_generator && !accessor_or_field(&m.name))
         .filter(|m| m.params.iter().all(|p| p.default.is_none() && !p.is_rest))
         .filter_map(|m| match m.body.as_slice() {
-            [Stmt::Return(Some(e))] if expr_is_hoist_safe(e, &pure_scan) && !expr_has_set(e) => {
+            [Stmt::Return(Some(e), _)] if expr_is_hoist_safe(e, &pure_scan) && !expr_has_set(e) => {
                 Some((
                     m.name.clone(),
                     Inlinable {
@@ -829,16 +858,18 @@ fn hoist_this_for(
     let mut hoists: Vec<Stmt> = Vec::new();
     let mut hoisted_ids: Vec<u32> = Vec::new();
     for (field, ty) in class.arrays {
-        let reads = expr_reads_property(&cond, Recv::This, field)
-            || update
-                .as_ref()
-                .is_some_and(|u| expr_reads_property(u, Recv::This, field))
-            || body
-                .iter()
-                .any(|s| stmt_reads_property(s, Recv::This, field));
-        if !reads {
+        // The first read the loop runs (condition, body, update): the
+        // hoisted read is that read and stands at it.
+        let Some(read_offset) = expr_first_read(&cond, Recv::This, field)
+            .or_else(|| stmts_first_read(&body, Recv::This, field))
+            .or_else(|| {
+                update
+                    .as_ref()
+                    .and_then(|u| expr_first_read(u, Recv::This, field))
+            })
+        else {
             continue;
-        }
+        };
         let writable: Vec<String> = class.data.iter().filter(|f| *f != field).cloned().collect();
         let strict = || Strict {
             readable: class.data,
@@ -870,6 +901,7 @@ fn hoist_this_for(
         ctx.immutable_locals.insert(hoist_id);
         hoisted_ids.push(hoist_id);
         hoists.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: hoist_id,
             name,
             ty: ty.clone(),
@@ -878,7 +910,7 @@ fn hoist_this_for(
                 byte_end: 0,
                 object: Box::new(Expr::This),
                 property: field.clone(),
-                byte_offset: 0,
+                byte_offset: read_offset,
             }),
         });
         cond = rewrite_expr(&cond, Recv::This, field, hoist_id);
@@ -936,7 +968,7 @@ fn substitute(e: &Expr, map: &std::collections::HashMap<u32, Expr>) -> Expr {
 
 fn inline_this_calls(e: &Expr, class: &ThisClass<'_>, used: &mut Vec<String>) -> Expr {
     map_expr(e, &mut |x| {
-        let Expr::Call { callee, args, .. } = x else {
+        let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = x else {
             return None;
         };
         let Expr::PropertyGet {
@@ -976,7 +1008,9 @@ fn inline_this_calls_stmt(s: &Stmt, class: &ThisClass<'_>, used: &mut Vec<String
             ty,
             mutable,
             init,
+            ..
         } => Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *id,
             name: name.clone(),
             ty: ty.clone(),
@@ -999,7 +1033,9 @@ fn inline_this_calls_stmt(s: &Stmt, class: &ThisClass<'_>, used: &mut Vec<String
                     .collect()
             }),
         },
-        Stmt::Return(v) => Stmt::Return(v.as_ref().map(|e| inline_this_calls(e, class, used))),
+        Stmt::Return(v, off) => {
+            Stmt::Return(v.as_ref().map(|e| inline_this_calls(e, class, used)), *off)
+        }
         other => other.clone(),
     }
 }
@@ -1059,25 +1095,43 @@ fn map_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
                 element_offset: *element_offset,
             }
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => {
             let left = r(left, f);
             Expr::Binary {
+                byte_offset: *byte_offset,
                 op: *op,
                 left,
                 right: r(right, f),
             }
         }
-        Expr::Logical { op, left, right } => {
+        Expr::Logical {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => {
             let left = r(left, f);
             Expr::Logical {
+                byte_offset: *byte_offset,
                 op: *op,
                 left,
                 right: r(right, f),
             }
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op,
+            left,
+            right,
+            byte_offset,
+        } => {
             let left = r(left, f);
             Expr::Compare {
+                byte_offset: *byte_offset,
                 op: *op,
                 left,
                 right: r(right, f),
@@ -1094,10 +1148,12 @@ fn map_expr(e: &Expr, f: &mut dyn FnMut(&Expr) -> Option<Expr>) -> Expr {
             condition,
             then_expr,
             else_expr,
+            byte_offset,
         } => {
             let condition = r(condition, f);
             let then_expr = r(then_expr, f);
             Expr::Conditional {
+                byte_offset: *byte_offset,
                 condition,
                 then_expr,
                 else_expr: r(else_expr, f),

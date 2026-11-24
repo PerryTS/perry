@@ -152,7 +152,7 @@ pub(crate) fn module_uses_media(module: &Module) -> bool {
     }
     fn stmt_uses(stmt: &Stmt) -> bool {
         match stmt {
-            Stmt::Expr(e) | Stmt::Return(Some(e)) => expr_uses(e),
+            Stmt::Expr(e) | Stmt::Return(Some(e), _) => expr_uses(e),
             Stmt::Let { init: Some(e), .. } => expr_uses(e),
             Stmt::If {
                 condition,
@@ -190,7 +190,9 @@ pub(crate) fn module_uses_media(module: &Module) -> bool {
             Expr::NativeMethodCall {
                 module: m, args, ..
             } => m == "perry/media" || args.iter().any(expr_uses),
-            Expr::Call { callee, args, .. } => expr_uses(callee) || args.iter().any(expr_uses),
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                expr_uses(callee) || args.iter().any(expr_uses)
+            }
             Expr::Closure { body, .. } => stmts_use(body),
             Expr::Array(items, _) => items.iter().any(expr_uses),
             Expr::Object(fields) => fields.iter().any(|(_, v)| expr_uses(v)),

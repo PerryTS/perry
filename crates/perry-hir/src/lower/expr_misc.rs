@@ -47,6 +47,7 @@ pub(super) fn lower_cond(ctx: &mut LoweringContext, cond: &ast::CondExpr) -> Res
     let else_expr = lower_expr(ctx, &cond.alt);
     ctx.lowering_call_callee = prev_call_callee;
     Ok(Expr::Conditional {
+        byte_offset: cond.span.lo.0,
         condition: Box::new(condition?),
         then_expr: Box::new(then_expr?),
         else_expr: Box::new(else_expr?),
@@ -55,7 +56,7 @@ pub(super) fn lower_cond(ctx: &mut LoweringContext, cond: &ast::CondExpr) -> Res
 
 pub(super) fn lower_await(ctx: &mut LoweringContext, await_expr: &ast::AwaitExpr) -> Result<Expr> {
     let inner = Box::new(lower_expr(ctx, &await_expr.arg)?);
-    Ok(Expr::Await(inner))
+    Ok(Expr::Await(inner, await_expr.span.lo.0))
 }
 
 pub(super) fn lower_super_prop(
@@ -133,7 +134,7 @@ pub(super) fn lower_super_prop(
                 let index = Box::new(lower_expr(ctx, &computed.expr)?);
                 Ok(Expr::IndexGet {
                     element_offset: 0,
-                    byte_offset: 0,
+                    byte_offset: crate::lower::super_member_token(super_prop),
                     byte_end: 0,
                     object: Box::new(Expr::This),
                     index,
@@ -198,7 +199,7 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         Expr::Bool(update.prefix),
                     ],
                     type_args: vec![],
-                    byte_offset: 0,
+                    byte_offset: update.span.lo.0,
                 });
             };
             if ctx.is_local_immutable(id) {
@@ -227,9 +228,9 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         }),
                         args: vec![Expr::LocalGet(id)],
                         type_args: vec![],
-                        byte_offset: 0,
+                        byte_offset: update.span.lo.0,
                     },
-                    throw_type_error_const_assignment(&name),
+                    throw_type_error_const_assignment(&name, update.span.lo.0),
                 ]));
             }
             let op = match update.op {
@@ -298,7 +299,7 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         prefix: update.prefix,
                         strict: ctx.current_strict,
                         element_offset: update.span.lo.0,
-                        byte_offset: 0,
+                        byte_offset: update.span.lo.0,
                         byte_end: 0,
                     })
                 }
@@ -351,6 +352,7 @@ pub(super) fn lower_tpl(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> Result<Exp
         result = Some(match result.take() {
             None => coerced,
             Some(prev) => Expr::Binary {
+                byte_offset: tpl.span.lo.0,
                 op: BinaryOp::Add,
                 left: Box::new(prev),
                 right: Box::new(coerced),
@@ -362,6 +364,7 @@ pub(super) fn lower_tpl(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> Result<Exp
             let quasi_str: &str = quasi.raw.as_ref();
             if !quasi_str.is_empty() {
                 result = Some(Expr::Binary {
+                    byte_offset: tpl.span.lo.0,
                     op: BinaryOp::Add,
                     left: Box::new(result.take().expect("substitution just set result")),
                     right: Box::new(Expr::String(unescape_template(quasi_str))),
@@ -418,8 +421,14 @@ pub(super) fn lower_meta_prop(
                 ("main".to_string(), Expr::Bool(ctx.is_entry_module)),
                 ("dirname".to_string(), Expr::String(dirname)),
                 ("filename".to_string(), Expr::String(filename)),
-                ("require".to_string(), import_meta_require_value(ctx)),
-                ("resolve".to_string(), import_meta_resolve_value(ctx)),
+                (
+                    "require".to_string(),
+                    import_meta_require_value(ctx, meta_prop.span.lo.0),
+                ),
+                (
+                    "resolve".to_string(),
+                    import_meta_resolve_value(ctx, meta_prop.span.lo.0),
+                ),
             ]))
         }
         ast::MetaPropKind::NewTarget => {
@@ -457,21 +466,22 @@ pub(super) fn lower_meta_prop(
 
 /// Reuse one module-owned loader for first-class `import.meta.require` reads.
 /// Its initializer is prepended after lowering has discovered every use.
-pub(crate) fn import_meta_require_value(ctx: &mut LoweringContext) -> Expr {
+pub(crate) fn import_meta_require_value(ctx: &mut LoweringContext, byte_offset: u32) -> Expr {
     let id = match ctx.import_meta_require_local {
-        Some(id) => id,
+        Some((id, _)) => id,
         None => {
             let id = ctx.next_local_id;
             ctx.next_local_id += 1;
-            ctx.import_meta_require_local = Some(id);
+            ctx.import_meta_require_local = Some((id, byte_offset));
             id
         }
     };
     Expr::LocalGet(id)
 }
 
-pub(crate) fn import_meta_resolve_value(ctx: &LoweringContext) -> Expr {
+pub(crate) fn import_meta_resolve_value(ctx: &LoweringContext, byte_offset: u32) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset: byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -519,6 +529,7 @@ pub(super) fn lower_yield(ctx: &mut LoweringContext, y: &ast::YieldExpr) -> Resu
         None => None,
     };
     Ok(Expr::Yield {
+        byte_offset: y.span.lo.0,
         value,
         delegate: y.delegate,
     })

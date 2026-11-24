@@ -3,6 +3,7 @@
 //! file under the source-size gate.
 
 use anyhow::Result;
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
@@ -63,14 +64,17 @@ pub(crate) fn prepare_ordered_class_computed_names(
 ) -> (Vec<Expr>, Vec<(String, Expr)>) {
     let mut ordered: Vec<(usize, Expr)> = Vec::new();
     let mut field_keys = Vec::new();
-    for (source_order, name, value) in super::computed_field_key_initializers_with_order(
-        class_body,
-        &class.fields,
-        &class.static_fields,
-    ) {
+    for (source_order, name, value, byte_offset) in
+        super::computed_field_key_initializers_with_order(
+            class_body,
+            &class.fields,
+            &class.static_fields,
+        )
+    {
         ordered.push((
             source_order,
             Expr::StaticFieldSet {
+                byte_offset,
                 class_name: registration_class_name.to_string(),
                 field_name: name.clone(),
                 value: Box::new(value),
@@ -82,7 +86,7 @@ pub(crate) fn prepare_ordered_class_computed_names(
                 byte_end: 0,
                 object: Box::new(Expr::ClassRef(registration_class_name.to_string())),
                 property: name,
-                byte_offset: 0,
+                byte_offset: byte_offset,
             },
         ));
     }
@@ -97,7 +101,7 @@ pub(crate) fn prepare_ordered_class_computed_names(
             }),
             args: vec![member.key_expr.clone()],
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset: member.function.byte_offset,
         };
         let mut resolved = member.clone();
         resolved.key_expr = to_property_key;
@@ -198,7 +202,7 @@ pub(crate) fn push_deduped_class_computed_keys(
                 }),
                 args: vec![lowered],
                 type_args: Vec::new(),
-                byte_offset: 0,
+                byte_offset: key_ast.span().lo.0,
             }));
         }
     }

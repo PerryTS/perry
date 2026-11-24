@@ -443,7 +443,7 @@ fn helper_tdz_different_binding_unproven() {
         .iter_mut()
         .find(|f| f.name == "guard")
         .unwrap();
-    let [Stmt::Return(Some(Expr::Sequence(parts)))] = f.body.as_mut_slice() else {
+    let [Stmt::Return(Some(Expr::Sequence(parts)), _)] = f.body.as_mut_slice() else {
         panic!("expected the lowering's lifted return check: {:?}", f.body);
     };
     let [Expr::Call { args, .. }, Expr::Call { callee, .. }] = parts.as_mut_slice() else {

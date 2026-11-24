@@ -389,6 +389,7 @@ impl<'a> Gen<'a> {
             | Expr::Compare { .. }
             | Expr::Logical { .. }
             | Expr::Call { .. }
+            | Expr::RegionCall { .. }
             | Expr::CallSpread { .. }
             | Expr::SuperCallSpread(..)
             | Expr::FuncRef(..)
@@ -401,6 +402,7 @@ impl<'a> Gen<'a> {
             | Expr::BufferIndexGet { .. }
             | Expr::Uint8ArrayGet { .. }
             | Expr::IndexGet { .. }
+            | Expr::RegionOut { .. }
             | Expr::BufferIndexSet { .. }
             | Expr::Uint8ArraySet { .. }
             | Expr::IndexSet { .. }

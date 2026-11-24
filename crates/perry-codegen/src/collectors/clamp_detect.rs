@@ -24,6 +24,7 @@ pub fn detect_clamp3(f: &Function) -> Option<(u32, u32, u32)> {
                 op: perry_hir::CompareOp::Lt,
                 left,
                 right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -38,7 +39,7 @@ pub fn detect_clamp3(f: &Function) -> Option<(u32, u32, u32)> {
         if then_branch.len() != 1 {
             return None;
         }
-        if !matches!(&then_branch[0], Stmt::Return(Some(Expr::LocalGet(id))) if *id == lo_id) {
+        if !matches!(&then_branch[0], Stmt::Return(Some(Expr::LocalGet(id)), _) if *id == lo_id) {
             return None;
         }
     } else {
@@ -51,6 +52,7 @@ pub fn detect_clamp3(f: &Function) -> Option<(u32, u32, u32)> {
                 op: perry_hir::CompareOp::Gt,
                 left,
                 right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -65,14 +67,14 @@ pub fn detect_clamp3(f: &Function) -> Option<(u32, u32, u32)> {
         if then_branch.len() != 1 {
             return None;
         }
-        if !matches!(&then_branch[0], Stmt::Return(Some(Expr::LocalGet(id))) if *id == hi_id) {
+        if !matches!(&then_branch[0], Stmt::Return(Some(Expr::LocalGet(id)), _) if *id == hi_id) {
             return None;
         }
     } else {
         return None;
     }
     // [2] Return(v)
-    if !matches!(&f.body[2], Stmt::Return(Some(Expr::LocalGet(id))) if *id == v_id) {
+    if !matches!(&f.body[2], Stmt::Return(Some(Expr::LocalGet(id)), _) if *id == v_id) {
         return None;
     }
     Some((v_id, lo_id, hi_id))
@@ -100,6 +102,7 @@ pub fn detect_clamp_u8(f: &Function) -> bool {
                 op: perry_hir::CompareOp::Lt,
                 left,
                 right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -113,7 +116,7 @@ pub fn detect_clamp_u8(f: &Function) -> bool {
         }
         if !matches!(
             then_branch.as_slice(),
-            [Stmt::Return(Some(Expr::Integer(0)))]
+            [Stmt::Return(Some(Expr::Integer(0)), _)]
         ) {
             return false;
         }
@@ -126,6 +129,7 @@ pub fn detect_clamp_u8(f: &Function) -> bool {
                 op: perry_hir::CompareOp::Gt,
                 left,
                 right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -139,7 +143,7 @@ pub fn detect_clamp_u8(f: &Function) -> bool {
         }
         if !matches!(
             then_branch.as_slice(),
-            [Stmt::Return(Some(Expr::Integer(255)))]
+            [Stmt::Return(Some(Expr::Integer(255)), _)]
         ) {
             return false;
         }
@@ -147,7 +151,7 @@ pub fn detect_clamp_u8(f: &Function) -> bool {
         return false;
     }
     // [2] Return of an int-coercing expression (`v | 0`, bitwise, Integer).
-    matches!(&f.body[2], Stmt::Return(Some(e)) if returns_int_expr(e))
+    matches!(&f.body[2], Stmt::Return(Some(e), _) if returns_int_expr(e))
 }
 
 // `is_integer_specializable` / `i64s_stmts` / `i64s_expr` used to live here.
@@ -182,7 +186,7 @@ pub fn returns_i32_identity_arg(f: &Function) -> bool {
     let param_id = f.params[0].id;
     matches!(
         f.body.as_slice(),
-        [Stmt::Return(Some(expr))] if returns_i32_identity_expr(expr, param_id)
+        [Stmt::Return(Some(expr), _)] if returns_i32_identity_expr(expr, param_id)
     )
 }
 
@@ -193,6 +197,7 @@ fn returns_i32_identity_expr(expr: &Expr, param_id: u32) -> bool {
             op: BinaryOp::BitOr,
             left,
             right,
+            ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => {
             returns_i32_identity_expr(left, param_id)
         }
@@ -203,11 +208,11 @@ fn returns_i32_identity_expr(expr: &Expr, param_id: u32) -> bool {
 pub fn returns_int_stmts(ss: &[Stmt]) -> bool {
     for s in ss {
         match s {
-            Stmt::Return(Some(e)) if !returns_int_expr(e) => {
+            Stmt::Return(Some(e), _) if !returns_int_expr(e) => {
                 return false;
             }
             // `return;` yields `undefined`, never an integer.
-            Stmt::Return(None) => {
+            Stmt::Return(None, _) => {
                 return false;
             }
             Stmt::If {

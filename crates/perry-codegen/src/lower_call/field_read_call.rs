@@ -42,7 +42,7 @@ pub(crate) fn field_read_call_at(ctx: &FnCtx<'_>, callee: &Expr, args: &[Expr]) 
     else {
         return None;
     };
-    if *byte_offset == 0 || ctx.wpfacts_off || ctx.wpfacts.interp_guard {
+    if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
         return None;
     }
     let fact = ctx.wpfacts.field_read_calls.get(byte_offset)?;
@@ -68,6 +68,7 @@ pub(crate) fn field_read_call_at(ctx: &FnCtx<'_>, callee: &Expr, args: &[Expr]) 
         .is_some_and(|(lo, hi)| lo >= i64::from(i32::MIN) && hi <= i64::from(i32::MAX));
     let index = if int32 {
         Expr::Binary {
+            byte_offset: *byte_offset,
             op: perry_hir::BinaryOp::BitOr,
             left: Box::new(index),
             right: Box::new(Expr::Integer(0)),
@@ -89,6 +90,7 @@ pub(crate) fn field_read_call_at(ctx: &FnCtx<'_>, callee: &Expr, args: &[Expr]) 
     };
     Some(match fact.default {
         Some(bits) => Expr::Logical {
+            byte_offset: 0, /*HPOS*/
             op: LogicalOp::Coalesce,
             left: Box::new(read),
             right: Box::new(Expr::Number(f64::from_bits(bits))),
@@ -190,7 +192,8 @@ fn in_floor<'e>(
         } => (left.as_ref(), true),
         e => (e, false),
     };
-    let Expr::IndexGet { object, index, .. } = element else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = element
+    else {
         return None;
     };
     let rep = crate::expr::index_get::proven_array::in_floor_rep(ctx, object)?;

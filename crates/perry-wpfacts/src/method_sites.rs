@@ -227,7 +227,7 @@ pub(crate) fn collect(
         nodes.extend(copies.get(&recv).into_iter().flatten().copied());
     };
     for s in &g.read_sites {
-        if s.is_call && !s.value_call && s.byte_offset != 0 {
+        if s.is_call && !s.value_call {
             add(s.module, Site::Callee(s.byte_offset), s.key, s.recv);
         }
     }

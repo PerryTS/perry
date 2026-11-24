@@ -17,6 +17,7 @@
 //! then evaluates the arguments once, in order.
 
 use anyhow::Result;
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::ir::*;
@@ -76,6 +77,7 @@ impl NamespaceGuard {
     /// `NamespacePatched(ns) ? generic : fast`.
     pub(super) fn wrap(self, fast: Expr) -> Expr {
         Expr::Conditional {
+            byte_offset: 0, /*HPOS*/
             condition: Box::new(Expr::NamespacePatched(self.ns)),
             then_expr: Box::new(self.generic),
             else_expr: Box::new(fast),
@@ -87,11 +89,12 @@ impl NamespaceGuard {
 /// patching write stores into (and the replacement after
 /// `globalThis.console = {…}`). Read through the real global object, not the
 /// `GlobalGet(0)` sentinel: codegen recognizes `GlobalGet(0).Promise.resolve(…)`
-/// as the intrinsic again and would bind the call straight back to it.
-fn live_namespace(ns: &str) -> Expr {
+/// as the intrinsic again and would bind the call straight back to it. The
+/// read stands at the namespace name it reads (`byte_offset`).
+fn live_namespace(ns: &str, byte_offset: u32) -> Expr {
     Expr::PropertyGet {
         byte_end: 0,
-        byte_offset: 0,
+        byte_offset,
         object: Box::new(Expr::GlobalThisExpr),
         property: ns.to_string(),
     }
@@ -146,9 +149,9 @@ pub(super) fn try_patched_builtin_call(
         return Ok(NamespaceCall::Plain(args));
     };
     if namespace_member_patched(&ns, &method) {
-        let object = live_namespace(&ns);
+        let object = live_namespace(&ns, member.obj.span().lo.0);
         return Ok(NamespaceCall::Dynamic(dynamic_member_call(
-            call, object, method, args,
+            call, member, object, method, args,
         )));
     }
     if !namespace_call_guarded() {
@@ -161,27 +164,35 @@ pub(super) fn try_patched_builtin_call(
             return Ok(NamespaceCall::Plain(args));
         }
         // A definition in the arguments: the one dynamic call.
-        let object = live_namespace(&ns);
+        let object = live_namespace(&ns, member.obj.span().lo.0);
         return Ok(NamespaceCall::Dynamic(dynamic_member_call(
-            call, object, method, args,
+            call, member, object, method, args,
         )));
     }
-    let generic = dynamic_member_call(call, live_namespace(&ns), method, args.clone());
+    let generic = dynamic_member_call(
+        call,
+        member,
+        live_namespace(&ns, member.obj.span().lo.0),
+        method,
+        args.clone(),
+    );
     Ok(NamespaceCall::Guarded(args, NamespaceGuard { ns, generic }))
 }
 
 /// `object.method(args…)` as an ordinary property-get-then-call: the callee is
 /// read off the live receiver and invoked with it as `this`, carrying `call`'s
-/// spread arguments.
+/// spread arguments. The member read stands at `member`'s token (the callee
+/// member of `call`, as the plain member call's read), the call at `call`.
 pub(super) fn dynamic_member_call(
     call: &ast::CallExpr,
+    member: &ast::MemberExpr,
     object: Expr,
     method: String,
     args: Vec<Expr>,
 ) -> Expr {
     let callee = Box::new(Expr::PropertyGet {
         byte_end: 0,
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::member_token(member),
         object: Box::new(object),
         property: method,
     });
@@ -199,7 +210,7 @@ pub(super) fn dynamic_member_call(
             })
             .collect();
         return Expr::CallSpread {
-            byte_offset: 0,
+            byte_offset: crate::lower::call_token(call),
             byte_end: 0,
             callee,
             args,
@@ -211,6 +222,6 @@ pub(super) fn dynamic_member_call(
         callee,
         args,
         type_args: Vec::new(),
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::call_token(call),
     }
 }

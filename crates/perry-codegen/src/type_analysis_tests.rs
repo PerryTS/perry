@@ -259,6 +259,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         fields: Vec::new(),
         constructor: None,
         methods: vec![perry_hir::Function {
+            byte_offset: 0,
             id: 4,
             name: "baseScore".to_string(),
             type_params: Vec::new(),
@@ -278,6 +279,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         getters: vec![(
             "baseLabel".to_string(),
             perry_hir::Function {
+                byte_offset: 0,
                 id: 5,
                 name: "get_baseLabel".to_string(),
                 type_params: Vec::new(),
@@ -319,6 +321,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![perry_hir::ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "label".to_string(),
             key_expr: None,
@@ -330,6 +333,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         }],
         constructor: None,
         methods: vec![perry_hir::Function {
+            byte_offset: 0,
             id: 3,
             name: "score".to_string(),
             type_params: Vec::new(),
@@ -351,6 +355,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
         static_accessor_names: Vec::new(),
         static_accessor_fn_ids: Vec::new(),
         static_fields: vec![perry_hir::ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "count".to_string(),
             key_expr: None,
@@ -361,6 +366,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
             decorators: Vec::new(),
         }],
         static_methods: vec![perry_hir::Function {
+            byte_offset: 0,
             id: 2,
             name: "make".to_string(),
             type_params: Vec::new(),
@@ -507,6 +513,7 @@ fn hir_inferred_types_reuse_codegen_contextual_class_facts() {
     assert_eq!(
         infer_expr_type(
             &Expr::StaticMethodCall {
+                byte_offset: 0,
                 class_name: "Widget".to_string(),
                 method_name: "make".to_string(),
                 args: Vec::new(),

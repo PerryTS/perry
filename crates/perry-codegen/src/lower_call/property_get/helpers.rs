@@ -158,7 +158,7 @@ pub(crate) fn resolve_static_dispatch_cls(
         Expr::LocalGet(id) => local_id_to_name
             .get(id)
             .and_then(|name| local_class_aliases.get(name).cloned()),
-        Expr::Call { callee, .. } => match callee.as_ref() {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
             Expr::FuncRef(fid) => func_returns_class.get(fid).cloned(),
             _ => None,
         },

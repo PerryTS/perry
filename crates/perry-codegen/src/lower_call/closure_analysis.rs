@@ -103,10 +103,10 @@ pub fn find_outer_writes_stmt(
                 find_outer_writes_expr(expr, inner_ids, out);
             }
         }
-        Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => {
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => {
             find_outer_writes_expr(e, inner_ids, out);
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -180,6 +180,7 @@ pub fn find_outer_writes_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             find_outer_writes_expr(discriminant, inner_ids, out);
             for case in cases {
@@ -221,7 +222,7 @@ fn find_outer_writes_expr(
             find_outer_writes_expr(left, inner_ids, out);
             find_outer_writes_expr(right, inner_ids, out);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             find_outer_writes_expr(callee, inner_ids, out);
             for a in args {
                 find_outer_writes_expr(a, inner_ids, out);
@@ -238,7 +239,7 @@ fn find_outer_writes_expr(
         Expr::PropertyGet { object, .. } => {
             find_outer_writes_expr(object, inner_ids, out);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             find_outer_writes_expr(object, inner_ids, out);
             find_outer_writes_expr(index, inner_ids, out);
         }
@@ -251,6 +252,7 @@ fn find_outer_writes_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             find_outer_writes_expr(condition, inner_ids, out);
             find_outer_writes_expr(then_expr, inner_ids, out);
@@ -368,8 +370,8 @@ fn find_thread_hazard_stmt(
     let stmts = |b: &[Stmt]| find_thread_hazard_in_body(b, hazardous_ids, async_step_closures);
     match stmt {
         Stmt::Let { init, .. } => init.as_ref().and_then(expr),
-        Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => expr(e),
-        Stmt::Return(None)
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => expr(e),
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -409,6 +411,7 @@ fn find_thread_hazard_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => expr(discriminant).or_else(|| {
             cases.iter().find_map(|case| {
                 case.test
@@ -430,7 +433,7 @@ fn find_thread_hazard_expr(
 ) -> Option<ThreadClosureHazard> {
     use perry_hir::Expr;
     match e {
-        Expr::Await(_) | Expr::ForAwaitToArray(_) => return Some(ThreadClosureHazard::Await),
+        Expr::Await(_, _) | Expr::ForAwaitToArray(_) => return Some(ThreadClosureHazard::Await),
         Expr::Closure {
             func_id,
             is_async,

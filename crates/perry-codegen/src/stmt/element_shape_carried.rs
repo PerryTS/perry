@@ -102,7 +102,9 @@ fn affine_over_carried(expr: &Expr, carried_id: u32) -> Option<(i64, i64, i64)> 
             let k = *n as i64;
             Some((0, k, k.checked_abs()?))
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let (la, lb, lmax) = affine_over_carried(left, carried_id)?;
             let (ra, rb, rmax) = affine_over_carried(right, carried_id)?;
             let (a, b) = match op {
@@ -148,13 +150,14 @@ pub(super) fn expr_reads_local(expr: &Expr, id: u32) -> bool {
         | Expr::MathSign(value)
         | Expr::MathF16round(value) => expr_reads_local(value, id),
         Expr::PropertyGet { object, .. } => expr_reads_local(object, id),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             expr_reads_local(object, id) || expr_reads_local(index, id)
         }
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             expr_reads_local(condition, id)
                 || expr_reads_local(then_expr, id)
@@ -181,6 +184,7 @@ pub(super) fn match_carried_update(
         op: BinaryOp::Mod,
         left,
         right,
+        ..
     } = value.as_ref()
     else {
         return None;
@@ -337,6 +341,7 @@ mod tests {
     }
     fn mul(l: Expr, r: Expr) -> Expr {
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Mul,
             left: Box::new(l),
             right: Box::new(r),
@@ -344,6 +349,7 @@ mod tests {
     }
     fn add(l: Expr, r: Expr) -> Expr {
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(l),
             right: Box::new(r),
@@ -351,6 +357,7 @@ mod tests {
     }
     fn sub(l: Expr, r: Expr) -> Expr {
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Sub,
             left: Box::new(l),
             right: Box::new(r),

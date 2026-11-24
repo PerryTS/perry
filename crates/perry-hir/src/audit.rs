@@ -104,8 +104,8 @@ fn visit_stmt(stmt: &Stmt, out: &mut ModuleAudit) {
                 visit_expr(v, out);
             }
         }
-        Stmt::Return(Some(e)) => visit_expr(e, out),
-        Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
+        Stmt::Return(Some(e), _) => visit_expr(e, out),
+        Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => {}
         Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
         Stmt::Labeled { body, .. } => visit_stmt(body, out),
         Stmt::If {
@@ -172,6 +172,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut ModuleAudit) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             visit_expr(discriminant, out);
             for case in cases {
@@ -345,6 +346,7 @@ mod tests {
 
     fn native_call(module: &str, method: &str) -> Expr {
         Expr::NativeMethodCall {
+            byte_offset: 0,
             module: module.to_string(),
             class_name: None,
             object: None,

@@ -42,7 +42,9 @@ fn local(e: &Expr) -> Option<u32> {
 /// The read `o[k]`, both operands bindings.
 fn read(e: &Expr) -> Option<(u32, u32)> {
     match e {
-        Expr::IndexGet { object, index, .. } => Some((local(object)?, local(index)?)),
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            Some((local(object)?, local(index)?))
+        }
         _ => None,
     }
 }
@@ -136,7 +138,7 @@ fn unshared(f: &Function) -> FxHashMap<u32, u32> {
                 lits.insert(*id);
             }
         }
-        Stmt::Return(Some(Expr::LocalGet(id))) => *allowed.entry(*id).or_default() += 1,
+        Stmt::Return(Some(Expr::LocalGet(id)), _) => *allowed.entry(*id).or_default() += 1,
         Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
             bad.extend(ids.iter().copied())
         }
@@ -165,16 +167,20 @@ fn unshared(f: &Function) -> FxHashMap<u32, u32> {
                 bad.insert(*id);
             }
             Expr::Delete(x) => {
-                if let Expr::IndexGet { object, .. } | Expr::PropertyGet { object, .. } = x.as_ref()
+                if let Expr::IndexGet { object, .. }
+                | Expr::RegionOut { object, .. }
+                | Expr::PropertyGet { object, .. } = x.as_ref()
                 {
                     bad.extend(local(object));
                 }
             }
             Expr::Call { callee, .. }
+            | Expr::RegionCall { callee, .. }
             | Expr::CallSpread { callee, .. }
             | Expr::JsCallValue { callee, .. } => {
-                if let Expr::IndexGet { object, .. } | Expr::PropertyGet { object, .. } =
-                    callee.as_ref()
+                if let Expr::IndexGet { object, .. }
+                | Expr::RegionOut { object, .. }
+                | Expr::PropertyGet { object, .. } = callee.as_ref()
                 {
                     bad.extend(local(object));
                 }

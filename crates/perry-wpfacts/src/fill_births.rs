@@ -58,7 +58,6 @@ pub(crate) fn births(m: &Model) -> Vec<(u32, u32, u32)> {
     let mut out: Vec<(u32, u32, u32)> = m
         .rest_fills
         .iter()
-        .filter(|f| f.offset != 0)
         .filter_map(|f| {
             let birth = m.arr_len_at_site.get(&f.site)?;
             let k = birth.len.filter(|k| (0..=dense).contains(k))?;

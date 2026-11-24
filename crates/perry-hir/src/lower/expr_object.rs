@@ -285,6 +285,7 @@ fn lower_method_prop(
         let param_id = ctx.define_local_spanned(param_name.clone(), param_type.clone(), param.span);
         ctx.shadow_native_instance_if_present(&param_name);
         params.push(Param {
+            byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: param_type,
@@ -337,6 +338,7 @@ fn lower_method_prop(
             simple_parameters,
             !mapped,
             mapped_parameter_ids,
+            method.function.span.lo.0,
         );
     }
     for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
@@ -479,6 +481,7 @@ fn lower_method_prop(
         ctx.func_defaults
             .push((func_id, defaults, param_ids, rest_idx, has_synth_args));
         ctx.pending_functions.push(Function {
+            byte_offset: method.function.span.lo.0,
             id: func_id,
             name: func_name,
             type_params: Vec::new(),
@@ -509,6 +512,7 @@ fn lower_method_prop(
             .copied()
             .collect();
         Expr::Closure {
+            byte_offset: method.function.span.lo.0,
             func_id,
             params,
             return_type,
@@ -543,6 +547,7 @@ fn lower_accessor_prop(
     key: &ast::PropName,
     setter_param: Option<&ast::Pat>,
     body: Option<&ast::FunctionBody>,
+    byte_offset: u32,
 ) -> Result<Option<(MethodKeyKind, Expr)>> {
     let accessor_key = match key {
         ast::PropName::Ident(ident) => MethodKeyKind::Static(ident.sym.to_string()),
@@ -609,6 +614,7 @@ fn lower_accessor_prop(
                 ctx.define_local_spanned(param_name.clone(), param_type.clone(), pat.span());
             ctx.shadow_native_instance_if_present(&param_name);
             params.push(Param {
+                byte_offset: pat.span().lo.0,
                 id: param_id,
                 name: param_name,
                 ty: param_type,
@@ -646,6 +652,7 @@ fn lower_accessor_prop(
             true,
             !mapped,
             mapped_parameter_ids,
+            byte_offset,
         );
     }
 
@@ -707,6 +714,7 @@ fn lower_accessor_prop(
     // way `Object.defineProperty(obj, k, { get(){…} })` already worked), so the
     // closure must NOT capture it.
     let closure = Expr::Closure {
+        byte_offset: byte_offset,
         func_id,
         params,
         return_type: Type::Any,
@@ -874,7 +882,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             class_name,
             args: Vec::new(),
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset: obj.span.lo.0,
             cap_args_appended: 0,
         });
     }
@@ -955,7 +963,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             Type::Any,
                         )
                     } else if ctx.lookup_class(&name).is_some() {
-                        (class_binding_read(ctx, &name), Type::Any)
+                        (class_binding_read(ctx, &name, ident.span.lo.0), Type::Any)
                     } else if ctx.lookup_native_module(&name).is_some() {
                         // #5242: a native-module-bound name (`import { relative }
                         // from 'path'`) used as a shorthand property. Resolve it to
@@ -963,7 +971,11 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         // property is the callable builtin instead of being dropped
                         // (which left it `undefined` — yargs shim.path.relative).
                         (
-                            super::lower_expr::native_module_binding_value(ctx, &name),
+                            super::lower_expr::native_module_binding_value(
+                                ctx,
+                                &name,
+                                ident.span.lo.0,
+                            ),
                             Type::Any,
                         )
                     } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
@@ -1001,14 +1013,14 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 .iter()
                 .map(|(name, ty, value)| (name.clone(), record_field_type(ty, value)))
                 .collect();
-            let class_name = ctx.synthesize_anon_shape_class(&field_shapes);
+            let class_name = ctx.synthesize_anon_shape_class(&field_shapes, obj.span.lo.0);
             let args: Vec<Expr> = fields.into_iter().map(|(_, _, value)| value).collect();
             return Ok(Expr::New {
                 byte_end: 0,
                 class_name,
                 args,
                 type_args: Vec::new(),
-                byte_offset: 0,
+                byte_offset: obj.span.lo.0,
                 cap_args_appended: 0,
             });
         }
@@ -1114,6 +1126,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         let scope_mark = ctx.enter_scope();
         let param_id = ctx.define_local("__perry_obj_iife".to_string(), Type::Any);
         let param = Param {
+            byte_offset: obj.span.lo.0,
             id: param_id,
             name: "__perry_obj_iife".to_string(),
             ty: Type::Any,
@@ -1190,7 +1203,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                                 return_type,
                             }
                         } else if ctx.lookup_class(&name).is_some() {
-                            class_binding_read(ctx, &name)
+                            class_binding_read(ctx, &name, ident.span.lo.0)
                         } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                             value
                         } else {
@@ -1240,6 +1253,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             &getter.key,
                             None,
                             getter.function.body.as_ref(),
+                            getter.span.lo.0,
                         );
                         ctx.object_super_home_stack.pop();
                         if let Some((gkey, closure)) = lowered_getter? {
@@ -1257,6 +1271,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             &setter.key,
                             setter.function.params.first().map(|param| &param.pat),
                             setter.function.body.as_ref(),
+                            setter.span.lo.0,
                         );
                         ctx.object_super_home_stack.pop();
                         if let Some((skey, closure)) = lowered_setter? {
@@ -1403,13 +1418,13 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             eligible.then(|| {
                 let fields: Vec<(String, Type)> =
                     names.iter().map(|name| (name.clone(), Type::Any)).collect();
-                let class_name = ctx.synthesize_anon_shape_class(&fields);
+                let class_name = ctx.synthesize_anon_shape_class(&fields, obj.span.lo.0);
                 Expr::New {
                     byte_end: 0,
                     class_name,
                     args: names.iter().map(|_| Expr::Undefined).collect(),
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: obj.span.lo.0,
                     cap_args_appended: 0,
                 }
             })
@@ -1429,7 +1444,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             }),
             args,
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset: obj.span.lo.0,
         };
         let mut body: Vec<Stmt> = Vec::with_capacity(ops.len() * 4 + 1);
         let mut inner_local_ids = vec![param_id];
@@ -1445,6 +1460,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         let key_id = ctx.define_local(key_name.clone(), Type::Any);
                         inner_local_ids.push(key_id);
                         body.push(Stmt::Let {
+                            byte_offset: 0, /*HPOS*/
                             id: key_id,
                             name: key_name,
                             ty: Type::Any,
@@ -1455,6 +1471,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         let prop_key_id = ctx.define_local(prop_key_name.clone(), Type::Any);
                         inner_local_ids.push(prop_key_id);
                         body.push(Stmt::Let {
+                            byte_offset: 0, /*HPOS*/
                             id: prop_key_id,
                             name: prop_key_name,
                             ty: Type::Any,
@@ -1468,6 +1485,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         let value_id = ctx.define_local(value_name.clone(), Type::Any);
                         inner_local_ids.push(value_id);
                         body.push(Stmt::Let {
+                            byte_offset: 0, /*HPOS*/
                             id: value_id,
                             name: value_name,
                             ty: Type::Any,
@@ -1496,6 +1514,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                         let value_id = ctx.define_local(value_name.clone(), Type::Any);
                         inner_local_ids.push(value_id);
                         body.push(Stmt::Let {
+                            byte_offset: 0, /*HPOS*/
                             id: value_id,
                             name: value_name,
                             ty: Type::Any,
@@ -1533,12 +1552,13 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 }
             }
         }
-        body.push(Stmt::Return(Some(Expr::LocalGet(param_id))));
+        body.push(Stmt::Return(Some(Expr::LocalGet(param_id)), obj.span.lo.0));
         ctx.exit_scope(scope_mark);
 
         let captures = iife_captures(ctx, &body, &inner_local_ids);
         let body_uses_this = body.iter().any(uses_this_stmt);
         let closure = Expr::Closure {
+            byte_offset: obj.span.lo.0,
             func_id: iife_func_id,
             params: vec![param],
             return_type: Type::Any,
@@ -1559,7 +1579,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             callee: Box::new(closure),
             args: vec![static_shape_seed.unwrap_or_else(|| Expr::Object(Vec::new()))],
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset: obj.span.lo.0,
         });
     }
     let mut props = Vec::new();
@@ -1608,12 +1628,12 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                             return_type,
                         }
                     } else if ctx.lookup_class(&name).is_some() {
-                        class_binding_read(ctx, &name)
+                        class_binding_read(ctx, &name, ident.span.lo.0)
                     } else if ctx.lookup_native_module(&name).is_some() {
                         // #5242: native-module-bound shorthand (`{ relative }` from
                         // `import { relative } from 'path'`). Resolve to the builtin
                         // value instead of dropping the property.
-                        super::lower_expr::native_module_binding_value(ctx, &name)
+                        super::lower_expr::native_module_binding_value(ctx, &name, ident.span.lo.0)
                     } else if let Some(value) = builtin_global_value_expr(ctx, &name) {
                         value
                     } else {
@@ -1671,6 +1691,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     let scope_mark = ctx.enter_scope();
     let param_id = ctx.define_local("__perry_obj_iife".to_string(), Type::Any);
     let param = Param {
+        byte_offset: obj.span.lo.0,
         id: param_id,
         name: "__perry_obj_iife".to_string(),
         ty: Type::Any,
@@ -1690,7 +1711,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         }),
         args,
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset: obj.span.lo.0,
     };
     for init in computed_post_init {
         match init {
@@ -1699,6 +1720,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 let key_id = ctx.define_local(key_name.clone(), Type::Any);
                 inner_local_ids.push(key_id);
                 body.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: key_id,
                     name: key_name,
                     ty: Type::Any,
@@ -1709,6 +1731,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 let prop_key_id = ctx.define_local(prop_key_name.clone(), Type::Any);
                 inner_local_ids.push(prop_key_id);
                 body.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: prop_key_id,
                     name: prop_key_name,
                     ty: Type::Any,
@@ -1722,6 +1745,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
                 let value_id = ctx.define_local(value_name.clone(), Type::Any);
                 inner_local_ids.push(value_id);
                 body.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: value_id,
                     name: value_name,
                     ty: Type::Any,
@@ -1743,7 +1767,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
             }
         }
     }
-    body.push(Stmt::Return(Some(Expr::LocalGet(param_id))));
+    body.push(Stmt::Return(Some(Expr::LocalGet(param_id)), obj.span.lo.0));
     ctx.exit_scope(scope_mark);
     let captures = iife_captures(ctx, &body, &inner_local_ids);
     // Refs #488 drizzle-sqlite: when a computed-key object literal
@@ -1759,6 +1783,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     let body_uses_this = body.iter().any(uses_this_stmt);
     let static_obj = Expr::object_literal(props);
     let closure = Expr::Closure {
+        byte_offset: obj.span.lo.0,
         func_id: iife_func_id,
         params: vec![param],
         return_type: Type::Any,
@@ -1779,7 +1804,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         callee: Box::new(closure),
         args: vec![static_obj],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: obj.span.lo.0,
     })
 }
 

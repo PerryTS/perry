@@ -29,11 +29,14 @@ fn match_u32_bitset_test(expr: &Expr) -> Option<(u32, u32)> {
         op: BinaryOp::BitAnd,
         left,
         right,
+        ..
     } = expr
     else {
         return None;
     };
-    let Expr::IndexGet { object, index, .. } = left.as_ref() else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) =
+        left.as_ref()
+    else {
         return None;
     };
     let Expr::LocalGet(mask_id) = object.as_ref() else {
@@ -57,6 +60,7 @@ fn match_u32_bitset_test(expr: &Expr) -> Option<(u32, u32)> {
         op: BinaryOp::Div,
         left: div_left,
         right: div_right,
+        ..
     } = inner_not.as_ref()
     else {
         return None;
@@ -72,6 +76,7 @@ fn match_u32_bitset_test(expr: &Expr) -> Option<(u32, u32)> {
         op: BinaryOp::Shl,
         left: shift_left,
         right: shift_right,
+        ..
     } = right.as_ref()
     else {
         return None;
@@ -83,6 +88,7 @@ fn match_u32_bitset_test(expr: &Expr) -> Option<(u32, u32)> {
         op: BinaryOp::Mod,
         left: mod_left,
         right: mod_right,
+        ..
     } = shift_right.as_ref()
     else {
         return None;

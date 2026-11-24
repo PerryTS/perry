@@ -35,7 +35,7 @@ impl JsEmitter {
                 self.emit_expr(expr);
                 self.output.push_str(";\n");
             }
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 self.write_indent();
                 if let Some(expr) = expr {
                     self.output.push_str("return ");
@@ -209,6 +209,7 @@ impl JsEmitter {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.write_indent();
                 self.output.push_str("switch (");

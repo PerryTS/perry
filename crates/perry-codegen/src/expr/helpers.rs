@@ -77,7 +77,9 @@ fn expr_produces_numeric_bits_by_construction(ctx: &FnCtx<'_>, expr: &Expr) -> b
         // themselves numeric by construction: then it is an `fadd` of two
         // canonical numbers, never a concatenation, and its NaN is canonical.
         // `PERRY_NUMERIC_ADD_BITS=0` keeps every add on the live-bits test.
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             if matches!(op, BinaryOp::Add) {
                 std::env::var("PERRY_NUMERIC_ADD_BITS").as_deref() != Ok("0")
                     && expr_produces_numeric_bits_by_construction(ctx, left)

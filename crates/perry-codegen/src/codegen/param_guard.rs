@@ -875,6 +875,7 @@ pub(crate) fn guarded_undefined_method_candidate(
                     op: CompareOp::Eq,
                     left,
                     right,
+                    ..
                 },
             then_branch,
             else_branch: None,
@@ -960,6 +961,7 @@ pub(crate) fn guarded_undefined_method_candidate(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 (in_loop && expr_has_guard(discriminant, id))
                     || cases
@@ -970,11 +972,11 @@ pub(crate) fn guarded_undefined_method_candidate(
                 body_has_loop_guard(std::slice::from_ref(body.as_ref()), id, in_loop)
             }
             Stmt::Expr(expr) | Stmt::Throw(expr) => in_loop && expr_has_guard(expr, id),
-            Stmt::Return(Some(expr)) => in_loop && expr_has_guard(expr, id),
+            Stmt::Return(Some(expr), _) => in_loop && expr_has_guard(expr, id),
             Stmt::Let {
                 init: Some(expr), ..
             } => in_loop && expr_has_guard(expr, id),
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Let { init: None, .. }
             | Stmt::Break
             | Stmt::Continue
@@ -1056,6 +1058,7 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
                     op: CompareOp::Eq,
                     left,
                     right,
+                    ..
                 },
             then_branch,
             else_branch: None,
@@ -1131,6 +1134,7 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 !expr_contains_local_get(discriminant, id)
                     && cases.iter().all(|case| {
@@ -1143,13 +1147,13 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
             Stmt::Labeled { body, .. } => {
                 scan_only_direct_conditions(std::slice::from_ref(body.as_ref()), id, guards)
             }
-            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
                 !expr_contains_local_get(expr, id)
             }
             Stmt::Let {
                 init: Some(expr), ..
             } => !expr_contains_local_get(expr, id),
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Let { init: None, .. }
             | Stmt::Break
             | Stmt::Continue
@@ -1219,7 +1223,7 @@ pub(crate) fn guarded_falsy_field_default_method_candidate(
 /// enclosing function.
 pub(crate) fn body_contains_await(stmts: &[perry_hir::Stmt]) -> bool {
     fn expr_contains_await(expr: &perry_hir::Expr) -> bool {
-        if matches!(expr, perry_hir::Expr::Await(_)) {
+        if matches!(expr, perry_hir::Expr::Await(_, _)) {
             return true;
         }
         let mut found = false;
@@ -1231,7 +1235,7 @@ pub(crate) fn body_contains_await(stmts: &[perry_hir::Stmt]) -> bool {
 
     stmts.iter().any(|stmt| match stmt {
         perry_hir::Stmt::Expr(expr) | perry_hir::Stmt::Throw(expr) => expr_contains_await(expr),
-        perry_hir::Stmt::Return(Some(expr)) => expr_contains_await(expr),
+        perry_hir::Stmt::Return(Some(expr), _) => expr_contains_await(expr),
         perry_hir::Stmt::Let {
             init: Some(expr), ..
         } => expr_contains_await(expr),
@@ -1275,6 +1279,7 @@ pub(crate) fn body_contains_await(stmts: &[perry_hir::Stmt]) -> bool {
         perry_hir::Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             expr_contains_await(discriminant)
                 || cases.iter().any(|case| {
@@ -1397,6 +1402,7 @@ mod tests {
 
     fn declaration_guard_for(ty: Type, aliases: &HashMap<String, Type>) -> Option<SpecParamGuard> {
         let params = [perry_hir::Param {
+            byte_offset: 0,
             id: 1,
             name: "value".to_string(),
             ty,
@@ -1615,12 +1621,17 @@ mod tests {
 
     #[test]
     fn suspension_scan_stays_in_the_current_function_body() {
-        let direct = vec![perry_hir::Stmt::Return(Some(perry_hir::Expr::Await(
-            Box::new(perry_hir::Expr::Undefined),
-        )))];
+        let direct = vec![perry_hir::Stmt::Return(
+            Some(perry_hir::Expr::Await(
+                Box::new(perry_hir::Expr::Undefined),
+                0,
+            )),
+            0,
+        )];
         assert!(body_contains_await(&direct));
 
         let nested = vec![perry_hir::Stmt::Expr(perry_hir::Expr::Closure {
+            byte_offset: 0,
             func_id: 9,
             params: Vec::new(),
             return_type: Type::Void,
@@ -1657,6 +1668,7 @@ mod tests {
             fields: fields
                 .into_iter()
                 .map(|(field, ty)| perry_hir::ClassField {
+                    byte_offset: 0,
                     origin: perry_hir::ClassFieldOrigin::Definition,
                     name: field.to_string(),
                     key_expr: None,
@@ -1927,6 +1939,7 @@ mod tests {
         shadowed.getters.push((
             "value".to_string(),
             perry_hir::Function {
+                byte_offset: 0,
                 id: 60,
                 name: "get_value".to_string(),
                 type_params: Vec::new(),

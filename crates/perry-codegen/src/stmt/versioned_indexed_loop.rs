@@ -36,7 +36,7 @@ fn checked_reader_call(
     expr: &Expr,
     counter_id: u32,
 ) -> Option<(String, String, Vec<u32>)> {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return None;
     };
     let Expr::PropertyGet {
@@ -110,6 +110,7 @@ fn match_candidate(
             op: CompareOp::Lt,
             left,
             right,
+            ..
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) => {
             match right.as_ref() {
                 Expr::LocalGet(id) => *id,
@@ -143,7 +144,7 @@ fn match_candidate(
     let (entity_id, entity_array_id) = match entity_stmt {
         Stmt::Let {
             id,
-            init: Some(Expr::IndexGet { object, index, .. }),
+            init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
             ..
         } if matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id) => {
             match object.as_ref() {
@@ -173,11 +174,16 @@ fn match_candidate(
         None => None,
     };
 
-    let Expr::Call {
+    let (Expr::Call {
         callee: callback,
         args: callback_args,
         ..
-    } = (match callback_stmt {
+    }
+    | Expr::RegionCall {
+        callee: callback,
+        args: callback_args,
+        ..
+    }) = (match callback_stmt {
         Stmt::Expr(expr) => expr,
         _ => return None,
     })

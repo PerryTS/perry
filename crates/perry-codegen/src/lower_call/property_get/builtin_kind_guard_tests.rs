@@ -250,6 +250,7 @@ fn proven_receivers_keep_the_direct_builtin_call() {
         "kind_guard_proven.ts",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "n".to_string(),
                 ty: Type::Number,

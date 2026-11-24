@@ -51,11 +51,13 @@ pub(crate) enum Proof {
 
 /// The wpfacts interval of argument `pos` at the call at `offset` lies in
 /// `[0, i32::MAX]`.
-fn site_nonneg(ctx: &FnCtx<'_>, offset: u32, pos: usize) -> bool {
+fn site_nonneg(ctx: &FnCtx<'_>, site: Option<u32>, pos: usize) -> bool {
+    let Some(offset) = site else {
+        return false;
+    };
     crate::codegen::index_entry::raw_i32_enabled()
         && site_args_enabled()
         && !ctx.wpfacts_off
-        && offset != 0
         && ctx
             .wpfacts
             .call_arg_ranges
@@ -66,18 +68,19 @@ fn site_nonneg(ctx: &FnCtx<'_>, offset: u32, pos: usize) -> bool {
 
 thread_local! {
     /// The source offset of the method call being lowered (its callee's
-    /// `PropertyGet::byte_offset`, the key of wpfacts `call_arg_ranges`).
-    static SITE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// `PropertyGet::byte_offset`, the key of wpfacts `call_arg_ranges`);
+    /// `None` outside a method call.
+    static SITE: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
 }
 
 /// Lower method call `callee` with `f`, its site offset visible to the
 /// index split (`site_nonneg`); nested calls in its arguments set theirs.
 pub(crate) fn with_call_site<R>(callee: &Expr, f: impl FnOnce() -> R) -> R {
-    let offset = match callee {
-        Expr::PropertyGet { byte_offset, .. } => *byte_offset,
-        _ => 0,
+    let site = match callee {
+        Expr::PropertyGet { byte_offset, .. } => Some(*byte_offset),
+        _ => None,
     };
-    let saved = SITE.with(|s| s.replace(offset));
+    let saved = SITE.with(|s| s.replace(site));
     let out = f();
     SITE.with(|s| s.set(saved));
     out
