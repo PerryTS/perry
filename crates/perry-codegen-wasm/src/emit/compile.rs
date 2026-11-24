@@ -17,7 +17,8 @@ impl WasmModuleEmitter {
             .collect();
 
         // First pass: collect all string literals
-        for (_, module) in modules {
+        for (mod_idx, (_, module)) in modules.iter().enumerate() {
+            self.current_mod_idx = mod_idx;
             self.collect_strings(module);
         }
 

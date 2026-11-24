@@ -1634,6 +1634,11 @@ function wrapImportsForI64(imports) {
   return wrapped;
 }
 
+class __DeadZone {
+  constructor(name) { this.name = name; }
+  throw() { throw new ReferenceError(`Cannot access '${this.name}' before initialization`); }
+}
+
 // What closure_new makes. Its class, not its keys, tells a closure from a plain
 // object that has `funcIdx` / `captures` fields, at no per-closure cost.
 class __PerryClosure {
@@ -2262,8 +2267,20 @@ const __memDispatch = {
   },
   // A cell holds a local that closures capture and mutate, so all of them share it.
   box_new: (value) => ({ value }),
-  box_get: (cell) => cell.value,
-  box_set: (cell, value) => { cell.value = value; return value; },
+  // A lexical binding's cell in its dead zone holds a __DeadZone; reading or assigning
+  // it throws until its declaration runs `box_init`.
+  box_new_tdz: (name) => ({ value: new __DeadZone(name) }),
+  box_get: (cell) => {
+    const value = cell.value;
+    if (value instanceof __DeadZone) value.throw();
+    return value;
+  },
+  box_set: (cell, value) => {
+    if (cell.value instanceof __DeadZone) cell.value.throw();
+    cell.value = value;
+    return value;
+  },
+  box_init: (cell, value) => { cell.value = value; return value; },
   // Console — args are already decoded by __bitsToJsValue
   console_log: (...args) => { console.log(...args); },
   console_warn: (...args) => { console.warn(...args); },

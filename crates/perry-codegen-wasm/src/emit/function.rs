@@ -556,6 +556,15 @@ impl<'a> FuncEmitCtx<'a> {
 
     /// Stores the value on the stack into the cell local `idx` holds, leaving the value.
     pub(super) fn emit_box_set(&mut self, func: &mut Function, idx: u32) {
+        self.emit_box_store(func, idx, "box_set");
+    }
+
+    /// `emit_box_set` for the declaration that fills a preallocated cell.
+    pub(super) fn emit_box_init(&mut self, func: &mut Function, idx: u32) {
+        self.emit_box_store(func, idx, "box_init");
+    }
+
+    fn emit_box_store(&mut self, func: &mut Function, idx: u32, bridge: &str) {
         func.instruction(&Instruction::LocalSet(self.temp_store_local));
         self.emit_frame_begin(func, 2);
         for (slot, local) in [(0, idx), (1, self.temp_store_local)] {
@@ -567,7 +576,7 @@ impl<'a> FuncEmitCtx<'a> {
                 memory_index: 0,
             }));
         }
-        self.emit_memcall(func, "box_set", 2);
+        self.emit_memcall(func, bridge, 2);
     }
 
     /// Moves each boxed parameter's incoming value into a fresh cell.
