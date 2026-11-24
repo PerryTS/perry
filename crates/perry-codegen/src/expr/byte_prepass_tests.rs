@@ -4,6 +4,7 @@ use perry_hir::{types::Type, CompareOp, Expr, Function, Module, Param, Stmt, Upd
 
 fn param(id: u32, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -16,6 +17,7 @@ fn param(id: u32, ty: Type) -> Param {
 
 fn function(body: Vec<Stmt>, params: Vec<Param>) -> Function {
     Function {
+        byte_offset: 0,
         id: 1,
         name: "witness".into(),
         type_params: vec![],
@@ -62,6 +64,7 @@ fn loop_body(body: Vec<Stmt>) -> Stmt {
     Stmt::For {
         init: None,
         condition: Some(Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(3)),
             right: Box::new(Expr::Integer(4)),
@@ -104,6 +107,7 @@ fn unregistered_writes_and_intrinsics_resolve_per_access() {
                 let mut body = vec![];
                 if local {
                     body.push(Stmt::Let {
+                        byte_offset: 0,
                         id: 1,
                         name: "view".into(),
                         ty: Type::Named(class.into()),
@@ -196,6 +200,7 @@ fn loop_writes_register_before_local_initializers_and_callbacks() {
             let mut loop_stmts = vec![];
             if local {
                 loop_stmts.push(Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "view".into(),
                     ty: Type::Named("Uint8Array".into()),
@@ -377,6 +382,7 @@ fn shared_and_native_byte_views_take_the_runtime_arm() {
             module.functions.push(function(
                 vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 4,
                         name: "owner".into(),
                         ty: Type::Any,
@@ -384,32 +390,39 @@ fn shared_and_native_byte_views_take_the_runtime_arm() {
                         init: Some(owner),
                     },
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 1,
                         name: "view".into(),
                         ty: Type::Named(if buffer { "Buffer" } else { "Uint8Array" }.into()),
                         mutable: false,
                         init: Some(view),
                     },
-                    Stmt::Return(Some(Expr::Call {
-                        byte_end: 0,
-                        callee: Box::new(Expr::FuncRef(2)),
-                        args: vec![Expr::LocalGet(1), Expr::LocalGet(3)],
-                        type_args: vec![],
-                        byte_offset: 0,
-                    })),
+                    Stmt::Return(
+                        Some(Expr::Call {
+                            byte_end: 0,
+                            callee: Box::new(Expr::FuncRef(2)),
+                            args: vec![Expr::LocalGet(1), Expr::LocalGet(3)],
+                            type_args: vec![],
+                            byte_offset: 0,
+                        }),
+                        0,
+                    ),
                 ],
                 vec![param(3, Type::Any)],
             ));
             // Pass the constructed view to an ordinary byte reader. It has no
             // tracked construction descriptor and exercises the plain resolver.
             let mut reader = function(
-                vec![Stmt::Return(Some(Expr::IndexGet {
-                    element_offset: 0,
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    index: Box::new(Expr::LocalGet(3)),
-                }))],
+                vec![Stmt::Return(
+                    Some(Expr::IndexGet {
+                        element_offset: 0,
+                        byte_offset: 0,
+                        byte_end: 0,
+                        object: Box::new(Expr::LocalGet(1)),
+                        index: Box::new(Expr::LocalGet(3)),
+                    }),
+                    0,
+                )],
                 vec![
                     param(
                         1,
@@ -441,6 +454,7 @@ fn shared_and_native_byte_views_take_the_runtime_arm() {
 fn reassigned_module_table_cannot_get_a_fixed_receiver() {
     let mut module = Module::new("reassigned.ts");
     module.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "table".into(),
         ty: Type::Named("Uint8Array".into()),

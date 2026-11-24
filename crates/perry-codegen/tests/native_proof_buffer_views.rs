@@ -127,6 +127,7 @@ fn module_with_classes_and_params(
     let mut module = Module::new(name);
     module.classes = classes;
     module.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -213,6 +214,7 @@ fn assert_typed_array_get_fallback_reason(artifact: &serde_json::Value, reason: 
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -225,6 +227,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 
 fn class_field(name: &str, ty: Type) -> ClassField {
     ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -306,6 +309,7 @@ fn pod_type(fields: &[(&str, Type)]) -> Type {
 
 fn pod_let(id: u32, name: &str, ty: Type, fields: Vec<(&str, Expr)>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -321,6 +325,7 @@ fn pod_let(id: u32, name: &str, ty: Type, fields: Vec<(&str, Expr)>) -> Stmt {
 
 fn number_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -331,6 +336,7 @@ fn number_let(id: u32, name: &str, mutable: bool, init: Expr) -> Stmt {
 
 fn buffer_let(id: u32, name: &str, size: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Named("Buffer".to_string()),
@@ -345,6 +351,7 @@ fn buffer_let(id: u32, name: &str, size: Expr) -> Stmt {
 
 fn typed_array_let(id: u32, name: &str, class_name: &str, kind: u8, length: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Named(class_name.to_string()),
@@ -358,6 +365,7 @@ fn typed_array_let(id: u32, name: &str, class_name: &str, kind: u8, length: Expr
 
 fn native_arena_owner_let(id: u32, name: &str, byte_length: Expr, mutable: bool) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -376,6 +384,7 @@ fn native_arena_view_let(
     length: Expr,
 ) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Named(class_name.to_string()),
@@ -391,6 +400,7 @@ fn native_arena_view_let(
 
 fn native_arena_owner_alias_let(id: u32, name: &str, owner_id: u32, mutable: bool) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -401,6 +411,7 @@ fn native_arena_owner_alias_let(id: u32, name: &str, owner_id: u32, mutable: boo
 
 fn runtime_condition(cond_id: u32) -> Expr {
     Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Ne,
         left: Box::new(local(cond_id)),
         right: Box::new(int(0)),
@@ -418,6 +429,7 @@ fn closure_type(return_type: Type) -> Type {
 
 fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Array(Box::new(Type::Number)),
@@ -428,6 +440,7 @@ fn number_array_let(id: u32, name: &str, values: Vec<i64>) -> Stmt {
 
 fn bit_or_zero(value: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitOr,
         left: Box::new(value),
         right: Box::new(int(0)),
@@ -436,6 +449,7 @@ fn bit_or_zero(value: Expr) -> Expr {
 
 fn div(left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Div,
         left: Box::new(left),
         right: Box::new(right),
@@ -444,6 +458,7 @@ fn div(left: Expr, right: Expr) -> Expr {
 
 fn add(left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -547,6 +562,7 @@ fn call(callee: Expr, args: Vec<Expr>) -> Expr {
 
 fn native_module_call(module: &str, method: &str, args: Vec<Expr>) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset: 0,
         module: module.to_string(),
         class_name: None,
         object: None,
@@ -641,6 +657,7 @@ fn for_loop_with_op_start_and_update(
     Stmt::For {
         init: Some(Box::new(number_let(counter_id, "i", true, start))),
         condition: Some(Expr::Compare {
+            byte_offset: 0,
             op,
             left: Box::new(local(counter_id)),
             right: Box::new(bound),
@@ -662,18 +679,21 @@ fn for_loop(counter_id: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
 fn artifact_records_buffer_read_u32_and_unsigned_materialization() {
     let body = vec![
         buffer_let(1, "buf", int(8)),
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
-                byte_offset: PROVEN_SITE,
-                object: Box::new(local(1)),
-                property: "readUInt32BE".to_string(),
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: PROVEN_SITE,
+                    object: Box::new(local(1)),
+                    property: "readUInt32BE".to_string(),
+                }),
+                args: vec![int(0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
             }),
-            args: vec![int(0)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        })),
+            0,
+        ),
     ];
 
     let artifact = proven_artifact_json("artifact_buffer_read_u32.ts", body);
@@ -741,7 +761,7 @@ fn loop_length_bound_does_not_prove_multibyte_buffer_read_inbounds() {
                 vec![local(2)],
             ))],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     for (pin_native, name) in [
@@ -778,18 +798,21 @@ fn loop_length_bound_does_not_prove_multibyte_buffer_read_inbounds() {
 fn artifact_records_buffer_read_double_as_f64() {
     let body = vec![
         buffer_let(1, "buf", int(8)),
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
-                byte_offset: PROVEN_SITE,
-                object: Box::new(local(1)),
-                property: "readDoubleLE".to_string(),
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: PROVEN_SITE,
+                    object: Box::new(local(1)),
+                    property: "readDoubleLE".to_string(),
+                }),
+                args: vec![int(0)],
+                type_args: Vec::new(),
+                byte_offset: 0,
             }),
-            args: vec![int(0)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        })),
+            0,
+        ),
     ];
 
     let artifact = proven_artifact_json("artifact_buffer_read_double.ts", body);
@@ -819,15 +842,18 @@ fn artifact_records_buffer_read_double_as_f64() {
 fn artifact_records_buffer_read_float_as_f32_and_float_extend_materialization() {
     let body = vec![
         buffer_let(1, "buf", int(8)),
-        Stmt::Return(Some(call(
-            Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: PROVEN_SITE,
-                object: Box::new(local(1)),
-                property: "readFloatLE".to_string(),
-            },
-            vec![int(0)],
-        ))),
+        Stmt::Return(
+            Some(call(
+                Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: PROVEN_SITE,
+                    object: Box::new(local(1)),
+                    property: "readFloatLE".to_string(),
+                },
+                vec![int(0)],
+            )),
+            0,
+        ),
     ];
 
     let artifact = proven_artifact_json("artifact_buffer_read_f32.ts", body);
@@ -875,7 +901,7 @@ fn artifact_records_width_aware_buffer_numeric_read_facts() {
     for (method, ..) in reads {
         body.push(Stmt::Expr(proven_buffer_read(1, method, int(0))));
     }
-    body.push(Stmt::Return(Some(int(0))));
+    body.push(Stmt::Return(Some(int(0)), 0));
 
     let artifact = proven_artifact_json("artifact_width_aware_buffer_reads.ts", body);
     let records = artifact["records"].as_array().unwrap();
@@ -912,7 +938,7 @@ fn loop_bound_by_buffer_length_only_does_not_prove_wide_read() {
             length(1),
             vec![Stmt::Expr(buffer_read(1, "readUInt32BE", local(2)))],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let artifact = compile_artifact_json("artifact_wide_read_needs_width_guard.ts", body);
@@ -934,6 +960,7 @@ fn explicit_width_guard_proves_wide_buffer_read() {
         Stmt::For {
             init: Some(Box::new(number_let(2, "i", true, int(0)))),
             condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Le,
                 left: Box::new(add(local(2), int(4))),
                 right: Box::new(length(1)),
@@ -941,7 +968,7 @@ fn explicit_width_guard_proves_wide_buffer_read() {
             update: Some(increment(2)),
             body: vec![Stmt::Expr(proven_buffer_read(1, "readUInt32BE", local(2)))],
         },
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let artifact = proven_artifact_json("artifact_width_guard_buffer_read.ts", body);
@@ -966,6 +993,7 @@ fn proven_buffer_and_typed_array_reads_are_numeric_operands() {
         Stmt::For {
             init: Some(Box::new(number_let(3, "i", true, int(0)))),
             condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Le,
                 left: Box::new(add(local(3), int(4))),
                 right: Box::new(length(1)),
@@ -994,7 +1022,7 @@ fn proven_buffer_and_typed_array_reads_are_numeric_operands() {
                 Box::new(add(local(2), index_get(4, local(5)))),
             ))],
         ),
-        Stmt::Return(Some(local(2))),
+        Stmt::Return(Some(local(2)), 0),
     ];
 
     let ir = proven_ir("numeric_buffer_typed_array_operands.ts", body);
@@ -1035,6 +1063,7 @@ fn unproven_bounds_typed_array_read_is_a_numeric_operand_without_a_call() {
                 Box::new(add(
                     local(3),
                     Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Mul,
                         left: Box::new(number(0.5)),
                         right: Box::new(index_get(1, local(4))),
@@ -1042,7 +1071,7 @@ fn unproven_bounds_typed_array_read_is_a_numeric_operand_without_a_call() {
                 )),
             ))],
         ),
-        Stmt::Return(Some(local(3))),
+        Stmt::Return(Some(local(3)), 0),
     ];
 
     let ir = compile_ir("unproven_bounds_typed_array_operand.ts", body);
@@ -1123,7 +1152,7 @@ fn artifact_records_tracked_typed_array_native_reads() {
             vec![Stmt::Expr(index_get(array_id, local(array_id + 1)))],
         ));
     }
-    body.push(Stmt::Return(Some(int(0))));
+    body.push(Stmt::Return(Some(int(0)), 0));
 
     let artifact = compile_artifact_json("artifact_tracked_typed_array_reads.ts", body);
     let records = artifact["records"].as_array().unwrap();
@@ -1174,7 +1203,7 @@ fn artifact_records_native_owned_typed_array_facts() {
             vec![array_set(2, local(3), add(local(3), number(0.5)))],
         ),
         for_loop(4, int(8), vec![Stmt::Expr(index_get(2, local(4)))]),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("native_owned_typed_array_fast_path.ts", body.clone());
@@ -1235,6 +1264,7 @@ fn native_owned_view_identity_keeps_numeric_add_on_the_native_path() {
             "layoutIndex",
             false,
             Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Div,
                 left: Box::new(Expr::PodLayoutSizeOf {
                     ty: layout_ty.clone(),
@@ -1257,7 +1287,7 @@ fn native_owned_view_identity_keeps_numeric_add_on_the_native_path() {
             ))],
         ),
         Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(1)))),
-        Stmt::Return(Some(local(3))),
+        Stmt::Return(Some(local(3)), 0),
     ];
 
     let ir = compile_ir("native_owned_view_numeric_add.ts", body);
@@ -1282,13 +1312,14 @@ fn bigint_typed_view_addition_keeps_dynamic_bigint_dispatch() {
             vec![
                 typed_array_let(1, "view", class_name, kind, int(1)),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "sum".to_string(),
                     ty: Type::Any,
                     mutable: false,
                     init: Some(add(index_get(1, int(0)), int(1))),
                 },
-                Stmt::Return(Some(local(2))),
+                Stmt::Return(Some(local(2)), 0),
             ],
         );
         let ir = compile_ir_for_module_with_opts(module, empty_opts());
@@ -1316,7 +1347,7 @@ fn native_owned_typed_array_owner_alias_dispose_invalidates_views() {
             ),
             native_arena_owner_alias_let(3, "alias", 1, false),
             Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(3)))),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert!(
@@ -1349,7 +1380,7 @@ fn native_owned_typed_array_owner_alias_dispose_invalidates_views() {
                 int(8),
             ),
             Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(1)))),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert!(
@@ -1383,7 +1414,7 @@ fn native_owned_typed_array_owner_alias_dispose_invalidates_views() {
             native_arena_owner_alias_let(3, "alias", 1, true),
             Stmt::Expr(Expr::LocalSet(3, Box::new(int(0)))),
             Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(3)))),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     let records = reassigned_alias["records"].as_array().unwrap();
@@ -1430,7 +1461,7 @@ fn native_owned_conditional_owner_alias_reassignment_invalidates_views() {
                 else_branch: None,
             },
             Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(3)))),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     ));
     assert_typed_array_get_fallback_reason(&artifact, "use_after_dispose");
@@ -1461,7 +1492,7 @@ fn native_owned_branch_local_owner_alias_removal_invalidates_views() {
                 else_branch: None,
             },
             Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(3)))),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     ));
     assert_typed_array_get_fallback_reason(&artifact, "use_after_dispose");
@@ -1488,7 +1519,7 @@ fn native_owned_unknown_call_escape_through_owner_alias_invalidates_views() {
                 vec![local(3)],
                 Type::Number,
             )),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert_typed_array_get_fallback_reason(&artifact, "missing_owner_root");
@@ -1514,7 +1545,7 @@ fn native_owned_unknown_call_escape_inside_aggregate_invalidates_views() {
                 vec![Expr::Array(vec![local(2)], None)],
                 Type::Number,
             )),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
@@ -1549,7 +1580,7 @@ fn native_owned_call_spread_escape_invalidates_views() {
                 ))],
                 type_args: Vec::new(),
             }),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
@@ -1574,7 +1605,7 @@ fn native_owned_proxy_apply_escape_invalidates_views() {
                 proxy: Box::new(extern_func_ref("unknown_proxy_apply_escape", Type::Any)),
                 args: vec![Expr::Array(vec![local(2)], None)],
             }),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
@@ -1599,7 +1630,7 @@ fn native_owned_proxy_construct_escape_invalidates_views() {
                 proxy: Box::new(extern_func_ref("unknown_proxy_construct_escape", Type::Any)),
                 args: vec![Expr::Array(vec![local(2)], None)],
             }),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
@@ -1625,7 +1656,7 @@ fn native_owned_reflect_apply_escape_invalidates_views() {
                 this_arg: Box::new(Expr::Undefined),
                 args: Box::new(Expr::Array(vec![local(2)], None)),
             }),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
@@ -1654,7 +1685,7 @@ fn native_owned_reflect_construct_escape_invalidates_views() {
                 args: Box::new(Expr::Array(vec![local(2)], None)),
                 new_target: Box::new(Expr::Undefined),
             }),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
@@ -1679,7 +1710,7 @@ fn native_owned_js_call_value_escape_invalidates_views() {
                 callee: Box::new(extern_func_ref("unknown_js_call_value_escape", Type::Any)),
                 args: vec![Expr::Array(vec![local(2)], None)],
             }),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert_typed_array_get_fallback_reason(&artifact, "escaping_unowned_pointer");
@@ -1706,11 +1737,12 @@ fn native_owned_static_method_v8_escape_invalidates_views() {
                     int(8),
                 ),
                 Stmt::Expr(Expr::StaticMethodCall {
+                    byte_offset: 0,
                     class_name: "RemoteNs".to_string(),
                     method_name: "invoke".to_string(),
                     args: vec![Expr::Array(vec![local(2)], None)],
                 }),
-                Stmt::Return(Some(index_get(2, int(0)))),
+                Stmt::Return(Some(index_get(2, int(0))), 0),
             ],
         ),
         opts,
@@ -1735,17 +1767,19 @@ fn native_owned_closure_capture_through_owner_alias_invalidates_views() {
             ),
             native_arena_owner_alias_let(3, "alias", 1, false),
             Stmt::Let {
+                byte_offset: 0,
                 id: 4,
                 name: "f".to_string(),
                 ty: closure_type(Type::Number),
                 mutable: false,
                 init: Some(Expr::Closure {
+                    byte_offset: 0,
                     func_id: 90,
                     params: Vec::new(),
                     return_type: Type::Number,
                     body: vec![
                         Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(3)))),
-                        Stmt::Return(Some(int(0))),
+                        Stmt::Return(Some(int(0)), 0),
                     ],
                     captures: vec![3],
                     mutable_captures: Vec::new(),
@@ -1760,7 +1794,7 @@ fn native_owned_closure_capture_through_owner_alias_invalidates_views() {
                 }),
             },
             Stmt::Expr(call(local(4), Vec::new())),
-            Stmt::Return(Some(index_get(2, int(0)))),
+            Stmt::Return(Some(index_get(2, int(0))), 0),
         ],
     );
     assert_typed_array_get_fallback_reason(&artifact, "closure_capture");
@@ -1782,10 +1816,13 @@ fn native_owned_uint8array_get_fallback_uses_uint8array_helper() {
                 int(16),
             ),
             Stmt::Expr(Expr::NativeArenaDispose(Box::new(local(1)))),
-            Stmt::Return(Some(Expr::Uint8ArrayGet {
-                array: Box::new(local(2)),
-                index: Box::new(int(0)),
-            })),
+            Stmt::Return(
+                Some(Expr::Uint8ArrayGet {
+                    array: Box::new(local(2)),
+                    index: Box::new(int(0)),
+                }),
+                0,
+            ),
         ],
     );
     // Codegen migrated the disposed-view fallback from `js_uint8array_get`
@@ -1826,7 +1863,7 @@ fn native_owned_uint8array_set_fallback_uses_uint8array_helper() {
                 index: Box::new(int(0)),
                 value: Box::new(int(7)),
             }),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ],
     );
     assert!(
@@ -1846,6 +1883,7 @@ fn uint8array_const_local_length_uses_inline_byte_get_set() {
         vec![
             number_let(1, "size", false, int(16)),
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "buf".to_string(),
                 ty: Type::Named("Uint8Array".to_string()),
@@ -1861,10 +1899,13 @@ fn uint8array_const_local_length_uses_inline_byte_get_set() {
                     value: Box::new(local(3)),
                 })],
             ),
-            Stmt::Return(Some(Expr::Uint8ArrayGet {
-                array: Box::new(local(2)),
-                index: Box::new(int(0)),
-            })),
+            Stmt::Return(
+                Some(Expr::Uint8ArrayGet {
+                    array: Box::new(local(2)),
+                    index: Box::new(int(0)),
+                }),
+                0,
+            ),
         ],
     );
     assert!(
@@ -1899,6 +1940,7 @@ fn bounded_buffer_read_modify_write_keeps_inline_byte_store() {
         index: Box::new(local(2)),
     };
     let value = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitAnd,
         left: Box::new(add(read, int(1))),
         right: Box::new(int(255)),
@@ -1919,7 +1961,7 @@ fn bounded_buffer_read_modify_write_keeps_inline_byte_store() {
                         value: Box::new(value),
                     })],
                 ),
-                Stmt::Return(Some(int(0))),
+                Stmt::Return(Some(int(0)), 0),
             ],
         ),
         empty_opts(),

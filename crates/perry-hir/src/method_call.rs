@@ -9,7 +9,7 @@ pub fn named_site(key: &str, offset: u32) -> bool {
 /// A callable entry whose ABI is the ordinary method ABI.
 pub fn ordinary_entry(f: &Function) -> bool {
     !f.is_generator && !f.is_async && !f.body.iter().any(|st| {
-        matches!(st, crate::Stmt::Return(Some(e)) if crate::fn_proto::is_record_generator_birth(e))
+        matches!(st, crate::Stmt::Return(Some(e), _) if crate::fn_proto::is_record_generator_birth(e))
     })
 }
 

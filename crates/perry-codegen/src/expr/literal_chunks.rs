@@ -53,7 +53,7 @@ pub(crate) fn lower_chunked_birth<'f>(
         true,
         |ctx, object| {
             for call in calls {
-                let Expr::Call { callee, args, .. } = call else {
+                let Expr::RegionCall { callee, args } = call else {
                     bail!("literal chunks: a chunk is not a call");
                 };
                 let Expr::FuncRef(fid) = callee.as_ref() else {

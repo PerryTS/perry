@@ -60,7 +60,9 @@ fn match_length_read(expr: &Expr, counter_id: u32) -> Option<(u32, i64, i64)> {
     if property != "length" {
         return None;
     }
-    let Expr::IndexGet { object, index, .. } = object.as_ref() else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) =
+        object.as_ref()
+    else {
         return None;
     };
     let Expr::LocalGet(array_id) = object.as_ref() else {
@@ -101,6 +103,7 @@ fn match_loop(
             op: CompareOp::Lt,
             left,
             right,
+            ..
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) => {
             match right.as_ref() {
                 Expr::Integer(n) if (0..=i64::from(i32::MAX)).contains(n) => *n,
@@ -134,6 +137,7 @@ fn match_loop(
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == accumulator_id) => {
             match_length_read(right, counter_id)?
         }
@@ -141,6 +145,7 @@ fn match_loop(
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } if matches!(right.as_ref(), Expr::LocalGet(id) if *id == accumulator_id) => {
             match_length_read(left, counter_id)?
         }

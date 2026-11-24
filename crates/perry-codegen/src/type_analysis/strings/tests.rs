@@ -47,6 +47,7 @@ fn rec_alias() -> HashMap<String, Type> {
 /// `function probe(r: Rec): string { return "t:" + r.<property>; }`
 fn concat_probe_ir(property: &str) -> String {
     let module = Module {
+        byte_offset: 0,
         name: "alias_string_concat.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
@@ -58,10 +59,12 @@ fn concat_probe_ir(property: &str) -> String {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
             params: vec![Param {
+                byte_offset: 0,
                 id: 1,
                 name: "r".to_string(),
                 ty: Type::Named("Rec".to_string()),
@@ -71,16 +74,20 @@ fn concat_probe_ir(property: &str) -> String {
                 arguments_object: None,
             }],
             return_type: Type::String,
-            body: vec![perry_hir::Stmt::Return(Some(Expr::Binary {
-                op: BinaryOp::Add,
-                left: Box::new(Expr::String("t:".to_string())),
-                right: Box::new(Expr::PropertyGet {
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    property: property.to_string(),
+            body: vec![perry_hir::Stmt::Return(
+                Some(Expr::Binary {
                     byte_offset: 0,
+                    op: BinaryOp::Add,
+                    left: Box::new(Expr::String("t:".to_string())),
+                    right: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
+                        object: Box::new(Expr::LocalGet(1)),
+                        property: property.to_string(),
+                        byte_offset: 0,
+                    }),
                 }),
-            }))],
+                0,
+            )],
             is_async: false,
             is_generator: false,
             is_strict: false,

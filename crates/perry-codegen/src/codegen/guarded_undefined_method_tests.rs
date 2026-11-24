@@ -17,6 +17,7 @@ fn callback_type() -> Type {
 
 fn optional_filter() -> Param {
     Param {
+        byte_offset: 0,
         id: FILTER,
         name: "filter".to_string(),
         ty: callback_type(),
@@ -30,6 +31,7 @@ fn optional_filter() -> Param {
 fn synthetic_optional_prologue() -> Stmt {
     Stmt::If {
         condition: Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(FILTER)),
             right: Box::new(Expr::Undefined),
@@ -49,6 +51,7 @@ fn loop_filter_guard() -> Stmt {
         update: None,
         body: vec![Stmt::If {
             condition: Expr::Logical {
+                byte_offset: 0,
                 op: LogicalOp::And,
                 left: Box::new(Expr::LocalGet(FILTER)),
                 right: Box::new(Expr::Call {
@@ -69,6 +72,7 @@ fn method(extra: Vec<Stmt>) -> Function {
     let mut body = vec![synthetic_optional_prologue(), loop_filter_guard()];
     body.extend(extra);
     Function {
+        byte_offset: 0,
         id: 90,
         name: "scan".to_string(),
         type_params: Vec::new(),

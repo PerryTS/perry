@@ -196,6 +196,7 @@ pub(crate) fn ir_opts(target: &str, is_entry: bool) -> CompileOptions {
 
 fn bare_module(name: &str) -> Module {
     Module {
+        byte_offset: 0,
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -245,10 +246,12 @@ fn bare_module(name: &str) -> Module {
 pub(crate) fn probe_module(name: &str, body: Vec<Stmt>) -> Module {
     let mut module = bare_module(name);
     module.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: 100,
             name: "n".to_string(),
             ty: Type::Number,
@@ -320,6 +323,7 @@ pub(crate) fn probe_body_symbol(ir: &str, module_name: &str) -> String {
 
 pub(crate) fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,

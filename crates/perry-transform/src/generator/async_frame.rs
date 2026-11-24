@@ -63,13 +63,14 @@ pub(super) fn admission(module: &Module) -> HashSet<FuncId> {
         if let Expr::Yield {
             value: Some(value),
             delegate: false,
+            ..
         }
-        | Expr::Await(value) = e
+        | Expr::Await(value, _) = e
         {
             if let Expr::LocalGet(id) = value.as_ref() {
                 *local_awaits.entry(*id).or_default() += 1;
             }
-            if let Expr::Call { callee, .. } = value.as_ref() {
+            if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = value.as_ref() {
                 if let Expr::FuncRef(id) = callee.as_ref() {
                     *consumed.entry(*id).or_default() += 1;
                 }
@@ -100,7 +101,7 @@ pub(super) fn admission(module: &Module) -> HashSet<FuncId> {
             if let Stmt::Let {
                 id,
                 mutable: false,
-                init: Some(Expr::Call { callee, .. }),
+                init: Some(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }),
                 ..
             } = s
             {
@@ -133,7 +134,7 @@ pub(super) fn admission(module: &Module) -> HashSet<FuncId> {
     // Discarding the promise does not publish it. Rejections and all queue
     // ordering remain handled by the existing async machinery.
     for s in &module.init {
-        if let Stmt::Expr(Expr::Call { callee, .. }) = s {
+        if let Stmt::Expr(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) = s {
             if let Expr::FuncRef(id) = callee.as_ref() {
                 *consumed.entry(*id).or_default() += 1;
             }
@@ -190,8 +191,8 @@ fn closed_body(
             | Expr::Yield {
                 delegate: false, ..
             }
-            | Expr::Await(_) => true,
-            Expr::Call { callee, .. } => {
+            | Expr::Await(_, _) => true,
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
                 if promise_intrinsic(callee) {
                     true
                 } else if let Expr::FuncRef(id) = callee.as_ref() {
@@ -232,7 +233,7 @@ fn closed_body(
 }
 
 pub(super) fn lower(f: &mut Function, controls: (Vec<LocalId>, Vec<LocalId>)) {
-    let Some(Stmt::Return(Some(Expr::AsyncFirstCall { step_closure }))) = f.body.last() else {
+    let Some(Stmt::Return(Some(Expr::AsyncFirstCall { step_closure }), _)) = f.body.last() else {
         return;
     };
     let Expr::LocalGet(step) = step_closure.as_ref() else {
@@ -262,12 +263,14 @@ pub(super) fn lower(f: &mut Function, controls: (Vec<LocalId>, Vec<LocalId>)) {
         captures_this: false,
         captures_new_target: false,
         construct_only: false,
+        byte_offset,
         enclosing_class: None,
         ..
     } = closure
     else {
         return;
     };
+    let frame_offset = *byte_offset;
     if captures.iter().any(|id| !declared.contains(id)) {
         return;
     }
@@ -288,6 +291,7 @@ pub(super) fn lower(f: &mut Function, controls: (Vec<LocalId>, Vec<LocalId>)) {
     }
     let owner = std::mem::replace(closure, Expr::Undefined);
     *closure = Expr::NativeMethodCall {
+        byte_offset: frame_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -319,6 +323,7 @@ mod tests {
         let mut m = Module::new("async_owner");
         m.class_family_syntax = Some(Default::default());
         m.functions.push(Function {
+            byte_offset: 0,
             id: 0,
             name: "suspended".into(),
             type_params: vec![],
@@ -326,10 +331,11 @@ mod tests {
             return_type: Type::Any,
             body: vec![
                 Stmt::Expr(Expr::Yield {
+                    byte_offset: 0,
                     value: Some(Box::new(Expr::Number(7.0))),
                     delegate: false,
                 }),
-                Stmt::Return(Some(Expr::Number(8.0))),
+                Stmt::Return(Some(Expr::Number(8.0)), 0),
             ],
             is_async: false,
             is_generator: true,
@@ -440,6 +446,7 @@ mod tests {
             let mut m = fixture();
             if alias {
                 m.init.push(Stmt::Let {
+                    byte_offset: 0,
                     id: 90,
                     name: "alias".into(),
                     ty: Type::Any,
@@ -450,7 +457,7 @@ mod tests {
                 let Stmt::Expr(call) = m.init.pop().unwrap() else {
                     unreachable!()
                 };
-                m.init.push(Stmt::Return(Some(call)));
+                m.init.push(Stmt::Return(Some(call), 0));
             }
             super::super::transform_generators(&mut m);
             assert!(
@@ -467,6 +474,7 @@ mod tests {
                 0 => m.functions[0].captures.push(91),
                 1 => {
                     m.functions[0].params.push(perry_hir::Param {
+                        byte_offset: 0,
                         id: 91,
                         name: "callback".into(),
                         ty: Type::Any,
@@ -485,10 +493,11 @@ mod tests {
                 }
                 2 => m.functions[0].is_strict = false,
                 _ => m.functions[0].body.push(Stmt::Expr(Expr::Closure {
+                    byte_offset: 0,
                     func_id: 9,
                     params: vec![],
                     return_type: Type::Any,
-                    body: vec![Stmt::Return(Some(Expr::LocalGet(91)))],
+                    body: vec![Stmt::Return(Some(Expr::LocalGet(91)), 0)],
                     captures: vec![91],
                     mutable_captures: vec![],
                     captures_this: false,
@@ -545,17 +554,19 @@ mod tests {
             };
             m.init = vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 90,
                     name: "arbitrary_source_name".into(),
                     ty: Type::Any,
                     mutable: false,
                     init: Some(call),
                 },
-                Stmt::Expr(Expr::Await(Box::new(Expr::LocalGet(90)))),
+                Stmt::Expr(Expr::Await(Box::new(Expr::LocalGet(90)), 0)),
             ];
             match mode {
-                1 => m.init.push(Stmt::Return(Some(Expr::LocalGet(90)))),
+                1 => m.init.push(Stmt::Return(Some(Expr::LocalGet(90)), 0)),
                 2 => m.init.push(Stmt::Let {
+                    byte_offset: 0,
                     id: 91,
                     name: "alias".into(),
                     ty: Type::Any,

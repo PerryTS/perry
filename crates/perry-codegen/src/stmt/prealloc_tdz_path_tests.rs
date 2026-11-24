@@ -5,6 +5,7 @@ fn emit(body: Vec<Stmt>) -> String {
     let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
     let mut module = Module::new("tdz_paths.ts");
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "test".into(),
         type_params: Vec::new(),
@@ -52,6 +53,7 @@ fn allocated_slots(ir: &str, seed: &str) -> Vec<String> {
 #[test]
 fn tdz_finally_allocates_on_normal_and_exception_paths() {
     let ir = emit(vec![Stmt::Try {
+        byte_offset: 0,
         body: vec![Stmt::Expr(Expr::Call {
             byte_end: 0,
             callee: Box::new(Expr::LocalGet(99)),
@@ -63,6 +65,7 @@ fn tdz_finally_allocates_on_normal_and_exception_paths() {
         finally: Some(vec![
             Stmt::PreallocateTdzBoxes(vec![10]),
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "value".into(),
                 ty: Type::Any,

@@ -24,7 +24,8 @@ pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<Strin
     if ctx.wpfacts_off || ctx.wpfacts.const_arrays.is_empty() || typed_feedback_emission_enabled() {
         return Ok(None);
     }
-    let Expr::IndexGet { object, index, .. } = expr else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr
+    else {
         return Ok(None);
     };
     let Expr::LocalGet(id) = object.as_ref() else {

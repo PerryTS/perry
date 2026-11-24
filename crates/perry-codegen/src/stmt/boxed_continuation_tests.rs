@@ -5,6 +5,7 @@ use perry_hir::{Expr, Function, Module, Param, Stmt};
 fn branch(initialized: bool) -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 101,
             name: "callback".into(),
             ty: Type::Any,
@@ -12,11 +13,13 @@ fn branch(initialized: bool) -> Vec<Stmt> {
             init: initialized.then_some(Expr::Integer(40)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 102,
             name: "writer".into(),
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Closure {
+                byte_offset: 0,
                 func_id: 2,
                 params: Vec::new(),
                 return_type: Type::Any,
@@ -33,7 +36,7 @@ fn branch(initialized: bool) -> Vec<Stmt> {
                 is_strict: true,
             }),
         },
-        Stmt::Return(Some(Expr::LocalGet(101))),
+        Stmt::Return(Some(Expr::LocalGet(101)), 0),
     ]
 }
 
@@ -41,10 +44,12 @@ fn assert_each_continuation_allocates(initialized: bool) {
     let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
     let mut module = Module::new("boxed_continuation.ts");
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "resume".into(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: 100,
             name: "state".into(),
             ty: Type::Any,

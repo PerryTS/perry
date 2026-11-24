@@ -28,11 +28,13 @@ const ARG_PARAM: u32 = 101;
 fn method_module(name: &str, property: &str, args: Vec<Expr>) -> Module {
     let mut module = bare_module(name);
     let receiver = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::String("receiver-".to_string())),
         right: Box::new(Expr::LocalGet(RECV_PARAM)),
     };
     let param = |id: u32, name: &str, ty: Type| Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -42,6 +44,7 @@ fn method_module(name: &str, property: &str, args: Vec<Expr>) -> Module {
         arguments_object: None,
     };
     module.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -50,18 +53,21 @@ fn method_module(name: &str, property: &str, args: Vec<Expr>) -> Module {
             param(ARG_PARAM, "v", Type::Any),
         ],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        body: vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
-                object: Box::new(receiver),
-                property: property.to_string(),
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(receiver),
+                    property: property.to_string(),
+                    byte_offset: 0,
+                }),
+                args,
+                type_args: Vec::new(),
                 byte_offset: 0,
             }),
-            args,
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }))],
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -351,7 +357,7 @@ fn proven_string_argument_representations_are_call_free() {
             ),
         ] {
             let name = format!("smc_repr_{property}.ts");
-            let is_result = matches!(init, Expr::Call { .. });
+            let is_result = matches!(init, Expr::Call { .. } | Expr::RegionCall { .. });
             let mut module = method_module(
                 &name,
                 property,
@@ -364,6 +370,7 @@ fn proven_string_argument_representations_are_call_free() {
             module.functions[0].body.insert(
                 0,
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 102,
                     name: "known".to_string(),
                     ty: Type::Any,

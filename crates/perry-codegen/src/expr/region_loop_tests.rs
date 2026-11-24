@@ -35,6 +35,7 @@ fn opts() -> CompileOptions {
 
 fn param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -75,6 +76,7 @@ fn loop_ir_with_return(name: &str, body: Vec<Stmt>, result: Expr) -> String {
 fn loop_ir_with_bound(name: &str, body: Vec<Stmt>, result: Expr, bound: Expr) -> String {
     let mut m = Module::new(name);
     m.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -82,6 +84,7 @@ fn loop_ir_with_bound(name: &str, body: Vec<Stmt>, result: Expr, bound: Expr) ->
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: H,
                 name: "h".to_string(),
                 ty: Type::Any,
@@ -90,6 +93,7 @@ fn loop_ir_with_bound(name: &str, body: Vec<Stmt>, result: Expr, bound: Expr) ->
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: I,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -97,6 +101,7 @@ fn loop_ir_with_bound(name: &str, body: Vec<Stmt>, result: Expr, bound: Expr) ->
                     init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(I)),
                     right: Box::new(bound),
@@ -108,7 +113,7 @@ fn loop_ir_with_bound(name: &str, body: Vec<Stmt>, result: Expr, bound: Expr) ->
                 }),
                 body,
             },
-            Stmt::Return(Some(result)),
+            Stmt::Return(Some(result), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -306,6 +311,7 @@ fn a_storing_region_guards_exact_shape_and_classless_receiver() {
             Stmt::Expr(Expr::LocalSet(
                 H,
                 Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(H)),
                     right: Box::new(get("x")),
@@ -343,6 +349,7 @@ fn a_read_only_region_guard_does_not_test_store_facts() {
         vec![Stmt::Expr(Expr::LocalSet(
             H,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(get("x")),
                 right: Box::new(get("y")),
@@ -371,6 +378,7 @@ fn a_read_region_carries_a_spill_copy_whose_reads_go_through_the_spill_buffer() 
         vec![Stmt::Expr(Expr::LocalSet(
             H,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(H)),
                 right: Box::new(get("x")),
@@ -460,6 +468,7 @@ fn a_bare_store_of_a_value_not_proven_a_double_names_its_key_to_the_prime() {
             Stmt::Expr(Expr::LocalSet(
                 H,
                 Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(H)),
                     right: Box::new(get("x")),
@@ -498,6 +507,7 @@ fn prime_rep_masks(ir: &str) -> Vec<u32> {
 #[test]
 fn a_region_r_proven_increment_store_clears_only_its_number_boxed_bit() {
     let increment = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(get("x")),
         right: Box::new(Expr::Integer(1)),
@@ -525,6 +535,7 @@ fn a_region_r_proven_increment_store_clears_only_its_number_boxed_bit() {
             Stmt::Expr(Expr::LocalSet(
                 H,
                 Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(get("x")),
                     right: Box::new(Expr::Integer(1)),
@@ -550,6 +561,7 @@ fn a_number_consuming_bare_read_sets_the_prime_rep_mask() {
         vec![Stmt::Expr(Expr::LocalSet(
             H,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(H)),
                 right: Box::new(get("x")),
@@ -575,6 +587,7 @@ fn a_number_read_guard_value_tests_a_word_that_asks() {
         vec![Stmt::Expr(Expr::LocalSet(
             H,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(H)),
                 right: Box::new(get("x")),
@@ -622,6 +635,7 @@ fn a_receiver_read_beneath_a_property_access_requests_no_number_lane() {
         vec![Stmt::Expr(Expr::LocalSet(
             H,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(H)),
                 right: Box::new(Expr::PropertyGet {
@@ -650,6 +664,7 @@ fn a_receiver_read_beneath_a_property_access_requests_no_number_lane() {
 #[test]
 fn a_truthiness_test_requests_no_number_lane() {
     let ternary = |test: Expr| Expr::Conditional {
+        byte_offset: 0,
         condition: Box::new(test),
         then_expr: Box::new(Expr::Integer(1)),
         else_expr: Box::new(Expr::Integer(0)),
@@ -669,6 +684,7 @@ fn a_truthiness_test_requests_no_number_lane() {
             vec![Stmt::Expr(Expr::LocalSet(
                 H,
                 Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(H)),
                     right: Box::new(ternary(test)),
@@ -691,9 +707,11 @@ fn a_truthiness_test_requests_no_number_lane() {
         vec![Stmt::Expr(Expr::LocalSet(
             H,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(H)),
                 right: Box::new(Expr::Conditional {
+                    byte_offset: 0,
                     condition: Box::new(Expr::LocalGet(N)),
                     then_expr: Box::new(get("x")),
                     else_expr: Box::new(Expr::Integer(0)),
@@ -717,6 +735,7 @@ fn a_region_number_local_is_admitted_only_in_f() {
     const TEMP: u32 = 6;
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: TEMP,
             name: "temp".to_string(),
             ty: Type::Any,
@@ -726,6 +745,7 @@ fn a_region_number_local_is_admitted_only_in_f() {
         Stmt::Expr(Expr::LocalSet(
             H,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(H)),
                 right: Box::new(Expr::LocalGet(TEMP)),
@@ -736,6 +756,7 @@ fn a_region_number_local_is_admitted_only_in_f() {
         "region_number_scope",
         body,
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(H)),
             right: Box::new(Expr::Integer(1)),
@@ -772,6 +793,7 @@ fn flow_derived_number_local_constant_bound_avoids_recheck() {
     const TEMP: u32 = 6;
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: TEMP,
             name: "temp".to_string(),
             ty: Type::Any,
@@ -781,6 +803,7 @@ fn flow_derived_number_local_constant_bound_avoids_recheck() {
         Stmt::Expr(Expr::LocalSet(
             H,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(H)),
                 right: Box::new(Expr::LocalGet(TEMP)),
@@ -791,6 +814,7 @@ fn flow_derived_number_local_constant_bound_avoids_recheck() {
         "region_number_scope_constant_bound",
         body,
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(H)),
             right: Box::new(Expr::Integer(1)),
@@ -849,6 +873,7 @@ fn invariant_boxed_bound_has_strict_entry_and_generic_fallback() {
     const TEMP: u32 = 6;
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: TEMP,
             name: "temp".to_string(),
             ty: Type::Any,
@@ -858,6 +883,7 @@ fn invariant_boxed_bound_has_strict_entry_and_generic_fallback() {
         Stmt::Expr(Expr::LocalSet(
             H,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(H)),
                 right: Box::new(Expr::LocalGet(TEMP)),
@@ -868,6 +894,7 @@ fn invariant_boxed_bound_has_strict_entry_and_generic_fallback() {
         "region_number_scope_any_bound",
         body,
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(H)),
             right: Box::new(Expr::Integer(1)),
@@ -958,6 +985,7 @@ fn a_bound_that_is_also_the_receiver_keeps_its_generic_comparison() {
 
 fn times(e: Expr, factor: i64) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Mul,
         left: Box::new(e),
         right: Box::new(Expr::Integer(factor)),
@@ -968,6 +996,7 @@ fn accumulated(reads: &[&str], factor: i64) -> Stmt {
     let mut sum = Expr::LocalGet(H);
     for key in reads {
         sum = Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(sum),
             right: Box::new(times(get(key), factor)),
@@ -1034,9 +1063,11 @@ fn arithmetic_getter_operand_requires_generic_recheck() {
         Stmt::Expr(Expr::LocalSet(
             H,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(H)),
                 right: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Mul,
                     left: Box::new(get("a")),
                     right: Box::new(getter),

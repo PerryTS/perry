@@ -7,7 +7,7 @@ use super::*;
 
 pub fn stmt_contains_return(s: &Stmt) -> bool {
     match s {
-        Stmt::Return(_) => true,
+        Stmt::Return(_, _) => true,
         Stmt::If {
             then_branch,
             else_branch,
@@ -65,7 +65,7 @@ pub fn convert_returns_in_stmts(stmts: &mut Vec<Stmt>, let_id: LocalId) {
     let mut i = 0;
     while i < stmts.len() {
         match &mut stmts[i] {
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 let break_stmt = Stmt::Break;
                 if let Some(e) = opt.take() {
                     let assign = Stmt::Expr(Expr::LocalSet(let_id, Box::new(e)));
@@ -125,12 +125,15 @@ fn returns_only_anonymous_records(function: &Function) -> bool {
     fn inspect(stmts: &[Stmt], saw_return: &mut bool) -> bool {
         for stmt in stmts {
             match stmt {
-                Stmt::Return(Some(Expr::New {
-                    class_name,
-                    cap_args_appended: 0,
-                    ..
-                })) if class_name.starts_with("__AnonShape_") => *saw_return = true,
-                Stmt::Return(_) => return false,
+                Stmt::Return(
+                    Some(Expr::New {
+                        class_name,
+                        cap_args_appended: 0,
+                        ..
+                    }),
+                    _,
+                ) if class_name.starts_with("__AnonShape_") => *saw_return = true,
+                Stmt::Return(_, _) => return false,
                 Stmt::If {
                     then_branch,
                     else_branch,
@@ -188,7 +191,7 @@ fn returns_only_anonymous_records(function: &Function) -> bool {
             class_name,
             cap_args_appended: 0,
             ..
-        }))) if class_name.starts_with("__AnonShape_")
+        }), _)) if class_name.starts_with("__AnonShape_")
     ) {
         return false;
     }
@@ -246,7 +249,7 @@ fn loop_has_prototype_surgery(stmts: &[Stmt]) -> bool {
                 init: Some(expr), ..
             }
             | Stmt::Expr(expr)
-            | Stmt::Return(Some(expr))
+            | Stmt::Return(Some(expr), _)
             | Stmt::Throw(expr) => expr_has_prototype_surgery(expr),
             Stmt::If {
                 condition,
@@ -291,6 +294,7 @@ fn loop_has_prototype_surgery(stmts: &[Stmt]) -> bool {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 expr_has_prototype_surgery(discriminant)
                     || cases.iter().any(|case| {
@@ -300,7 +304,7 @@ fn loop_has_prototype_surgery(stmts: &[Stmt]) -> bool {
             }
             Stmt::Labeled { body, .. } => stmt_has_prototype_surgery(body),
             Stmt::Let { init: None, .. }
-            | Stmt::Return(None)
+            | Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -476,24 +480,28 @@ pub fn inline_calls_in_stmts(
                 };
                 let mut handled = false;
                 let direct_call = match &init_expr {
-                    Expr::Call { .. } => Some(init_expr.clone()),
+                    Expr::Call { .. } | Expr::RegionCall { .. } => Some(init_expr.clone()),
                     Expr::NativeMethodCall {
                         module,
                         class_name: None,
                         object: None,
                         method,
                         args,
+                        ..
                     } if module == "__perry_runtime"
                         && method == "requireObjectCoercible"
                         && matches!(
                             args.as_slice(),
-                            [Expr::Call { .. }, Expr::Number(_) | Expr::Integer(_)]
+                            [
+                                Expr::Call { .. } | Expr::RegionCall { .. },
+                                Expr::Number(_) | Expr::Integer(_)
+                            ]
                         ) =>
                     {
                         let call = &args[0];
                         let eligible = matches!(
                             call,
-                            Expr::Call { callee, .. }
+                            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
                                 if matches!(callee.as_ref(), Expr::FuncRef(id)
                                     if func_candidates.get(id).is_some_and(returns_only_anonymous_records))
                         );
@@ -519,14 +527,15 @@ pub fn inline_calls_in_stmts(
                             .take(inlined_stmts.len().saturating_sub(1))
                             .any(stmt_contains_return);
                         let trailing_is_return =
-                            matches!(inlined_stmts.last(), Some(Stmt::Return(Some(_))));
+                            matches!(inlined_stmts.last(), Some(Stmt::Return(Some(_), _)));
                         if !has_nested_return && trailing_is_return {
                             // Collapse: convert the trailing Return into the
                             // original Let-binding.
                             if let Some(last) = inlined_stmts.last_mut() {
-                                if let Stmt::Return(Some(ret_expr)) = last {
+                                if let Stmt::Return(Some(ret_expr), _) = last {
                                     let e = std::mem::replace(ret_expr, Expr::Undefined);
                                     *last = Stmt::Let {
+                                        byte_offset: 0, /*HPOS*/
                                         id: let_id,
                                         name: let_name.clone(),
                                         ty: let_ty.clone(),
@@ -546,6 +555,7 @@ pub fn inline_calls_in_stmts(
                             convert_returns_in_stmts(&mut inlined_stmts, let_id);
                             let mut wrapped: Vec<Stmt> = Vec::with_capacity(2);
                             wrapped.push(Stmt::Let {
+                                byte_offset: 0, /*HPOS*/
                                 id: let_id,
                                 name: let_name.clone(),
                                 ty: let_ty.clone(),
@@ -594,7 +604,7 @@ pub fn inline_calls_in_stmts(
                     }
                 }
             }
-            Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 let hoisted = inline_calls_in_expr(
                     expr,
                     func_candidates,
@@ -1042,6 +1052,7 @@ pub fn inline_calls_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             hoisted.extend(inline_calls_in_expr(
                 condition,
@@ -1103,7 +1114,7 @@ pub fn inline_calls_in_expr(
             *exact_receiver_facts = intersect_exact_receiver_facts(&then_facts, &else_facts);
             return hoisted;
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             let mut earlier = EarlierOperands::before_arguments_of(callee);
             hoisted.extend(inline_calls_in_expr(
                 callee,
@@ -1206,7 +1217,7 @@ pub fn inline_calls_in_expr(
             }
             exact_receiver_facts.clear();
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             let mut earlier = EarlierOperands::default();
             hoisted.extend(ordered!(object, &mut earlier));
             hoisted.extend(ordered!(index, &mut earlier));
@@ -1605,6 +1616,7 @@ pub fn build_inline_arg_bindings(
                 let fresh = *next_local_id;
                 *next_local_id += 1;
                 setup.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: fresh,
                     name: param.name.clone(),
                     ty: param.ty.clone(),
@@ -1617,6 +1629,7 @@ pub fn build_inline_arg_bindings(
             let fresh = *next_local_id;
             *next_local_id += 1;
             setup.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: fresh,
                 name: param.name.clone(),
                 ty: param.ty.clone(),
@@ -1669,7 +1682,7 @@ pub fn try_inline_simple_call(
     class_field_types: &HashMap<(String, String), String>,
     preserve_loop_closures: bool,
 ) -> Option<(Vec<Stmt>, Expr)> {
-    if let Expr::Call { callee, args, .. } = expr {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = expr {
         // Check for regular function call
         if let Expr::FuncRef(func_id) = callee.as_ref() {
             if let Some(func) = func_candidates.get(func_id) {
@@ -1684,7 +1697,7 @@ pub fn try_inline_simple_call(
                 }
                 // Pattern 1: single Return(expr)
                 if func.body.len() == 1 {
-                    if let Stmt::Return(Some(return_expr)) = &func.body[0] {
+                    if let Stmt::Return(Some(return_expr), _) = &func.body[0] {
                         // Issue #858: params that are captured by some
                         // closure inside the body MUST be materialized as a
                         // fresh `Let` rather than substituted in place with
@@ -1722,7 +1735,7 @@ pub fn try_inline_simple_call(
                 // and the last must be Return(Some(expr)).
                 if func.body.len() > 1 {
                     let last = func.body.last().unwrap();
-                    if let Stmt::Return(Some(return_expr)) = last {
+                    if let Stmt::Return(Some(return_expr), _) = last {
                         let all_lets = func.body[..func.body.len() - 1].iter().all(|s| {
                             matches!(
                                 s,
@@ -1776,6 +1789,7 @@ pub fn try_inline_simple_call(
                                     ty,
                                     mutable,
                                     init: Some(init_expr),
+                                    ..
                                 } = stmt
                                 {
                                     let new_id =
@@ -1787,6 +1801,7 @@ pub fn try_inline_simple_call(
                                     let mut new_init = init_expr.clone();
                                     substitute_locals(&mut new_init, &param_map, next_local_id);
                                     setup.push(Stmt::Let {
+                                        byte_offset: 0, /*HPOS*/
                                         id: new_id,
                                         name: name.clone(),
                                         ty: ty.clone(),
@@ -1850,7 +1865,7 @@ pub fn try_inline_simple_call(
 
                     // Check for single return statement
                     if method_candidate.func.body.len() == 1 {
-                        if let Stmt::Return(Some(return_expr)) = &method_candidate.func.body[0] {
+                        if let Stmt::Return(Some(return_expr), _) = &method_candidate.func.body[0] {
                             // Issue #858: see fn-call branch above. Same
                             // closure-captured-param materialization rule
                             // applies to method-call inlining.
@@ -1941,7 +1956,7 @@ pub fn try_inline_simple_call(
                             match stmt {
                                 // Anything after `return;` is dead: splicing
                                 // it would run it (#10416's sibling shape).
-                                Stmt::Return(None) => break,
+                                Stmt::Return(None, _) => break,
                                 Stmt::Expr(e) => {
                                     let mut expr = e.clone();
                                     substitute_locals(&mut expr, &shared_param_map, next_local_id);
@@ -2038,7 +2053,7 @@ fn fold_scalar_aggregate_param_length(stmts: &mut [Stmt], param_id: LocalId, len
                 }
             }
             Stmt::Expr(expr) | Stmt::Throw(expr) => fold_expr(expr, param_id, len),
-            Stmt::Return(value) => {
+            Stmt::Return(value, _) => {
                 if let Some(value) = value {
                     fold_expr(value, param_id, len);
                 }
@@ -2096,6 +2111,7 @@ fn fold_scalar_aggregate_param_length(stmts: &mut [Stmt], param_id: LocalId, len
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 fold_expr(discriminant, param_id, len);
                 for case in cases {
@@ -2134,7 +2150,7 @@ pub fn try_inline_call(
     class_field_types: &HashMap<(String, String), String>,
     preserve_loop_closures: bool,
 ) -> Option<(Vec<Stmt>, Option<Expr>)> {
-    if let Expr::Call { callee, args, .. } = expr {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = expr {
         // Handle regular function calls
         if let Expr::FuncRef(func_id) = callee.as_ref() {
             if let Some(func) = func_candidates.get(func_id) {
@@ -2317,10 +2333,11 @@ mod tests {
         let mut expr = Expr::Integer(1);
         for func_id in 0..depth as u32 {
             expr = Expr::Closure {
+                byte_offset: 0,
                 func_id,
                 params: Vec::new(),
                 return_type: Type::Any,
-                body: vec![Stmt::Return(Some(expr))],
+                body: vec![Stmt::Return(Some(expr), 0)],
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,
@@ -2394,6 +2411,7 @@ mod tests {
     /// inlining `keep(x)` yields the setup `let e = x`.
     fn keep_candidate() -> HashMap<FuncId, Function> {
         let param = perry_hir::Param {
+            byte_offset: 0,
             id: 100,
             name: "e".to_string(),
             ty: Type::Any,
@@ -2403,12 +2421,13 @@ mod tests {
             arguments_object: None,
         };
         let keep = Function {
+            byte_offset: 0,
             id: 7,
             name: "keep".to_string(),
             type_params: Vec::new(),
             params: vec![param],
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::LocalGet(100)))],
+            body: vec![Stmt::Return(Some(Expr::LocalGet(100)), 0)],
             is_async: false,
             is_generator: false,
             is_exported: false,
@@ -2482,6 +2501,7 @@ mod tests {
                 call(Expr::FuncRef(7), vec![Expr::LocalGet(1)]),
             ]),
             Expr::Binary {
+                byte_offset: 0,
                 op: perry_hir::BinaryOp::Add,
                 left: Box::new(Expr::LocalSet(1, Box::new(Expr::Integer(1)))),
                 right: Box::new(call(Expr::FuncRef(7), vec![Expr::LocalGet(1)])),
@@ -2526,7 +2546,7 @@ mod tests {
             ),
             "keep(x) should still inline: {setup:?}"
         );
-        let Expr::Call { args, .. } = &expr else {
+        let (Expr::Call { args, .. } | Expr::RegionCall { args, .. }) = &expr else {
             panic!("the outer call stays a call")
         };
         assert!(matches!(args[2], Expr::LocalGet(_)), "{:?}", args[2]);

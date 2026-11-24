@@ -54,6 +54,7 @@ fn versioned_loop_value_expr(
             op: perry_hir::BinaryOp::Add,
             left,
             right,
+            ..
         } => {
             versioned_loop_value_expr(left, param_ids, capture_ids)
                 && versioned_loop_value_expr(right, param_ids, capture_ids)
@@ -177,7 +178,7 @@ fn collect_direct_call_closures_in_stmts(
             perry_hir::Stmt::Expr(expr) | perry_hir::Stmt::Throw(expr) => {
                 collect_direct_call_closures_in_expr(expr, out)
             }
-            perry_hir::Stmt::Return(expr) => {
+            perry_hir::Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     collect_direct_call_closures_in_expr(expr, out);
                 }
@@ -235,6 +236,7 @@ fn collect_direct_call_closures_in_stmts(
             perry_hir::Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 collect_direct_call_closures_in_expr(discriminant, out);
                 for case in cases {
@@ -262,7 +264,7 @@ fn collect_direct_call_closures_in_expr(
     expr: &perry_hir::Expr,
     out: &mut std::collections::HashSet<u32>,
 ) {
-    if let perry_hir::Expr::Call { args, .. } = expr {
+    if let perry_hir::Expr::Call { args, .. } | perry_hir::Expr::RegionCall { args, .. } = expr {
         for arg in args {
             if let perry_hir::Expr::Closure { func_id, .. } = arg {
                 out.insert(*func_id);
@@ -294,7 +296,9 @@ fn count_stmt_nodes(stmt: &perry_hir::Stmt) -> usize {
         perry_hir::Stmt::Expr(expr) | perry_hir::Stmt::Throw(expr) => {
             count += count_expr_nodes(expr)
         }
-        perry_hir::Stmt::Return(expr) => count += expr.as_ref().map(count_expr_nodes).unwrap_or(0),
+        perry_hir::Stmt::Return(expr, _) => {
+            count += expr.as_ref().map(count_expr_nodes).unwrap_or(0)
+        }
         perry_hir::Stmt::If {
             condition,
             then_branch,
@@ -348,6 +352,7 @@ fn count_stmt_nodes(stmt: &perry_hir::Stmt) -> usize {
         perry_hir::Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             count += count_expr_nodes(discriminant);
             for case in cases {
@@ -431,7 +436,7 @@ fn scan_capture_use_stmt(
         perry_hir::Stmt::Expr(expr) | perry_hir::Stmt::Throw(expr) => {
             scan_capture_use_expr(expr, in_loop, uses);
         }
-        perry_hir::Stmt::Return(expr) => {
+        perry_hir::Stmt::Return(expr, _) => {
             if let Some(expr) = expr {
                 scan_capture_use_expr(expr, in_loop, uses);
             }
@@ -505,6 +510,7 @@ fn scan_capture_use_stmt(
         perry_hir::Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             scan_capture_use_expr(discriminant, in_loop, uses);
             for case in cases {

@@ -1119,6 +1119,7 @@ fn directly_accesses_byte_local(expr: &Expr, id: u32) -> bool {
     }
     let receiver = match expr {
         Expr::IndexGet { object, .. }
+        | Expr::RegionOut { object, .. }
         | Expr::IndexSet { object, .. }
         | Expr::IndexUpdate { object, .. } => Some(object.as_ref()),
         Expr::Uint8ArrayGet { array, .. } | Expr::Uint8ArraySet { array, .. } => {
@@ -1284,7 +1285,7 @@ fn collect_owned_buffer_lets(
             }
             Stmt::Let { init: None, .. }
             | Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -1472,7 +1473,7 @@ impl ArrayFactCollector {
                     self.aliases.remove(id);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 self.collect_expr(expr);
             }
             Stmt::If {
@@ -1524,6 +1525,7 @@ impl ArrayFactCollector {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.collect_expr(discriminant);
                 for case in cases {
@@ -1534,7 +1536,7 @@ impl ArrayFactCollector {
                 }
             }
             Stmt::Labeled { body, .. } => self.collect_stmt(body.as_ref()),
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -1783,7 +1785,7 @@ impl ArrayFactCollector {
                     self.collect_expr(child);
                 });
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 self.mark_unknown_call_escape();
                 self.collect_expr(callee);
                 for arg in args {
@@ -1826,7 +1828,7 @@ impl ArrayFactCollector {
                     self.collect_expr(inner);
                 }
             }
-            Expr::Await(operand)
+            Expr::Await(operand, _)
             | Expr::Yield {
                 value: Some(operand),
                 ..
@@ -2198,16 +2200,17 @@ fn expr_is_literal_u32(expr: &Expr) -> bool {
 fn expr_is_i32_shaped(expr: &Expr) -> bool {
     match expr {
         Expr::Integer(n) => i32::try_from(*n).is_ok(),
-        Expr::Binary { op, left, right }
-            if matches!(
-                op,
-                perry_hir::BinaryOp::BitAnd
-                    | perry_hir::BinaryOp::BitOr
-                    | perry_hir::BinaryOp::BitXor
-                    | perry_hir::BinaryOp::Shl
-                    | perry_hir::BinaryOp::Shr
-                    | perry_hir::BinaryOp::UShr
-            ) =>
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(
+            op,
+            perry_hir::BinaryOp::BitAnd
+                | perry_hir::BinaryOp::BitOr
+                | perry_hir::BinaryOp::BitXor
+                | perry_hir::BinaryOp::Shl
+                | perry_hir::BinaryOp::Shr
+                | perry_hir::BinaryOp::UShr
+        ) =>
         {
             expr_is_numeric_shaped(left) && expr_is_numeric_shaped(right)
         }
@@ -2220,7 +2223,11 @@ fn expr_is_i32_shaped(expr: &Expr) -> bool {
 
 fn expr_is_numeric_shaped(expr: &Expr) -> bool {
     match expr {
-        Expr::Integer(_) | Expr::Number(_) | Expr::LocalGet(_) | Expr::IndexGet { .. } => true,
+        Expr::Integer(_)
+        | Expr::Number(_)
+        | Expr::LocalGet(_)
+        | Expr::IndexGet { .. }
+        | Expr::RegionOut { .. } => true,
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }
         | Expr::Logical { left, right, .. } => {
@@ -2233,6 +2240,7 @@ fn expr_is_numeric_shaped(expr: &Expr) -> bool {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             expr_is_numeric_shaped(condition)
                 && expr_is_numeric_shaped(then_expr)
@@ -2288,6 +2296,7 @@ mod tests {
 
     fn const_let(id: u32, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{}", id),
             ty: Type::Named("Uint8Array".into()),
@@ -2298,6 +2307,7 @@ mod tests {
 
     fn const_number_let(id: u32, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{}", id),
             ty: Type::Number,
@@ -2316,6 +2326,7 @@ mod tests {
 
     fn mutable_number_let(id: u32, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{}", id),
             ty: Type::Number,
@@ -2326,6 +2337,7 @@ mod tests {
 
     fn number_array_let(id: u32, values: &[i64]) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("a{}", id),
             ty: Type::Array(Box::new(Type::Number)),
@@ -2339,6 +2351,7 @@ mod tests {
 
     fn int32_array_let(id: u32, values: &[i64]) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("a{}", id),
             ty: Type::Array(Box::new(Type::Int32)),
@@ -2352,6 +2365,7 @@ mod tests {
 
     fn u32_array_let(id: u32, values: &[i64]) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("a{}", id),
             ty: Type::Array(Box::new(Type::Named("PerryU32".to_string()))),
@@ -2365,6 +2379,7 @@ mod tests {
 
     fn alias_let(id: u32, source_id: u32) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("alias{}", id),
             ty: Type::Any,
@@ -2385,6 +2400,7 @@ mod tests {
 
     fn ushr0(left: Expr) -> Expr {
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::UShr,
             left: Box::new(left),
             right: Box::new(Expr::Integer(0)),
@@ -2453,6 +2469,7 @@ mod tests {
                 const_let(
                     2,
                     int32_new(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Sub,
                         left: Box::new(Expr::LocalGet(50)),
                         right: Box::new(Expr::Integer(1)),
@@ -2480,6 +2497,7 @@ mod tests {
             const_let(
                 1,
                 int32_new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Mul,
                     left: Box::new(rows_length()),
                     right: Box::new(Expr::Integer(7)),
@@ -2495,6 +2513,7 @@ mod tests {
             const_let(
                 3,
                 int32_new(Expr::Compare {
+                    byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(99)),
                     right: Box::new(rows_length()),
@@ -2525,6 +2544,7 @@ mod tests {
 
     fn facts_with_spec_numeric_param(stmts: &[Stmt]) -> TypeFacts {
         let params = vec![perry_hir::Param {
+            byte_offset: 0,
             id: 1,
             name: "n".into(),
             ty: Type::Number,
@@ -2565,6 +2585,7 @@ mod tests {
             let mut stmts = Vec::new();
             if rebind {
                 stmts.push(Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "n".into(),
                     ty: Type::Number,
@@ -2618,6 +2639,7 @@ mod tests {
                 Stmt::Expr(Expr::LocalSet(
                     2,
                     Box::new(ushr0(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::BitXor,
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::Integer(0x1234)),
@@ -2641,6 +2663,7 @@ mod tests {
                 Stmt::Expr(Expr::LocalSet(
                     2,
                     Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::BitOr,
                         left: Box::new(Expr::LocalGet(2)),
                         right: Box::new(Expr::Integer(0)),
@@ -2664,6 +2687,7 @@ mod tests {
             Stmt::For {
                 init: Some(Box::new(mutable_number_let(2, Expr::Integer(0)))),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::Integer(1000)),
@@ -2676,9 +2700,11 @@ mod tests {
                 body: vec![Stmt::Expr(Expr::LocalSet(
                     1,
                     Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(1)),
                         right: Box::new(Expr::Binary {
+                            byte_offset: 0,
                             op: BinaryOp::Mod,
                             left: Box::new(Expr::LocalGet(2)),
                             right: Box::new(Expr::Integer(10)),
@@ -2737,6 +2763,7 @@ mod tests {
                 int32_array_let(1, &[1, 2, 3]),
                 number_array_let(2, &[1, 2, 3]),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 3,
                     name: "fractional".to_string(),
                     ty: Type::Array(Box::new(Type::Int32)),
@@ -2763,6 +2790,7 @@ mod tests {
                 u32_array_let(1, &[0, 4_000_000_000]),
                 int32_array_let(2, &[0, 1]),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 3,
                     name: "negative".to_string(),
                     ty: Type::Array(Box::new(Type::Named("PerryU32".to_string()))),
@@ -2786,11 +2814,13 @@ mod tests {
     fn native_fact_graph_collects_range_and_shape_escape_facts() {
         let stmts = vec![
             mutable_number_let(1, Expr::Integer(0)),
-            Stmt::Expr(Expr::synthetic_index_get(
+            Stmt::Expr(Expr::index_get_at(
                 Box::new(Expr::LocalGet(2)),
                 Box::new(Expr::LocalGet(1)),
+                0,
             )),
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "o".to_string(),
                 ty: Type::Any,
@@ -2888,10 +2918,11 @@ mod tests {
             &[
                 number_array_let(1, &[1, 2, 3]),
                 alias_let(2, 1),
-                Stmt::Expr(Expr::synthetic_index_set(
+                Stmt::Expr(Expr::index_set_at(
                     Box::new(Expr::LocalGet(2)),
                     Box::new(Expr::Integer(0)),
                     Box::new(Expr::Integer(9)),
+                    0,
                 )),
             ],
             &HashSet::new(),
@@ -2910,10 +2941,11 @@ mod tests {
         let graph = collect_hir_facts(
             &[
                 number_array_let(1, &[1, 2, 3]),
-                Stmt::Expr(Expr::synthetic_index_set(
+                Stmt::Expr(Expr::index_set_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(Expr::Integer(0)),
                     Box::new(Expr::Integer(9)),
+                    0,
                 )),
             ],
             &HashSet::new(),
@@ -2932,6 +2964,7 @@ mod tests {
             &[
                 number_array_let(1, &[1, 2, 3]),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "box".to_string(),
                     ty: Type::Array(Box::new(Type::Array(Box::new(Type::Number)))),
@@ -2967,7 +3000,7 @@ mod tests {
         let graph = collect_hir_facts(
             &[
                 number_array_let(1, &[1, 2, 3]),
-                Stmt::Expr(Expr::Await(Box::new(Expr::Undefined))),
+                Stmt::Expr(Expr::Await(Box::new(Expr::Undefined), 0)),
             ],
             &HashSet::new(),
             &HashSet::new(),
@@ -3040,6 +3073,7 @@ mod tests {
     #[test]
     fn const_copy_of_live_integer_accumulator_stays_integer() {
         let bitor0 = |left: Expr| Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::BitOr,
             left: Box::new(left),
             right: Box::new(Expr::Integer(0)),
@@ -3281,6 +3315,7 @@ mod tests {
     #[test]
     fn bigint_capable_bitwise_init_is_not_an_integer_local() {
         let any_param = |id: u32| perry_hir::Param {
+            byte_offset: 0,
             id,
             name: format!("p{id}"),
             ty: Type::Any,
@@ -3290,6 +3325,7 @@ mod tests {
             arguments_object: None,
         };
         let any_const = |id: u32, init: Expr| Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{id}"),
             ty: Type::Any,
@@ -3297,6 +3333,7 @@ mod tests {
             init: Some(init),
         };
         let bin = |op: BinaryOp, left: Expr, right: Expr| Expr::Binary {
+            byte_offset: 0,
             op,
             left: Box::new(left),
             right: Box::new(right),

@@ -130,6 +130,17 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             super::objects_arrays_lit::lower(ctx, expr)
         }
         Expr::IndexGet { .. } => super::index_get::lower(ctx, expr),
+        // A split region's output read lowers as the element read it is.
+        Expr::RegionOut { object, index } => super::index_get::lower(
+            ctx,
+            &Expr::IndexGet {
+                object: object.clone(),
+                index: index.clone(),
+                byte_offset: 0,
+                byte_end: 0,
+                element_offset: 0,
+            },
+        ),
         Expr::IndexSet { .. } => {
             let strict = ctx.is_strict_fn;
             super::index_set::lower(ctx, expr, value_discarded, strict)
@@ -691,7 +702,9 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::SetSize(..)
         | Expr::FsWriteFileSync(..)
         | Expr::FsAppendFileSync(..) => super::bigint_set::lower(ctx, expr),
-        Expr::NativeMethodCall { .. } | Expr::Call { .. } => super::calls::lower(ctx, expr),
+        Expr::NativeMethodCall { .. } | Expr::Call { .. } | Expr::RegionCall { .. } => {
+            super::calls::lower(ctx, expr)
+        }
         Expr::ProxyNew { .. }
         | Expr::ProxyGet { .. }
         | Expr::ProxySet { .. }

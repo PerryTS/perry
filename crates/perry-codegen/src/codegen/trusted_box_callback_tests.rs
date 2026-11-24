@@ -14,6 +14,7 @@ const CALLBACK_FUNC: u32 = 99;
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -35,6 +36,7 @@ fn callback_type() -> Type {
 
 fn consume_function() -> Function {
     Function {
+        byte_offset: 0,
         id: 1,
         name: "consume".to_string(),
         type_params: Vec::new(),
@@ -55,6 +57,7 @@ fn consume_function() -> Function {
 
 fn outer_function(direct_literal: bool) -> Function {
     let mut body = vec![Stmt::Let {
+        byte_offset: 0,
         id: COUNT,
         name: "count".to_string(),
         ty: Type::Number,
@@ -65,6 +68,7 @@ fn outer_function(direct_literal: bool) -> Function {
         callback()
     } else {
         body.push(Stmt::Let {
+            byte_offset: 0,
             id: CALLBACK,
             name: "callback".to_string(),
             ty: callback_type(),
@@ -81,6 +85,7 @@ fn outer_function(direct_literal: bool) -> Function {
         byte_offset: 0,
     }));
     Function {
+        byte_offset: 0,
         id: 3,
         name: "outer".to_string(),
         type_params: Vec::new(),
@@ -113,6 +118,7 @@ fn callback_body() -> Vec<Stmt> {
 
 fn callback_with(func_id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Expr {
     Expr::Closure {
+        byte_offset: 0,
         func_id,
         params,
         return_type: Type::Void,
@@ -150,9 +156,11 @@ fn versioned_callback(func_id: u32) -> Expr {
         vec![Stmt::Expr(Expr::LocalSet(
             COUNT,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(COUNT)),
                 right: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(property(POS, "x")),
                     right: Box::new(property(VEL, "vx")),
@@ -285,7 +293,7 @@ fn erased_captured_closure_ir(reassigned: bool, under_applied: bool) -> String {
     } else {
         Vec::new()
     };
-    let mut target = callback_with(98, params, vec![Stmt::Return(Some(Expr::Integer(7)))]);
+    let mut target = callback_with(98, params, vec![Stmt::Return(Some(Expr::Integer(7)), 0)]);
     if let Expr::Closure {
         return_type,
         captures,
@@ -321,6 +329,7 @@ fn erased_captured_closure_ir(reassigned: bool, under_applied: bool) -> String {
     outer.body = vec![
         Stmt::PreallocateBoxes(vec![CALLBACK]),
         Stmt::Let {
+            byte_offset: 0,
             id: CALLBACK,
             name: "target".into(),
             ty: Type::Any,
@@ -631,6 +640,7 @@ fn versioned_callback_selector_rejects_calls_and_heap_writes() {
         vec![Stmt::Expr(Expr::LocalSet(
             COUNT,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(COUNT)),
                 right: Box::new(Expr::LocalGet(30)),
@@ -710,6 +720,7 @@ fn captured_scope_callee_resolution_uses_a_decoded_base() {
     outer.body = vec![
         Stmt::PreallocateBoxes(vec![COUNT, CALLBACK]),
         Stmt::Let {
+            byte_offset: 0,
             id: COUNT,
             name: "count".into(),
             ty: Type::Number,
@@ -717,6 +728,7 @@ fn captured_scope_callee_resolution_uses_a_decoded_base() {
             init: Some(Expr::Integer(0)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: CALLBACK,
             name: "callback".into(),
             ty: callback_type(),
@@ -724,11 +736,13 @@ fn captured_scope_callee_resolution_uses_a_decoded_base() {
             init: Some(Expr::LocalGet(2)),
         },
         Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: CALLBACK_FUNC,
             params: Vec::new(),
             return_type: Type::Void,
             body: vec![Stmt::While {
                 condition: Expr::Compare {
+                    byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(COUNT)),
                     right: Box::new(Expr::Integer(3)),
@@ -832,6 +846,7 @@ fn captured_array_and_with_writes_decode_the_box_container() {
     let mut outer = outer_function(false);
     outer.body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: COUNT,
             name: "array".into(),
             ty: Type::Array(Box::new(Type::Number)),

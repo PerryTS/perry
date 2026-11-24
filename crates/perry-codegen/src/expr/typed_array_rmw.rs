@@ -105,15 +105,21 @@ fn match_shape<'a>(
         op: BinaryOp::Add,
         left,
         right,
+        ..
     } = value
     else {
         return None;
     };
-    let Expr::IndexGet {
+    let (Expr::IndexGet {
         object: read_object,
         index: read_index,
         ..
-    } = left.as_ref()
+    }
+    | Expr::RegionOut {
+        object: read_object,
+        index: read_index,
+        ..
+    }) = left.as_ref()
     else {
         return None;
     };

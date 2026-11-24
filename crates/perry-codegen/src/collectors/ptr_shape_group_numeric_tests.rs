@@ -26,6 +26,7 @@ const METH_PV: u32 = 110;
 
 fn field(name: &str) -> ClassField {
     ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -39,6 +40,7 @@ fn field(name: &str) -> ClassField {
 
 fn num_param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -72,6 +74,7 @@ fn class_p() -> Class {
         heritage_lexically_shadowed: false,
         fields: vec![field("x"), field("y")],
         constructor: Some(Function {
+            byte_offset: 0,
             id: 900,
             name: "constructor".to_string(),
             type_params: Vec::new(),
@@ -114,6 +117,7 @@ fn class_q() -> Class {
     let mut q = class_p();
     q.name = "Q".to_string();
     q.methods = vec![Function {
+        byte_offset: 0,
         id: 901,
         name: "setX".to_string(),
         type_params: Vec::new(),
@@ -147,6 +151,7 @@ fn new_of(class_name: &str, args: Vec<Expr>) -> Expr {
 /// `const <id>: <C>[] = [];`
 fn let_arr(id: u32, class_name: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("a{id}"),
         ty: Type::Array(Box::new(Type::Named(class_name.to_string()))),
@@ -167,6 +172,7 @@ fn push(array_id: u32, value: Expr) -> Stmt {
 fn counted_loop(idx: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: 0,
             id: idx,
             name: format!("i{idx}"),
             ty: Type::Number,
@@ -174,6 +180,7 @@ fn counted_loop(idx: u32, bound: Expr, body: Vec<Stmt>) -> Stmt {
             init: Some(Expr::Number(0.0)),
         })),
         condition: Some(Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx)),
             right: Box::new(bound),
@@ -199,6 +206,7 @@ fn arr_len(arr: u32) -> Expr {
 /// `const <id> = <arr>[<idx>];` typed by the array's element class.
 fn let_elem(id: u32, arr: u32, idx: u32, class_name: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("r{id}"),
         ty: Type::Named(class_name.to_string()),
@@ -235,6 +243,7 @@ fn store_field(id: u32, property: &str, value: Expr) -> Stmt {
 /// `i + 1` over the loop counter.
 fn counter_plus_one(idx: u32) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(idx)),
         right: Box::new(Expr::Integer(1)),
@@ -414,6 +423,7 @@ fn guarded_numeric_parameter_proves_derived_constructor_argument() {
                     "P",
                     vec![
                         Expr::Binary {
+                            byte_offset: 0,
                             op: BinaryOp::Add,
                             left: Box::new(Expr::LocalGet(BASE)),
                             right: Box::new(Expr::LocalGet(2)),
@@ -463,6 +473,7 @@ fn producer_local_new_args_prove_numeric_fields() {
     let stmts = vec![
         let_arr(1, "P"),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "p".to_string(),
             ty: Type::Named("P".to_string()),
@@ -574,6 +585,7 @@ fn producer_new_args_join_the_meet() {
     let stmts = vec![
         let_arr(1, "P"),
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "p".to_string(),
             ty: Type::Named("P".to_string()),
@@ -663,6 +675,7 @@ fn class_base() -> Class {
     b.name = "Base".to_string();
     b.fields = vec![field("z")];
     b.constructor = Some(Function {
+        byte_offset: 0,
         id: 902,
         name: "constructor".to_string(),
         type_params: Vec::new(),
@@ -690,13 +703,14 @@ fn class_d_extends_base() -> Class {
     d.extends_name = Some("Base".to_string());
     d.fields = vec![field("x")];
     d.constructor = Some(Function {
+        byte_offset: 0,
         id: 903,
         name: "constructor".to_string(),
         type_params: Vec::new(),
         params: vec![num_param(CTOR_PX, "x"), num_param(CTOR_PZ2, "z")],
         return_type: Type::Void,
         body: vec![
-            Stmt::Expr(Expr::SuperCall(vec![Expr::LocalGet(CTOR_PZ2)])),
+            Stmt::Expr(Expr::SuperCall(vec![Expr::LocalGet(CTOR_PZ2)], 0)),
             this_store("x", Expr::LocalGet(CTOR_PX)),
         ],
         is_async: false,
@@ -828,6 +842,7 @@ fn loop_counter_is_numeric_by_construction() {
 fn numeric_accumulator_is_numeric_by_construction() {
     let stmts = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "acc".to_string(),
             ty: Type::Number,
@@ -837,6 +852,7 @@ fn numeric_accumulator_is_numeric_by_construction() {
         Stmt::Expr(Expr::LocalSet(
             3,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(3)),
                 right: Box::new(Expr::Number(1.0)),
@@ -859,6 +875,7 @@ fn bigint_typed_view_addition_is_not_numeric_by_construction() {
         let sum_id = view_id + 1;
         let stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: view_id,
                 name: format!("bigint_view_{offset}"),
                 ty: Type::Any,
@@ -869,15 +886,18 @@ fn bigint_typed_view_addition_is_not_numeric_by_construction() {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: sum_id,
                 name: format!("mixed_sum_{offset}"),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
-                    left: Box::new(Expr::synthetic_index_get(
+                    left: Box::new(Expr::index_get_at(
                         Box::new(Expr::LocalGet(view_id)),
                         Box::new(Expr::Integer(0)),
+                        0,
                     )),
                     right: Box::new(Expr::Integer(1)),
                 }),
@@ -896,6 +916,7 @@ fn bigint_typed_view_addition_is_not_numeric_by_construction() {
 fn non_numeric_writes_and_bindings_are_excluded() {
     let no_init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 4,
             name: "u".to_string(),
             ty: Type::Number,
@@ -911,6 +932,7 @@ fn non_numeric_writes_and_bindings_are_excluded() {
 
     let string_write = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 5,
             name: "s".to_string(),
             ty: Type::Number,
@@ -924,6 +946,7 @@ fn non_numeric_writes_and_bindings_are_excluded() {
     // A closure-body write is still a write against the enclosing id.
     let closure_write = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 6,
             name: "c".to_string(),
             ty: Type::Number,
@@ -931,6 +954,7 @@ fn non_numeric_writes_and_bindings_are_excluded() {
             init: Some(Expr::Number(0.0)),
         },
         Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 99,
             params: Vec::new(),
             return_type: Type::Any,
@@ -957,6 +981,7 @@ fn non_numeric_writes_and_bindings_are_excluded() {
 
     let boxed: HashSet<u32> = [7u32].into_iter().collect();
     let boxed_local = vec![Stmt::Let {
+        byte_offset: 0,
         id: 7,
         name: "b".to_string(),
         ty: Type::Number,
@@ -989,6 +1014,7 @@ fn non_numeric_writes_and_bindings_are_excluded() {
 fn update_value_resolves_via_not_bigint() {
     let store_update_arg = |target: u32| {
         vec![Stmt::Let {
+            byte_offset: 0,
             id: target,
             name: "j".to_string(),
             ty: Type::Number,
@@ -1036,6 +1062,7 @@ fn literal_array_sum_loses_its_proof_to_an_element_store() {
     let program = |store: bool| {
         let mut stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 40,
                 name: "a".to_string(),
                 ty: Type::Any,
@@ -1046,6 +1073,7 @@ fn literal_array_sum_loses_its_proof_to_an_element_store() {
                 )),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 41,
                 name: "t".to_string(),
                 ty: Type::Any,
@@ -1069,6 +1097,7 @@ fn literal_array_sum_loses_its_proof_to_an_element_store() {
             vec![Stmt::Expr(Expr::LocalSet(
                 41,
                 Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(41)),
                     right: Box::new(Expr::IndexGet {

@@ -19,6 +19,7 @@ const TABLE: u32 = 20;
 
 fn local(id: u32, name: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -29,6 +30,7 @@ fn local(id: u32, name: &str) -> Stmt {
 
 fn add(left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -37,6 +39,7 @@ fn add(left: Expr, right: Expr) -> Expr {
 
 fn bit_and(left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitAnd,
         left: Box::new(left),
         right: Box::new(right),
@@ -45,6 +48,7 @@ fn bit_and(left: Expr, right: Expr) -> Expr {
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -65,6 +69,7 @@ fn count_body(body: Vec<Stmt>) -> Vec<Stmt> {
     )));
     stmts.push(Stmt::While {
         condition: Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(I)),
             right: Box::new(Expr::Integer(1024)),
@@ -77,10 +82,12 @@ fn count_body(body: Vec<Stmt>) -> Vec<Stmt> {
 /// `function sum(a: Uint8Array) { let i = 0; let s = 0; while (i < 1024) { s = s + a[i]; i = i + 1; } return s; }`
 fn sum_function() -> Function {
     Function {
+        byte_offset: 0,
         id: 1,
         name: "sum".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: ARR,
             name: "a".to_string(),
             ty: Type::Named("Uint8Array".to_string()),
@@ -95,6 +102,7 @@ fn sum_function() -> Function {
             local(S, "s"),
             Stmt::While {
                 condition: Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(I)),
                     right: Box::new(Expr::Integer(1024)),
@@ -116,7 +124,7 @@ fn sum_function() -> Function {
                     )),
                 ],
             },
-            Stmt::Return(Some(Expr::LocalGet(S))),
+            Stmt::Return(Some(Expr::LocalGet(S)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -144,6 +152,7 @@ fn specialized_clone_ir(
     module.functions.push(function);
     module.init.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: TABLE,
             name: "table".to_string(),
             ty: Type::Named("Uint8Array".to_string()),
@@ -233,6 +242,7 @@ fn uint8array_with_literal_length_reaches_the_ta_ptr_clone() {
 /// `new Uint8Array(1 << 20)`: a computed length, so the clone carries no `xN`.
 fn shift_1_20() -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Shl,
         left: Box::new(Expr::Integer(1)),
         right: Box::new(Expr::Integer(20)),
@@ -242,6 +252,7 @@ fn shift_1_20() -> Expr {
 /// `function paint(a: Uint8Array) { let i = 0; while (i < 1024) { a[i] = i & 255; i = i + 1; } }`
 fn paint_function() -> Function {
     Function {
+        byte_offset: 0,
         id: 2,
         name: "paint".to_string(),
         type_params: Vec::new(),
@@ -267,6 +278,7 @@ fn paint_function() -> Function {
 /// `function fill(a: Uint8Array, v: number) { let i = 0; while (i < 1024) { a[i] = v + i; i = i + 1; } }`
 fn fill_from_param_function() -> Function {
     Function {
+        byte_offset: 0,
         id: 3,
         name: "fill".to_string(),
         type_params: Vec::new(),

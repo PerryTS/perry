@@ -14,6 +14,7 @@ impl<'a> FuncEmitCtx<'a> {
                 object,
                 args,
                 class_name,
+                ..
             } => {
                 let normalized = module.strip_prefix("node:").unwrap_or(module);
                 match normalized {

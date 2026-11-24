@@ -95,7 +95,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // the runtime factory. The result is a numeric stream handle, so
         // downstream `rs.getReader()` dispatches through the #1545 runtime
         // stream-handle probe.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. }
@@ -121,7 +121,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // #11516: handle-free hash/HMAC chains. `perry_transform::crypto_hash_chain`
         // rewrote a provably non-escaping `createHash`/`createHmac` into these
         // internal `crypto.__perryHash*` calls; the state lives in a frame slot.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. }
@@ -142,15 +142,20 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             callee: outer_callee,
             args: outer_args,
             ..
+        }
+        | Expr::RegionCall {
+            callee: outer_callee,
+            args: outer_args,
+            ..
         } if matches!(
             outer_callee.as_ref(),
             Expr::PropertyGet { property: p, object, .. } if p == "digest" && matches!(
                 object.as_ref(),
-                Expr::Call { callee: c2, .. } if matches!(
+                Expr::Call { callee: c2, .. } | Expr::RegionCall { callee: c2, .. } if matches!(
                     c2.as_ref(),
                     Expr::PropertyGet { property: p2, object: obj2, .. } if p2 == "update" && matches!(
                         obj2.as_ref(),
-                        Expr::Call { callee: c3, .. } if matches!(
+                        Expr::Call { callee: c3, .. } | Expr::RegionCall { callee: c3, .. } if matches!(
                             c3.as_ref(),
                             Expr::PropertyGet { property: p3, object: obj3, .. } if (p3 == "createHash" || p3 == "Hash" || p3 == "createHmac" || p3 == "Hmac") && matches!(
                                 obj3.as_ref(),
@@ -174,7 +179,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `js_native_call_method` routes subsequent method calls on that
         // handle through `HANDLE_METHOD_DISPATCH` → `dispatch_hash`. See
         // `perry-stdlib/src/crypto.rs::js_crypto_create_hash`.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if (property == "createHash" || property == "Hash") && matches!(
@@ -189,7 +194,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `crypto.createSign(alg)` / legacy `crypto.Sign(alg)` and
         // `crypto.createVerify(alg)` / legacy `crypto.Verify(alg)` streaming
         // RSA signature handles.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if (property == "createSign" || property == "Sign" || property == "createVerify" || property == "Verify") && matches!(
@@ -204,7 +209,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `crypto.createECDH(curve)` — Node-compatible ECDH handle. The
         // runtime currently covers the high-value P-256 aliases used by
         // Node/Bun/Deno parity tests: prime256v1, secp256r1, P-256.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "createECDH" && matches!(
@@ -220,7 +225,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `crypto.DiffieHellman(...)` / `crypto.getDiffieHellman(name)` /
         // `crypto.createDiffieHellmanGroup(name)` / constructor alias
         // `crypto.DiffieHellmanGroup(name)` classic DH handles.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if (property == "createDiffieHellman" || property == "DiffieHellman" || property == "getDiffieHellman" || property == "createDiffieHellmanGroup" || property == "DiffieHellmanGroup") && matches!(
@@ -236,7 +241,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `createPrivateKey(pem)` returns the PEM surrogate directly, while
         // `createPublicKey(privateOrPublicPem)` derives a public PEM string.
         // The asymmetric native helpers accept these PEM surrogates as keys.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if (property == "createPrivateKey" || property == "createPublicKey") && matches!(
@@ -251,7 +256,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `crypto.generateKeyPair("rsa"|"ec"|"ed25519"|"x25519", options,
         // callback)` — callback form. Native shim invokes `(err, publicKey,
         // privateKey)`.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "generateKeyPair" && matches!(
@@ -265,7 +270,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // `crypto.generateKeyPairSync("rsa", { ...pem encodings... })` —
         // returns a plain object with `publicKey`/`privateKey` PEM strings.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "generateKeyPairSync" && matches!(
@@ -279,7 +284,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // `crypto.diffieHellman({ privateKey, publicKey })` — currently
         // covers the high-value X25519 stateless DH path from Node/Bun.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "diffieHellman" && matches!(
@@ -293,7 +298,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // `crypto.encapsulate(publicKey[, callback])` — currently covers the
         // high-value X25519 KEM path using Perry's KeyObject surrogate.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "encapsulate" && matches!(
@@ -307,7 +312,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // `crypto.decapsulate(privateKey, ciphertext[, callback])` — X25519
         // ciphertexts return the recovered shared key Buffer.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "decapsulate" && matches!(
@@ -328,7 +333,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `js_crypto_create_hmac` returns a NaN-boxed handle; dispatch_hmac
         // (registered in `perry-stdlib/src/common/dispatch.rs`) handles the
         // method routing.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if (property == "createHmac" || property == "Hmac") && matches!(
@@ -348,7 +353,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // through `dispatch_cipher`. Supports aes-128-cbc, aes-256-cbc,
         // aes-128-gcm, aes-256-gcm. See
         // `perry-stdlib/src/crypto.rs::js_crypto_create_cipheriv`.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. }
@@ -365,7 +370,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `crypto.randomBytes(size, callback)` — callback form. Perry
         // invokes the callback synchronously in the native shim, but keeps
         // Node's `(err, buffer)` shape.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "randomBytes" && matches!(
@@ -378,7 +383,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // `crypto.randomFill(buffer[, offset][, size], callback)`.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "randomFill" && matches!(
@@ -395,7 +400,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // as POINTER_TAG. HANDLE_METHOD_DISPATCH then routes `.update(d)` /
         // `.sign(key, enc?)` / `.verify(key, sig, enc?)` through
         // `dispatch_sign`. RSA PKCS#1 v1.5 over sha1/224/256/384/512.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. }
@@ -410,7 +415,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // Phase H crypto: `crypto.randomBytes(n)` as a Buffer.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "randomBytes" && matches!(
@@ -423,7 +428,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // Phase H crypto: `crypto.randomUUID()`.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "randomUUID" && matches!(
@@ -436,7 +441,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // `crypto.randomUUIDv7([options])` — RFC 9562 v7 (#2550).
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "randomUUIDv7" && matches!(
@@ -454,7 +459,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // JS number), so no NaN-box is needed at the call site. The
         // 3-arg callback form preserves Node's `(err, n)` shape and
         // returns `undefined`.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "randomInt" && matches!(
@@ -468,7 +473,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // Phase H crypto: `crypto.timingSafeEqual(a, b)` — constant-time
         // compare of two byte sequences. Returns a NaN-boxed boolean.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "timingSafeEqual" && matches!(
@@ -486,7 +491,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         //   generatePrime(size, options, callback)
         //   checkPrimeSync(candidate, options?)
         //   checkPrime(candidate, options, callback)
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if matches!(property.as_str(), "generatePrimeSync" | "generatePrime" | "checkPrimeSync" | "checkPrime") && matches!(
@@ -501,7 +506,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `crypto.getHashes()` / `getCiphers()` / `getCurves()` — stable
         // deterministic inventories used for feature detection. The runtime
         // helper returns an ArrayHeader pointer.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if matches!(property.as_str(), "getHashes" | "getCiphers" | "getCurves") && matches!(
@@ -515,7 +520,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // `crypto.getCipherInfo(algorithm, options?)` — feature detection
         // for supported symmetric ciphers.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "getCipherInfo" && matches!(
@@ -528,7 +533,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // `crypto.getFips()` — Perry does not expose OpenSSL FIPS mode.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "getFips" && matches!(
@@ -542,7 +547,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // `crypto.setFips(false|0)` — Perry has no OpenSSL FIPS mode, so
         // accepting the disabling no-op matches Node's default environment.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "setFips" && matches!(
@@ -556,7 +561,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // `crypto.secureHeapUsed()` — default Node shape when secure heap
         // is not enabled: { total: 0, used: 0, utilization: 0, min: 0 }.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "secureHeapUsed" && matches!(
@@ -571,7 +576,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // One-shot asymmetric signing/verification. Initial native parity
         // coverage supports Node's common RSA-SHA256/RSASSA-PKCS1-v1_5 PEM
         // path and returns a Buffer / boolean respectively.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "sign" && matches!(
@@ -583,7 +588,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             arm_crypto_sign(ctx, callee.as_ref(), args)
         }
 
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "verify" && matches!(
@@ -599,7 +604,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // Node/Bun `publicEncrypt(key, data)` → `privateDecrypt(key, data)`
         // default OAEP roundtrip and `privateEncrypt` → `publicDecrypt`
         // PKCS#1 v1.5 transform for PEM keys.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if (property == "publicEncrypt" || property == "privateDecrypt" || property == "privateEncrypt" || property == "publicDecrypt") && matches!(
@@ -616,7 +621,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // BufferHeader; the bridge then materializes a real v8::Uint8Array
         // when the value crosses into a V8-fallback module (jose). See
         // `js_crypto_create_secret_key` for the encoding handling.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "createSecretKey" && matches!(
@@ -631,7 +636,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `crypto.generateKeySync("aes"|"hmac", { length })` — returns a
         // secret KeyObject-shaped BufferHeader, matching createSecretKey's
         // property/export/equality surface.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "generateKeySync" && matches!(
@@ -646,7 +651,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // `crypto.generateKey("aes"|"hmac", { length }, cb)` — async Node
         // shape. Perry computes synchronously and invokes the callback with
         // `(null, key)`, matching the observable parity tests.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "generateKey" && matches!(
@@ -659,7 +664,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // crypto.argon2Sync(algorithm, parameters) -> Buffer.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "argon2Sync" && matches!(
@@ -672,7 +677,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // crypto.argon2(algorithm, parameters, callback)
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "argon2" && matches!(
@@ -685,7 +690,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // crypto.hkdfSync(algorithm, ikm, salt, info, keylen) -> Buffer.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "hkdfSync" && matches!(
@@ -698,7 +703,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // crypto.hkdf(algorithm, ikm, salt, info, keylen, callback)
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "hkdf" && matches!(
@@ -711,7 +716,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // crypto.scrypt(password, salt, keylen[, options], callback)
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "scrypt" && matches!(
@@ -728,7 +733,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // through to the runtime so non-SHA256 keys derive correctly (#1355).
         // An absent digest arg passes a null pointer; the runtime defaults to
         // SHA-256 (what SCRAM relies on).
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "pbkdf2Sync" && matches!(
@@ -741,7 +746,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // crypto.pbkdf2(password, salt, iterations, keylen, algorithm, callback)
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "pbkdf2" && matches!(
@@ -758,7 +763,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // and reads optional `{ N, r, p }` cost params from the options
         // object pointer; an absent options arg passes a null pointer and the
         // runtime uses Node's defaults (N=16384, r=8, p=1).
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "scryptSync" && matches!(
@@ -773,7 +778,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // crypto.hkdfSync(digest, ikm, salt, info, keylen) -> ArrayBuffer.
         // The runtime returns an array-buffer-marked Buffer; callers wrap it
         // with `Buffer.from(...)` / `new Uint8Array(...)`.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "hkdfSync" && matches!(
@@ -789,7 +794,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // The runtime builds the object (PEM strings) and returns it already
         // NaN-boxed; `.publicKey` / `.privateKey` reads go through the generic
         // object property dispatch (the object carries a keys array).
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. } if property == "generateKeyPairSync" && matches!(
@@ -806,7 +811,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // "promises" }, method }. Route supported methods through the
         // runtime fs/promises wrappers so validation failures reject
         // instead of throwing before a Promise is returned.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, .. } if matches!(
@@ -830,7 +835,7 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         // APIs (`statSync`, `readdirSync`, `renameSync`, ...) fall
         // through to this generic shape. Handling them here avoids
         // touching HIR or the lower_call dispatch tower.
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, .. } if matches!(
@@ -843,43 +848,58 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         }
 
         // -------- Calls --------
+        // A split region's call lowers as the direct call it is, no site.
+        Expr::RegionCall { callee, args } => lower_plain_call(ctx, callee, args, None),
         Expr::Call {
             callee,
             args,
             byte_offset,
             byte_end,
             ..
-        } => {
-            super::downgrade_buffer_aliases_in_expr(
-                ctx,
-                callee,
-                crate::native_value::MaterializationReason::UnknownCallEscape,
-            );
-            for arg in args {
-                super::downgrade_buffer_aliases_in_expr(
-                    ctx,
-                    arg,
-                    crate::native_value::MaterializationReason::UnknownCallEscape,
-                );
-            }
-            // #5247: under `--debug-symbols`, record this call's source byte
-            // offset so the dynamic method-dispatch emission site can emit a
-            // `js_set_call_location` immediately before the throwing dispatch
-            // (after the call's args — which may be nested calls that overwrite
-            // this — have been lowered). The dynamic dispatch path renders it as
-            // `at <file>:<line>` in the "X is not a function" TypeError's
-            // `.stack`. No-op in the default build.
-            if ctx.strings.debug_locations_enabled() {
-                ctx.strings.set_pending_call_offset(*byte_offset);
-            }
-            let watched = crate::verify_facts::life::watch_call(ctx, *byte_offset, *byte_end, args);
-            let value = crate::codegen::signature_entry::with_direct_call(*byte_offset, || {
-                lower_call(ctx, callee, args)
-            });
-            crate::verify_facts::life::end_call(ctx, watched, value?)
-        }
+        } => lower_plain_call(ctx, callee, args, Some((*byte_offset, *byte_end))),
 
         // -------- Proxy / Reflect (metaprogramming) --------
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
     }
+}
+
+/// A call with no special lowering: its callee and arguments, at its site
+/// (`byte_offset`/`byte_end`; `None` for a split region's call).
+fn lower_plain_call(
+    ctx: &mut FnCtx<'_>,
+    callee: &Expr,
+    args: &[Expr],
+    site: Option<(u32, u32)>,
+) -> Result<String> {
+    super::downgrade_buffer_aliases_in_expr(
+        ctx,
+        callee,
+        crate::native_value::MaterializationReason::UnknownCallEscape,
+    );
+    for arg in args {
+        super::downgrade_buffer_aliases_in_expr(
+            ctx,
+            arg,
+            crate::native_value::MaterializationReason::UnknownCallEscape,
+        );
+    }
+    // #5247: under `--debug-symbols`, record this call's source byte
+    // offset so the dynamic method-dispatch emission site can emit a
+    // `js_set_call_location` immediately before the throwing dispatch
+    // (after the call's args — which may be nested calls that overwrite
+    // this — have been lowered). The dynamic dispatch path renders it as
+    // `at <file>:<line>` in the "X is not a function" TypeError's
+    // `.stack`. No-op in the default build.
+    if ctx.strings.debug_locations_enabled() {
+        ctx.strings
+            .set_pending_call_offset(site.map_or(0, |(offset, _)| offset));
+    }
+    let watched = match site {
+        Some((start, end)) => crate::verify_facts::life::watch_call(ctx, start, end, args),
+        None => Vec::new(),
+    };
+    let value = crate::codegen::signature_entry::with_direct_call(site.map(|(o, _)| o), || {
+        lower_call(ctx, callee, args)
+    });
+    crate::verify_facts::life::end_call(ctx, watched, value?)
 }

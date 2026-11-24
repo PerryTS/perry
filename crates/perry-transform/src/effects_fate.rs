@@ -686,14 +686,14 @@ impl<'e> Walk<'_, 'e> {
 
     fn stmt(&mut self, stmt: &'e Stmt) {
         match stmt {
-            Stmt::Return(Some(e)) => match self.slot(e) {
+            Stmt::Return(Some(e), _) => match self.slot(e) {
                 Some(s) => self.raise(s, Fate::Returned, Proof::Proven),
                 None => {
                     self.at("Return");
                     self.expr(e)
                 }
             },
-            Stmt::Return(None) => {}
+            Stmt::Return(None, _) => {}
             // A copy's declaration: the copy is the parameter.
             Stmt::Let {
                 id,
@@ -764,6 +764,7 @@ impl<'e> Walk<'_, 'e> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.at("Switch");
                 self.expr(discriminant);
@@ -800,6 +801,7 @@ impl<'e> Walk<'_, 'e> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 self.test_sub(e, condition);
                 self.test_sub(e, then_expr);
@@ -846,6 +848,7 @@ impl<'e> Walk<'_, 'e> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 self.test_sub(value, condition);
                 self.into(value, s, then_expr);
@@ -932,7 +935,9 @@ impl<'e> Walk<'_, 'e> {
                     }
                 }
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 let address = match op {
                     CompareOp::Eq | CompareOp::Ne => true,
                     CompareOp::LooseEq | CompareOp::LooseNe => nullish(left) || nullish(right),
@@ -958,6 +963,7 @@ impl<'e> Walk<'_, 'e> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 self.test_sub(e, condition);
                 self.sub(e, then_expr);
@@ -971,7 +977,7 @@ impl<'e> Walk<'_, 'e> {
             | Expr::TemplateStringCoerce(operand)
             | Expr::StringCoerce(operand)
             | Expr::NumberCoerce(operand) => self.converted(e, operand),
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 let targets = self.proof.targets(callee);
                 // The callee itself: a method call keeps its receiver unless
                 // the targets are known, and then the receiver is `this` of
@@ -1212,7 +1218,7 @@ fn callees(
 ) {
     let mut visit = |e: &Expr| {
         match e {
-            Expr::Call { callee, .. } => {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
                 if let Some((ts, _)) = proof.targets(callee) {
                     ts.into_iter().for_each(&mut *out);
                 }

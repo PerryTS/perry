@@ -89,7 +89,9 @@ pub struct Fill {
 #[derive(Clone, Copy, Debug)]
 pub struct FillPush {
     pub module: u32,
-    pub offset: u32,
+    /// The receiver member read `this.k` (its start); `None` when the
+    /// receiver is no member read: no codegen site names it.
+    pub offset: Option<u32>,
     pub recv: NodeId,
     pub fill: u32,
 }
@@ -119,8 +121,7 @@ fn this_push(e: &Expr) -> Option<(&str, u32, &Expr)> {
     else {
         return None;
     };
-    (matches!(owner.as_ref(), Expr::This) && *byte_offset != 0)
-        .then(|| (property.as_str(), *byte_offset, &args[0]))
+    matches!(owner.as_ref(), Expr::This).then(|| (property.as_str(), *byte_offset, &args[0]))
 }
 
 /// An empty Array birth: `[]`, or `new Array()`.
@@ -139,7 +140,9 @@ fn int_const(e: &Expr) -> Option<i64> {
     match e {
         Expr::Integer(i) => Some(*i),
         Expr::Number(f) if f.fract() == 0.0 && f.abs() < 9.0e15 => Some(*f as i64),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let (a, b) = (int_const(left)?, int_const(right)?);
             match op {
                 BinaryOp::Add => a.checked_add(b),
@@ -183,7 +186,7 @@ impl Scan<'_> {
         match e {
             Expr::This
             | Expr::ThisProvenClass(_)
-            | Expr::SuperCall(_)
+            | Expr::SuperCall(_, _)
             | Expr::SuperCallSpread(_)
             | Expr::SuperMethodCall { .. }
             | Expr::SuperMethodCallSpread { .. }
@@ -194,10 +197,11 @@ impl Scan<'_> {
             }
             // `this.f(...)`: the callee runs with `this` as its receiver.
             Expr::Call { callee, .. }
+            | Expr::RegionCall { callee, .. }
             | Expr::CallSpread { callee, .. }
             | Expr::JsCallValue { callee, .. }
                 if matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
-                    | Expr::IndexGet { object, .. }
+                    | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                     if matches!(object.as_ref(), Expr::This)) =>
             {
                 self.uses.leak = true;
@@ -284,7 +288,7 @@ fn any_stmt(ss: &[Stmt], f: &mut dyn FnMut(&Stmt) -> bool) -> bool {
             Stmt::Switch { cases, .. } => cases.iter().any(|c| any_stmt(&c.body, f)),
             Stmt::Let { .. }
             | Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Throw(_)
             | Stmt::Break
             | Stmt::Continue
@@ -298,14 +302,14 @@ fn any_stmt(ss: &[Stmt], f: &mut dyn FnMut(&Stmt) -> bool) -> bool {
 }
 
 fn returns(ss: &[Stmt]) -> bool {
-    any_stmt(ss, &mut |s| matches!(s, Stmt::Return(_)))
+    any_stmt(ss, &mut |s| matches!(s, Stmt::Return(_, _)))
 }
 
 fn jumps(ss: &[Stmt]) -> bool {
     any_stmt(ss, &mut |s| {
         matches!(
             s,
-            Stmt::Return(_)
+            Stmt::Return(_, _)
                 | Stmt::Break
                 | Stmt::Continue
                 | Stmt::LabeledBreak(_)
@@ -358,7 +362,10 @@ fn counted(s: &Stmt) -> Option<(i64, &[Stmt])> {
         return None;
     };
     let from = int_const(from)?;
-    let Expr::Compare { op, left, right } = condition else {
+    let Expr::Compare {
+        op, left, right, ..
+    } = condition
+    else {
         return None;
     };
     if !matches!(left.as_ref(), Expr::LocalGet(l) if l == id) {
@@ -586,8 +593,8 @@ pub fn analyze(c: &Class, sabotage: bool) -> Vec<Fill> {
 /// Fill `ModuleBindings::fill_push_recvs` (module docs).
 pub(crate) fn export(m: &Model, bindings: &mut [crate::bindings::ModuleBindings]) {
     for p in &m.push_fill_pushes {
-        if let (true, Some(mb)) = (p.offset != 0, bindings.get_mut(p.module as usize)) {
-            mb.fill_push_recvs.push(p.offset);
+        if let (Some(offset), Some(mb)) = (p.offset, bindings.get_mut(p.module as usize)) {
+            mb.fill_push_recvs.push(offset);
         }
     }
     for mb in bindings.iter_mut() {

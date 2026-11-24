@@ -45,7 +45,7 @@ fn accumulator_rhs_is_numeric(
 ) -> bool {
     match expr {
         Expr::Number(_) | Expr::Integer(_) => true,
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             let Expr::LocalGet(a) = object.as_ref() else {
                 return false;
             };
@@ -247,7 +247,7 @@ pub(crate) fn collect_local_writes<'a>(
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, out),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     walk_expr(e, out);
                 }
@@ -321,6 +321,7 @@ pub(crate) fn collect_local_writes<'a>(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 walk_expr(discriminant, out);
                 for case in cases {
@@ -401,7 +402,7 @@ pub(super) fn collect_numeric_element_lets(
     for stmt in body {
         let Stmt::Let {
             id,
-            init: Some(Expr::IndexGet { object, index, .. }),
+            init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
             ..
         } = stmt
         else {

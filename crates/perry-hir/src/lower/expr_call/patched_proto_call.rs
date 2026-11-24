@@ -80,5 +80,5 @@ pub(super) fn try_patched_proto_call(
         return Ok(Err(args));
     }
     let object = lower_expr(ctx, &member.obj)?;
-    Ok(Ok(dynamic_member_call(call, object, method, args)))
+    Ok(Ok(dynamic_member_call(call, member, object, method, args)))
 }

@@ -262,6 +262,7 @@ pub(crate) fn wrap_with_gets(property: &str, fallback: Expr, envs: Vec<LocalId>)
 /// emitted just ahead of the with statement that minted it.
 pub(crate) fn with_implicit_unset_let(id: LocalId, name: String) -> Stmt {
     Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name,
         ty: Type::Any,
@@ -352,7 +353,7 @@ pub(crate) fn opt_call_receiver_repeatable(expr: &Expr) -> bool {
         // `a.b` / `a[const]` chains over repeatable receivers stay repeatable
         // (property reads are not side-effecting in this codebase's model).
         Expr::PropertyGet { object, .. } => opt_call_receiver_repeatable(object),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             opt_call_receiver_repeatable(object) && opt_call_receiver_repeatable(index)
         }
         _ => false,
@@ -372,19 +373,26 @@ pub(crate) fn opt_call_receiver_repeatable(expr: &Expr) -> bool {
 /// call dispatches the builtin), while a user object missing the method still
 /// short-circuits (#830 preserved). Non-repeatable receivers keep the plain
 /// function-value check to avoid double-evaluating side effects.
-pub(crate) fn opt_call_func_nullish_guard(receiver: &Expr, func_value: Expr) -> Expr {
+pub(crate) fn opt_call_func_nullish_guard(
+    receiver: &Expr,
+    func_value: Expr,
+    byte_offset: u32,
+) -> Expr {
     let func_nullish = Expr::Compare {
+        byte_offset,
         op: CompareOp::LooseEq,
         left: Box::new(func_value),
         right: Box::new(Expr::Null),
     };
     if opt_call_receiver_repeatable(receiver) {
         let not_string = Expr::Compare {
+            byte_offset,
             op: CompareOp::Ne,
             left: Box::new(Expr::TypeOf(Box::new(receiver.clone()))),
             right: Box::new(Expr::String("string".to_string())),
         };
         Expr::Logical {
+            byte_offset,
             op: LogicalOp::And,
             left: Box::new(func_nullish),
             right: Box::new(not_string),
@@ -403,7 +411,11 @@ pub(crate) fn opt_call_func_nullish_guard(receiver: &Expr, func_value: Expr) -> 
 /// name produces the same callable/property value whether it appears as a
 /// standalone reference or as a shorthand property. The caller must ensure
 /// `ctx.lookup_native_module(name)` is `Some`.
-pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> Expr {
+pub(crate) fn native_module_binding_value(
+    ctx: &LoweringContext,
+    name: &str,
+    byte_offset: u32,
+) -> Expr {
     let (module_name, method_name) = match ctx.lookup_native_module(name) {
         Some(v) => v,
         None => return Expr::Undefined,
@@ -472,7 +484,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         // PropertyGet (which resolved to `undefined`). Methods
         // fall through to the callable native-module ref below.
         if module_name == "process" {
-            if let Some(e) = expr_member::lower_process_named_property(method) {
+            if let Some(e) = expr_member::lower_process_named_property(method, byte_offset) {
                 return e;
             }
         }

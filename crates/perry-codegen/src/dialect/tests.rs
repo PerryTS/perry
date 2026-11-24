@@ -178,6 +178,7 @@ fn cell_class() -> Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "v".to_string(),
             key_expr: None,
@@ -216,6 +217,7 @@ fn cell_loop_module() -> Module {
     m.init = vec![Stmt::While {
         condition: Expr::Bool(false),
         body: vec![Stmt::Let {
+            byte_offset: 0,
             id: 4001,
             name: "c".to_string(),
             ty: Type::Named("Cell".to_string()),
@@ -950,6 +952,7 @@ fn wide_bigint_literal_words_survive_native_construction() {
         .iter()
         .enumerate()
         .map(|(i, v)| Stmt::Let {
+            byte_offset: 0,
             id: 4100 + i as u32,
             name: format!("b{i}"),
             ty: Type::BigInt,

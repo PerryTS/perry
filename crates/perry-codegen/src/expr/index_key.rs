@@ -30,12 +30,14 @@ pub(super) fn is_char_code(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
             {
                 true
             }
-            Expr::Call { callee, .. } => matches!(callee.as_ref(),
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
+                matches!(callee.as_ref(),
                 Expr::PropertyGet { object, property, .. }
                 if property == "charCodeAt"
                     && crate::type_analysis::is_string_expr(ctx, object)
                     && crate::type_analysis::string_value_is_runtime_guaranteed(ctx, object)
-                    && !crate::lower_call::property_get::patched_proto::guards(ctx, object, property)),
+                    && !crate::lower_call::property_get::patched_proto::guards(ctx, object, property))
+            }
             Expr::LocalGet(id)
                 if !ctx.boxed_vars.contains(id)
                     && !ctx.module_globals.contains_key(id)
@@ -415,18 +417,23 @@ mod tests {
     fn read_ir(index: Expr, prelude: Vec<Stmt>) -> String {
         let mut module = Module::new("intkey.ts");
         let mut body = prelude;
-        body.push(Stmt::Return(Some(Expr::IndexGet {
-            element_offset: 0,
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(1)),
-            index: Box::new(index),
-        })));
+        body.push(Stmt::Return(
+            Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(1)),
+                index: Box::new(index),
+            }),
+            0,
+        ));
         module.functions.push(Function {
+            byte_offset: 0,
             id: 1,
             name: "read".into(),
             params: vec![
                 Param {
+                    byte_offset: 0,
                     id: 1,
                     name: "array".into(),
                     ty: Type::Array(Box::new(Type::Any)),
@@ -436,6 +443,7 @@ mod tests {
                     arguments_object: None,
                 },
                 Param {
+                    byte_offset: 0,
                     id: 2,
                     name: "key".into(),
                     ty: Type::Number,
@@ -445,6 +453,7 @@ mod tests {
                     arguments_object: None,
                 },
                 Param {
+                    byte_offset: 0,
                     id: 3,
                     name: "text".into(),
                     ty: Type::String,
@@ -512,6 +521,7 @@ mod tests {
     fn bitwise_index_keeps_native_integer_and_exact_negative_fallback() {
         let ir = read_ir(
             Expr::Binary {
+                byte_offset: 0,
                 op: perry_hir::BinaryOp::BitOr,
                 left: Box::new(Expr::NumberCoerce(Box::new(Expr::LocalGet(2)))),
                 right: Box::new(Expr::Integer(0)),
@@ -545,6 +555,7 @@ mod tests {
         let ir = read_ir(
             Expr::LocalGet(4),
             vec![Stmt::Let {
+                byte_offset: 0,
                 id: 4,
                 name: "c".into(),
                 ty: Type::Number,
@@ -579,6 +590,7 @@ mod tests {
             byte_offset: 0,
         };
         let var = |init| Stmt::Let {
+            byte_offset: 0,
             id: 4,
             name: "c".into(),
             ty: Type::Any,
@@ -614,6 +626,7 @@ mod tests {
             Expr::LocalGet(4),
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 4,
                     name: "c".into(),
                     ty: Type::Number,
@@ -631,6 +644,7 @@ mod tests {
     #[test]
     fn bounded_surrogate_writer_keeps_char_code_admission() {
         let bin = |op, left, right| Expr::Binary {
+            byte_offset: 0,
             op,
             left: Box::new(left),
             right: Box::new(right),
@@ -664,6 +678,7 @@ mod tests {
             Expr::LocalGet(4),
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 4,
                     name: "c".into(),
                     ty: Type::Number,
@@ -705,6 +720,7 @@ mod tests {
         let ir = read_ir(
             Expr::LocalGet(2),
             vec![Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "key".into(),
                 ty: Type::Number,
@@ -719,7 +735,9 @@ mod tests {
     }
     fn literal_choice_index(other: Expr) -> String {
         let choice = Expr::Conditional {
+            byte_offset: 0,
             condition: Box::new(Expr::Compare {
+                byte_offset: 0,
                 op: perry_hir::CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(5)),
                 right: Box::new(Expr::Integer(0)),
@@ -728,9 +746,11 @@ mod tests {
             else_expr: Box::new(other),
         };
         let index = Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(5)),
             right: Box::new(Expr::Logical {
+                byte_offset: 0,
                 op: perry_hir::LogicalOp::Coalesce,
                 left: Box::new(choice),
                 right: Box::new(Expr::Integer(0)),
@@ -740,17 +760,20 @@ mod tests {
             Expr::LocalGet(4),
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 5,
                     name: "origin".into(),
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::BitAnd,
                         left: Box::new(Expr::NumberCoerce(Box::new(Expr::LocalGet(2)))),
                         right: Box::new(Expr::Integer(127)),
                     }),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 4,
                     name: "square".into(),
                     ty: Type::Any,
@@ -794,6 +817,7 @@ mod tests {
     /// `key | 0`: a native i32 widened to the key's double.
     fn int_key() -> Expr {
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::BitOr,
             left: Box::new(Expr::NumberCoerce(Box::new(Expr::LocalGet(2)))),
             right: Box::new(Expr::Integer(0)),

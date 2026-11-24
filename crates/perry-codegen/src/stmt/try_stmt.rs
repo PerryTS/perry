@@ -175,7 +175,7 @@ pub(super) fn emit_eh_dispatch(
 fn iterator_cleanup_expr(expr: &perry_hir::Expr) -> bool {
     use perry_hir::Expr;
     match expr {
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             matches!(&**callee, Expr::ExternFuncRef { name, .. } if name == "js_iterator_close_on_throw")
         }
         Expr::NativeMethodCall {
@@ -184,6 +184,7 @@ fn iterator_cleanup_expr(expr: &perry_hir::Expr) -> bool {
             object: None,
             method,
             args,
+            ..
         } => {
             module == "__perry_runtime"
                 && (method == "iteratorCloseOnThrow"
@@ -230,6 +231,7 @@ pub(crate) fn lower_try(
     body: &[perry_hir::Stmt],
     catch: Option<&perry_hir::CatchClause>,
     finally: Option<&[perry_hir::Stmt]>,
+    byte_offset: u32,
 ) -> Result<()> {
     // An iterator-cleanup `try` (linux x86_64) catches only to close the
     // iterator and rethrow: its catch reads no frame state, so it does not
@@ -275,6 +277,7 @@ pub(crate) fn lower_try(
         lower_expr(
             ctx,
             &perry_hir::Expr::NativeMethodCall {
+                byte_offset,
                 module: "__perry_runtime".into(),
                 class_name: None,
                 object: None,
@@ -383,6 +386,7 @@ mod tests {
     fn array_record_cleanup_has_no_normal_path_savepoint() {
         use perry_hir::{Expr, Stmt};
         let close = |method: &str, args| Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,
@@ -390,6 +394,7 @@ mod tests {
             args,
         };
         let expr = Expr::Conditional {
+            byte_offset: 0,
             condition: Box::new(Expr::Bool(false)),
             then_expr: Box::new(close("iteratorCloseOnThrow", vec![])),
             else_expr: Box::new(close(
@@ -458,10 +463,12 @@ mod tests {
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut module = perry_hir::Module::new("iterret_cleanup");
         module.init.push(perry_hir::Stmt::Try {
+            byte_offset: 0,
             body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::Number(42.0))],
             catch: Some(perry_hir::CatchClause {
                 param: Some((1, "__forof_err_1".into())),
                 body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::NativeMethodCall {
+                    byte_offset: 0,
                     module: "__perry_runtime".into(),
                     class_name: None,
                     object: None,
@@ -511,6 +518,7 @@ mod tests {
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut module = perry_hir::Module::new("local_throw");
         module.init.push(perry_hir::Stmt::Try {
+            byte_offset: 0,
             body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::Number(42.0))],
             catch: Some(perry_hir::CatchClause {
                 param: Some((1, "e".into())),
@@ -584,6 +592,7 @@ mod tests {
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut module = perry_hir::Module::new("free_try");
         module.init.push(perry_hir::Stmt::Try {
+            byte_offset: 0,
             body: vec![perry_hir::Stmt::Throw(perry_hir::Expr::Number(42.0))],
             catch: Some(perry_hir::CatchClause {
                 param: Some((1, "e".into())),

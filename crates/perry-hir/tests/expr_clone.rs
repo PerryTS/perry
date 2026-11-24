@@ -24,6 +24,7 @@ fn chain(n: usize) -> Expr {
     let mut e = key(0);
     for i in 1..n {
         e = Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(e),
             right: Box::new(key(i)),
@@ -56,6 +57,7 @@ fn a_deep_chain_copies_on_a_test_thread_stack() {
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } = at
         else {
             panic!("level {i}: {at:?}")
