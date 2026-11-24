@@ -37,8 +37,8 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_proto_method, declared_static,
-    construct_layout, declared_super_construct, run_construct, run_function, run_member, run_super_construct,
+    construct_layout, declared_construct, declared_member, declared_proto_method, declared_static,
+    declared_super_construct, run_construct, run_function, run_member, run_super_construct,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -1308,7 +1308,10 @@ pub(crate) fn intrinsic_miss_on(
 /// any of them is a write this lookup sees, with or without the realm held.
 fn native_chain(holder: &str) -> Vec<String> {
     // Each prototype under its constructor's name (`realm_proto_value`).
-    let mut out = vec![holder.strip_suffix(".prototype").unwrap_or(holder).to_string()];
+    let mut out = vec![holder
+        .strip_suffix(".prototype")
+        .unwrap_or(holder)
+        .to_string()];
     let own = loads::view_chain(Some(holder)).or_else(|| match holder.ends_with(".prototype") {
         true => members::realm_entry(holder),
         false => members::realm_entry(&format!("{holder}.prototype")),
@@ -2872,7 +2875,9 @@ pub(crate) fn native_own_load(
 /// The realm prototype realm constructor `identity` holds as its own
 /// `prototype` (a reference the realm declares) when the realm declares
 /// every link of that prototype's chain (`members::realm_born`).
-pub(crate) fn realm_ctor_prototype(identity: &str) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+pub(crate) fn realm_ctor_prototype(
+    identity: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
     use perry_hir::realm_manifest::{RealmKind, RealmOwnValue};
     let e = members::realm_entry(identity).filter(|e| e.kind == RealmKind::Constructor)?;
     let p = e.own.iter().find(|p| !p.symbol && p.key == "prototype")?;
@@ -2886,7 +2891,10 @@ pub(crate) fn realm_ctor_prototype(identity: &str) -> Option<&'static perry_hir:
 /// prototype under its declaration's name. Its declared accessors run per
 /// receiver (`realm_proto_getter`), so their keys are accessor keys
 /// (`Model::add_accessor_atom`: the lookups walk their holders).
-pub(crate) fn realm_proto_value(m: &mut Model, born: &'static perry_hir::realm_manifest::RealmEntry) -> Tok {
+pub(crate) fn realm_proto_value(
+    m: &mut Model,
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+) -> Tok {
     // One object, one token: the name a builtin object of the kind reads
     // its prototype under (`loads` proto of `what`, `native_chain`), the
     // constructor's (`URL` for `URL.prototype`).
@@ -2911,7 +2919,10 @@ pub(crate) fn realm_proto_value(m: &mut Model, born: &'static perry_hir::realm_m
 
 /// The realm declaration of native prototype token `t` when it is a
 /// realm-born prototype (`realm_proto_value`).
-pub(crate) fn realm_proto_of(m: &Model, t: Tok) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+pub(crate) fn realm_proto_of(
+    m: &Model,
+    t: Tok,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
     match &m.toks[t as usize] {
         TokKind::NativeProto(n, None) => realm_proto_named(n),
         _ => None,
@@ -2921,7 +2932,9 @@ pub(crate) fn realm_proto_of(m: &Model, t: Tok) -> Option<&'static perry_hir::re
 /// The realm prototype a builtin kind `what` (`URL`, or a declaration's
 /// `fresh` kind `EventTarget.prototype`) reads its chain from, when the
 /// realm declares every link of it (`members::realm_born`).
-pub(crate) fn realm_proto_named(what: &str) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+pub(crate) fn realm_proto_named(
+    what: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
     let base = what.strip_suffix(".prototype").unwrap_or(what);
     members::realm_born(&format!("{base}.prototype"))
 }
@@ -2954,16 +2967,27 @@ fn realm_chain_getter(
 /// prototype token `holder`, which runs with each receiver of the lookup
 /// as `this` (ECMA-262 10.1.8.1 OrdinaryGet step 7), never with the
 /// prototype's shared chain value (`loads::tok_load` leaves it out).
-pub(crate) fn realm_proto_getter(m: &Model, holder: Tok, a: Atom) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+pub(crate) fn realm_proto_getter(
+    m: &Model,
+    holder: Tok,
+    a: Atom,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
     let born = realm_proto_of(m, holder)?;
-    let members::RealmFind::Own(p, _) = members::realm_chain_find(born, &m.atoms[a as usize]) else {
+    let members::RealmFind::Own(p, _) = members::realm_chain_find(born, &m.atoms[a as usize])
+    else {
         return None;
     };
     realm_chain_getter(born, p)
 }
 
 /// `dst` ⊇ what getter `e` returns on receiver `origin`.
-pub(crate) fn realm_getter_load(m: &mut Model, e: &'static perry_hir::realm_manifest::RealmEntry, origin: Tok, a: Atom, dst: NodeId) {
+pub(crate) fn realm_getter_load(
+    m: &mut Model,
+    e: &'static perry_hir::realm_manifest::RealmEntry,
+    origin: Tok,
+    a: Atom,
+    dst: NodeId,
+) {
     effects::getter_load(m, e, origin, a, dst);
 }
 

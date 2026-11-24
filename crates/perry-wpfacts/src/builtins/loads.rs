@@ -265,7 +265,9 @@ pub(super) fn family_proto_value(m: &mut Model, fam: Family, what: Option<&str>,
         // constructor's name (`realm_proto_value`).
         None => native_proto(
             m,
-            what.map_or("%UnknownPrototype%", |w| w.strip_suffix(".prototype").unwrap_or(w)),
+            what.map_or("%UnknownPrototype%", |w| {
+                w.strip_suffix(".prototype").unwrap_or(w)
+            }),
         ),
     };
     m.add_tok(dst, p);

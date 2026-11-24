@@ -1846,7 +1846,7 @@ impl<'a> Gen<'a> {
             let pa = self.m.atom("prototype");
             let pp = self.load(pv, Key::Named(pa));
             self.m.tmpls[tm as usize].parent_value = Some((pv, pp));
-            if let Some(identity) = binding.and_then(|n| self.realm_parent_named(c, n)) {
+            if let Some(identity) = binding.and_then(|n| self.realm_parent_named(mi, c, n)) {
                 self.m.realm_parent.insert(tm, identity);
             }
             self.parent_values
@@ -1858,20 +1858,49 @@ impl<'a> Gen<'a> {
     /// module export HIR resolved it to (`import { Readable } from
     /// "stream"`), else the global object's (`extends EventTarget`), when
     /// the realm declares what `super(...)` into it does and its
-    /// `prototype`. Linked like a program parent named in `extends`: the
-    /// evaluated value is checked after the solve (`settle_parent_values`).
-    fn realm_parent_named(&mut self, c: &Class, n: &str) -> Option<&'static str> {
+    /// `prototype`. The name is resolved by static scope (ECMA-262 9.1.2.1
+    /// GetIdentifierReference): only a name no module-level binding or
+    /// import of module `mi` holds reaches the global binding (a lexical
+    /// local takes HIR's `extends_expr` and names no binding here). Linked
+    /// like a program parent named in `extends`: the evaluated value is
+    /// checked after the solve (`settle_parent_values`).
+    fn realm_parent_named(&mut self, mi: u32, c: &Class, n: &str) -> Option<&'static str> {
         if self.m.unit_mode {
             return None;
         }
         let ns = match c.native_extends.as_ref().filter(|(_, name)| name == n) {
             Some((module, _)) => crate::builtins::node_module_ns(module)?,
+            None if self.module_binds(mi as usize, n) => return None,
             None => crate::model::BuiltinNs::GlobalThis,
         };
         let identity = self.m.namespace_property(ns, n)?.native?;
         (crate::builtins::declared_super_construct(identity).is_some()
             && crate::builtins::realm_ctor_prototype(identity).is_some())
         .then_some(identity)
+    }
+
+    /// Does a binding of module `mi` (a top-level declaration, function,
+    /// class, global or a value import) hold name `n`, so that `n` does not
+    /// reach the global object there?
+    fn module_binds(&self, mi: usize, n: &str) -> bool {
+        use perry_hir::ImportSpecifier as S;
+        self.init_of(mi)
+            .iter()
+            .any(|s| matches!(s, Stmt::Let { name, .. } if name == n))
+            || self.functions_of(mi).iter().any(|f| f.name == n)
+            || self
+                .classes_of(mi)
+                .iter()
+                .any(|c| c.name == n || c.aliases.iter().any(|a| a == n))
+            || self.globals_of(mi).iter().any(|g| g.name == n)
+            || self.imports_of(mi).iter().any(|imp| {
+                !imp.type_only
+                    && imp.specifiers.iter().any(|sp| match sp {
+                        S::Named { local, .. } | S::Default { local } | S::Namespace { local } => {
+                            local == n
+                        }
+                    })
+            })
     }
 
     /// DECISIONS 95/96: per unit, a class and the evaluation of its parent

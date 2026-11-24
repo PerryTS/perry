@@ -772,7 +772,10 @@ impl<'a> Gen<'a> {
         let mut cur = Some(tm);
         while let Some(c) = cur {
             let t = &self.m.tmpls[c as usize];
-            if t.parent_value.is_some() && t.parent.is_none() && !self.m.realm_parent.contains_key(&c) {
+            if t.parent_value.is_some()
+                && t.parent.is_none()
+                && !self.m.realm_parent.contains_key(&c)
+            {
                 return true;
             }
             cur = t.parent;
