@@ -2556,8 +2556,8 @@ const __memDispatch = {
     if (!Array.isArray(arr)) return '';
     return arr.join(separator);
   },
-  array_index_of: (arr, value) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value); },
-  array_includes: (arr, value) => { if (!Array.isArray(arr)) return 0; return arr.includes(value) ? 1 : 0; },
+  array_index_of: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value, fromIndex); },
+  array_includes: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return 0; return arr.includes(value, fromIndex) ? 1 : 0; },
   array_concat: (a1, a2) => (Array.isArray(a1) ? a1 : []).concat(Array.isArray(a2) ? a2 : []),
   array_reverse: (arr) => { if (Array.isArray(arr)) arr.reverse(); return arr; },
   array_flat: (arr) => Array.isArray(arr) ? arr.flat() : [],
@@ -2596,14 +2596,15 @@ const __memDispatch = {
   // String methods — args are plain JS strings
   string_charAt: (str, idx) => String(str).charAt(idx),
   string_substring: (str, start, end) => String(str).substring(start, end),
-  string_indexOf: (str, search) => String(str).indexOf(String(search)),
-  string_slice: (str, start, end) => String(str).slice(start, end),
+  // Codegen picks these five bridges by method name alone and passes every argument.
+  string_indexOf: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'indexOf'), args),
+  string_slice: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'slice'), args),
   string_toLowerCase: (str) => String(str).toLowerCase(),
   string_toUpperCase: (str) => String(str).toUpperCase(),
   string_trim: (str) => String(str).trim(),
-  string_includes: (str, search) => String(str).includes(String(search)) ? 1 : 0,
-  string_startsWith: (str, search) => String(str).startsWith(String(search)) ? 1 : 0,
-  string_endsWith: (str, search) => String(str).endsWith(String(search)) ? 1 : 0,
+  string_includes: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'includes'), args),
+  string_startsWith: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'startsWith'), args),
+  string_endsWith: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'endsWith'), args),
   string_replace: (str, pattern, replacement) => {
     const s = String(str);
     const p = (pattern instanceof RegExp) ? pattern : String(pattern);
