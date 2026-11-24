@@ -174,3 +174,38 @@ f().then((v) => console.log("async " + v));
         "1,1,true,true,true,{\"2\":4,\"z\":0,\"a\":2,\"ab\":3},1\n1,true,2+z+a+ab+Symbol(k),true\n__proto__+atrue\nasync 7,8,object"
     );
 }
+
+// `Reflect.get`/`set`/`deleteProperty`/`isExtensible`/`preventExtensions`/
+// `setPrototypeOf` answer as in Node, in WASM and async (JS) bodies.
+#[test]
+fn reflect_property_operations() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const sym = Symbol("k");
+const o: any = { a: 1, b: 2 };
+o[sym] = 3;
+class G { w = 1; get v() { return this.w; } set v(x: any) { this.w = x * 10; } }
+const g: any = new G();
+const r: any = { w: 9 };
+Object.defineProperty(o, "fixed", { value: 0 });
+console.log([Reflect.get(o, "a"), Reflect.get(o, sym), Reflect.set(o, "c", 3), o.c, Reflect.set(o, sym, 4), o[sym], Reflect.set(o, "fixed", 5), o.fixed, Reflect.deleteProperty(o, "b"), "b" in o, Reflect.deleteProperty(o, "fixed")].join(","));
+console.log([Reflect.get(g, "v", r), Reflect.set(g, "v", 2, r), r.w, g.w, Reflect.get(function q() {} as any, "captures")].join(","));
+const p = { hi: () => "hi" };
+const e: any = {};
+console.log([Reflect.setPrototypeOf(e, p), e.hi(), Reflect.isExtensible(e), Reflect.preventExtensions(e), Reflect.isExtensible(e), Reflect.setPrototypeOf(e, null), Reflect.set(e, "n", 1), e.n].join(","));
+const errs: string[] = [];
+for (const t of [() => Reflect.get(1 as any, "a"), () => Reflect.set("s" as any, "a", 1), () => Reflect.deleteProperty(true as any, "a"), () => Reflect.isExtensible(1 as any), () => Reflect.preventExtensions(null as any), () => Reflect.setPrototypeOf(1 as any, null)]) {
+  try { t(); errs.push("none"); } catch (x: any) { errs.push(x.name); }
+}
+console.log(errs.join(","));
+async function f() {
+  const a: any = { x: 1 };
+  return [Reflect.get(a, "x"), Reflect.set(a, "y", 2), a.y, Reflect.deleteProperty(a, "x"), a.x, Reflect.get(g, "v", r), Reflect.preventExtensions(a), Reflect.isExtensible(a), Reflect.set(a, "z", 1), Reflect.setPrototypeOf(a, p)].join(",");
+}
+f().then((v) => console.log("async " + v));
+"#
+        ),
+        "1,3,true,3,true,4,false,0,true,false,false\n9,true,20,1,\ntrue,hi,true,true,false,false,false,\nTypeError,TypeError,TypeError,TypeError,TypeError,TypeError\nasync 1,true,2,true,,20,true,false,false,false"
+    );
+}
