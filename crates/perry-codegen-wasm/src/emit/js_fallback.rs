@@ -1162,6 +1162,26 @@ impl WasmModuleEmitter {
             Expr::SetValues(a) => self.emit_js_bridge_call("set_values", &[a], locals),
             Expr::MapClear(a) => self.emit_js_bridge_call("map_clear", &[a], locals),
             Expr::SetClear(a) => self.emit_js_bridge_call("set_clear", &[a], locals),
+            // The WeakRef and FinalizationRegistry nodes call the bridges their WASM arms
+            // call (`emit/expr/url_process_path.rs`).
+            Expr::WeakRefNew(a) => self.emit_js_bridge_call("weakref_new", &[a], locals),
+            Expr::WeakRefDeref(a) => self.emit_js_bridge_call("weakref_deref", &[a], locals),
+            Expr::FinalizationRegistryNew(a) => {
+                self.emit_js_bridge_call("finreg_new", &[a], locals)
+            }
+            Expr::FinalizationRegistryRegister {
+                registry,
+                target,
+                held,
+                token,
+            } => {
+                let mut operands: Vec<&Expr> = vec![registry, target, held];
+                operands.extend(token.as_deref());
+                self.emit_js_bridge_call("finreg_register", &operands, locals)
+            }
+            Expr::FinalizationRegistryUnregister { registry, token } => {
+                self.emit_js_bridge_call("finreg_unregister", &[registry, token], locals)
+            }
             Expr::MapGet { map, key } => self.emit_js_bridge_call("map_get", &[map, key], locals),
             // The `has` and `delete` bridges answer 1/0 and nothing, for their WASM callers;
             // JS wants the boolean, and `delete` says whether the entry was there.
