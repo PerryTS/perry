@@ -99,8 +99,8 @@ console.log([o[new Got() as any], msg].join(","));
     );
 }
 
-// An own property shadows a class getter, and a deleted method is not found. Expected
-// output is Node's.
+// An own property or a setter-only accessor shadows a class getter, and a deleted method
+// is not found. Expected output is Node's.
 #[test]
 fn an_object_key_conversion_method_lookup_follows_the_current_object() {
     assert_eq!(
@@ -109,15 +109,17 @@ fn an_object_key_conversion_method_lookup_follows_the_current_object() {
 class Got { get toString(): any { throw new RangeError("unexpected"); } }
 const own: any = new Got();
 Object.defineProperty(own, "toString", { value: () => "kk" });
+class Base { get toString(): any { throw new RangeError("shadowed"); } }
+class SetOnly extends Base { set toString(v: any) {} valueOf() { return "kk"; } }
 class Key { toString() { return "kk"; } valueOf() { return "vv"; } }
 const key: any = new Key();
 const o: any = { kk: 1, vv: 2, "[object Object]": 3 };
 const before = o[key];
 delete (Key.prototype as any).toString;
-console.log([o[own], before, o[key]].join(","));
+console.log([o[own], before, o[key], o[new SetOnly() as any]].join(","));
 "#
         ),
-        "1,1,3"
+        "1,1,3,1"
     );
 }
 

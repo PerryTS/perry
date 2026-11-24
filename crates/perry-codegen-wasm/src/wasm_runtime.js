@@ -6213,20 +6213,24 @@ function __hostDescriptors(props) {
 function __hostKey(key) {
   if (!__holdsProperties(key)) return key;
   const own = Object.prototype.hasOwnProperty;
-  const hasClassGetter = (name) => {
-    if (!__classOf(key) || own.call(key, name)) return false;
+  // The compiled accessor the lookup resolves to, if any; a setter alone reads undefined.
+  const classAccessor = (name) => {
+    if (!__classOf(key) || own.call(key, name)) return undefined;
     for (let c = __classOf(key); c; c = classParentTable[c] || null) {
       const methods = classMethodTable[c];
-      if (methods && own.call(methods, name)) return false;
-      if (methods && own.call(methods, '__get_' + name)) return true;
+      if (!methods) continue;
+      if (own.call(methods, name)) return undefined;
+      if (own.call(methods, '__get_' + name)) return 'get';
+      if (own.call(methods, '__set_' + name)) return 'set';
     }
-    return false;
+    return undefined;
   };
   const method = (name) => {
     // A class instance's compiled accessors live in the class table, not on the host object.
-    const viaGetter = typeof name === 'string' && hasClassGetter(name);
-    const value = viaGetter ? __memDispatch.class_get_field(key, name) : key[name];
-    if (viaGetter) __memDispatch.propagate_exception(true);
+    const accessor = typeof name === 'string' ? classAccessor(name) : undefined;
+    if (accessor === 'set') return undefined;
+    const value = accessor ? __memDispatch.class_get_field(key, name) : key[name];
+    if (accessor) __memDispatch.propagate_exception(true);
     const fn = __hostAccessor(value);
     return typeof fn === 'function' ? (...args) => Reflect.apply(fn, key, args) : fn;
   };
