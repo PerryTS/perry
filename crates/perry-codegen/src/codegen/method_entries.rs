@@ -9,6 +9,8 @@ use crate::types::{DOUBLE, I32, I64, PTR};
 /// A ClassBody static method's closure-convention entry (`<body>__clo`).
 pub(super) struct StaticMethodEntry {
     pub(super) cid: u32,
+    /// The method's HIR function id.
+    pub(super) id: u32,
     pub(super) llvm_name: String,
     pub(super) param_count: u32,
     pub(super) spec_length: u32,
@@ -117,6 +119,7 @@ pub(super) fn emit_static_method_entry(
         f.set_length(e.spec_length);
         f.set_strict();
         set_fn_proto_kind(f, e.kind);
+        f.family = crate::recv_family::keys(e.id);
         // A static method is a method definition: no [[Construct]] and so no
         // own `prototype` (only construct-capable bodies get that key).
         f.set_non_constructor();
@@ -226,6 +229,7 @@ pub(super) fn emit_class_method_entry(
         f.set_length(e.spec_length);
         f.set_strict();
         set_fn_proto_kind(f, e.kind);
+        f.family = crate::recv_family::keys(e.id);
         f.set_non_constructor();
     });
     let info_ref = chunker.current_block().fn_info_ref(&entry_name);
@@ -361,6 +365,7 @@ mod tests {
             &mut chunker,
             &StaticMethodEntry {
                 cid: 801,
+                id: 0,
                 llvm_name: "method_body".into(),
                 param_count: 1,
                 spec_length: 1,
@@ -478,6 +483,7 @@ pub(super) fn emit_computed_method_entries(
                 chunker,
                 &StaticMethodEntry {
                     cid,
+                    id: f.id,
                     llvm_name,
                     param_count: f.params.len() as u32,
                     spec_length: crate::codegen::spec_function_length(&f.params) as u32,

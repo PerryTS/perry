@@ -38,6 +38,7 @@ pub(crate) mod fn_record;
 pub mod function;
 pub mod function_order;
 pub(crate) mod gc_call_effects;
+pub(crate) mod recv_family;
 pub mod verify_facts;
 pub use gc_call_effects::GcEffects;
 pub mod gc_map;

@@ -23,6 +23,7 @@ mod calln;
 mod direct;
 mod errors;
 mod explicit_this;
+pub(crate) mod family;
 mod validate;
 mod value_call;
 
@@ -50,6 +51,7 @@ pub use calln::{
     js_closure_call8, js_closure_call9,
 };
 pub use direct::{DirectCall1, DirectCall2, DirectCall3, DirectCall4};
+pub use family::{check_family_this, check_family_this_value, has_family};
 
 pub(crate) use value_call::{call_compiled_body_this, native_call_value_this};
 pub use value_call::{

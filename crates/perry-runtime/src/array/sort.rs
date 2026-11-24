@@ -13,7 +13,7 @@ mod indices;
 
 /// Resolved comparator state: the closure + (when shapes allow) the direct
 /// 2-arg call target hoisted out of the comparison loops.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct ComparatorCall {
     comparator: *const ClosureHeader,
     direct: crate::closure::DirectCall2,
@@ -566,7 +566,7 @@ unsafe fn array_sort_spec_path(
     // [[Set]] fire user accessors that can allocate, sweeping or moving it.
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr);
-    let cmp_handle = cmp.map(|c| scope.root_raw_const_ptr(c.comparator));
+    let cmp_handle = cmp.as_ref().map(|c| scope.root_raw_const_ptr(c.comparator));
 
     // Collect present elements into a GC-rooted temp array whose element
     // buffer keeps accessor-produced values alive — and CURRENT — across
@@ -816,7 +816,7 @@ unsafe fn sort_array_receiver(
     // it again, and a bare Rust local is invisible to the collector.
     let scope = crate::gc::RuntimeHandleScope::new();
     let arr_handle = scope.root_raw_mut_ptr(arr);
-    let cmp_handle = cmp.map(|c| scope.root_raw_const_ptr(c.comparator));
+    let cmp_handle = cmp.as_ref().map(|c| scope.root_raw_const_ptr(c.comparator));
     let objproto_keys = object_prototype_numeric_keys();
     let arr = arr_handle.get_raw_mut_ptr::<ArrayHeader>();
     if sort_needs_spec_path(arr, &objproto_keys) {

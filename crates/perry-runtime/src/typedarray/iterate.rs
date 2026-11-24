@@ -162,7 +162,7 @@ pub(crate) fn typed_array_map_this(
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
-        let cb_site = crate::closure::DirectCall3::resolve(callback);
+        let cb_site = crate::closure::DirectCall3::resolve_handed(callback);
         // 23.2.3.20 step 5: A is TypedArraySpeciesCreate(O, « len ») — BEFORE
         // the callback loop (so a throwing constructor/@@species getter aborts
         // before any callback runs).
@@ -210,7 +210,7 @@ pub(crate) fn typed_array_filter_this(
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
-        let cb_site = crate::closure::DirectCall3::resolve(callback);
+        let cb_site = crate::closure::DirectCall3::resolve_handed(callback);
         // 23.2.3.10: the callback runs for every element FIRST (collecting the
         // kept values), THEN A = TypedArraySpeciesCreate(O, « captured »). The
         // @@species getter is therefore observed after all callbacks.
@@ -260,7 +260,7 @@ pub(crate) fn typed_array_every_this(
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
-        let cb_site = crate::closure::DirectCall3::resolve(callback);
+        let cb_site = crate::closure::DirectCall3::resolve_handed(callback);
         for i in 0..len {
             let v = load_at(ta, i);
             let r = calls.call3(&cb_site, v, i);
@@ -298,7 +298,7 @@ pub(crate) fn typed_array_some_this(
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
-        let cb_site = crate::closure::DirectCall3::resolve(callback);
+        let cb_site = crate::closure::DirectCall3::resolve_handed(callback);
         for i in 0..len {
             let v = load_at(ta, i);
             let r = calls.call3(&cb_site, v, i);
@@ -334,7 +334,7 @@ pub(crate) fn typed_array_for_each_this(
             // #8180: resolve the callback's dispatch ONCE. It is invariant for a
             // fixed closure (see closure/dispatch/direct.rs), and this loop calls
             // exactly one.
-            let cb_site = crate::closure::DirectCall3::resolve(callback);
+            let cb_site = crate::closure::DirectCall3::resolve_handed(callback);
             for i in 0..len {
                 let v = load_at(ta, i);
                 let _ = calls.call3(&cb_site, v, i);
@@ -370,7 +370,7 @@ pub(crate) fn typed_array_find_this(
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
-        let cb_site = crate::closure::DirectCall3::resolve(callback);
+        let cb_site = crate::closure::DirectCall3::resolve_handed(callback);
         for i in 0..len {
             let v = load_at(ta, i);
             let r = calls.call3(&cb_site, v, i);
@@ -408,7 +408,7 @@ pub(crate) fn typed_array_find_index_this(
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
-        let cb_site = crate::closure::DirectCall3::resolve(callback);
+        let cb_site = crate::closure::DirectCall3::resolve_handed(callback);
         for i in 0..len {
             let v = load_at(ta, i);
             let r = calls.call3(&cb_site, v, i);

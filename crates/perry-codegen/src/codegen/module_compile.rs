@@ -23,6 +23,7 @@ pub fn compile_module(hir: &HirModule, mut opts: CompileOptions) -> Result<Vec<u
         opts.debug_source_line_offset,
     );
     crate::verify_facts::bodies(&opts.program_facts);
+    crate::recv_family::install(&opts.program_facts);
     let _fallback = crate::fallback_diag::begin(
         &hir.name,
         opts.module_source.as_deref(),
@@ -46,6 +47,7 @@ pub fn compile_module_owned(hir: HirModule, mut opts: CompileOptions) -> Result<
         opts.debug_source_line_offset,
     );
     crate::verify_facts::bodies(&opts.program_facts);
+    crate::recv_family::install(&opts.program_facts);
     let _fallback = crate::fallback_diag::begin(
         &hir.name,
         opts.module_source.as_deref(),
@@ -69,6 +71,7 @@ pub fn module_birth_shapes(hir: &HirModule, opts: CompileOptions) -> Result<Vec<
             opts.debug_source_line_offset,
         );
         crate::verify_facts::bodies(&opts.program_facts);
+        crate::recv_family::install(&opts.program_facts);
     }
     let mut births = Vec::new();
     lower_module(hir, opts, Some(&mut births))?;

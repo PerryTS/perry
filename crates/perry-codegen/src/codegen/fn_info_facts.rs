@@ -64,6 +64,12 @@ pub(super) fn record_fn_info_facts(
     for &fid in src.closure_arrow_functions {
         llmod.note_fn_info(&closure(fid), |f| f.set_arrow());
     }
+    // K3 C3: a live-family body's home keys (a class method's are on its
+    // method entry; a facts entry for a body this module does not emit as a
+    // closure renders nothing).
+    for (fid, keys) in crate::recv_family::all() {
+        llmod.note_fn_info(&closure(fid), |f| f.family = Some(keys));
+    }
     // The clones hang off arrow bodies only (the runtime's resolvers take
     // them from an arrow's info).
     for (&fid, plan) in src.trusted_box_closures {

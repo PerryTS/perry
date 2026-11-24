@@ -169,7 +169,7 @@ unsafe fn sorted_bigint_lanes(
     let mut lanes: Vec<u64> = std::slice::from_raw_parts(data_ptr(ta) as *const u64, len).to_vec();
     lanes.sort_by(|&a, &b| {
         bigint_lane_compare(
-            cmp_site,
+            cmp_site.clone(),
             cmp_handle.get_raw_const_ptr::<ClosureHeader>(),
             a,
             b,
@@ -444,7 +444,7 @@ pub(crate) fn typed_array_find_last_this(
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
-        let cb_site = crate::closure::DirectCall3::resolve(callback.get_raw_const_ptr());
+        let cb_site = crate::closure::DirectCall3::resolve_handed(callback.get_raw_const_ptr());
         for i in (0..len).rev() {
             candidate.set_nanbox_f64(js_typed_array_get(current(), i as i32));
             let r = cb_site.call(
@@ -500,7 +500,7 @@ pub(crate) fn typed_array_find_last_index_this(
         // #8180: resolve the callback's dispatch ONCE. It is invariant for a
         // fixed closure (see closure/dispatch/direct.rs), and this loop calls
         // exactly one.
-        let cb_site = crate::closure::DirectCall3::resolve(callback.get_raw_const_ptr());
+        let cb_site = crate::closure::DirectCall3::resolve_handed(callback.get_raw_const_ptr());
         for i in (0..len).rev() {
             candidate.set_nanbox_f64(js_typed_array_get(current(), i as i32));
             let r = cb_site.call(

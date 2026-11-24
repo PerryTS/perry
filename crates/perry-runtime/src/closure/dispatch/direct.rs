@@ -151,6 +151,18 @@ pub extern "C" fn js_closure_resolve_versioned_loop_direct_call(
     target.func_ptr
 }
 
+/// K3 C3: how a resolved direct-call site treats its receiver.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum HandedThis {
+    /// Any receiver: the body has no live receiver family, or the loop's
+    /// `thisArg` was checked.
+    Free,
+    /// A live-family body resolved for plain calls (`plain_call_receiver`).
+    PlainOnly,
+    /// A live-family body handed a fixed `thisArg`: checked at the first call.
+    Pending,
+}
+
 macro_rules! define_direct_call_site {
     (
         $(#[$meta:meta])*
@@ -167,16 +179,41 @@ macro_rules! define_direct_call_site {
         }
 
         $(#[$meta])*
-        #[derive(Clone, Copy)]
-        pub struct $site(crate::closure::body_call::js_body_fn_ty!($($arg),+));
+        #[derive(Clone)]
+        pub struct $site(
+            crate::closure::body_call::js_body_fn_ty!($($arg),+),
+            /// K3 C3 receiver state ([`HandedThis`]).
+            std::cell::Cell<HandedThis>,
+        );
 
         impl $site {
-            /// Resolve `closure` once, before the loop.
+            /// Resolve `closure` once, before a loop whose calls are plain
+            /// (`plain_call_receiver()`).
             #[inline]
             pub fn resolve(closure: *const ClosureHeader) -> Self {
-                $site(resolve_direct_func_ptr(closure, $arity).map_or($slow, |func_ptr| unsafe {
-                    crate::closure::body_call::js_body_fn!(func_ptr; $($arg),+)
-                }))
+                $site(
+                    resolve_direct_func_ptr(closure, $arity).map_or($slow, |func_ptr| unsafe {
+                        crate::closure::body_call::js_body_fn!(func_ptr; $($arg),+)
+                    }),
+                    std::cell::Cell::new(if crate::closure::has_family(closure) {
+                        HandedThis::PlainOnly
+                    } else {
+                        HandedThis::Free
+                    }),
+                )
+            }
+
+            /// Resolve `closure` once, before a loop that calls it with the
+            /// fixed receiver `this` (a builtin's `thisArg`): the K3 C3
+            /// receiver-family check runs once for the whole loop, before
+            /// its first call (a loop that calls nothing checks nothing).
+            #[inline]
+            pub fn resolve_handed(closure: *const ClosureHeader) -> Self {
+                let site = Self::resolve(closure);
+                if site.1.get() == HandedThis::PlainOnly {
+                    site.1.set(HandedThis::Pending);
+                }
+                site
             }
 
             /// Invoke with the CURRENT closure address (see the module docs on
@@ -190,6 +227,19 @@ macro_rules! define_direct_call_site {
                 this: crate::closure::JsThis,
                 $($arg: f64),+
             ) -> f64 {
+                // K3 C3: the loop's fixed `thisArg` is checked at the first
+                // call; a site resolved for plain calls passes no receiver.
+                match self.1.get() {
+                    HandedThis::Free => {}
+                    HandedThis::Pending => {
+                        crate::closure::check_family_this(closure, this.as_f64());
+                        self.1.set(HandedThis::Free);
+                    }
+                    HandedThis::PlainOnly => debug_assert!(
+                        this.bits() == crate::closure::plain_call_receiver().bits(),
+                        "a handed receiver needs `resolve_handed`"
+                    ),
+                }
                 // SAFETY: `self.0` is the resolved body of `closure` at this
                 // arity, or the dispatcher fallback.
                 unsafe { (self.0)(closure, this, $($arg),+) }
@@ -197,6 +247,13 @@ macro_rules! define_direct_call_site {
 
             /// Whether the direct target was resolved. Test-only: a "fast
             /// path" nobody can prove ran is not a fast path.
+            /// The K3 C3 receiver state. Test-only.
+            #[cfg(test)]
+            #[allow(dead_code)]
+            pub(crate) fn handed_state(&self) -> HandedThis {
+                self.1.get()
+            }
+
             #[cfg(test)]
             #[allow(dead_code)]
             pub(crate) fn is_direct(&self) -> bool {

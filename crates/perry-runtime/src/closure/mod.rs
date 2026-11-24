@@ -79,6 +79,7 @@ pub(crate) use dispatch::{call_compiled_body_this, native_call_value_this};
 pub(crate) use dispatch::{
     call_with_explicit_this, forward_with_explicit_this, receiver_may_box, ReceiverBinding,
 };
+pub use dispatch::{check_family_this, check_family_this_value, has_family};
 pub use dispatch::{
     clean_closure_ptr, dispatch_bound_function, dispatch_bound_method, get_valid_func_ptr,
     get_valid_info, js_closure_call0, js_closure_call1, js_closure_call10, js_closure_call11,

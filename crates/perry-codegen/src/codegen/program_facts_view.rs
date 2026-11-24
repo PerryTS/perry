@@ -25,6 +25,11 @@ pub struct ProgramFactsView {
     pub verification_bodies:
         Option<std::sync::Arc<std::collections::BTreeMap<(u32, String), bool>>>,
     pub verification_module: Option<String>,
+    /// K3 C3: this module's bodies whose receiver family is live, by
+    /// (HIR function id, synthetic name), with their home keys; `None`
+    /// when the solve gave up (no body is checked then).
+    pub recv_family_live:
+        Option<std::sync::Arc<std::collections::BTreeMap<(u32, String), Vec<String>>>>,
     pub verification_sites: Option<std::sync::Arc<Vec<crate::verify_facts::SiteClaim>>>,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     /// The program's realm reach R, on the entry module only: its `main`

@@ -561,7 +561,18 @@ pub(crate) fn view_for(
     } else {
         Vec::new()
     };
+    // K3 C3: the module's live-family bodies change its emitted infos.
+    let recv_family_live = pf.recv_family_live.as_ref().map(|b| {
+        Arc::new(
+            b.iter()
+                .filter(|((path, _, _), _)| path == &key)
+                .map(|((_, id, name), keys)| ((*id, name.clone()), keys.clone()))
+                .collect::<std::collections::BTreeMap<_, _>>(),
+        )
+    });
+    let family_digest = recv_family_live.as_ref().filter(|m| !m.is_empty());
     let digest = if elision.is_empty()
+        && family_digest.is_none()
         && !elision.fnproto_bind_unwritten
         && elision.super_unrelinked.is_empty()
         && !elision.fnproto_borrow_unwritten
@@ -574,6 +585,7 @@ pub(crate) fn view_for(
         pf.digest_for(&key).hash(&mut h);
         elision.hash(&mut h);
         inactive.hash(&mut h);
+        family_digest.hash(&mut h);
         h.finish()
     };
     perry_codegen::ProgramFactsView {
@@ -592,6 +604,7 @@ pub(crate) fn view_for(
         } else {
             None
         },
+        recv_family_live,
         verification_module: (perry_codegen::verify_facts::enabled()
             || perry_codegen::verify_facts::dce_enabled())
         .then(|| key.clone()),

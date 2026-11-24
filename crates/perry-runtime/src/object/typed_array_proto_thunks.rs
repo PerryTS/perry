@@ -716,7 +716,7 @@ macro_rules! rooted_callback {
                 Self {
                     handle: scope.root_raw_const_ptr(callback),
                     this_arg: scope.root_nanbox_f64(this_arg),
-                    site: crate::closure::$site::resolve(callback),
+                    site: crate::closure::$site::resolve_handed(callback),
                 }
             }
 

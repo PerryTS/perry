@@ -88,7 +88,7 @@ fn every_resolved_call_site_roots_its_callback() {
     let lines = lines();
     let mut offenders = Vec::new();
     for (i, line) in lines.iter().enumerate() {
-        if !line.contains("::resolve(callback)") {
+        if !line.contains("::resolve(callback)") && !line.contains("::resolve_handed(callback)") {
             continue;
         }
         let mut rooted = false;

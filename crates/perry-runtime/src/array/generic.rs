@@ -623,7 +623,7 @@ pub extern "C" fn js_arraylike_forEach(recv: f64, cb: f64, this_arg: f64) -> f64
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
+    let cb_site = crate::closure::DirectCall3::resolve_handed(callable(cb_h.get_nanbox_f64()));
     for k in 0..len {
         if !al_has(recv_h.get_nanbox_f64(), k) {
             continue;
@@ -650,7 +650,7 @@ pub extern "C" fn js_arraylike_map(recv: f64, cb: f64, this_arg: f64) -> f64 {
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
+    let cb_site = crate::closure::DirectCall3::resolve_handed(callable(cb_h.get_nanbox_f64()));
     // ArraySpeciesCreate → ArrayCreate throws RangeError for len ≥ 2^32
     // (test262 map/create-non-array-invalid-len) — BEFORE any callback runs.
     if len > u32::MAX as i64 {
@@ -693,7 +693,7 @@ pub extern "C" fn js_arraylike_filter(recv: f64, cb: f64, this_arg: f64) -> f64 
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
+    let cb_site = crate::closure::DirectCall3::resolve_handed(callable(cb_h.get_nanbox_f64()));
     // ArraySpeciesCreate(O, 0).
     let mut sink =
         unsafe { crate::array::species::SpeciesSink::new(&scope, recv_h.get_nanbox_f64(), 0) };
@@ -736,7 +736,7 @@ pub extern "C" fn js_arraylike_flatMap(recv: f64, cb: f64, this_arg: f64) -> f64
     let recv_h = scope.root_nanbox_f64(to_object(recv));
     // LengthOfArrayLike before IsCallable, as for the other callback methods.
     let len = al_length(recv_h.get_nanbox_f64());
-    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
+    let cb_site = crate::closure::DirectCall3::resolve_handed(callable(cb_h.get_nanbox_f64()));
     // ArraySpeciesCreate(O, 0), then FlattenIntoArray with the mapper.
     let mut sink =
         unsafe { crate::array::species::SpeciesSink::new(&scope, recv_h.get_nanbox_f64(), 0) };
@@ -811,7 +811,7 @@ pub extern "C" fn js_arraylike_some(recv: f64, cb: f64, this_arg: f64) -> f64 {
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
+    let cb_site = crate::closure::DirectCall3::resolve_handed(callable(cb_h.get_nanbox_f64()));
     for k in 0..len {
         if !al_has(recv_h.get_nanbox_f64(), k) {
             continue;
@@ -841,7 +841,7 @@ pub extern "C" fn js_arraylike_every(recv: f64, cb: f64, this_arg: f64) -> f64 {
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
+    let cb_site = crate::closure::DirectCall3::resolve_handed(callable(cb_h.get_nanbox_f64()));
     for k in 0..len {
         if !al_has(recv_h.get_nanbox_f64(), k) {
             continue;
@@ -874,7 +874,7 @@ pub extern "C" fn js_arraylike_find(recv: f64, cb: f64, this_arg: f64) -> f64 {
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
+    let cb_site = crate::closure::DirectCall3::resolve_handed(callable(cb_h.get_nanbox_f64()));
     // `v` is read before the callback and returned after it — root it.
     let v_h = scope.root_nanbox_f64(undef());
     for k in 0..len {
@@ -903,7 +903,7 @@ pub extern "C" fn js_arraylike_findIndex(recv: f64, cb: f64, this_arg: f64) -> f
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
+    let cb_site = crate::closure::DirectCall3::resolve_handed(callable(cb_h.get_nanbox_f64()));
     for k in 0..len {
         let v = al_get(recv_h.get_nanbox_f64(), k);
         let hit = cb_site.call(
@@ -930,7 +930,7 @@ pub extern "C" fn js_arraylike_findLast(recv: f64, cb: f64, this_arg: f64) -> f6
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
+    let cb_site = crate::closure::DirectCall3::resolve_handed(callable(cb_h.get_nanbox_f64()));
     // `v` is read before the callback and returned after it — root it.
     let v_h = scope.root_nanbox_f64(undef());
     let mut k = len - 1;
@@ -961,7 +961,7 @@ pub extern "C" fn js_arraylike_findLastIndex(recv: f64, cb: f64, this_arg: f64) 
     // check (ECMA-262 §23.1.3.*), so a `length` getter fires even when the
     // callback is missing/non-callable. Read `len` first, then validate `cb`.
     let len = al_length(recv_h.get_nanbox_f64());
-    let cb_site = crate::closure::DirectCall3::resolve(callable(cb_h.get_nanbox_f64()));
+    let cb_site = crate::closure::DirectCall3::resolve_handed(callable(cb_h.get_nanbox_f64()));
     let mut k = len - 1;
     while k >= 0 {
         let v = al_get(recv_h.get_nanbox_f64(), k);

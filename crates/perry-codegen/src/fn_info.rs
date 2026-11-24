@@ -36,7 +36,7 @@ use crate::runtime_abi::{
 /// `#[repr(C)]` layout; LLVM lays it out for the target exactly as the
 /// runtime's C layout does, 32-bit pointers included).
 pub(crate) const INFO_TYPE: &str =
-    "{ ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64, i16 }";
+    "{ ptr, i16, i16, i32, i32, i32, ptr, i64, ptr, i32, i16, i16, i64, i16, i32 }";
 
 /// The own slots a body's function objects are born with
 /// (`JsFunctionInfo::own_slots`): one, `prototype`, for a body that owns it
@@ -126,6 +126,10 @@ pub(crate) struct FnInfoFacts {
     pub call_entry: Option<String>,
     pub call_entry_offset_words: u8,
     pub metadata: Option<(String, u32)>,
+    /// K3 C3: the home keys of a body whose receiver family is live
+    /// (`ProgramFactsView::recv_family_live`); the runtime checks its
+    /// receiver where it invokes it (`JsFunctionInfo::family`).
+    pub family: Option<Vec<String>>,
     /// A source module body has stack identity but no callable birth or startup publication.
     pub module_frame: bool,
 }
@@ -469,7 +473,11 @@ fn render_definition(
     // A masked 64-bit symbol difference is not a portable object relocation.
     let compressed_in_mask = source_in_mask && source_encoding.as_ref().unwrap().2.is_some();
     let info_type = if compressed_in_mask {
-        INFO_TYPE.strip_suffix("i64, i16 }").unwrap().to_string() + "{ i32, i32 }, i16 }"
+        INFO_TYPE
+            .strip_suffix("i64, i16, i32 }")
+            .unwrap()
+            .to_string()
+            + "{ i32, i32 }, i16, i32 }"
     } else {
         INFO_TYPE.to_string()
     };
@@ -482,11 +490,24 @@ fn render_definition(
     } else {
         format!("i64 {versioned_mask_value}")
     };
+    // K3 C3: the home-key record next to the info (`family_record`).
+    let family_record = facts
+        .family
+        .as_deref()
+        .filter(|k| !k.is_empty())
+        .map(family_record);
+    let family_word = match &family_record {
+        Some(_) => format!(
+            "trunc (i64 sub (i64 ptrtoint (ptr @{info}$family to i64), i64 ptrtoint (ptr @{info} to i64)) to i32)"
+        ),
+        None => "0".to_string(),
+    };
     let value = format!(
         "{{ ptr @{body}, i16 {params}, i16 {rest}, i32 {flags}, i32 {length}, i32 {tcap}, \
          ptr {tcode}, i64 {tmask}, ptr {vcode}, i32 {vcap}, i16 {declared}, i16 {plain}, \
-         {mask_field}, i16 {own} }}",
+         {mask_field}, i16 {own}, i32 {family} }}",
         own = own_slots_for_flags(flags),
+        family = family_word,
         params = saturate_u16(def.params as u64),
         plain = plain_params(def.params, flags),
         rest = facts.rest_fixed,
@@ -547,7 +568,7 @@ fn render_definition(
         types.push("{ ptr, i32 }".to_string());
         fields.push(format!("{{ ptr, i32 }} {{ ptr @{owner}, i32 {ordinal} }}"));
     }
-    if types.len() == 1 {
+    let definition = if types.len() == 1 {
         format!("@{info} = {linkage}constant {info_type} {value}")
     } else {
         format!(
@@ -555,7 +576,39 @@ fn render_definition(
             types.join(", "),
             fields.join(", ")
         )
+    };
+    match family_record {
+        Some((len, bytes)) => format!(
+            "{definition}\n@{info}$family = private unnamed_addr constant [{len} x i8] c\"{bytes}\""
+        ),
+        None => definition,
     }
+}
+
+/// K3 C3: a body's home-key record (perry-runtime `closure::dispatch::family`):
+/// `u16` count, then per key a tag (0 a string key, 1 a well-known symbol by
+/// short name: HIR's `@@name` and its `@@__perry_wk_name` read spelling are
+/// both that symbol), a `u16` length and the bytes; little-endian. Returns the
+/// byte length and the LLVM `c"..."` text.
+fn family_record(keys: &[String]) -> (usize, String) {
+    let mut seen: Vec<(u8, &str)> = Vec::new();
+    for k in keys {
+        let key = match k.strip_prefix("@@") {
+            Some(rest) => (1u8, rest.strip_prefix("__perry_wk_").unwrap_or(rest)),
+            None => (0u8, k.as_str()),
+        };
+        if !seen.contains(&key) {
+            seen.push(key);
+        }
+    }
+    let mut out: Vec<u8> = (seen.len() as u16).to_le_bytes().to_vec();
+    for (tag, k) in seen {
+        out.push(tag);
+        out.extend((k.len() as u16).to_le_bytes());
+        out.extend(k.as_bytes());
+    }
+    let text = out.iter().map(|b| format!("\\{b:02X}")).collect::<String>();
+    (out.len(), text)
 }
 
 #[cfg(test)]
@@ -641,7 +694,10 @@ mod tests {
                 assert!(ir.contains(", i32, i32, i32, i32, i32, i32 }"), "{ir}");
                 assert!(ir.contains("i32 31, i32 79, i32 0, i32 trunc"), "{ir}");
             } else {
-                assert!(ir.contains("i16, { i32, i32 }, i16 }, i32, i32 }"), "{ir}");
+                assert!(
+                    ir.contains("i16, { i32, i32 }, i16, i32 }, i32, i32 }"),
+                    "{ir}"
+                );
                 assert!(ir.contains("ptr null, i32 79, i16"), "{ir}");
             }
         }

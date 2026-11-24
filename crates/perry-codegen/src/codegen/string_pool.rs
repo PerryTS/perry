@@ -926,6 +926,7 @@ pub(super) fn emit_string_pool(
             }
             computed_static_entries.push(StaticMethodEntry {
                 cid,
+                id: f.id,
                 llvm_name: scoped_static_method_name(module_prefix, cid, class_name, &f.name),
                 param_count: f.params.len() as u32,
                 spec_length,
@@ -1076,6 +1077,7 @@ pub(super) fn emit_string_pool(
         let entry_name = format!("{}__eclo", llvm_name);
         method_entries.push(StaticMethodEntry {
             cid,
+            id: definition_order,
             llvm_name: llvm_name.clone(),
             param_count,
             spec_length,
@@ -1190,6 +1192,7 @@ pub(super) fn emit_string_pool(
             &mut chunker,
             &StaticMethodEntry {
                 cid,
+                id: definition_order,
                 llvm_name: llvm_name.clone(),
                 param_count,
                 spec_length,
