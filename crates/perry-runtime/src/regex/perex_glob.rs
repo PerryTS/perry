@@ -28,6 +28,15 @@ impl<'s> GlobProgram<'s> {
             .unwrap()
     }
     pub(crate) fn new(scope: &'s RuntimeHandleScope, source: &str) -> Result<Self, EngineError> {
+        Self::new_with_flags(scope, source, "u")
+    }
+
+    /// A program for `source` under RegExp `flags` (`""` matches by UTF-16 code unit).
+    pub(crate) fn new_with_flags(
+        scope: &'s RuntimeHandleScope,
+        source: &str,
+        flags: &str,
+    ) -> Result<Self, EngineError> {
         let pattern =
             BoundSubject::new(NativeText(source)).map_err(|e| EngineError::Subject(e.error))?;
         let mut budget = Budget::new(api::WORK);
@@ -35,7 +44,7 @@ impl<'s> GlobProgram<'s> {
         let program = host::compile(
             scope,
             &pattern,
-            super::validate_and_canonicalize_flags("u"),
+            super::validate_and_canonicalize_flags(flags),
             &mut budget,
             &memory,
             api::PROGRAM_BYTES,

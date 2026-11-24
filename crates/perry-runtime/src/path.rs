@@ -1114,20 +1114,33 @@ fn perex_path_matches_glob(
     win32: bool,
 ) -> Result<i32, crate::regex::perex_runtime::EngineError> {
     use crate::regex::{perex_glob::GlobProgram, perex_runtime::EngineError};
+    use perex::compiler::CompileError;
     let path = unsafe { string_from_header(path) }.unwrap_or_default();
     let pattern = unsafe { string_from_header(pattern) }.unwrap_or_default();
     let scope = crate::gc::RuntimeHandleScope::new();
     // A segment that does not compile matches nothing, as minimatch's `$.` does.
-    let mut compile = |source: &str| match GlobProgram::new(&scope, source) {
+    let mut compile = |source: &str, unicode: bool| match GlobProgram::new_with_flags(
+        &scope,
+        source,
+        if unicode { "u" } else { "" },
+    ) {
         Ok(program) => Ok(Some(program)),
-        Err(EngineError::Compile(perex::compiler::CompileError::Syntax { .. })) => Ok(None),
+        Err(EngineError::Compile(CompileError::Syntax { .. })) => Ok(None),
         Err(error) => Err(error),
     };
     let mut test = |program: &Option<GlobProgram<'_>>, segment: &str| match program {
         Some(program) => program.is_match(segment),
         None => Ok(false),
     };
-    glob::matches(&path, &pattern, win32, &mut compile, &mut test).map(i32::from)
+    match glob::matches(&path, &pattern, win32, &mut compile, &mut test) {
+        Ok(answer) => Ok(i32::from(answer)),
+        Err(glob::GlobError::Engine(error)) => Err(error),
+        Err(glob::GlobError::PatternTooLong) => Err(EngineError::Type("pattern is too long")),
+        Err(glob::GlobError::TooLarge) => Err(EngineError::Compile(CompileError::Unsupported {
+            feature: "Invalid regular expression: Regular expression too large",
+            utf16_offset: 0,
+        })),
+    }
 }
 
 /// `path.matchesGlob(path, pattern)` — Node 22.5+ API. Returns whether the

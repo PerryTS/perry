@@ -135,6 +135,29 @@ fn matches_glob_answers_like_minimatch() {
         (true, r#"c:\a\b.ts"#, "C:/a/*.ts", true),
         (true, r#"\\srv\share\x"#, "//srv/share/*", true),
         (true, r#"foo\bar\baz"#, "foo/*", false),
+        // Review cases (#15325), answers measured with Node 26.12.1.
+        (false, "a|b", "@(a[|]b|c)", true),
+        (false, "|", "@([|]|x)", true),
+        (true, "//?/C:/a.txt", "c:/*.txt", true),
+        (true, "//?/c:/src/a.ts", "C:/src/*.ts", true),
+        (false, "x\0oA", "x\0o{A,B}", true),
+        (false, "\u{1F600}", "?", false),
+        (false, "wxb", "@(w!(x)|q)b", false),
+        (false, "wyb", "@(w!(x)|q)b", true),
+        (false, "2", "{1..3..-9223372036854775808}", false),
+        (
+            false,
+            "9223372036854775807",
+            "{9223372036854775807..9223372036854775807}",
+            false,
+        ),
+        (false, "99999", "{1..200000}", true),
+        (false, "150000", "{1..200000}", false),
+        (false, "@()", "@()", true),
+        (false, "x", "@()", false),
+        (false, "d", "@(a|@(b|@(c|@(d))))", true),
+        (false, "[x", "[*", true),
+        (false, "[ab", "[@(a|b)b", false),
     ] {
         let (subject_ptr, pattern_ptr) = (string_to_js(subject), string_to_js(pattern));
         let got = if win32 {
