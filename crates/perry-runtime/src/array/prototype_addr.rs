@@ -193,6 +193,53 @@ pub(crate) struct RealmIntrinsics {
     /// %Array.prototype.values% (slot 2 of every arguments object), noted
     /// when Array.prototype installs it.
     array_values: Cell<usize>,
+    /// The realm's original namespace objects (`%Temporal%`,
+    /// `%WebAssembly%`, …), one per `GLOBAL_THIS_BUILTIN_NAMESPACES` row,
+    /// recorded once when the realm binds `globalThis.<Name>`. A later
+    /// `globalThis.<Name> = X` replaces the writable binding only; the
+    /// runtime's own "the builtin namespace" questions read these. Same cell
+    /// algebra as the entries.
+    namespaces: [Cell<usize>; NAMESPACE_ENTRY_COUNT],
+}
+
+/// How many namespace intrinsics a realm has: one per global namespace row.
+const NAMESPACE_ENTRY_COUNT: usize = crate::object::GLOBAL_THIS_BUILTIN_NAMESPACES.len();
+
+fn namespace_cell(name: &str) -> Option<&'static Cell<usize>> {
+    let index = crate::object::GLOBAL_THIS_BUILTIN_NAMESPACES
+        .iter()
+        .position(|listed| *listed == name)?;
+    Some(&crate::state::state().realm_intrinsics.namespaces[index])
+}
+
+/// Record this realm's original namespace object `name` (its address). The
+/// first realm populated on a thread owns the cells, as it owns the entries
+/// ([`note_realm_intrinsic`]). No-op for a name that is no global namespace.
+pub(crate) fn note_realm_namespace(name: &str, addr: usize) {
+    let Some(cell) = namespace_cell(name) else {
+        return;
+    };
+    if addr != 0 && cell.get() == 0 {
+        cell.set(addr);
+        crate::gc::runtime_write_barrier_root_raw_ptr(addr as *const u8);
+    }
+}
+
+/// This realm's original namespace object `name` as a value (`%Temporal%`),
+/// `undefined` before the realm binds it or for a name that is no global
+/// namespace. Never reads the (writable) global binding.
+pub(crate) fn realm_namespace_value(name: &str) -> f64 {
+    let addr = match namespace_cell(name) {
+        Some(cell) => match cell.get() {
+            0 => 0,
+            addr => heal_prototype_addr(cell, addr),
+        },
+        None => 0,
+    };
+    if addr == 0 {
+        return f64::from_bits(crate::value::TAG_UNDEFINED);
+    }
+    crate::value::js_nanbox_pointer(addr as i64)
 }
 
 /// This realm's %Array.prototype.values%, 0 before Array.prototype is built.
@@ -423,6 +470,9 @@ pub fn scan_prototype_addr_cache_roots_mut(visitor: &mut crate::gc::RuntimeRootV
         &crate::state::state().realm_intrinsics.array_values,
         visitor,
     );
+    for cell in &crate::state::state().realm_intrinsics.namespaces {
+        rewrite_prototype_addr_slot(cell, visitor);
+    }
 }
 
 /// The per-cell half of [`scan_prototype_addr_cache_roots_mut`].

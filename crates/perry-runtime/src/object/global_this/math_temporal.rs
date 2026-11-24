@@ -825,7 +825,8 @@ pub(crate) fn temporal_ctor_kind_impl(fp: *const u8) -> Option<crate::temporal::
 }
 
 /// Resolve `Temporal.<kind>.prototype` for a Temporal value's `kind` by
-/// navigating the live `globalThis.Temporal.<Name>.prototype` chain (the
+/// navigating `%Temporal%.<Name>.prototype` (the realm's original namespace, never the
+/// writable global binding; the
 /// prototype object is stamped on each constructor closure's `prototype`
 /// dynamic prop at namespace-install time). Returns `undefined` if the
 /// namespace isn't reachable. Used by `Object.getPrototypeOf` on a Temporal
@@ -852,14 +853,10 @@ pub(crate) fn temporal_kind_prototype(kind: crate::temporal::TemporalKind) -> f6
     // own dereference. Root each hop and re-read its address across the key
     // allocation.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let g_handle = scope.root_nanbox_f64(super::js_get_global_this());
-    let (tkey, g) =
-        g_handle.across_nanbox(|| crate::string::js_string_from_bytes(b"Temporal".as_ptr(), 8));
-    let gp = (g.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
-    if gp.is_null() {
-        return undef;
-    }
-    let temporal = js_object_get_field_by_name(gp, tkey);
+    // %Temporal% (the realm's original namespace), never the writable global
+    // binding: node's `Temporal.X.prototype` here is the birth one.
+    let temporal =
+        crate::value::JSValue::from_bits(crate::array::realm_namespace_value("Temporal").to_bits());
     if !temporal.is_pointer() {
         return undef;
     }

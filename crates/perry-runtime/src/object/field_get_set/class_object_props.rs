@@ -669,8 +669,9 @@ pub(super) unsafe fn instance_constructor_value(
             CLASS_ID_BOXED_SYMBOL => "Symbol",
             _ => unreachable!(),
         };
-        // Declared phase-A globals, each a literal: the realm's core.
-        let v = crate::object::builtin_value_core(name);
+        // The realm's original constructor (the boxed value's prototype's
+        // `constructor`), whatever the global binding holds now.
+        let v = crate::object::builtin_constructor_value(name);
         return Some(JSValue::from_bits(v.to_bits()));
     }
     // #11868: an anonymous shape is not a constructor identity. Let the

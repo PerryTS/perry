@@ -699,6 +699,12 @@ fn populate_rows(singleton_at_entry: *mut ObjectHeader, phases: RealmPhases) {
             }
             crate::value::js_nanbox_pointer(ns_obj as i64)
         };
+        if ns_value.to_bits() & !crate::value::POINTER_MASK == crate::value::POINTER_TAG {
+            crate::array::note_realm_namespace(
+                name,
+                (ns_value.to_bits() & crate::value::POINTER_MASK) as usize,
+            );
+        }
         if phases == RealmPhases::Rest {
             // As for a phase-B family prototype: sealed before the global's
             // slot can name it.

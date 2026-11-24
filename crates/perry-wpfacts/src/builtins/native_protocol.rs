@@ -1544,8 +1544,38 @@ pub fn global_any_field(m: &mut Model, s: KeyShapeId) -> NodeId {
     for call in news {
         m.cons(ga, Cons::New { call });
     }
+    let calls: Vec<CallId> = m
+        .runtime_global_calls
+        .iter()
+        .filter(|(n, _)| m.key_may_name_str(Key::Any(s), n))
+        .map(|(_, c)| *c)
+        .collect();
+    for call in calls {
+        m.cons(ga, Cons::Call { call });
+    }
     global_any_navigator(m);
     ga
+}
+
+/// RTREAD14: the runtime's call `call` of what the global object holds
+/// under `name`, a name it reads at run time (`Gen::runtime_global_handlers`):
+/// on the name's field and on every any-key field whose key can spell it
+/// (made now or later, `global_any_field`).
+pub fn runtime_global_call(m: &mut Model, name: &str, call: CallId) {
+    let g = m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+    let a = m.atom(name);
+    let f = global_field(m, g, a);
+    m.cons(f, Cons::Call { call });
+    let hits: Vec<NodeId> = m
+        .global_any_fields
+        .iter()
+        .filter(|(s, _)| m.key_may_name_str(Key::Any(*s), name))
+        .map(|(_, f)| *f)
+        .collect();
+    for f in hits {
+        m.cons(f, Cons::Call { call });
+    }
+    m.runtime_global_calls.push((name.to_string(), call));
 }
 
 /// GLOBK3: the global object's field of what a `defineProperty` under a

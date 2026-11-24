@@ -1067,14 +1067,16 @@ unsafe fn native_module_property_by_name_impl(
     if module_name == "util" && property_name == "debug" {
         return bound_native_callable_export_value("util", "debuglog");
     }
+    // The realm's original constructors (`%URL%`), as in node: replacing
+    // `globalThis.URL` does not change `require("url").URL`.
     if module_name == "url" && property_name == "URL" {
-        return crate::object::builtin_value_core("URL");
+        return crate::object::builtin_constructor_value("URL");
     }
     if module_name == "url" && property_name == "URLSearchParams" {
-        return crate::object::builtin_value_core("URLSearchParams");
+        return crate::object::builtin_constructor_value("URLSearchParams");
     }
     if module_name == "url" && property_name == "URLPattern" {
-        return crate::object::builtin_value_core("URLPattern");
+        return crate::object::builtin_constructor_value("URLPattern");
     }
     // #6560/#9599 — Bun globals shim pack. The stdio properties are
     // BunFile-like handles built by `bun_compat`. In Bun platform mode the

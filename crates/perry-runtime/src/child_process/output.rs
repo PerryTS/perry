@@ -140,7 +140,8 @@ fn cp_make_error_with_class(
     };
     set("name", cp_box_string(name));
     set("message", cp_box_string(message));
-    let constructor = crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len());
+    // The realm's original constructor, whatever the global binding holds.
+    let constructor = crate::object::builtin_constructor_value(name);
     set("constructor", constructor);
     // `name`/`message` are non-enumerable on a Node Error (only the diagnostic
     // props are enumerable), so keep them out of `Object.keys(err)`.

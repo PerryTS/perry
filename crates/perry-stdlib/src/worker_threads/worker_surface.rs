@@ -367,9 +367,13 @@ pub(super) fn install_web_worker_globals() {
     set_object_field(global(), "onerror", js_null());
 }
 
+/// The worker global's `on<type>` handler: the runtime's by-name global read
+/// (realm table `RUNTIME_GLOBAL_READS`).
 pub(super) fn web_worker_global_handler(name: &str) -> Option<u64> {
-    let global_value = perry_runtime::object::js_get_global_this();
-    object_event_handler(global_value.to_bits(), name)
+    callback_bits_from_value(perry_runtime::object::js_get_global_this_builtin_value(
+        name.as_ptr(),
+        name.len(),
+    ))
 }
 
 extern "C" fn web_worker_post_message(

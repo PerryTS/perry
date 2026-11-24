@@ -3921,6 +3921,32 @@ fn builtin_protos_unwritten(
             "native member: unknown code holds the realm and may replace the member".into(),
         );
     }
+    // PSTORE (owner 2026-11-24, the E20 realm hold dropped): a program
+    // store onto a prototype on the family's chain is a member of THAT
+    // intrinsic, which every lookup on a value of the family passes
+    // (`builtins::intrinsic_miss_on`). A realm prototype taken as a value
+    // (`Storage.prototype`, `Response.prototype`: `builtins::realm_proto_of`)
+    // is one object of its own, its writes are recorded under its identity
+    // alone (`solve::native_proto_alias`), not under `ObjectProto`: ask
+    // each prototype of the realm's declared chain (`native_chain`) here.
+    if let Some(fam) = fam.filter(|_| !locked) {
+        for name in crate::builtins::native_chain(fam.chain_holder()) {
+            let Some(&np) = m.tok_index.get(&TokKind::native_proto(&name)) else {
+                continue;
+            };
+            let (top, own) = crate::builtins::native_written_by(m, np, a);
+            if own {
+                return Err(format!(
+                    "native member: the program writes the key onto {name}.prototype"
+                ));
+            }
+            if top {
+                return Err(format!(
+                    "native member: a store into ⊤ may write the key onto {name}.prototype"
+                ));
+            }
+        }
+    }
     let (through_top, own) = match objproto {
         _ if locked => (false, false),
         Some(op) => crate::builtins::native_written_by(m, op, a),

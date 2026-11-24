@@ -1136,6 +1136,97 @@ impl<'a> Gen<'a> {
 }
 
 impl<'a> Gen<'a> {
+    /// W-HOST: the structured clone a message carries (thread/clone_write.rs,
+    /// Message mode; StructuredDeserialize): fresh ordinary objects and
+    /// arrays, Map, Set, Date, RegExp, Error, ArrayBuffer and typed arrays,
+    /// each holding the others and any primitive; never a program object,
+    /// function or program prototype. The tokens of the tree.
+    fn message_clone_tree(&mut self, mi: u32) -> Vec<Tok> {
+        let (obj, _) = self.bobj(mi, "json");
+        let arr = self.new_arr_template(mi, "json");
+        let arr = self.m.tok(TokKind::Obj(arr, NO_CTX));
+        let mut tree = vec![obj, arr];
+        for what in [
+            "Map",
+            "Set",
+            "Date",
+            "RegExp",
+            "Error",
+            "ArrayBuffer",
+            "TypedArray",
+        ] {
+            let (x, _) = self.bobj(mi, what);
+            tree.push(x);
+        }
+        for &o in &tree {
+            let fa = self.m.field_any(o);
+            self.m.add_prim(fa, prim::ALL);
+            for &x in &tree {
+                self.m.add_tok(fa, x);
+            }
+        }
+        tree
+    }
+
+    /// W-HOST: a message's event: a MessageEvent (perry-runtime
+    /// event_target/message_event.rs `delivery`, `delivery_with_ports`),
+    /// [[Prototype]] %MessageEvent.prototype% -> %Event.prototype%, no own
+    /// property; its `data` getter returns its [[data]] slot, the clone
+    /// `tree`. Its `ports` stay the generic MessagePort path.
+    fn message_event(&mut self, mi: u32, tree: &[Tok]) -> Tok {
+        let (mev, _) = self.bobj(mi, "MessageEvent.prototype");
+        let da = crate::builtins::worker_slot_atom(&mut self.m, "data");
+        let data = self.m.field_r(mev, da);
+        self.m.add_prim(data, prim::ALL);
+        for &x in tree {
+            self.m.add_tok(data, x);
+        }
+        mev
+    }
+
+    /// RTREAD14 (owner 2026-11-23 Phase B, 2026-11-24 RUNTIME_GLOBAL_READS):
+    /// what the runtime does with a value it reads from the global object by
+    /// name. Every such read is the Worker global's handler
+    /// `%WorkerGlobal%.<name>` (perry-stdlib worker_threads/worker_surface.rs
+    /// `web_worker_global_handler`), and its one consumer
+    /// (channel_pump.rs, the parent port's message) calls a callable value
+    /// with `this` = the global object and one argument, the MessageEvent
+    /// (`message_event_with_ports`) of the structured clone the parent
+    /// posted; the host reports its throw. A value that is not callable is
+    /// never touched (`callback_bits_from_value`). So the store under such a
+    /// name is the program's field and this call its whole run-time use: no
+    /// escape. One event node per program, one call per name, on the name's
+    /// global field and every any-key global field that can spell it
+    /// (`builtins::runtime_global_call`). The event and its clone are born
+    /// when a value first reaches such a field (`runtime_global_event`), so
+    /// a program that stores no handler births none of their families.
+    pub(crate) fn runtime_global_handlers(&mut self) {
+        let names = perry_realm_table::RUNTIME_GLOBAL_READS;
+        if self.m.unit_mode || self.modules.is_empty() || names.is_empty() {
+            return;
+        }
+        let ev = self.m.node_l("runtime-message-event");
+        self.m.runtime_event = Some(ev);
+        let g = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        for &name in names {
+            if crate::builtins::members::realm_entry(&format!(
+                "{}{name}",
+                crate::builtins::WORKER_GLOBAL_PREFIX
+            ))
+            .is_none()
+            {
+                unreachable!(
+                    "REALMVAL: the runtime reads global {name} by name, but no \
+                     %WorkerGlobal%.{name} handler declares what it does with it"
+                );
+            }
+            let gn = self.tok_node(g);
+            let (id, _) = self.new_call(ThisArg::Node(gn), vec![ev], vec![]);
+            self.m.calls[id as usize].region = self.m.host_report;
+            crate::builtins::runtime_global_call(&mut self.m, name, id);
+        }
+    }
+
     /// W-HOST (LADDER18): what the runtime does with the host Worker `t`
     /// (node `n`) made at this site (perry-stdlib worker_threads
     /// worker_pump.rs `dispatch_worker_event_with_ports`, worker_threads.rs
@@ -1166,46 +1257,14 @@ impl<'a> Gen<'a> {
     /// Listener registration and `postMessage` are the Worker methods of
     /// `bobj_method` (builtins/collections.rs `worker_method`).
     fn worker_host(&mut self, mi: u32, t: Tok, n: NodeId) {
-        let (obj, _) = self.bobj(mi, "json");
-        let arr = self.new_arr_template(mi, "json");
-        let arr = self.m.tok(TokKind::Obj(arr, NO_CTX));
-        let mut tree = vec![obj, arr];
-        for what in [
-            "Map",
-            "Set",
-            "Date",
-            "RegExp",
-            "Error",
-            "ArrayBuffer",
-            "TypedArray",
-        ] {
-            let (x, _) = self.bobj(mi, what);
-            tree.push(x);
-        }
-        for &o in &tree {
-            let fa = self.m.field_any(o);
-            self.m.add_prim(fa, prim::ALL);
-            for &x in &tree {
-                self.m.add_tok(fa, x);
-            }
-        }
+        let tree = self.message_clone_tree(mi);
         let pa = crate::builtins::worker_slot_atom(&mut self.m, "WorkerPayload");
         let payload = self.m.field_r(t, pa);
         self.m.add_prim(payload, prim::ALL);
         for &x in &tree {
             self.m.add_tok(payload, x);
         }
-        // A message's event: a MessageEvent (message_event.rs `delivery`),
-        // [[Prototype]] %MessageEvent.prototype% -> %Event.prototype%, no
-        // own property; its `data` getter returns its [[data]] slot, the
-        // clone tree. Its `ports` stay the generic MessagePort path.
-        let (mev, _) = self.bobj(mi, "MessageEvent.prototype");
-        let da = crate::builtins::worker_slot_atom(&mut self.m, "data");
-        let data = self.m.field_r(mev, da);
-        self.m.add_prim(data, prim::ALL);
-        for &x in &tree {
-            self.m.add_tok(data, x);
-        }
+        let mev = self.message_event(mi, &tree);
         // HOSTEV: any other event (`error`, `messageerror`, `exit`) is the
         // plain object of perry-stdlib worker_threads.rs `event_object`
         // (Object.prototype): exactly the own data fields `type` (the event

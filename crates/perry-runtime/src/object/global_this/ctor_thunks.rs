@@ -251,7 +251,7 @@ pub(crate) fn builtin_prototype_value(name: &str) -> f64 {
 /// declares no builtin. The same realm entry as [`builtin_prototype_value`]:
 /// after `globalThis.Promise = X`, "is `C` the builtin Promise" and "what is
 /// a promise's inherited `constructor`" still answer `%Promise%`.
-pub(crate) fn builtin_constructor_value(name: &str) -> f64 {
+pub fn builtin_constructor_value(name: &str) -> f64 {
     let addr = match name {
         "Buffer" => return crate::object::native_module::buffer_constructor_value(),
         "Object" => crate::object::ensure_object_intrinsics().0 as usize,

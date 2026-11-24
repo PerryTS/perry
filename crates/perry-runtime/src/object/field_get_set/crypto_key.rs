@@ -34,7 +34,7 @@ pub(crate) unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) ->
         })),
         b"usages" => Some(crypto_key_usages_value(usages)),
         b"constructor" => {
-            let ctor = crate::object::builtin_value_core("CryptoKey");
+            let ctor = crate::object::builtin_constructor_value("CryptoKey");
             Some(JSValue::from_bits(ctor.to_bits()))
         }
         _ => None,

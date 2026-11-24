@@ -204,8 +204,12 @@ fn object_matcher_matches(actual: f64, expected: f64) -> bool {
 }
 
 fn constructor_name_matches_builtin_error(thrown: f64, expected: f64) -> bool {
+    // The realm's original constructors: node compares `expected` by
+    // identity, never through the global binding.
     fn global_builtin(name: &'static [u8]) -> f64 {
-        crate::object::js_get_global_this_builtin_value(name.as_ptr(), name.len())
+        crate::object::builtin_constructor_value(
+            std::str::from_utf8(name).expect("a static ASCII constructor name"),
+        )
     }
 
     let expected_name = if expected.to_bits() == global_builtin(b"Error").to_bits() {

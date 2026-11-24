@@ -293,6 +293,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             return super::static_dispatch::instanceof_class_resolved(
                 value,
                 class_id,
+                type_ref,
                 primitive,
                 lhs_non_proxy,
             );
@@ -300,6 +301,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         return super::static_dispatch::instanceof_classified(
             value,
             class_id,
+            type_ref,
             primitive,
             lhs_non_proxy,
         );
@@ -381,6 +383,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                     value,
                     class_id,
                     Some(type_ref),
+                    None,
                 );
             }
             Some(BuiltinInstanceIdentity::Crypto) => {
@@ -474,7 +477,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 // the class-id chain the same way the EventEmitter branch below
                 // does for its own subclass case.
                 || (method == "Stream"
-                    && super::static_dispatch::instanceof_classified(value, 0xFFFF0070, primitive, lhs_non_proxy).to_bits() == crate::value::TAG_TRUE))
+                    && super::static_dispatch::instanceof_classified(value, 0xFFFF0070, type_ref, primitive, lhs_non_proxy).to_bits() == crate::value::TAG_TRUE))
         {
             return f64::from_bits(crate::value::TAG_TRUE);
         }
@@ -495,6 +498,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 if super::static_dispatch::instanceof_classified(
                     value,
                     CLASS_ID_EVENT_EMITTER,
+                    type_ref,
                     primitive,
                     lhs_non_proxy,
                 )
@@ -621,6 +625,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
             let result = super::static_dispatch::instanceof_classified(
                 value,
                 class_id,
+                type_ref,
                 primitive,
                 lhs_non_proxy,
             );
@@ -649,6 +654,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
                 return super::static_dispatch::instanceof_classified(
                     value,
                     class_id,
+                    type_ref,
                     primitive,
                     lhs_non_proxy,
                 );
@@ -659,6 +665,7 @@ pub extern "C" fn js_instanceof_dynamic(value: f64, mut type_ref: f64) -> f64 {
         return super::static_dispatch::instanceof_classified(
             value,
             crate::buffer::NODE_BUFFER_CLASS_ID,
+            type_ref,
             primitive,
             lhs_non_proxy,
         );

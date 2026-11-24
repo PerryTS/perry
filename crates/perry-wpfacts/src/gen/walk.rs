@@ -156,6 +156,9 @@ impl<'a> Gen<'a> {
                 return;
             }
         }
+        // RTREAD14: the runtime's calls of the globals it reads by name,
+        // after the program's own calls (their ids stay the program's).
+        self.runtime_global_handlers();
     }
 
     /// RPG1b: module `mi`'s static evaluation dependencies (`Model::eval_deps`).

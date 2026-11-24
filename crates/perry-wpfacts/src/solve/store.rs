@@ -613,6 +613,13 @@ impl Model {
                 let g = self.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
                 let f = builtins::global_field(self, g, a);
                 self.edge(src, f);
+                // A key the global-store escape rule keeps (owner 11-24;
+                // a run-time-read name is not one: its runtime call hangs
+                // on this field, `Gen::runtime_global_handlers`) hands the
+                // stored value on (`tok_store`), beside the field.
+                if builtins::global_store_escapes(self, t, key) {
+                    self.with_b(|m| builtins::tok_store(m, t, key, src));
+                }
                 return;
             }
         }

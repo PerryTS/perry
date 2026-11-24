@@ -848,13 +848,9 @@ fn attach_assertion_error_prototype(constructor_value: f64) {
     }
     let scope = crate::gc::RuntimeHandleScope::new();
     let constructor = scope.root_nanbox_f64(constructor_value);
-    let error = {
-        let name = "Error";
-        scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
-            name.as_ptr(),
-            name.len(),
-        ))
-    };
+    // `%Error%`, not the global binding: node's AssertionError extends the
+    // realm's original Error whatever `globalThis.Error` holds.
+    let error = scope.root_nanbox_f64(crate::object::builtin_constructor_value("Error"));
     let error_prototype = {
         scope.root_nanbox_f64(unsafe {
             crate::value::js_dynamic_object_get_property(

@@ -33,6 +33,23 @@ pub fn generate(runtime_src: &Path, out: &Path) -> Result<RealmManifest, String>
         writeln!(rust,"crate::realm_manifest::RealmEntry {{ name: {:?}, kind: crate::realm_manifest::RealmKind::{:?}, births: &{:?}, module: {}, facts: {:?}, effects: {effects}, own: {own}, proto: {:?}, value: {value} }},",d.name,d.kind,d.births,module,serde_json::to_string(d).unwrap(),d.prototype).unwrap();
     }
     rust.push_str("];\n");
+    // Owner decision 2026-11-24 (RTREAD): the global names the runtime reads
+    // at run time, derived from its lookup sites (`realm_source::global_reads`).
+    let reads = perry_runtime_manifest::realm_source::global_reads::read(runtime_src)?;
+    rust.push_str("pub static RUNTIME_GLOBAL_READS: &[&str] = &[\n");
+    let mut sites = String::new();
+    for (name, at) in &reads.names {
+        writeln!(rust, "    {name:?},").unwrap();
+        for s in at {
+            writeln!(sites, "{name}\t{s}").unwrap();
+        }
+    }
+    rust.push_str("];\n");
+    for (entry, names) in &reads.abi_readers {
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        writeln!(sites, "abi-reader\t{entry}\t{}", names.join(",")).unwrap();
+    }
+    std::fs::write(out.join("runtime-global-reads.tsv"), sites).map_err(|e| e.to_string())?;
     std::fs::write(out.join("realm_table.rs"), rust).map_err(|e| e.to_string())?;
     std::fs::write(
         out.join("realm-consume-time-ns"),

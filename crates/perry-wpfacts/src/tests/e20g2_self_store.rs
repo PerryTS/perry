@@ -116,7 +116,14 @@ fn e20g2_global_to_unknown_call_reads_declared_names() {
 #[test]
 fn e20g2_global_to_unknown_call_declared_name_escapes() {
     let mut bad = Vec::new();
-    for name in ["onerror", "WebAssembly", "Array", "setTimeout", "console"] {
+    // // owner 11-24: only names perry-runtime reads at run time (derived; today: onmessage) make a global store escape; each of onerror, WebAssembly, Array, setTimeout is not one of them.
+    for (name, escapes) in [
+        ("onerror", false),
+        ("WebAssembly", false),
+        ("Array", false),
+        ("setTimeout", false),
+        ("console", true),
+    ] {
         let src = format!(
             "class N {{ v = 1; }}
             const n = new N();
@@ -125,8 +132,8 @@ fn e20g2_global_to_unknown_call_declared_name_escapes() {
             f(globalThis);
             console.log(/*A*/ n.v);"
         );
-        if v_proven(&src) {
-            bad.push(format!("{name}: n.v proven although the runtime reads it"));
+        if v_proven(&src) == escapes {
+            bad.push(format!("{name}: n.v proven != {}", !escapes));
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
@@ -221,14 +228,16 @@ fn stop8_entries_store_is_under_the_known_keys() {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
-/// KEEP: the literal written under a key no name lists: `k` is any string,
-/// the store reaches the self-reference and the E20 store holds the realm.
+/// The literal written under a key no name lists: `k` is any string, the
+/// store reaches the self-reference and escapes there under E20; owner
+/// 11-24: that no longer holds the realm.
 #[test]
 fn stop8_entries_unknown_key_keeps_the_hold() {
     let mut bad = Vec::new();
     for s in ENTRIES {
-        if !held(&entries_src(s, "classes[String(Date.now())] = A;")) {
-            bad.push(format!("{s}: realm not held"));
+        // owner 11-24: E20 carve-out dropped; the stored value escapes to the runtime per its contract, the realm is not held.
+        if held(&entries_src(s, "classes[String(Date.now())] = A;")) {
+            bad.push(format!("{s}: realm held"));
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
