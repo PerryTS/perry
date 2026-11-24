@@ -459,7 +459,7 @@ pub(crate) fn closed_number_call(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     if ctx.wpfacts_off {
         return false;
     }
-    if crate::codegen::facts_rep::number_call(ctx, callee, *call_offset) {
+    if crate::codegen::facts_rep::number_call(ctx, callee, Some(*call_offset)) {
         return true;
     }
     let Expr::PropertyGet {

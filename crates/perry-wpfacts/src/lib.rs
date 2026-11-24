@@ -397,9 +397,10 @@ pub struct ProgramFacts {
     /// [`ProgramFacts::interp_guard`]'s.
     pub fnproto_bind_written: Option<String>,
     /// ASSUMED (`FactsConfig::native_externs`): the extern call sites
-    /// (module path, byte offset) modeled by the native-extern assumption;
-    /// every fact of the program rests on it when this is non-empty.
-    pub native_extern_sites: Vec<(String, u32)>,
+    /// (module path, the call's byte offset; `None`: a spread call) modeled
+    /// by the native-extern assumption; every fact of the program rests on
+    /// it when this is non-empty.
+    pub native_extern_sites: Vec<(String, Option<u32>)>,
     /// #13645: an array's `@@iterator` may not be the builtin, and why
     /// (`Model::array_iteration_writes`); `None`: compiled code never
     /// changes it. Interpreted code is [`ProgramFacts::interp_guard`]'s.
@@ -1326,7 +1327,7 @@ fn compute_act<'a>(
     } else {
         g.m.array_iteration_writes()
     };
-    let native_extern_sites: Vec<(String, u32)> =
+    let native_extern_sites: Vec<(String, Option<u32>)> =
         g.m.native_extern_fired
             .iter()
             .map(|&(mi, off)| {
