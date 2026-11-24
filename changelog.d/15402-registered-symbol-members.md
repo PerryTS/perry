@@ -1,0 +1,1 @@
+Fixed: class methods and accessors named `[Symbol.for("…")]` are defined on the prototype again; they were missing, so a call threw `value is not a function` and an `EventEmitter` subclass's `[Symbol.for("nodejs.rejection")]` hook never ran.
