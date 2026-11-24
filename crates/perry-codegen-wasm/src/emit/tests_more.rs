@@ -1270,6 +1270,9 @@ mod math_minmax;
 #[path = "async_operator_tests.rs"]
 mod async_operator;
 
+#[path = "number_to_string_radix_tests.rs"]
+mod number_to_string_radix;
+
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {
     assert_eq!(
