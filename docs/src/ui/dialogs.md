@@ -34,8 +34,13 @@ returns; read the path from `openFileDialog` instead. On HarmonyOS the call does
 nothing, as `openFileDialog` does.
 
 The page keeps every `dataUrl` it receives, about 1.4 times the file's size, in
-memory until it is closed, and there is no size limit: use it for photos and
-documents, not for large files.
+memory until it is closed, and `JSON.stringify` of it, as below, keeps a second
+copy. A file whose `dataUrl` does not fit in one string (above about 384 MB in
+Chrome) arrives as `(name, "")`, like one that cannot be read. Use it for photos
+and documents, not for large files.
+
+Call it from a user gesture such as a button press: the callback may never run
+without one, or when the reader cancels in a browser without the `cancel` event.
 
 ```typescript,no-test
 openFileDialogData("image/*", (name: string, dataUrl: string) => {
