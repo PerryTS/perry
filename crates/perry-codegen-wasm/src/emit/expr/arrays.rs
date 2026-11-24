@@ -308,24 +308,18 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::ArrayIndexOf {
                 array,
                 value,
-                from_index: _,
+                from_index,
             } => {
-                // NOTE: the wasm backend's array_index_of helper does not yet
-                // honor the optional fromIndex (#2804 covers the native path).
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, array);
-                self.emit_store_arg(func, 1, value);
-                self.emit_memcall(func, "array_index_of", 2);
+                let argc = self.emit_array_search_frame(func, array, value, from_index);
+                self.emit_memcall(func, "array_index_of", argc);
             }
             Expr::ArrayIncludes {
                 array,
                 value,
-                from_index: _,
+                from_index,
             } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, array);
-                self.emit_store_arg(func, 1, value);
-                self.emit_memcall_i32(func, "array_includes", 2);
+                let argc = self.emit_array_search_frame(func, array, value, from_index);
+                self.emit_memcall_i32(func, "array_includes", argc);
                 // Convert i32 to NaN-boxed boolean
                 func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                     ValType::I64,
@@ -573,5 +567,24 @@ impl<'a> FuncEmitCtx<'a> {
             _ => return false,
         }
         true
+    }
+
+    /// Opens the frame of `indexOf` / `includes`: the array, the value and, when given,
+    /// fromIndex. Returns the slot count.
+    fn emit_array_search_frame(
+        &mut self,
+        func: &mut Function,
+        array: &Expr,
+        value: &Expr,
+        from_index: &Option<Box<Expr>>,
+    ) -> u32 {
+        let argc = if from_index.is_some() { 3 } else { 2 };
+        self.emit_frame_begin(func, argc);
+        self.emit_store_arg(func, 0, array);
+        self.emit_store_arg(func, 1, value);
+        if let Some(from) = from_index {
+            self.emit_store_arg(func, 2, from);
+        }
+        argc
     }
 }
