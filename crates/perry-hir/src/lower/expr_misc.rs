@@ -134,7 +134,7 @@ pub(super) fn lower_super_prop(
                 let index = Box::new(lower_expr(ctx, &computed.expr)?);
                 Ok(Expr::IndexGet {
                     element_offset: 0,
-                    byte_offset: 0,
+                    byte_offset: super_prop.span.lo.0,
                     byte_end: 0,
                     object: Box::new(Expr::This),
                     index,
@@ -299,7 +299,7 @@ pub(super) fn lower_update(ctx: &mut LoweringContext, update: &ast::UpdateExpr) 
                         prefix: update.prefix,
                         strict: ctx.current_strict,
                         element_offset: update.span.lo.0,
-                        byte_offset: 0,
+                        byte_offset: update.span.lo.0,
                         byte_end: 0,
                     })
                 }

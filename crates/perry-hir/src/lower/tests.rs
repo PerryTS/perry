@@ -666,7 +666,7 @@ fn test_native_module_binding_value_named_import() {
         "path".to_string(),
         Some("relative".to_string()),
     );
-    let value = super::lower_expr::native_module_binding_value(&ctx, "relative");
+    let value = super::lower_expr::native_module_binding_value(&ctx, "relative", 0);
     assert!(matches!(
         value,
         crate::ir::Expr::Call { callee, args, .. }
@@ -716,7 +716,7 @@ fn test_native_module_binding_value_os_eol() {
     // used directly or as a shorthand property.
     let mut ctx = make_ctx();
     ctx.register_native_module("EOL".to_string(), "os".to_string(), Some("EOL".to_string()));
-    let value = super::lower_expr::native_module_binding_value(&ctx, "EOL");
+    let value = super::lower_expr::native_module_binding_value(&ctx, "EOL", 0);
     assert!(matches!(value, crate::ir::Expr::OsEOL));
 }
 
@@ -727,7 +727,7 @@ fn test_native_module_binding_value_namespace() {
     // property must match what the bare identifier reference produces.
     let mut ctx = make_ctx();
     ctx.register_native_module("crypto".to_string(), "crypto".to_string(), None);
-    let value = super::lower_expr::native_module_binding_value(&ctx, "crypto");
+    let value = super::lower_expr::native_module_binding_value(&ctx, "crypto", 0);
     assert!(matches!(value, crate::ir::Expr::NativeModuleRef(ref m) if m == "crypto"));
 }
 

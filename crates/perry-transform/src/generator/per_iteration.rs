@@ -1915,6 +1915,7 @@ mod tests {
                 captures: vec![read_x()],
             }),
             Stmt::Expr(Expr::RefreshClassExprCaptures {
+                byte_offset: 0,
                 class_value: Box::new(Expr::Undefined),
                 captures: vec![read_x()],
                 env_class: None,

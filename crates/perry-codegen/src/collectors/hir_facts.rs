@@ -2799,9 +2799,10 @@ mod tests {
     fn native_fact_graph_collects_range_and_shape_escape_facts() {
         let stmts = vec![
             mutable_number_let(1, Expr::Integer(0)),
-            Stmt::Expr(Expr::synthetic_index_get(
+            Stmt::Expr(Expr::index_get_at(
                 Box::new(Expr::LocalGet(2)),
                 Box::new(Expr::LocalGet(1)),
+                0,
             )),
             Stmt::Let {
                 id: 3,
@@ -2901,10 +2902,11 @@ mod tests {
             &[
                 number_array_let(1, &[1, 2, 3]),
                 alias_let(2, 1),
-                Stmt::Expr(Expr::synthetic_index_set(
+                Stmt::Expr(Expr::index_set_at(
                     Box::new(Expr::LocalGet(2)),
                     Box::new(Expr::Integer(0)),
                     Box::new(Expr::Integer(9)),
+                    0,
                 )),
             ],
             &HashSet::new(),
@@ -2923,10 +2925,11 @@ mod tests {
         let graph = collect_hir_facts(
             &[
                 number_array_let(1, &[1, 2, 3]),
-                Stmt::Expr(Expr::synthetic_index_set(
+                Stmt::Expr(Expr::index_set_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(Expr::Integer(0)),
                     Box::new(Expr::Integer(9)),
+                    0,
                 )),
             ],
             &HashSet::new(),

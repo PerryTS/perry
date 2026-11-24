@@ -591,10 +591,11 @@ fn idxset_inbounds_ir_for_target(target: Option<&str>) -> String {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                body: vec![Stmt::Expr(Expr::index_set_at(
                     Box::new(Expr::LocalGet(ARR_ID)),
                     Box::new(Expr::LocalGet(IDX_ID)),
                     Box::new(Expr::LocalGet(VAL_ID)),
+                    0,
                 ))],
             },
             Stmt::Return(Some(Expr::LocalGet(ARR_ID)), 0),
@@ -695,10 +696,11 @@ fn idxset_recv_global_ir() -> String {
                 // multi-statement store bodies, this probe goes red again —
                 // deliberately — and must be re-shaped, not deleted.
                 body: vec![
-                    Stmt::Expr(Expr::synthetic_index_set(
+                    Stmt::Expr(Expr::index_set_at(
                         Box::new(Expr::LocalGet(G_ID)),
                         Box::new(Expr::LocalGet(IDX_ID)),
                         Box::new(Expr::LocalGet(VAL_ID)),
+                        0,
                     )),
                     Stmt::Expr(Expr::Call {
                         byte_end: 0,
@@ -788,10 +790,11 @@ fn idxset_recv_captured_ir() -> String {
                             op: UpdateOp::Increment,
                             prefix: false,
                         }),
-                        body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                        body: vec![Stmt::Expr(Expr::index_set_at(
                             Box::new(Expr::LocalGet(ARR_ID)),
                             Box::new(Expr::LocalGet(IDX_ID)),
                             Box::new(Expr::LocalGet(VAL_ID)),
+                            0,
                         ))],
                     }],
                     captures: vec![ARR_ID, VAL_ID],
@@ -899,10 +902,11 @@ fn idxset_runtime_key_ir() -> String {
         ],
         return_type: Type::Any,
         body: vec![
-            Stmt::Expr(Expr::synthetic_index_set(
+            Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(ARR_ID)),
                 Box::new(Expr::LocalGet(IDX_ID)),
                 Box::new(Expr::LocalGet(VAL_ID)),
+                0,
             )),
             Stmt::Return(Some(Expr::LocalGet(ARR_ID)), 0),
         ],
@@ -945,10 +949,11 @@ fn dynarr_set_ir() -> String {
         params: vec![param(ARR_ID, "a"), param(IDX_ID, "k"), param(VAL_ID, "v")],
         return_type: Type::Any,
         body: vec![
-            Stmt::Expr(Expr::synthetic_index_set(
+            Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(ARR_ID)),
                 Box::new(Expr::LocalGet(IDX_ID)),
                 Box::new(Expr::LocalGet(VAL_ID)),
+                0,
             )),
             Stmt::Return(Some(Expr::LocalGet(ARR_ID)), 0),
         ],
@@ -1047,10 +1052,11 @@ fn idxset_bounded_ir_with(quiet: bool) -> String {
                     op: UpdateOp::Increment,
                     prefix: false,
                 }),
-                body: vec![Stmt::Expr(Expr::synthetic_index_set(
+                body: vec![Stmt::Expr(Expr::index_set_at(
                     Box::new(Expr::LocalGet(ARR_ID)),
                     Box::new(Expr::LocalGet(IDX_ID)),
                     Box::new(Expr::LocalGet(VAL_ID)),
+                    0,
                 ))],
             },
             Stmt::Return(Some(Expr::LocalGet(ARR_ID)), 0),

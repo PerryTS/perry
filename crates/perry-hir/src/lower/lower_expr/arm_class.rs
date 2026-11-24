@@ -365,7 +365,7 @@ pub(crate) fn lower_class_expr(
             // returns. Empty entries materialize that local without emitting a
             // capture refresh.
             ctx.body_class_expr_captures
-                .push((owner, ids, env_class.clone()));
+                .push((owner, ids, env_class.clone(), class_expr.class.span.lo.0));
             Some(owner)
         } else if ids.is_empty() {
             None
@@ -375,7 +375,7 @@ pub(crate) fn lower_class_expr(
                 crate::types::Type::Any,
             );
             ctx.body_class_expr_captures
-                .push((owner, ids, env_class.clone()));
+                .push((owner, ids, env_class.clone(), class_expr.class.span.lo.0));
             Some(owner)
         }
     } else {

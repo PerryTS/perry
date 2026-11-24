@@ -336,7 +336,7 @@ fn source_for_of(
             ty: element_ty,
             mutable: var_decl.kind != ast::VarDeclKind::Const,
             init: Some(Expr::IndexGet {
-                byte_offset: 0,
+                byte_offset: stmt.span.lo.0,
                 byte_end: 0,
                 element_offset: walk_site_key(binding),
                 object: Box::new(Expr::LocalGet(array)),

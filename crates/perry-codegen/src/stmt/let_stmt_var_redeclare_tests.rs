@@ -107,9 +107,10 @@ fn let_numeric_array_compare_against_void_stays_boxed() {
                 init: Some(Expr::Compare {
                     byte_offset: 0,
                     op: CompareOp::Eq,
-                    left: Box::new(Expr::synthetic_index_get(
+                    left: Box::new(Expr::index_get_at(
                         Box::new(Expr::LocalGet(ARR)),
                         Box::new(Expr::Integer(1)),
+                        0,
                     )),
                     right: Box::new(Expr::Void(Box::new(Expr::Integer(0)))),
                 }),

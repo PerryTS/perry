@@ -911,9 +911,10 @@ fn the_recursive_fuse_inside_a_producer_body_counts() {
             }),
             body: vec![Stmt::Expr(Expr::ArrayPush {
                 array_id: 10,
-                value: Box::new(Expr::synthetic_index_get(
+                value: Box::new(Expr::index_get_at(
                     Box::new(Expr::LocalGet(40)),
                     Box::new(Expr::LocalGet(41)),
+                    0,
                 )),
                 field_writeback: None,
             })],
@@ -1003,9 +1004,10 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
                 }),
                 body: vec![Stmt::Expr(Expr::ArrayPush {
                     array_id: outer,
-                    value: Box::new(Expr::synthetic_index_get(
+                    value: Box::new(Expr::index_get_at(
                         Box::new(Expr::LocalGet(child)),
                         Box::new(Expr::LocalGet(j)),
+                        0,
                     )),
                     field_writeback: None,
                 })],

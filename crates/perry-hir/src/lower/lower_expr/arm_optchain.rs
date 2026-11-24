@@ -234,7 +234,7 @@ pub(crate) fn lower_opt_chain_expr(
                     let index = lower_expr(ctx, &comp.expr)?;
                     Expr::IndexGet {
                         element_offset: member.span.lo.0,
-                        byte_offset: 0,
+                        byte_offset: member.span.lo.0,
                         byte_end: 0,
                         object: Box::new(obj_expr.clone()),
                         index: Box::new(index),
@@ -376,7 +376,7 @@ pub(crate) fn lower_opt_chain_expr(
                             let idx = lower_expr(ctx, &c.expr)?;
                             Expr::IndexGet {
                                 element_offset: member.span.lo.0,
-                                byte_offset: 0,
+                                byte_offset: member.span.lo.0,
                                 byte_end: 0,
                                 object: Box::new(obj.clone()),
                                 index: Box::new(idx),

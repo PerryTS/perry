@@ -53,13 +53,14 @@ pub(crate) fn lazy_or_index_elem(
     arr_id: LocalId,
     idx_id: LocalId,
     result_id: LocalId,
+    byte_offset: u32,
 ) -> Expr {
     if use_lazy_iter {
         Expr::LocalGet(result_id)
     } else {
         Expr::IndexGet {
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset: byte_offset,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(arr_id)),
             index: Box::new(Expr::LocalGet(idx_id)),
@@ -1670,7 +1671,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 } else {
                     let raw_item_expr = Expr::IndexGet {
                         element_offset: 0,
-                        byte_offset: 0,
+                        byte_offset: for_of_stmt.span.lo.0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(arr_id)),
                         index: Box::new(Expr::LocalGet(idx_id)),
@@ -1795,6 +1796,7 @@ pub(super) fn lower_stmt_for_of_inner(
                                 arr_id,
                                 idx_id,
                                 result_id,
+                                for_of_stmt.span.lo.0,
                             )),
                         }]
                     }
@@ -1810,7 +1812,7 @@ pub(super) fn lower_stmt_for_of_inner(
             let mut source = if let Some(id) = binding_value {
                 Expr::LocalGet(id)
             } else {
-                lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id)
+                lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id, for_of_stmt.span.lo.0)
             };
             if for_of_stmt.is_await && !use_lazy_iter {
                 source = Expr::Await(Box::new(source), for_of_stmt.span.lo.0);
@@ -1996,7 +1998,7 @@ pub(crate) fn lower_stmt_for_in(
     // Prepend the key binding/assignment: <head> = __keys[__i]
     let key_source = Expr::IndexGet {
         element_offset: 0,
-        byte_offset: 0,
+        byte_offset: for_in_stmt.span.lo.0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(keys_id)),
         index: Box::new(Expr::LocalGet(idx_id)),

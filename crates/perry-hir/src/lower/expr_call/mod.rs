@@ -656,6 +656,7 @@ fn lower_call_inner(
                         callee: Box::new(super::lower_expr::native_module_binding_value(
                             ctx,
                             ident.sym.as_ref(),
+                            ident.span.lo.0,
                         )),
                         args,
                         type_args: Vec::new(),

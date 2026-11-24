@@ -580,6 +580,7 @@ fn class_expr_capture_refresh_rereads_its_capture_array_below_each_capture() {
     let ir = compile_body(
         "refresh_class_expr_captures",
         vec![Stmt::Expr(Expr::RefreshClassExprCaptures {
+            byte_offset: 0,
             class_value: Box::new(Expr::Undefined),
             captures: vec![allocating("first"), allocating("second")],
             env_class: None,
@@ -622,6 +623,7 @@ fn capture_refresh(name: &str, captures: Vec<Expr>) -> String {
     compile_body(
         name,
         vec![Stmt::Expr(Expr::RefreshClassExprCaptures {
+            byte_offset: 0,
             class_value: Box::new(Expr::Undefined),
             captures,
             env_class: None,

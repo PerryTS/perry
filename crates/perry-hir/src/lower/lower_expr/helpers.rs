@@ -410,7 +410,7 @@ pub(crate) fn opt_call_func_nullish_guard(
 /// name produces the same callable/property value whether it appears as a
 /// standalone reference or as a shorthand property. The caller must ensure
 /// `ctx.lookup_native_module(name)` is `Some`.
-pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> Expr {
+pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str, byte_offset: u32) -> Expr {
     let (module_name, method_name) = match ctx.lookup_native_module(name) {
         Some(v) => v,
         None => return Expr::Undefined,
@@ -479,7 +479,7 @@ pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str) -> 
         // PropertyGet (which resolved to `undefined`). Methods
         // fall through to the callable native-module ref below.
         if module_name == "process" {
-            if let Some(e) = expr_member::lower_process_named_property(method) {
+            if let Some(e) = expr_member::lower_process_named_property(method, byte_offset) {
                 return e;
             }
         }
