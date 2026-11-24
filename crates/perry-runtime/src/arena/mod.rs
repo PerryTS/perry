@@ -29,8 +29,6 @@ pub(crate) use young_large::{
 };
 mod region;
 pub(crate) use construction::ConstructionBatch;
-#[cfg(test)]
-pub(crate) use region::Kind as ArenaBlockKind;
 mod inline;
 mod page_meta;
 pub(crate) use page_meta::GENERATION_PAGE_SIZE;

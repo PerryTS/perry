@@ -340,8 +340,9 @@ fn requeue_front(stream: f64, records: *const crate::array::ArrayHeader, from: u
     );
     let mut merged = scope.root_raw_mut_ptr(crate::array::js_array_alloc(len - from));
     for i in from..len {
-        let value = records
-            .with_const_ptr::<crate::array::ArrayHeader, _>(|r| crate::array::js_array_get_f64(r, i));
+        let value = records.with_const_ptr::<crate::array::ArrayHeader, _>(|r| {
+            crate::array::js_array_get_f64(r, i)
+        });
         let grown = merged.with_mut_ptr::<crate::array::ArrayHeader, _>(|m| {
             crate::array::js_array_push_f64(m, value)
         });
