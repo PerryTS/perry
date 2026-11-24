@@ -1867,16 +1867,39 @@ function __isComputedKeySlot(key) {
   return key.startsWith('__perry_computed_field_key_');
 }
 
+// Re-parents onto the built-in `base`'s prototype the first prototype up `className`'s
+// chain of user classes that inherits from Object.prototype.
+function __linkHostBase(className, base) {
+  const { prototype } = globalThis[base];
+  for (let c = className; c && c !== base; c = classParentTable[c]) {
+    const p = __classProto(c);
+    const up = Object.getPrototypeOf(p);
+    if (up === prototype) break;
+    if (up === Object.prototype) {
+      Object.setPrototypeOf(p, prototype);
+      break;
+    }
+  }
+}
+
 // With `caps`, the constructor is one evaluation of a class expression
 // (`Expr::ClassExprFresh`) with that capture environment. Its `prototype` holds
 // the class's own members bound to the evaluation, and its instances inherit from it.
-function __classCtor(className, ctorIdx, caps) {
+// `base` / `init` (an evaluation only; see `builtin_base_init` in emit/expr/classes.rs):
+// the built-in parent the instance is made from, and how the implicit constructor
+// forwards its args to it, as `new` on a declared class does (class_new_host,
+// host_super_init, error_super_init).
+function __classCtor(className, ctorIdx, caps, base, init = 0) {
   const evaluated = caps !== undefined;
   const ctor = function (...args) {
     if (new.target === undefined) {
       throw new TypeError(`Class constructor ${className} cannot be invoked without 'new'`);
     }
-    const self = __classInstance(className, evaluated ? proto : undefined);
+    const self = typeof base === 'string'
+      ? Object.setPrototypeOf(Reflect.construct(globalThis[base], []), proto)
+      : __classInstance(className, evaluated ? proto : undefined);
+    if (init & 1) __memDispatch.host_super_init(self, args);
+    if (init & 2) __memDispatch.error_super_init(self, init & 4 ? args[0] : undefined);
     if (ctorIdx < 0) return self;
     const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx);
     // The constructor's trailing params are the class's captures (see
@@ -1907,7 +1930,13 @@ function __classCtor(className, ctorIdx, caps) {
   if (evaluated) Object.defineProperty(ctor, __evaluationRecord, { value: { template: className, caps } });
   // A declared class's value shares its instances' prototype (see __classProto). An
   // evaluation has its own, holding the class's members bound to it.
-  const proto = evaluated ? Object.create(__classProtoBase(className)) : __classProto(className);
+  // With a built-in parent, an evaluation's instances are the built-in's objects, whose
+  // methods its prototype inherits, directly or through its declared parent classes.
+  if (typeof base === 'string') __linkHostBase(classParentTable[className], base);
+  const protoBase = evaluated ? __classProtoBase(className) : undefined;
+  const proto = evaluated
+    ? Object.create(typeof base === 'string' && protoBase === Object.prototype ? globalThis[base].prototype : protoBase)
+    : __classProto(className);
   __defineHidden(proto, 'constructor', ctor);
   if (evaluated) {
     for (const m of Object.keys(classMethodTable[className] || {})) {
@@ -1964,8 +1993,8 @@ function __classTemplate(className) {
   if (!t) __classTemplates.set(className, (t = { first: undefined, slots: [], proto: undefined, fields: new Set() }));
   return t;
 }
-function __classEvaluate(className, ctorIdx, caps) {
-  const ctor = __classCtor(className, ctorIdx, Array.isArray(caps) ? caps : []);
+function __classEvaluate(className, ctorIdx, caps, base, init) {
+  const ctor = __classCtor(className, ctorIdx, Array.isArray(caps) ? caps : [], base, init);
   __linkClassParent(className, ctor);
   const t = __classTemplate(className);
   if (t.first === undefined) t.first = ctor;
@@ -2836,21 +2865,11 @@ const __memDispatch = {
   // class_set_method/class_call_method interact with WASM indirect call table.
   class_new: (className, ctorIdx) => __classInstance(__classNoteCtorSlot(className, ctorIdx)),
   // `new C()` where C's chain of user classes ends at the built-in `base` (Map, Array,
-  // ...): the built-in object itself, on C's prototype. The first prototype up the chain
-  // that inherits from Object.prototype is re-parented onto base's.
+  // ...): the built-in object itself, on C's prototype.
   class_new_host: (className, ctorIdx, base) => {
     const cls = __classNoteCtorSlot(className, ctorIdx);
-    const Base = globalThis[String(base)];
-    for (let c = cls; c && c !== String(base); c = classParentTable[c]) {
-      const p = __classProto(c);
-      const up = Object.getPrototypeOf(p);
-      if (up === Base.prototype) break;
-      if (up === Object.prototype) {
-        Object.setPrototypeOf(p, Base.prototype);
-        break;
-      }
-    }
-    return Object.setPrototypeOf(Reflect.construct(Base, []), __classProto(cls));
+    __linkHostBase(cls, String(base));
+    return Object.setPrototypeOf(Reflect.construct(globalThis[String(base)], []), __classProto(cls));
   },
   // `super(...args)` into the built-in an instance from class_new_host was made from.
   // A collection's entries go through the instance's `set`/`add` (see __addMapEntries).
@@ -2877,9 +2896,10 @@ const __memDispatch = {
     return obj;
   },
   class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
-  class_fresh: (className, ctorIdx, caps) => __classEvaluate(String(className), ctorIdx | 0, caps),
-  class_eval_begin: (className, ctorIdx) => {
-    const ctor = __classEvaluate(String(className), ctorIdx | 0, []);
+  class_fresh: (className, ctorIdx, caps, base, init) =>
+    __classEvaluate(String(className), ctorIdx | 0, caps, base, init | 0),
+  class_eval_begin: (className, ctorIdx, base, init) => {
+    const ctor = __classEvaluate(String(className), ctorIdx | 0, [], base, init | 0);
     __classDefining.push(ctor);
     return ctor;
   },

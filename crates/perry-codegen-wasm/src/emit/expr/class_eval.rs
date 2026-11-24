@@ -33,11 +33,12 @@ impl<'a> FuncEmitCtx<'a> {
                 // ClassDefinitionEvaluation order: the binding, the computed names in
                 // source order, then static fields and blocks in source order.
                 let ctor_slot = self.class_ctor_slot(template);
+                let (base, init) = self.builtin_base_init(template);
                 self.emit_class_bridge(
                     func,
                     "class_eval_begin",
                     template,
-                    &[&Expr::Number(ctor_slot)],
+                    &[&Expr::Number(ctor_slot), &base, &Expr::Number(init)],
                 );
                 match evaluation_owner {
                     Some(owner) => {
