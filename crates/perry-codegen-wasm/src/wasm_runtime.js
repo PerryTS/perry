@@ -6722,7 +6722,10 @@ function __classMethodValue(cls, mname, evaluation) {
   let fn = byName.get(mname);
   if (!fn || fn.funcIdx !== funcIdx) {
     fn = function (...args) { return __classMemberCall(funcIdx, evaluation, this, args); };
-    Object.defineProperty(fn, 'name', { value: mname });
+    // SetFunctionName: a symbol key names the method by its bracketed description.
+    const name = typeof mname !== 'symbol' ? mname
+      : mname.description === undefined ? '' : `[${mname.description}]`;
+    Object.defineProperty(fn, 'name', { value: name });
     Object.defineProperty(fn, 'length', { value: __fnNameLength.get(funcIdx)?.[1] ?? 0 });
     __defineHidden(fn, 'funcIdx', funcIdx);
     __defineHidden(fn, 'captures', [TAG_UNDEFINED]);
