@@ -480,6 +480,10 @@ pub struct Gen<'a> {
     /// rule, a copy, a store, a call argument); any other is a
     /// sign-observing use (`gen/zero_sign.rs`). Taken by `expr`.
     pub zs_ok: bool,
+    /// The compound `o.k op= v` read being walked (13.15.3 step 2): the
+    /// PropertySet's value's `PropertyGet` of the same key at the store's
+    /// offset. It is the compound's `UpdateGet` site, not a read site.
+    pub(crate) compound_get: Option<*const perry_hir::Expr>,
     /// Negative control (`PERRY_FACTS_SABOTAGE=leavingwrite`): every
     /// branch's writes are dropped from the reads after it, also a branch
     /// that falls through to them.
@@ -906,6 +910,7 @@ impl<'a> Gen<'a> {
             name_folds: true,
             leaving_writes: true,
             zs_ok: false,
+            compound_get: None,
             leaving_write_sabotage: false,
             jumps: 0,
             tries: 0,
