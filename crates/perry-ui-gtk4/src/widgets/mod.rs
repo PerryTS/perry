@@ -289,6 +289,7 @@ fn accessible_widget(handle: i64) -> Option<Widget> {
 pub fn set_accessibility_label(handle: i64, text_ptr: *const u8) {
     let text = unsafe { crate::app::str_from_header(text_ptr) };
     if let Some(widget) = accessible_widget(handle) {
+        widget.reset_relation(gtk4::AccessibleRelation::LabelledBy);
         widget.update_property(&[gtk4::accessible::Property::Label(&text)]);
     }
 }
@@ -296,6 +297,7 @@ pub fn set_accessibility_label(handle: i64, text_ptr: *const u8) {
 /// Name `field` with the `label` widget.
 pub fn set_labelled_by(field: i64, label: i64) {
     if let (Some(field), Some(label)) = (accessible_widget(field), get_widget(label)) {
+        field.reset_property(gtk4::AccessibleProperty::Label);
         let labels = [label.upcast_ref::<gtk4::Accessible>()];
         field.update_relation(&[gtk4::accessible::Relation::LabelledBy(&labels)]);
     }

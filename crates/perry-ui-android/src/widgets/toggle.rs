@@ -38,6 +38,11 @@ pub(crate) fn switch(handle: i64) -> Option<GlobalRef> {
     TOGGLE_SWITCHES.with(|switches| switches.borrow().get(&handle).cloned())
 }
 
+/// Drop the switches of the handles after `handle`, which later widgets reuse.
+pub(crate) fn forget_after(handle: i64) {
+    TOGGLE_SWITCHES.with(|switches| switches.borrow_mut().retain(|h, _| *h <= handle));
+}
+
 /// Create a Switch with a label and onChange callback.
 /// Returns a widget handle for a LinearLayout(HORIZONTAL) containing the label and switch.
 pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {

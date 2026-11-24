@@ -178,6 +178,7 @@ pub fn clear_children(handle: i64) {
                     let mut widgets = WIDGETS.lock().unwrap();
                     if idx < widgets.len() {
                         widgets.truncate(idx + 1);
+                        toggle::forget_after(handle);
                     }
                 }
             }
