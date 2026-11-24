@@ -823,6 +823,19 @@ fn section_with_title_and_children() {
 }
 
 #[test]
+fn disclosure_is_an_expanded_section() {
+    let mut m = empty_module();
+    m.init.push(app_with_body(nmc(
+        "Disclosure",
+        vec![Expr::String("More details".into())],
+    )));
+    let r = emit_index_ets(&mut m).unwrap().unwrap();
+    assert!(r
+        .ets_source
+        .contains("Text('More details').fontSize(14).fontColor('#888888')"));
+}
+
+#[test]
 fn string_literal_escaping() {
     assert_eq!(arkts_string_lit("hi"), "'hi'");
     assert_eq!(arkts_string_lit("he's there"), "'he\\'s there'");

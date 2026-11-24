@@ -578,8 +578,9 @@ export function Section(title: string, children: Widget[]): Widget;
 
 /**
  * A collapsible section: `title` is always shown, and the children attached with
- * `widgetAddChild` show when the reader expands it. Web: `<details>`/`<summary>`.
- * Native backends show a `Section`, always expanded.
+ * `widgetAddChild` show when the reader expands it. Web: `<details>`/`<summary>`,
+ * collapsed at first. Native backends show `Section(title)`, always expanded, with no
+ * control to collapse it.
  */
 export function Disclosure(title: string): Widget;
 
