@@ -586,3 +586,20 @@ fn proxy_define_properties_map_runs_the_traps() {
     site("{ a: { value: payload } }", "", op, true).unwrap();
     site("{ a: { value: 1 } }", get, op, true).unwrap();
 }
+
+/// Rule PXOWN: Array.from( px ) of a Proxy without `@@iterator` reads it as
+/// an array-like through its `get` trap (`length`, each index); the
+/// elements reach the result, nothing of the target escapes.
+#[test]
+fn proxy_array_from_array_like_runs_the_get_trap() {
+    let op = "const v: any = Array.from(px);";
+    let out = format!("{op}\nexternal(v);");
+    let tg = "{ length: 1, 0: payload }";
+    let ext = "get(t: any, k: any) { external(payload); return 1; }";
+    site("{ length: 1 }", ext, op, false).unwrap();
+    let get = "get(t: any, k: any) { return k === \"length\" ? 1 : payload; }";
+    site("{ length: 1 }", get, &out, false).unwrap();
+    site(tg, "", &out, false).unwrap();
+    site(tg, "", op, true).unwrap();
+    site("{ length: 1 }", get, op, true).unwrap();
+}

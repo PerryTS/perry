@@ -170,6 +170,8 @@ pub enum ProxyOp {
     /// Rule PXOWN: one copy of the own properties (CopyDataProperties)
     /// into the targets node at a site: its stores.
     Copy(NodeId, SiteId),
+    /// Rule PXOWN: Array.from's array-like read of the Proxy into one node.
+    FromLike(NodeId),
     /// Rule PXOWN: the descriptor values one getOwnPropertyDescriptor(s)
     /// node takes: the trap result's fields and the forward.
     DescValues(NodeId),
@@ -2340,6 +2342,50 @@ impl Model {
                 self.edge(g, descs);
                 self.define_any_on(o, descs, value, site, reason);
             }
+            // Rule PXOWN: Array.from( p ) (23.1.2.1): GetMethod( p, @@iterator )
+            // (step 4, the `get` trap; the iteration itself is the iteration
+            // rule's); a nullish method reads p as an array-like (step 5):
+            // LengthOfArrayLike (Get( p, "length" ), ToLength) and Get( p, k )
+            // of each index (the `get` trap, Receiver p), into `dst`.
+            Cons::FromArrayLike { dst } => {
+                if !self.proxy_made(p, ProxyOp::FromLike(dst)) {
+                    let wk = self.atom(builtins::WK_ITERATOR);
+                    let it = self.proxy_get(p, Key::Named(wk), NO_NODE);
+                    let src = self.node_l("proxy-from-source");
+                    let t = self.tok(TokKind::Proxy(p));
+                    self.add_tok(src, t);
+                    let like = self.node_l("proxy-from-array-like");
+                    self.cons(
+                        it,
+                        Cons::Guard {
+                            test: guard::NULLISH,
+                            from: src,
+                            dst: like,
+                        },
+                    );
+                    let la = self.atom("length");
+                    let len = self.node_l("proxy-from-length");
+                    self.cons(
+                        like,
+                        Cons::Load {
+                            key: Key::Named(la),
+                            dst: len,
+                        },
+                    );
+                    let r = self.reason("ToLength of an Array.from array-like length");
+                    let region = self.thrown;
+                    self.cons(
+                        len,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::ToPrimitive,
+                            region,
+                        },
+                    );
+                    let ek = self.elem_key();
+                    self.cons(like, Cons::Load { key: ek, dst });
+                }
+            }
             // Rule PXESC: the rules with no Proxy model yet, each named (a new
             // rule must take a place in this match). The operation may run
             // any internal method of the Proxy: its escape, the rule named in
@@ -2361,7 +2407,6 @@ impl Model {
             | Cons::EnumLoad { .. }
             | Cons::ForInAcc { .. }
             | Cons::ForInBody { .. }
-            | Cons::FromArrayLike { .. }
             | Cons::Fulfil { .. }
             | Cons::HandOver { .. }
             | Cons::IdxOwnLoad { .. }
