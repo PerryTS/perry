@@ -287,6 +287,25 @@ impl WasmModuleEmitter {
         }
     }
 
+    /// JS for `emit_function_value`'s call.
+    fn js_function_value(&self, func_idx: u32) -> String {
+        let table_idx = self
+            .func_to_table_idx
+            .get(&func_idx)
+            .copied()
+            .unwrap_or(func_idx);
+        let name = self
+            .fn_names
+            .get(&func_idx)
+            .map_or("", |&id| &self.string_table[id as usize].0);
+        format!(
+            "fromJsValue(__memDispatch.function_value({}, {}, {}))",
+            table_idx,
+            self.fn_proto_code(func_idx),
+            js_string_literal(name)
+        )
+    }
+
     pub(super) fn emit_js_expr(&self, expr: &Expr, locals: &BTreeMap<u32, String>) -> String {
         if let Some(bridge) = expr::path_module_bridge(expr) {
             return self.emit_js_bridge_call(bridge, &[], locals);
@@ -296,6 +315,10 @@ impl WasmModuleEmitter {
         }
         if let Some((bridge, operands)) = expr::path_operands(expr) {
             return self.emit_js_bridge_call(bridge, &operands, locals);
+        }
+        if let Some((bridge, args)) = super::expr::reflection_bridge(expr) {
+            let args: Vec<String> = args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+            return format!("fromJsValue(__memDispatch.{bridge}({}))", host_args(&args));
         }
         match expr {
             // Rust spells an infinity `inf`, which is not a JS literal.
@@ -467,27 +490,45 @@ impl WasmModuleEmitter {
                 format!("fromJsValue(await toJsValue({}))", v)
             }
             Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
-                let direct = match callee.as_ref() {
-                    Expr::FuncRef(id) => self.func_map.get(id).copied(),
-                    Expr::ExternFuncRef { name, .. } => self.func_name_map.get(name).copied(),
-                    _ => None,
+                let args_js: Vec<String> =
+                    args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+                let call_direct = |func_idx: u32| -> String {
+                    // An async function is its JS implementation here: WASM reaches it
+                    // through an import, which is not exported.
+                    if let Some((name, _, param_count)) = self
+                        .async_func_imports
+                        .iter()
+                        .find(|(_, idx, _)| *idx == func_idx)
+                    {
+                        let mut args: Vec<String> = self
+                            .with_rest_packed(Some(func_idx), args)
+                            .iter()
+                            .map(|a| self.emit_js_expr(a, locals))
+                            .collect();
+                        args.resize(
+                            args.len().max(*param_count),
+                            "u64ToF64(TAG_UNDEFINED)".to_string(),
+                        );
+                        return format!("__asyncFuncImpls.__async_{name}({})", args.join(", "));
+                    }
+                    // Call exported WASM function. WASM funcs use i64 params/result; one
+                    // with no result returns `undefined`. The callback boundary packs a
+                    // rest parameter's arguments, pads missing ones and rethrows an
+                    // exception left pending under an enclosing WASM `try`.
+                    let args_i64: Vec<String> =
+                        args_js.iter().map(|a| format!("f64ToU64({})", a)).collect();
+                    format!(
+                        "u64ToF64(__invokeWasmCallback({}) ?? TAG_UNDEFINED)",
+                        std::iter::once(format!("wasmInstance.exports.__wasm_func_{func_idx}"))
+                            .chain(args_i64)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 };
-                let args_js: Vec<String> = self
-                    .with_rest_packed(direct, args)
-                    .iter()
-                    .map(|a| self.emit_js_expr(a, locals))
-                    .collect();
                 match callee.as_ref() {
                     Expr::FuncRef(id) => {
                         if let Some(&func_idx) = self.func_map.get(id) {
-                            // Call exported WASM function. WASM funcs use i64 params/result.
-                            let args_i64: Vec<String> =
-                                args_js.iter().map(|a| format!("f64ToU64({})", a)).collect();
-                            format!(
-                                "u64ToF64(wasmInstance.exports.__wasm_func_{}({}))",
-                                func_idx,
-                                args_i64.join(", ")
-                            )
+                            call_direct(func_idx)
                         } else {
                             "u64ToF64(TAG_UNDEFINED)".to_string()
                         }
@@ -527,13 +568,7 @@ impl WasmModuleEmitter {
                     }
                     Expr::ExternFuncRef { name, .. } => {
                         if let Some(&func_idx) = self.func_name_map.get(name) {
-                            let args_i64: Vec<String> =
-                                args_js.iter().map(|a| format!("f64ToU64({})", a)).collect();
-                            format!(
-                                "u64ToF64(wasmInstance.exports.__wasm_func_{}({}))",
-                                func_idx,
-                                args_i64.join(", ")
-                            )
+                            call_direct(func_idx)
                         } else {
                             "u64ToF64(TAG_UNDEFINED)".to_string()
                         }
@@ -962,10 +997,6 @@ impl WasmModuleEmitter {
                 let (obj, props) = (self.emit_js_expr(obj, locals), self.emit_js_expr(props, locals));
                 format!("fromJsValue(__memDispatch.object_define_properties(toJsValue({obj}), toJsValue({props})))")
             }
-            Expr::ObjectGetOwnPropertyDescriptor(obj, key) => {
-                let (obj, key) = (self.emit_js_expr(obj, locals), self.emit_js_expr(key, locals));
-                format!("fromJsValue(__memDispatch.object_get_own_property_descriptor(toJsValue({obj}), toJsValue({key})))")
-            }
             Expr::ObjectEntries(o) => {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.entries(toJsValue({})))", o)
@@ -1085,7 +1116,7 @@ impl WasmModuleEmitter {
             Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 let obj = self.emit_js_expr(object, locals);
                 let idx = self.emit_js_expr(index, locals);
-                format!("fromJsValue(toJsValue({})[toJsValue({})])", obj, idx)
+                format!("fromJsValue(toJsValue({})[__hostKey(toJsValue({}))])", obj, idx)
             }
             Expr::IndexSet {
                 object,
@@ -1097,7 +1128,7 @@ impl WasmModuleEmitter {
                 let idx = self.emit_js_expr(index, locals);
                 let val = self.emit_js_expr(value, locals);
                 format!(
-                    "(toJsValue({})[toJsValue({})] = toJsValue({}), {})",
+                    "(toJsValue({})[__hostKey(toJsValue({}))] = toJsValue({}), {})",
                     obj, idx, val, val
                 )
             }
@@ -1111,7 +1142,7 @@ impl WasmModuleEmitter {
                 let val = self.emit_js_expr(value, locals);
                 // Target, key, then value, each evaluated once (see PropertySet).
                 format!(
-                    "((__o, __k, __v) => (toJsValue(__o)[toJsValue(__k)] = toJsValue(__v), __v))({}, {}, {})",
+                    "((__o, __k, __v) => (toJsValue(__o)[__hostKey(toJsValue(__k))] = toJsValue(__v), __v))({}, {}, {})",
                     obj, k, val
                 )
             }
@@ -1189,6 +1220,7 @@ impl WasmModuleEmitter {
             Expr::DateToUTCString(d) => {
                 self.emit_js_bridge_call("date_to_utc_string", &[d], locals)
             }
+            Expr::CryptoRandomUUID => self.emit_js_bridge_call("crypto_random_uuid", &[], locals),
             // `new` on a constructor value (`new Map<K, V>([...])` among others) and the Map and
             // Set nodes call the bridges their WASM arms call (`emit/expr/classes.rs`,
             // `emit/expr/map_set.rs`).
@@ -1305,8 +1337,16 @@ impl WasmModuleEmitter {
                         "u64ToF64(wasmInstance.exports.__wasm_global_{}.value)",
                         gidx
                     )
-                } else if let Some(&func_idx) = self.func_name_map.get(name) {
-                    format!("fromJsValue(wasmInstance.exports.__wasm_func_{})", func_idx)
+                } else if let Some(&func_idx) = self
+                    .imported_func_indices
+                    .get(&mod_key)
+                    .or_else(|| self.func_name_map.get(name))
+                {
+                    // The function's one value, as the WASM arm in `emit/expr/classes.rs`
+                    // makes it: the raw export takes i64 parameters, so a JS caller
+                    // cannot pass it numbers. Consumer import table first — bare names
+                    // collide.
+                    self.js_function_value(func_idx)
                 } else {
                     "u64ToF64(TAG_UNDEFINED)".to_string()
                 }
@@ -1361,19 +1401,13 @@ impl WasmModuleEmitter {
                 let Some(&func_idx) = self.func_map.get(id) else {
                     return "u64ToF64(TAG_UNDEFINED)".to_string();
                 };
-                let table_idx = self
-                    .func_to_table_idx
-                    .get(&func_idx)
-                    .copied()
-                    .unwrap_or(func_idx);
-                format!(
-                    "fromJsValue(__memDispatch.function_value({}, {}))",
-                    table_idx,
-                    self.fn_proto_code(func_idx)
-                )
+                self.js_function_value(func_idx)
             }
             Expr::New {
-                class_name, args, ..
+                class_name,
+                args,
+                cap_args_appended,
+                ..
             } => {
                 let args_js: Vec<String> =
                     args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
@@ -1407,8 +1441,9 @@ impl WasmModuleEmitter {
                 // under an enclosing WASM `try` is left pending, and this rethrows it
                 // here instead of handing back `this` as if it had succeeded.
                 format!(
-                    "u64ToF64(__invokeWasmCallback(wasmInstance.exports.__wasm_func_{}, {}))",
+                    "u64ToF64(__invokeConstructor(wasmInstance.exports.__wasm_func_{}, {}, {}))",
                     ctor_idx,
+                    cap_args_appended,
                     call_args.join(", ")
                 )
             }
@@ -1439,7 +1474,7 @@ impl WasmModuleEmitter {
                     js_string_literal(property)
                 ),
                 Expr::IndexGet { object, index, .. } => format!(
-                    "fromJsValue(delete toJsValue({})[toJsValue({})])",
+                    "fromJsValue(delete toJsValue({})[__hostKey(toJsValue({}))])",
                     self.emit_js_expr(object, locals),
                     self.emit_js_expr(index, locals)
                 ),
@@ -1457,6 +1492,30 @@ impl WasmModuleEmitter {
             ),
             Expr::ArrayIterationPatched => {
                 "fromJsValue(__memDispatch.rt_arrayIterationPatched())".to_string()
+            }
+            // The array method nodes `folded_call` does not name.
+            Expr::ArrayPop(id) => {
+                let array = self.emit_js_expr(&Expr::LocalGet(*id), locals);
+                format!("fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({array}), \"pop\"), []))")
+            }
+            Expr::ArrayLikeMethod {
+                method,
+                receiver,
+                args,
+                source,
+            } => {
+                let receiver = self.emit_js_expr(receiver, locals);
+                let args_js: Vec<String> = args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+                let method = js_string_literal(method);
+                let lookup = match source {
+                    perry_hir::ir::ArrayLikeSource::Receiver => {
+                        format!("__jsMethodGet(toJsValue({receiver}), {method})")
+                    }
+                    _ => format!(
+                        "{{ r: toJsValue({receiver}), m: {method}, f: Array.prototype[{method}] }}"
+                    ),
+                };
+                format!("fromJsValue(__jsMethodInvoke({lookup}, [{}]))", host_args(&args_js))
             }
             _ => {
                 // A folded builtin-method node (`a.map(f)`, `m.get(k)`, ...) is the call

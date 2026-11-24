@@ -32,6 +32,7 @@ use super::*;
 
 pub(super) use iterator_records::BRIDGES as ITERATOR_RECORD_BRIDGES;
 pub(super) use iterator_records::EAGER as ITERATOR_RECORD_EAGER;
+pub(super) use objects::reflection_bridge;
 pub(super) use url_process_path::{
     path_export_operands, path_module_bridge, path_namespace_bridge, path_operands,
     path_win32_bridge,

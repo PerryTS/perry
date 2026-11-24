@@ -459,7 +459,7 @@ impl<'a> Gen<'a> {
             ret: self.m.funcs[init_fn as usize].ret,
             class: None,
             ctor_of: None,
-            new_target: self.m.all_prim_node,
+            new_target: None,
             fn_ctor: false,
         };
         for g in self.globals_of(mi as usize) {
@@ -1197,7 +1197,7 @@ impl<'a> Gen<'a> {
             ret: info.ret,
             class,
             ctor_of,
-            new_target: self.m.all_prim_node,
+            new_target: fn_ctor.then_some(fxi),
             fn_ctor,
         };
         if !f.is_strict && fn_ctor && crate::ctor_phase::body_mentions_this(&f.body) {
@@ -1384,7 +1384,7 @@ impl<'a> Gen<'a> {
             ret: self.m.funcs[fi as usize].ret,
             class: Some(tm),
             ctor_of: Some(tm),
-            new_target: self.m.all_prim_node,
+            new_target: None,
             fn_ctor: false,
         };
         let inst = self.m.tok(TokKind::Obj(tm, NO_CTX));
@@ -1510,7 +1510,7 @@ impl<'a> Gen<'a> {
             ret: self.m.funcs[si as usize].ret,
             class: Some(tm),
             ctor_of: None,
-            new_target: self.m.all_prim_node,
+            new_target: None,
             fn_ctor: false,
         };
         let cobj = self.m.tok(TokKind::ClassObj(tm));

@@ -615,7 +615,8 @@ pub(crate) struct Fx {
     pub class: Option<TmplId>,
     /// Constructor of this class template (construction-phase tracking).
     pub ctor_of: Option<TmplId>,
-    pub new_target: NodeId,
+    /// The function `new` may call whose body (or an arrow in it) this is.
+    pub new_target: Option<FnIdx>,
     /// A plain function / function expression that `new` may call.
     pub fn_ctor: bool,
     /// The innermost `if` branch being walked: its test node and the test
@@ -744,6 +745,7 @@ impl<'a> Gen<'a> {
         let all = m.node_l("PRIMALL");
         m.add_prim(all, prim::ALL);
         m.all_prim_node = all;
+        m.reflect_new_targets = m.node_l("REFLECT-NEW-TARGETS");
         let thrown = m.node_l("THROWN");
         // What a `catch` (or a rejection handler) receives beside the values
         // the program throws (edges): the error object a failed runtime

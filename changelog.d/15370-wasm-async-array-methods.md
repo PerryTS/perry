@@ -1,0 +1,1 @@
+On the web target, inside an async function body, `Array.prototype.pop`, `map(f, thisArg)` and `Array.prototype.m.call(...)` work, closures passed to array methods as data keep their identity, and a callback receives its `thisArg` (#15338).

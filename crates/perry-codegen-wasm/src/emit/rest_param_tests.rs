@@ -65,3 +65,64 @@ inAsync().then((v) => console.log("async " + v));
         "3 2,3,4 0 0 5,6\n2,3 8,9\n2,3,4\n9,9\nasync 1,8,9 8,9 000"
     );
 }
+
+// `super(...args)` runs the parent's constructor with the spread arguments: a mixed list,
+// into a parent rest parameter, before the derived class's field initializers, into a
+// built-in Error or Map parent, and from the constructor synthesized for a derived class
+// that captures a variable. Expected output is Node's.
+#[test]
+fn super_with_spread_arguments_runs_the_parent_constructor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Base { a: number; b: string; constructor(a: number, b: string) { this.a = a; this.b = b; } }
+class D1 extends Base { constructor(...args: [number, string]) { super(...args); } }
+class D2 extends Base { constructor(n: number) { const rest: [string] = ["y"]; super(n, ...rest); } }
+class R { first: number; more: number[]; constructor(first: number, ...more: number[]) { this.first = first; this.more = more; } }
+class S extends R { constructor(...xs: number[]) { super(...xs); } }
+class F extends Base { tag = this.a * 10; constructor(...xs: [number, string]) { super(...xs); } }
+class E extends Error { constructor(...xs: [string]) { super(...xs); } }
+class M extends Map<string, number> { constructor(...xs: any[]) { super(...xs); } }
+function make(k: number) {
+  class B { v: number; constructor(v: number) { this.v = v; } }
+  class C extends B { get k() { return k; } }
+  return new C(3);
+}
+const d1 = new D1(1, "x"), d2 = new D2(7), s = new S(1, 2, 3), f = new F(4, "f");
+console.log(d1.a, d1.b, d2.a, d2.b, s.first, JSON.stringify(s.more), f.tag, f.b);
+const e = new E("boom"), m = new M([["k", 1]]), c = make(9);
+console.log(e.message, e instanceof Error, m.get("k"), m.size, c.v, c.k);
+"#
+        ),
+        "1 x 7 y 1 [2,3] 40 f\nboom true 1 1 3 9"
+    );
+}
+
+// A class's captures follow its constructor's rest parameter: `new` in the declaring
+// function and on a class value an evaluation made keep them out of the rest array, and
+// `super(...xs)` hands a derived class's to its parent.
+// Expected output is Node's.
+#[test]
+fn a_constructor_rest_parameter_leaves_the_captures_out() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function declared(k: number) {
+  class C { v: any; constructor(a: any, ...xs: any[]) { this.v = [a, xs, k]; } }
+  return JSON.stringify([new C(1, 2, 3).v, new C(1).v]);
+}
+function evaluated(k: number) { return class { v: any; constructor(...xs: any[]) { this.v = [xs, k]; } }; }
+const E: any = evaluated(5);
+function derived(k: number) {
+  class B { v: any; constructor(...xs: any[]) { this.v = [xs, k]; } }
+  class D extends B { constructor(...xs: any[]) { super(...xs, "d"); } }
+  class F { v: any; constructor(a: any) { this.v = [a, k]; } }
+  class G extends F { constructor(...xs: any[]) { super(...(xs as [any])); } }
+  return JSON.stringify([new D(1, 2).v, new G(3, 4).v]);
+}
+console.log(declared(9), JSON.stringify([new E(1, 2).v, new E().v]), derived(7));
+"#
+        ),
+        "[[1,[2,3],9],[1,[],9]] [[[1,2],5],[[],5]] [[[1,2,\"d\"],7],[3,7]]"
+    );
+}
