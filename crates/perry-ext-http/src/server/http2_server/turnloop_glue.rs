@@ -155,14 +155,22 @@ pub(crate) fn mark_turnloop_session_closed(session_handle: i64) {
     }
 }
 
-pub(crate) fn queue_turnloop_session_error(session_handle: i64, code: &str) {
+/// The session's socket failed. `target` is the peer a failed `connect` was
+/// attempting; Node names it in the message and on the error.
+pub(crate) fn queue_turnloop_session_error(
+    session_handle: i64,
+    syscall: &str,
+    code: &str,
+    target: Option<perry_ffi::turnloop_net::Endpoint>,
+) {
     if session_handle == 0 {
         return;
     }
-    push_h2_event(Http2PendingEvent::ClientError {
-        handle: session_handle,
-        message: code.to_string(),
-        code: None,
+    push_h2_event(Http2PendingEvent::SessionSocketError {
+        session_handle,
+        syscall: syscall.to_string(),
+        code: code.to_string(),
+        target,
     });
 }
 
@@ -232,6 +240,7 @@ pub(crate) fn register_turnloop_stream_handle(
         turnloop_conn: conn_id,
         turnloop_responded: false,
         request_started: false,
+        close_queued: false,
     })
 }
 
@@ -308,19 +317,35 @@ pub(crate) fn queue_turnloop_stream_cancel(stream_handle: i64, cause: &str) {
     if stream_handle == 0 {
         return;
     }
-    mark_turnloop_stream_closed(stream_handle);
     push_h2_event(Http2PendingEvent::ClientError {
         handle: stream_handle,
         message: format!("The pending stream has been canceled (caused by: {cause})"),
         code: Some("ERR_HTTP2_STREAM_CANCEL".to_string()),
     });
+    mark_turnloop_stream_closed(stream_handle);
 }
 
+/// The stream is over. A client stream's `'close'` is queued here, once, so it
+/// follows the `'end'`, `'error'` or reset already queued for it, as in Node.
 pub(crate) fn mark_turnloop_stream_closed(stream_handle: i64) {
-    if let Some(stream) = get_handle_mut::<Http2StreamHandle>(stream_handle) {
-        stream.closed = true;
-        stream.destroyed = true;
-        stream.turnloop_conn = 0;
+    let session_handle = match get_handle_mut::<Http2StreamHandle>(stream_handle) {
+        Some(stream) => {
+            stream.closed = true;
+            stream.destroyed = true;
+            stream.turnloop_conn = 0;
+            stream.session_handle
+        }
+        None => return,
+    };
+    let is_client = get_handle::<Http2SessionHandle>(session_handle)
+        .is_some_and(|session| session.session_type == 1);
+    if !is_client {
+        return;
+    }
+    let first = get_handle_mut::<Http2StreamHandle>(stream_handle)
+        .is_some_and(|stream| !std::mem::replace(&mut stream.close_queued, true));
+    if first {
+        push_h2_event(Http2PendingEvent::ClientStreamClose { stream_handle });
     }
 }
 

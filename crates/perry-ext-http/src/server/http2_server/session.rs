@@ -492,7 +492,7 @@ pub(crate) fn start_client_request(stream_handle: i64, body: Vec<u8>) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     /// `http2.connect(url, { ca: fs.readFileSync(path) })` hands over a Buffer,
@@ -538,7 +538,7 @@ mod tests {
             .collect()
     }
 
-    fn client_session(turnloop_conn: i64) -> Http2SessionHandle {
+    pub(crate) fn client_session(turnloop_conn: i64) -> Http2SessionHandle {
         Http2SessionHandle {
             activity_count: crate::server::server::activity::new_session_count(true),
             socket_value: f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()),
@@ -702,6 +702,7 @@ mod tests {
             turnloop_conn: 0,
             turnloop_responded: false,
             request_started: true,
+            close_queued: false,
         });
         crate::server::http2_server::queue_turnloop_stream_cancel(stream_handle, "ECONNREFUSED");
         let events = H2_PENDING_EVENTS
@@ -727,6 +728,86 @@ mod tests {
             )]
         );
         assert!(get_handle::<Http2StreamHandle>(stream_handle).is_some_and(|s| s.closed));
+        assert_eq!(
+            events_for(stream_handle),
+            vec!["error", "close"],
+            "Node emits the cancelled stream's 'close' after its 'error'"
+        );
+    }
+
+    /// The kinds of the events queued for one stream, in order.
+    fn events_for(stream_handle: i64) -> Vec<&'static str> {
+        let events = H2_PENDING_EVENTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        events
+            .iter()
+            .filter_map(|event| match event {
+                Http2PendingEvent::ClientData {
+                    stream_handle: h, ..
+                } if *h == stream_handle => Some("data"),
+                Http2PendingEvent::ClientEnd { stream_handle: h } if *h == stream_handle => {
+                    Some("end")
+                }
+                Http2PendingEvent::ClientStreamClose { stream_handle: h }
+                    if *h == stream_handle =>
+                {
+                    Some("close")
+                }
+                Http2PendingEvent::ClientError { handle: h, .. } if *h == stream_handle => {
+                    Some("error")
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn stream_of(session_handle: i64) -> i64 {
+        register_handle(Http2StreamHandle {
+            session_handle,
+            id: 1,
+            pending: false,
+            closed: false,
+            destroyed: false,
+            aborted: false,
+            rst_code: 0,
+            headers_sent: true,
+            sent_headers: Vec::new(),
+            request_headers: HashMap::new(),
+            listeners: HashMap::new(),
+            encoding: None,
+            response_status: 200,
+            response_headers: Vec::new(),
+            turnloop_conn: 0,
+            turnloop_responded: false,
+            request_started: true,
+            close_queued: false,
+        })
+    }
+
+    /// A client stream whose response completed emits `'close'` after `'end'`,
+    /// and only once however many times the transport retires it.
+    #[test]
+    fn a_completed_client_stream_closes_once_after_end() {
+        let stream_handle = stream_of(register_handle(client_session(0)));
+        crate::server::http2_server::queue_turnloop_client_body(
+            stream_handle,
+            b"ok".to_vec(),
+            Vec::new(),
+        );
+        crate::server::http2_server::mark_turnloop_stream_closed(stream_handle);
+        crate::server::http2_server::mark_turnloop_stream_closed(stream_handle);
+        assert_eq!(events_for(stream_handle), vec!["data", "end", "close"]);
+    }
+
+    /// A server stream's `'close'` is not queued on this path.
+    #[test]
+    fn a_server_stream_queues_no_client_close() {
+        let mut session = client_session(0);
+        session.session_type = 0;
+        let stream_handle = stream_of(register_handle(session));
+        crate::server::http2_server::mark_turnloop_stream_closed(stream_handle);
+        assert!(events_for(stream_handle).is_empty());
     }
 
     /// The per-request half of the deleted `h2` fallback: `session.request()` on
@@ -756,6 +837,7 @@ mod tests {
             turnloop_conn: 0,
             turnloop_responded: false,
             request_started: false,
+            close_queued: false,
         });
         assert!(
             super::super::turnloop_conn_of_session(session_handle).is_none(),

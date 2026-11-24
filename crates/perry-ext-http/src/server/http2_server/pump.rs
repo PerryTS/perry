@@ -309,6 +309,18 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                     }
                 }
             }
+            Http2PendingEvent::ClientStreamClose { stream_handle } => {
+                let listeners = get_handle::<Http2StreamHandle>(stream_handle)
+                    .and_then(|s| s.listeners.get("close").cloned())
+                    .unwrap_or_default();
+                let scope = perry_ffi::TransientRootScope::enter();
+                for cb in scope.root_addrs(&listeners) {
+                    call0(cb.get());
+                    unsafe {
+                        js_promise_run_microtasks();
+                    }
+                }
+            }
             Http2PendingEvent::ClientClose {
                 session_handle,
                 callback,
@@ -438,6 +450,29 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                     ),
                     None => string_value(&message),
                 });
+                for cb in listeners {
+                    call1(cb.get(), arg.get());
+                    unsafe {
+                        js_promise_run_microtasks();
+                    }
+                }
+            }
+            Http2PendingEvent::SessionSocketError {
+                session_handle,
+                syscall,
+                code,
+                target,
+            } => {
+                let listeners = get_handle::<Http2SessionHandle>(session_handle)
+                    .and_then(|s| s.listeners.get("error").cloned())
+                    .unwrap_or_default();
+                let scope = perry_ffi::TransientRootScope::enter();
+                let listeners = scope.root_addrs(&listeners);
+                let arg = scope.root_nanbox(perry_ext_net::socket_error_value(
+                    &syscall,
+                    &code,
+                    target.as_ref(),
+                ));
                 for cb in listeners {
                     call1(cb.get(), arg.get());
                     unsafe {
