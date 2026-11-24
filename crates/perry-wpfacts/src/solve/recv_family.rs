@@ -27,6 +27,10 @@ use crate::pts::{FxHashMap, FxHashSet};
 pub(crate) const WATCH_FIELD: u8 = 1;
 /// `Node::fam_watch`: a prototypes node (every token is a chain edge).
 pub(crate) const WATCH_PROTO: u8 = 2;
+/// `Node::fam_watch` bit: a node stored into an object from unmodelled code
+/// (`rfam_top_holder`); a function token arriving there, also one dropped
+/// beside ⊤, leaves its family. Combines with `WATCH_FIELD`.
+pub(crate) const WATCH_TOP_HELD: u8 = 4;
 /// The key of an any-key or number-keys field node: no home key.
 pub(crate) const NO_HOME_KEY: Atom = u32::MAX - 1;
 
@@ -101,15 +105,16 @@ impl Model {
 
     /// `n` is the field `a` (or, `WATCH_PROTO`, the prototypes) of `t`.
     pub(crate) fn rfam_watch(&mut self, n: NodeId, t: Tok, a: Atom, kind: u8) {
-        self.nodes[n as usize].fam_watch = kind;
+        self.nodes[n as usize].fam_watch |= kind;
         self.rfam.owner.insert(n, (t, a));
     }
 
     /// The tokens of `ts` arriving at node `n` the family reads.
     pub(crate) fn rfam_filter(&self, n: NodeId, ts: &mut dyn Iterator<Item = Tok>) -> Vec<Tok> {
-        match self.nodes[n as usize].fam_watch {
-            WATCH_PROTO => ts.collect(),
-            WATCH_FIELD => ts
+        let w = self.nodes[n as usize].fam_watch;
+        match w {
+            _ if w & WATCH_PROTO != 0 => ts.collect(),
+            _ if w & (WATCH_FIELD | WATCH_TOP_HELD) != 0 => ts
                 .filter(|&t| {
                     matches!(self.toks[t as usize], TokKind::Func(f, _) if self.rfam.fams.contains_key(&f))
                 })
@@ -120,10 +125,13 @@ impl Model {
 
     /// Tokens arrived at watched node `n` (those dropped beside ⊤ too).
     pub(crate) fn rfam_arrived(&mut self, n: NodeId, ts: &[Tok]) {
+        if self.nodes[n as usize].fam_watch & WATCH_TOP_HELD != 0 {
+            self.rfam_top_held(ts);
+        }
         let Some(&(h, a)) = self.rfam.owner.get(&n) else {
             return;
         };
-        if self.nodes[n as usize].fam_watch == WATCH_PROTO {
+        if self.nodes[n as usize].fam_watch & WATCH_PROTO != 0 {
             for &p in ts {
                 if p == TOP {
                     if self.rfam.explain_off {
@@ -172,12 +180,15 @@ impl Model {
     }
 
     /// Store `src` into an object from unmodelled code (⊤): a method or
-    /// accessor that reaches it, now or later (`Cons::TopSink` on `src`),
-    /// may run on that object, so it leaves its family.
+    /// accessor that reaches it, now or later (`WATCH_TOP_HELD`, also a
+    /// token dropped beside ⊤ there, `escaped_beside_top`), may run on that
+    /// object, so it leaves its family. The receiver-rooted path
+    /// (DECISIONS 149b, `rooted_store`) is such a store too (CWN Q2).
     pub(crate) fn rfam_top_holder(&mut self, src: NodeId) {
         if !self.rfam.top_held.insert(src) {
             return;
         }
+        self.nodes[src as usize].fam_watch |= WATCH_TOP_HELD;
         let ts = self.nodes[src as usize].pts.to_sorted();
         self.rfam_top_held(&ts);
     }

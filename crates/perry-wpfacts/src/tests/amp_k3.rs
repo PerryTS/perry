@@ -288,3 +288,17 @@ fn k3b_t12b_stored_into_top_keeps_top() {
     let (v, top, r) = recv_after(&src, "/*A*/", "x");
     assert!(top && !v.starts_with("T0"), "a method stored into ⊤ lost its ⊤ this: {v} {r:?}");
 }
+
+/// T13 (CWN Q2): a value stored into an object from unmodelled code (⊤)
+/// is watched for later arrivals: a method that escaped elsewhere and
+/// reaches it after ⊤ did is dropped beside that ⊤ (`escaped_beside_top`)
+/// and still leaves its family. The receiver-rooted path (DECISIONS 149b,
+/// `rooted_store`) is watched the same way (`rfam_top_holder` runs first).
+#[test]
+fn k3b_t13_later_arrival_at_a_top_held_value_keeps_top() {
+    let src = format!(
+        "{DECL}declare function get(): any;\nclass P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nfunction put(v: any) {{ get().k = v; }}\nput(get());\nconst p = new P();\np.m();\nsink(p.m);\nconst w = {{ f: p }};\nfunction later(o: any) {{ return o.f; }}\nput(later(w).m);\n"
+    );
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(top && !v.starts_with("T0"), "a method reaching a value stored into ⊤ lost its ⊤ this: {v} {r:?}");
+}
