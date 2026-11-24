@@ -96,6 +96,7 @@ fn apply_lexical(
                 threshold: index,
                 direct_throws: true,
             },
+            0,
         );
     }
     for function in &mut module.functions {
@@ -110,7 +111,7 @@ fn apply_lexical(
     for class in &mut module.classes {
         let threshold = facts.class_positions.get(&class.name).copied().unwrap_or(0);
         if threshold <= last_decl {
-            rw_class(class, &Rw::checks(&decl, threshold));
+            rw_class(class, &Rw::checks(&decl, threshold), 0);
         }
     }
     // An importer in an import cycle can read an exported binding before this
@@ -594,23 +595,24 @@ impl<'a> Rw<'a> {
     }
 }
 
-fn rw_stmts(stmts: &mut [Stmt], rw: &Rw<'_>) {
+fn rw_stmts(stmts: &mut [Stmt], rw: &Rw<'_>, at: u32) {
     for stmt in stmts {
-        rw_stmt(stmt, rw);
+        rw_stmt(stmt, rw, at);
     }
 }
 
-fn rw_stmt(stmt: &mut Stmt, rw: &Rw<'_>) {
+fn rw_stmt(stmt: &mut Stmt, rw: &Rw<'_>, at: u32) {
+    let at = innermost(stmt.byte_offset(), at);
     match stmt {
         Stmt::Let { init, .. } => {
             if let Some(init) = init {
-                rw_expr(init, rw);
+                rw_expr(init, rw, at);
             }
         }
-        Stmt::Expr(expr) | Stmt::Throw(expr) => rw_expr(expr, rw),
+        Stmt::Expr(expr) | Stmt::Throw(expr) => rw_expr(expr, rw, at),
         Stmt::Return(expr, _) => {
             if let Some(expr) = expr {
-                rw_expr(expr, rw);
+                rw_expr(expr, rw, at);
             }
         }
         Stmt::If {
@@ -618,15 +620,15 @@ fn rw_stmt(stmt: &mut Stmt, rw: &Rw<'_>) {
             then_branch,
             else_branch,
         } => {
-            rw_expr(condition, rw);
-            rw_stmts(then_branch, rw);
+            rw_expr(condition, rw, at);
+            rw_stmts(then_branch, rw, at);
             if let Some(else_branch) = else_branch {
-                rw_stmts(else_branch, rw);
+                rw_stmts(else_branch, rw, at);
             }
         }
         Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            rw_expr(condition, rw);
-            rw_stmts(body, rw);
+            rw_expr(condition, rw, at);
+            rw_stmts(body, rw, at);
         }
         Stmt::For {
             init,
@@ -635,29 +637,29 @@ fn rw_stmt(stmt: &mut Stmt, rw: &Rw<'_>) {
             body,
         } => {
             if let Some(init) = init {
-                rw_stmt(init, rw);
+                rw_stmt(init, rw, at);
             }
             if let Some(condition) = condition {
-                rw_expr(condition, rw);
+                rw_expr(condition, rw, at);
             }
             if let Some(update) = update {
-                rw_expr(update, rw);
+                rw_expr(update, rw, at);
             }
-            rw_stmts(body, rw);
+            rw_stmts(body, rw, at);
         }
-        Stmt::Labeled { body, .. } => rw_stmt(body, rw),
+        Stmt::Labeled { body, .. } => rw_stmt(body, rw, at),
         Stmt::Try {
             body,
             catch,
             finally,
             ..
         } => {
-            rw_stmts(body, rw);
+            rw_stmts(body, rw, at);
             if let Some(catch) = catch {
-                rw_stmts(&mut catch.body, rw);
+                rw_stmts(&mut catch.body, rw, at);
             }
             if let Some(finally) = finally {
-                rw_stmts(finally, rw);
+                rw_stmts(finally, rw, at);
             }
         }
         Stmt::Switch {
@@ -665,12 +667,12 @@ fn rw_stmt(stmt: &mut Stmt, rw: &Rw<'_>) {
             cases,
             ..
         } => {
-            rw_expr(discriminant, rw);
+            rw_expr(discriminant, rw, at);
             for case in cases {
                 if let Some(test) = &mut case.test {
-                    rw_expr(test, rw);
+                    rw_expr(test, rw, at);
                 }
-                rw_stmts(&mut case.body, rw);
+                rw_stmts(&mut case.body, rw, at);
             }
         }
         Stmt::Break
@@ -684,22 +686,23 @@ fn rw_stmt(stmt: &mut Stmt, rw: &Rw<'_>) {
 }
 
 fn rw_function(function: &mut Function, rw: &Rw<'_>) {
+    let at = function.byte_offset;
     for param in &mut function.params {
         if let Some(default) = &mut param.default {
-            rw_expr(default, rw);
+            rw_expr(default, rw, at);
         }
     }
-    rw_stmts(&mut function.body, rw);
+    rw_stmts(&mut function.body, rw, at);
 }
 
-fn rw_class(class: &mut Class, rw: &Rw<'_>) {
+fn rw_class(class: &mut Class, rw: &Rw<'_>, at: u32) {
     for decorator in &mut class.decorators {
         for arg in &mut decorator.args {
-            rw_expr(arg, rw);
+            rw_expr(arg, rw, at);
         }
     }
     if let Some(extends) = &mut class.extends_expr {
-        rw_expr(extends, rw);
+        rw_expr(extends, rw, at);
     }
     if let Some(ctor) = &mut class.constructor {
         rw_function(ctor, rw);
@@ -715,7 +718,7 @@ fn rw_class(class: &mut Class, rw: &Rw<'_>) {
         rw_function(function, rw);
     }
     for member in &mut class.computed_members {
-        rw_expr(&mut member.key_expr, rw);
+        rw_expr(&mut member.key_expr, rw, at);
         rw_function(&mut member.function, rw);
     }
     for field in class
@@ -724,33 +727,34 @@ fn rw_class(class: &mut Class, rw: &Rw<'_>) {
         .chain(class.static_fields.iter_mut())
     {
         if let Some(key) = &mut field.key_expr {
-            rw_expr(key, rw);
+            rw_expr(key, rw, at);
         }
         if let Some(init) = &mut field.init {
-            rw_expr(init, rw);
+            rw_expr(init, rw, at);
         }
     }
 }
 
-fn rw_expr(expr: &mut Expr, rw: &Rw<'_>) {
+fn rw_expr(expr: &mut Expr, rw: &Rw<'_>, at: u32) {
+    let at = innermost(expr.byte_offset(), at);
     if let Expr::Closure { params, body, .. } = expr {
         // A closure body runs when the closure is called, not where it is
         // created: it is checked, never a static throw.
         let inner = rw.in_function();
         for param in params.iter_mut() {
             if let Some(default) = &mut param.default {
-                rw_expr(default, &inner);
+                rw_expr(default, &inner, at);
             }
         }
-        rw_stmts(body, &inner);
+        rw_stmts(body, &inner, at);
         return;
     }
     // An existing check's binding operand tests the slot; it is not a read.
-    if tdz_check::for_each_check_value_mut(expr, &mut |value| rw_expr(value, rw)) {
+    if tdz_check::for_each_check_value_mut(expr, &mut |value| rw_expr(value, rw, at)) {
         return;
     }
-    walk_expr_children_mut(expr, &mut |child| rw_expr(child, rw));
-    guard(expr, rw);
+    walk_expr_children_mut(expr, &mut |child| rw_expr(child, rw, at));
+    guard(expr, rw, at);
     lift_check(expr);
 }
 
@@ -773,7 +777,14 @@ fn accessed_binding(expr: &Expr) -> Option<LocalId> {
     }
 }
 
-fn guard(expr: &mut Expr, rw: &Rw<'_>) {
+/// The offset a check built for an access takes: the innermost construct
+/// around the access that has one (a local's read or write has none).
+fn innermost(own: Option<u32>, at: u32) -> u32 {
+    own.filter(|&o| o != 0).unwrap_or(at)
+}
+
+/// `at`: the innermost construct's offset around the access (`innermost`).
+fn guard(expr: &mut Expr, rw: &Rw<'_>, at: u32) {
     let Some(id) = accessed_binding(expr) else {
         return;
     };
@@ -786,7 +797,7 @@ fn guard(expr: &mut Expr, rw: &Rw<'_>) {
         (Expr::LocalSet(_, value), true) => Expr::Sequence(vec![
             *value,
             tdz_check::throw(
-                name, 0, /*HPOS LocalGet/LocalSet: the guarded access's offset*/
+                name, at
             ),
         ]),
         (Expr::LocalSet(id, value), false) => {
@@ -794,17 +805,17 @@ fn guard(expr: &mut Expr, rw: &Rw<'_>) {
                 id,
                 Box::new(tdz_check::check_then(
                     id, name, *value,
-                    0, /*HPOS LocalGet/LocalSet: the guarded access's offset*/
+                    at
                 )),
             )
         }
         // Every other access reads the binding before anything else runs.
         (_, true) => tdz_check::throw(
-            name, 0, /*HPOS LocalGet/LocalSet: the guarded access's offset*/
+            name, at
         ),
         (access, false) => Expr::Sequence(vec![
             tdz_check::check(
-                id, name, 0, /*HPOS LocalGet/LocalSet: the guarded access's offset*/
+                id, name, at
             ),
             access,
         ]),
