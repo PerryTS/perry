@@ -1972,6 +1972,7 @@ impl Model {
     /// modeled (⊤, a marker's run, a bound function's target), `lhs` is
     /// passed to unknown code: it escapes.
     pub fn has_instance(&mut self, t: Tok, reason: u32, lhs: NodeId) {
+        self.instanceof_walk(lhs);
         let unknown =
             t == TOP || self.is_marker(t) || matches!(self.toks[t as usize], TokKind::Bound(_));
         if unknown {
@@ -1986,6 +1987,25 @@ impl Model {
         let arg = self.has_instance_node(t);
         self.edge(lhs, arg);
         self.implicit(t, reason, Protocol::HasInstance, self.thrown);
+    }
+
+    /// OrdinaryHasInstance (7.3.22 steps 5-6) walks the left side's chain
+    /// with O.[[GetPrototypeOf]]() until it meets C.prototype or null. An
+    /// ordinary link runs no code there; a Proxy (the value itself, or one
+    /// on its chain) runs its `getPrototypeOf` trap and the forward
+    /// (10.5.1, `Cons::ProtoOf` on it), and the walk goes on from what that
+    /// returns: the walk node holds every link (`ProtoOf` of the left side
+    /// and of the walk node itself). Made for every left side that meets
+    /// InstanceofOperator, once per node: a superset where `@@hasInstance`
+    /// is another function than Function.prototype's, which walks nothing.
+    fn instanceof_walk(&mut self, lhs: NodeId) {
+        if !self.idx_done.insert((lhs, TOP, lhs, IDX_INSTANCEOF_WALK)) {
+            return;
+        }
+        let w = self.node_l("instanceof-chain");
+        self.nodes[w as usize].frame = self.nodes[lhs as usize].frame;
+        self.cons(lhs, Cons::ProtoOf { dst: w });
+        self.cons(w, Cons::ProtoOf { dst: w });
     }
 
     /// The argument node of the `@@hasInstance` call on `t`, one per token.

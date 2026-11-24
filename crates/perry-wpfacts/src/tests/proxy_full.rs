@@ -474,3 +474,20 @@ fn proxy_escape_runs_its_traps_with_unknown_operands() {
     site(FN, th, "({ m: px, q: payload }).m();", false).unwrap();
     site(FN, th, "({ m: px, q: 1 }).m();", true).unwrap();
 }
+
+/// OrdinaryHasInstance( C, px ) (7.3.22): the walk of the left side's chain
+/// is O.[[GetPrototypeOf]](), on a Proxy its `getPrototypeOf` trap (10.5.1),
+/// also for a Proxy on the chain of the left side, and the walk goes on
+/// from what the trap returns.
+#[test]
+fn proxy_instanceof_left_runs_its_get_prototype_of() {
+    let h = "getPrototypeOf(t: any) { external(payload); return null; }";
+    let op = "class C {}\nconsole.log(px instanceof C);";
+    site("{}", h, op, false).unwrap();
+    site("{}", "", op, true).unwrap();
+    let op = "class C {}\nconsole.log(Object.create(px) instanceof C);";
+    site("{}", h, op, false).unwrap();
+    site("{}", "", op, true).unwrap();
+    let inner = format!("getPrototypeOf(t: any) {{ return new Proxy({{}}, {{ {h} }}); }}");
+    site("{}", &inner, "class C {}\nconsole.log(px instanceof C);", false).unwrap();
+}

@@ -81,6 +81,8 @@ pub const IDX_ENUM_READ: u16 = 65;
 pub const IDX_ENUM_CHAIN: u16 = 66;
 /// An index store watched for the hole it may leave (`Cons::IndexHoleIn`).
 pub const IDX_HOLE_IN: u16 = 67;
+/// `Model::instanceof_walk`: the chain walk of one `instanceof` left side.
+pub const IDX_INSTANCEOF_WALK: u16 = 68;
 pub const IDX_OWN_PRIM: u16 = 46;
 /// `Cons::Spread` of a String source: the store of its characters (10.4.3).
 pub const IDX_SPREAD_STR: u16 = 47;
