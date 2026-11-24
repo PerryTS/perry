@@ -640,9 +640,10 @@ impl Model {
         // `defineProperty`) is no [[Set]]: [[DefineOwnProperty]] replaces
         // the accessor (ECMA-262 10.1.6.3 step 2-3, ValidateAndApply...
         // with a data descriptor over a configurable accessor), so it takes
-        // the ordinary path: a write of that key and no other.
+        // the ordinary path: a write of that key and no other. A class field
+        // too (DefineField: CreateDataPropertyOrThrow, `own_define_site`).
         if let Key::Named(a) = key {
-            let define = self.define_site(site);
+            let define = self.own_define_site(site);
             if !elem
                 && !theirs
                 && !define
@@ -663,7 +664,7 @@ impl Model {
         if !theirs {
             if let Some(f) = self.builtin_field(t, key) {
                 self.edge(src, f);
-                if !self.define_site(site) {
+                if !self.own_define_site(site) {
                     self.accessor_walk(
                         t,
                         t,
@@ -1173,8 +1174,10 @@ impl Model {
         // Setters on the chain (and own accessors), including an accessor
         // installed through another token that may denote this native. A
         // definition runs none: [[DefineOwnProperty]] calls no setter
-        // (ECMA-262 10.1.6.3), so no setter's throw reaches any region.
-        if !self.define_site(site) {
+        // (ECMA-262 10.1.6.3), so no setter's throw reaches any region. A
+        // class field is one (DefineField, 10.2.10: CreateDataPropertyOrThrow),
+        // as is every `own_define_site`.
+        if !self.own_define_site(site) {
             self.builtin_field_use(
                 t,
                 key,
@@ -1233,9 +1236,6 @@ impl Model {
 }
 
 impl Model {
-    /// A store site of `defineProperty` (`Gen::define_property`,
-    /// `define_by_data`, `define_any_on`): its value is defined with
-    /// [[DefineOwnProperty]], which runs no [[Set]] and so no setter.
     /// A site that defines an own property ([[DefineOwnProperty]], no
     /// [[Set]]): `defineProperty`, a class field (CreateDataPropertyOrThrow,
     /// 7.3.6 / 10.2.10 DefineField), a literal-descriptor or birth define.

@@ -169,6 +169,24 @@ fn a_class_field_over_a_realm_accessor_is_an_own_property() {
     assert!(!k.top && k.objs.iter().any(|o| o.ends_with(":D")), "{k:?}");
 }
 
+/// A class field is [[DefineOwnProperty]] (DefineField,
+/// CreateDataPropertyOrThrow; ECMA-262 7.3.6, 10.2.10), never a [[Set]]: it
+/// runs no setter of the realm chain, so a field over an undeclared realm
+/// setter (`Event.prototype.returnValue`) is no stop; the field is the
+/// instance's own data property, which the later read sees.
+#[test]
+fn a_class_field_over_an_undeclared_realm_setter_runs_no_setter() {
+    let pf = facts(
+        "class E4 extends Event { returnValue: any = new D(); }\nclass D { }\nclass H { v: any = 0; }\nconst e: any = new E4(\"x\");\nconst h = new H();\nh.v = e.returnValue;\nconsole.log(h.v);\n",
+    );
+    let k = field(tmpl(&pf, "H"), "v").kind.clone();
+    assert!(
+        !k.top && k.objs.iter().any(|o| o.ends_with(":D")),
+        "{k:?}\n{}",
+        pf.dump_text()
+    );
+}
+
 /// A computed key may name any setter of the realm chain.
 #[test]
 fn a_computed_key_store_reaches_the_realm_setters_it_may_name() {
