@@ -4728,11 +4728,11 @@ function notifyRouteListeners() {
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("popstate", notifyRouteListeners);
 }
-function pushRoute(path, url = path) {
-  if (path !== perry_ui_router_current_path()) history.pushState(null, "", url);
+function pushRoute(url) {
+  if (url.href !== location.href) history.pushState(null, "", url.href);
 }
 function perry_ui_router_navigate(path) {
-  pushRoute(String(path));
+  pushRoute(new URL(String(path), location.href));
   notifyRouteListeners();
 }
 function perry_ui_router_on_change(callback) {
@@ -4750,8 +4750,8 @@ function perry_ui_link_create(text, href) {
     // Opaque origins (file:, mailto:, data:) all read "null", so they compare equal.
     if (!/^https?:$/.test(url.protocol) || url.origin !== location.origin) return;
     // The browser scrolls to a fragment of this page and fires popstate itself.
-    if (url.hash && url.pathname === location.pathname && url.search === location.search) return;
-    try { pushRoute(url.pathname + url.search + url.hash, url.href); } catch (_) { return; }
+    if (url.href.includes("#") && url.pathname === location.pathname && url.search === location.search) return;
+    try { pushRoute(url); } catch (_) { return; }
     e.preventDefault();
     notifyRouteListeners();
   });

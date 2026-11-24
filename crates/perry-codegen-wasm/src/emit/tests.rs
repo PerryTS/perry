@@ -923,15 +923,16 @@ winListeners.popstate.forEach(fn => fn({}));
 "#
         ),
         concat!(
-            "start /directory/42?x=1\npush /requests\nroute /requests\n",
+            "start /directory/42?x=1\npush http://h.test/requests\nroute /requests\n",
             "push http://h.test/helpers\nroute /helpers\nHelpers /helpers prevented=true\n",
             "Elsewhere https://other.example/x prevented=false\nroute /requests"
         )
     );
 }
 
-// A listener that navigates (a redirect) leaves every listener on the new route, and a
-// path starting with "//" reaches the history as this page's, not as another host's.
+// A listener that navigates (a redirect) leaves every listener on the new route, a
+// navigation to the current URL adds no history entry, and a path starting with "//"
+// reaches the history as this page's, not as another host's.
 #[test]
 fn router_listeners_end_on_the_current_route_and_links_push_their_own_url() {
     let dom = format!(
@@ -941,6 +942,7 @@ globalThis.location = { pathname: "/a", search: "", hash: "", href: "http://h.te
 globalThis.history = { pushState(_state, _title, path) {
   const u = new URL(path, location.href);
   Object.assign(location, { pathname: u.pathname, search: u.search, hash: u.hash, href: u.href });
+  console.log("push " + u.pathname + u.search);
 } };
 "#
     );
@@ -951,6 +953,8 @@ import { Link, routerNavigate, routerOnChange } from "perry/ui";
 routerOnChange((path: string) => { if (path === "/private") routerNavigate("/login"); });
 routerOnChange((path: string) => { console.log("route " + path); });
 routerNavigate("/private");
+routerNavigate("?x=1");
+routerNavigate("?x=1");
 Link("slashes", "http://h.test//h.test/next");
 "#,
             &dom,
@@ -959,7 +963,11 @@ const a = [...uiHandles.values()].find(e => e.tagName === "A");
 a.listeners.click[0]({ button: 0, defaultPrevented: false, preventDefault() {} });
 "#
         ),
-        "route /login\nroute /login\nroute //h.test/next"
+        concat!(
+            "push /private\npush /login\nroute /login\nroute /login\n",
+            "push /login?x=1\nroute /login?x=1\nroute /login?x=1\n",
+            "push //h.test/next\nroute //h.test/next"
+        )
     );
 }
 
@@ -988,6 +996,7 @@ Link("mail", "mailto:a@b.test");
 Link("tel", "tel:+34600000000");
 Link("file", "file:///next");
 Link("frag", '#part');
+Link("top", '#');
 "#,
             &dom,
             r#"
@@ -1011,7 +1020,7 @@ console.log(click("next"));
     let modified = "next=false next=false next=false next=false next=false\nnext=false\n";
     assert_eq!(
         run("http://h.test/a", "console.log('push ' + path);"),
-        format!("push http://h.test/next\nroute /a\nnext=true mail=false tel=false file=false frag=false\n{modified}push http://h.test/next\nroute /a\nnext=true\nnext=false")
+        format!("push http://h.test/next\nroute /a\nnext=true mail=false tel=false file=false frag=false top=false\n{modified}push http://h.test/next\nroute /a\nnext=true\nnext=false")
     );
     for (page, push) in [
         ("file:///a/index.html", "console.log('push ' + path);"),
@@ -1019,7 +1028,7 @@ console.log(click("next"));
     ] {
         assert_eq!(
             run(page, push),
-            format!("next=false mail=false tel=false file=false frag=false\n{modified}next=false\nnext=false")
+            format!("next=false mail=false tel=false file=false frag=false top=false\n{modified}next=false\nnext=false")
         );
     }
 }
