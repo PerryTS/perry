@@ -2443,6 +2443,7 @@ impl Model {
             region: throw,
         });
         self.protocol_calls.insert(call);
+        self.rfam.handed.insert(call);
         self.why_mint(call, Some(t), reason);
         self.rel(|| format!("implicitcall {call} {t} {ret} {arg}"));
         if implsrc_on() {

@@ -25,6 +25,7 @@ impl Model {
             return;
         }
         let f = self.tok_fn(ft);
+        self.rfam_handed_this(call, f, this_tok);
         let fthis = self.funcs[f as usize].this;
         match (this_tok, &self.calls[call as usize].this) {
             (Some(x), _) => self.add_tok(fthis, x),

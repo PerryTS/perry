@@ -1098,15 +1098,8 @@ impl<'a> Gen<'a> {
                 }
                 for (i, which) in [(2usize, 0u8), (3, 1)] {
                     if let Some(f) = arg(i) {
-                        // K3 (B): a literal's `get k()` / `set k()` (the
-                        // literal IIFE's define) is an accessor of the
-                        // literal under its key (`recv_family`); a computed
-                        // key has no home key.
-                        if k.is_some() && birth_tm.is_some() {
-                            for ft in self.m.nodes[f as usize].pts.to_sorted() {
-                                self.m.rfam_home(ft, &[a], None);
-                            }
-                        }
+                        // K3 (CWN ruling 3): an accessor has no family `this` until the
+                        // runtime's getter path is split from program property reads.
                         self.m.cons(
                             f,
                             Cons::Accessor {

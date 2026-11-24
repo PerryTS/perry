@@ -119,9 +119,17 @@ impl<'a> Gen<'a> {
                 let el = self.load(r, Key::any());
                 let num = self.prim_node(prim::NUM);
                 let mut outs = vec![el];
-                for a in args {
-                    let an = self.expr(fx, a);
-                    let ret = self.callback(an, vec![el, num, r]);
+                // Every argument may be called (the model does not read the
+                // method); the callback iterators (23.1.3.15 forEach step
+                // 6.c.ii and their kin) call the first with `this` = the
+                // second.
+                let ans: Vec<NodeId> = args.iter().map(|a| self.expr(fx, a)).collect();
+                for (i, &an) in ans.iter().enumerate() {
+                    let th = match ans.get(1) {
+                        Some(&t) if i == 0 => ThisArg::Node(t),
+                        _ => ThisArg::Undef,
+                    };
+                    let ret = self.callback_this(an, th, vec![el, num, r]);
                     outs.push(ret);
                     // Array-likes may also receive the arguments as elements.
                     self.elem_store(fx, r, an, "array-like method");
@@ -302,7 +310,7 @@ impl<'a> Gen<'a> {
                     None => ThisArg::Undef,
                 };
                 let num = self.prim_node(prim::NUM);
-                let ret = self.call_value(f, this, vec![it, num], vec![]);
+                let ret = self.callback_this(f, this, vec![it, num]);
                 self.new_arr_from(mi, "fromMapped", &[ret])
             }
             Expr::IteratorFrom(x) | Expr::GetIterator(x) | Expr::GetAsyncIterator(x) => {

@@ -78,11 +78,15 @@ fn k3_t6_control_writer_alone() {
     assert!(v.starts_with("No("), "a writer escape kept the parameter: {v}");
 }
 
-// K3 (B), receiver family (owner 11-23): a method or accessor that code
-// outside the program's view gets hold of runs only with `this` = an
-// object of its class family (its home holder, the objects whose chain
-// reaches it, the objects it was copied onto under its key, Proxies of
-// them) or nullish; never ⊤.
+// The owner's premise (11-23), verbatim: "A method or getter/setter that
+// code outside the program's view gets hold of runs only with `this` = an
+// object of its own class family. The family includes classes it was
+// copied onto, and Proxies that forward to such an object." + "a violation
+// must be caught by a check at the runtime's callback/accessor invoke
+// point, never on proven sites". Owner 11-24: the bare class prototype is
+// not a family object. CWN K3BUILD10: a plain holder (no prototype) is no
+// member; a program call through it is a modelled call (`this` = it by its
+// binding); only handed calls (a builtin or the host calls) are checked.
 
 /// The first `.key` read after `marker`: (verdict, the unguarded receiver
 /// set holds ⊤, the unguarded receivers). The family tests read the solved
@@ -115,7 +119,8 @@ fn k3b_t1_escaped_class_method_this_is_its_family() {
     assert!(!top, "an escaped class method's this is ⊤: {v} {r:?}");
 }
 
-/// T2: an escaped object literal's method and getter run on the literal.
+/// T2: an escaped object literal's method runs on the literal; its getter
+/// keeps ⊤ (CWN ruling 3).
 #[test]
 fn k3b_t2_escaped_literal_method_this_is_its_family() {
     let src = format!(
@@ -123,11 +128,11 @@ fn k3b_t2_escaped_literal_method_this_is_its_family() {
     );
     let (v, top, r) = recv_after(&src, "/*A*/", "w");
     assert!(!top && r.len() == 1, "an escaped literal method's this is ⊤: {v} {r:?}");
+    // CWN ruling 3: an accessor gets no family `this` (the runtime cannot
+    // check a getter a builtin runs until its getter path is split from
+    // program reads): the escaped getter keeps ⊤.
     let (v, top, r) = recv_after(&src, "/*B*/", "w");
-    assert!(!top && r.iter().all(|n| n.contains("lit") || n.contains("descriptor")), "an escaped literal getter's this is ⊤: {v} {r:?}");
-    // The escaped descriptor record holds the getter under `get`: whoever
-    // holds the record can call `d.get()` on it (a copy target).
-    assert!(r.iter().any(|n| n.contains("descriptor")), "the escaped descriptor record is missing from the getter's this: {r:?}");
+    assert!(top, "an escaped literal getter got a family this: {v} {r:?}");
 }
 
 /// T3: a method copied onto another class's prototype under its key runs
@@ -145,6 +150,21 @@ fn k3b_t3_copy_target_joins_the_family() {
     let q = |r: &[String]| r.iter().any(|n| n.contains(":Q"));
     assert!(!q(&ra), "Q instances in this without the copy: {ra:?}");
     assert!(q(&rb), "the copy target's instances are missing from this: {rb:?}");
+}
+
+/// T3b: copied onto a class prototype under another key ("classes it was
+/// copied onto"): that class's instances join; a plain object holding it
+/// joins only as a prototype (`Object.create(h)`), never itself.
+#[test]
+fn k3b_t3b_copy_onto_a_prototype_under_another_key_joins() {
+    let base = "class P { x = 1; m() { return /*A*/ this.x; } }\nclass Q { y = 0; x = 3; }\n";
+    let src = format!("{DECL}{base}(Q.prototype as any).k = P.prototype.m;\nnew P().m(); sink(new Q());\nsink(P.prototype.m);\n");
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(!top && r.iter().any(|n| n.contains(":Q")), "the instances of a class it was copied onto are missing: {v} {r:?}");
+    let src = format!("{DECL}{base}const h: any = {{ x: 4 }};\nh.k = P.prototype.m;\nconst c = Object.create(h);\nnew P().m(); sink(c); sink(h);\n");
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(!top && r.len() == 2, "Object.create(h) of a holder under another key: {v} {r:?}");
+    assert!(!r.iter().any(|n| n.starts_with("lit")), "the plain holder itself is in this: {r:?}");
 }
 
 /// T7 (CWN ruling 2): `new f()` of a plain function takes its chain from
@@ -194,27 +214,52 @@ fn k3b_t8_unheld_member_is_no_receiver() {
     assert!(!top && !r.iter().any(|n| n.starts_with("proto:")), "an unheld member (P.prototype) in the escaped run's this: {v} {r:?}");
 }
 
-/// T4 control: program code calls the method with a `this` outside its
-/// family: the method keeps ⊤ `this` as before.
+/// T4: program code calls the method with a `this` outside its family
+/// (`.call` is a modelled call, never checked): `this` is that receiver by
+/// its binding beside the family, no ⊤.
 #[test]
-fn k3b_t4_this_outside_the_family_keeps_top() {
+fn k3b_t4_program_call_outside_the_family_is_its_binding() {
     let src = format!(
         "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nconst p = new P();\np.m();\nsink(P.prototype.m);\np.m.call({{ z: 1 }});\n"
     );
     let (v, top, r) = recv_after(&src, "/*A*/", "x");
-    assert!(top && !v.starts_with("T0"), "a method called on a non-member lost its ⊤ this: {v} {r:?}");
+    assert!(!top && r.len() == 2, "a program .call outside the family switched it off: {v} {r:?}");
 }
 
-/// T4b (CWN ruling, family premise 11-23 "objects it was copied onto"):
-/// an object holding the method under another key is a copy target: its
-/// program call runs on it, the family stays on.
+/// T15: a handed call (a builtin calls it: `forEach`'s thisArg) with a
+/// `this` outside the family: the runtime check would reject it, so the
+/// family is off and `this` ⊤; with a member as thisArg it stays on.
 #[test]
-fn k3b_t4b_holder_under_another_key_joins_the_family() {
-    let src = format!(
-        "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nconst p = new P();\np.m();\nsink(P.prototype.m);\nconst h = {{ h: p.m }};\nh.h();\n"
-    );
+fn k3b_t15_handed_call_outside_the_family_keeps_top() {
+    // `[1].forEach(f, t)` lowers to the array-like method (HIR binds the
+    // callback's `this` there); a Set's `forEach` is the builtin call.
+    let base = "class P { x = 1; m() { return /*A*/ this.x; } }\nconst p = new P();\np.m();\nsink(P.prototype.m);\nconst a = new Set<number>([1]);\n";
+    for recv in ["[1]", "a"] {
+        let src = format!("{DECL}{base}{recv}.forEach(p.m, {{ z: 1 }});\n");
+        let (v, top, r) = recv_after(&src, "/*A*/", "x");
+        assert!(top, "{recv}: a handed call on a non-member lost its ⊤ this: {v} {r:?}");
+    }
+    // The array-like model also calls the receiver's members (its
+    // `Protocol::Any` implicit call, the callback stored as an element):
+    // that handed call runs `m` on the array, so an array receiver puts the
+    // family off; the Set's builtin call keeps it.
+    let src = format!("{DECL}{base}a.forEach(p.m, p);\n");
     let (v, top, r) = recv_after(&src, "/*A*/", "x");
-    assert!(!top && r.len() == 2, "a holder under another key switched the family off: {v} {r:?}");
+    assert!(!top, "a handed call on a member switched the family off: {v} {r:?}");
+}
+
+/// T4b (CWN K3BUILD10): a plain object holding the method under another
+/// key is no member: escaped alone it is no receiver; the program's own
+/// `h.h()` runs on it by its binding; no ⊤ either way.
+#[test]
+fn k3b_t4b_plain_holder_under_another_key_is_no_member() {
+    let base = "class P { x = 1; m() { return /*A*/ this.x; } }\nconst p = new P();\np.m();\nsink(P.prototype.m);\nconst h = { h: p.m };\n";
+    let src = format!("{DECL}{base}sink(h);\n");
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(!top && r.len() == 1, "an escaped plain holder is in this: {v} {r:?}");
+    let src = format!("{DECL}{base}h.h();\n");
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(!top && r.len() == 2, "the program call through the holder: {v} {r:?}");
 }
 
 // K3BUILD7: a class constructor's `prototype` is non-writable and
@@ -241,18 +286,19 @@ fn k3b_t9b_subclass_of_escaped_class_has_no_top_chain() {
 }
 
 /// T10: an escaped property descriptor record (6.2.6.4
-/// FromPropertyDescriptor) holds the method under `value`: whoever holds
-/// the record can call `d.value()` on it, so it joins the family; the
-/// program's own `d.value()` runs on it too.
+/// FromPropertyDescriptor) holds the method under `value`: a plain holder,
+/// no member; the program's own `d.value()` runs on it by its binding.
 #[test]
-fn k3b_t10_descriptor_record_joins_the_family() {
-    for tail in ["sink(o.m); sink(d); sink(o);", "sink(d); sink(o);"] {
+fn k3b_t10_descriptor_record_is_no_member() {
+    // `d.value()` resolves no call (d.value holds ⊤ beside m, K3BUILD7):
+    // the record is in `this` by neither path.
+    for call in ["", "d.value();\n"] {
         let src = format!(
-            "\"use strict\";\n{DECL}const o = {{ w: 2, m() {{ return /*A*/ this.w; }} }};\no.m();\nconst d: any = Object.getOwnPropertyDescriptor(o, \"m\");\nd.value();\n{tail}\n"
+            "\"use strict\";\n{DECL}const o = {{ w: 2, m() {{ return /*A*/ this.w; }} }};\no.m();\nconst d: any = Object.getOwnPropertyDescriptor(o, \"m\");\n{call}sink(o.m); sink(d); sink(o);\n"
         );
         let (v, top, r) = recv_after(&src, "/*A*/", "w");
-        assert!(!top && r.len() == 2, "{tail}: the descriptor record is no family member: {v} {r:?}");
-        assert!(r.iter().any(|n| n.contains("descriptor")), "{tail}: the record is missing from this: {r:?}");
+        assert!(!top && r.len() == 1, "{call:?}: {v} {r:?}");
+        assert!(!r.iter().any(|n| n.contains("descriptor")), "{call:?}: the record in this: {r:?}");
     }
 }
 
@@ -267,15 +313,15 @@ fn k3b_t11_bare_prototype_is_no_receiver() {
     assert!(!top && !r.is_empty() && !r.iter().any(|n| n.starts_with("proto:")), "the bare prototype is in the escaped run's this: {v} {r:?}");
 }
 
-/// T12 (CWN ruling): a method stored under a computed key into an object
-/// that escapes: `this` = its family and that object, no ⊤.
+/// T12 (CWN K3BUILD10): a method stored under a computed key into a plain
+/// object that escapes: no member, `this` = its family, no ⊤.
 #[test]
-fn k3b_t12_computed_key_holder_joins_the_family() {
+fn k3b_t12_computed_key_plain_holder_is_no_member() {
     let src = format!(
         "{DECL}declare const k: string;\nclass P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nconst p = new P();\np.m();\nconst h: any = {{}};\nh[k] = p.m;\nsink(h);\n"
     );
     let (v, top, r) = recv_after(&src, "/*A*/", "x");
-    assert!(!top && r.len() == 2, "a computed-key holder switched the family off: {v} {r:?}");
+    assert!(!top && r.len() == 1, "a computed-key plain holder is in this: {v} {r:?}");
 }
 
 /// T12 control: a method stored into an object from unmodelled code (⊤,
@@ -301,4 +347,31 @@ fn k3b_t13_later_arrival_at_a_top_held_value_keeps_top() {
     );
     let (v, top, r) = recv_after(&src, "/*A*/", "x");
     assert!(top && !v.starts_with("T0"), "a method reaching a value stored into ⊤ lost its ⊤ this: {v} {r:?}");
+}
+
+/// T16 (CWN ruling 3): an escaped class getter and setter keep ⊤ `this`;
+/// the class's method gets its family.
+#[test]
+fn k3b_t16_class_accessor_has_no_family() {
+    let src = format!(
+        "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} get g() {{ return /*B*/ this.x; }} set s(v: number) {{ /*C*/ this.x; }} }}\nconst p = new P();\np.m(); p.g; p.s = 2;\nsink(P.prototype.m); sink(Object.getOwnPropertyDescriptor(P.prototype, \"g\")); sink(Object.getOwnPropertyDescriptor(P.prototype, \"s\")); sink(p);\n"
+    );
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(!top, "an escaped class method's this is ⊤: {v} {r:?}");
+    for at in ["/*B*/", "/*C*/"] {
+        let (v, top, r) = recv_after(&src, at, "x");
+        assert!(top, "{at}: an escaped class accessor got a family this: {v} {r:?}");
+    }
+}
+
+/// T11b (CWN ruling 2): a subclass prototype is no receiver of its
+/// family either; its instances are.
+#[test]
+fn k3b_t11b_subclass_prototype_is_no_receiver() {
+    let src = format!(
+        "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nclass Q extends P {{ y = 2; }}\nconst q = new Q();\nq.m();\nsink(P.prototype.m); sink(Q.prototype); sink(q);\n"
+    );
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(!top && !r.is_empty(), "{v} {r:?}");
+    assert!(!r.iter().any(|n| n.starts_with("proto:")), "a class prototype is in the escaped run's this: {r:?}");
 }

@@ -553,6 +553,7 @@ impl Model {
                 // call site makes one call per callee it reaches; only the
                 // calls made below it share keys.
                 let id = self.solver_call_raw(by, cs);
+                self.rfam.handed.insert(id);
                 self.chain_root.insert(id, id);
                 callee(self, target, id);
                 return id;
@@ -605,6 +606,7 @@ impl Model {
                     },
                 );
                 self.chain_calls.insert(k, (id, tg));
+                self.rfam.handed.insert(id);
                 if root == TOUCH_ROOT {
                     // The shared call is the root of the calls below it.
                     self.chain_root.insert(id, id);

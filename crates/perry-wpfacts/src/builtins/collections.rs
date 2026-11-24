@@ -457,6 +457,7 @@ fn member_call(
         region: m.thrown,
     });
     m.recv_calls.insert((t, key, get), call);
+    m.rfam.handed.insert(call);
     m.why_mint(call, Some(t), u32::MAX);
     (call, true)
 }

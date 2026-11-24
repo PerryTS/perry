@@ -5,22 +5,26 @@
 //! class prototype or class object, the literal, the object an accessor
 //! literal is defined on), the objects it is stored onto under that key
 //! (copy targets), every object whose prototypes hold a member, and the
-//! Proxies whose target holds a member. An object that holds it under
-//! another key, known or computed, is a copy target too (CWN ruling under
-//! the 11-23 premise "objects it was copied onto": whoever holds `h` can
-//! call `h[k]()` on it), a property descriptor record included. A modelled
-//! call outside the family, or a store into an object from unmodelled code
-//! (⊤, no token: that object may be `this`), leaves it ⊤ `this` as before:
-//! one way, monotone.
+//! Proxies whose target holds a member. "The family includes classes it
+//! was copied onto": an object it is stored onto under another key, known
+//! or computed, is a copy target only as a prototype: the objects whose
+//! prototypes hold it join (`copied_of`), the holder itself does not. A
+//! plain holder `h` (a record, a descriptor record) is no member: the
+//! program's own `h.k()` or `f.call(h)` is a modelled call whose `this` is
+//! `h` by its binding, and unknown code calling `f` on `h` violates the
+//! premise, which the runtime check catches (CWN ruling K3BUILD10).
 //! The runtime checks the family where it invokes a handed method or
-//! accessor (the next K3 step); this solve assumes that check.
+//! accessor (`Model::handed`: a call a builtin or the host makes); a
+//! modelled handed call whose `this` holds a value outside the family, or
+//! a store into an object from unmodelled code (⊤, no token: that object
+//! may be `this`), leaves it ⊤ `this` as before: one way, monotone.
 //!
 //! The holders are recorded while solving, as tokens arrive at field and
 //! prototype nodes (`Node::fam_watch`): at the fixpoint a field that holds
 //! ⊤ has dropped the escaped method beside it (`escaped_beside_top`), so
 //! the family cannot be read from the field contents then.
 
-use crate::model::{prim, Atom, FnIdx, Model, NodeId, Tok, TokKind, TOP};
+use crate::model::{prim, Atom, CallId, FnIdx, Model, NodeId, ThisArg, Tok, TokKind, TOP};
 use crate::pts::{FxHashMap, FxHashSet};
 
 /// `Node::fam_watch`: a field node (only function tokens matter).
@@ -51,13 +55,14 @@ pub struct Family {
     /// A member escaped: ⊤ may be that member, so an object whose
     /// prototypes hold ⊤ is a member too.
     via_top: bool,
-    /// The `this` sizes the last check saw (`settle_family`).
-    seen: Vec<(u32, u16)>,
-    /// The `this` nodes of its other runs (a summarized body's instances,
-    /// made for modelled calls, also later ones): checked, never given the
-    /// family.
+    /// The `this` operands of its handed calls (`Model::handed`: a builtin
+    /// or the host calls it; the runtime checks those): checked, never
+    /// given the family. Program calls are not checked.
     watch: Vec<NodeId>,
+    /// The sizes the last check saw (`settle_family`).
     wseen: Vec<(u32, u16)>,
+    /// Receiver tokens of its handed calls.
+    htoks: Vec<Tok>,
 }
 
 #[derive(Default)]
@@ -72,11 +77,16 @@ pub struct RecvFam {
     fam_of: FxHashMap<Tok, Vec<FnIdx>>,
     /// Objects whose prototypes hold ⊤.
     top_proto: Vec<Tok>,
+    /// Object -> the functions stored onto it under another key than
+    /// their home key: copied onto it as a prototype, the objects whose
+    /// prototypes hold it join (not the object itself).
+    copied_of: FxHashMap<Tok, Vec<FnIdx>>,
+    /// Calls a builtin or the host makes (`chain_call`, Proxy traps): the
+    /// runtime checks a family function's receiver there.
+    pub(crate) handed: FxHashSet<CallId>,
     /// Nodes stored into ⊤ (`rfam_top_holder`).
     pub(crate) top_held: FxHashSet<NodeId>,
-    /// `settle_family` has looked at the summary instances and tokens
-    /// before these.
-    inst_cursor: usize,
+    /// `settle_family` has looked at the tokens before this.
     tok_cursor: usize,
     /// `PERRY_K3_FAMOFF`: print why a function left its family.
     pub(crate) explain_off: bool,
@@ -151,6 +161,13 @@ impl Model {
                     continue;
                 }
                 self.rfam.rev_proto.entry(p).or_default().push(h);
+                // `p` holds a function under another key: copied onto `p`
+                // as a prototype, so `h` is of its family.
+                if let Some(fs) = self.rfam.copied_of.get(&p).cloned() {
+                    for f in fs {
+                        self.rfam_member(f, h);
+                    }
+                }
                 if let Some(fs) = self.rfam.fam_of.get(&p).cloned() {
                     for f in fs {
                         self.rfam_member(f, h);
@@ -164,8 +181,12 @@ impl Model {
         }
     }
 
-    /// `h` holds function token `ft` under key `_key` (a field or accessor).
-    pub(crate) fn rfam_holding(&mut self, ft: Tok, h: Tok, _key: Atom) {
+    /// `h` holds function token `ft` under key `key` (a field or accessor).
+    /// Under its home key `h` is a member (a copy target). Under another
+    /// key (`NO_HOME_KEY`: a computed one) `h` is no member: only the
+    /// objects whose prototypes hold `h` are ("classes it was copied
+    /// onto"); a plain holder stays outside the family.
+    pub(crate) fn rfam_holding(&mut self, ft: Tok, h: Tok, key: Atom) {
         let TokKind::Func(f, _) = self.toks[ft as usize] else {
             return;
         };
@@ -175,8 +196,49 @@ impl Model {
         if r.off {
             return;
         }
-        // Under its home key or another one (`_key`): a copy target.
-        self.rfam_member(f, h);
+        if r.keys.contains(&key) {
+            self.rfam_member(f, h);
+            return;
+        }
+        let fs = self.rfam.copied_of.entry(h).or_default();
+        if fs.contains(&f) {
+            return;
+        }
+        fs.push(f);
+        if let Some(cs) = self.rfam.rev_proto.get(&h).cloned() {
+            for c in cs {
+                self.rfam_member(f, c);
+            }
+        }
+    }
+
+    /// `this_into`: the receiver of `call` into `f`. A handed call
+    /// (`RecvFam::handed`) is checked against the family at the runtime's
+    /// invoke point, so its receiver is checked here too (`settle_family`).
+    pub(crate) fn rfam_handed_this(&mut self, call: CallId, f: FnIdx, this_tok: Option<Tok>) {
+        if !self.rfam.handed.contains(&call) {
+            return;
+        }
+        let Some(r) = self.rfam.fams.get_mut(&f) else {
+            return;
+        };
+        if r.off {
+            return;
+        }
+        match (this_tok, &self.calls[call as usize].this) {
+            (Some(x), _) | (None, &ThisArg::Tok(x)) => {
+                if !r.htoks.contains(&x) {
+                    r.htoks.push(x);
+                }
+            }
+            (None, &ThisArg::Node(n)) => {
+                if !r.watch.contains(&n) {
+                    r.watch.push(n);
+                    r.wseen.push((u32::MAX, 0));
+                }
+            }
+            (None, ThisArg::Undef) => {}
+        }
     }
 
     /// Store `src` into an object from unmodelled code (⊤): a method or
@@ -260,7 +322,6 @@ impl Model {
         for &d in dsts {
             if !r.dsts.contains(&d) {
                 r.dsts.push(d);
-                r.seen.push((u32::MAX, 0));
             }
         }
         r.given.clear();
@@ -406,8 +467,9 @@ impl Model {
 
     /// Once the worklist is empty: a family with an escaped member takes
     /// the objects whose prototypes hold ⊤; a Proxy whose target holds a
-    /// member joins; a `this` that holds a value outside the family (a
-    /// modelled call) leaves the family. Monotone.
+    /// member joins; a handed call's `this` that holds a value outside the
+    /// family leaves the family (the runtime check would reject it; a
+    /// program call's `this` is its own binding, never checked). Monotone.
     pub(crate) fn settle_family(&mut self) -> bool {
         let mut changed = false;
         let live: Vec<FnIdx> = self
@@ -420,18 +482,6 @@ impl Model {
         if live.is_empty() {
             return false;
         }
-        // Every run of a family function is checked, the ones made later
-        // too: a modelled call's receiver lands in its instance's `this`.
-        for i in self.rfam.inst_cursor..self.sum.insts.len() {
-            let (f, d) = (self.sum.insts[i].f, self.sum.insts[i].this);
-            if let Some(r) = self.rfam.fams.get_mut(&f) {
-                if !r.dsts.contains(&d) && !r.watch.contains(&d) {
-                    r.watch.push(d);
-                    r.wseen.push((u32::MAX, 0));
-                }
-            }
-        }
-        self.rfam.inst_cursor = self.sum.insts.len();
         // A class instance, a `new f()` instance (its chain is `f.prototype`)
         // or a subclass prototype object has its static chain
         // from birth; its prototypes node is made on first use only, so
@@ -497,10 +547,15 @@ impl Model {
             if r.off {
                 continue;
             }
-            let mut seen = r.seen.clone();
-            seen.extend_from_slice(&r.wseen);
+            let mut seen = r.wseen.clone();
             let mut bad: Option<(NodeId, Option<Tok>)> = None;
-            for (i, &d) in r.dsts.iter().chain(&r.watch).enumerate() {
+            if let Some(&t) = r.htoks.iter().find(|t| **t != TOP && !r.members.contains(t) && !r.extra.contains(t)) {
+                let what = self.tok_name(t);
+                self.rfam_off(f, || format!("handed this holds {what}"));
+                changed = true;
+                continue;
+            }
+            for (i, &d) in r.watch.iter().enumerate() {
                 let node = &self.nodes[d as usize];
                 let now = (node.pts.len() as u32, node.prim);
                 if seen[i] == now {
@@ -532,8 +587,7 @@ impl Model {
                 }
                 None => {
                     let r = self.rfam.fams.get_mut(&f).unwrap();
-                    r.wseen = seen.split_off(r.dsts.len());
-                    r.seen = seen;
+                    r.wseen = seen;
                 }
             }
         }

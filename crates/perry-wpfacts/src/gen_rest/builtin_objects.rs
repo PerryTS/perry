@@ -147,18 +147,8 @@ impl<'a> Gen<'a> {
                     Some((class_name, args, get, set)) => {
                         let a = self.evaluate_all(fx, args);
                         let own = [get, set].map(|i| i.and_then(|i| a.get(i).copied()));
-                        // K3 (B): an accessor written in place is a method of
-                        // what it is defined on, under its key (`recv_family`).
-                        if let Some(ks) = key.as_deref() {
-                            let ka = self.m.atom(ks);
-                            for i in [get, set].into_iter().flatten() {
-                                if let (Expr::Closure { .. }, Some(&n)) = (&args[i], a.get(i)) {
-                                    for ft in self.m.nodes[n as usize].pts.to_sorted() {
-                                        self.m.rfam_home(ft, &[ka], None);
-                                    }
-                                }
-                            }
-                        }
+                        // K3 (CWN ruling 3): an accessor has no family `this` until the
+                        // runtime's getter path is split from program property reads.
                         (self.new_named(fx, class_name, a, vec![]), own)
                     }
                     None => (self.expr(fx, d), [None, None]),

@@ -336,7 +336,17 @@ impl<'a> Gen<'a> {
 
     /// Call `cb` with `args` (this = undefined); returns the result node.
     pub(super) fn callback(&mut self, cb: NodeId, args: Vec<NodeId>) -> NodeId {
-        self.call_value(cb, ThisArg::Undef, args, vec![])
+        self.callback_this(cb, ThisArg::Undef, args)
+    }
+
+    /// `callback` with the receiver the builtin passes (its `thisArg`): a
+    /// call the builtin makes, so the runtime checks a family method's
+    /// receiver there (`RecvFam::handed`).
+    pub(super) fn callback_this(&mut self, cb: NodeId, this: ThisArg, args: Vec<NodeId>) -> NodeId {
+        let (call, ret) = self.new_call(this, args, vec![]);
+        self.m.rfam.handed.insert(call);
+        self.m.cons(cb, Cons::Call { call });
+        ret
     }
 
     /// These operations read numeric elements. The solved receiver decides

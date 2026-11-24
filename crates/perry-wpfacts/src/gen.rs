@@ -1611,7 +1611,8 @@ impl<'a> Gen<'a> {
             let a = self.accessor_atom(mi, c, name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
-            self.m.rfam_home(ft, &[a], Some(holder));
+            // K3 (CWN ruling 3): an accessor has no family `this` until the
+            // runtime's getter path is split from program property reads.
             self.m.accessors.entry((holder, a)).or_default().0.push(ft);
             push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
@@ -1638,7 +1639,8 @@ impl<'a> Gen<'a> {
             let a = self.accessor_atom(mi, c, name);
             self.m.add_accessor_atom(a);
             let ft = self.m.funcs[f as usize].token;
-            self.m.rfam_home(ft, &[a], Some(holder));
+            // K3 (CWN ruling 3): an accessor has no family `this` until the
+            // runtime's getter path is split from program property reads.
             self.m.accessors.entry((holder, a)).or_default().1.push(ft);
             push_unique(self.m.accessor_keys.entry(holder).or_default(), a);
         }
@@ -1667,7 +1669,8 @@ impl<'a> Gen<'a> {
                 };
                 self.m.add_accessor_atom(a);
                 let ft = self.m.funcs[f as usize].token;
-                self.m.rfam_home(ft, &[a], Some(holder));
+                // K3 (CWN ruling 3): an accessor has no family `this` until the
+                // runtime's getter path is split from program property reads.
                 let e = self.m.accessors.entry((holder, a)).or_default();
                 if setter { &mut e.1 } else { &mut e.0 }.push(ft);
                 push_unique(self.m.accessor_keys.entry(holder).or_default(), a);

@@ -151,6 +151,7 @@ impl Model {
             TokKind::Func(f, _) => {
                 self.bind_args(call, t);
                 if !self.funcs[f as usize].lexical_this {
+                    self.rfam_handed_this(call, f, this_tok);
                     self.this_into(call, t, this_tok);
                 }
             }

@@ -212,6 +212,7 @@ impl Model {
             },
         );
         let call = self.calls.len() as CallId;
+        self.rfam.handed.insert(call);
         self.calls.push(CallSite {
             first_arg_fixed: true,
             this: ThisArg::Node(h),
