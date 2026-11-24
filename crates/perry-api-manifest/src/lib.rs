@@ -404,7 +404,7 @@ fn is_node_core_private_named_export(module: &str, name: &str) -> bool {
                 | "isEncoding"
                 | "of"
         ),
-        "crypto" => matches!(name, "md5" | "randomUUIDv7" | "sha256"),
+        "crypto" => matches!(name, "md5" | "sha256"),
         "perf_hooks" => matches!(
             name,
             "clearMarks"
@@ -1059,7 +1059,7 @@ mod tests {
                     "of",
                 ][..],
             ),
-            ("crypto", &["md5", "randomUUIDv7", "sha256"][..]),
+            ("crypto", &["md5", "sha256"][..]),
             (
                 "perf_hooks",
                 &[
