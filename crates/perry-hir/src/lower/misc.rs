@@ -448,7 +448,7 @@ pub(crate) fn assign_token(assign: &ast::AssignExpr) -> u32 {
     let ast::AssignTarget::Simple(target) = &assign.left else {
         return assign.span.lo.0;
     };
-    let mut cur: &ast::Expr = match target {
+    let cur: &ast::Expr = match target {
         ast::SimpleAssignTarget::Member(m) => return member_token(m),
         ast::SimpleAssignTarget::SuperProp(m) => return super_member_token(m),
         ast::SimpleAssignTarget::Paren(x) => &x.expr,
@@ -458,6 +458,19 @@ pub(crate) fn assign_token(assign: &ast::AssignExpr) -> u32 {
         ast::SimpleAssignTarget::TsTypeAssertion(x) => &x.expr,
         _ => return assign.span.lo.0,
     };
+    target_member_token(cur).unwrap_or(assign.span.lo.0)
+}
+
+/// Where an update `o.k++` / `a[k]++` stands: its member operand (also
+/// parenthesized or behind a TS wrapper) at the member token, as the read
+/// and the store it pairs; any other operand at the update's start.
+pub(crate) fn update_token(update: &ast::UpdateExpr) -> u32 {
+    target_member_token(&update.arg).unwrap_or(update.span.lo.0)
+}
+
+/// The member token of a reference operand seen through parentheses and TS
+/// wrappers; `None` when the operand is no member.
+fn target_member_token(mut cur: &ast::Expr) -> Option<u32> {
     loop {
         cur = match cur {
             ast::Expr::TsAs(x) => &x.expr,
@@ -466,9 +479,9 @@ pub(crate) fn assign_token(assign: &ast::AssignExpr) -> u32 {
             ast::Expr::TsTypeAssertion(x) => &x.expr,
             ast::Expr::TsConstAssertion(x) => &x.expr,
             ast::Expr::Paren(x) => &x.expr,
-            ast::Expr::Member(m) => return member_token(m),
-            ast::Expr::SuperProp(m) => return super_member_token(m),
-            _ => return assign.span.lo.0,
+            ast::Expr::Member(m) => return Some(member_token(m)),
+            ast::Expr::SuperProp(m) => return Some(super_member_token(m)),
+            _ => return None,
         };
     }
 }
