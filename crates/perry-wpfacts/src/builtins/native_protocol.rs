@@ -833,6 +833,25 @@ pub fn note_global_in_top(m: &mut Model) {
     }
 }
 
+/// Foreign code (a declared extern, `Model::foreign_calls`) was handed a
+/// value: it is unknown code beside the runtime that holds ⊤, so once the
+/// global object is in ⊤ (`global_in_top`) it may hold it and read every
+/// global (`global_field_read_by_unknown`). Owner 2026-11-16: only an
+/// all-primitive extern reaches no program object; owner 2026-11-24
+/// decision 2 (declared names only) holds where the runtime is the holder.
+pub fn note_foreign_holds(m: &mut Model) {
+    if m.foreign_holds {
+        return;
+    }
+    m.foreign_holds = true;
+    if m.global_in_top {
+        let fields: Vec<NodeId> = m.global_fields.iter().map(|&(_, n)| n).collect();
+        for n in fields {
+            global_field_read_by_unknown(m, n);
+        }
+    }
+}
+
 /// Unknown code that holds the global object (`global_in_top`) reads its
 /// properties: what the program stored in global `n` leaves. Whole program
 /// that code is the runtime, which reads only the global names the realm
@@ -842,16 +861,40 @@ pub fn note_global_in_top(m: &mut Model) {
 /// keys where they happen (`written_by`). Owner decision 2026-11-24, the
 /// read twin of R-GLOBAL (2026-11-18, which dropped that code's any-key
 /// write). Per unit, beside an unseen module or interpreted code
-/// (`realm_nameable`), other code reads every global.
+/// (`realm_nameable`), or once foreign code holds ⊤ (`note_foreign_holds`:
+/// a declared extern was handed a value), other code reads every global.
 fn global_field_read_by_unknown(m: &mut Model, n: NodeId) {
-    if !m.realm_nameable() {
-        let a = m.global_fields.iter().find(|&&(_, f)| f == n).map(|&(a, _)| a);
-        let g = m.tok_index.get(&TokKind::Builtin(BuiltinNs::GlobalThis)).copied();
+    if !m.realm_nameable() && !m.foreign_holds {
+        let a = m
+            .global_fields
+            .iter()
+            .find(|&&(_, f)| f == n)
+            .map(|&(a, _)| a);
+        let g = m
+            .tok_index
+            .get(&TokKind::Builtin(BuiltinNs::GlobalThis))
+            .copied();
         if let (Some(a), Some(g)) = (a, g) {
             if !super::undeclared::global_store_escapes(m, g, Key::Named(a)) {
                 return;
             }
         }
+    }
+    if crate::unksrc::on() {
+        let a = m
+            .global_fields
+            .iter()
+            .find(|&&(_, f)| f == n)
+            .map(|&(a, _)| a);
+        eprintln!(
+            "perry: wpfacts unksrc GLOBSINK node={n} name={:?} nameable={} foreign={} global_tok={}",
+            a.map(|a| m.atoms[a as usize].clone()),
+            m.realm_nameable(),
+            m.foreign_holds,
+            m.tok_index
+                .get(&TokKind::Builtin(BuiltinNs::GlobalThis))
+                .is_some(),
+        );
     }
     let r = m.reason("global property read by unknown code that holds the global object");
     m.sink_node(n, r);

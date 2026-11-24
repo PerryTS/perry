@@ -62,6 +62,9 @@ impl Model {
     }
 
     fn escape_at(&mut self, t: Tok, reason: u32) {
+        if self.foreign_reason == Some(reason) {
+            crate::builtins::note_foreign_holds(self);
+        }
         if let Some(c) = self.cur_native_call {
             let region = self.calls[c as usize].region;
             let ret = self.calls[c as usize].ret;

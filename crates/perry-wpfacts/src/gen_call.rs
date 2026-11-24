@@ -384,7 +384,21 @@ impl<'a> Gen<'a> {
                 self.runtime_extern(fx, name, args, spread, vec![])
             }
             _ => {
-                let c = self.expr(fx, callee);
+                // A body-less `declare function` called by its name is
+                // foreign code (owner 2026-11-16: only an all-primitive
+                // extern reaches no program object, the arm above): its
+                // value is the extern model's ⊤, and what the call hands it
+                // escapes to foreign code (`Model::foreign_calls`).
+                let foreign = match callee {
+                    Expr::ExternFuncRef { name, .. } => self.declared_extern(fx.module, name),
+                    _ => false,
+                };
+                let c = if foreign {
+                    let Expr::ExternFuncRef { name, .. } = callee else { unreachable!() };
+                    self.m.top_val(&format!("runtime extern value {name}"))
+                } else {
+                    self.expr(fx, callee)
+                };
                 self.own_test_recv = Some(c);
                 let rec = (byte_offset != 0).then(|| self.call_sites_at.len());
                 if byte_offset != 0 {
@@ -424,6 +438,9 @@ impl<'a> Gen<'a> {
                 // a callee node that already holds the callee (the program's
                 // `require` from `createRequire`) runs the call at `cons`.
                 let (call, ret) = self.new_call(ThisArg::Undef, args, spread);
+                if foreign {
+                    self.m.foreign_calls.insert(call);
+                }
                 if let Some(i) = rec {
                     self.call_sites_at[i].call = call;
                 }
@@ -459,6 +476,19 @@ impl<'a> Gen<'a> {
             && crate::builtins::sentinel_user_global(&self.m, property)
     }
 
+    /// `name` is a body-less `declare function` of module `mi`
+    /// (`Module::extern_funcs`) that no import or module binding shadows.
+    fn declared_extern(&self, mi: u32, name: &str) -> bool {
+        !name.starts_with("js_")
+            && !self.is_import(mi, name)
+            && !self.mods[mi as usize].scope.contains_key(name)
+            && self.modules[mi as usize]
+                .1
+                .extern_funcs
+                .iter()
+                .any(|(n, _, _)| n == name)
+    }
+
     fn is_runtime_extern(&self, mi: u32, name: &str) -> bool {
         name.starts_with("js_")
             && !self.is_import(mi, name)
@@ -492,6 +522,10 @@ impl<'a> Gen<'a> {
             let key = Key::Named(self.m.atom(name));
             self.m.load_from(t, t, key, dst);
             return dst;
+        }
+        // A declared extern read as a value: a call of ⊤ may call it.
+        if declared_extern && !name.starts_with("js_") {
+            self.m.foreign_fn_value = true;
         }
         self.m.top_val(&format!("runtime extern value {name}"))
     }

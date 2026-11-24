@@ -3204,6 +3204,16 @@ pub struct Model {
     /// (`Gen`'s import walk): code the closed world does not cover, which may
     /// call the Function constructor it is handed (`escape_body`).
     pub unseen_module_runs: bool,
+    /// Calls of a body-less `declare function` (an FFI symbol: native code
+    /// outside the program, `Module::extern_funcs`) that no all-primitive
+    /// manifest describes (`Gen::native_extern`): foreign code.
+    pub foreign_calls: crate::pts::FxHashSet<CallId>,
+    /// Such an extern is read as a value: any call of ⊤ may be its call.
+    pub foreign_fn_value: bool,
+    /// The escape reason of a value handed to foreign code.
+    pub foreign_reason: Option<u32>,
+    /// Foreign code was handed a value: it holds ⊤ (`note_foreign_holds`).
+    pub foreign_holds: bool,
     /// Per module: a Worker of the program may run it (`Gen::worker_side`):
     /// it is reachable from a Worker entry module, or some Worker's entry
     /// is not named. A module past the end counts as one (unknown).
