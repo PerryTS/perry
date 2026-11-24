@@ -991,7 +991,7 @@ impl Rewriter<'_> {
             Expr::PropertyGet {
                 byte_offset: member,
                 ..
-            } => (if *member != 0 { *member } else { *byte_offset }, None),
+            } => (*member, None),
             _ => return None,
         };
         if offset == 0 {
@@ -2073,7 +2073,7 @@ fn lane_functions(hir: &Module, facts: &ElisionFacts) -> HashSet<u32> {
                 Expr::PropertyGet {
                     byte_offset: at, ..
                 } => {
-                    member.insert(if *at != 0 { *at } else { *byte_offset });
+                    member.insert(*at);
                 }
                 _ => {}
             }

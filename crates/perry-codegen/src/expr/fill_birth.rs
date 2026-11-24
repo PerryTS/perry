@@ -80,12 +80,7 @@ fn plan<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<Plan<'e>> {
     if ctx.wpfacts_off || ctx.wpfacts.fill_births.is_empty() {
         return None;
     }
-    let Expr::Call {
-        callee,
-        byte_offset,
-        ..
-    } = e
-    else {
+    let Expr::Call { callee, .. } = e else {
         return None;
     };
     let Expr::PropertyGet {
@@ -96,7 +91,7 @@ fn plan<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<Plan<'e>> {
     else {
         return None;
     };
-    let offset = if *member != 0 { *member } else { *byte_offset };
+    let offset = *member;
     if property != "fill" || offset == 0 {
         return None;
     }

@@ -422,11 +422,7 @@ fn site(ctx: &mut FnCtx<'_>, callee: &Expr) -> Result<Option<Site>> {
             byte_offset,
             ..
         } => {
-            let offset = if *byte_offset != 0 {
-                *byte_offset
-            } else {
-                direct_offset
-            };
+            let offset = *byte_offset;
             if offset == 0 {
                 return Ok(None);
             }

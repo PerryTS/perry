@@ -208,7 +208,7 @@ impl<'a> Gen<'a> {
                         self.m.arr_len_at_site.entry(site).or_default().hole_free = true;
                         // I32 at rest (PR B): a birth an at-rest template
                         // may have, keyed as codegen keys the call.
-                        let offset = if *pb != 0 { *pb } else { byte_offset };
+                        let offset = *pb;
                         let (module, recv) = (fx.module, o);
                         let fill = crate::rest_elems::RestFill {
                             module,
@@ -245,11 +245,8 @@ impl<'a> Gen<'a> {
                 } else {
                     private
                 };
-                let (off, end) = if *pb != 0 {
-                    (*pb, *pe)
-                } else {
-                    (byte_offset, byte_end)
-                };
+                // The method site is the callee member read's identity.
+                let (off, end) = (*pb, *pe);
                 let rec = (off != 0).then(|| self.call_sites_at.len());
                 if off != 0 {
                     self.call_sites_at.push(crate::signatures::CallSiteRec {
