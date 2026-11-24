@@ -587,6 +587,15 @@ impl<'a> Proof<'a> {
                 }
                 o
             }
+            // ToObject keeps an object's identity; a primitive becomes a wrapper.
+            Expr::ObjectCoerce(value) => self
+                .expr(value, function)
+                .into_iter()
+                .map(|origin| match origin {
+                    Origin::Undefined | Origin::Primitive | Origin::Numeric => Origin::Unknown,
+                    origin => origin,
+                })
+                .collect(),
             // These operations inspect data but do not let a callback escape.
             Expr::Binary { .. }
             | Expr::Compare { .. }
@@ -932,6 +941,20 @@ mod tests {
             "function f(o) { return Object.getOwnPropertyDescriptor(o, 'constructor'); } f(require('fs')); f.call(null, Object);",
             "function f(o) { return Object.getOwnPropertyDescriptor(o, 'constructor'); } f(require('fs')); const x = {}; Object.defineProperty(x, 'p', {set: f}); x.p = Object;",
         ] { assert!(uses(source) > 0, "{source}"); }
+    }
+    #[test]
+    fn object_coercion_keeps_namespace_identity_and_refuses_wrappers() {
+        assert_eq!(
+            uses("const fs = require('fs'); Object.getOwnPropertyDescriptor(Object(fs), 'readFileSync');"),
+            0
+        );
+        for source in [
+            "Object.getOwnPropertyDescriptor(Object('x'), 'constructor');",
+            "Object.getOwnPropertyDescriptor(Object(Object), 'getPrototypeOf');",
+            "const fs = require('fs'); globalThis.f(Object(fs)); Object.getOwnPropertyDescriptor(fs, 'readFileSync');",
+        ] {
+            assert!(uses(source) > 0, "{source}");
+        }
     }
     #[test]
     fn exported_descriptor_helpers_keep_unknown_call_arguments() {
