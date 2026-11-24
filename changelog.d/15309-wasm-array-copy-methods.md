@@ -1,0 +1,1 @@
+`--target web`: `toReversed()`, `toSorted()`, `toSpliced()`, `with()` and `reduceRight()` return their results instead of `undefined`, `toSpliced()` inserts its items, and `copyWithin()` edits the array (inside a function too) (#15303).
