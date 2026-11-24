@@ -145,7 +145,9 @@ impl<'a> FuncEmitCtx<'a> {
                     if !self.is_boxed(id) {
                         func.instruction(&Instruction::LocalSet(idx));
                     } else if self.preallocated.contains(id) {
-                        self.emit_box_set(func, idx);
+                        // `box_init`, not `box_set`: the declaration ends a dead zone
+                        // that an assignment would throw in.
+                        self.emit_box_init(func, idx);
                         func.instruction(&Instruction::Drop);
                     } else {
                         self.emit_box_call(func, "box_new");
@@ -559,13 +561,28 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::End);
             }
             // A closure created before its captured binding's `Let` runs shares the cell
-            // made here, and the `Let` fills it. A TDZ cell starts as `undefined`: the
-            // wasm target does not throw on a read inside the dead zone.
+            // made here, and the `Let` fills it. A TDZ cell holds the binding's name in
+            // its dead zone, where `box_get` / `box_set` throw a ReferenceError.
             Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
+                let tdz = matches!(stmt, Stmt::PreallocateTdzBoxes(_));
                 for id in ids {
                     if let Some(&idx) = self.local_map.get(id).filter(|_| self.is_boxed(id)) {
-                        func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                        self.emit_box_call(func, "box_new");
+                        let name = self
+                            .emitter
+                            .tdz_names
+                            .get(&(self.emitter.current_mod_idx, *id))
+                            .filter(|_| tdz);
+                        match name.and_then(|n| self.emitter.string_map.get(n.as_str())) {
+                            Some(&key_id) => {
+                                let name_bits = (STRING_TAG << 48) | (key_id as u64);
+                                func.instruction(&Instruction::I64Const(name_bits as i64));
+                                self.emit_box_call(func, "box_new_tdz");
+                            }
+                            None => {
+                                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+                                self.emit_box_call(func, "box_new");
+                            }
+                        }
                         func.instruction(&Instruction::LocalSet(idx));
                         self.preallocated.insert(*id);
                     }

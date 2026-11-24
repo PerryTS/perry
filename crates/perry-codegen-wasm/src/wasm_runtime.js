@@ -1634,6 +1634,12 @@ function wrapImportsForI64(imports) {
   return wrapped;
 }
 
+// The key of a cell's dead-zone mark: a symbol, which no property of a program's can be.
+const __tdz = Symbol('perry.tdz');
+function __throwDeadZone(name) {
+  throw new ReferenceError(`Cannot access '${name}' before initialization`);
+}
+
 // What closure_new makes. Its class, not its keys, tells a closure from a plain
 // object that has `funcIdx` / `captures` fields, at no per-closure cost.
 class __PerryClosure {
@@ -2262,8 +2268,26 @@ const __memDispatch = {
   },
   // A cell holds a local that closures capture and mutate, so all of them share it.
   box_new: (value) => ({ value }),
-  box_get: (cell) => cell.value,
-  box_set: (cell, value) => { cell.value = value; return value; },
+  // A lexical binding's cell in its dead zone carries the binding's name under `__tdz`; reading
+  // or assigning it throws until its declaration runs `box_init`. The mark is on the cell
+  // because testing the value could run a Proxy trap of the program's.
+  box_new_tdz: (name) => ({ value: undefined, [__tdz]: name }),
+  box_get: (cell) => {
+    if (cell[__tdz] !== undefined) __throwDeadZone(cell[__tdz]);
+    return cell.value;
+  },
+  // The compiler's own read of a binding (see with_tdz_suppressed): undefined in its dead zone.
+  box_peek: (cell) => cell.value,
+  box_set: (cell, value) => {
+    if (cell[__tdz] !== undefined) __throwDeadZone(cell[__tdz]);
+    cell.value = value;
+    return value;
+  },
+  box_init: (cell, value) => {
+    if (cell[__tdz] !== undefined) cell[__tdz] = undefined;
+    cell.value = value;
+    return value;
+  },
   // Console — args are already decoded by __bitsToJsValue
   console_log: (...args) => { console.log(...args); },
   console_warn: (...args) => { console.warn(...args); },

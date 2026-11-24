@@ -1370,6 +1370,9 @@ mod static_method;
 #[path = "date_setter_tests.rs"]
 mod date_setter;
 
+#[path = "tdz_cell_tests.rs"]
+mod tdz_cell;
+
 #[path = "class_value_tests.rs"]
 mod class_value;
 
