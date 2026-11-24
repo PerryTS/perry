@@ -45,6 +45,23 @@ fn a_renamed_export_and_a_plain_function_export() {
 }
 
 #[test]
+fn an_alias_keeps_its_own_name_when_its_origin_names_another_export() {
+    let alias = "addRef".to_string();
+    let source = "function add() {}\nexport const addRef = add;\n";
+    let module = lower(source);
+    assert_eq!(
+        module
+            .declared_export_origin(&alias, &alias)
+            .map(String::as_str),
+        Some("add")
+    );
+    let module = lower(&format!(
+        "{source}function other() {{}}\nexport {{ other as add }};\n"
+    ));
+    assert_eq!(module.declared_export_origin(&alias, &alias), None);
+}
+
+#[test]
 fn a_binding_of_a_value_is_no_function_alias() {
     let module = lower("const box = { n: 1 };\nexport const boxRef = box;\n");
     assert_eq!(module.function_alias_origin("boxRef"), None);

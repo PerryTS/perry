@@ -346,7 +346,18 @@ impl Module {
         local: &'a String,
         exported: &str,
     ) -> Option<&'a String> {
-        let origin = self.function_alias_origin(exported).unwrap_or(local);
+        // An origin whose name publicly exports something else is not reachable
+        // by that name.
+        let taken = |name: &str| {
+            self.exports.iter().any(|export| {
+                matches!(export, Export::Named { local, exported }
+                    if exported == name && local != name)
+            })
+        };
+        let origin = self
+            .function_alias_origin(exported)
+            .filter(|name| !taken(name))
+            .unwrap_or(local);
         let declared = self
             .classes
             .iter()
