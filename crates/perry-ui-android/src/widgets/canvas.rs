@@ -78,15 +78,9 @@ static CANVAS_IMAGE_SIZES: LazyLock<Mutex<HashMap<i64, (f64, f64)>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 static NEXT_IMAGE_HANDLE: AtomicI64 = AtomicI64::new(1);
 
-const JS_TAG_TRUE: u64 = 0x7FFC_0000_0000_0004;
-
 extern "C" {
-    fn js_object_alloc(class_id: u32, field_count: u32) -> *mut c_void;
-    fn js_object_set_field_by_name(obj: *mut c_void, key: *const c_void, value: f64);
     fn js_string_from_bytes(data: *const u8, len: u32) -> *mut c_void;
-    fn js_nanbox_pointer(ptr: i64) -> f64;
     fn js_nanbox_string(ptr: i64) -> f64;
-    fn js_promise_resolved(value: f64) -> *mut c_void;
     fn js_promise_rejected(reason: f64) -> *mut c_void;
 }
 
