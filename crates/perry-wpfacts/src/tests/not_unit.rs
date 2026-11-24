@@ -317,7 +317,7 @@ fn control_relink_to_a_program_object() {
 #[test]
 fn control_relink_to_an_array_reads_its_length() {
     let src = format!("{C}{RL}console.log(t.length);\n");
-    let at_read = src.find("t.length").unwrap() as u32 + 1;
+    let at_read = src.find("t.length").unwrap() as u32 + 3;
     let pf = one(&src);
     assert!(refused(&pf, "length"));
     let read: Vec<_> = pf
