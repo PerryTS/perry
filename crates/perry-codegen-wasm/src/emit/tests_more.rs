@@ -1294,6 +1294,9 @@ mod number_to_string_radix;
 #[path = "object_create_tests.rs"]
 mod object_create;
 
+#[path = "reflection_tests.rs"]
+mod reflection;
+
 #[path = "object_key_tests.rs"]
 mod object_key;
 

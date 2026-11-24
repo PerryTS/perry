@@ -287,7 +287,30 @@ impl WasmModuleEmitter {
         }
     }
 
+    /// JS for `emit_function_value`'s call.
+    fn js_function_value(&self, func_idx: u32) -> String {
+        let table_idx = self
+            .func_to_table_idx
+            .get(&func_idx)
+            .copied()
+            .unwrap_or(func_idx);
+        let name = self
+            .fn_names
+            .get(&func_idx)
+            .map_or("", |&id| &self.string_table[id as usize].0);
+        format!(
+            "fromJsValue(__memDispatch.function_value({}, {}, {}))",
+            table_idx,
+            self.fn_proto_code(func_idx),
+            js_string_literal(name)
+        )
+    }
+
     pub(super) fn emit_js_expr(&self, expr: &Expr, locals: &BTreeMap<u32, String>) -> String {
+        if let Some((bridge, args)) = super::expr::reflection_bridge(expr) {
+            let args: Vec<String> = args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+            return format!("fromJsValue(__memDispatch.{bridge}({}))", host_args(&args));
+        }
         match expr {
             // Rust spells an infinity `inf`, which is not a JS literal.
             Expr::Number(n) if n.is_infinite() => {
@@ -965,10 +988,6 @@ impl WasmModuleEmitter {
                 let (obj, props) = (self.emit_js_expr(obj, locals), self.emit_js_expr(props, locals));
                 format!("fromJsValue(__memDispatch.object_define_properties(toJsValue({obj}), toJsValue({props})))")
             }
-            Expr::ObjectGetOwnPropertyDescriptor(obj, key) => {
-                let (obj, key) = (self.emit_js_expr(obj, locals), self.emit_js_expr(key, locals));
-                format!("fromJsValue(__memDispatch.object_get_own_property_descriptor(toJsValue({obj}), toJsValue({key})))")
-            }
             Expr::ObjectEntries(o) => {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.entries(toJsValue({})))", o)
@@ -1288,16 +1307,7 @@ impl WasmModuleEmitter {
                     // makes it: the raw export takes i64 parameters, so a JS caller
                     // cannot pass it numbers. Consumer import table first — bare names
                     // collide.
-                    let table_idx = self
-                        .func_to_table_idx
-                        .get(&func_idx)
-                        .copied()
-                        .unwrap_or(func_idx);
-                    format!(
-                        "fromJsValue(__memDispatch.function_value({}, {}))",
-                        table_idx,
-                        self.fn_proto_code(func_idx)
-                    )
+                    self.js_function_value(func_idx)
                 } else {
                     "u64ToF64(TAG_UNDEFINED)".to_string()
                 }
@@ -1352,16 +1362,7 @@ impl WasmModuleEmitter {
                 let Some(&func_idx) = self.func_map.get(id) else {
                     return "u64ToF64(TAG_UNDEFINED)".to_string();
                 };
-                let table_idx = self
-                    .func_to_table_idx
-                    .get(&func_idx)
-                    .copied()
-                    .unwrap_or(func_idx);
-                format!(
-                    "fromJsValue(__memDispatch.function_value({}, {}))",
-                    table_idx,
-                    self.fn_proto_code(func_idx)
-                )
+                self.js_function_value(func_idx)
             }
             Expr::New {
                 class_name,
