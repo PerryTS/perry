@@ -19,6 +19,7 @@ pub(super) fn collect(ctx: &FnCtx<'_>, body: &[Stmt], counter_id: u32) -> Vec<(u
             .is_some();
         let access = match e {
             Expr::IndexGet { object, index, .. }
+            | Expr::RegionOut { object, index, .. }
             | Expr::IndexSet { object, index, .. }
             | Expr::PutValueSet {
                 target: object,

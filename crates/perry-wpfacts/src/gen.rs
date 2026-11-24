@@ -1795,7 +1795,11 @@ impl<'a> Gen<'a> {
             Some(perry_hir::Expr::PropertyGet { object, .. }) => {
                 !matches!(object.as_ref(), perry_hir::Expr::GlobalGet(0))
             }
-            Some(perry_hir::Expr::IndexGet { .. } | perry_hir::Expr::StaticFieldGet { .. }) => true,
+            Some(
+                perry_hir::Expr::IndexGet { .. }
+                | perry_hir::Expr::RegionOut { .. }
+                | perry_hir::Expr::StaticFieldGet { .. },
+            ) => true,
             _ => false,
         };
         let binding = c.extends_name.as_deref().filter(|_| !member);

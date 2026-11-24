@@ -242,7 +242,7 @@ fn binding_of(expr: &Expr) -> Option<Binding> {
 /// The array binding an element read `a[i]` / `a.at(i)` reads from.
 fn indexed_array(expr: &Expr) -> Option<Binding> {
     match expr {
-        Expr::IndexGet { object, .. } => binding_of(object),
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => binding_of(object),
         Expr::ArrayAt { array, .. } => binding_of(array),
         _ => None,
     }

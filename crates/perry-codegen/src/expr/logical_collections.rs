@@ -1395,6 +1395,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     index,
                     object: keys,
                     ..
+                }
+                | Expr::RegionOut {
+                    index,
+                    object: keys,
+                    ..
                 },
                 Expr::LocalGet(o),
             ) = (property.as_ref(), object.as_ref())

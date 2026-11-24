@@ -72,7 +72,7 @@ fn at_rest_or_read(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         return true;
     }
     match e {
-        Expr::IndexGet { .. } => int32_element(ctx, e, false),
+        Expr::IndexGet { .. } | Expr::RegionOut { .. } => int32_element(ctx, e, false),
         Expr::Logical {
             op: LogicalOp::Coalesce,
             left,

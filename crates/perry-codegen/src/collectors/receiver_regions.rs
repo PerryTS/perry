@@ -1535,7 +1535,9 @@ fn expr_region_ender_with_trusted_operation(
         // region model has the opposite obligation: missing one licenses a
         // stale cached address. `loop_purity` excludes them for the same
         // reason, via its `_ => false` arm.
-        Expr::PropertyGet { .. } | Expr::IndexGet { .. } => Some(RegionEnder::CollectingCall),
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. } | Expr::RegionOut { .. } => {
+            Some(RegionEnder::CollectingCall)
+        }
 
         // ---- Everything else -----------------------------------------------
         // Assume it collects. Adding a variant to the allowlist above requires

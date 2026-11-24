@@ -1341,7 +1341,7 @@ fn collect_aliases(
         if let Stmt::Let {
             id,
             mutable: false,
-            init: Some(Expr::IndexGet { object, index, .. }),
+            init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
             ..
         } = stmt
         {
@@ -1398,7 +1398,7 @@ fn candidate_field(
 ) -> Option<usize> {
     let index = match object {
         Expr::LocalGet(alias) => aliases.get(alias).copied(),
-        Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
             const_index(index)
         }
         _ => None,
@@ -1428,7 +1428,7 @@ fn expr_is_safe(
                 return true;
             }
         }
-        Expr::IndexGet { object, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) =>
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) =>
         {
             // Only an alias declaration or a direct property receiver is safe;
             // both parents intercept this expression before recursion reaches it.
@@ -1515,7 +1515,11 @@ fn stmts_are_safe(
             Stmt::Let { id, init, .. } if *id == array_id => true,
             Stmt::Let {
                 id,
-                init: Some(Expr::IndexGet { object, index, .. }),
+                init:
+                    Some(
+                        Expr::IndexGet { object, index, .. }
+                        | Expr::RegionOut { object, index, .. },
+                    ),
                 ..
             } if aliases.contains_key(id)
                 && matches!(object.as_ref(), Expr::LocalGet(candidate) if *candidate == array_id)
@@ -1625,7 +1629,7 @@ fn replacement_for_expr(
     }
     let index = match object.as_ref() {
         Expr::LocalGet(alias) => aliases.get(alias).copied(),
-        Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
             const_index(index)
         }
         _ => None,

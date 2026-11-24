@@ -396,7 +396,7 @@ fn match_consume_loop(
 /// Match `child[j]` (IndexGet { object: LocalGet(child), index: LocalGet(j) }).
 fn is_index_get_of(e: &Expr, child_id: LocalId, j_id: LocalId) -> bool {
     match e {
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(id) if *id == child_id)
                 && matches!(index.as_ref(), Expr::LocalGet(id) if *id == j_id)
         }

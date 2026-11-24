@@ -889,7 +889,10 @@ fn try_extract(
     let outs: Vec<u32> = out_decl.iter().chain(out_outer.iter()).copied().collect();
     if value {
         if let Some(Stmt::Expr(e)) = body.pop() {
-            body.push(Stmt::Return(Some(e), 0 /* compiler-split region plumbing, not a source site */));
+            body.push(Stmt::Return(
+                Some(e),
+                0, /* compiler-split region plumbing, not a source site */
+            ));
         }
     }
     match outs.len() {
@@ -1146,13 +1149,10 @@ fn try_extract(
                 init: Some(call),
             });
             for (k, id) in outs.iter().enumerate() {
-                // Compiler-split region plumbing, not a source site: the
-                // split runs before the facts (collect_module_finish), so
-                // this read is seen by them and stays at offset 0.
-                let get = Expr::IndexGet {
-                    element_offset: 0,
-                    byte_offset: 0,
-                    byte_end: 0,
+                // Compiler-split region plumbing, not a source site: its
+                // own kind, an element read with no site (the split runs
+                // before the facts, collect_module_finish).
+                let get = Expr::RegionOut {
                     object: Box::new(Expr::LocalGet(tmp)),
                     index: Box::new(Expr::Number(k as f64)),
                 };

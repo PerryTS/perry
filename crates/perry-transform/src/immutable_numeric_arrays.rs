@@ -274,7 +274,7 @@ fn scan_expr(e: &Expr, arrays: &Arrays, ranges: &Ranges, allowed: &mut HashMap<L
         return;
     }
     let receiver = match e {
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             match perry_hir::tdz_check::without_checks(object) {
                 Expr::LocalGet(id)
                     if arrays

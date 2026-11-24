@@ -1338,6 +1338,7 @@ impl<'a> Gen<'a> {
             | Expr::BufferIndexGet { .. }
             | Expr::Uint8ArrayGet { .. }
             | Expr::IndexGet { .. }
+            | Expr::RegionOut { .. }
             | Expr::BufferIndexSet { .. }
             | Expr::Uint8ArraySet { .. }
             | Expr::IndexSet { .. }

@@ -537,7 +537,7 @@ fn position(parent: Option<&Expr>) -> String {
         ) => "field-initializer".to_string(),
         Some(Expr::New { .. }) => "constructor-argument".to_string(),
         Some(Expr::PropertyGet { .. }) => "field-read".to_string(),
-        Some(Expr::IndexGet { .. }) => "indexed-read".to_string(),
+        Some(Expr::IndexGet { .. } | Expr::RegionOut { .. }) => "indexed-read".to_string(),
         Some(p) => format!("other:{}", kind(p)),
         None => "statement-other".to_string(),
     }
@@ -1345,7 +1345,8 @@ impl Census<'_> {
                             | Expr::PropertySet { .. }
                             | Expr::IndexSet { .. }
                             | Expr::PropertyGet { .. }
-                            | Expr::IndexGet { .. },
+                            | Expr::IndexGet { .. }
+                            | Expr::RegionOut { .. },
                         )
                         | None => "-".to_string(),
                         Some(p) => sides::node_side(self.m, p, e),
@@ -1373,7 +1374,9 @@ impl Census<'_> {
                     _ => self.block(c, "read-unproven"),
                 }
             }
-            Expr::IndexGet { object, index, .. } if self.cand(object).is_some() => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
+                if self.cand(object).is_some() =>
+            {
                 let c = self.cand(object).expect("candidate");
                 let constant = super::escape_arrays::const_index(index).is_some();
                 if !(self.cand_kind(c) == Kind::Array && constant) {

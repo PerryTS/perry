@@ -89,6 +89,11 @@ pub(crate) fn flat_const_index_get_target(
             object: outer_obj,
             index: outer_idx,
             ..
+        }
+        | Expr::RegionOut {
+            object: outer_obj,
+            index: outer_idx,
+            ..
         } => {
             let Expr::LocalGet(id) = outer_obj.as_ref() else {
                 return None;
@@ -494,8 +499,8 @@ fn i32_chain_magnitude_bits(e: &Expr, env: I32ChainEnv<'_>) -> Option<u32> {
             temps::selection_bits(e, env, i32_chain_magnitude_bits)
         }
         // Issue #50 bridge: element of a flat-const 2D int table.
-        Expr::IndexGet { object, .. } => match object.as_ref() {
-            Expr::IndexGet { object: inner, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => match object.as_ref() {
+            Expr::IndexGet { object: inner, .. } | Expr::RegionOut { object: inner, .. } => {
                 matches!(inner.as_ref(), Expr::LocalGet(id) if env.flat_const_arrays.contains_key(id))
             }
             Expr::LocalGet(id) => env
@@ -769,7 +774,7 @@ fn lower_checked_typed_array_i32_load(
 }
 
 fn packed_i32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::PackedF64LoopFact> {
-    let Expr::IndexGet { object, index, .. } = e else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e else {
         return None;
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -786,7 +791,7 @@ fn packed_i32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::Pa
 }
 
 fn packed_u32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::PackedF64LoopFact> {
-    let Expr::IndexGet { object, index, .. } = e else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e else {
         return None;
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -871,7 +876,7 @@ fn region_i32_chain_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
                     .all(|arg| can_lower_expr_as_i32_in_current_region(ctx, arg)))
             .then_some(I32_CHAIN_LEAF_BITS)
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             (ta_int_elem_load_is_i32_provable(ctx, object, index)
             || super::masked_window::masked_window_i32_load_is_provable(ctx, object, index)
             // The checked-kind fast path lowers `index` through `fptosi`
@@ -1008,7 +1013,7 @@ fn native_expr_kind(e: &Expr) -> &'static str {
         Expr::Call { .. } => "Call",
         Expr::Uint8ArrayGet { .. } => "Uint8ArrayGet",
         Expr::BufferIndexGet { .. } => "BufferIndexGet",
-        Expr::IndexGet { .. } => "IndexGet",
+        Expr::IndexGet { .. } | Expr::RegionOut { .. } => "IndexGet",
         _ => "Expr",
     }
 }
@@ -1139,7 +1144,7 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
             let lowered = super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?;
             Some(i32_from_indexed_get_lowered(ctx, lowered))
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             if ta_int_elem_load_is_i32_provable(ctx, object, index) {
                 super::lower_typed_array_load(ctx, object, index)?
                     .map(|lowered| i32_from_indexed_get_lowered(ctx, lowered))
@@ -1184,7 +1189,7 @@ fn i32_from_indexed_get_lowered(ctx: &mut FnCtx<'_>, lowered: LoweredValue) -> S
 }
 
 fn lower_packed_i32_loop_index_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<LoweredValue>> {
-    let Expr::IndexGet { object, index, .. } = e else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e else {
         return Ok(None);
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -1247,7 +1252,7 @@ pub(crate) fn lower_packed_u32_loop_index_get(
     ctx: &mut FnCtx<'_>,
     e: &Expr,
 ) -> Result<Option<LoweredValue>> {
-    let Expr::IndexGet { object, index, .. } = e else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e else {
         return Ok(None);
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -1672,7 +1677,7 @@ fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
     if let Some(lowered) = lower_packed_u32_loop_index_get(ctx, e)? {
         return Ok(lowered);
     }
-    if let Expr::IndexGet { object, index, .. } = e {
+    if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e {
         if let Some(lowered) = super::try_lower_proven_view_checked_u32_load(ctx, object, index)? {
             return Ok(lowered);
         }
@@ -1861,7 +1866,8 @@ fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         || super::rest_elems::number_read(ctx, e);
     let needs_raw_f64_fallback_coercion = !stable_numeric_index
         && (expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
-            || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e));
+            || matches!(e, Expr::IndexGet { .. } | Expr::RegionOut { .. })
+                && is_numeric_expr(ctx, e));
     let raw = lower_expr(ctx, e)?;
     let value = if needs_raw_f64_fallback_coercion {
         ctx.block()
@@ -1890,7 +1896,8 @@ fn lower_expr_native_f32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         || super::rest_elems::number_read(ctx, e);
     let needs_raw_f64_fallback_coercion = !stable_numeric_index
         && (expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
-            || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e));
+            || matches!(e, Expr::IndexGet { .. } | Expr::RegionOut { .. })
+                && is_numeric_expr(ctx, e));
     let raw = lower_expr(ctx, e)?;
     let d = if needs_raw_f64_fallback_coercion {
         ctx.block()

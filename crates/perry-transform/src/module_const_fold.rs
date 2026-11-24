@@ -929,7 +929,7 @@ mod tests {
             assert!(
                 matches!(
                     &m.functions[0].body[0],
-                    Stmt::Return(Some(Expr::IndexGet { .. }), _)
+                    Stmt::Return(Some(Expr::IndexGet { .. } | Expr::RegionOut { .. }), _)
                 ),
                 "key {key:?} must stay an IndexGet, got {:?}",
                 m.functions[0].body[0]
@@ -1073,7 +1073,10 @@ mod tests {
         run(&mut m);
         let body = &m.functions[0].body;
         assert!(
-            matches!(&body[0], Stmt::Expr(Expr::IndexGet { .. })),
+            matches!(
+                &body[0],
+                Stmt::Expr(Expr::IndexGet { .. } | Expr::RegionOut { .. })
+            ),
             "{:?}",
             body[0]
         );
@@ -1081,7 +1084,10 @@ mod tests {
             panic!("closure expected");
         };
         assert!(
-            matches!(&early[0], Stmt::Return(Some(Expr::IndexGet { .. }), _)),
+            matches!(
+                &early[0],
+                Stmt::Return(Some(Expr::IndexGet { .. } | Expr::RegionOut { .. }), _)
+            ),
             "{early:?}"
         );
         let Stmt::If { then_branch, .. } = &body[3] else {
@@ -1152,7 +1158,10 @@ mod tests {
             run(&mut m);
             let last = m.functions[0].body.last().unwrap();
             assert!(
-                matches!(last, Stmt::Return(Some(Expr::IndexGet { .. }), _)),
+                matches!(
+                    last,
+                    Stmt::Return(Some(Expr::IndexGet { .. } | Expr::RegionOut { .. }), _)
+                ),
                 "{last:?}"
             );
         }

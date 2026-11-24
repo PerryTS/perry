@@ -76,7 +76,9 @@ impl Plan {
 
     fn read<'a>(&mut self, ctx: &FnCtx<'_>, e: &'a Expr) -> Option<(u32, &'a Expr)> {
         let (object, index) = match e {
-            Expr::IndexGet { object, index, .. } => (object.as_ref(), index.as_ref()),
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+                (object.as_ref(), index.as_ref())
+            }
             Expr::Uint8ArrayGet { array, index } => (array.as_ref(), index.as_ref()),
             Expr::BufferIndexGet { buffer, index } => (buffer.as_ref(), index.as_ref()),
             _ => return None,
@@ -1021,7 +1023,9 @@ fn numeric(
         return Number::U(ctx.block().zext(I8, &byte, I32));
     }
     let read = match e {
-        Expr::IndexGet { object, index, .. } => Some((object.as_ref(), index.as_ref())),
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            Some((object.as_ref(), index.as_ref()))
+        }
         Expr::Uint8ArrayGet { array, index } => Some((array.as_ref(), index.as_ref())),
         Expr::BufferIndexGet { buffer, index } => Some((buffer.as_ref(), index.as_ref())),
         _ => None,

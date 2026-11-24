@@ -101,7 +101,9 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32, defer_apply: bool) -
             }
             Expr::LocalGet(local) => *local == id,
             Expr::PropertyGet { object, .. } => observes(object, id),
-            Expr::IndexGet { object, index, .. } => observes(object, id) || observes(index, id),
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+                observes(object, id) || observes(index, id)
+            }
             Expr::Unary { operand, .. } => observes(operand, id),
             Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
                 observes(left, id) || observes(right, id)
@@ -670,7 +672,7 @@ impl LocalUses {
         let is_member = |e: &Expr| {
             matches!(
                 e,
-                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                     if is_local(object)
             )
         };
@@ -679,7 +681,9 @@ impl LocalUses {
             Expr::PropertyGet {
                 object, property, ..
             } if property == "length" && is_local(object) => self.length_reads += 1,
-            Expr::IndexGet { object, .. } if is_local(object) => self.index_reads += 1,
+            Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } if is_local(object) => {
+                self.index_reads += 1
+            }
             Expr::Delete(target) if is_member(target) => self.reference_uses += 1,
             Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } if is_member(callee) => {
                 self.reference_uses += 1
@@ -727,7 +731,7 @@ pub(crate) fn lower_elided_arguments_length(ctx: &mut FnCtx<'_>, id: u32) -> Opt
 pub(crate) fn is_elided_arguments_index_get(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     matches!(
         expr,
-        Expr::IndexGet { object, .. }
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
             if matches!(object.as_ref(), Expr::LocalGet(id) if ctx.elided_arguments.get(id).is_some_and(|binding| binding.deferred.is_none()))
     )
 }

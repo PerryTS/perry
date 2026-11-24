@@ -352,7 +352,7 @@ pub(crate) fn opt_call_receiver_repeatable(expr: &Expr) -> bool {
         // `a.b` / `a[const]` chains over repeatable receivers stay repeatable
         // (property reads are not side-effecting in this codebase's model).
         Expr::PropertyGet { object, .. } => opt_call_receiver_repeatable(object),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             opt_call_receiver_repeatable(object) && opt_call_receiver_repeatable(index)
         }
         _ => false,
@@ -410,7 +410,11 @@ pub(crate) fn opt_call_func_nullish_guard(
 /// name produces the same callable/property value whether it appears as a
 /// standalone reference or as a shorthand property. The caller must ensure
 /// `ctx.lookup_native_module(name)` is `Some`.
-pub(crate) fn native_module_binding_value(ctx: &LoweringContext, name: &str, byte_offset: u32) -> Expr {
+pub(crate) fn native_module_binding_value(
+    ctx: &LoweringContext,
+    name: &str,
+    byte_offset: u32,
+) -> Expr {
     let (module_name, method_name) = match ctx.lookup_native_module(name) {
         Some(v) => v,
         None => return Expr::Undefined,

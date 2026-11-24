@@ -696,7 +696,7 @@ where
         Expr::GetFunctionPrototypeMethod { func, .. } => {
             f(func);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             f(object);
             f(index);
         }

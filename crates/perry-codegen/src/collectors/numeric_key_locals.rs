@@ -64,7 +64,7 @@ pub(crate) fn expr_is_numeric_key(e: &Expr, leaves: &KeyLeaves<'_>) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) | Expr::Undefined => true,
         Expr::LocalGet(id) => (leaves.key_local)(*id),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(id) if (leaves.owned_view)(*id))
                 && expr_is_number_or_bigint(index, leaves)
         }

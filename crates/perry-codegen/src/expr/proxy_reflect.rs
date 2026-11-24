@@ -646,8 +646,18 @@ fn same_put_value_receiver_expr(target: &Expr, receiver: &Expr) -> bool {
                 object: a_object,
                 index: a_index,
                 ..
+            }
+            | Expr::RegionOut {
+                object: a_object,
+                index: a_index,
+                ..
             },
             Expr::IndexGet {
+                object: b_object,
+                index: b_index,
+                ..
+            }
+            | Expr::RegionOut {
                 object: b_object,
                 index: b_index,
                 ..

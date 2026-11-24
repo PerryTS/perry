@@ -460,7 +460,7 @@ fn int_range_expr_inner(
                 UpdateOp::Decrement => checked_range_sub(old, IntRange::exact(1)),
             }
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             int_typed_array_load_range(ctx, object, index, seen)
         }
         Expr::Binary {

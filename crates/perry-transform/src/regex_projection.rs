@@ -69,6 +69,9 @@ fn reads(
     match expr {
         Expr::IndexGet {
             object, index: key, ..
+        }
+        | Expr::RegionOut {
+            object, index: key, ..
         } if matches!(object.as_ref(), Expr::LocalGet(l) if *l == id) => {
             if let Some(n) = index(key) {
                 if capture.is_some_and(|previous| previous != n) {

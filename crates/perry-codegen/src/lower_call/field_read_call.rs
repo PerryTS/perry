@@ -192,7 +192,8 @@ fn in_floor<'e>(
         } => (left.as_ref(), true),
         e => (e, false),
     };
-    let Expr::IndexGet { object, index, .. } = element else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = element
+    else {
         return None;
     };
     let rep = crate::expr::index_get::proven_array::in_floor_rep(ctx, object)?;

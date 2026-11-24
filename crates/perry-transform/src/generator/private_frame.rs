@@ -210,8 +210,10 @@ fn closed_effects(module: &Module) -> bool {
                 enclosing_class: None,
                 ..
             } => true,
-            Expr::IndexGet { index, .. } => matches!(index.as_ref(), Expr::NativeMethodCall {
-                module,class_name:None,object:None,method,.. } if module=="__perry_runtime" && method=="arrayRecordIndex"),
+            Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } => {
+                matches!(index.as_ref(), Expr::NativeMethodCall {
+                module,class_name:None,object:None,method,.. } if module=="__perry_runtime" && method=="arrayRecordIndex")
+            }
             Expr::PropertyGet {
                 object, property, ..
             } => {
