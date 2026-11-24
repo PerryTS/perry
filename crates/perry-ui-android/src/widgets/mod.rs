@@ -178,6 +178,7 @@ pub fn clear_children(handle: i64) {
                     let mut widgets = WIDGETS.lock().unwrap();
                     if idx < widgets.len() {
                         widgets.truncate(idx + 1);
+                        toggle::forget_after(handle);
                     }
                 }
             }
@@ -536,6 +537,78 @@ pub fn set_tooltip(handle: i64, text_ptr: *const u8) {
             }
         })
     }
+}
+
+/// The view that takes a widget's accessible name: a Toggle's is its Switch.
+fn accessible_view(handle: i64) -> Option<GlobalRef> {
+    toggle::switch(handle).or_else(|| get_widget(handle))
+}
+
+/// Set the name TalkBack announces.
+pub fn set_accessibility_label(handle: i64, text_ptr: *const u8) {
+    let text = unsafe { crate::app::str_from_header(text_ptr) };
+    if let Some(view_ref) = accessible_view(handle) {
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let jstr = env.new_string(text).expect("accessibility label string");
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setContentDescription"),
+                jni::jni_sig!("(Ljava/lang/CharSequence;)V"),
+                &[JValue::Object(&jstr)],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+            }
+        })
+    }
+}
+
+/// Name `field` with the `label` view. A content description would replace what TalkBack
+/// reads of a text field's value.
+pub fn set_label_for(label: i64, field: i64) {
+    let (Some(label_ref), Some(field_ref)) = (get_widget(label), accessible_view(field)) else {
+        return;
+    };
+    jni_bridge::with_env(|env| {
+        let _ = jni_bridge::push_local_frame(env, 8);
+        let mut id = env
+            .call_method(
+                field_ref.as_obj(),
+                jni::jni_str!("getId"),
+                jni::jni_sig!("()I"),
+                &[],
+            )
+            .and_then(|v| v.i())
+            .unwrap_or(-1);
+        // View.NO_ID = -1
+        if id == -1 {
+            id = env
+                .call_static_method(
+                    jni::jni_str!("android/view/View"),
+                    jni::jni_str!("generateViewId"),
+                    jni::jni_sig!("()I"),
+                    &[],
+                )
+                .and_then(|v| v.i())
+                .unwrap_or(-1);
+            let _ = env.call_method(
+                field_ref.as_obj(),
+                jni::jni_str!("setId"),
+                jni::jni_sig!("(I)V"),
+                &[JValue::Int(id)],
+            );
+        }
+        let _ = env.call_method(
+            label_ref.as_obj(),
+            jni::jni_str!("setLabelFor"),
+            jni::jni_sig!("(I)V"),
+            &[JValue::Int(id)],
+        );
+        unsafe {
+            let _ = jni_bridge::pop_local_frame(env, &JObject::null());
+        }
+    })
 }
 
 /// Set control size (map to scale).

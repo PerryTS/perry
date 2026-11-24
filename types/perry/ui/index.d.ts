@@ -941,6 +941,22 @@ export function widgetSetOpacity(widget: Widget, opacity: number): void;
 export function widgetSetEnabled(widget: Widget, enabled: number): void;
 export function widgetSetTooltip(widget: Widget, text: string): void;
 /**
+ * The name a screen reader announces for `widget`: `aria-label` on web,
+ * `accessibilityLabel` on the Apple targets, the content description on Android, the
+ * accessible label on GTK4. On Android it replaces what TalkBack reads of a text field's
+ * value, so name a field with `Label` there. No-op on Windows and HarmonyOS.
+ */
+export function widgetSetAccessibilityLabel(widget: Widget, text: string): void;
+/**
+ * A caption for a form field. Web: a `<label for>` bound to `field` (or to the first
+ * input, textarea or select inside it), so tapping the caption focuses the field and a
+ * screen reader announces it; two Labels for one field are read together in document
+ * order, and `widgetSetAccessibilityLabel` wins over any Label. Native: a `Text` that
+ * also names `field`, replacing a name set before; on Windows and HarmonyOS only a
+ * `Text`.
+ */
+export function Label(text: string, field: Widget): Widget;
+/**
  * Attach a rich (widget-tree) tooltip to `widget`. The `content` widget
  * is presented in a borderless floating panel after `hoverDelayMs` of
  * mouse hover (default 500ms when ≤0). Currently wired on macOS via

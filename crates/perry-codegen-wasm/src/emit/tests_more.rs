@@ -232,6 +232,54 @@ for (const label of ["A", "B", "C"]) {
     );
 }
 
+// `Label(text, field)` is a `<label for>` naming the field's id, or the input inside a
+// composite widget such as a Toggle; `widgetSetAccessibilityLabel` sets that control's `aria-label`.
+#[test]
+fn label_binds_to_its_field_and_accessibility_label_sets_aria_label() {
+    let dom = format!(
+        "{WIDGET_DOM}{}",
+        r#"
+FakeElement.prototype.matches = function (selector) {
+  return selector.toUpperCase().split(",").includes(this.tagName);
+};
+const byTag = FakeElement.prototype.querySelector;
+FakeElement.prototype.querySelector = function (selector) {
+  for (const one of selector.split(",")) { const found = byTag.call(this, one); if (found) return found; }
+  return null;
+};
+// The page already uses the first generated id.
+document.getElementById = id => id === "perry-field-1" ? new FakeElement("input") : null;
+"#
+    );
+    assert_eq!(
+        run_web_source_with_dom(
+            r#"
+import { Label, TextField, Toggle, widgetSetAccessibilityLabel } from "perry/ui";
+const phone = TextField("phone", (v: string) => {});
+widgetSetAccessibilityLabel(phone, "Phone number");
+Label("Phone", phone);
+const notify = Toggle("Notify", (v: boolean) => {});
+Label("Send me updates", notify);
+widgetSetAccessibilityLabel(notify, "Updates");
+"#,
+            &dom,
+            r#"
+const all = [...uiHandles.values()];
+const phone = all.find(e => e.placeholder === "phone");
+const toggleInput = all.find(e => e._inp)._inp;
+for (const text of ["Phone", "Send me updates"]) {
+  const label = all.find(e => e.tagName === "LABEL" && e.textContent === text);
+  const target = [phone, toggleInput].find(e => e.id === label.htmlFor);
+  console.log(text + " -> " + (target === phone ? "phone" : target === toggleInput ? "toggle input" : "nothing"));
+}
+console.log(phone["aria-label"] + ", " + toggleInput["aria-label"]);
+console.log([phone.id, toggleInput.id].join(" "));
+"#
+        ),
+        "Phone -> phone\nSend me updates -> toggle input\nPhone number, Updates\nperry-field-2 perry-field-3"
+    );
+}
+
 // A class used as a value is a constructor: `new` on it runs the class's constructor
 // and field initializers, and the instance keeps its methods and its class.
 #[test]

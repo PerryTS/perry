@@ -62,6 +62,21 @@ pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
     tree::register_node(node)
 }
 
+/// A caption that also names `field` for a screen reader.
+#[no_mangle]
+pub extern "C" fn perry_ui_label_create(text_ptr: i64, field: i64) -> i64 {
+    perry_ui_widget_set_accessibility_label(field, text_ptr);
+    perry_ui_text_create(text_ptr)
+}
+
+/// Set the name VoiceOver announces.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_accessibility_label(handle: i64, text_ptr: i64) {
+    tree::with_node_mut(handle, |node| {
+        node.accessibility_label = cstring_from_header(text_ptr as *const u8);
+    });
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     let mut node = NodeData::new(NodeKind::Button);

@@ -15,22 +15,31 @@ thread_local! {
 
 /// Set the on/off state of an existing toggle widget.
 pub fn set_state(handle: i64, on: i64) {
-    TOGGLE_SWITCHES.with(|switches| {
-        if let Some(switch_ref) = switches.borrow().get(&handle) {
-            jni_bridge::with_env(|env| {
-                let _ = jni_bridge::push_local_frame(env, 8);
-                let _ = env.call_method(
-                    switch_ref.as_obj(),
-                    jni::jni_str!("setChecked"),
-                    jni::jni_sig!("(Z)V"),
-                    &[JValue::Bool(on != 0)],
-                );
-                unsafe {
-                    let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
-                }
-            })
-        }
-    });
+    // `setChecked` can run the change callback, which can reach `TOGGLE_SWITCHES` again.
+    if let Some(switch_ref) = switch(handle) {
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let _ = env.call_method(
+                switch_ref.as_obj(),
+                jni::jni_str!("setChecked"),
+                jni::jni_sig!("(Z)V"),
+                &[JValue::Bool(on != 0)],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+            }
+        })
+    }
+}
+
+/// The Switch inside a Toggle's container.
+pub(crate) fn switch(handle: i64) -> Option<GlobalRef> {
+    TOGGLE_SWITCHES.with(|switches| switches.borrow().get(&handle).cloned())
+}
+
+/// Drop the switches of the handles after `handle`, which later widgets reuse.
+pub(crate) fn forget_after(handle: i64) {
+    TOGGLE_SWITCHES.with(|switches| switches.borrow_mut().retain(|h, _| *h <= handle));
 }
 
 /// Create a Switch with a label and onChange callback.

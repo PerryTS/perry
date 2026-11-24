@@ -7,6 +7,16 @@ pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
     widgets::text::create(text_ptr as *const u8)
 }
 
+/// No accessible name is set on Windows, so a Label is only its text.
+#[no_mangle]
+pub extern "C" fn perry_ui_label_create(text_ptr: i64, _field: i64) -> i64 {
+    perry_ui_text_create(text_ptr)
+}
+
+/// No-op: a window's name needs UI Automation, which this backend does not use.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_accessibility_label(_handle: i64, _text_ptr: i64) {}
+
 /// Create an AdBanner placeholder (#867). `unit_id_ptr` / `size_ptr` are
 /// string pointers per the `AdBanner(unitId, size)` dispatch row. This
 /// symbol was previously absent from the Windows staticlib, so any TS

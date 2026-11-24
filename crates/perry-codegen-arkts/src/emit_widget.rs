@@ -113,6 +113,12 @@ pub(crate) fn emit_widget(
                 "Slider" => emit_slider(args, callbacks),
                 "Spacer" => "Blank()".to_string(),
                 "Divider" => "Divider()".to_string(),
+                "Label" => emit_text(
+                    &args[..args.len().min(1)],
+                    text_slots,
+                    arkts_locals,
+                    bindings,
+                ),
                 "Image" | "ImageFile" => emit_image(args, bindings),
                 "ScrollView" => emit_scrollview(
                     args,

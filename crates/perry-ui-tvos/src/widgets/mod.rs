@@ -60,6 +60,23 @@ pub fn get_widget(handle: i64) -> Option<Retained<UIView>> {
     })
 }
 
+/// Set the name VoiceOver announces. A Toggle is a container, so the name goes on its
+/// switch; an image view is no accessibility element until it has a name.
+pub fn set_accessibility_label(handle: i64, text_ptr: *const u8) {
+    let text = unsafe { perry_ffi::copy_string_from_raw(text_ptr) };
+    let Some(view) = toggle::switch(handle).or_else(|| get_widget(handle)) else {
+        return;
+    };
+    let label = objc2_foundation::NSString::from_str(&text);
+    unsafe {
+        let _: () = objc2::msg_send![&*view, setAccessibilityLabel: &*label];
+        let image_view = objc2::runtime::AnyClass::get(c"UIImageView").unwrap();
+        if objc2::msg_send![&*view, isKindOfClass: image_view] {
+            let _: () = objc2::msg_send![&*view, setIsAccessibilityElement: true];
+        }
+    }
+}
+
 /// Set the hidden state of a widget.
 pub fn set_hidden(handle: i64, hidden: bool) {
     if let Some(view) = get_widget(handle) {

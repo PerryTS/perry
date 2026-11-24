@@ -28,6 +28,20 @@ pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
     widgets::text::create(text_ptr as *const u8)
 }
 
+/// A caption that also names `field` for a screen reader.
+#[no_mangle]
+pub extern "C" fn perry_ui_label_create(text_ptr: i64, field: i64) -> i64 {
+    let handle = perry_ui_text_create(text_ptr);
+    widgets::set_labelled_by(field, handle);
+    handle
+}
+
+/// Set the name a screen reader announces.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_accessibility_label(handle: i64, text_ptr: i64) {
+    widgets::set_accessibility_label(handle, text_ptr as *const u8);
+}
+
 /// Create a Button.
 #[no_mangle]
 pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {

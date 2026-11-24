@@ -77,6 +77,7 @@ Perry widgets map to HTML elements:
 | `Table` | `<table>` |
 | `Divider` | `<hr>` |
 | `Spacer` | `<div>` (flex: 1) |
+| `Label` | `<label for>` bound to its field |
 
 ## FFI Support
 
