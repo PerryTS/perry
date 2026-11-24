@@ -72,6 +72,25 @@ f().then((v) => console.log("async " + v)).then(() => g()).then((v) => console.l
     );
 }
 
+// A Perry closure accessor reads back as the same closure. Expected output is Node's.
+#[test]
+fn get_own_property_descriptor_returns_the_accessor_closure() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const g = () => 7;
+const o: any = {};
+Object.defineProperty(o, "x", { get: g });
+const d: any = Object.getOwnPropertyDescriptor(o, "x");
+async function f() { const a: any = Object.getOwnPropertyDescriptor(o, "x"); return a.get === g; }
+console.log([d.get === g, d.get(), d.set === undefined].join(","));
+f().then((v) => console.log("async " + v));
+"#
+        ),
+        "true,7,true\nasync true"
+    );
+}
+
 // `Object.defineProperty` and `Object.defineProperties` accessors that are Perry
 // closures run with the receiver as `this`. Expected output is Node's.
 #[test]

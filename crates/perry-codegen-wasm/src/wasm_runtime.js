@@ -2405,7 +2405,14 @@ const __memDispatch = {
   },
   object_define_property: (obj, key, desc) => Object.defineProperty(obj, key, __hostDescriptor(desc)),
   object_define_properties: (obj, props) => Object.defineProperties(obj, __hostDescriptors(props)),
-  object_get_own_property_descriptor: (obj, key) => Object.getOwnPropertyDescriptor(obj, key),
+  object_get_own_property_descriptor: (obj, key) => {
+    const desc = Object.getOwnPropertyDescriptor(obj, key);
+    if (desc && 'get' in desc) {
+      desc.get = hostAccessorClosures.get(desc.get) ?? desc.get;
+      desc.set = hostAccessorClosures.get(desc.set) ?? desc.set;
+    }
+    return desc;
+  },
   object_entries: (obj) => __holdsProperties(obj) ? Object.entries(obj) : [],
   // `{ a, ...rest } = obj`: a new object with obj's own enumerable keys, symbols
   // included, except the statically named ones (CopyDataProperties). Defined, not
@@ -6140,6 +6147,8 @@ function __hostDescriptor(desc) {
 // One wrapper per closure, so redefining a non-configurable accessor with the same
 // closure is a no-op, as it is for a host function.
 const hostAccessors = new WeakMap();
+// The reverse map, so a descriptor reads back the closure that defined it.
+const hostAccessorClosures = new WeakMap();
 function __hostAccessor(v) {
   if (!__isPerryClosure(v)) return v;
   let fn = hostAccessors.get(v);
@@ -6150,6 +6159,7 @@ function __hostAccessor(v) {
       return result;
     };
     hostAccessors.set(v, fn);
+    hostAccessorClosures.set(fn, v);
   }
   return fn;
 }
