@@ -1724,10 +1724,7 @@ pub(crate) fn proven_accessor_fn(
     let set = kind == crate::codegen::AccessorKind::Set;
     // A scalar-replaced receiver is no object (`scalar_receiver`): its
     // accesses are the frame slots' own, never a call with a `this`.
-    // offset 0: an access codegen builds after facts (member_update.rs:296/828)
-    // names no site.
     if ctx.wpfacts_off
-        || offset == 0
         || property.starts_with('#')
         || ctx.is_static_class_this(object)
         || scalar_receiver(ctx, object)

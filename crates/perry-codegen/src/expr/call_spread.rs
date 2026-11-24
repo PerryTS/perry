@@ -316,17 +316,13 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                         let real = Expr::CallSpread {
                             byte_offset: 0,
                             byte_end: 0,
-                            callee: Box::new(Expr::PropertyGet {
-                                byte_end: 0,
-                                byte_offset: 0,
-                                object: Box::new(Expr::PropertyGet {
-                                    byte_end: 0,
-                                    byte_offset: 0,
-                                    object: Box::new(Expr::GlobalThisExpr),
-                                    property: "console".to_string(),
-                                }),
-                                property: property.clone(),
-                            }),
+                            callee: Box::new(Expr::property_get_unsited(
+                                Box::new(Expr::property_get_unsited(
+                                    Box::new(Expr::GlobalThisExpr),
+                                    "console".to_string(),
+                                )),
+                                property.clone(),
+                            )),
                             args: args.to_vec(),
                             type_args: Vec::new(),
                         };

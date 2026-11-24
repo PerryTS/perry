@@ -42,9 +42,7 @@ pub(crate) fn field_read_call_at(ctx: &FnCtx<'_>, callee: &Expr, args: &[Expr]) 
     else {
         return None;
     };
-    // offset 0: a method call codegen builds after facts (class_field_push.rs:128)
-    // names no site.
-    if *byte_offset == 0 || ctx.wpfacts_off || ctx.wpfacts.interp_guard {
+    if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
         return None;
     }
     let fact = ctx.wpfacts.field_read_calls.get(byte_offset)?;

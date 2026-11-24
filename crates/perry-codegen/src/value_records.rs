@@ -938,12 +938,7 @@ impl Rewriter<'_> {
             ));
         }
         for (i, k) in keys.iter().enumerate() {
-            let read = Expr::PropertyGet {
-                object: Box::new(Expr::LocalGet(p)),
-                property: k.clone(),
-                byte_offset: 0,
-                byte_end: 0,
-            };
+            let read = Expr::property_get_unsited(Box::new(Expr::LocalGet(p)), k.clone());
             let v = if rec.track {
                 Expr::Conditional {
                     byte_offset: 0, /*HPOS*/
@@ -1095,12 +1090,7 @@ impl Rewriter<'_> {
         }
         let mut reads = Vec::new();
         for (i, k) in keys.iter().enumerate() {
-            let read = Expr::PropertyGet {
-                object: agg(),
-                property: k.clone(),
-                byte_offset: 0,
-                byte_end: 0,
-            };
+            let read = Expr::property_get_unsited(agg(), k.clone());
             let v = if rec.track {
                 Expr::Conditional {
                     byte_offset: 0, /*HPOS*/
@@ -1466,12 +1456,7 @@ impl Rewriter<'_> {
             ));
         }
         for (i, k) in keys.iter().enumerate() {
-            let read = Expr::PropertyGet {
-                object: tmp(),
-                property: k.clone(),
-                byte_offset: 0,
-                byte_end: 0,
-            };
+            let read = Expr::property_get_unsited(tmp(), k.clone());
             let v = if rec.track {
                 Expr::Conditional {
                     byte_offset: 0, /*HPOS*/

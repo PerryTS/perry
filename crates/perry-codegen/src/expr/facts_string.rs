@@ -48,9 +48,7 @@ fn call_kinds(ctx: &FnCtx<'_>, e: &Expr) -> Option<u16> {
     else {
         return None;
     };
-    // offset 0: a read codegen builds after facts (member_update.rs:296,
-    // value_records.rs:940) names no site.
-    if ctx.wpfacts_off || ctx.wpfacts.interp_guard || *byte_offset == 0 {
+    if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
         return None;
     }
     ctx.wpfacts
