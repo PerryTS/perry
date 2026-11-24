@@ -1297,6 +1297,9 @@ mod object_create;
 #[path = "reflection_tests.rs"]
 mod reflection;
 
+#[path = "object_accessor_tests.rs"]
+mod object_accessor;
+
 #[path = "object_key_tests.rs"]
 mod object_key;
 
