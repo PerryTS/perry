@@ -66,6 +66,7 @@ Perry widgets map to HTML elements:
 | `Toggle` | `<input type="checkbox">` |
 | `Slider` | `<input type="range">` |
 | `Picker` | `<select>` |
+| `DatePicker` | `<input type="date">` |
 | `ProgressView` | `<progress>` |
 | `Image` / `ImageFile` | `<img>` |
 | `VStack` | `<div>` (flexbox column) |

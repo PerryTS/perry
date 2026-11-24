@@ -112,8 +112,8 @@ mod tests {
             WASM_RUNTIME_JS
                 .matches("callWasmClosure(el._perryCallback, el.value)")
                 .count(),
-            3,
-            "TextField, SecureField, and TextArea must pass their DOM strings directly"
+            4,
+            "TextField, SecureField, TextArea, and DatePicker must pass their DOM strings directly"
         );
         assert!(
             !WASM_RUNTIME_JS
