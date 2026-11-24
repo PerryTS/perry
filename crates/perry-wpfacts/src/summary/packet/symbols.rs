@@ -260,7 +260,7 @@ impl Model {
                 self.packet_token(origin, packet),
                 act
             ),
-            Cons::UnnamedSet { target } => {
+            Cons::UnnamedSet { target, .. } => {
                 format!("UnnamedSet target={:?}", self.packet_token(target, packet))
             }
             Cons::ChainSet {

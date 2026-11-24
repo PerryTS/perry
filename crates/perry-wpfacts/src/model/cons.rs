@@ -511,8 +511,9 @@ pub enum Cons {
     AnyAccessors { origin: Tok, act: ChainAct },
     /// The node is a copy source's unnamed-key field (`field_any`): once it
     /// holds a value the source has an own key the model does not name, a
-    /// [[Set]] of some key on `target` (Object.assign, `spread_into`).
-    UnnamedSet { target: Tok },
+    /// [[Set]] of some key on `target` (Object.assign, `spread_into`) at
+    /// the copy's store site `site`.
+    UnnamedSet { target: Tok, site: SiteId },
     /// The node is the prototype closure of `origin`: an unknown (⊤)
     /// prototype may hold a setter, so the stored value and `origin` escape.
     StoreTopProto { origin: Tok, src: NodeId },

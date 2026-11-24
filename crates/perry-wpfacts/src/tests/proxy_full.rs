@@ -318,3 +318,315 @@ fn proxy_delete_computed_key_passes_the_key() {
         site("{}", h, &op, proven).unwrap_or_else(|e| panic!("Reflect {key}: {e}"));
     }
 }
+
+/// Rule PXNEWT: `Reflect.construct( p, args, newTarget )` is
+/// p.[[Construct]]( args, newTarget ) (28.1.2): the `construct` trap gets
+/// argArray and newTarget.
+#[test]
+fn proxy_reflect_construct_runs_the_construct_trap() {
+    let t = "class { constructor(x: any) {} }";
+    let h = "construct(t: any, a: any, nt: any) { external(a[0]); return {}; }";
+    site(t, h, "Reflect.construct(px, [payload]);", false).unwrap();
+    site(t, h, "Reflect.construct(px, [1]);", true).unwrap();
+    let h = "construct(t: any, a: any, nt: any) { external(nt.q); return {}; }";
+    let n = "class N { static q: any = payload; }\n";
+    site(t, h, &format!("{n}Reflect.construct(px, [], N);"), false).unwrap();
+    let n = "class N { static q: any = 1; }\n";
+    site(t, h, &format!("{n}Reflect.construct(px, [], N);"), true).unwrap();
+}
+
+/// The forward Construct( target, argumentsList, newTarget ) (10.5.13
+/// step 6) keeps newTarget: an inner Proxy's `construct` trap sees the
+/// outer Proxy (its `nt.q` runs the outer `get` trap), and what that trap
+/// returns is the `new`'s as returned, no prototype set on it.
+#[test]
+fn proxy_construct_forward_keeps_the_new_target() {
+    let ic = "construct(t: any, a: any, nt: any) { external(nt.q); return {}; }";
+    let ipx = format!("new Proxy(class {{}}, {{ {ic} }})");
+    let out = "get(t: any, k: any) { return payload; }";
+    let keep = "get(t: any, k: any) { return 1; }";
+    site(&ipx, out, "new px();", false).unwrap();
+    site(&ipx, keep, "new px();", true).unwrap();
+    site(&ipx, out, "Reflect.construct(px, []);", false).unwrap();
+    let ir = "new Proxy(class {}, { construct(t: any, a: any, nt: any) { return payload; } })";
+    site(ir, "", "new px();", true).unwrap();
+}
+
+/// Rule PXNEWT: with a Proxy newTarget the new object's prototype is
+/// Get( newTarget, "prototype" ) alone (10.1.14), here the forward to the
+/// Proxy's target class (its `m`), never the constructed class's own; the
+/// constructed class's (or function's) body runs on that object.
+#[test]
+fn proxy_new_target_prototype_comes_from_its_get() {
+    let tc = "class T { constructor(x: any) { external(x); } m() { external(payload); } }\n";
+    let op = format!("{tc}const o: any = Reflect.construct(T, [1], px); o.m();");
+    site("class { m() { return 1; } }", "", &op, true).unwrap();
+    site("class { m() { external(payload); } }", "", &op, false).unwrap();
+    let t = "class { m() { return 1; } }";
+    site(t, "", &format!("{tc}Reflect.construct(T, [payload], px);"), false).unwrap();
+    let h = "get(t: any, k: any) { external(payload); return t[k]; }";
+    site(t, h, &format!("{tc}Reflect.construct(T, [1], px);"), false).unwrap();
+    let h = "get(t: any, k: any) { return t[k]; }";
+    site(t, h, &format!("{tc}Reflect.construct(T, [1], px);"), true).unwrap();
+    let f = "function F(this: any, x: any) { external(x); }\n";
+    site(t, "", &format!("{f}Reflect.construct(F, [payload], px);"), false).unwrap();
+    site(t, "", &format!("{f}Reflect.construct(F, [1], px);"), true).unwrap();
+}
+
+/// Rule PXENUM: for-in over an object whose chain holds a Proxy (14.7.5.9
+/// EnumerateObjectProperties) runs the Proxy's ownKeys,
+/// getOwnPropertyDescriptor and getPrototypeOf traps; the body's `o[k]`
+/// reaching it is its [[Get]] with receiver `o` (the get trap).
+#[test]
+fn proxy_on_a_for_in_chain_runs_its_traps() {
+    let body = "const o: any = Object.create(px); for (const k in o) { console.log(o[k]); }";
+    for h in [
+        "ownKeys(t: any) { external(payload); return []; }",
+        "getOwnPropertyDescriptor(t: any, k: any) { external(payload); return undefined; }",
+        "getPrototypeOf(t: any) { external(payload); return null; }",
+        "get(t: any, k: any, r: any) { external(payload); return 1; }",
+    ] {
+        site("{ a: 1 }", h, body, false).unwrap_or_else(|e| panic!("{h}: {e}"));
+    }
+    let h = "get(t: any, k: any, r: any) { external(r.z); return 1; }";
+    let op = "const o: any = Object.create(px); o.z = payload; for (const k in o) { console.log(o[k]); }";
+    site("{ a: 1 }", h, op, false).unwrap();
+    site("{ a: 1 }", "", body, true).unwrap();
+    site("{ a: 1 }", "get(t: any, k: any, r: any) { return 1; }", body, true).unwrap();
+}
+
+/// Rule PXSUPER: `super.m()` whose home object's prototype is a Proxy
+/// (`Object.setPrototypeOf( B.prototype, px )`) is px.[[Get]]("m", this)
+/// (13.3.7.3, 10.5.8): the get trap with receiver `this`, or the forward;
+/// the value is called with `this`.
+#[test]
+fn proxy_super_home_prototype_runs_its_get() {
+    let cls = "class A { m() { return 1; } }\nclass B extends A { n() { return super.m(); } }\nObject.setPrototypeOf(B.prototype, px);\n";
+    let t = "{ m() { return 1; } }";
+    let h = "get(t: any, k: any, r: any) { external(payload); return t[k]; }";
+    site(t, h, &format!("{cls}new B().n();"), false).unwrap();
+    let h = "get(t: any, k: any, r: any) { return t[k]; }";
+    site(t, h, &format!("{cls}new B().n();"), true).unwrap();
+    let h = "get(t: any, k: any, r: any) { external(r.q); return t[k]; }";
+    site(t, h, &format!("{cls}const b: any = new B(); b.q = payload; b.n();"), false).unwrap();
+    site("{ m() { external(payload); } }", "", &format!("{cls}new B().n();"), false).unwrap();
+    let t = "{ m(this: any) { external(this.q); } }";
+    site(t, "", &format!("{cls}const b: any = new B(); b.q = payload; b.n();"), false).unwrap();
+    site(t, "", &format!("{cls}const b: any = new B(); b.q = 1; b.n();"), true).unwrap();
+}
+
+/// Rule PXPROTO2: GetIterator( px ) (7.4.3) reads `@@iterator` with
+/// px.[[Get]] (the get trap) and calls it with `this` = the Proxy.
+#[test]
+fn proxy_iterate_runs_its_get_and_calls_with_the_proxy() {
+    let op = "for (const x of px) { console.log(x); }";
+    let h = "get(t: any, k: any) { external(payload); return t[k]; }";
+    let it = "{ q: 1, [Symbol.iterator](this: any) { external(this.q); return [1][Symbol.iterator](); } }";
+    site(it, h, op, false).unwrap();
+    site(it, "", op, true).unwrap();
+    let h = "get(t: any, k: any) { return k === \"q\" ? payload : t[k]; }";
+    site(it, h, op, false).unwrap();
+}
+
+/// InstanceofOperator( V, px ) (13.10.2): `@@hasInstance` and
+/// OrdinaryHasInstance's `prototype` are px.[[Get]]s (the get trap).
+#[test]
+fn proxy_instanceof_runs_its_get() {
+    let op = "console.log(({}) instanceof px);";
+    let h = "get(t: any, k: any) { external(payload); return (v: any) => false; }";
+    site("class {}", h, op, false).unwrap();
+    let h = "get(t: any, k: any) { return (v: any) => { external(v); return false; }; }";
+    site("class {}", h, "console.log(payload instanceof px);", false).unwrap();
+    site("class {}", "get(t: any, k: any) { return (v: any) => false; }", op, true).unwrap();
+    // `@@hasInstance` undefined: OrdinaryHasInstance reads `prototype`.
+    let h = "get(t: any, k: any) { if (k === \"prototype\") { external(payload); } return undefined; }";
+    site("class {}", h, op, false).unwrap();
+    site("class {}", "get(t: any, k: any) { return undefined; }", op, true).unwrap();
+}
+
+/// StructuredSerialize of a Proxy throws a DataCloneError before any
+/// internal method runs: no trap.
+#[test]
+fn proxy_structured_clone_runs_no_trap() {
+    let h = "get(t: any, k: any) { external(payload); return t[k]; }";
+    site("{ a: 1 }", h, "try { structuredClone(px); } catch (e) {}", true).unwrap();
+}
+
+/// Rule PXESC: a Proxy that reaches unknown code may have every internal
+/// method run there with unknown operands: each trap runs with `this` = the
+/// handler and the target, and the target escapes (the forwards). A
+/// builtin run with `this` = the Proxy (`Array.prototype[@@iterator]`,
+/// `Function.prototype[@@hasInstance]`) and a receiver handed to unknown
+/// code reach it so; no Proxy part is held (E9).
+#[test]
+fn proxy_escape_runs_its_traps_with_unknown_operands() {
+    let has = "has(t: any, k: any) { external(payload); return true; }";
+    site("{ a: 1 }", has, "external(px);", false).unwrap();
+    site("{ a: 1 }", "", "external(px);", true).unwrap();
+    site("{ a: payload }", "", "external(px);", false).unwrap();
+    let op = "for (const x of px) { console.log(x); }";
+    site("[1]", "", op, true).unwrap();
+    site("[1]", "get(t: any, k: any) { return t[k]; }", op, true).unwrap();
+    let op = "console.log(({}) instanceof px);";
+    site("class {}", "", op, true).unwrap();
+    site("class {}", "get(t: any, k: any) { return t[k]; }", op, true).unwrap();
+    let th = "apply(t: any, th: any, a: any) { external(th); return 1; }";
+    site(FN, th, "({ m: px, q: payload }).m();", false).unwrap();
+    site(FN, th, "({ m: px, q: 1 }).m();", true).unwrap();
+}
+
+/// OrdinaryHasInstance( C, px ) (7.3.22): the walk of the left side's chain
+/// is O.[[GetPrototypeOf]](), on a Proxy its `getPrototypeOf` trap (10.5.1),
+/// also for a Proxy on the chain of the left side, and the walk goes on
+/// from what the trap returns.
+#[test]
+fn proxy_instanceof_left_runs_its_get_prototype_of() {
+    let h = "getPrototypeOf(t: any) { external(payload); return null; }";
+    let op = "class C {}\nconsole.log(px instanceof C);";
+    site("{}", h, op, false).unwrap();
+    site("{}", "", op, true).unwrap();
+    let op = "class C {}\nconsole.log(Object.create(px) instanceof C);";
+    site("{}", h, op, false).unwrap();
+    site("{}", "", op, true).unwrap();
+    let inner = format!("getPrototypeOf(t: any) {{ return new Proxy({{}}, {{ {h} }}); }}");
+    site("{}", &inner, "class C {}\nconsole.log(px instanceof C);", false).unwrap();
+}
+
+/// Rule PXESC: a rule with no Proxy model yet (`Object.values`, an object
+/// spread) is the Proxy's escape, named by the rule: each trap runs with
+/// unknown operands; no Proxy part is held (E9).
+#[test]
+fn proxy_unmodeled_rule_is_its_escape() {
+    let get = "get(t: any, k: any) { external(payload); return 1; }";
+    for op in ["console.log(Object.values(px));", "console.log({ ...px });"] {
+        site("{ a: 1 }", get, op, false).unwrap();
+        site("{ a: 1 }", "", op, true).unwrap();
+    }
+}
+
+/// Rule PXOWN: EnumerableOwnProperties (Object.values, Object.entries) and
+/// CopyDataProperties (`{ ...px }`, Object.assign) of a Proxy run its
+/// `ownKeys`, `getOwnPropertyDescriptor` and `get` traps; the values reach
+/// the result, and nothing of the target escapes.
+#[test]
+fn proxy_own_values_and_copy_run_the_traps() {
+    let traps = [
+        "get(t: any, k: any) { external(payload); return 1; }",
+        "ownKeys(t: any) { external(payload); return []; }",
+        "getOwnPropertyDescriptor(t: any, k: any) { external(payload); return undefined; }",
+    ];
+    for op in [
+        "const v: any = Object.values(px);",
+        "const v: any = Object.entries(px);",
+        "const v: any = { ...px };",
+        "const v: any = Object.assign({}, px);",
+    ] {
+        for h in traps {
+            site("{ a: 1 }", h, op, false).unwrap();
+        }
+        // The values reach the result (sound) ...
+        site("{ a: payload }", "", &format!("{op}\nexternal(v);"), false).unwrap();
+        let get = "get(t: any, k: any) { return payload; }";
+        site("{ a: 1 }", get, &format!("{op}\nexternal(v);"), false).unwrap();
+        // ... and nothing else: the target does not escape.
+        site("{ a: payload }", "", op, true).unwrap();
+        site("{ a: payload }", get, op, true).unwrap();
+    }
+}
+
+/// Rule PXOWN: Object.getOwnPropertyDescriptors / getOwnPropertyDescriptor
+/// of a Proxy: the `getOwnPropertyDescriptor` trap's result fields are the
+/// descriptors' values; without the trap the target's own.
+#[test]
+fn proxy_own_descriptors_run_the_trap() {
+    let gopd = "getOwnPropertyDescriptor(t: any, k: any) { return { value: payload, configurable: true, enumerable: true, writable: true }; }";
+    for op in [
+        "const v: any = Object.getOwnPropertyDescriptors(px);",
+        "const v: any = Object.getOwnPropertyDescriptor(px, \"a\");",
+    ] {
+        site("{ a: 1 }", gopd, &format!("{op}\nexternal(v);"), false).unwrap();
+        site("{ a: payload }", "", &format!("{op}\nexternal(v);"), false).unwrap();
+        site("{ a: payload }", "", op, true).unwrap();
+        site("{ a: 1 }", gopd, op, true).unwrap();
+    }
+}
+
+/// Rule PXOWN: the `get` of an accessor descriptor the
+/// `getOwnPropertyDescriptor` trap returns is handed out by
+/// Object.getOwnPropertyDescriptor(s).
+#[test]
+fn proxy_own_descriptor_accessor_is_the_traps() {
+    let gopd = "getOwnPropertyDescriptor(t: any, k: any) { return { get() { return payload; }, configurable: true, enumerable: true }; }";
+    for op in [
+        "const v: any = Object.getOwnPropertyDescriptors(px);",
+        "const v: any = Object.getOwnPropertyDescriptor(px, \"a\");",
+    ] {
+        site("{ a: 1 }", gopd, &format!("{op}\nexternal(v);"), false).unwrap();
+        site("{ a: 1 }", gopd, op, true).unwrap();
+    }
+}
+
+/// Rule PXOWN: Object.defineProperties( o, px ) reads the descriptors off
+/// the Proxy with its `ownKeys`, `getOwnPropertyDescriptor` and `get`
+/// traps and defines them on `o`; nothing of the target escapes.
+#[test]
+fn proxy_define_properties_map_runs_the_traps() {
+    let op = "const o: any = {};\nObject.defineProperties(o, px);";
+    let out = format!("{op}\nexternal(o);");
+    for h in [
+        "get(t: any, k: any) { external(payload); return { value: 1 }; }",
+        "ownKeys(t: any) { external(payload); return []; }",
+        "getOwnPropertyDescriptor(t: any, k: any) { external(payload); return undefined; }",
+    ] {
+        site("{ a: { value: 1 } }", h, op, false).unwrap();
+    }
+    let get = "get(t: any, k: any) { return { value: payload, enumerable: true }; }";
+    site("{ a: { value: 1 } }", get, &out, false).unwrap();
+    site("{ a: { value: payload } }", "", &out, false).unwrap();
+    site("{ a: { value: payload } }", "", op, true).unwrap();
+    site("{ a: { value: 1 } }", get, op, true).unwrap();
+}
+
+/// Rule PXOWN: Array.from( px ) of a Proxy without `@@iterator` reads it as
+/// an array-like through its `get` trap (`length`, each index); the
+/// elements reach the result, nothing of the target escapes.
+#[test]
+fn proxy_array_from_array_like_runs_the_get_trap() {
+    let op = "const v: any = Array.from(px);";
+    let out = format!("{op}\nexternal(v);");
+    let tg = "{ length: 1, 0: payload }";
+    let ext = "get(t: any, k: any) { external(payload); return 1; }";
+    site("{ length: 1 }", ext, op, false).unwrap();
+    let get = "get(t: any, k: any) { return k === \"length\" ? 1 : payload; }";
+    site("{ length: 1 }", get, &out, false).unwrap();
+    site(tg, "", &out, false).unwrap();
+    site(tg, "", op, true).unwrap();
+    site("{ length: 1 }", get, op, true).unwrap();
+}
+
+/// Rule PXASSIGN: `Object.assign( px, s )` (20.1.2.1 step 4.b.iii.2.b)
+/// is Set( px, key, v, true ) per copied key: the `set` trap with the
+/// value, or without a trap the forward to the target; the target itself
+/// does not escape.
+#[test]
+fn proxy_assign_target_runs_the_set_trap() {
+    let set_v = "set(t: any, k: any, v: any, r: any) { external(v); return true; }";
+    site("{}", SET_OUT, "Object.assign(px, { a: 1 });", false).unwrap();
+    site("{}", set_v, "Object.assign(px, { a: payload });", false).unwrap();
+    site("{}", set_v, "Object.assign(px, { a: 1 });", true).unwrap();
+    // No trap: the target gets the value (the forward), nothing escapes.
+    site("{ b: payload }", "", "Object.assign(px, { a: 1 });", true).unwrap();
+    site("{}", "", "Object.assign(px, { a: payload });\nexternal(px.a);", false).unwrap();
+    site("{}", "", "Object.assign(px, { a: payload });", true).unwrap();
+}
+
+/// A copied key the model does not name (a computed store into the
+/// source) is a Set of some key on the Proxy: the trap sees its value.
+#[test]
+fn proxy_assign_target_unnamed_key_runs_the_set_trap() {
+    let set_v = "set(t: any, k: any, v: any, r: any) { external(v); return true; }";
+    let src = |v: &str| format!("const s: any = {{}};\ns[process.argv[2]] = {v};\nObject.assign(px, s);");
+    site("{}", set_v, &src("payload"), false).unwrap();
+    site("{}", set_v, &src("1"), true).unwrap();
+    site("{ b: payload }", "", &src("1"), true).unwrap();
+}

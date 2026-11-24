@@ -87,16 +87,18 @@ console.log(p.a, p.b);
     assert!(!e9(&tops) && !held, "{tops:?}");
 }
 
-// K3: Proxy.revocable keeps the old path (E9).
+// K3: the Proxy of Proxy.revocable is a modeled Proxy (rule PXESC: its
+// escape runs its traps; after revoke() each operation throws a TypeError
+// first, which the traps over-run). No part is held (E9).
 #[test]
-fn px1_k3_revocable_keeps_old_path() {
+fn px1_k3_revocable_is_a_modeled_proxy() {
     let (tops, _) = solve(
         r#"const { proxy, revoke } = Proxy.revocable({ a: 1 } as any, {});
 console.log((proxy as any).a, process.argv[2]);
 revoke();
 "#,
     );
-    assert!(e9(&tops), "revocable stays E9: {tops:?}");
+    assert!(!e9(&tops), "revocable holds E9: {tops:?}");
 }
 
 /// PROXY3: the verdicts of the sites under `key` (reads, calls, stores).

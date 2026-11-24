@@ -407,10 +407,22 @@ impl Model {
             return;
         }
         let opaque = !self.own_props_modelled(s);
-        // Any key of the source may be an index of an Array target.
-        self.mark_hole(d);
-        self.map_open(d);
-        let fa_d = self.any_key_node(d);
+        // Rule PXASSIGN: `Object.assign( px, s )` (20.1.2.1 step
+        // 4.b.iii.2.b): each copied key is Set( px, key, v, true ), the
+        // Proxy's [[Set]] (`store_into`); the values of keys the model does
+        // not name gather in `fa_d`, a [[Set]] of some key once one is there
+        // (`Cons::UnnamedSet`). A Proxy has no own fields of its own.
+        let px = matches!(self.toks[d as usize], TokKind::Proxy(_));
+        let fa_d = if px {
+            let w = self.node_l("proxy-assign-unnamed");
+            self.cons(w, Cons::UnnamedSet { target: d, site });
+            w
+        } else {
+            // Any key of the source may be an index of an Array target.
+            self.mark_hole(d);
+            self.map_open(d);
+            self.any_key_node(d)
+        };
         // A String wrapper's own indices are its characters (10.4.3.5).
         if !opaque && self.may_wrap_string(s) {
             self.add_prim(fa_d, prim::STR);
@@ -489,16 +501,20 @@ impl Model {
         // source has such a key (an unmodeled source may have any).
         // It is a write of the target under some key as well: onto a
         // builtin prototype, every key of it (`note_native_write`).
-        if opaque {
+        if px {
+            // `fa_s` reaches `fa_d` (above), whose rule is the Set.
+        } else if opaque {
             self.accessor_walk(d, d, Key::any(), ChainAct::Store(fa_s, self.thrown));
             self.note_unnamed_set(d);
         } else {
-            self.cons(fa_s, Cons::UnnamedSet { target: d });
+            self.cons(fa_s, Cons::UnnamedSet { target: d, site });
         }
-        // Numeric-only source properties keep their range through a copy.
-        let numeric_s = self.numeric_field(s);
-        let numeric_d = self.numeric_field(d);
-        self.edge(numeric_s, numeric_d);
+        if !px {
+            // Numeric-only source properties keep their range through a copy.
+            let numeric_s = self.numeric_field(s);
+            let numeric_d = self.numeric_field(d);
+            self.edge(numeric_s, numeric_d);
+        }
         // Getters of `s` (own and on the chain) run; their results have no
         // known key here.
         let act = ChainAct::Load(fa_d, self.thrown);

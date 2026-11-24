@@ -81,6 +81,8 @@ pub const IDX_ENUM_READ: u16 = 65;
 pub const IDX_ENUM_CHAIN: u16 = 66;
 /// An index store watched for the hole it may leave (`Cons::IndexHoleIn`).
 pub const IDX_HOLE_IN: u16 = 67;
+/// `Model::instanceof_walk`: the chain walk of one `instanceof` left side.
+pub const IDX_INSTANCEOF_WALK: u16 = 68;
 pub const IDX_OWN_PRIM: u16 = 46;
 /// `Cons::Spread` of a String source: the store of its characters (10.4.3).
 pub const IDX_SPREAD_STR: u16 = 47;
@@ -2366,6 +2368,13 @@ pub struct Model {
     /// left-hand side (`Solver::has_instance`).
     pub has_instance_arg: crate::pts::FxHashMap<Tok, NodeId>,
     pub construct_done: crate::pts::FxHashSet<(CallId, Tok)>,
+    /// Rule PXNEWT: the object `Reflect.construct( T, args, P )` with a Proxy
+    /// new target P makes, per (call, Proxy, T) (`proxy_nt_inst`).
+    pub proxy_nt_inst: crate::pts::FxHashMap<(CallId, u32, Tok), Tok>,
+    /// Rule PXNEWT: those objects. Their prototype is what
+    /// Get(P, "prototype") returns alone (10.1.14), so `proto_node` seeds
+    /// no static prototype for them.
+    pub proxy_nt_toks: crate::pts::FxHashSet<Tok>,
     /// (`new` call, summarized constructor) -> the node its runs' body
     /// result reaches instead of the call's result: the `new` result takes
     /// only its objects, and the this-object while it holds a non-object

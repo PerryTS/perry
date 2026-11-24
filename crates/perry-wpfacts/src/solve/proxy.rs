@@ -24,10 +24,11 @@
 //! the formatter's `%j`) runs the `toJSON` [[Get]], [[OwnPropertyKeys]],
 //! [[GetOwnProperty]] and the member [[Get]]s (`proxy_json`); a console
 //! argument runs that, ToPrimitive and the unwrapped show (`proxy_inspect`).
-//! Every other operation on the token, and
-//! an escape of it, takes the path the solver had before (`degrade`): the
-//! target is hard E9 and goes to ⊤, the handler escapes, and the operation
-//! sees ⊤. The hold's reason names that first operation.
+//! PXESC: an escape of the token (unknown code, a ⊤ sink, a reflecting
+//! runtime helper) runs every trap with unknown operands and escapes the
+//! target (`proxy_escape`); a rule with no Proxy model (each named in
+//! `proxy_apply`) is that escape with the rule in its reason, its result
+//! unknown. Nothing holds the target as E9.
 
 use super::*;
 
@@ -39,7 +40,6 @@ pub(crate) const PROXY_NEW: &str = "#proxy-new";
 pub struct ProxyRec {
     pub target: NodeId,
     pub handler: NodeId,
-    pub degraded: bool,
     /// The Proxy's operations, one entry per class (`ProxyOp`): what the
     /// first use made (its trap call, its forward to the target), which
     /// every later use of the class joins.
@@ -92,8 +92,12 @@ pub enum ProxyOp {
     HardFwd(Hard),
     /// Rule PXAPPLY: the [[Call]] of one call site: its `this` node.
     Apply(CallId),
-    /// Rule PXAPPLY: the [[Construct]] of one call site (`NewProgram`).
-    Construct(CallId, bool),
+    /// Rule PXAPPLY: the [[Construct]] of one call site with its newTarget
+    /// node (`NO_NODE`: `new`, the Proxy itself; else Reflect.construct's).
+    Construct(CallId, NodeId),
+    /// Rule PXNEWT: GetPrototypeFromConstructor(p) (10.1.14): the objects
+    /// p.[[Get]]("prototype") returns, or the realm's default prototype.
+    NtProto,
     /// Rule PXAPPLY: the receivers of the `ThisTo` relays.
     ThisTo,
     /// [[HasProperty]] of `key` (with its key node): trap and forward.
@@ -158,6 +162,22 @@ pub enum ProxyOp {
     /// Rule PXCHAIN: a receiver's read or call under a computed key that
     /// may be an index (`Cons::PlainKey`) reaching the Proxy.
     Plain(Tok, ChainAct),
+    /// Rule PXESC: the Proxy reached unknown code (`proxy_escape`).
+    Escape,
+    /// Rule PXOWN: the node of the `getOwnPropertyDescriptor` trap's
+    /// results for any key (`proxy_own_props`).
+    OwnDesc,
+    /// Rule PXOWN: one copy of the own properties (CopyDataProperties)
+    /// into the targets node at a site: its stores.
+    Copy(NodeId, SiteId),
+    /// Rule PXOWN: Array.from's array-like read of the Proxy into one node.
+    FromLike(NodeId),
+    /// Rule PXOWN: the descriptor values one getOwnPropertyDescriptor(s)
+    /// node takes: the trap result's fields and the forward.
+    DescValues(NodeId),
+    /// Rule PXOWN: the getters (false) / setters (true) of those
+    /// descriptors one node takes.
+    DescAcc(bool, NodeId),
 }
 
 impl Model {
@@ -180,7 +200,6 @@ impl Model {
                 self.proxies.push(ProxyRec {
                     target,
                     handler,
-                    degraded: false,
                     ops: Default::default(),
                     callable: false,
                     calls: Vec::new(),
@@ -206,30 +225,52 @@ impl Model {
         self.add_tok(c.ret, t);
     }
 
-    /// Today's path for Proxy `p` (before PROXY2): target hard E9 and ⊤,
-    /// handler escapes. Once per Proxy.
-    /// `cause` names the first operation that sent it here (the hold's
-    /// reason reads "E9 Proxy target (<cause>)").
-    pub(crate) fn proxy_degrade(&mut self, p: u32, cause: &str) {
-        if self.proxies[p as usize].degraded {
+    /// Rule PXESC: Proxy `p` reaches unknown code (an escape, a ⊤ sink, a
+    /// reflecting runtime helper): that code may run every internal method
+    /// of it (ECMA-262 10.5.1-10.5.13) with operands of its own. Each trap
+    /// runs as the operation calls it: `this` = the handler, the target its
+    /// first argument, the key any String or Symbol (ToPropertyKey's), each
+    /// other operand (a value, a descriptor, a Receiver, a thisArgument, an
+    /// argument list, a newTarget) unknown, and its result goes back to that
+    /// code. Each forward is the same internal method of the target with
+    /// those operands, which is the target's own escape: the target
+    /// escapes (a Proxy target runs this rule in turn). Once per Proxy.
+    pub(crate) fn proxy_escape(&mut self, p: u32, reason: u32) {
+        if self.proxy_made(p, ProxyOp::Escape) {
             return;
         }
-        self.proxies[p as usize].degraded = true;
-        let (target, handler) = (
-            self.proxies[p as usize].target,
-            self.proxies[p as usize].handler,
-        );
-        let r = self.reason(&format!("E9 Proxy target ({cause})"));
-        self.cons(
-            target,
-            Cons::Hard {
-                kind: Hard::E9Proxy,
-                reason: r,
-            },
-        );
-        self.cons(target, Cons::TopSink { reason: r });
-        let rh = self.reason("E9 Proxy handler");
-        self.sink_node(handler, rh);
+        let t = self.proxies[p as usize].target;
+        let unk = self.node_l("proxy-escape-operand");
+        self.add_top(unk, |m| {
+            format!(
+                "operand of an escaped Proxy's trap: {}",
+                m.reasons[reason as usize]
+            )
+        });
+        self.add_prim(unk, prim::ALL);
+        let k = self.proxy_key_arg(Key::any(), NO_NODE);
+        let ret = self.node_l("proxy-escape-ret");
+        self.sink_node(ret, reason);
+        let any = Some(Key::any());
+        let traps: [(&str, Option<Key>, Vec<NodeId>); 13] = [
+            ("getPrototypeOf", None, vec![t]),
+            ("setPrototypeOf", None, vec![t, unk]),
+            ("isExtensible", None, vec![t]),
+            ("preventExtensions", None, vec![t]),
+            ("getOwnPropertyDescriptor", any, vec![t, k]),
+            ("defineProperty", any, vec![t, k, unk]),
+            ("has", any, vec![t, k]),
+            ("get", any, vec![t, k, unk]),
+            ("set", any, vec![t, k, unk, unk]),
+            ("deleteProperty", any, vec![t, k]),
+            ("ownKeys", None, vec![t]),
+            ("apply", None, vec![t, unk, unk]),
+            ("construct", None, vec![t, unk, unk]),
+        ];
+        for (name, key, args) in traps {
+            self.proxy_trap(p, name, key, args, ret);
+        }
+        self.sink_node(t, reason);
     }
 
     /// The key argument a trap receives: ToPropertyKey's result (a String
@@ -393,7 +434,7 @@ impl Model {
     /// trap call returning into it and one forward read of the target into
     /// it. The class is entered before the forward runs: a target holding
     /// `p` reads into the same node.
-    fn proxy_get(&mut self, p: u32, key: Key, idx: NodeId) -> NodeId {
+    pub(crate) fn proxy_get(&mut self, p: u32, key: Key, idx: NodeId) -> NodeId {
         let recv = self.tok(TokKind::Proxy(p));
         self.proxy_get_r(p, key, idx, recv)
     }
@@ -753,6 +794,7 @@ impl Model {
         // [[GetOwnProperty]] of each key: the trap, the descriptor read.
         let k = self.proxy_key_arg(Key::any(), NO_NODE);
         let desc = self.node_l("proxy-gopd-ret");
+        self.proxies[p as usize].ops.insert(ProxyOp::OwnDesc, desc);
         self.proxy_trap(
             p,
             "getOwnPropertyDescriptor",
@@ -972,6 +1014,28 @@ impl Model {
                 builtin,
             },
         );
+    }
+
+    /// Rule PXSUPER: `super.key` whose home object's prototype is Proxy `p`
+    /// (13.3.7.3 MakeSuperPropertyReference: the base is
+    /// HomeObject.[[GetPrototypeOf]](), the Receiver `this` = `origin`):
+    /// GetValue is p.[[Get]](key, this) (10.5.8: the get trap with receiver
+    /// `this`, the forward to the target with the same receiver), a call
+    /// calls that value with `this`, PutValue is p.[[Set]](key, V, this)
+    /// (`proxy_chain_set`), a lookup the chain walk.
+    pub(crate) fn proxy_super(&mut self, p: u32, origin: Tok, key: Key, act: ChainAct) {
+        match act {
+            ChainAct::Load(dst, _) => {
+                let g = self.proxy_get_r(p, key, NO_NODE, origin);
+                self.edge(g, dst);
+            }
+            ChainAct::Call(call) => {
+                let g = self.proxy_get_r(p, key, NO_NODE, origin);
+                self.bind_via(g, call, origin);
+            }
+            ChainAct::Store(src, region) => self.proxy_chain_set(p, origin, key, src, region),
+            ChainAct::Lookup { .. } => self.proxy_chain_walk(p, origin, key, act),
+        }
     }
 
     /// Rule PXCHAIN: a per-receiver walk of `origin` (`Cons::Chain`)
@@ -1300,8 +1364,18 @@ impl Model {
                 let th = self.proxy_this_to(p);
                 self.add_tok(th, origin);
             }
-            Cons::New { call } => self.proxy_construct(p, call, false),
-            Cons::NewProgram { call } => self.proxy_construct(p, call, true),
+            Cons::New { call } | Cons::NewProgram { call } => {
+                self.proxy_construct(p, call, NO_NODE)
+            }
+            // Reflect.construct( p, args, newTarget ) (28.1.2):
+            // p.[[Construct]]( args, newTarget ).
+            Cons::ReflectNew { call, new_target } => self.proxy_construct(p, call, new_target),
+            // Reflect.construct( T, args, p ): the Proxy is the newTarget
+            // (IsConstructor(p): its target is a constructor).
+            Cons::ReflectNewTarget { call, target } => {
+                let pt = self.tok(TokKind::Proxy(p));
+                self.reflect_construct(call, target, pt);
+            }
             _ => {}
         }
     }
@@ -1384,45 +1458,81 @@ impl Model {
         }
     }
 
-    /// Rule PXAPPLY: p.[[Construct]](argumentsList, newTarget) (10.5.13)
-    /// of `new p( ... )` (newTarget = p): trap `construct( target,
-    /// argArray, newTarget )`; its result is the `new`'s only when it is an
-    /// object (step 11: otherwise a TypeError), `Cons::Objects`. Without a
-    /// trap (step 6) Construct(target, argumentsList, newTarget): the
-    /// target's [[Construct]], whose new object's [[Prototype]] is
-    /// Get(newTarget, "prototype") (10.1.13 GetPrototypeFromConstructor):
-    /// p.[[Get]]("prototype"), the get trap and its forward
-    /// (`Cons::ProtoFrom` on the forward's result). A `prototype` that is
-    /// no Object (a primitive; ⊤ or a marker may be one) gives the realm's
-    /// intrinsic default prototype of the constructor's kind (10.1.14 step
-    /// 4: `%Object.prototype%` for an ordinary function, the builtin's own
-    /// for a builtin): `ObjectProto`, which stands for every builtin
-    /// prototype. `program`: the call's `NewProgram` rule
-    /// (`construct_program`). Once per (call, rule).
-    fn proxy_construct(&mut self, p: u32, call: CallId, program: bool) {
-        if self.proxy_made(p, ProxyOp::Construct(call, program)) {
+    /// Rule PXAPPLY / PXNEWT: p.[[Construct]](argumentsList, newTarget)
+    /// (10.5.13) of call `call`: trap `construct( target, argArray,
+    /// newTarget )` with `this` = the handler, only an Object result the
+    /// call's (step 11); without a trap (step 6) Construct(target,
+    /// argumentsList, newTarget), the forward: `Cons::ReflectNew` on the
+    /// target with the same newTarget, so a Proxy target runs its own
+    /// [[Construct]] with it and an ordinary target makes its object with
+    /// newTarget's prototype (`reflect_construct`, `proxy_nt_inst`); the
+    /// forward's result is the call's as made. `given`: the newTarget node
+    /// of `Reflect.construct( p, args, newTarget )`, whose omitted
+    /// argument (undefined) is p itself (28.1.2 step 2); `NO_NODE` for
+    /// `new p(...)`, whose newTarget is p. Once per (call, given).
+    fn proxy_construct(&mut self, p: u32, call: CallId, given: NodeId) {
+        if self.proxy_made(p, ProxyOp::Construct(call, given)) {
             return;
         }
         let t = self.proxies[p as usize].target;
         let (ret, region) = (self.calls[call as usize].ret, self.calls[call as usize].region);
         let arr = self.proxy_args_array(call);
-        let nt = self.node_l("proxy-new-target");
         let pt = self.tok(TokKind::Proxy(p));
-        self.add_tok(nt, pt);
+        let nt = self.node_l("proxy-new-target");
+        if given == NO_NODE {
+            self.add_tok(nt, pt);
+        } else {
+            self.cons(given, Cons::Objects { dst: nt });
+            let omitted = self.node_l("proxy-new-target-omitted");
+            self.cons(
+                given,
+                Cons::TypeIs {
+                    mask: prim::UNDEF,
+                    dst: omitted,
+                },
+            );
+            let own = self.node_l("proxy-new-target-self");
+            self.add_tok(own, pt);
+            self.cons(
+                omitted,
+                Cons::TopIfAny {
+                    dst: nt,
+                    from: own,
+                    reason: None,
+                },
+            );
+        }
         let tr = self.node_l("proxy-construct-ret");
         self.proxy_trap_in(p, "construct", None, vec![t, arr, nt], tr, region);
         self.cons(tr, Cons::Objects { dst: ret });
         let fr = self.node_l("proxy-construct-fwd");
         let call2 = self.proxy_fwd_call(call, ThisArg::Undef, fr);
-        let rule = match program {
-            true => Cons::NewProgram { call: call2 },
-            false => Cons::New { call: call2 },
-        };
-        self.cons(t, rule);
+        self.cons(
+            t,
+            Cons::ReflectNew {
+                call: call2,
+                new_target: nt,
+            },
+        );
+        self.edge(fr, ret);
+    }
+
+    /// Rule PXNEWT: GetPrototypeFromConstructor(p, intrinsicDefaultProto)
+    /// (10.1.14) for Proxy newTarget `p`: the Objects p.[[Get]]("prototype")
+    /// returns (its `get` trap and the forward); a non-Object gives the
+    /// realm's intrinsic default (step 4: `%Object.prototype%` for a class
+    /// or function, `ObjectProto`, which stands for every builtin
+    /// prototype). The node of those prototypes; once per Proxy.
+    pub(crate) fn proxy_nt_proto(&mut self, p: u32) -> NodeId {
+        if let Some(&n) = self.proxies[p as usize].ops.get(&ProxyOp::NtProto) {
+            return n;
+        }
+        let out = self.node_l("proxy-new-target-proto");
+        self.proxies[p as usize].ops.insert(ProxyOp::NtProto, out);
         let pa = self.atom("prototype");
         let pr = self.proxy_get(p, Key::Named(pa), NO_NODE);
-        self.cons(fr, Cons::ProtoFrom { src: pr });
-        let prim_pr = self.node_l("proxy-construct-proto-not-object");
+        self.cons(pr, Cons::Objects { dst: out });
+        let prim_pr = self.node_l("proxy-new-target-proto-not-object");
         self.cons(
             pr,
             Cons::TypeIs {
@@ -1430,20 +1540,48 @@ impl Model {
                 dst: prim_pr,
             },
         );
-        let realm = self.node_l("proxy-construct-realm-default-proto");
+        let realm = self.node_l("proxy-new-target-realm-default-proto");
         let op = self.tok(TokKind::ObjectProto);
         self.add_tok(realm, op);
-        let dflt = self.node_l("proxy-construct-default-proto");
         self.cons(
             prim_pr,
             Cons::TopIfAny {
-                dst: dflt,
+                dst: out,
                 from: realm,
                 reason: None,
             },
         );
-        self.cons(fr, Cons::ProtoFrom { src: dflt });
-        self.edge(fr, ret);
+        out
+    }
+
+    /// Rule PXNEWT: OrdinaryCreateFromConstructor(newTarget) of
+    /// `Reflect.construct( target, args, p )` (or a Proxy's forward) with
+    /// Proxy newTarget `p` and a class or function `target`: an object of
+    /// target's layout per (call, Proxy, target), a birth of its own,
+    /// whose prototype is `proxy_nt_proto(p)` alone (`proxy_nt_toks`).
+    /// `None`: another unit's layout (one token for all its instances),
+    /// which cannot carry a prototype of its own.
+    pub(crate) fn proxy_nt_inst(&mut self, call: CallId, p: u32, target: Tok) -> Option<Tok> {
+        if let Some(&i) = self.proxy_nt_inst.get(&(call, p, target)) {
+            return Some(i);
+        }
+        let tm = match self.toks[target as usize] {
+            TokKind::ClassObj(tm) => tm,
+            TokKind::Func(f, _) => self.fn_inst_template(f),
+            _ => return None,
+        };
+        if self.foreign.contains_key(&tm) {
+            return None;
+        }
+        let birth = self.node_l("proxy-new-target-birth");
+        let ctx = self.proxy_fwd_call(call, ThisArg::Undef, birth);
+        let inst = self.site_tok(tm, ctx);
+        self.proxy_nt_toks.insert(inst);
+        self.proxy_nt_inst.insert((call, p, target), inst);
+        let pr = self.proxy_nt_proto(p);
+        let protos = self.proto_node(inst);
+        self.edge(pr, protos);
+        Some(inst)
     }
 
     /// Rule PXCALL: the `ProxyCallee` rule of called Proxy `of` on the
@@ -1472,6 +1610,23 @@ impl Model {
     }
 
     /// The one rule that sees a Proxy token: operation `c` on Proxy `p`.
+    /// [[Set]] (10.5.9) of `key` with the Proxy as the Receiver
+    /// (`proxy_set`).
+    pub(crate) fn proxy_store(&mut self, p: u32, key: Key, src: NodeId, site: SiteId, region: NodeId) {
+        let recv = self.tok(TokKind::Proxy(p));
+        self.proxy_set(p, key, src, site, region, recv);
+        // Rule PXDEFINE: the forward's OrdinarySet ends at the
+        // Receiver, this Proxy (10.1.9.2 OrdinarySetWithOwnDescriptor
+        // step 2.c: Receiver.[[GetOwnProperty]](P), 10.5.5; steps
+        // 2.d / 2.e: Receiver.[[DefineOwnProperty]](P, desc), 10.5.6).
+        // A setter on the target's chain ends it there instead: the
+        // model keeps both.
+        if !self.proxy_made(p, ProxyOp::OwnProp(key, NO_NODE)) {
+            self.proxy_own_prop(p, key, NO_NODE);
+        }
+        self.proxy_define(p, key, src, region);
+    }
+
     pub(crate) fn proxy_apply(&mut self, n: NodeId, c: &Cons, p: u32) {
         match *c {
             Cons::Load { key, dst } => self.proxy_get_into(p, key, NO_NODE, dst),
@@ -1628,21 +1783,16 @@ impl Model {
                 src,
                 site,
                 region,
-            } => {
-                let recv = self.tok(TokKind::Proxy(p));
-                self.proxy_set(p, key, src, site, region, recv);
-                // Rule PXDEFINE: the forward's OrdinarySet ends at the
-                // Receiver, this Proxy (10.1.9.2 OrdinarySetWithOwnDescriptor
-                // step 2.c: Receiver.[[GetOwnProperty]](P), 10.5.5; steps
-                // 2.d / 2.e: Receiver.[[DefineOwnProperty]](P, desc), 10.5.6).
-                // A setter on the target's chain ends it there instead: the
-                // model keeps both.
-                if !self.proxy_made(p, ProxyOp::OwnProp(key, NO_NODE)) {
-                    self.proxy_own_prop(p, key, NO_NODE);
-                }
-                self.proxy_define(p, key, src, region);
-            }
+            } => self.proxy_store(p, key, src, site, region),
             Cons::DefineOwn { key, value, region } => self.proxy_define(p, key, value, region),
+            // Rule PXASSIGN: `Object.assign( px, s )`: the copy's Sets of
+            // `s`'s keys on the Proxy (`spread_into`, `store_into`). Other
+            // copies (a literal's spread, a rest object) copy into a fresh
+            // object, never into a Proxy.
+            Cons::SpreadFrom { src, site, from } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.spread_into(src, t, site, from);
+            }
             // Rule PXRECV: the Proxy is the target of a Proxy whose forward
             // passes the original Receiver `recv`.
             Cons::FwdLoad {
@@ -1761,6 +1911,8 @@ impl Model {
             | Cons::CallThis { .. }
             | Cons::New { .. }
             | Cons::NewProgram { .. }
+            | Cons::ReflectNew { .. }
+            | Cons::ReflectNewTarget { .. }
             // Rule PXCALLR: the relays of a method call that found the
             // Proxy through a receiver (`bind_via`): the `this` it binds
             // (`ThisTo`, the thisArg of the [[Call]]), its arguments and
@@ -1868,6 +2020,12 @@ impl Model {
             | Cons::TopIfTop { .. }
             | Cons::ForInMeet { .. }
             | Cons::ThisInst { .. }
+            // `ProtoValues` on a prototype node that holds the Proxy: the
+            // Proxy itself is that [[Prototype]] value (what a
+            // [[GetPrototypeOf]] of the object holding it returns, a
+            // `super` home object's included); no internal method of the
+            // Proxy runs.
+            | Cons::ProtoValues { .. }
             // `Object.create( p )` (20.1.2.2, OrdinaryObjectCreate 10.1.12):
             // `p` becomes the new object's [[Prototype]]; no internal method
             // of `p` runs. The operations that later reach it on the chain
@@ -1887,7 +2045,13 @@ impl Model {
             // Proxy: an object key is no constant (ToPropertyKey is its own
             // rule), the computed-key definition.
             | Cons::DefineAnyKey { .. }
-            | Cons::DefineKeyed { .. } => {
+            | Cons::DefineKeyed { .. }
+            // Rule PXSUPER: the Proxy as the home object's prototype of a
+            // `super.key` (its [[GetPrototypeOf]] result: the lookup starts
+            // at it, `super_lookup`), or as the `this` of one (the
+            // Receiver: the lookup itself is on the home prototype).
+            | Cons::SuperFrom { .. }
+            | Cons::Super { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
@@ -1906,7 +2070,16 @@ impl Model {
             | Cons::StrSubstring { .. }
             | Cons::StrReplace { .. }
             | Cons::ClassReplace { .. }
-            | Cons::Captures { .. } => {
+            | Cons::Captures { .. }
+            // A run's argument and result relays (DECISIONS 44 (b)): the
+            // Proxy is a value that flows to the call's result; only the
+            // markers there map families.
+            | Cons::ArgInto { .. }
+            | Cons::RetInto { .. }
+            // Rule PXASSIGN: the Proxy as a value of a copied unnamed key
+            // (`fa_s` of a copy source): the Set of it on the target is the
+            // ordinary rule; no internal method of the Proxy runs.
+            | Cons::UnnamedSet { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
@@ -1946,6 +2119,21 @@ impl Model {
             // (`for_in_every_key`); its `p[k]` reads are [[Get]]s (the Load
             // arm), the enumeration itself `proxy_own_keys`.
             Cons::ForInKeys { ft, call } => self.for_in_every_key(call, ft),
+            // Rule PXENUM: for-in over an object whose chain holds the Proxy
+            // (14.7.5.9 EnumerateObjectProperties): the walk reaching it
+            // runs its [[OwnPropertyKeys]], [[GetOwnProperty]] and
+            // [[GetPrototypeOf]] (`proxy_own_keys`: the ownKeys,
+            // getOwnPropertyDescriptor and getPrototypeOf traps and the walk
+            // on), and the body's `of[k]` read reaching it is OrdinaryGet's
+            // step 3, p.[[Get]](k, of) (`proxy_chain_get`: the get trap with
+            // receiver `of`, the forward the target's own and chain).
+            Cons::EnumChain { key, dst, of, .. } => {
+                let r = self.reason("for-in: a Proxy on the chain of the enumerated object");
+                self.proxy_own_keys(p, r);
+                let recv = self.proxy_chain_recv(p);
+                self.add_tok(recv, of);
+                self.proxy_chain_get(p, key, dst, of, false);
+            }
             // Rule PK on a Proxy (Object.getOwnPropertyNames): its own
             // keys are what its ownKeys trap (or the target's own) returns
             // (10.5.11 [[OwnPropertyKeys]]), kept to Strings (20.1.2.10):
@@ -1954,21 +2142,319 @@ impl Model {
             Cons::OwnNames { dst } => {
                 self.add_prim(dst, prim::STR);
             }
-            // Another protocol touch: its hold names the protocol and the
-            // touch's own reason.
-            Cons::Implicit { reason, proto, .. } => {
-                let cause = format!("implicit {proto:?}: {}", self.reasons[reason as usize]);
-                self.proxy_degrade(p, &cause);
-                self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);
+            // Rule PXNEWT: a Proxy as the newTarget of Reflect.construct
+            // gives no class layout a foreign birth: the object made is
+            // its own birth of the target's layout (`proxy_nt_inst`),
+            // its prototype Get( newTarget, "prototype" ) (10.1.14).
+            Cons::NewTargetHard { .. } => {}
+            // Rule PXPROTO2: GetIterator (7.4.3), IteratorNext / Close /
+            // Complete / Value (7.4.x) and their async twins, Node's
+            // `Buffer.from(object)`, InstanceofOperator's `@@hasInstance`
+            // (13.10.2) and the error message's inspection of the Proxy:
+            // each key the protocol looks up or reads is a [[Get]] of the
+            // Proxy (10.5.8: the get trap and the forward), a method found
+            // called with `this` = the Proxy (`implicit`). A formatter
+            // showing a Proxy target that is itself a Proxy enumerates it
+            // (`proxy_own_keys`: the ownKeys and getOwnPropertyDescriptor
+            // traps) and reads its values ([[Get]] under any key).
+            Cons::Implicit {
+                reason,
+                proto:
+                    pr @ (Protocol::Iterate
+                    | Protocol::IterNext
+                    | Protocol::IterResult
+                    | Protocol::AsyncIterate
+                    | Protocol::AsyncIterNext
+                    | Protocol::AsyncIterResult
+                    | Protocol::BufferFrom
+                    | Protocol::HasInstance
+                    | Protocol::ShallowInspect
+                    | Protocol::InspectTarget(_)),
+                region,
+            } => {
+                if matches!(pr, Protocol::InspectTarget(_)) {
+                    self.proxy_own_keys(p, reason);
+                }
+                let t = self.tok(TokKind::Proxy(p));
+                self.implicit(t, reason, pr, region);
             }
-            // A hard operation: its hold names the kind and the reason.
-            Cons::Hard { kind, reason } => {
-                let cause = format!("hard {}: {}", kind.code(), self.reasons[reason as usize]);
-                self.proxy_degrade(p, &cause);
-                self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);
+            // The `next` of an iterated value read as its own iterator (the
+            // ordinary object's rule, `Cons::IterNext`): p.[[Get]]("next")
+            // (10.5.8, the get trap and the forward).
+            Cons::IterNext { dst } => {
+                let a = self.atom("next");
+                let f = self.proxy_get(p, Key::Named(a), NO_NODE);
+                self.edge(f, dst);
             }
-            _ => {
-                self.proxy_degrade(p, c.kind_name());
+            // StructuredSerialize (HTML 2.7.3) of a Proxy: an exotic object
+            // with internal slots of its own throws a DataCloneError before
+            // any internal method of it runs: no trap.
+            Cons::Implicit {
+                proto: Protocol::Clone,
+                ..
+            } => {}
+            // InstanceofOperator( V, p ) (13.10.2): `@@hasInstance` and, for
+            // OrdinaryHasInstance, `prototype` are [[Get]]s of the Proxy
+            // (`implicit`); the method is called with `V`.
+            Cons::HasInstance { reason, arg } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.has_instance(t, reason, arg);
+            }
+            // The hard kinds that reach a Proxy as an operand: as the target
+            // of `Proxy.revocable` / a Proxy made by name (E9: its own
+            // TopSink beside, the unknown code's), a `with` object (E15:
+            // HasBinding's HasProperty and `@@unscopables` [[Get]] and the
+            // binding's [[Get]] / [[Set]] are rules of their own on the
+            // object, `Gen` WithGet / WithSet) and a transfer-list item (B3:
+            // no transferable platform object, a DataCloneError before any
+            // internal method runs). A Proxy has no layout to mark.
+            Cons::Hard {
+                kind: Hard::E9Proxy | Hard::E15With | Hard::B3Transfer,
+                ..
+            } => {}
+            // Rule PXESC: a ⊤ sink and a store the runtime keeps (unknown
+            // code holds what reaches them: `escape`), and a reflecting
+            // runtime helper (`Protocol::Any`: it may run anything on its
+            // operand, as it may call a function handed to it) give the Proxy
+            // to unknown code: its escape (`proxy_escape`).
+            Cons::TopSink { .. } | Cons::RuntimeStore { .. } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
+            }
+            Cons::Implicit {
+                reason,
+                proto: Protocol::Any,
+                ..
+            } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.escape(t, reason);
+            }
+            // Hard kinds no rule emits on a value node (`mark_hard` sets them
+            // on a layout): E10 (OrdinaryObjectCreate sets [[Prototype]], no
+            // internal method of the prototype runs), E11 (Reflect.construct
+            // is `Cons::ReflectNew`), E21 (the `extends` value's `prototype`
+            // [[Get]] is `Cons::NativeParent`'s) and the buffer kinds B1, B2,
+            // B4 (a Proxy has no [[ArrayBufferData]]: a TypeError before any
+            // internal method). A Proxy has no layout to mark.
+            Cons::Hard {
+                kind:
+                    Hard::E10ObjectCreate
+                    | Hard::E11ReflectConstruct
+                    | Hard::E21NativeParent
+                    | Hard::B1Exposed
+                    | Hard::B2BufferResize
+                    | Hard::B4Resizable,
+                ..
+            } => {}
+            // Rule PXOWN: EnumerableOwnProperties( p, value ) (7.3.23:
+            // Object.values / Object.entries): p.[[OwnPropertyKeys]]()
+            // (10.5.11, the `ownKeys` trap), p.[[GetOwnProperty]]( k ) of
+            // each String key (10.5.5, `getOwnPropertyDescriptor`), and
+            // Get( p, k ) of each enumerable one (10.5.8, the `get` trap with
+            // Receiver p, the forward the target's [[Get]]): into `dst`.
+            Cons::OwnValues { dst } => {
+                let r = self.reason("EnumerableOwnProperties of a Proxy");
+                self.proxy_own_props(p, r);
+                self.proxy_get_into(p, Key::any(), NO_NODE, dst);
+            }
+            // Rule PXOWN: EnumerableOwnProperties( p, key ) (Object.entries'
+            // keys): the same two traps; a key is a String of the `ownKeys`
+            // list (CreateListFromArrayLike, read in `proxy_keys_trap`), any
+            // String.
+            Cons::OwnKeys { dst } => {
+                let r = self.reason("EnumerableOwnProperties of a Proxy");
+                self.proxy_own_props(p, r);
+                self.add_prim(dst, prim::STR);
+            }
+            // Rule PXOWN: Object.getOwnPropertyDescriptor(s) of p (20.1.2.8,
+            // 20.1.2.9): p.[[OwnPropertyKeys]]() and p.[[GetOwnProperty]]( k )
+            // (the `getOwnPropertyDescriptor` trap, its result
+            // ToPropertyDescriptor'd, then FromPropertyDescriptor'd: a fresh
+            // object whose `value` is the trap result's; `get` / `set` are
+            // `Cons::OwnDescAcc`'s); without the trap the target's own
+            // descriptor (the forward). getOwnPropertyDescriptor runs one
+            // key's trap: the [[OwnPropertyKeys]] here is a superset.
+            Cons::OwnDescValues { dst } => {
+                let r = self.reason("getOwnPropertyDescriptor(s) of a Proxy");
+                self.proxy_own_props(p, r);
+                if !self.proxy_made(p, ProxyOp::DescValues(dst)) {
+                    let d = self.proxies[p as usize].ops[&ProxyOp::OwnDesc];
+                    let a = self.atom("value");
+                    self.cons(
+                        d,
+                        Cons::Load {
+                            key: Key::Named(a),
+                            dst,
+                        },
+                    );
+                    let t = self.proxies[p as usize].target;
+                    self.cons(t, Cons::OwnDescValues { dst });
+                }
+            }
+            // Rule PXOWN: the `get` (or `set`) of those descriptors: the
+            // trap result's field (ToPropertyDescriptor 6.2.6.5 reads it,
+            // FromPropertyDescriptor hands it out), and the forward, the
+            // target's own accessors.
+            Cons::OwnDescAcc { setter, dst } => {
+                let r = self.reason("getOwnPropertyDescriptor(s) of a Proxy");
+                self.proxy_own_props(p, r);
+                if !self.proxy_made(p, ProxyOp::DescAcc(setter, dst)) {
+                    let d = self.proxies[p as usize].ops[&ProxyOp::OwnDesc];
+                    let a = self.atom(if setter { "set" } else { "get" });
+                    self.cons(
+                        d,
+                        Cons::Load {
+                            key: Key::Named(a),
+                            dst,
+                        },
+                    );
+                    let t = self.proxies[p as usize].target;
+                    self.cons(t, Cons::OwnDescAcc { setter, dst });
+                }
+            }
+            // Rule PXOWN: CopyDataProperties( target, p, excluded ) (7.3.25:
+            // `{ ...p }`, object rest; Object.assign 20.1.2.1 the same reads):
+            // p.[[OwnPropertyKeys]]() (`ownKeys`), p.[[GetOwnProperty]]( k )
+            // of each key (`getOwnPropertyDescriptor`) and Get( p, k ) of each
+            // enumerable one (`get`, Receiver p), stored under k, a String or
+            // a Symbol, on each target: a computed-key store at the copy's
+            // site (a definition for a spread, a [[Set]] for Object.assign).
+            // No key is surely copied.
+            Cons::Spread { into, site } => {
+                let r = self.reason("CopyDataProperties from a Proxy");
+                self.proxy_own_props(p, r);
+                if let Some(&tm) = self.lit_spread_site.get(&site) {
+                    self.spread_source(tm, site, Vec::new());
+                }
+                if !self.proxy_made(p, ProxyOp::Copy(into, site)) {
+                    let g = self.proxy_get(p, Key::any(), NO_NODE);
+                    let region = self.thrown;
+                    self.cons(
+                        into,
+                        Cons::Store {
+                            key: Key::any(),
+                            src: g,
+                            site,
+                            region,
+                        },
+                    );
+                }
+            }
+            // Rule PXOWN: ObjectDefineProperties( O, p ) (20.1.2.3.1) with the
+            // Proxy as the descriptors map: p.[[OwnPropertyKeys]]() (`ownKeys`),
+            // p.[[GetOwnProperty]]( k ) of each key (`getOwnPropertyDescriptor`)
+            // and Get( p, k ) of each enumerable one (`get`, Receiver p): the
+            // descriptor objects (`descs`, which generation reads as
+            // ToPropertyDescriptor does), each defined on O under k, a
+            // computed key (`define_any_on`: E5 on O, the value stored under
+            // any key).
+            Cons::DefineAll {
+                o,
+                descs,
+                value,
+                site,
+                reason,
+            } => {
+                self.proxy_own_props(p, reason);
+                let g = self.proxy_get(p, Key::any(), NO_NODE);
+                self.edge(g, descs);
+                self.define_any_on(o, descs, value, site, reason);
+            }
+            // Rule PXOWN: Array.from( p ) (23.1.2.1): GetMethod( p, @@iterator )
+            // (step 4, the `get` trap; the iteration itself is the iteration
+            // rule's); a nullish method reads p as an array-like (step 5):
+            // LengthOfArrayLike (Get( p, "length" ), ToLength) and Get( p, k )
+            // of each index (the `get` trap, Receiver p), into `dst`.
+            Cons::FromArrayLike { dst } => {
+                if !self.proxy_made(p, ProxyOp::FromLike(dst)) {
+                    let wk = self.atom(builtins::WK_ITERATOR);
+                    let it = self.proxy_get(p, Key::Named(wk), NO_NODE);
+                    let src = self.node_l("proxy-from-source");
+                    let t = self.tok(TokKind::Proxy(p));
+                    self.add_tok(src, t);
+                    let like = self.node_l("proxy-from-array-like");
+                    self.cons(
+                        it,
+                        Cons::Guard {
+                            test: guard::NULLISH,
+                            from: src,
+                            dst: like,
+                        },
+                    );
+                    let la = self.atom("length");
+                    let len = self.node_l("proxy-from-length");
+                    self.cons(
+                        like,
+                        Cons::Load {
+                            key: Key::Named(la),
+                            dst: len,
+                        },
+                    );
+                    let r = self.reason("ToLength of an Array.from array-like length");
+                    let region = self.thrown;
+                    self.cons(
+                        len,
+                        Cons::Implicit {
+                            reason: r,
+                            proto: Protocol::ToPrimitive,
+                            region,
+                        },
+                    );
+                    let ek = self.elem_key();
+                    self.cons(like, Cons::Load { key: ek, dst });
+                }
+            }
+            // Rule PXESC: the rules with no Proxy model yet, each named (a new
+            // rule must take a place in this match). The operation may run
+            // any internal method of the Proxy: its escape, the rule named in
+            // the reason (`proxy_escape`: each trap with unknown operands,
+            // the target's own escape), and the rule's result is unknown.
+            Cons::Accessor { .. }
+            | Cons::AccessorKeyed { .. }
+            | Cons::AddsKeys { .. }
+            | Cons::AnnexBDefine { .. }
+            | Cons::AnnexBLookup { .. }
+            | Cons::BirthField { .. }
+            | Cons::BoundCall { .. }
+            | Cons::CallerValue { .. }
+            | Cons::CjsPublish { .. }
+            | Cons::ContractThis { .. }
+            | Cons::DefineDesc { .. }
+            | Cons::EnumKeyAny { .. }
+            | Cons::EnumKeyStore { .. }
+            | Cons::EnumLoad { .. }
+            | Cons::ForInAcc { .. }
+            | Cons::ForInBody { .. }
+            | Cons::Fulfil { .. }
+            | Cons::HandOver { .. }
+            | Cons::IdxOwnLoad { .. }
+            | Cons::Miss { .. }
+            | Cons::NativeParent { .. }
+            | Cons::NativeThis { .. }
+            | Cons::NewNamed { .. }
+            | Cons::NotBuffer { .. }
+            | Cons::NotRegExp { .. }
+            | Cons::OverrideThis { .. }
+            | Cons::OwnComputedKey { .. }
+            | Cons::OwnGate { .. }
+            | Cons::OwnOnly { .. }
+            | Cons::OwnTest { .. }
+            | Cons::ProtoKey { .. }
+            | Cons::ProtoKeySet { .. }
+            | Cons::RegExpPattern { .. }
+            | Cons::RequireSpec { .. }
+            | Cons::ShareBuffer { .. }
+            | Cons::StoreKeyed { .. }
+            | Cons::StoreOut { .. }
+            | Cons::SuperCtor { .. }
+            | Cons::SuperCtorParent { .. }
+            | Cons::ThisFrom { .. }
+            | Cons::ViewedBuffer { .. }
+            | Cons::VisitHolders { .. }
+            | Cons::VisitStop { .. } => {
+                let r = self.reason(&format!("Proxy operand of rule {} (no Proxy model)", c.kind_name()));
+                let t = self.tok(TokKind::Proxy(p));
+                self.escape(t, r);
                 self.apply_inner(n, c, Tokens::Slice(&[TOP]), 0);
             }
         }

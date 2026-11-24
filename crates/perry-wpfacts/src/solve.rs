@@ -1429,6 +1429,11 @@ impl Model {
         self.proto_node.insert(t, n);
         self.rfam_watch(n, t, 0, recv_family::WATCH_PROTO);
         self.rel(|| format!("protonode {n} {t}"));
+        // Rule PXNEWT: an object made with a Proxy new target has the
+        // prototype its `prototype` [[Get]] gives (`proxy_nt_inst`) only.
+        if self.proxy_nt_toks.contains(&t) {
+            return n;
+        }
         // Seed the static part of the chain.
         let objproto = self.tok(TokKind::ObjectProto);
         match self.toks[t as usize].clone() {
@@ -2055,6 +2060,7 @@ impl Model {
     /// modeled (⊤, a marker's run, a bound function's target), `lhs` is
     /// passed to unknown code: it escapes.
     pub fn has_instance(&mut self, t: Tok, reason: u32, lhs: NodeId) {
+        self.instanceof_walk(lhs);
         let unknown =
             t == TOP || self.is_marker(t) || matches!(self.toks[t as usize], TokKind::Bound(_));
         if unknown {
@@ -2069,6 +2075,25 @@ impl Model {
         let arg = self.has_instance_node(t);
         self.edge(lhs, arg);
         self.implicit(t, reason, Protocol::HasInstance, self.thrown);
+    }
+
+    /// OrdinaryHasInstance (7.3.22 steps 5-6) walks the left side's chain
+    /// with O.[[GetPrototypeOf]]() until it meets C.prototype or null. An
+    /// ordinary link runs no code there; a Proxy (the value itself, or one
+    /// on its chain) runs its `getPrototypeOf` trap and the forward
+    /// (10.5.1, `Cons::ProtoOf` on it), and the walk goes on from what that
+    /// returns: the walk node holds every link (`ProtoOf` of the left side
+    /// and of the walk node itself). Made for every left side that meets
+    /// InstanceofOperator, once per node: a superset where `@@hasInstance`
+    /// is another function than Function.prototype's, which walks nothing.
+    fn instanceof_walk(&mut self, lhs: NodeId) {
+        if !self.idx_done.insert((lhs, TOP, lhs, IDX_INSTANCEOF_WALK)) {
+            return;
+        }
+        let w = self.node_l("instanceof-chain");
+        self.nodes[w as usize].frame = self.nodes[lhs as usize].frame;
+        self.cons(lhs, Cons::ProtoOf { dst: w });
+        self.cons(w, Cons::ProtoOf { dst: w });
     }
 
     /// The argument node of the `@@hasInstance` call on `t`, one per token.
@@ -2523,11 +2548,29 @@ impl Model {
                 self.reasons[reason as usize]
             );
         }
-        match keys {
-            None => self.method_on(t, Key::any(), call),
-            Some(ks) => {
-                for a in ks {
-                    self.method_on(t, Key::Named(a), call);
+        // A Proxy's protocol keys are its [[Get]]s (10.5.8, `proxy_get`),
+        // each value called with `this` = the Proxy; OrdinaryHasInstance
+        // (7.3.21 step 4) also reads Get( p, "prototype" ), a value compared
+        // only.
+        if let TokKind::Proxy(p) = self.toks[t as usize] {
+            let mut ks: Vec<Key> = match &keys {
+                None => vec![Key::any()],
+                Some(ks) => ks.iter().map(|&a| Key::Named(a)).collect(),
+            };
+            if proto == Protocol::HasInstance {
+                ks.push(Key::Named(self.atom("prototype")));
+            }
+            for key in ks {
+                let f = self.proxy_get(p, key, NO_NODE);
+                self.cons(f, Cons::Call { call });
+            }
+        } else {
+            match keys {
+                None => self.method_on(t, Key::any(), call),
+                Some(ks) => {
+                    for a in ks {
+                        self.method_on(t, Key::Named(a), call);
+                    }
                 }
             }
         }
