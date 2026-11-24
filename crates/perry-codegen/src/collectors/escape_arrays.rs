@@ -177,7 +177,7 @@ fn collect_length_only_indices_in_expr(
     uses: &mut HashMap<u32, HashMap<u32, (usize, usize)>>,
 ) {
     use perry_hir::Expr;
-    if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr {
+    if let Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } = expr {
         if let (Expr::LocalGet(id), Some(index)) = (object.as_ref(), const_index(index)) {
             if non_escaping_arrays
                 .get(id)
@@ -193,7 +193,7 @@ fn collect_length_only_indices_in_expr(
     } = expr
     {
         if property == "length" {
-            if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) =
+            if let Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } =
                 object.as_ref()
             {
                 if let (Expr::LocalGet(id), Some(index)) = (object.as_ref(), const_index(index)) {
@@ -328,7 +328,7 @@ fn collect_used_array_indices_in_expr(
     used: &mut HashMap<u32, HashSet<u32>>,
 ) {
     use perry_hir::Expr;
-    if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr {
+    if let Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } = expr {
         if let Expr::LocalGet(id) = object.as_ref() {
             if let Some(&len) = non_escaping_arrays.get(id) {
                 if let Some(k) = const_index(index) {
@@ -547,7 +547,7 @@ fn escape_method_call_receiver(
     candidates: &std::collections::HashMap<u32, u32>,
     escaped: &mut HashSet<u32>,
 ) {
-    if let (perry_hir::Expr::IndexGet { object, .. } | perry_hir::Expr::RegionOut { object, .. }) =
+    if let perry_hir::Expr::IndexGet { object, .. } | perry_hir::Expr::RegionOut { object, .. } =
         callee
     {
         if let perry_hir::Expr::LocalGet(id) = object.as_ref() {

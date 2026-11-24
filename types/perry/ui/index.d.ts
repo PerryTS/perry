@@ -1021,6 +1021,7 @@ export function calendarGetSelectedDate(widget: Widget): string;
 //   Android  android.widget.DatePicker
 //   GTK4     GtkCalendar (GTK has no native compact date field, so the
 //            month grid is reused; behavior is otherwise identical)
+//   web      <input type="date">
 //   tvOS/watchOS  stub the FFI (returns 0 on create, undefined on get-date)
 //
 // `year` and `month` are 1-based; pass <=0 / out-of-range to default to

@@ -570,7 +570,7 @@ impl<'a> UseWalk<'a> {
     /// tracked array itself" (number|undefined — valid exactly where a
     /// ToNumber/short-circuit context absorbs the undefined).
     fn value_or_element_is_numeric(&self, tracked: u32, e: &Expr) -> bool {
-        if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e {
+        if let Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } = e {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if *id == tracked && self.key_is_provably_numeric(index) {
                     return true;

@@ -246,3 +246,40 @@ calls().then((v) => console.log(v));
         "after\ncaught void 1\nrejected value 2\n1/undefined 1/2"
     );
 }
+
+// An async function's promise holds the host value its body returned, so a host callback
+// (`console.log`, `String`) and `Promise.all` read it as a compiled one does, and a
+// returned promise is adopted. Expected output is Node's.
+#[test]
+fn async_function_result_reaches_a_host_callback() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function str() { return "x"; }
+async function num() { return 1.5; }
+async function nan() { return 0 / 0; }
+async function yes() { return true; }
+async function nul() { return null; }
+async function arr() { return ["a", 1]; }
+async function bare(c: boolean) { if (c) return; return "unreached"; }
+async function end() {}
+async function param(v: any) { return v; }
+async function nested() { return str(); }
+async function inTry() { try { return "t"; } finally { await num(); } }
+async function awaits() { return [await str(), await nested(), await yes(), await nul(), await bare(true)].join(); }
+async function fails() { throw "f"; }
+function show(v: any) { return typeof v + ":" + String(v); }
+str().then(console.log)
+  .then(() => Promise.all([str().then(String), num().then(String), nan().then(String), yes().then(String), nul().then(String),
+    arr().then(String), bare(true).then(String), end().then(String), param("p").then(String),
+    nested().then(String), inTry().then(String), awaits().then(String), fails().catch(String)]))
+  .then((v) => console.log(v.join(" ")))
+  .then(() => Promise.all([str(), num(), yes(), nul(), end(), nested(), param("p")]))
+  .then((v) => console.log(v.map(show).join(" ")))
+  .then(() => arr().then((v) => console.log(v[0], v.length)))
+  .then(null, (e) => console.log("threw " + e.message));
+"#
+        ),
+        "x\nx 1.5 NaN true null a,1 undefined undefined p x t x,x,true,, f\nstring:x number:1.5 boolean:true object:null undefined:undefined string:x string:p\na 2"
+    );
+}

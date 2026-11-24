@@ -676,19 +676,19 @@ fn on_connect(id: i64) {
                 tls.ca,
             );
             let output = with_owned(id, |conn| {
-                let mut session = session.ok()?;
+                let mut session = session?;
                 session.pump();
-                if session.failure().is_some() {
-                    return None;
+                if let Some(failure) = session.failure() {
+                    return Err(failure.to_owned());
                 }
                 let output = session.take_output();
                 conn.tls_session = Some(session);
-                Some(output)
-            })
-            .flatten();
-            if output.is_none_or(|output| !output.is_empty() && tl::write(id, &output, 0).is_err())
-            {
-                destroy_connection(id);
+                Ok(output)
+            });
+            match output {
+                Some(Err(failure)) => fail_tls(id, &failure),
+                Some(Ok(output)) if output.is_empty() || tl::write(id, &output, 0).is_ok() => {}
+                _ => destroy_connection(id),
             }
         }
         Some(Started::Waiting) => {
@@ -745,16 +745,20 @@ fn on_data(id: i64, bytes: &[u8]) {
         let session = conn.tls_session.as_mut()?;
         session.receive(bytes);
         let progress = session.pump();
-        let failed = session.failure().is_some();
+        let failure = session.failure().map(str::to_owned);
         let output = session.take_output();
         let text = session.take_plaintext();
-        Some((progress, failed, output, text, !session.is_handshaking()))
+        Some((progress, failure, output, text, !session.is_handshaking()))
     })
     .flatten();
-    let Some((progress, failed, output, text, ready)) = received else {
+    let Some((progress, failure, output, text, ready)) = received else {
         return;
     };
-    if failed || (!output.is_empty() && tl::write(id, &output, 0).is_err()) {
+    if let Some(failure) = failure {
+        fail_tls(id, &failure);
+        return;
+    }
+    if !output.is_empty() && tl::write(id, &output, 0).is_err() {
         destroy_connection(id);
         return;
     }
@@ -1340,6 +1344,16 @@ pub(super) fn on_timer(id: impl Into<Target>) {
         flush_id(id);
         fail_connection(id, "SETTINGS_TIMEOUT");
     }
+}
+
+/// The TLS session failed: a client session's `'error'` carries the cause
+/// before the connection closes, as Node's does.
+fn fail_tls(id: i64, failure: &str) {
+    if peek(id, |conn| conn.role == Role::Client).unwrap_or(false) {
+        let session = peek(id, |conn| conn.session_handle).unwrap_or(0);
+        crate::server::http2_server::queue_turnloop_session_tls_error(session, failure);
+    }
+    destroy_connection(id);
 }
 
 pub(super) fn on_error(id: impl Into<Target>, code: Option<&str>) {

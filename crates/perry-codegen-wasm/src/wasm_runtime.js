@@ -1940,6 +1940,17 @@ function __evaluationOf(ctor) {
 function __instanceEvaluationOf(obj) {
   return obj !== null && typeof obj === 'object' ? obj[__evaluationTag] : undefined;
 }
+// The own keys the runtime keeps on a program's functions and classes, which no own-key
+// reflection reports.
+const __internalSymbols = new Set([__classTag, __evaluationRecord, __evaluationTag]);
+function __isInternalKey(obj, key) {
+  if (typeof key === 'symbol') {
+    return __internalSymbols.has(key) || (key === Symbol.hasInstance && __perryClassCtors.has(obj));
+  }
+  if (key === 'funcIdx' || key === 'captures') return __isPerryClosure(obj) || __classMethodFns.has(obj);
+  return __isComputedKeySlot(key) && __perryClassCtors.has(obj)
+    && !__reflectApply(Object.prototype.propertyIsEnumerable, obj, [key]);
+}
 const __classTemplates = new Map();
 let __classEnvCall = null;
 function __classTemplate(className) {
@@ -2343,6 +2354,13 @@ const __memDispatch = {
     }
     return obj;
   },
+  // One half of a pair: the other is undefined and keeps what an earlier half defined.
+  object_literal_define_accessor: (obj, key, get, set) => {
+    const desc = { __proto__: null, enumerable: true, configurable: true };
+    if (get !== undefined) desc.get = __hostAccessor(get);
+    if (set !== undefined) desc.set = __hostAccessor(set);
+    return Object.defineProperty(obj, __memDispatch.to_property_key(key), desc);
+  },
   // Only an object or null becomes the prototype; any other value is ignored.
   object_literal_set_prototype: (obj, proto) => {
     if (obj && typeof obj === 'object' && (proto === null || typeof proto === 'object' || typeof proto === 'function')) {
@@ -2389,8 +2407,47 @@ const __memDispatch = {
     return Object.defineProperty(obj, k, __hostDescriptor(desc));
   },
   object_define_properties: (obj, props) => Object.defineProperties(obj, __hostDescriptors(props)),
+  reflect_define_property: (obj, key, desc) => {
+    if (!__holdsProperties(obj)) return Reflect.defineProperty(obj, key, desc);
+    const k = __memDispatch.to_property_key(key);
+    return Reflect.defineProperty(obj, k, __hostDescriptor(desc));
+  },
+  reflect_has: (obj, key) => {
+    if (!__holdsProperties(obj)) return Reflect.has(obj, key);
+    const k = __memDispatch.to_property_key(key);
+    if (k !== 'funcIdx' && k !== 'captures') return Reflect.has(obj, k);
+    // A closure's bookkeeping keys are also hidden from what inherits from it.
+    for (let o = obj; o !== null; o = Reflect.getPrototypeOf(o)) {
+      if (__memDispatch.object_has_own(o, k)) return true;
+    }
+    return false;
+  },
+  reflect_own_keys: (obj) => Reflect.ownKeys(obj).filter(k => !__isInternalKey(obj, k)),
+  reflect_get_own_property_descriptor: (obj, key) => __holdsProperties(obj)
+    ? __memDispatch.object_get_own_property_descriptor(obj, key)
+    : Reflect.getOwnPropertyDescriptor(obj, key),
+  object_has_own: (obj, key) => {
+    if (obj === null || obj === undefined) return Object.hasOwn(obj, key);
+    const k = __memDispatch.to_property_key(key);
+    return __hasOwn(obj, k) && !__isInternalKey(obj, k);
+  },
+  object_get_own_property_names: (obj) => Object.getOwnPropertyNames(obj).filter(k => !__isInternalKey(obj, k)),
+  object_get_own_property_symbols: (obj) => Object.getOwnPropertySymbols(obj).filter(k => !__isInternalKey(obj, k)),
+  object_get_own_property_descriptors: (obj) => {
+    if (obj === null || obj === undefined) return Object.getOwnPropertyDescriptors(obj);
+    const descs = {};
+    for (const key of __memDispatch.reflect_own_keys(Object(obj))) {
+      const value = __memDispatch.object_get_own_property_descriptor(obj, key);
+      if (value === undefined) continue;
+      Object.defineProperty(descs, key, { value, writable: true, enumerable: true, configurable: true });
+    }
+    return descs;
+  },
   object_get_own_property_descriptor: (obj, key) => {
-    const desc = Object.getOwnPropertyDescriptor(obj, __hostKey(key));
+    if (obj === null || obj === undefined) return Object.getOwnPropertyDescriptor(obj, key);
+    const k = __memDispatch.to_property_key(key);
+    if (__isInternalKey(obj, k)) return undefined;
+    const desc = Object.getOwnPropertyDescriptor(obj, k);
     if (desc && 'get' in desc) {
       desc.get = hostAccessorClosures.get(desc.get) ?? desc.get;
       desc.set = hostAccessorClosures.get(desc.set) ?? desc.set;
@@ -2499,8 +2556,8 @@ const __memDispatch = {
     if (!Array.isArray(arr)) return '';
     return arr.join(separator);
   },
-  array_index_of: (arr, value) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value); },
-  array_includes: (arr, value) => { if (!Array.isArray(arr)) return 0; return arr.includes(value) ? 1 : 0; },
+  array_index_of: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value, fromIndex); },
+  array_includes: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return 0; return arr.includes(value, fromIndex) ? 1 : 0; },
   array_concat: (a1, a2) => (Array.isArray(a1) ? a1 : []).concat(Array.isArray(a2) ? a2 : []),
   array_reverse: (arr) => { if (Array.isArray(arr)) arr.reverse(); return arr; },
   array_flat: (arr) => Array.isArray(arr) ? arr.flat() : [],
@@ -2539,14 +2596,15 @@ const __memDispatch = {
   // String methods — args are plain JS strings
   string_charAt: (str, idx) => String(str).charAt(idx),
   string_substring: (str, start, end) => String(str).substring(start, end),
-  string_indexOf: (str, search) => String(str).indexOf(String(search)),
-  string_slice: (str, start, end) => String(str).slice(start, end),
+  // Codegen picks these five bridges by method name alone and passes every argument.
+  string_indexOf: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'indexOf'), args),
+  string_slice: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'slice'), args),
   string_toLowerCase: (str) => String(str).toLowerCase(),
   string_toUpperCase: (str) => String(str).toUpperCase(),
   string_trim: (str) => String(str).trim(),
-  string_includes: (str, search) => String(str).includes(String(search)) ? 1 : 0,
-  string_startsWith: (str, search) => String(str).startsWith(String(search)) ? 1 : 0,
-  string_endsWith: (str, search) => String(str).endsWith(String(search)) ? 1 : 0,
+  string_includes: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'includes'), args),
+  string_startsWith: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'startsWith'), args),
+  string_endsWith: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'endsWith'), args),
   string_replace: (str, pattern, replacement) => {
     const s = String(str);
     const p = (pattern instanceof RegExp) ? pattern : String(pattern);
@@ -2576,10 +2634,11 @@ const __memDispatch = {
   // A function declaration used as a value: one closure per function, so it keeps its
   // identity and properties across reads, with the `prototype` object an ordinary
   // function has (`prototype.constructor` is the function).
-  function_value: (funcIdx, protoKind) => {
+  function_value: (funcIdx, protoKind, name) => {
     let fn = __functionValues.get(funcIdx);
     if (!fn) {
       fn = new __PerryClosure(funcIdx, 0, protoKind);
+      Object.defineProperty(fn, 'name', { value: name, configurable: true });
       const prototype = {};
       Object.defineProperty(prototype, 'constructor', { value: fn, writable: true, configurable: true });
       Object.defineProperty(fn, 'prototype', { value: prototype, writable: true });
@@ -3071,10 +3130,25 @@ const __memDispatch = {
 
   // JSON — args are plain JS values
   json_parse: (str) => { try { return JSON.parse(String(str)); } catch (e) { if (tryDepth > 0) currentException = e; return undefined; } },
-  // A Perry closure arrives as {funcIdx, captures}; JSON.stringify needs a function.
-  json_stringify: (val, replacer, space) => JSON.stringify(val,
-    replacer && typeof replacer.funcIdx !== 'undefined'
-      ? (key, value) => callWasmClosure(replacer, key, value) : replacer, space),
+  // A closure value is omitted as a function is, through a `toJSON` its prototype has
+  // only meanwhile; a replacer function gets the closure itself.
+  json_stringify: (val, replacer, space) => {
+    const host = __hostAccessor(replacer);
+    const replace = typeof host === 'function' ? function (...args) {
+      const result = __reflectApply(host, this, args);
+      return __isPerryClosure(result) ? undefined : result;
+    } : host;
+    const proto = __PerryClosure.prototype;
+    const outer = Object.getOwnPropertyDescriptor(proto, 'toJSON');
+    if (typeof replace === 'function') delete proto.toJSON;
+    else __defineHidden(proto, 'toJSON', function () { return __isPerryClosure(this) ? undefined : this; });
+    try {
+      return JSON.stringify(val, replace, space);
+    } finally {
+      if (outer) Object.defineProperty(proto, 'toJSON', outer);
+      else delete proto.toJSON;
+    }
+  },
 
   // Map — args are plain JS values (m is the Map object itself)
   map_new: () => new Map(),
@@ -4039,6 +4113,30 @@ function perry_ui_picker_create(callback) {
     if (el._perryCallback !== undefined) callWasmClosure(el._perryCallback, el.selectedIndex);
   });
   return uiAlloc(el);
+}
+// DatePicker: an `<input type="date">`, whose value is already the ISO `yyyy-MM-dd` string
+// the native backends report. `year`/`month` are 1-based; out of range defaults to 2026-01.
+function __isoDate(year, month, day) {
+  const y = (year >= 1 && year <= 9999) ? (year | 0) : 2026;
+  const m = (month >= 1 && month <= 12) ? (month | 0) : 1;
+  // A date input drops a date that does not exist, so the day stops at the month's last.
+  const d = day >= 1 ? __Math.min(day | 0, new Date(Date.UTC(y, m, 0)).getUTCDate()) : 1;
+  return String(y).padStart(4, "0") + "-" + String(m).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+}
+function perry_ui_date_picker_create(year, month, callback) {
+  const el = document.createElement("input"); el.type = "date";
+  el.value = __isoDate(year, month, 1);
+  el._perryCallback = callback;
+  el.addEventListener("change", () => {
+    if (el._perryCallback !== undefined && el.value) callWasmClosure(el._perryCallback, el.value);
+  });
+  return uiAlloc(el);
+}
+function perry_ui_date_picker_set_date(h, year, month, day) {
+  const el = uiGet(h); if (el) el.value = __isoDate(year, month, day);
+}
+function perry_ui_date_picker_get_selected_date(h) {
+  const el = uiGet(h); return el ? el.value : undefined;
 }
 function perry_ui_wheel_picker_create(callback) {
   const el = document.createElement("select");
@@ -5990,6 +6088,7 @@ const __perryUiDispatch = {
   perry_ui_table_set_column_header, perry_ui_table_set_column_width,
   perry_ui_table_update_row_count, perry_ui_table_set_on_row_select, perry_ui_table_get_selected_row,
   perry_ui_textarea_create, perry_ui_textarea_set_string, perry_ui_textarea_get_string,
+  perry_ui_date_picker_create, perry_ui_date_picker_set_date, perry_ui_date_picker_get_selected_date,
   perry_ui_vstack_create_with_insets, perry_ui_hstack_create_with_insets,
   // Child management
   perry_ui_widget_add_child, perry_ui_widget_remove_all_children,

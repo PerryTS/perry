@@ -843,7 +843,7 @@ impl PropertyOrigins<'_> {
         // cursor. Every reaching value still proves its property spelling:
         // numbers and undefined cannot name a native instance API. Unknown
         // assignments or escaped function parameters prevent this proof.
-        if let (Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. }) = expr {
+        if let Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } = expr {
             if let Expr::LocalGet(id) = index.as_ref() {
                 if self.0.locals.get(id).is_some_and(|value| {
                     !value.is_empty()

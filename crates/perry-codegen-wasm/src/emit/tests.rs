@@ -1056,6 +1056,34 @@ select.dispatch("change");
     );
 }
 
+// The web DatePicker reports the ISO `yyyy-MM-dd` string the native backends report;
+// an out-of-range year or month falls back to 2026-01, and a day past the month's end
+// is the month's last.
+#[test]
+fn date_picker_reports_and_sets_an_iso_date() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { DatePicker, datePickerGetSelectedDate, datePickerSetDate } from "perry/ui";
+const picker = DatePicker(2026, 11, (iso: string) => { console.log("changed " + iso + " " + typeof iso); });
+console.log(datePickerGetSelectedDate(picker));
+datePickerSetDate(picker, 2027, 2, 9);
+console.log(datePickerGetSelectedDate(picker));
+datePickerSetDate(picker, 2028, 2, 31);
+console.log(datePickerGetSelectedDate(picker));
+const fallback = DatePicker(0, 13, (iso: string) => {});
+console.log(datePickerGetSelectedDate(fallback));
+"#,
+            r#"
+const input = [...uiHandles.values()].find(e => e.tagName === "INPUT" && e.type === "date");
+input.value = "2026-11-12";
+input.dispatch("change");
+"#
+        ),
+        "2026-11-01\n2027-02-09\n2028-02-29\n2026-01-01\nchanged 2026-11-12 string"
+    );
+}
+
 #[test]
 fn a_generator_keeps_its_locals_across_resumes() {
     assert_eq!(
