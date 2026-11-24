@@ -303,6 +303,7 @@ mod spread_elements;
 mod spread_enumerable;
 mod spread_iterable_args;
 mod spread_root;
+mod rest_per_call_site;
 mod st2;
 mod stop_native_report;
 mod static_call_value;

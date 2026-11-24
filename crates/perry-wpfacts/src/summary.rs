@@ -1232,8 +1232,9 @@ impl Model {
             _ => LAY_NONE,
         };
         let key = match x {
-            // Rule C: a closure maker's runs are per call site.
-            _ if call != NO_NODE && self.closure_maker(f, x) => {
+            // Rule C: a closure maker's runs are per call site; so are those
+            // of a function with a rest parameter no receiver lays out (E2).
+            _ if call != NO_NODE && (self.closure_maker(f, x) || self.rest_per_site(f, lay)) => {
                 let site = self.sum.tmpl_of.get(&call).copied().unwrap_or(call);
                 (7, site, ft)
             }
@@ -1579,6 +1580,18 @@ impl Model {
             return false;
         };
         (x.is_none() || s.this == NO_NODE) && s.maker
+    }
+
+    /// E2: a rest parameter's array is born by each call (ECMA-262 10.2.11
+    /// FunctionDeclarationInstantiation: CreateArrayFromList of that call's
+    /// remaining arguments), so its elements are that call's arguments only.
+    /// A run with no receiver layout (`LAY_NONE`) births the rest template
+    /// every such run shares (`fill_instance`), merging the arguments of
+    /// every call; the per-site run of rule C (kind 7, `LAY_SITE`) births one
+    /// array per call site instead. Bounded as rule C: a site inside an
+    /// instance is its template.
+    fn rest_per_site(&self, f: FnIdx, lay: u32) -> bool {
+        lay == LAY_NONE && self.funcs[f as usize].rest.is_some()
     }
 
     /// Apply the entries of every pending instance (a worklist: instances
