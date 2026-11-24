@@ -29,7 +29,7 @@ fn lower_packed_f64_loop_store_value(
         // `arr[key]` can lower through the boxed/runtime fallback to a NaN-boxed
         // JS value, and `fabs` (a bare sign-bit clear) would skip `Math.abs`'s
         // ToNumber coercion on it.
-        if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) =
+        if let Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } =
             operand.as_ref()
         {
             let proven_packed_load = matches!(object.as_ref(), Expr::LocalGet(id) if *id == arr_id)

@@ -8,7 +8,8 @@ use super::*;
 
 impl WasmModuleEmitter {
     /// Generate JavaScript code for an async function body.
-    /// The generated function uses NaN-boxed f64 values and bridge helper functions.
+    /// The generated function uses NaN-boxed f64 values and bridge helper functions, and
+    /// returns a host value: its promise is read by host reactions as well as compiled ones.
     pub(super) fn emit_js_async_function(&self, func: &perry_hir::ir::Function) -> String {
         let params: Vec<String> = func
             .params
@@ -44,14 +45,12 @@ impl WasmModuleEmitter {
             "  __async_{name}: ({params}) => {{\n\
              \x20   const __p = (async () => {{\n\
              {body}\
-             \x20     return {undef};\n\
              \x20   }})();\n\
              \x20   return nanboxPointer(allocHandle(__p));\n\
              \x20 }},",
             name = func.name,
             params = params_str,
             body = body,
-            undef = "u64ToF64(TAG_UNDEFINED)",
         )
     }
 
@@ -104,10 +103,10 @@ impl WasmModuleEmitter {
             }
             Stmt::Return(Some(e), _) => {
                 let val = self.emit_js_expr(e, locals);
-                out.push_str(&format!("{pad}    return {val};\n"));
+                out.push_str(&format!("{pad}    return toJsValue({val});\n"));
             }
             Stmt::Return(None, _) => {
-                out.push_str(&format!("{pad}    return u64ToF64(TAG_UNDEFINED);\n"));
+                out.push_str(&format!("{pad}    return;\n"));
             }
             Stmt::If {
                 condition,

@@ -632,47 +632,8 @@ fn fail(owner: f64, message: &str, closing: bool) {
     let error = if closing {
         p::undefined()
     } else {
-        {
-            let (code, text) = message
-                .split_once(':')
-                .unwrap_or(("ERR_TLS_HANDSHAKE_FAILED", message));
-            socket::error(code, &node_failure_message(code, text.trim_start()))
-        }
+        let (code, text) = crate::turnloop_tls::node_failure(message);
+        socket::error(code, &text)
     };
     socket::destroy(owner.get(), error);
-}
-
-/// Node's message for a handshake failure's cause code. Node reports these as
-/// an `Error` carrying `.code` and OpenSSL's text; rustls has its own text, so
-/// the codes Node users test for get Node's words and anything else keeps
-/// rustls's.
-fn node_failure_message(code: &str, rustls_message: &str) -> String {
-    match code {
-        "UNABLE_TO_VERIFY_LEAF_SIGNATURE" => "unable to verify the first certificate".to_string(),
-        "CERT_HAS_EXPIRED" => "certificate has expired".to_string(),
-        "CERT_NOT_YET_VALID" => "certificate is not yet valid".to_string(),
-        "CERT_REVOKED" => "certificate revoked".to_string(),
-        "ERR_TLS_CERT_ALTNAME_INVALID" => {
-            format!("Hostname/IP does not match certificate's altnames: {rustls_message}")
-        }
-        _ => rustls_message.to_string(),
-    }
-}
-
-#[cfg(test)]
-mod node_text_tests {
-    use super::node_failure_message;
-
-    #[test]
-    fn node_codes_get_node_text() {
-        let _serial = crate::test_serial();
-        assert_eq!(
-            node_failure_message("UNABLE_TO_VERIFY_LEAF_SIGNATURE", "x"),
-            "unable to verify the first certificate"
-        );
-        assert_eq!(
-            node_failure_message("ERR_SSL_PROTOCOL_ERROR", "rustls text"),
-            "rustls text"
-        );
-    }
 }

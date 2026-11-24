@@ -472,7 +472,7 @@ impl Scan {
                     | Expr::IndexGet { object, .. }
                     | Expr::RegionOut { object, .. } => {
                         self.expr(object, Use::Value);
-                        if let (Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. }) =
+                        if let Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } =
                             callee.as_ref()
                         {
                             self.expr(index, Use::Consume);

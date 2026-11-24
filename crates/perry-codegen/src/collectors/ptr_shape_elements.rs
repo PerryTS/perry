@@ -1034,8 +1034,8 @@ impl<'a> ArrayWalk<'a> {
                     // ONLY position an element read is admitted in — see the
                     // `Expr::IndexGet` arm for why every other one is an
                     // escape of the ELEMENT (as opposed to the array).
-                    if let (Expr::IndexGet { object, index, .. }
-                    | Expr::RegionOut { object, index, .. }) = e
+                    if let Expr::IndexGet { object, index, .. }
+                    | Expr::RegionOut { object, index, .. } = e
                     {
                         if let (Expr::LocalGet(a), Expr::LocalGet(i)) =
                             (object.as_ref(), index.as_ref())
@@ -1274,7 +1274,7 @@ impl<'a> ArrayWalk<'a> {
             Expr::PropertyGet {
                 object, property, ..
             } => {
-                if let (Expr::IndexGet {
+                if let Expr::IndexGet {
                     object: array,
                     index,
                     ..
@@ -1283,7 +1283,7 @@ impl<'a> ArrayWalk<'a> {
                     object: array,
                     index,
                     ..
-                }) = object.as_ref()
+                } = object.as_ref()
                 {
                     if let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) =
                         (array.as_ref(), index.as_ref())

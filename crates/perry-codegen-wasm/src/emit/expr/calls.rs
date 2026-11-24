@@ -185,6 +185,9 @@ impl<'a> FuncEmitCtx<'a> {
                         "js_object_literal_define" | "js_object_literal_set_computed" => {
                             Some(("object_literal_define", 3u32))
                         }
+                        "js_object_define_accessor" => {
+                            Some(("object_literal_define_accessor", 4u32))
+                        }
                         "js_object_literal_set_prototype" => {
                             Some(("object_literal_set_prototype", 2u32))
                         }

@@ -367,10 +367,6 @@ fn stmt_reads_property(stmt: &Stmt, recv: Recv, property: &str) -> bool {
     stmt_first_read(stmt, recv, property).is_some()
 }
 
-fn expr_reads_property(expr: &Expr, recv: Recv, property: &str) -> bool {
-    expr_first_read(expr, recv, property).is_some()
-}
-
 /// The offset of the first `RECV.PROP` read in evaluation order: the hoisted
 /// read is that read, run once before the loop, and stands at it.
 fn stmts_first_read(stmts: &[Stmt], recv: Recv, property: &str) -> Option<u32> {
