@@ -802,7 +802,7 @@ fn try_extract(
             .unwrap_or_else(|| format!("v{id}"));
         param_desc.push(format!("{}:{}", name, type_name(&proof)));
         params.push(Param {
-            byte_offset: 0, /*HPOS*/
+            byte_offset: 0, /* compiler-split region plumbing, not a source site */
             id: fresh,
             name,
             ty: proof,
@@ -889,21 +889,21 @@ fn try_extract(
     let outs: Vec<u32> = out_decl.iter().chain(out_outer.iter()).copied().collect();
     if value {
         if let Some(Stmt::Expr(e)) = body.pop() {
-            body.push(Stmt::Return(Some(e), 0 /*HPOS*/));
+            body.push(Stmt::Return(Some(e), 0 /* compiler-split region plumbing, not a source site */));
         }
     }
     match outs.len() {
         0 => {}
         1 => body.push(Stmt::Return(
             Some(Expr::LocalGet(remap[&outs[0]])),
-            0, /*HPOS*/
+            0, /* compiler-split region plumbing, not a source site */
         )),
         _ => body.push(Stmt::Return(
             Some(Expr::Array(
                 outs.iter().map(|id| Expr::LocalGet(remap[id])).collect(),
                 None,
             )),
-            0, /*HPOS*/
+            0, /* compiler-split region plumbing, not a source site */
         )),
     }
     let func_id = sh.next_func + 1;
@@ -1033,7 +1033,7 @@ fn try_extract(
             .collect();
         sh.closure_names.push((func_id, name));
         Expr::Closure {
-            byte_offset: 0, /*HPOS*/
+            byte_offset: 0, /* compiler-split region plumbing, not a source site */
             func_id,
             params,
             return_type: Type::Any,
@@ -1051,7 +1051,7 @@ fn try_extract(
         }
     } else {
         sh.out.push(Function {
-            byte_offset: 0, /*HPOS*/
+            byte_offset: 0, /* compiler-split region plumbing, not a source site */
             id: func_id,
             name,
             type_params: Vec::new(),
@@ -1077,6 +1077,7 @@ fn try_extract(
         callee: Box::new(callee),
         args: live_in.iter().map(|id| Expr::LocalGet(*id)).collect(),
         type_args: Vec::new(),
+        // Compiler-split region plumbing, not a source site.
         byte_offset: 0,
     };
     // A live-out keeps the type the parent's typed locals gave it: the value
@@ -1145,6 +1146,9 @@ fn try_extract(
                 init: Some(call),
             });
             for (k, id) in outs.iter().enumerate() {
+                // Compiler-split region plumbing, not a source site: the
+                // split runs before the facts (collect_module_finish), so
+                // this read is seen by them and stays at offset 0.
                 let get = Expr::IndexGet {
                     element_offset: 0,
                     byte_offset: 0,
