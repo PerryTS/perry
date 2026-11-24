@@ -6116,7 +6116,7 @@ const __uiMethodMap = {
 
 function __callHostFunction(fn, args, receiver = undefined) {
   try {
-    return Reflect.apply(fn, receiver, __classMethodFns.has(fn) ? args : __hostArgs(fn, args));
+    return Reflect.apply(fn, receiver, __classMethodFns.has(fn) ? args : __hostArgs(fn, args, receiver));
   } catch (error) {
     if (tryDepth === 0) throw error;
     currentException = error;
@@ -6214,7 +6214,7 @@ function __hostKey(key) {
   if (!__holdsProperties(key)) return key;
   const own = Object.prototype.hasOwnProperty;
   const hasClassGetter = (name) => {
-    if (own.call(key, name)) return false;
+    if (!__classOf(key) || own.call(key, name)) return false;
     for (let c = __classOf(key); c; c = classParentTable[c] || null) {
       const methods = classMethodTable[c];
       if (methods && own.call(methods, name)) return false;
@@ -6240,9 +6240,13 @@ function __hostKey(key) {
 
 // The arguments of a host function; a property key argument goes through `__hostKey`.
 const __hostKeyFns = new Set([Object.prototype.hasOwnProperty, Object.prototype.propertyIsEnumerable]);
-function __hostArgs(fn, args) {
+function __hostArgs(fn, args, receiver) {
   const hostArgs = args.map(__hostCallback);
   if (__hostKeyFns.has(fn)) hostArgs[0] = __hostKey(args[0]);
+  else if (__hostKeyFns.has(receiver)) {
+    if (fn === Function.prototype.call) hostArgs[1] = __hostKey(args[1]);
+    else if (fn === Function.prototype.apply && Array.isArray(args[1])) hostArgs[1] = __hostArgs(receiver, args[1]);
+  }
   return hostArgs;
 }
 
@@ -6392,7 +6396,7 @@ function __jsMethodInvoke(ref, args) {
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
   // A compiled class method takes Perry values, as `reflect_apply` passes them.
   if (__classMethodFns.has(ref.f)) return Reflect.apply(ref.f, ref.r, args);
-  return Reflect.apply(ref.f, ref.r, __hostArgs(ref.f, args));
+  return Reflect.apply(ref.f, ref.r, __hostArgs(ref.f, args, ref.r));
 }
 
 // Own keys only: `mname in methods` would also find Object.prototype's names.

@@ -1,6 +1,6 @@
 //! An object used as a property key on the web target.
 
-use super::run_web_source;
+use super::{run_web_source, run_web_source_then};
 
 // ToPropertyKey runs a conversion method that is a Perry closure, with the key object as
 // `this`. Expected output is Node's.
@@ -118,6 +118,29 @@ console.log([o[own], before, o[key]].join(","));
 "#
         ),
         "1,1,3"
+    );
+}
+
+// A key forwarded through `call` / `apply` is converted, and a host key is not asked for its
+// own descriptors. Expected output is Node's.
+#[test]
+fn a_forwarded_object_key_is_converted_and_a_host_key_keeps_its_traps() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+const k: any = { toString: () => "kk" };
+const o: any = { kk: 1 };
+const has: any = Object.prototype.hasOwnProperty;
+async function f() { return [has.call(o, k), has.apply(o, [k])].join(","); }
+console.log([has.call(o, k), has.apply(o, [k]), Object.prototype.propertyIsEnumerable.call(o, k)].join(","));
+f().then((v) => console.log(v));
+"#,
+            r#"
+const proxy = new Proxy({ toString: () => "kk" }, { getOwnPropertyDescriptor() { throw new Error("trap"); } });
+console.log({ kk: 1 }[__hostKey(proxy)]);
+"#
+        ),
+        "true,true,true\ntrue,true\n1"
     );
 }
 
