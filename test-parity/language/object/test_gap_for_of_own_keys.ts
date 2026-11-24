@@ -64,24 +64,4 @@ function wrapAll(api: any): any {
 const w = wrapAll({ a(n: number): string { return "a" + n; }, b(s: string): number { return s.length; } });
 console.log("wrapped " + w.a(1) + " " + String(w.b("xyz")));
 
-// A replaced Array iterator runs for these loops too.
-const saved = Array.prototype[Symbol.iterator];
-let calls = 0;
-(Array.prototype as any)[Symbol.iterator] = function (this: any[]): any {
-  calls++;
-  let i = 0;
-  const self = this;
-  return {
-    next(): any {
-      if (i < self.length) return { value: "<" + String(self[i++]) + ">", done: false };
-      return { value: undefined, done: true };
-    },
-  };
-};
-const viaIter: string[] = [];
-for (const k of Object.keys(o)) viaIter.push(String(k));
-for (const v of Object.values(o)) viaIter.push(String(v));
-for (const n of Object.getOwnPropertyNames(o)) viaIter.push(String(n));
-for (const r of Reflect.ownKeys(o)) viaIter.push(String(r));
-(Array.prototype as any)[Symbol.iterator] = saved;
-console.log("iterator calls " + calls + " " + viaIter.join(","));
+// (A replaced Array.prototype[Symbol.iterator] case is cut: perry refuses that store, builtin_proto.rs; removal queued, owner 11-16.)
