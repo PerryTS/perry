@@ -1359,11 +1359,137 @@ impl WasmModuleEmitter {
             Expr::ArrayIterationPatched => {
                 "fromJsValue(__memDispatch.rt_arrayIterationPatched())".to_string()
             }
-            _ => {
-                // Fallback: return undefined for unhandled expressions
-                "u64ToF64(TAG_UNDEFINED)".to_string()
-            }
+            // Any other unhandled expression is undefined.
+            _ => self
+                .emit_js_array_method(expr, locals)
+                .unwrap_or_else(|| "u64ToF64(TAG_UNDEFINED)".to_string()),
         }
+    }
+
+    /// JS for an array method node, or `None` for any other node: the host method call
+    /// `Expr::Call` emits for `receiver.method(...)`.
+    fn emit_js_array_method(&self, expr: &Expr, locals: &BTreeMap<u32, String>) -> Option<String> {
+        let js = |e: &Expr| format!("toJsValue({})", self.emit_js_expr(e, locals));
+        let local = |id: &LocalId| js(&Expr::LocalGet(*id));
+        let list = |required: &[&Expr], optional: &Option<Box<Expr>>| -> Vec<String> {
+            required
+                .iter()
+                .copied()
+                .chain(optional.as_deref())
+                .map(js)
+                .collect()
+        };
+        let (receiver, method, args) = match expr {
+            Expr::ArrayMap { array, callback } => (js(array), "map", vec![js(callback)]),
+            Expr::ArrayFilter { array, callback } => (js(array), "filter", vec![js(callback)]),
+            Expr::ArrayForEach { array, callback } => (js(array), "forEach", vec![js(callback)]),
+            Expr::ArrayFind { array, callback } => (js(array), "find", vec![js(callback)]),
+            Expr::ArrayFindIndex { array, callback } => {
+                (js(array), "findIndex", vec![js(callback)])
+            }
+            Expr::ArrayFindLast { array, callback } => (js(array), "findLast", vec![js(callback)]),
+            Expr::ArrayFindLastIndex { array, callback } => {
+                (js(array), "findLastIndex", vec![js(callback)])
+            }
+            Expr::ArraySome { array, callback } => (js(array), "some", vec![js(callback)]),
+            Expr::ArrayEvery { array, callback } => (js(array), "every", vec![js(callback)]),
+            Expr::ArrayFlatMap { array, callback } => (js(array), "flatMap", vec![js(callback)]),
+            Expr::ArraySort { array, comparator } => (js(array), "sort", vec![js(comparator)]),
+            Expr::ArrayToSorted { array, comparator } => {
+                (js(array), "toSorted", list(&[], comparator))
+            }
+            Expr::ArrayReduce {
+                array,
+                callback,
+                initial,
+            } => (js(array), "reduce", list(&[callback], initial)),
+            Expr::ArrayReduceRight {
+                array,
+                callback,
+                initial,
+            } => (js(array), "reduceRight", list(&[callback], initial)),
+            Expr::ArrayIndexOf {
+                array,
+                value,
+                from_index,
+            } => (js(array), "indexOf", list(&[value], from_index)),
+            Expr::ArrayLastIndexOf {
+                array,
+                value,
+                from_index,
+            } => (js(array), "lastIndexOf", list(&[value], from_index)),
+            Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            } => (js(array), "includes", list(&[value], from_index)),
+            Expr::ArrayAt { array, index } => (js(array), "at", vec![js(index)]),
+            Expr::ArraySlice {
+                array, start, end, ..
+            } => (js(array), "slice", list(&[start], end)),
+            Expr::ArrayFlat { array } => (js(array), "flat", vec![]),
+            Expr::ArrayToReversed { array } => (js(array), "toReversed", vec![]),
+            Expr::ArrayToSpliced {
+                array,
+                start,
+                delete_count,
+                items,
+            } => {
+                let mut args = vec![js(start), js(delete_count)];
+                args.extend(items.iter().map(js));
+                (js(array), "toSpliced", args)
+            }
+            Expr::ArrayWith {
+                array,
+                index,
+                value,
+            } => (js(array), "with", vec![js(index), js(value)]),
+            Expr::ArrayPop(id) => (local(id), "pop", vec![]),
+            Expr::ArrayShift(id) => (local(id), "shift", vec![]),
+            Expr::ArrayUnshift { array_id, value } => (local(array_id), "unshift", vec![js(value)]),
+            Expr::ArrayPushSpread { array_id, source } => {
+                (local(array_id), "push", vec![format!("...{}", js(source))])
+            }
+            Expr::ArraySplice {
+                array_id,
+                start,
+                delete_count,
+                items,
+            } => {
+                let mut args = list(&[start], delete_count);
+                args.extend(items.iter().map(js));
+                (local(array_id), "splice", args)
+            }
+            Expr::ArrayCopyWithin {
+                array_id,
+                target,
+                start,
+                end,
+            } => (local(array_id), "copyWithin", list(&[target, start], end)),
+            Expr::ArrayLikeMethod {
+                method,
+                receiver,
+                args,
+                source,
+            } => {
+                let receiver = js(receiver);
+                let args: Vec<String> = args.iter().map(js).collect();
+                if !matches!(source, perry_hir::ir::ArrayLikeSource::Receiver) {
+                    let method = js_string_literal(method);
+                    return Some(format!(
+                        "fromJsValue(__jsMethodInvoke({{ r: {receiver}, m: {method}, f: Array.prototype[{method}] }}, [{}]))",
+                        args.join(", ")
+                    ));
+                }
+                (receiver, method.as_str(), args)
+            }
+            _ => return None,
+        };
+        Some(format!(
+            "fromJsValue(__jsMethodInvoke(__jsMethodGet({receiver}, {}), [{}]))",
+            js_string_literal(method),
+            args.join(", ")
+        ))
     }
 
     /// JS for a `__perry_runtime` intrinsic: the same contract as the WASM arms in
