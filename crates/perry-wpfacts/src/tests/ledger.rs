@@ -264,7 +264,8 @@ cause_test!(
     "escaped-this",
     "property",
     "y",
-    r#"const g: any = (globalThis as any).hostFn; g({ m() { return (this as any).y; } });"#
+    // A plain function: a method's `this` is its class family (K3 (B)).
+    r#"const g: any = (globalThis as any).hostFn; g(function (this: any) { return this.y; });"#
 );
 cause_test!(
     unseen intrinsic_prototype_top_store,

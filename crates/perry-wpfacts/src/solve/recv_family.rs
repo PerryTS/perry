@@ -35,6 +35,8 @@ pub struct Family {
     /// Its `this` nodes, once an escape gave it its family (`escape_this`).
     dsts: Vec<NodeId>,
     members: FxHashSet<Tok>,
+    /// The members its `this` nodes hold (`rfam_give`).
+    given: FxHashSet<Tok>,
     /// Tokens `escape_this` adds itself beside the family (published
     /// receivers, a receiver marker).
     extra: FxHashSet<Tok>,
@@ -185,13 +187,8 @@ impl Model {
             if r.off || !r.members.insert(t) {
                 continue;
             }
-            let dsts = r.dsts.clone();
             self.rfam.fam_of.entry(t).or_default().push(f);
-            if self.fam_this(t) {
-                for d in dsts {
-                    self.add_tok(d, t);
-                }
-            }
+            self.rfam_give(f);
             if let Some(cs) = self.rfam.rev_proto.get(&t) {
                 work.extend(cs.iter().copied());
             }
@@ -241,13 +238,39 @@ impl Model {
                 r.seen.push((u32::MAX, 0));
             }
         }
-        let members: Vec<Tok> = r.members.iter().copied().collect();
-        let members: Vec<Tok> = members.into_iter().filter(|&t| self.fam_this(t)).collect();
+        r.given.clear();
         for &d in dsts {
-            for &t in &members {
+            self.add_prim(d, prim::NULL | prim::UNDEF);
+        }
+        self.rfam_give(f);
+        true
+    }
+
+    /// `f`'s `this` nodes get every member `this` may be that they do not
+    /// hold yet. True when one was added.
+    fn rfam_give(&mut self, f: FnIdx) -> bool {
+        let Some(r) = self.rfam.fams.get(&f) else {
+            return false;
+        };
+        if r.off || r.dsts.is_empty() {
+            return false;
+        }
+        let new: Vec<Tok> = r
+            .members
+            .iter()
+            .copied()
+            .filter(|t| !r.given.contains(t) && self.fam_this(*t))
+            .collect();
+        if new.is_empty() {
+            return false;
+        }
+        let dsts = r.dsts.clone();
+        let r = self.rfam.fams.get_mut(&f).unwrap();
+        r.given.extend(new.iter().copied());
+        for d in dsts {
+            for &t in &new {
                 self.add_tok(d, t);
             }
-            self.add_prim(d, prim::NULL | prim::UNDEF);
         }
         true
     }
@@ -257,8 +280,14 @@ impl Model {
     /// its home key, the class prototype object itself included.
     /// `PERRY_K3_NOPROTO` (measurement only, never a default) leaves the
     /// bare prototype out, for the owner to decide with numbers.
+    ///
+    /// Code outside the program's view calls it only on what it holds: a
+    /// member that escaped (`Model::escaped`, monotone: `settle_family`
+    /// gives a member once it escapes). A member no unknown code holds is
+    /// never its receiver there.
     fn fam_this(&self, t: Tok) -> bool {
         !(self.rfam.no_proto && matches!(self.toks[t as usize], TokKind::Proto(_)))
+            && self.escaped.contains_key(&t)
     }
 
     /// A token `escape_this` adds itself beside the family.
@@ -356,6 +385,7 @@ impl Model {
                 }
                 changed = true;
             }
+            changed |= self.rfam_give(f);
             let r = &self.rfam.fams[&f];
             if r.off {
                 continue;

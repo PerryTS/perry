@@ -119,12 +119,12 @@ fn k3b_t1_escaped_class_method_this_is_its_family() {
 #[test]
 fn k3b_t2_escaped_literal_method_this_is_its_family() {
     let src = format!(
-        "\"use strict\";\n{DECL}const o = {{ w: 2, m() {{ return /*A*/ this.w; }} }};\nconst q = {{ w: 3, get g() {{ return /*B*/ this.w; }} }};\no.m(); q.g;\nsink(o.m); sink(Object.getOwnPropertyDescriptor(q, \"g\"));\n"
+        "\"use strict\";\n{DECL}const o = {{ w: 2, m() {{ return /*A*/ this.w; }} }};\nconst q = {{ w: 3, get g() {{ return /*B*/ this.w; }} }};\no.m(); q.g;\nsink(o.m); sink(Object.getOwnPropertyDescriptor(q, \"g\")); sink(o); sink(q);\n"
     );
     let (v, top, r) = recv_after(&src, "/*A*/", "w");
-    assert!(!top && v.starts_with("T0"), "an escaped literal method's this is ⊤: {v} {r:?}");
+    assert!(!top && r.len() == 1, "an escaped literal method's this is ⊤: {v} {r:?}");
     let (v, top, r) = recv_after(&src, "/*B*/", "w");
-    assert!(!top && v.starts_with("T0"), "an escaped literal getter's this is ⊤: {v} {r:?}");
+    assert!(!top && r.iter().all(|n| n.contains("lit")), "an escaped literal getter's this is ⊤: {v} {r:?}");
 }
 
 /// T3: a method copied onto another class's prototype under its key runs
@@ -132,9 +132,9 @@ fn k3b_t2_escaped_literal_method_this_is_its_family() {
 #[test]
 fn k3b_t3_copy_target_joins_the_family() {
     let base = "class P { x = 1; m() { return /*A*/ this.x; } }\nclass Q { y = 0; x = 3; }\n";
-    let only = format!("{DECL}{base}new P().m(); new Q();\nsink(P.prototype.m);\n");
+    let only = format!("{DECL}{base}new P().m(); sink(new Q());\nsink(P.prototype.m);\n");
     let copied =
-        format!("{DECL}{base}(Q.prototype as any).m = P.prototype.m;\nnew P().m(); new Q();\nsink(P.prototype.m);\n");
+        format!("{DECL}{base}(Q.prototype as any).m = P.prototype.m;\nnew P().m(); sink(new Q());\nsink(P.prototype.m);\n");
     let (a, at, ra) = recv_after(&only, "/*A*/", "x");
     let (b, bt, rb) = recv_after(&copied, "/*A*/", "x");
     assert!(!at, "an escaped class method's this is ⊤: {a} {ra:?}");
@@ -149,7 +149,7 @@ fn k3b_t3_copy_target_joins_the_family() {
 #[test]
 fn k3b_t7_new_function_instance_chain_joins_the_family() {
     let src = format!(
-        "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nfunction F(this: any) {{ this.x = 5; }}\n(F.prototype as any).m = P.prototype.m;\nnew P().m(); const f = new (F as any)();\nsink(P.prototype.m);\n"
+        "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nfunction F(this: any) {{ this.x = 5; }}\n(F.prototype as any).m = P.prototype.m;\nnew P().m(); sink(new (F as any)());\nsink(P.prototype.m);\n"
     );
     let (v, top, r) = recv_after(&src, "/*A*/", "x");
     assert!(!top, "a copied method's this is ⊤: {v} {r:?}");
@@ -161,10 +161,21 @@ fn k3b_t7_new_function_instance_chain_joins_the_family() {
 #[test]
 fn k3b_t2c_literal_function_expression_is_a_method() {
     let src = format!(
-        "\"use strict\";\n{DECL}const o = {{ w: 2, m: function () {{ return /*A*/ this.w; }} }};\no.m();\nsink(o.m);\n"
+        "\"use strict\";\n{DECL}const o = {{ w: 2, m: function () {{ return /*A*/ this.w; }} }};\no.m();\nsink(o.m); sink(o);\n"
     );
     let (v, top, r) = recv_after(&src, "/*A*/", "w");
-    assert!(!top && v.starts_with("T0"), "an escaped literal function property's this is ⊤: {v} {r:?}");
+    assert!(!top && r.len() == 1, "an escaped literal function property's this is ⊤: {v} {r:?}");
+}
+
+/// T8: unknown code calls an escaped method only on what it holds: a
+/// family member that never escaped is not its receiver there.
+#[test]
+fn k3b_t8_unheld_member_is_no_receiver() {
+    let src = format!(
+        "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nconst p = new P();\np.m();\nsink(P.prototype.m);\n"
+    );
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(!top && !r.iter().any(|n| n.starts_with("proto:")), "an unheld member (P.prototype) in the escaped run's this: {v} {r:?}");
 }
 
 /// T4 control: program code calls the method with a `this` outside its
