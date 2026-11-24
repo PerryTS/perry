@@ -70,9 +70,6 @@ pub struct RecvFam {
     tok_cursor: usize,
     /// `PERRY_K3_FAMOFF`: print why a function left its family.
     pub(crate) explain_off: bool,
-    /// `PERRY_K3_NOPROTO` (measurement only): `this` leaves out the class
-    /// prototype object.
-    pub(crate) no_proto: bool,
 }
 
 impl Model {
@@ -290,18 +287,16 @@ impl Model {
     }
 
     /// A member `this` may be (owner 11-23: "`this` = an object of its own
-    /// class family"): every object whose chain holds the function under
-    /// its home key, the class prototype object itself included.
-    /// `PERRY_K3_NOPROTO` (measurement only, never a default) leaves the
-    /// bare prototype out, for the owner to decide with numbers.
+    /// class family"): every object whose chain holds the function, but
+    /// not the bare class prototype object (owner 11-24: `P.prototype` is
+    /// no object of its class family; the runtime check rejects it).
     ///
     /// Code outside the program's view calls it only on what it holds: a
     /// member that escaped (`Model::escaped`, monotone: `settle_family`
     /// gives a member once it escapes). A member no unknown code holds is
     /// never its receiver there.
     fn fam_this(&self, t: Tok) -> bool {
-        !(self.rfam.no_proto && matches!(self.toks[t as usize], TokKind::Proto(_)))
-            && self.escaped.contains_key(&t)
+        !matches!(self.toks[t as usize], TokKind::Proto(_)) && self.escaped.contains_key(&t)
     }
 
     /// `PERRY_K3_FAMOFF` (report only): a key's spelling.

@@ -221,3 +221,14 @@ fn k3b_t9b_subclass_of_escaped_class_has_no_top_chain() {
     let (v, top, r) = recv_after(&src, "/*A*/", "z");
     assert!(!top && r.iter().all(|n| n.starts_with("proto:")), "an escaped class's subclass chain holds more than its prototype: {v} {r:?}");
 }
+
+/// T11 (owner 11-24): the bare class prototype is no object of its class
+/// family for `this`: an escaped `P.prototype` is no receiver there.
+#[test]
+fn k3b_t11_bare_prototype_is_no_receiver() {
+    let src = format!(
+        "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nconst p = new P();\np.m();\nsink(P.prototype); sink(p);\n"
+    );
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(!top && !r.is_empty() && !r.iter().any(|n| n.starts_with("proto:")), "the bare prototype is in the escaped run's this: {v} {r:?}");
+}
