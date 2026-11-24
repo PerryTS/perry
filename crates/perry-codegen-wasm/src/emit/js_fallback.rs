@@ -1088,7 +1088,7 @@ impl WasmModuleEmitter {
             Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 let obj = self.emit_js_expr(object, locals);
                 let idx = self.emit_js_expr(index, locals);
-                format!("fromJsValue(toJsValue({})[toJsValue({})])", obj, idx)
+                format!("fromJsValue(toJsValue({})[__hostKey(toJsValue({}))])", obj, idx)
             }
             Expr::IndexSet {
                 object,
@@ -1100,7 +1100,7 @@ impl WasmModuleEmitter {
                 let idx = self.emit_js_expr(index, locals);
                 let val = self.emit_js_expr(value, locals);
                 format!(
-                    "(toJsValue({})[toJsValue({})] = toJsValue({}), {})",
+                    "(toJsValue({})[__hostKey(toJsValue({}))] = toJsValue({}), {})",
                     obj, idx, val, val
                 )
             }
@@ -1114,7 +1114,7 @@ impl WasmModuleEmitter {
                 let val = self.emit_js_expr(value, locals);
                 // Target, key, then value, each evaluated once (see PropertySet).
                 format!(
-                    "((__o, __k, __v) => (toJsValue(__o)[toJsValue(__k)] = toJsValue(__v), __v))({}, {}, {})",
+                    "((__o, __k, __v) => (toJsValue(__o)[__hostKey(toJsValue(__k))] = toJsValue(__v), __v))({}, {}, {})",
                     obj, k, val
                 )
             }
@@ -1434,7 +1434,7 @@ impl WasmModuleEmitter {
                     js_string_literal(property)
                 ),
                 Expr::IndexGet { object, index, .. } => format!(
-                    "fromJsValue(delete toJsValue({})[toJsValue({})])",
+                    "fromJsValue(delete toJsValue({})[__hostKey(toJsValue({}))])",
                     self.emit_js_expr(object, locals),
                     self.emit_js_expr(index, locals)
                 ),
