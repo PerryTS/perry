@@ -8,7 +8,7 @@ const __hostGlobal = globalThis;
 // The runtime's own calls and own-key checks read nothing a program can overwrite
 // (`Function.prototype.call`, `Object.prototype.hasOwnProperty`, `Reflect.apply`).
 const __reflectApply = Reflect.apply;
-const __hasOwn = Object.hasOwn;
+const __hasOwn = Function.prototype.call.bind(Object.prototype.hasOwnProperty);
 
 const TAG_UNDEFINED = 0x7FFC_0000_0000_0001n;
 const TAG_NULL      = 0x7FFC_0000_0000_0002n;
