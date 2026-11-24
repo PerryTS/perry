@@ -148,7 +148,10 @@ cp "$STDLIB_ARCHIVE" "$TRIMMED_STDLIB"
 while IFS= read -r member; do
   [[ -n "$member" ]] && ar -d "$TRIMMED_STDLIB" "$member"
 done < <(ar -t "$TRIMMED_STDLIB" | grep '^perry_runtime-' || true)
-if nm -g "$TRIMMED_STDLIB" 2>/dev/null | grep -qE ' [Tt] _?js_gc_init$'; then
+# `grep -q` would exit at the first match and SIGPIPE `nm`; under pipefail
+# that makes a matching pipeline read as false, so these checks read the whole
+# listing instead.
+if nm -g "$TRIMMED_STDLIB" 2>/dev/null | grep -E ' [Tt] _?js_gc_init$' >/dev/null; then
   fail "stdlib provider still owns runtime ABI symbols"
 fi
 
@@ -172,7 +175,9 @@ APP_IMAGE="$BUILD_DIR/next-app.$SHARED_EXT"
 PERRY_RUNTIME_DIR="$(dirname "$RUNTIME_ARCHIVE")" \
   "$PERRY_BIN" compile perry-host.js --output-type dylib --no-auto-optimize --no-cache \
   -o "$APP_IMAGE" >"$BUILD_DIR/perry-compile.log" 2>&1 || fail "Perry dylib compile failed"
-nm -u "$APP_IMAGE" 2>/dev/null | grep -qE '_?js_gc_init$' || fail "app dylib unexpectedly embeds the Perry ABI"
+# The app imports the runtime's GC entry (`js_gc_init_with_layouts`, or
+# `js_gc_init`) rather than defining it.
+nm -u "$APP_IMAGE" 2>/dev/null | grep -E '_?js_gc_init(_with_layouts)?$' >/dev/null || fail "app dylib unexpectedly embeds the Perry ABI"
 
 PERRY_COMMIT="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)"
 if command -v shasum >/dev/null 2>&1; then
