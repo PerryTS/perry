@@ -293,12 +293,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             }
             let key_idx = ctx.strings.intern(property);
             let key_handle_global = format!("@{}", ctx.strings.entry(key_idx).handle_global);
-            let field_read = Expr::PropertyGet {
-                byte_end: 0,
-                object: object.clone(),
-                property: property.clone(),
-                byte_offset: 0,
-            };
+            let field_read = Expr::property_get_unsited(object.clone(), property.clone());
             let result_may_be_heap =
                 !crate::type_analysis::is_provably_not_bigint(ctx, &field_read);
             let strict_i32 = if *strict { "1" } else { "0" };
@@ -825,13 +820,11 @@ fn update_by_get_and_set(
         values.push((old_num.as_str(), proof));
     }
     let out = crate::rooting::with_scoped_values(ctx, &values, |ctx, reads| {
-        let store = Expr::PropertySet {
-            object: Box::new(object.clone()),
-            property: property.to_string(),
-            value: Box::new(reads[0].clone()),
-            byte_offset: 0,
-            byte_end: 0,
-        };
+        let store = Expr::property_set_unsited(
+            Box::new(object.clone()),
+            property.to_string(),
+            Box::new(reads[0].clone()),
+        );
         super::property_set::lower(ctx, &store, strict)?;
         lower_expr(ctx, reads.last().expect("one value at least"))
     })?;
