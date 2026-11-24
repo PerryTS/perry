@@ -587,9 +587,12 @@ impl Model {
 
     /// Nodes `ns` a native model made for solver call of `by` (root program
     /// call `root`) with no program position take that of `root`'s (else
-    /// `by`'s) result node.
+    /// `by`'s) result node, else that of the source call each was derived
+    /// from (`CallInfo::site`: a protocol touch or a builtin call the solve
+    /// made shares its origin's site, `iterate` included).
     pub(crate) fn solver_call_pos(&mut self, root: CallId, by: CallId, ns: &[NodeId]) {
-        let p = [root, by]
+        let sites = [root, by].map(|c| self.calls.get(c as usize).map_or(c, |i| i.site));
+        let p = [root, by, sites[0], sites[1]]
             .iter()
             .filter_map(|&c| self.calls.get(c as usize))
             .map(|c| self.node_program_pos(c.ret))
