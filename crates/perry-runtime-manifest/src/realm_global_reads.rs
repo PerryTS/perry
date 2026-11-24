@@ -759,6 +759,10 @@ fn read_sources(srcs: &[Src]) -> Result<GlobalReads, String> {
                 calls += 1;
                 let (idx, kind) = &readers[&r];
                 let arg = arguments(ts, i + 1).and_then(|a| a.get(*idx).copied());
+                if arg.is_some_and(|(a, b)| b == a + 1 && ts[a].text == "None") {
+                    // A literal `None` for the name names no global: no read.
+                    continue;
+                }
                 // Not evaluable: a value computed from the caller's
                 // parameters is selected by them.
                 let val = arg.and_then(|(a, b)| {
@@ -935,6 +939,18 @@ mod tests {
         );
         let r = run(&[("x.rs", &src)]).unwrap();
         assert_eq!(r.names.keys().collect::<Vec<_>>(), ["Temporal"]);
+    }
+
+    #[test]
+    fn a_literal_none_name_reads_nothing() {
+        let src = format!(
+            "{READER}fn by(v: f64, binding: Option<&'static str>) {{ if let Some(n) = binding {{ builtin_value_core(n); }} }}\n\
+             fn a(v: f64) {{ by(v, None); }}\n\
+             fn b(v: f64) {{ by(v, Some(\"Promise\")); }}\n"
+        );
+        let r = run(&[("x.rs", &src)]).unwrap();
+        assert_eq!(r.names.keys().collect::<Vec<_>>(), ["Promise"]);
+        assert_eq!(r.names["Promise"].len(), 1, "{:?}", r.names);
     }
 
     #[test]
