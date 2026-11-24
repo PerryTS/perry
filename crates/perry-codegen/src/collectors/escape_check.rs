@@ -557,7 +557,7 @@ pub fn check_escapes_in_expr(
             check_escapes_in_expr(then_expr, candidates, classes, escaped);
             check_escapes_in_expr(else_expr, candidates, classes, escaped);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             // Method-call form: `local.method(...)` needs a real heap `this`
             // pointer unless a conservative method summary proves that the
             // body is just a numeric expression over `this.field`, literals,

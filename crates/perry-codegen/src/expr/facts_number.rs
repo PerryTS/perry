@@ -625,7 +625,7 @@ fn expr_is_number(ctx: &FnCtx<'_>, e: &Expr, cids: &[u32], depth: u8) -> bool {
             expr_is_number(ctx, then_expr, cids, depth)
                 && expr_is_number(ctx, else_expr, cids, depth)
         }
-        Expr::Call { callee, .. } => match callee.as_ref() {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
             Expr::PropertyGet {
                 object, property, ..
             } if matches!(object.as_ref(), Expr::This) => {

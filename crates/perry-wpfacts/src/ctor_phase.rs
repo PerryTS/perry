@@ -1007,7 +1007,7 @@ impl<'a> W<'a> {
             // method's body with this `this` (ECMA-262 13.3.6.1 / 10.2.1):
             // the walk follows that body at the call's place, its stores in
             // their order, its uses of `this` judged as the constructor's.
-            Expr::Call { callee, args, .. }
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                 if matches!(callee.as_ref(), Expr::PropertyGet { object, property, .. }
                     if matches!(object.as_ref(), Expr::This) && self.followable(st, property)) =>
             {
@@ -1036,7 +1036,9 @@ impl<'a> W<'a> {
                 self.visiting.pop();
             }
             // `this.m(...)`: the callee runs with `this` as its receiver.
-            Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }
+            Expr::Call { callee, .. }
+            | Expr::RegionCall { callee, .. }
+            | Expr::CallSpread { callee, .. }
                 if matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
                     if matches!(object.as_ref(), Expr::This)) =>
             {
@@ -1494,7 +1496,7 @@ fn inert_constant(v: &Expr) -> bool {
 /// ending in `return o`. `None`: any other statement (a computed key, a
 /// spread, a prototype set).
 fn literal_builder_parts(e: &Expr) -> Option<Vec<&Expr>> {
-    let Expr::Call { callee, args, .. } = e else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = e else {
         return None;
     };
     let Expr::Closure { params, body, .. } = callee.as_ref() else {
@@ -1522,7 +1524,7 @@ fn literal_builder_parts(e: &Expr) -> Option<Vec<&Expr>> {
                 lets.push(*id);
                 values.push(v);
             }
-            Stmt::Expr(Expr::Call { callee, args, .. }) => {
+            Stmt::Expr(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) => {
                 let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
                     return None;
                 };

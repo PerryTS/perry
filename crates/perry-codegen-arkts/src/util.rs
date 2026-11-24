@@ -67,7 +67,7 @@ pub(crate) fn numeric_arg_resolved(
             // theme-color resolution like `txR = dark ? 0.91 : 0.17`
             // pick the else-branch (light mode) when dark is bound to
             // `isDarkMode()`.
-            Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
                 Expr::ExternFuncRef { name, .. } if is_harmonyos_zero_fn(name) => return Some(0.0),
                 _ => return None,
             },

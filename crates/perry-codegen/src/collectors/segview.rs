@@ -285,7 +285,7 @@ fn find_candidates_in_list(list: &[Stmt], out: &mut Vec<Candidate>) {
         // The subject decides which `open` form the lowering can use, and
         // whether this is a segment loop at all.
         let two_arg_open = match subject.as_ref() {
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 matches!(callee.as_ref(), Expr::PropertyGet { property, .. } if property == "segment")
                     && args.len() == 1
             }
@@ -378,7 +378,7 @@ fn head_is_canonical(
 }
 
 fn is_for_of_next_call(e: &Expr, iter_id: u32) -> bool {
-    let Expr::Call { callee, args, .. } = e else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = e else {
         return false;
     };
     let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
@@ -569,7 +569,7 @@ fn classify_segment_uses_in_expr(e: &Expr, seg: u32, t: &mut SegmentUseTally) {
     // Recognise the parent shapes BEFORE descending, so the `LocalGet(seg)`
     // inside them is attributed rather than falling into `materialise`.
     match e {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()
@@ -770,7 +770,9 @@ pub fn count_for_of_sites(stmts: &[Stmt]) -> (usize, usize) {
             } = s
             {
                 all += 1;
-                if let Expr::Call { callee, args, .. } = subject.as_ref() {
+                if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } =
+                    subject.as_ref()
+                {
                     if args.len() == 1
                         && matches!(callee.as_ref(),
                             Expr::PropertyGet { property, .. } if property == "segment")
@@ -1018,12 +1020,14 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
             init: Some(Expr::GetIterator(subject)),
             ..
         } => match subject.as_ref() {
-            Expr::Call { callee, args, .. } => match callee.as_ref() {
-                Expr::PropertyGet { object, .. } if args.len() == 1 => {
-                    (object.as_ref().clone(), args[0].clone())
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                match callee.as_ref() {
+                    Expr::PropertyGet { object, .. } if args.len() == 1 => {
+                        (object.as_ref().clone(), args[0].clone())
+                    }
+                    _ => return 0,
                 }
-                _ => return 0,
-            },
+            }
             _ => return 0,
         },
         _ => return 0,
@@ -1528,7 +1532,7 @@ fn rewrite_uses_in_expr(e: &mut Expr, seg: u32, cur: u32, fresh: &mut u32, out: 
     // `O.codePointAt(k)` -> `cur != 0 ? _code_point_at(cursor, k) : <original>`
     let e_original = e.clone();
     let mut replaced = None;
-    if let Expr::Call { callee, args, .. } = e {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = e {
         if let Expr::PropertyGet {
             object, property, ..
         } = callee.as_ref()

@@ -127,14 +127,18 @@ fn passthrough_yield(result_id: LocalId, kind_id: LocalId, byte_offset: u32) -> 
 /// The re-yielded pull value and the local holding its step kind.
 fn passthrough_result(value: &Expr) -> Option<(Expr, LocalId)> {
     match value {
-        Expr::Call { callee, args, .. } if args.len() == 2 => match (callee.as_ref(), &args[1]) {
-            (Expr::ExternFuncRef { name, .. }, Expr::LocalGet(kind_id))
-                if name == YIELD_RESULT_MARKER =>
-            {
-                Some((args[0].clone(), *kind_id))
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
+            if args.len() == 2 =>
+        {
+            match (callee.as_ref(), &args[1]) {
+                (Expr::ExternFuncRef { name, .. }, Expr::LocalGet(kind_id))
+                    if name == YIELD_RESULT_MARKER =>
+                {
+                    Some((args[0].clone(), *kind_id))
+                }
+                _ => None,
             }
-            _ => None,
-        },
+        }
         _ => None,
     }
 }

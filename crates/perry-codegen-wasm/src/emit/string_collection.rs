@@ -558,7 +558,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(right);
             }
             Expr::Unary { operand, .. } => self.collect_strings_in_expr(operand),
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 self.collect_strings_in_expr(callee);
                 for a in args {
                     self.collect_strings_in_expr(a);

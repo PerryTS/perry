@@ -178,7 +178,7 @@ impl Walk {
             }
             // `early_branches::try_lower_native_chain_method_call`: a method
             // call on a native receiver it can see through.
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 // `require("net")` / `process.getBuiltinModule("net")` by name
                 // (`lower_call/mod.rs`).
                 if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {

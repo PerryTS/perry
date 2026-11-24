@@ -65,6 +65,7 @@ impl SH for Expr {
             // so source whitespace edits that shift offsets don't bust the object
             // cache.
             Expr::Call { callee, args, type_args, .. } => { tag(h, 18); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
+            Expr::RegionCall { callee, args } => { tag(h, 12602); callee.as_ref().hash(h); args.hash(h); }
             Expr::CallSpread { callee, args, type_args,  .. } => { tag(h, 19); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
             Expr::SuperCallSpread(args) => { tag(h, 12240); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::PodLayoutSizeOf { ty } => { tag(h, 12001); ty.hash(h); }

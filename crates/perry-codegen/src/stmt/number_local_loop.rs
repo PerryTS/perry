@@ -173,7 +173,7 @@ impl<'a> LoopFacts<'a> {
             Expr::LocalGet(id) => {
                 self.reads.insert(*id);
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if let Expr::LocalGet(id) = callee.as_ref() {
                     self.callback_sites.push((*id, args));
                 }
@@ -326,7 +326,7 @@ fn produces_number(ctx: &FnCtx<'_>, expr: &Expr, numbers: &BTreeSet<u32>) -> boo
             UnaryOp::Not => false,
         },
         Expr::NumberCoerce(_) => true,
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if numeric_callbacks::candidate(ctx, callee, args.len()).is_some() =>
         {
             args.iter().all(|arg| produces_number(ctx, arg, numbers))
@@ -455,7 +455,7 @@ fn match_number_locals(
         .filter(|id| {
             facts.writes[id].iter().all(|write| {
                 matches!(write,
-            Some(Expr::Call { callee, args, .. })
+            Some(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. })
                 if numeric_callbacks::candidate(ctx, callee, args.len()).is_some())
             })
         })

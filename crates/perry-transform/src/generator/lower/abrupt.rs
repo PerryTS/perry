@@ -1139,7 +1139,7 @@ mod sync_delegation_result_tests {
         };
         let Stmt::Let {
             id: result_id,
-            init: Some(Expr::Call { callee, .. }),
+            init: Some(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }),
             ..
         } = &then_branch[0]
         else {
@@ -1203,7 +1203,8 @@ mod sync_delegation_result_tests {
         };
         for name in ["js_iterator_delegate_return", "js_iterator_delegate_throw"] {
             let call = sync_delegate_call(&route, name, 10);
-            let Expr::Call { callee, args, .. } = call else {
+            let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = call
+            else {
                 panic!("protocol work must be a shared runtime call");
             };
             assert!(

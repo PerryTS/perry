@@ -273,7 +273,7 @@ fn fill_defaults_in_expr(expr: &mut Expr, cx: &DefaultFill) {
             fill_defaults_in_expr(then_expr, cx);
             fill_defaults_in_expr(else_expr, cx);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             fill_defaults_in_expr(callee, cx);
             for arg in args.iter_mut() {
                 fill_defaults_in_expr(arg, cx);

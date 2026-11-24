@@ -103,7 +103,7 @@ fn closed_effects(module: &Module) -> bool {
     let mut targets = HashSet::new();
     let mut unknown = HashSet::new();
     let mut calls = |e: &Expr| {
-        if let Expr::Call { callee, args, .. } = e {
+        if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = e {
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 if let Some(f) = functions.get(fid) {
                     for (index, p) in f.params.iter().enumerate() {
@@ -219,20 +219,22 @@ fn closed_effects(module: &Module) -> bool {
                 matches!(object.as_ref(), Expr::GlobalGet(0))
                     && matches!(property.as_str(), "log" | "reject")
             }
-            Expr::Call { callee, args, .. } => match callee.as_ref() {
-                Expr::FuncRef(fid) => functions.contains_key(fid),
-                Expr::LocalGet(id) => {
-                    (targets.contains(id) && !unknown.contains(id)) || self_steps.contains(id)
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                match callee.as_ref() {
+                    Expr::FuncRef(fid) => functions.contains_key(fid),
+                    Expr::LocalGet(id) => {
+                        (targets.contains(id) && !unknown.contains(id)) || self_steps.contains(id)
+                    }
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if matches!(object.as_ref(), Expr::GlobalGet(0)) => {
+                        property == "reject"
+                            || (property == "log"
+                                && args.iter().all(|a| primitive_output(a, &primitives)))
+                    }
+                    _ => false,
                 }
-                Expr::PropertyGet {
-                    object, property, ..
-                } if matches!(object.as_ref(), Expr::GlobalGet(0)) => {
-                    property == "reject"
-                        || (property == "log"
-                            && args.iter().all(|a| primitive_output(a, &primitives)))
-                }
-                _ => false,
-            },
+            }
             Expr::NativeMethodCall {
                 module,
                 class_name: None,
@@ -268,8 +270,9 @@ fn closed_effects(module: &Module) -> bool {
     // still participate in the effect proof: a late getter or Error/Function
     // inspection can expose effects captured while a private frame was live.
     let terminal = match module.init.last() {
-        Some(Stmt::Expr(Expr::Call { callee, args, .. }))
-            if matches!(callee.as_ref(),
+        Some(Stmt::Expr(
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. },
+        )) if matches!(callee.as_ref(),
             Expr::PropertyGet {object,property,..} if property=="log" && matches!(object.as_ref(),Expr::GlobalGet(_))) =>
         {
             Some(args)
@@ -439,7 +442,7 @@ fn lower_list(
         let candidate = match &normalized {
             Stmt::Let {
                 id,
-                init: Some(Expr::Call { callee, args, .. }),
+                init: Some(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }),
                 ..
             } => match callee.as_ref() {
                 Expr::FuncRef(fid) => templates

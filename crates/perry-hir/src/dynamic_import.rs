@@ -1329,21 +1329,23 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
                 visiting,
             )
         }
-        Expr::Call { callee, args, .. } => match static_string_replace_target(callee, args) {
-            Some(string) => resolve_string_replace_parts(
-                string,
-                &args[0],
-                &args[1],
-                consts,
-                param_literals,
-                local_literals,
-                visiting,
-            ),
-            None if is_static_path_join_call(callee) => {
-                resolve_static_path_args(args, consts, param_literals, local_literals, visiting)
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+            match static_string_replace_target(callee, args) {
+                Some(string) => resolve_string_replace_parts(
+                    string,
+                    &args[0],
+                    &args[1],
+                    consts,
+                    param_literals,
+                    local_literals,
+                    visiting,
+                ),
+                None if is_static_path_join_call(callee) => {
+                    resolve_static_path_args(args, consts, param_literals, local_literals, visiting)
+                }
+                None => Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string()),
             }
-            None => Resolution::Unresolved(NOT_STATICALLY_RESOLVABLE.to_string()),
-        },
+        }
         Expr::PathJoin(left, right) | Expr::PathResolveJoin(left, right) => {
             let left = resolve_import_path_with_context(
                 left,

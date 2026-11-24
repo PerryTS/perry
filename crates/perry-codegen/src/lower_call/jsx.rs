@@ -157,7 +157,11 @@ fn rewrite_jsx_box(ctx: &mut FnCtx<'_>, props_arg: &Expr) -> Result<String> {
     //    wrap explicitly: `<Box>{[w]}</Box>`.
     let children_array_opt: Option<Expr> = children_opt.map(|c| match &c {
         Expr::Array(_, _) => c,
-        Expr::Call { callee, .. } if is_jsx_call_callee(callee) => Expr::Array(vec![c], None),
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
+            if is_jsx_call_callee(callee) =>
+        {
+            Expr::Array(vec![c], None)
+        }
         _ => c,
     });
 

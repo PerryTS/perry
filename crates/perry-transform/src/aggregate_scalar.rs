@@ -1477,7 +1477,9 @@ fn expr_is_safe(
                 return false;
             }
         }
-        Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }
+        Expr::Call { callee, .. }
+        | Expr::RegionCall { callee, .. }
+        | Expr::CallSpread { callee, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { object, property, .. }

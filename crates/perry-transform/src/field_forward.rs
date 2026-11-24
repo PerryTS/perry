@@ -276,6 +276,7 @@ fn scan_expr<'a>(
             return;
         }
         Expr::Call { callee, .. }
+        | Expr::RegionCall { callee, .. }
         | Expr::CallSpread { callee, .. }
         | Expr::JsCallValue { callee, .. }
             if field_read(callee, b).is_some() =>

@@ -935,7 +935,7 @@ fn rewrite_direct_extern_calls_in_module(
 }
 
 fn rewrite_direct_extern_call(expr: &mut Expr, call_rewrites: &HashMap<String, FuncId>) {
-    if let Expr::Call { callee, .. } = expr {
+    if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = expr {
         if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
             if let Some(id) = call_rewrites.get(name) {
                 **callee = Expr::FuncRef(*id);

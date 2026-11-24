@@ -896,7 +896,7 @@ fn implied<'p>(
         } => implied(operand, !positive, subst, pred, depth, out),
         // A predicate's result is its body's: what the body implies of its
         // parameters, it implies of the arguments that are locals.
-        Expr::Call { callee, args, .. } if depth < 2 => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } if depth < 2 => {
             let Expr::FuncRef(fid) = callee.as_ref() else {
                 return;
             };
@@ -1328,7 +1328,8 @@ fn typeof_unbound_global<'e>(a: &'e Expr, b: &'e Expr) -> Option<&'e String> {
     if s != "undefined" {
         return None;
     }
-    let Expr::Call { callee, args, .. } = o.as_ref() else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = o.as_ref()
+    else {
         return None;
     };
     let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {

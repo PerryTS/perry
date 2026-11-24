@@ -222,7 +222,7 @@ fn find_outer_writes_expr(
             find_outer_writes_expr(left, inner_ids, out);
             find_outer_writes_expr(right, inner_ids, out);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             find_outer_writes_expr(callee, inner_ids, out);
             for a in args {
                 find_outer_writes_expr(a, inner_ids, out);

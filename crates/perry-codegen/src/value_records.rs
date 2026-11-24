@@ -1032,7 +1032,7 @@ impl Rewriter<'_> {
             .record_call(e)
             .map(|s| s.record_params.clone())
             .unwrap_or_default();
-        let Expr::Call { callee, args, .. } = e else {
+        let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = e else {
             return;
         };
         self.expr(callee);
@@ -1564,12 +1564,16 @@ impl Rewriter<'_> {
     fn ra_source(&self, e: &Expr) -> Option<u32> {
         match e {
             Expr::ArrayPop(id) => self.ra_locals.get(id).copied(),
-            Expr::Call { callee, args, .. } if args.is_empty() => match callee.as_ref() {
-                Expr::PropertyGet {
-                    object, property, ..
-                } if property == "pop" => self.ra_of(object),
-                _ => None,
-            },
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
+                if args.is_empty() =>
+            {
+                match callee.as_ref() {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if property == "pop" => self.ra_of(object),
+                    _ => None,
+                }
+            }
             Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => self.ra_of(object),
             _ => None,
         }
@@ -1580,7 +1584,7 @@ impl Rewriter<'_> {
         let t = Expr::Integer(i64::from(tmpl));
         *e = match std::mem::replace(e, undefined()) {
             Expr::ArrayPop(id) => rt(RA_POP, vec![Expr::LocalGet(id), t]),
-            Expr::Call { callee, .. } => {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
                 let Expr::PropertyGet { object, .. } = *callee else {
                     unreachable!("a record array's pop")
                 };
@@ -1702,12 +1706,14 @@ impl Rewriter<'_> {
             } if module == "array" && matches!(method.as_str(), "push_single" | "push") => {
                 self.ra_of(o).map(|t| (t, args.len()))
             }
-            Expr::Call { callee, args, .. } => match callee.as_ref() {
-                Expr::PropertyGet {
-                    object, property, ..
-                } if property == "push" => self.ra_of(object).map(|t| (t, args.len())),
-                _ => None,
-            },
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                match callee.as_ref() {
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if property == "push" => self.ra_of(object).map(|t| (t, args.len())),
+                    _ => None,
+                }
+            }
             _ => None,
         };
         if let Some((tmpl, n)) = pushed {
@@ -1767,7 +1773,7 @@ impl Rewriter<'_> {
             } if on(object) => Some(format!("a store of `{property}`")),
             Expr::IndexSet { object, .. } if on(object) => Some("an index store".into()),
             Expr::PutValueSet { target, .. } if on(target) => Some("a store".into()),
-            Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
                 Expr::PropertyGet {
                     object, property, ..
                 } if on(object) => Some(format!("a call of `{property}`")),

@@ -812,7 +812,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // `p.then(cb)`, `p.catch(cb)`, etc. Refine the local to
         // `Promise(Any)` so `is_promise_expr` can detect subsequent
         // `.then()` / `.catch()` chains.
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if is_promise_expr(ctx, init) {
                 return Some(HirType::Promise(Box::new(HirType::Any)));
             }
@@ -983,11 +983,16 @@ fn crypto_digest_chain_has_string_encoding(callee: &Expr) -> Option<bool> {
     if p1 != "digest" {
         return None;
     }
-    let Expr::Call {
+    let (Expr::Call {
         callee: c2,
         args: digest_args,
         ..
-    } = o1.as_ref()
+    }
+    | Expr::RegionCall {
+        callee: c2,
+        args: digest_args,
+        ..
+    }) = o1.as_ref()
     else {
         return None;
     };
@@ -1002,7 +1007,7 @@ fn crypto_digest_chain_has_string_encoding(callee: &Expr) -> Option<bool> {
     if p2 != "update" {
         return None;
     }
-    let Expr::Call { callee: c3, .. } = o2.as_ref() else {
+    let (Expr::Call { callee: c3, .. } | Expr::RegionCall { callee: c3, .. }) = o2.as_ref() else {
         return None;
     };
     let Expr::PropertyGet {

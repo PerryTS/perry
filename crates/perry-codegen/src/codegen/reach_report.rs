@@ -312,7 +312,7 @@ impl<'a> Build<'a> {
     }
 
     fn expr_kind(&mut self, mi: usize, from: usize, expr: &Expr, eval_scope: bool) {
-        if let Expr::Call { callee, args, .. } = expr {
+        if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = expr {
             if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == "js_eval_in_scope")
             {
                 self.expr(mi, from, callee);

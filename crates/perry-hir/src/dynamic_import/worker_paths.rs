@@ -263,7 +263,7 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
                 values.is_url = then_values.is_url;
                 Ok(values)
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if let Some(string) = static_string_replace_target(callee, args) {
                     return self.replace(string, &args[0], &args[1], depth + 1);
                 }

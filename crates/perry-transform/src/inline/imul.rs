@@ -103,10 +103,12 @@ pub fn rewrite_imul_calls_in_stmts(stmts: &mut [Stmt], imul_ids: &HashSet<FuncId
 
 pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
     // Check if this expr is a call to an imul polyfill
-    let is_imul = matches!(e, Expr::Call { callee, args, .. }
+    let is_imul = matches!(e, Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
         if args.len() == 2 && matches!(callee.as_ref(), Expr::FuncRef(fid) if imul_ids.contains(fid)));
     if is_imul {
-        if let Expr::Call { args, .. } = std::mem::replace(e, Expr::Undefined) {
+        if let Expr::Call { args, .. } | Expr::RegionCall { args, .. } =
+            std::mem::replace(e, Expr::Undefined)
+        {
             let mut args = args;
             let b = args.pop().unwrap();
             let a = args.pop().unwrap();
@@ -139,7 +141,7 @@ pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
             rewrite_imul_calls_in_expr(then_expr, imul_ids);
             rewrite_imul_calls_in_expr(else_expr, imul_ids);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             rewrite_imul_calls_in_expr(callee, imul_ids);
             for arg in args {
                 rewrite_imul_calls_in_expr(arg, imul_ids);

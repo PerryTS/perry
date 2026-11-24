@@ -831,7 +831,7 @@ pub(crate) fn collect_canonical_str_ineligible_locals(stmts: &[perry_hir::Stmt])
                 else_expr,
                 ..
             } => syntactic_str(then_expr, declared) && syntactic_str(else_expr, declared),
-            Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
                 Expr::PropertyGet {
                     object, property, ..
                 } => match property.as_str() {

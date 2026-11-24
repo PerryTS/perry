@@ -43,7 +43,7 @@ pub(crate) fn emit_widget(
     // { obj: LocalGet(state_id), property: "text" }, args: [] } where
     // state_id is in the registry. Emit a reactive Text using the
     // registered synth_id + initial value (uses the v3.2 path).
-    if let Expr::Call { callee, args, .. } = expr {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = expr {
         if args.is_empty() {
             if let Expr::PropertyGet {
                 object, property, ..

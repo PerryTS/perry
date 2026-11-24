@@ -724,7 +724,7 @@ fn source_key(e: &Expr) -> String {
         Expr::PropertyGet { property, .. }
         | Expr::PropertySet { property, .. }
         | Expr::PropertyUpdate { property, .. } => property.clone(),
-        Expr::Call { callee, .. } => source_key(callee),
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => source_key(callee),
         Expr::New { .. } => "<new>".into(),
         _ => "<value>".into(),
     }

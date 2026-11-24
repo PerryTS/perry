@@ -64,7 +64,7 @@ fn expression(expr: &Expr, discarded: bool) -> bool {
                 return true;
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()

@@ -382,16 +382,18 @@ fn ty_of(e: &Expr, env: &Env<'_>, cx: &Ctx<'_>) -> Type {
             is_async: false,
             is_generator: false,
         }),
-        Expr::Call { callee, .. } => match call_target(callee, env, cx) {
-            Some(fid) => env.st.rets.get(&fid).cloned().unwrap_or(Type::Never),
-            None => {
-                if cx.cfg.strict {
-                    Type::Any
-                } else {
-                    infer_expr_type(e, env)
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
+            match call_target(callee, env, cx) {
+                Some(fid) => env.st.rets.get(&fid).cloned().unwrap_or(Type::Never),
+                None => {
+                    if cx.cfg.strict {
+                        Type::Any
+                    } else {
+                        infer_expr_type(e, env)
+                    }
                 }
             }
-        },
+        }
         Expr::New { class_name, .. } if cx.classes.contains(class_name) => {
             Type::Named(class_name.clone())
         }
@@ -1511,7 +1513,7 @@ fn round(cx: &Ctx<'_>, st: &State, m: &Module) -> State {
                 let k = this_store_key(e).unwrap_or_default();
                 fsets.push(((c.to_string(), k), ty_of(value, &env, cx)));
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if let Some(fid) = call_target(callee, &env, cx) {
                     calls.push((fid, args.iter().map(|a| ty_of(a, &env, cx)).collect()));
                     // A local handed to a callee whose parameter is concrete

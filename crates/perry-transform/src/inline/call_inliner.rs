@@ -480,7 +480,7 @@ pub fn inline_calls_in_stmts(
                 };
                 let mut handled = false;
                 let direct_call = match &init_expr {
-                    Expr::Call { .. } => Some(init_expr.clone()),
+                    Expr::Call { .. } | Expr::RegionCall { .. } => Some(init_expr.clone()),
                     Expr::NativeMethodCall {
                         module,
                         class_name: None,
@@ -492,13 +492,16 @@ pub fn inline_calls_in_stmts(
                         && method == "requireObjectCoercible"
                         && matches!(
                             args.as_slice(),
-                            [Expr::Call { .. }, Expr::Number(_) | Expr::Integer(_)]
+                            [
+                                Expr::Call { .. } | Expr::RegionCall { .. },
+                                Expr::Number(_) | Expr::Integer(_)
+                            ]
                         ) =>
                     {
                         let call = &args[0];
                         let eligible = matches!(
                             call,
-                            Expr::Call { callee, .. }
+                            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
                                 if matches!(callee.as_ref(), Expr::FuncRef(id)
                                     if func_candidates.get(id).is_some_and(returns_only_anonymous_records))
                         );
@@ -1111,7 +1114,7 @@ pub fn inline_calls_in_expr(
             *exact_receiver_facts = intersect_exact_receiver_facts(&then_facts, &else_facts);
             return hoisted;
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             let mut earlier = EarlierOperands::before_arguments_of(callee);
             hoisted.extend(inline_calls_in_expr(
                 callee,
@@ -1679,7 +1682,7 @@ pub fn try_inline_simple_call(
     class_field_types: &HashMap<(String, String), String>,
     preserve_loop_closures: bool,
 ) -> Option<(Vec<Stmt>, Expr)> {
-    if let Expr::Call { callee, args, .. } = expr {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = expr {
         // Check for regular function call
         if let Expr::FuncRef(func_id) = callee.as_ref() {
             if let Some(func) = func_candidates.get(func_id) {
@@ -2147,7 +2150,7 @@ pub fn try_inline_call(
     class_field_types: &HashMap<(String, String), String>,
     preserve_loop_closures: bool,
 ) -> Option<(Vec<Stmt>, Option<Expr>)> {
-    if let Expr::Call { callee, args, .. } = expr {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = expr {
         // Handle regular function calls
         if let Expr::FuncRef(func_id) = callee.as_ref() {
             if let Some(func) = func_candidates.get(func_id) {
@@ -2541,7 +2544,7 @@ mod tests {
             ),
             "keep(x) should still inline: {setup:?}"
         );
-        let Expr::Call { args, .. } = &expr else {
+        let (Expr::Call { args, .. } | Expr::RegionCall { args, .. }) = &expr else {
             panic!("the outer call stays a call")
         };
         assert!(matches!(args[2], Expr::LocalGet(_)), "{:?}", args[2]);

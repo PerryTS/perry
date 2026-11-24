@@ -953,7 +953,7 @@ fn expr_kind_for_diag(e: &Expr) -> &'static str {
         Expr::GlobalGet(_) => {
             "a module-global read (imported binding) — inline as a string literal"
         }
-        Expr::Call { .. } | Expr::CallSpread { .. } => "a function call",
+        Expr::Call { .. } | Expr::RegionCall { .. } | Expr::CallSpread { .. } => "a function call",
         Expr::Closure { .. } => "a closure",
         Expr::PropertyGet { .. } => "a property access (e.g. `routes.HOME`)",
         Expr::Array(_, _) | Expr::ArraySpread(_) => "an array literal",

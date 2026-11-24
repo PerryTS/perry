@@ -806,7 +806,7 @@ fn define_call(e: &Expr) -> Option<(DefineCall<'_>, bool)> {
 /// `globalThis.Object.defineProperties(this, props)`, the generic arm of a
 /// guarded namespace pair (`perry_hir::namespace_pairs::pair_callee`).
 fn generic_define_call(e: &Expr) -> Option<DefineCall<'_>> {
-    let Expr::Call { callee, args, .. } = e else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = e else {
         return None;
     };
     let Expr::PropertyGet {

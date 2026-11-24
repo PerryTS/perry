@@ -434,7 +434,7 @@ mod tests {
         assert!(!format!("{body:?}").contains("FuncRef(2)"), "{body:?}");
         let call_at = body
             .iter()
-            .position(|stmt| matches!(stmt, Stmt::Expr(Expr::Call { callee, .. }) if matches!(callee.as_ref(), Expr::FuncRef(1))))
+            .position(|stmt| matches!(stmt, Stmt::Expr(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) if matches!(callee.as_ref(), Expr::FuncRef(1))))
             .unwrap_or_else(|| panic!("the call to f must survive: {body:?}"));
         assert!(
             matches!(&body[..call_at], [Stmt::Let { .. }]),

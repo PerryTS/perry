@@ -163,7 +163,7 @@ pub(crate) fn infer_dynamic_extends_names(module: &mut Module) {
         let Some(expr) = class.extends_expr.as_deref() else {
             continue;
         };
-        let Expr::Call { callee, .. } = expr else {
+        let (Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) = expr else {
             continue;
         };
         let Expr::FuncRef(func_id) = callee.as_ref() else {
@@ -312,7 +312,7 @@ pub(crate) fn number_to_js_key(m: f64) -> String {
 /// than array-element access.
 /// Check if a lowered HIR expression is a call to a generator function.
 pub(super) fn is_generator_call_expr(ctx: &LoweringContext, expr: &Expr) -> bool {
-    if let Expr::Call { callee, .. } = expr {
+    if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = expr {
         if let Expr::FuncRef(func_id) = callee.as_ref() {
             // Look up the function name by its ID
             for (name, id) in &ctx.functions {

@@ -118,7 +118,7 @@ pub(crate) fn rewrite_set_hidden_in_expr(
         Expr::Closure { body, .. } => {
             rewrite_set_hidden_calls_in_stmts(body, bindings);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             rewrite_set_hidden_in_expr(callee, bindings);
             for a in args.iter_mut() {
                 rewrite_set_hidden_in_expr(a, bindings);
@@ -251,7 +251,7 @@ pub(crate) fn rewrite_set_hidden_in_closures_in_expr(
     // Otherwise descend into sub-exprs without rewriting top-level
     // widgetSetHidden calls.
     match e {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             rewrite_set_hidden_in_closures_in_expr(callee, bindings);
             for a in args.iter_mut() {
                 rewrite_set_hidden_in_closures_in_expr(a, bindings);

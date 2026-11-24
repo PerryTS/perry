@@ -160,7 +160,7 @@ pub(crate) fn collect_literal_finals(
         if let Expr::Closure { body, .. } = e {
             stmts(body, module, prefix, reps, widths, out);
         }
-        if let Expr::Call { callee, args, .. } = e {
+        if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = e {
             if let Expr::Closure { params, body, .. } = callee.as_ref() {
                 // An IIFE binds its parameters to its arguments and runs its
                 // body once: walk that body once, with the bindings, then the
@@ -498,7 +498,7 @@ impl ObjectSource {
                 Expr::LocalGet(id) => Some(Self::Property(*id, property.clone())),
                 _ => None,
             },
-            Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
                 Expr::LocalGet(id) => Some(Self::CallLocal(*id)),
                 Expr::FuncRef(id) => Some(Self::CallFunction(*id)),
                 Expr::Closure { body, .. } => Self::returned(body),

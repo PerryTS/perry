@@ -36,7 +36,7 @@ pub(crate) fn class(e: &Expr) -> Node {
         | Expr::I18nString { .. } | Expr::LocalGet { .. } | Expr::LocalSet { .. }
         | Expr::ScopedTemp { .. } | Expr::GlobalGet { .. } | Expr::GlobalSet { .. }
         | Expr::Update { .. } | Expr::Binary { .. } | Expr::Unary { .. } | Expr::Compare { .. }
-        | Expr::Logical { .. } | Expr::Call { .. } | Expr::CallSpread { .. }
+        | Expr::Logical { .. } | Expr::Call { .. } | Expr::RegionCall { .. } | Expr::CallSpread { .. }
         | Expr::SuperCallSpread { .. } | Expr::FuncRef { .. } | Expr::ExternFuncRef { .. }
         | Expr::PropertyGet { .. } | Expr::PropertySet { .. } | Expr::PropertyUpdate { .. }
         | Expr::Object { .. } | Expr::LiteralChunks { .. } | Expr::LiteralChunkObject { .. }

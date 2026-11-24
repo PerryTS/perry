@@ -1108,7 +1108,8 @@ fn lower_stmt_inner(
                             // sock as ("net", "Socket").
                             if let Stmt::Let {
                                 name,
-                                init: Some(Expr::Call { callee, .. }),
+                                init:
+                                    Some(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }),
                                 ..
                             } = s
                             {

@@ -367,7 +367,7 @@ impl WasmModuleEmitter {
                 // In JS async context, we can truly await
                 format!("fromJsValue(await toJsValue({}))", v)
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 let args_js: Vec<String> =
                     args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
                 match callee.as_ref() {

@@ -148,7 +148,7 @@ pub fn build_default_param_stmts(params: &[Param]) -> Vec<Stmt> {
             .collect();
         let default_is_throw_helper = matches!(
             default_expr,
-            Expr::Call { callee, .. }
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
                 if matches!(
                     callee.as_ref(),
                     Expr::ExternFuncRef { name, .. } if name.starts_with("js_throw_")

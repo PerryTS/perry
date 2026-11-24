@@ -744,7 +744,7 @@ pub(crate) fn guarded_path_type(ctx: &FnCtx<'_>, expr: &Expr) -> Option<perry_hi
         Expr::Integer(_) => Some(Type::Number),
         Expr::Null => Some(Type::Null),
         Expr::Undefined | Expr::Void(_) => Some(Type::Void),
-        Expr::Call { .. } => guarded_call_return_proof(ctx, expr),
+        Expr::Call { .. } | Expr::RegionCall { .. } => guarded_call_return_proof(ctx, expr),
         // #8169: a Tier-B clone's entry guard gives its boxed Number
         // parameters real runtime proofs, and arithmetic derived from those
         // parameters constructs another Number. Let a recursive `f(n - 1)`
@@ -793,7 +793,7 @@ pub(crate) fn guarded_call_return_proof(
     ctx: &FnCtx<'_>,
     expr: &Expr,
 ) -> Option<perry_hir::types::Type> {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return None;
     };
     let Expr::FuncRef(function_id) = callee.as_ref() else {

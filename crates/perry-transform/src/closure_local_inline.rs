@@ -400,7 +400,7 @@ fn collect_uses_in_stmt(stmt: &Stmt, set: &[LocalId], uses: &mut Uses) {
 
 fn collect_uses(expr: &Expr, set: &[LocalId], uses: &mut Uses) {
     match expr {
-        Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)) =>
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)) =>
         {
             uses.calls += 1;
             if args.len() != uses.arity || !args.iter().all(|a| uses.writes.is_stable_arg(a)) {
@@ -455,9 +455,9 @@ fn rewrite_calls(
     body_expr: &Expr,
     next_local_id: &mut LocalId,
 ) {
-    let is_target = matches!(expr, Expr::Call { callee, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)));
+    let is_target = matches!(expr, Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } if matches!(callee.as_ref(), Expr::LocalGet(x) if set.contains(x)));
     if is_target {
-        let Expr::Call { args, .. } = expr else {
+        let (Expr::Call { args, .. } | Expr::RegionCall { args, .. }) = expr else {
             unreachable!()
         };
         // Arity was checked during collection; a mismatch here means the

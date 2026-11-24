@@ -282,7 +282,9 @@ fn module_uses_global_math(module: &perry_hir::Module) -> bool {
             _ => {}
         }
         let collapsed_callee = match expr {
-            Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => {
+            Expr::Call { callee, .. }
+            | Expr::RegionCall { callee, .. }
+            | Expr::CallSpread { callee, .. } => {
                 matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
                     if matches!(object.as_ref(), Expr::GlobalGet(0)))
                 .then_some(callee.as_ref() as *const Expr)
@@ -451,7 +453,7 @@ fn module_uses_json_format(module: &perry_hir::Module) -> bool {
             || matches!(expr, Expr::PropertyGet { property, .. } if property == "console")
     }
     fn expr_uses_json_format(expr: &Expr) -> bool {
-        if let Expr::Call { callee, args, .. } = expr {
+        if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = expr {
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()

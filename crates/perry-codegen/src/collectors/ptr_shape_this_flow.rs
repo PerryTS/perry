@@ -326,7 +326,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             Expr::PropertySet { object, value, .. } if private_this(object, 0, 1) => {
                 self.expr_this_safe(value, ctx)
             }
-            Expr::Call { callee, args, .. }
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                 if matches!(
                     callee.as_ref(),
                     Expr::PropertyGet { object, .. } if private_this(object, 1, 0)
@@ -409,7 +409,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 self.expr_this_safe(value, ctx)
             }
             // `this.m(args)` — vet the callee method transitively.
-            Expr::Call { callee, args, .. }
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                 if matches!(
                     callee.as_ref(),
                     Expr::PropertyGet { object, .. } if matches!(object.as_ref(), Expr::This)

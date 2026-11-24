@@ -376,7 +376,7 @@ pub fn invalidate_exact_receivers_for_expr(expr: &Expr, facts: &mut ExactReceive
                 invalidate_exact_receivers_for_expr(child, facts)
             });
         }
-        Expr::Call { .. }
+        Expr::Call { .. } | Expr::RegionCall { .. }
         | Expr::CallSpread { .. }
         | Expr::NativeMethodCall { .. }
         | Expr::StaticMethodCall { .. }

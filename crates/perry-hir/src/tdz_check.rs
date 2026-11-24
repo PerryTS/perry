@@ -76,7 +76,7 @@ pub fn throw(name: &str, byte_offset: u32) -> Expr {
 
 /// The binding a check expression tests, when `expr` is one.
 pub fn checked_binding(expr: &Expr) -> Option<LocalId> {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return None;
     };
     let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
@@ -112,14 +112,14 @@ pub fn without_checks(mut expr: &Expr) -> &Expr {
 /// call of the program (a check inside `f(x)` and the call `f(x)` are two
 /// sites that share a start).
 pub fn is_dead_zone_op(expr: &Expr) -> bool {
-    matches!(expr, Expr::Call { callee, .. }
+    matches!(expr, Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
         if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
             if name == TDZ_CHECK || name == TDZ_CHECK_THEN || name == TDZ_THROW))
 }
 
 /// True when `expr` is a read check `check(id)` (not `check_then`).
 pub fn is_read_check(expr: &Expr) -> bool {
-    matches!(expr, Expr::Call { callee, args, .. }
+    matches!(expr, Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
         if args.len() == 2
             && matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == TDZ_CHECK)
             && matches!(args.first(), Some(Expr::LocalGet(_))))
@@ -131,7 +131,7 @@ pub fn for_each_check_value_mut(expr: &mut Expr, f: &mut dyn FnMut(&mut Expr)) -
     if checked_binding(expr).is_none() {
         return false;
     }
-    if let Expr::Call { args, .. } = expr {
+    if let Expr::Call { args, .. } | Expr::RegionCall { args, .. } = expr {
         for arg in args.iter_mut().skip(2) {
             f(arg);
         }

@@ -484,7 +484,7 @@ pub fn is_js_value_expr(expr: &Expr, tracker: &JsValueTracker) -> bool {
         // Property access on JS objects returns JS values
         Expr::PropertyGet { object, .. } => is_js_value_expr(object, tracker),
         // Calls that return JS objects (e.g., chained method calls or require())
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             match callee.as_ref() {
                 // require() call - GlobalGet(0) is typically require
                 Expr::GlobalGet(0) => true,
@@ -521,7 +521,7 @@ pub fn is_js_object_expr(
         Expr::PropertyGet { object, .. } => is_js_object_expr(object, tracker, extern_func_to_js),
         // Call to require() returns JS value - GlobalGet(0) is typically the require function
         // Pattern: require('module').Something
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             match callee.as_ref() {
                 // require() call - GlobalGet(0) is typically require
                 Expr::GlobalGet(0) => true,
@@ -546,7 +546,7 @@ pub fn transform_expr(
     // Handle different expression types
     match expr {
         // Call expressions - may be method calls on JS objects or direct function calls
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             // First check if this is a method call on a JS object: obj.method(args)
             if let Expr::PropertyGet { object, property, .. } = callee.as_mut() {
                 // Transform the object first

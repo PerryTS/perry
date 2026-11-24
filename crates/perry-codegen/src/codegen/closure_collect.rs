@@ -263,7 +263,7 @@ fn collect_direct_call_closures_in_expr(
     expr: &perry_hir::Expr,
     out: &mut std::collections::HashSet<u32>,
 ) {
-    if let perry_hir::Expr::Call { args, .. } = expr {
+    if let perry_hir::Expr::Call { args, .. } | perry_hir::Expr::RegionCall { args, .. } = expr {
         for arg in args {
             if let perry_hir::Expr::Closure { func_id, .. } = arg {
                 out.insert(*func_id);

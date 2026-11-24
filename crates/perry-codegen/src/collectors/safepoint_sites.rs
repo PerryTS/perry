@@ -53,7 +53,7 @@ pub fn count_body_nodes(stmts: &[Stmt]) -> usize {
 fn is_safepoint(e: &Expr) -> bool {
     matches!(
         e,
-        Expr::Call { .. }
+        Expr::Call { .. } | Expr::RegionCall { .. }
             | Expr::CallSpread { .. }
             | Expr::NativeMethodCall { .. }
             | Expr::StaticMethodCall { .. }

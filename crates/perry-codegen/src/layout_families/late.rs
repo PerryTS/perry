@@ -173,6 +173,7 @@ fn factory_form(e: &Expr) -> bool {
         Expr::New { .. }
             | Expr::NewDynamic { .. }
             | Expr::Call { .. }
+            | Expr::RegionCall { .. }
             | Expr::ClassRef(_)
             | Expr::ClassExprFresh { .. }
             | Expr::LocalGet(_)
@@ -245,7 +246,7 @@ impl Factories {
                     (FactoryMode::Instance, Expr::NewDynamic { callee, .. }) => {
                         next.push((FactoryMode::Constructor, callee.as_ref()));
                     }
-                    (_, Expr::Call { callee, .. }) => {
+                    (_, Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) => {
                         functions.extend(
                             self.callee_fns(callee, cx.fn_of_local)
                                 .into_iter()
@@ -420,7 +421,7 @@ impl Census {
                     }
                     // A call or a `new` names the classes the local's object
                     // is a fresh instance of (`Factories::instance_classes`).
-                    if let Expr::Call { .. } | Expr::New { .. } = init {
+                    if let Expr::Call { .. } | Expr::RegionCall { .. } | Expr::New { .. } = init {
                         self.init_expr.borrow_mut().insert(*id, init.clone());
                     }
                     match init {
@@ -430,7 +431,7 @@ impl Census {
                         Expr::FuncRef(f) => {
                             self.fn_of_local.borrow_mut().insert(*id, *f);
                         }
-                        Expr::Call { callee, args, .. } => {
+                        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                             self.init_call.borrow_mut().insert(*id, (**callee).clone());
                             self.init_literals
                                 .borrow_mut()
@@ -520,7 +521,7 @@ impl Census {
     /// parameters, reassigned locals.
     fn note_edges(&self, e: &Expr) {
         match e {
-            Expr::Call { callee, args, .. }
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                 if matches!(callee.as_ref(), Expr::FuncRef(_) | Expr::LocalGet(_)) =>
             {
                 let locals: Vec<Option<u32>> = args

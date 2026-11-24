@@ -2214,6 +2214,8 @@ impl<'a> Gen<'a> {
                 let b = self.prim_node(prim::BOOL);
                 self.call_with(fx, callee, vec![none, b], vec![], (*byte_offset, *byte_end))
             }
+            // A split region's call: the direct call it is, no site.
+            Expr::RegionCall { callee, args } => self.call_expr(fx, callee, args, &[], 0, 0),
             Expr::Call {
                 callee,
                 args,

@@ -466,7 +466,7 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
                         }
                     }
                 }
-                Expr::Call { callee, .. } => {
+                Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
                     if let Expr::PropertyGet {
                         object, property, ..
                     } = callee.as_ref()
@@ -889,7 +889,7 @@ pub fn mark_unstable_scalar_method_receivers(
     let writes = collect_candidate_property_writes(stmts, candidates);
 
     for_each_expr_in_stmts(stmts, &mut |expr| {
-        let Expr::Call { callee, args, .. } = expr else {
+        let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
             return;
         };
         let Expr::PropertyGet {

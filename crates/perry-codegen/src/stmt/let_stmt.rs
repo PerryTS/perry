@@ -633,7 +633,11 @@ pub(crate) fn lower_let(
 
     // Keep non-escaping uppercase results virtual for fused consumers while
     // snapshotting the receiver against later source-local writes.
-    if let Some(perry_hir::Expr::Call { callee, args, .. }) = init {
+    if let Some(
+        perry_hir::Expr::Call { callee, args, .. }
+        | perry_hir::Expr::RegionCall { callee, args, .. },
+    ) = init
+    {
         if ctx.fusible_uppercase_locals.contains(&id)
             && args.is_empty()
             && matches!(
@@ -677,7 +681,11 @@ pub(crate) fn lower_let(
     // small constant-index reads does not need an ArrayHeader or unobserved
     // substring allocations. The escape collector admits this exact shape and
     // rejects `.length`, mutation, captures, and dynamic indices.
-    if let Some(perry_hir::Expr::Call { callee, args, .. }) = init {
+    if let Some(
+        perry_hir::Expr::Call { callee, args, .. }
+        | perry_hir::Expr::RegionCall { callee, args, .. },
+    ) = init
+    {
         if ctx.non_escaping_arrays.contains_key(&id) && is_scalar_split(ctx, callee, args) {
             let perry_hir::Expr::PropertyGet { object, .. } = callee.as_ref() else {
                 unreachable!();

@@ -653,7 +653,7 @@ fn da_expr(e: &Expr, c: &HashSet<u32>, fns: &Fns, da: &mut HashSet<u32>, bad: &m
             }
         }
         // A direct call runs the body after the arguments.
-        Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(id) if fns.local.contains_key(id)) =>
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(id) if fns.local.contains_key(id)) =>
         {
             for a in args {
                 da_expr(a, c, fns, da, bad);

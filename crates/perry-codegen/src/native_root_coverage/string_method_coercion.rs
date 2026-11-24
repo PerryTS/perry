@@ -356,7 +356,7 @@ fn proven_string_argument_representations_are_call_free() {
             ),
         ] {
             let name = format!("smc_repr_{property}.ts");
-            let is_result = matches!(init, Expr::Call { .. });
+            let is_result = matches!(init, Expr::Call { .. } | Expr::RegionCall { .. });
             let mut module = method_module(
                 &name,
                 property,

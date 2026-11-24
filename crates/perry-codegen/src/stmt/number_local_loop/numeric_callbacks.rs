@@ -148,7 +148,9 @@ pub(crate) fn try_lower(
         let value = lower_expr(ctx, arg)?;
         let raw = match arg {
             Expr::LocalGet(id) => ctx.receiver_descriptors.callback_local_is_raw_f64(*id),
-            Expr::Call { callee, args, .. } => returns_number(ctx, callee, args.len()),
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                returns_number(ctx, callee, args.len())
+            }
             _ => false,
         };
         values.push(if raw {
@@ -229,7 +231,7 @@ pub(super) fn scalar_loop(
                 else_expr,
                 ..
             } => expr(ctx, condition, n) && expr(ctx, then_expr, n) && expr(ctx, else_expr, n),
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 candidate(ctx, callee, args.len()).is_some() && args.iter().all(|a| expr(ctx, a, n))
             }
             _ => false,

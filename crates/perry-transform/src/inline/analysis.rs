@@ -262,7 +262,10 @@ pub fn scalar_aggregate_loop_param(func: &Function) -> Option<LocalId> {
             // Calls and constructors can observe or mutate module state while
             // module-init locals are cached. The dedicated path does not need
             // either shape, so keep its body call-free.
-            Expr::Call { .. } | Expr::CallSpread { .. } | Expr::New { .. } => false,
+            Expr::Call { .. }
+            | Expr::RegionCall { .. }
+            | Expr::CallSpread { .. }
+            | Expr::New { .. } => false,
             _ => {
                 let mut safe = true;
                 perry_hir::walker::walk_expr_children(expr, &mut |child| {
@@ -380,7 +383,7 @@ fn has_pod_value_param(func: &Function) -> bool {
 pub fn body_calls_func(stmts: &[Stmt], target_id: FuncId) -> bool {
     fn check_expr(expr: &Expr, target_id: FuncId) -> bool {
         match expr {
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if let Expr::FuncRef(fid) = callee.as_ref() {
                     if *fid == target_id {
                         return true;
@@ -752,6 +755,7 @@ pub fn construction_expr_can_affect_method_lookup(
             )
         }),
         Expr::Call { .. }
+        | Expr::RegionCall { .. }
         | Expr::CallSpread { .. }
         | Expr::NativeMethodCall { .. }
         | Expr::StaticMethodCall { .. }

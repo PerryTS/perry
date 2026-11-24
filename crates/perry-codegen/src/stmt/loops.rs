@@ -6404,7 +6404,10 @@ fn expr_is_packed_f64_loop_safe(
         | Expr::Bool(_)
         | Expr::Null
         | Expr::Undefined => true,
-        Expr::Call { .. } | Expr::NativeMethodCall { .. } | Expr::CallSpread { .. } => false,
+        Expr::Call { .. }
+        | Expr::RegionCall { .. }
+        | Expr::NativeMethodCall { .. }
+        | Expr::CallSpread { .. } => false,
         Expr::Closure { .. }
         | Expr::PropertySet { .. }
         | Expr::PropertyUpdate { .. }
@@ -10117,7 +10120,7 @@ fn expr_array_length_effect(
                 LoopArrayLengthEffect::Preserves
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()
@@ -10578,7 +10581,7 @@ pub(crate) fn expr_preserves_array_length(
         // `mutate([arr])`, `mutate({ arr })`, or a closure captured from an
         // outer scope would make the cached length and bounded-index facts
         // unsound.
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()

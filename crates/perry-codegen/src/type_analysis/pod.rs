@@ -167,7 +167,7 @@ fn collect_pod_numeric_field_read_locals(ctx: &FnCtx<'_>, expr: &Expr, out: &mut
             collect_pod_numeric_field_read_locals(ctx, then_expr, out);
             collect_pod_numeric_field_read_locals(ctx, else_expr, out);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             collect_pod_numeric_field_read_locals(ctx, callee, out);
             for arg in args {
                 collect_pod_numeric_field_read_locals(ctx, arg, out);
@@ -235,7 +235,7 @@ fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) 
                 || expr_may_materialize_pod_local(ctx, object, target_id)
                 || expr_may_materialize_pod_local(ctx, value, target_id)
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             expr_may_materialize_pod_local(ctx, callee, target_id)
                 || args
                     .iter()

@@ -30,12 +30,14 @@ pub(super) fn is_char_code(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
             {
                 true
             }
-            Expr::Call { callee, .. } => matches!(callee.as_ref(),
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
+                matches!(callee.as_ref(),
                 Expr::PropertyGet { object, property, .. }
                 if property == "charCodeAt"
                     && crate::type_analysis::is_string_expr(ctx, object)
                     && crate::type_analysis::string_value_is_runtime_guaranteed(ctx, object)
-                    && !crate::lower_call::property_get::patched_proto::guards(ctx, object, property)),
+                    && !crate::lower_call::property_get::patched_proto::guards(ctx, object, property))
+            }
             Expr::LocalGet(id)
                 if !ctx.boxed_vars.contains(id)
                     && !ctx.module_globals.contains_key(id)

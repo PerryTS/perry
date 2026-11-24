@@ -823,14 +823,16 @@ fn lift_check(expr: &mut Expr) {
         | Expr::IndexGet { object, .. }
         | Expr::RegionOut { object, .. } => object.as_mut(),
         Expr::Delete(operand) => operand.as_mut(),
-        Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => callee.as_mut(),
+        Expr::Call { callee, .. }
+        | Expr::RegionCall { callee, .. }
+        | Expr::CallSpread { callee, .. } => callee.as_mut(),
         _ => return,
     };
     let Expr::Sequence(parts) = first else {
         return;
     };
     let is_plain_check = parts.len() == 2
-        && matches!(&parts[0], Expr::Call { callee, args, .. }
+        && matches!(&parts[0], Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if args.len() == 2
                 && matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == tdz_check::TDZ_CHECK));
     if !is_plain_check {

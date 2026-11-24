@@ -423,7 +423,7 @@ mod tests {
             react_create_element_call(&mut ctx, Expr::String("div".to_string()), &Expr::Null, 0)
                 .expect("react mode must produce a createElement call");
         match call {
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 match *callee {
                     Expr::PropertyGet { property, .. } => assert_eq!(property, "createElement"),
                     other => panic!("expected PropertyGet callee, got {other:?}"),

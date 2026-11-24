@@ -38,7 +38,7 @@ pub fn expr_contains_local_get(e: &perry_hir::Expr, target_id: u32) -> bool {
                 || expr_contains_local_get(then_expr, target_id)
                 || expr_contains_local_get(else_expr, target_id)
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             expr_contains_local_get(callee, target_id)
                 || args.iter().any(|a| expr_contains_local_get(a, target_id))
         }

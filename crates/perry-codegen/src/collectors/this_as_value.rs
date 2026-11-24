@@ -462,7 +462,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
                 || expr_uses_this_as_value(then_expr, fields)
                 || expr_uses_this_as_value(else_expr, fields)
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             expr_uses_this_as_value(callee, fields)
                 || args.iter().any(|a| expr_uses_this_as_value(a, fields))
         }

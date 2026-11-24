@@ -1027,7 +1027,7 @@ pub fn fix_native_instance_expr_with_locals(
                 // here, so the generic recursion below does not revisit it.
                 if matches!(
                     object.as_ref(),
-                    Expr::Call { .. } | Expr::NativeMethodCall { .. }
+                    Expr::Call { .. } | Expr::RegionCall { .. } | Expr::NativeMethodCall { .. }
                 ) {
                     fix_native_instance_expr_with_locals(
                         object,
@@ -1330,7 +1330,7 @@ pub fn detect_native_instance_creation_with_context(
         }
         // Handle Call expressions where the object is a known native instance
         // This is the pattern BEFORE transformation: pool.getConnection()
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()

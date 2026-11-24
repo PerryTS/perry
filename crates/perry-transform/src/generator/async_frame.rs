@@ -70,7 +70,7 @@ pub(super) fn admission(module: &Module) -> HashSet<FuncId> {
             if let Expr::LocalGet(id) = value.as_ref() {
                 *local_awaits.entry(*id).or_default() += 1;
             }
-            if let Expr::Call { callee, .. } = value.as_ref() {
+            if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = value.as_ref() {
                 if let Expr::FuncRef(id) = callee.as_ref() {
                     *consumed.entry(*id).or_default() += 1;
                 }
@@ -101,7 +101,7 @@ pub(super) fn admission(module: &Module) -> HashSet<FuncId> {
             if let Stmt::Let {
                 id,
                 mutable: false,
-                init: Some(Expr::Call { callee, .. }),
+                init: Some(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }),
                 ..
             } = s
             {
@@ -134,7 +134,7 @@ pub(super) fn admission(module: &Module) -> HashSet<FuncId> {
     // Discarding the promise does not publish it. Rejections and all queue
     // ordering remain handled by the existing async machinery.
     for s in &module.init {
-        if let Stmt::Expr(Expr::Call { callee, .. }) = s {
+        if let Stmt::Expr(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) = s {
             if let Expr::FuncRef(id) = callee.as_ref() {
                 *consumed.entry(*id).or_default() += 1;
             }
@@ -192,7 +192,7 @@ fn closed_body(
                 delegate: false, ..
             }
             | Expr::Await(_, _) => true,
-            Expr::Call { callee, .. } => {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
                 if promise_intrinsic(callee) {
                     true
                 } else if let Expr::FuncRef(id) = callee.as_ref() {

@@ -652,16 +652,18 @@ pub(crate) fn try_lower_agg_set(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Opti
     let called = match super::record_array::try_lower_source(ctx, value)? {
         Some(c) => Some(c),
         None => {
-            let Expr::Call {
-                callee,
-                args,
-                byte_offset,
-                ..
-            } = value.as_ref()
-            else {
-                return Ok(None);
+            let (callee, args, byte_offset) = match value.as_ref() {
+                Expr::Call {
+                    callee,
+                    args,
+                    byte_offset,
+                    ..
+                } => (callee, args, *byte_offset),
+                // A split region's call: the direct call it is, no site.
+                Expr::RegionCall { callee, args } => (callee, args, 0),
+                _ => return Ok(None),
             };
-            super::signature_entry::with_direct_call(*byte_offset, || {
+            super::signature_entry::with_direct_call(byte_offset, || {
                 try_lower_call(ctx, callee, args)
             })?
         }

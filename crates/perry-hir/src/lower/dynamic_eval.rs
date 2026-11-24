@@ -138,7 +138,7 @@ fn bindings_object(
 /// does not. Keep the container rooted in the caller instead of emitting a
 /// one-shot builder function and its GC metadata for every direct eval.
 fn inline_bindings_builder(expr: Expr) -> Expr {
-    let Expr::Call { callee, args, .. } = &expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = &expr else {
         return expr;
     };
     let Expr::Closure {
@@ -163,7 +163,7 @@ fn inline_bindings_builder(expr: Expr) -> Expr {
     if *result != id
         || !definitions.iter().all(|stmt| {
             matches!(stmt,
-                Stmt::Expr(Expr::Call { callee, args, .. })
+                Stmt::Expr(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. })
                     if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
                         if name == "js_object_define_accessor")
                     && args.len() == 4

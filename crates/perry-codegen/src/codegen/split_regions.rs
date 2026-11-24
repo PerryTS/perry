@@ -1073,13 +1073,10 @@ fn try_extract(
     };
 
     // The call and the unpacking of live-outs.
-    let call = Expr::Call {
-        byte_end: 0,
+    // Compiler-split region plumbing, not a source site: its own kind.
+    let call = Expr::RegionCall {
         callee: Box::new(callee),
         args: live_in.iter().map(|id| Expr::LocalGet(*id)).collect(),
-        type_args: Vec::new(),
-        // Compiler-split region plumbing, not a source site.
-        byte_offset: 0,
     };
     // A live-out keeps the type the parent's typed locals gave it: the value
     // is the same, and `+v` / `String(v)` is the identity on it.

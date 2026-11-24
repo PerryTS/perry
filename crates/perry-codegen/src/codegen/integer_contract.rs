@@ -73,7 +73,7 @@ fn terms(e: &Expr, f: &Function, steps: &mut Vec<u32>, forcing: &mut u128) -> Op
             terms(left, f, steps, forcing)?;
             terms(right, f, steps, forcing)
         }
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if matches!(callee.as_ref(), Expr::FuncRef(id) if *id == f.id) && args.len() == 1 =>
         {
             let Expr::Binary {

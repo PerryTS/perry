@@ -90,7 +90,9 @@ fn basis(ctx: &FnCtx<'_>, e: &Expr, depth: u8) -> Basis {
         return Basis::No;
     }
     match e {
-        Expr::Call { .. } if call_kinds(ctx, e) == Some(K_STR) => Basis::Facts,
+        Expr::Call { .. } | Expr::RegionCall { .. } if call_kinds(ctx, e) == Some(K_STR) => {
+            Basis::Facts
+        }
         Expr::Logical {
             op: LogicalOp::Coalesce,
             left,

@@ -977,7 +977,7 @@ impl<'e> Walk<'_, 'e> {
             | Expr::TemplateStringCoerce(operand)
             | Expr::StringCoerce(operand)
             | Expr::NumberCoerce(operand) => self.converted(e, operand),
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 let targets = self.proof.targets(callee);
                 // The callee itself: a method call keeps its receiver unless
                 // the targets are known, and then the receiver is `this` of
@@ -1218,7 +1218,7 @@ fn callees(
 ) {
     let mut visit = |e: &Expr| {
         match e {
-            Expr::Call { callee, .. } => {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
                 if let Some((ts, _)) = proof.targets(callee) {
                     ts.into_iter().for_each(&mut *out);
                 }

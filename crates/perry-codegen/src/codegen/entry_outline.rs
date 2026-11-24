@@ -193,12 +193,13 @@ fn as_chunk_call<'a>(
     chunks: &std::collections::HashMap<u32, &'a perry_hir::Function>,
 ) -> Option<&'a perry_hir::Function> {
     match stmt {
-        perry_hir::Stmt::Expr(perry_hir::Expr::Call { callee, args, .. }) if args.is_empty() => {
-            match callee.as_ref() {
-                perry_hir::Expr::FuncRef(id) => chunks.get(id).copied(),
-                _ => None,
-            }
-        }
+        perry_hir::Stmt::Expr(
+            perry_hir::Expr::Call { callee, args, .. }
+            | perry_hir::Expr::RegionCall { callee, args, .. },
+        ) if args.is_empty() => match callee.as_ref() {
+            perry_hir::Expr::FuncRef(id) => chunks.get(id).copied(),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -268,7 +269,7 @@ pub fn logical_entry_module(hir: &HirModule) -> std::borrow::Cow<'_, HirModule> 
 const CJS_FACTORY_NAME: &str = "__perry_cjs_factory";
 
 /// If `expr` is itself an `Expr::Closure`, or a same-expression invocation of
-/// one (`Expr::Call { callee: Box<Expr::Closure>, .. }` — the
+/// one (`Expr::Call { callee: Box<Expr::Closure>, .. } | Expr::RegionCall { callee: Box<Expr::Closure>, .. }` — the
 /// `(function(){...})()` IIFE shape `wrap_commonjs_for_target` always uses to
 /// wrap a CJS body), return that closure. `None` for anything else — this is
 /// intentionally narrow rather than a fully general expression search; the
@@ -276,7 +277,9 @@ const CJS_FACTORY_NAME: &str = "__perry_cjs_factory";
 fn as_inline_closure(expr: &perry_hir::Expr) -> Option<&perry_hir::Expr> {
     match expr {
         perry_hir::Expr::Closure { .. } => Some(expr),
-        perry_hir::Expr::Call { callee, .. } => as_inline_closure(callee.as_ref()),
+        perry_hir::Expr::Call { callee, .. } | perry_hir::Expr::RegionCall { callee, .. } => {
+            as_inline_closure(callee.as_ref())
+        }
         _ => None,
     }
 }
@@ -285,7 +288,9 @@ fn as_inline_closure(expr: &perry_hir::Expr) -> Option<&perry_hir::Expr> {
 fn as_inline_closure_mut(expr: &mut perry_hir::Expr) -> Option<&mut perry_hir::Expr> {
     match expr {
         perry_hir::Expr::Closure { .. } => Some(expr),
-        perry_hir::Expr::Call { callee, .. } => as_inline_closure_mut(callee.as_mut()),
+        perry_hir::Expr::Call { callee, .. } | perry_hir::Expr::RegionCall { callee, .. } => {
+            as_inline_closure_mut(callee.as_mut())
+        }
         _ => None,
     }
 }
@@ -552,9 +557,11 @@ pub(crate) fn outlined_entry_global_let_ids(hir: &HirModule) -> HashSet<u32> {
                 perry_hir::Stmt::PreallocateBoxes(ids) => {
                     globals.extend(ids.iter().filter(|id| definer.contains_key(id)).copied());
                 }
-                perry_hir::Stmt::Expr(perry_hir::Expr::Call { callee, args, .. })
-                    if args.is_empty()
-                        && matches!(callee.as_ref(), perry_hir::Expr::FuncRef(id) if chunk_ids.contains(id)) =>
+                perry_hir::Stmt::Expr(
+                    perry_hir::Expr::Call { callee, args, .. }
+                    | perry_hir::Expr::RegionCall { callee, args, .. },
+                ) if args.is_empty()
+                    && matches!(callee.as_ref(), perry_hir::Expr::FuncRef(id) if chunk_ids.contains(id)) =>
                 {
                     // The compiler-owned call itself carries no module-local use.
                 }
@@ -1490,10 +1497,12 @@ mod tests {
             .init
             .iter()
             .filter_map(|s| match s {
-                Stmt::Expr(Expr::Call { callee, .. }) => match callee.as_ref() {
-                    Expr::FuncRef(id) => Some(*id),
-                    _ => None,
-                },
+                Stmt::Expr(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) => {
+                    match callee.as_ref() {
+                        Expr::FuncRef(id) => Some(*id),
+                        _ => None,
+                    }
+                }
                 _ => None,
             })
             .collect();
@@ -1672,7 +1681,7 @@ mod tests {
             .iter()
             .enumerate()
             .filter_map(|(i, s)| match s {
-                Stmt::Expr(Expr::Call { callee, .. })
+                Stmt::Expr(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. })
                     if matches!(callee.as_ref(), Expr::FuncRef(_)) =>
                 {
                     Some(i)
@@ -1876,7 +1885,7 @@ mod tests {
         assert_eq!(body.len(), 3, "three ordered chunk calls");
         assert!(
             body.iter()
-                .all(|s| matches!(s, Stmt::Expr(Expr::Call { .. }))),
+                .all(|s| matches!(s, Stmt::Expr(Expr::Call { .. } | Expr::RegionCall { .. }))),
             "every residual statement in the factory is a chunk call: {body:?}"
         );
         assert_eq!(
@@ -1942,7 +1951,7 @@ mod tests {
         assert!(
             body[1..]
                 .iter()
-                .all(|s| matches!(s, Stmt::Expr(Expr::Call { .. }))),
+                .all(|s| matches!(s, Stmt::Expr(Expr::Call { .. } | Expr::RegionCall { .. }))),
             "everything else still outlined into ordered chunk calls: {body:?}"
         );
     }

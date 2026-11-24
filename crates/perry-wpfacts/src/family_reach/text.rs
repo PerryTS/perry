@@ -290,6 +290,7 @@ impl Scan<'_, '_, '_> {
                 self.receivers.insert(addr(x));
             }
             Expr::Call { callee, .. }
+            | Expr::RegionCall { callee, .. }
             | Expr::CallSpread { callee, .. }
             | Expr::NewDynamic { callee, .. }
             | Expr::NewDynamicSpread { callee, .. }
