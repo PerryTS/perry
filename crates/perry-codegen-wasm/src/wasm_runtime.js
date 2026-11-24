@@ -2049,6 +2049,12 @@ function __arrayCallback(cb) {
   const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
   return fn && ((...bits) => __invokeWasmCallback(fn, ...cb.captures, ...bits));
 }
+// An array callback as a host array method calls it; a value that is not a Perry
+// callable is passed on for the host to call or reject.
+function __hostPredicate(cb) {
+  const call = __arrayCallback(cb);
+  return call ? (...args) => __bitsToJsValue(call(...args.map(__jsValueToBits))) : cb;
+}
 // The one value of a declared class's static method, shared by every class value
 // that reaches it, so `Sub.m === Base.m`.
 const __classStaticMethodValues = new Map();
@@ -2761,6 +2767,8 @@ const __memDispatch = {
     for (let i = 0; i < arr.length; i++) { if (__bitsToJsValue(call(__jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr)))) return i; }
     return -1;
   },
+  array_find_last: (arr, cb) => Array.prototype.findLast.call(arr, __hostPredicate(cb)),
+  array_find_last_index: (arr, cb) => Array.prototype.findLastIndex.call(arr, __hostPredicate(cb)),
   array_sort: (arr, cb) => {
     if (!Array.isArray(arr)) return arr;
     if (cb === undefined || cb === null) { arr.sort(); return arr; }
@@ -2787,16 +2795,8 @@ const __memDispatch = {
   array_to_spliced: (arr, start, deleteCount, ...items) => Array.prototype.toSpliced.call(arr, start, deleteCount, ...items),
   array_with: (arr, index, value) => Array.prototype.with.call(arr, index, value),
   array_copy_within: (arr, target, start, end) => Array.prototype.copyWithin.call(arr, target, start, end),
-  array_some: (arr, cb) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
-    if (!call) return 0;
-    return arr.some((v, i) => __bitsToJsValue(call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
-  },
-  array_every: (arr, cb) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
-    if (!call) return 0;
-    return arr.every((v, i) => __bitsToJsValue(call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
-  },
+  array_some: (arr, cb) => Array.isArray(arr) && arr.some(__hostPredicate(cb)) ? 1 : 0,
+  array_every: (arr, cb) => Array.isArray(arr) && arr.every(__hostPredicate(cb)) ? 1 : 0,
 
   // Classes — args are plain JS values. obj is the object, className/methodName are strings.
   // class_new returns a plain object carrying its class name (see __classInstance).

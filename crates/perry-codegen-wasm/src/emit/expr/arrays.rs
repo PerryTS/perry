@@ -401,6 +401,38 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 1, callback);
                 self.emit_memcall(func, "array_find_index", 2);
             }
+            Expr::ArrayFindLast { array, callback } => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, array);
+                self.emit_store_arg(func, 1, callback);
+                self.emit_memcall(func, "array_find_last", 2);
+            }
+            Expr::ArrayFindLastIndex { array, callback } => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, array);
+                self.emit_store_arg(func, 1, callback);
+                self.emit_memcall(func, "array_find_last_index", 2);
+            }
+            // `some` / `every` answer through the i32 bridges the unfolded method call
+            // uses (`emit/method_call.rs`).
+            Expr::ArraySome { array, callback } | Expr::ArrayEvery { array, callback } => {
+                let bridge = if matches!(expr, Expr::ArraySome { .. }) {
+                    "array_some"
+                } else {
+                    "array_every"
+                };
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, array);
+                self.emit_store_arg(func, 1, callback);
+                self.emit_memcall_i32(func, bridge, 2);
+                func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                    ValType::I64,
+                )));
+                func.instruction(&Instruction::I64Const(TAG_TRUE as i64));
+                func.instruction(&Instruction::Else);
+                func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
+                func.instruction(&Instruction::End);
+            }
             Expr::ArraySort { array, comparator } => {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, array);
