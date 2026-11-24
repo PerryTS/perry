@@ -1015,6 +1015,7 @@ pub(super) fn emit_class_artifacts(c: ClassArtifactsCtx<'_>) -> Result<()> {
                         llmod,
                         &public,
                         class_ids[&class.name],
+                        is_static,
                     );
                 }
             }
