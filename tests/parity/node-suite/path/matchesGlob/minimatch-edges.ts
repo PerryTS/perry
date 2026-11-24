@@ -26,5 +26,6 @@ for (const [subject, pattern] of [
   console.log(JSON.stringify(subject), JSON.stringify(pattern), path.matchesGlob(subject, pattern));
 }
 console.log("win32 //?/C:", path.win32.matchesGlob("//?/C:/a.txt", "c:/*.txt"), path.win32.matchesGlob("//?/c:/src/a.ts", "C:/src/*.ts"));
+console.log("win32 folded drive", path.win32.matchesGlob("x.ts/..\\c:/b", "C:/{a,b}"), path.win32.matchesGlob("x.ts/..\\c:/b", "C:/b"));
 try { path.matchesGlob("a", "x".repeat(65537)); } catch (e: any) { console.log("long:", e.name, e.message); }
 try { path.matchesGlob("bbb", "!(a)".repeat(16)); } catch (e: any) { console.log("large:", e.name); }

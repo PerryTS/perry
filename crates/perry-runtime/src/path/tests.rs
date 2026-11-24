@@ -158,6 +158,8 @@ fn matches_glob_answers_like_minimatch() {
         (false, "d", "@(a|@(b|@(c|@(d))))", true),
         (false, "[x", "[*", true),
         (false, "[ab", "[@(a|b)b", false),
+        (true, r#"x.ts/..\c:/b"#, "C:/{a,b}", true),
+        (true, r#"x.ts/..\c:/b"#, "C:/b", false),
     ] {
         let (subject_ptr, pattern_ptr) = (string_to_js(subject), string_to_js(pattern));
         let got = if win32 {

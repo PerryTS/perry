@@ -78,7 +78,9 @@ pub(crate) fn matches<P, E>(
     if pattern.is_empty() {
         return Ok(path.is_empty());
     }
-    let raw = split(
+    // minimatch folds the split path in place while matching the first pattern, so a
+    // later pattern sees (and aligns its drive root against) the folded path.
+    let mut file = split(
         &if win32 {
             path.replace('\\', "/")
         } else {
@@ -86,8 +88,6 @@ pub(crate) fn matches<P, E>(
         },
         win32,
     );
-    let mut file = raw.clone();
-    fold_segments(&mut file, win32, false);
     let slashed = pattern.replace('\\', "/");
     let expanded: Vec<String> = if has_brace_group(&slashed) {
         let escaped = slashed.replace('\0', ESC_NUL);
@@ -126,12 +126,13 @@ pub(crate) fn matches<P, E>(
             });
         }
         let (file_start, pattern_start) = if win32 {
-            align_win32_roots(&raw, &parts, &mut compiled)
+            align_win32_roots(&file, &parts, &mut compiled)
         } else {
             (0, 0)
         };
-        let file = &file[file_start.min(file.len())..];
-        if match_parts(file, &compiled[pattern_start..], test).map_err(GlobError::Engine)? {
+        fold_segments(&mut file, win32, false);
+        let rest = &file[file_start.min(file.len())..];
+        if match_parts(rest, &compiled[pattern_start..], test).map_err(GlobError::Engine)? {
             return Ok(true);
         }
     }

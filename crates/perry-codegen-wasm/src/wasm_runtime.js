@@ -3842,9 +3842,9 @@ function isPathSeparator(code) {
     if (pattern === '') return path === '';
     const split = (p) => win && /^\/\/[^/]+/.test(p) ? ['', ...p.split(/\/+/)] : p.split(/\/+/);
     const drive = (s) => win && typeof s === 'string' && /^[a-z]:$/i.test(s);
-    const raw = split(win ? path.replace(/\\/g, '/') : path);
-    const file = raw.slice();
-    foldSegments(file, win, false);
+    // minimatch folds the split path in place while matching the first pattern, so a
+    // later pattern sees (and aligns its drive root against) the folded path.
+    const file = split(win ? path.replace(/\\/g, '/') : path);
     const slashed = pattern.replace(/\\/g, '/');
     let expanded = [slashed];
     if (/\{(?:(?!\{).)*\}/.test(slashed)) {
@@ -3863,14 +3863,15 @@ function isPathSeparator(code) {
       if (win) {
         if (parts[0] === '' && parts[1] === '' && parts[2] === '?' && drive(compiled[3])) compiled[2] = '?';
         const unc = (p) => p[0] === '' && p[1] === '' && p[2] === '?' && drive(p[3]);
-        const fdi = drive(raw[0]) ? 0 : unc(raw) ? 3 : -1;
+        const fdi = drive(file[0]) ? 0 : unc(file) ? 3 : -1;
         const pdi = drive(compiled[0]) ? 0 : unc(compiled) ? 3 : -1;
-        if (fdi >= 0 && pdi >= 0 && raw[fdi].toLowerCase() === compiled[pdi].toLowerCase()) {
-          compiled[pdi] = raw[fdi];
+        if (fdi >= 0 && pdi >= 0 && file[fdi].toLowerCase() === compiled[pdi].toLowerCase()) {
+          compiled[pdi] = file[fdi];
           fileStart = fdi;
           patternStart = pdi;
         }
       }
+      foldSegments(file, win, false);
       if (matchParts(file.slice(fileStart), compiled.slice(patternStart))) return true;
     }
     return false;
