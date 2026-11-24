@@ -210,7 +210,7 @@ pub(super) fn dynamic_member_call(
             })
             .collect();
         return Expr::CallSpread {
-            byte_offset: call.span.lo.0,
+            byte_offset: crate::lower::call_token(call),
             byte_end: 0,
             callee,
             args,
@@ -222,6 +222,6 @@ pub(super) fn dynamic_member_call(
         callee,
         args,
         type_args: Vec::new(),
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::call_token(call),
     }
 }

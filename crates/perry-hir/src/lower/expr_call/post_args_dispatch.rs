@@ -73,7 +73,7 @@ pub(super) fn try_object_static_alias_call(
                     if let Some(method) = ctx.object_static_method_aliases.get(&id).cloned() {
                         if let Some(method) = method.strip_prefix("Response.") {
                             return Ok(Expr::NativeMethodCall {
-                                byte_offset: call.span.lo.0,
+                                byte_offset: crate::lower::call_token(call),
                                 module: "fetch".to_string(),
                                 class_name: None,
                                 object: None,

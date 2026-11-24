@@ -430,7 +430,7 @@ fn lower_call_inner(
                         && matches!(method_name, "Database" | "DatabaseSync")
                     {
                         return Ok(Expr::NativeMethodCall {
-                            byte_offset: call.span.lo.0,
+                            byte_offset: crate::lower::call_token(call),
                             module: "sqlite".to_string(),
                             class_name: None,
                             object: None,
@@ -542,7 +542,7 @@ fn lower_call_inner(
                     ast::SuperProp::Ident(ident) => {
                         if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
                             return Ok(Expr::ObjectSuperMethodCall {
-                                byte_offset: call.span.lo.0,
+                                byte_offset: crate::lower::call_token(call),
                                 home: Box::new(Expr::LocalGet(home_id)),
                                 key: Box::new(Expr::String(ident.sym.to_string())),
                                 receiver: Box::new(Expr::This),
@@ -563,7 +563,7 @@ fn lower_call_inner(
                     ast::SuperProp::Computed(computed) => {
                         if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
                             return Ok(Expr::ObjectSuperMethodCall {
-                                byte_offset: call.span.lo.0,
+                                byte_offset: crate::lower::call_token(call),
                                 home: Box::new(Expr::LocalGet(home_id)),
                                 key: Box::new(lower_expr(ctx, computed.expr.as_ref())?),
                                 receiver: Box::new(Expr::This),
@@ -621,7 +621,7 @@ fn lower_call_inner(
                                 }
                             };
                             return Ok(Expr::ObjectSuperMethodCall {
-                                byte_offset: call.span.lo.0,
+                                byte_offset: crate::lower::call_token(call),
                                 home: Box::new(home),
                                 key: Box::new(lower_expr(ctx, computed.expr.as_ref())?),
                                 receiver: Box::new(Expr::This),
@@ -660,7 +660,7 @@ fn lower_call_inner(
                         )),
                         args,
                         type_args: Vec::new(),
-                        byte_offset: call.span.lo.0,
+                        byte_offset: crate::lower::call_token(call),
                     });
                 }
                 if native_module::namespace_call_needs_esm_binding(ctx, expr) {
@@ -668,7 +668,7 @@ fn lower_call_inner(
                         callee: Box::new(lower_expr(ctx, expr)?),
                         args,
                         type_args: Vec::new(),
-                        byte_offset: call.span.lo.0,
+                        byte_offset: crate::lower::call_token(call),
                         byte_end: 0,
                     });
                 }
@@ -907,7 +907,7 @@ fn lower_call_inner(
                     // #5247: capture the call's source byte offset (same source as
                     // DynamicImport's `byte_offset` below). Codegen resolves it to a
                     // `file:line` for the runtime "X is not a function" TypeError.
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                 })
             }
         }

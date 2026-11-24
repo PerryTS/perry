@@ -123,7 +123,7 @@ pub(super) fn try_url_date_weakref_instance(
             {
                 let pattern_expr = lower_expr(ctx, &member.obj)?;
                 return Ok(Ok(Expr::NativeMethodCall {
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                     module: "url".to_string(),
                     class_name: Some("URLPattern".to_string()),
                     object: Some(Box::new(pattern_expr)),
@@ -172,13 +172,13 @@ pub(super) fn try_url_date_weakref_instance(
                         byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: call.span.lo.0,
+                            byte_offset: crate::lower::call_token(call),
                             object: Box::new(recv_expr),
                             property: "toJSON".to_string(),
                         }),
                         args,
                         type_args: vec![],
-                        byte_offset: call.span.lo.0,
+                        byte_offset: crate::lower::call_token(call),
                     }));
                 }
                 cached_recv = Some(recv_expr);

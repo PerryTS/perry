@@ -191,12 +191,12 @@ pub(crate) fn try_iterator_from(
             callee: Box::new(Expr::PropertyGet {
                 object: Box::new(iterator),
                 property: "concat".to_string(),
-                byte_offset: call.span.lo.0,
+                byte_offset: crate::lower::call_token(call),
                 byte_end: 0,
             }),
             args,
             type_args: vec![],
-            byte_offset: call.span.lo.0,
+            byte_offset: crate::lower::call_token(call),
             byte_end: 0,
         }));
     }
