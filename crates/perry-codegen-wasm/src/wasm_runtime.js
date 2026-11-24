@@ -3120,6 +3120,18 @@ const __memDispatch = {
   set_size: (s) => (s instanceof Set) ? s.size : 0,
   set_clear: (s) => { if (s instanceof Set) s.clear(); },
   set_values: (s) => (s instanceof Set) ? [...s.values()] : [],
+
+  // WeakRef / FinalizationRegistry are the host's; a Perry closure cleanup callback is
+  // wrapped so the host can call it.
+  weakref_new: (target) => new WeakRef(target),
+  weakref_deref: (ref) => WeakRef.prototype.deref.call(ref),
+  finreg_new: (cb) => {
+    const call = __arrayCallback(cb);
+    return new FinalizationRegistry(call ? (held) => { call(__jsValueToBits(held)); } : cb);
+  },
+  finreg_register: (reg, target, held, token) =>
+    FinalizationRegistry.prototype.register.call(reg, target, held, token),
+  finreg_unregister: (reg, token) => FinalizationRegistry.prototype.unregister.call(reg, token),
   // The Set/Map `for...of` fast path steps `slot = cursor_next(coll, slot + 1, ep)`,
   // then `ep = compaction_epoch(coll)`, and reads the entry with `*_at(coll, slot)`;
   // -1 ends the loop. A host collection has no slots, so each loop owns a live iterator:
