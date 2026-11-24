@@ -36,3 +36,18 @@ fn stop_report_names_the_native_and_the_handed_value() {
         "no hands line:\n{b}"
     );
 }
+
+/// The same native call inside a function: the getter is its parameter, and
+/// the binding of a parameter (`run_unsummarized`'s `param-bind` edge) stands
+/// at the function's declaration, so the edge into the getter's node has a
+/// program position.
+#[test]
+fn stop_report_parameter_binding_has_a_position() {
+    let b = first_block(
+        "function k(h: any, y: any): void { h.__defineGetter__(\"g\", y); }\nk({}, new Proxy(function () {}, {}));\n",
+    );
+    assert!(b.contains("a native hands a value to unknown code"), "{b}");
+    assert!(b.contains("  fed by:  "), "no fed-by line:\n{b}");
+    assert!(!b.contains("(no program position recorded)"), "edge without a position:\n{b}");
+    assert!(!b.contains("  nopos:   "), "edge without a position:\n{b}");
+}

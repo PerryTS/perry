@@ -2221,7 +2221,16 @@ impl Model {
                 self.nodes[b as usize].frame = run;
                 self.nodes[b as usize].rel = true;
                 self.nodes[p as usize].frame = run;
+                // The binding stands at the parameter's declaration (the
+                // position generation recorded for the parameter's node).
+                let saved = self.stop_top.as_mut().map(|s| {
+                    let at = s.node_pos.get(p as usize).copied().unwrap_or(crate::topstop::NOPOS);
+                    std::mem::replace(&mut s.gen_pos, at)
+                });
                 self.edge(b, p);
+                if let (Some(s), Some(g)) = (self.stop_top.as_mut(), saved) {
+                    s.gen_pos = g;
+                }
                 self.funcs[f as usize].params[i] = b;
             }
         }
