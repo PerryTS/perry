@@ -327,6 +327,18 @@
         if let Some(sig) = perry_system_table_lookup(method) {
             return lower_perry_ui_table_call(ctx, sig, args);
         }
+        if method == "requestLocation" {
+            bail!(
+                "perry/system: 'requestLocation' was removed; \
+                 use geolocationGetCurrent(onSuccess, onError)"
+            );
+        }
+        bail!(
+            "perry/system: '{}' is not a known function (args: {}). \
+             Check types/perry/system/index.d.ts for the supported API surface.",
+            method,
+            args.len()
+        );
     }
 
     // perry/audio dispatch (issue #1867): loadSound, play, stop, pause,
