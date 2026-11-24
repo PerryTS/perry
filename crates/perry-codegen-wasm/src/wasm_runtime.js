@@ -4317,8 +4317,9 @@ function perry_ui_set_enabled(h, enabled) {
   const el = uiGet(h); if (el) { el.disabled = !enabled; el.style.pointerEvents = enabled ? "" : "none"; el.style.opacity = enabled ? "" : "0.5"; }
 }
 function perry_ui_set_tooltip(h, text) { const el = uiGet(h); if (el) el.title = text || ""; }
+// On a Toggle the name goes on the checkbox: a screen reader ignores one on its wrapper.
 function perry_ui_widget_set_accessibility_label(h, text) {
-  const el = uiGet(h); if (el) el.setAttribute("aria-label", String(text));
+  const el = uiGet(h); if (el) (el._inp || el).setAttribute("aria-label", String(text));
 }
 // A `<label for>` bound to the field, or to the first form control inside a composite
 // widget; the control gets an id when it has none.

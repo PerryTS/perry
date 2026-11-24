@@ -233,7 +233,7 @@ for (const label of ["A", "B", "C"]) {
 }
 
 // `Label(text, field)` is a `<label for>` naming the field's id, or the input inside a
-// composite widget such as a Toggle; `widgetSetAccessibilityLabel` sets `aria-label`.
+// composite widget such as a Toggle; `widgetSetAccessibilityLabel` sets that control's `aria-label`.
 #[test]
 fn label_binds_to_its_field_and_accessibility_label_sets_aria_label() {
     let dom = format!(
@@ -258,6 +258,7 @@ widgetSetAccessibilityLabel(phone, "Phone number");
 Label("Phone", phone);
 const notify = Toggle("Notify", (v: boolean) => {});
 Label("Send me updates", notify);
+widgetSetAccessibilityLabel(notify, "Updates");
 "#,
             &dom,
             r#"
@@ -269,10 +270,10 @@ for (const text of ["Phone", "Send me updates"]) {
   const target = [phone, toggleInput].find(e => e.id === label.htmlFor);
   console.log(text + " -> " + (target === phone ? "phone" : target === toggleInput ? "toggle input" : "nothing"));
 }
-console.log(phone["aria-label"]);
+console.log(phone["aria-label"] + ", " + toggleInput["aria-label"]);
 "#
         ),
-        "Phone -> phone\nSend me updates -> toggle input\nPhone number"
+        "Phone -> phone\nSend me updates -> toggle input\nPhone number, Updates"
     );
 }
 

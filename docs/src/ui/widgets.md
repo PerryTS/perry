@@ -496,7 +496,7 @@ Every widget handle accepts these:
 | `widgetSetEnabled(w, flag)` | `0` disables, `1` enables |
 | `widgetSetHidden(w, flag)` | `0` visible, `1` hidden |
 | `widgetSetTooltip(w, text)` | Tooltip on hover (desktop only) |
-| `widgetSetAccessibilityLabel(w, text)` | Name a screen reader announces (web `aria-label`; no-op on native) |
+| `widgetSetAccessibilityLabel(w, text)` | Name a screen reader announces for a control, not a layout container (web `aria-label`; no-op on native) |
 | `widgetSetOnClick(w, cb)` | Click handler |
 | `widgetSetOnHover(w, cb)` | Hover enter/leave (desktop only) |
 | `widgetSetOnDoubleClick(w, cb)` | Double-click handler |
