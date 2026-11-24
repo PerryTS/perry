@@ -343,7 +343,7 @@ pub struct ProgramFacts {
     pub diag_stream: Option<(std::path::PathBuf, Vec<(u64, u64)>)>,
     /// Dump-only: the addresses of the HIR sites the analyses recorded
     /// (`ledger::census` compares them with the HIR).
-    pub(crate) diagnostic_sites: Vec<(usize, &'static str, u32)>,
+    pub(crate) diagnostic_sites: Vec<(usize, String, &'static str, u32)>,
     /// DECISIONS 225: the activation pass's count (the whole program).
     pub activation: Option<String>,
     /// DECISIONS 225: escaped functions of the final solve whose body was
