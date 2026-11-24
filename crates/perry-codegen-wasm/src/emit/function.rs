@@ -291,7 +291,7 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
         let _rt = self.rt.as_ref().unwrap();
 
-        // Field initializers: class_set_field(this, field_name, value) via mem_call
+        // Field initializers: class_init_field(this, field_name, value) via mem_call
         let emit_field_inits = |func: &mut Function| {
             for field in &class.fields {
                 let Some(init) = &field.init else { continue };
@@ -343,7 +343,7 @@ impl WasmModuleEmitter {
                 // Store value to slot 2
                 ctx.emit_store_arg(func, 2, init);
                 // Call via mem_call
-                ctx.emit_memcall_void(func, "class_set_field", 3);
+                ctx.emit_memcall_void(func, "class_init_field", 3);
             }
         };
         // A derived class initializes its fields when `super()` returns, so the parent
@@ -387,7 +387,7 @@ impl WasmModuleEmitter {
 
     pub(super) fn compile_class_method(
         &self,
-        class_name: &str,
+        home_class: Option<&str>,
         method: &perry_hir::ir::Function,
     ) -> Function {
         // Local 0 = this, params start at 1
@@ -417,7 +417,7 @@ impl WasmModuleEmitter {
         let mut func = Function::new(locals);
         let _has_ret = method.body.iter().any(has_return);
         let mut ctx = FuncEmitCtx::new(self, &local_map, temp_local_idx, temp_i32_idx);
-        ctx.current_class = Some(class_name.to_string());
+        ctx.current_class = home_class.map(str::to_string);
         ctx.this_local = Some(0);
         ctx.emit_box_params(&mut func, &method.params);
 
