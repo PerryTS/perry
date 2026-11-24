@@ -447,9 +447,6 @@ fn target_of(
     recs: &[&CallSiteRec],
 ) -> Result<(u32, u32), &'static str> {
     let live = |n: NodeId| (n as usize) < g.m.nodes.len();
-    if offset == 0 {
-        return Err("offset-0");
-    }
     if recs.iter().any(|r| r.spread) {
         return Err("spread");
     }

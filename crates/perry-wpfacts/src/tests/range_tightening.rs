@@ -64,10 +64,7 @@ fn a_sum_of_two_counters_is_their_hull() {
     assert_eq!(call(&calls, "at(r * 16)"), (Some((0, 112)), true));
     assert_eq!(call(&calls, "at(r * 16 + f)"), (Some((0, 119)), true));
     assert_eq!(call(&calls, "at(r + f)"), (Some((0, 14)), true));
-    assert_eq!(
-        call(&calls, "at(r * 16 - f + 7)"),
-        (Some((0, 119)), true)
-    );
+    assert_eq!(call(&calls, "at(r * 16 - f + 7)"), (Some((0, 119)), true));
 }
 
 #[test]

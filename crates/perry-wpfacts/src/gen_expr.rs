@@ -796,7 +796,13 @@ impl<'a> Gen<'a> {
         // online, so `call_with` binds the callee read so far inside it, and
         // the skip (`Model::ns_pair_of`) must already see the call there.
         self.m.ns_pair_calls.insert(c0 as CallId, (ns_b, key));
-        let rg = self.call_with(fx, callee, a.clone(), vec![], (*byte_offset, *byte_end));
+        let rg = self.call_with(
+            fx,
+            callee,
+            a.clone(),
+            vec![],
+            Some((*byte_offset, *byte_end)),
+        );
         let made: Vec<CallId> = (c0..self.m.calls.len())
             .filter(|&c| self.m.calls[c].ret == rg && self.m.calls[c].args == a)
             .map(|c| c as CallId)
@@ -2212,10 +2218,11 @@ impl<'a> Gen<'a> {
                 self.m.edge(e, err);
                 let none = self.tmp("step-resume-none");
                 let b = self.prim_node(prim::BOOL);
-                self.call_with(fx, callee, vec![none, b], vec![], (*byte_offset, *byte_end))
+                let site = Some((*byte_offset, *byte_end));
+                self.call_with(fx, callee, vec![none, b], vec![], site)
             }
             // A split region's call: the direct call it is, no site.
-            Expr::RegionCall { callee, args } => self.call_expr(fx, callee, args, &[], 0, 0),
+            Expr::RegionCall { callee, args } => self.call_expr(fx, callee, args, &[], None),
             Expr::Call {
                 callee,
                 args,
@@ -2223,11 +2230,10 @@ impl<'a> Gen<'a> {
                 byte_end,
                 ..
             } => {
-                let result = self.call_expr(fx, callee, args, &[], *byte_offset, *byte_end);
-                if *byte_offset != 0 {
-                    self.call_kinds_at
-                        .push((fx.module, *byte_offset, *byte_end, result));
-                }
+                let site = Some((*byte_offset, *byte_end));
+                let result = self.call_expr(fx, callee, args, &[], site);
+                self.call_kinds_at
+                    .push((fx.module, *byte_offset, *byte_end, result));
                 result
             }
             Expr::CallSpread { callee, args, .. } => {
@@ -2241,7 +2247,10 @@ impl<'a> Gen<'a> {
                 // model run for it then (the console formatter) reads it.
                 let prev =
                     std::mem::replace(&mut self.fixed_spreads, (!lead).then(|| spreads.clone()));
-                let ret = self.call_with(fx, callee, a, s, (0, 0));
+                // FACTS-GAP: a spread value call `f(...xs)` passes no site
+                // (no `call_sites_at`/`read_sites` record); giving it the
+                // CallSpread's identity adds facts, a separate measured step.
+                let ret = self.call_with(fx, callee, a, s, None);
                 self.fixed_spreads = prev;
                 if !lead {
                     for c in &mut self.m.calls[c0..] {
