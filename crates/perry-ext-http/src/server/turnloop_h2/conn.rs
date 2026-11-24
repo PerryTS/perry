@@ -1273,6 +1273,14 @@ pub(super) fn on_eof(id: impl Into<Target>) {
     if already != Some(false) {
         return;
     }
+    if peek(id, |conn| conn.role == Role::Client && conn.handshaking).unwrap_or(false) {
+        // Node's error for a peer that closes before the handshake completes.
+        fail_tls(
+            id,
+            "ECONNRESET: Client network socket disconnected before secure TLS connection was established",
+        );
+        return;
+    }
     // The transport is gone: the core produces one terminal per open stream.
     with_owned(id, |conn| {
         if let Some(core) = conn.core.as_mut() {
@@ -1348,22 +1356,33 @@ pub(super) fn on_timer(id: impl Into<Target>) {
 
 /// The TLS session failed: a client session's `'error'` carries the cause
 /// before the connection closes, as Node's does.
-fn fail_tls(id: i64, failure: &str) {
+fn fail_tls(id: impl Into<Target>, failure: &str) {
+    let id = id.into();
     if peek(id, |conn| conn.role == Role::Client).unwrap_or(false) {
         let session = peek(id, |conn| conn.session_handle).unwrap_or(0);
+        cancel_queued_opens(id, &perry_ext_net::turnloop_tls::node_failure(failure).1);
         crate::server::http2_server::queue_turnloop_session_tls_error(session, failure);
     }
     destroy_connection(id);
+}
+
+/// The transport failed before it came up. Each `session.request()` still
+/// waiting for it is cancelled with `ERR_HTTP2_STREAM_CANCEL`, and that stream's
+/// `'error'` comes before the session's, as in Node.
+fn cancel_queued_opens(id: impl Into<Target>, cause: &str) {
+    let queued = with_owned(id, |conn| std::mem::take(&mut conn.queued_opens)).unwrap_or_default();
+    for open in queued {
+        crate::server::http2_server::queue_turnloop_stream_cancel(open.stream_handle, cause);
+    }
 }
 
 pub(super) fn on_error(id: impl Into<Target>, code: Option<&str>) {
     let id = id.into();
     let session = peek(id, |conn| conn.session_handle).unwrap_or(0);
     if session != 0 {
-        crate::server::http2_server::queue_turnloop_session_error(
-            session,
-            code.unwrap_or("ECONNRESET"),
-        );
+        let code = code.unwrap_or("ECONNRESET");
+        cancel_queued_opens(id, code);
+        crate::server::http2_server::queue_turnloop_session_error(session, code);
     }
     destroy_connection(id);
 }
