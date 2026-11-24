@@ -97,8 +97,6 @@ pub(crate) use direct_method_guard::emit_inline_direct_method_shape_guard;
 #[cfg(test)]
 mod args_sweep_tests;
 #[cfg(test)]
-mod system_unknown_call_tests;
-#[cfg(test)]
 mod conversion_window_tests;
 #[cfg(test)]
 mod named_import_install_tests;
@@ -107,6 +105,8 @@ mod native;
 #[cfg(test)]
 mod native_abi_tests;
 mod native_module_dispatch;
+#[cfg(test)]
+mod system_unknown_call_tests;
 pub(crate) use early_branches::native_receiver_module;
 pub(crate) use native_module_dispatch::native_lookup_runtime;
 #[cfg(test)]
