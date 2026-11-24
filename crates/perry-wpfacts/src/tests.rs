@@ -73,6 +73,7 @@ mod class_call_throws;
 mod class_capture_forwarding;
 mod class_statics;
 mod closed_marker_load;
+mod closed_methods;
 mod closed_world;
 mod closure_context;
 mod computed_delete_absent;

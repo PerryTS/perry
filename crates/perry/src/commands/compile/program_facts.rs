@@ -1159,6 +1159,29 @@ fn elision_for(
             e.dedup();
         }
     }
+    // The method calls closed over declared methods; a record proving less
+    // leaves its offset out.
+    if let Some(module) = pf
+        .module_paths
+        .iter()
+        .position(|p| p == path)
+        .filter(|_| !interp)
+    {
+        let mut refused: std::collections::BTreeSet<(u32, String)> = Default::default();
+        for s in pf
+            .sites
+            .iter()
+            .filter(|s| s.module as usize == module && s.is_call)
+        {
+            let at = (s.byte_offset, s.key.clone());
+            if s.closed_methods && !refused.contains(&at) {
+                out.closed_methods.insert(at);
+            } else {
+                out.closed_methods.remove(&at);
+                refused.insert(at);
+            }
+        }
+    }
     // FVA 3.4: every class's constant statics (a static call names its class
     // by id, which may be another module's).
     if !interp {

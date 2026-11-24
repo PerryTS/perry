@@ -284,8 +284,9 @@ pub(crate) fn try_lower_instance_method_call(
     property: &str,
     args: &[Expr],
     call_byte_offset: u32,
+    member: &Expr,
 ) -> Result<Option<String>> {
-    lower_instance_method_call(ctx, object, property, args, None, call_byte_offset)
+    lower_instance_method_call(ctx, object, property, args, None, call_byte_offset, member)
 }
 
 /// `recv.m(...args)`: the plain call's tower with the spread argument
@@ -297,8 +298,17 @@ pub(crate) fn try_lower_instance_method_spread_call(
     property: &str,
     args: &[perry_hir::CallArg],
     call_byte_offset: u32,
+    member: &Expr,
 ) -> Result<Option<String>> {
-    lower_instance_method_call(ctx, object, property, &[], Some(args), call_byte_offset)
+    lower_instance_method_call(
+        ctx,
+        object,
+        property,
+        &[],
+        Some(args),
+        call_byte_offset,
+        member,
+    )
 }
 
 fn lower_instance_method_call(
@@ -308,6 +318,7 @@ fn lower_instance_method_call(
     args: &[Expr],
     spread: Option<&[perry_hir::CallArg]>,
     call_byte_offset: u32,
+    member: &Expr,
 ) -> Result<Option<String>> {
     // Runtime-derived evidence may identify the receiver directly. A declared
     // local class is weaker: it may only select the later direct-method guard,
@@ -501,9 +512,14 @@ fn lower_instance_method_call(
         // direct calls, with no probe. Its generic arm is only a nullable
         // receiver's (the receiver test a read keeps): a nullish receiver
         // reads its method, before the arguments, and throws.
+        // The switch reads no shadow bit, so where a write or a relink may
+        // reach some object the facts must also name each receiver's method.
+        let unshadowed = !crate::proto_constants::shadow_tests()
+            || crate::expr::wpfacts_access::closed_methods(ctx, member, property);
         let proven: Option<(Vec<(u32, usize)>, bool)> =
-            crate::expr::wpfacts_access::proven_receiver_classes(ctx, object).and_then(
-                |(cids, nullable)| {
+            crate::expr::wpfacts_access::proven_receiver_classes(ctx, object)
+                .filter(|_| unshadowed)
+                .and_then(|(cids, nullable)| {
                     cids.iter()
                         .map(|&cid| {
                             implementors
@@ -514,8 +530,7 @@ fn lower_instance_method_call(
                         })
                         .collect::<Option<Vec<_>>>()
                         .map(|m| (m, nullable))
-                },
-            );
+                });
         // A typed receiver takes this route only when the facts close the
         // site over cased implementors; otherwise the guarded typed path
         // below is unchanged.
