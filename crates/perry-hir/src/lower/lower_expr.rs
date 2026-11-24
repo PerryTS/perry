@@ -476,11 +476,11 @@ fn lower_expr_impl(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<Expr> 
 
             let callee = lower_expr(ctx, &tagged.tag)?;
             Ok(Expr::Call {
-                byte_end: 0,
+                byte_end: tagged.span.hi.0,
                 callee: Box::new(callee),
                 args: call_args,
                 type_args: vec![],
-                byte_offset: 0,
+                byte_offset: tagged.span.lo.0,
             })
         }
         // Class expression used as a value (not in `new` context) —
