@@ -251,8 +251,7 @@ pub(crate) fn write_floor(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
 /// `e` is the `fill` call of an at-rest birth (wpfacts keys it by the
 /// `fill` member read).
 pub(crate) fn is_birth(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    let Expr::Call { callee, .. } = e
-    else {
+    let Expr::Call { callee, .. } = e else {
         return false;
     };
     let Expr::PropertyGet {

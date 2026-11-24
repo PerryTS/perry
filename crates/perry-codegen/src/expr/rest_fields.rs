@@ -214,11 +214,10 @@ fn gated(ctx: &FnCtx<'_>, property: &str) -> bool {
 
 /// Is the read of `property` at `byte_offset` one a lane may reach: a lane
 /// key read at a site wpfacts lists (`ElisionFacts::rest_lane_reads`), or
-/// at a site without an offset (synthesized, which the facts cannot name)?
+/// or an unsited read (`Expr::property_get_unsited`, built after facts: no
+/// fact names it, so it may reach a lane)?
 fn gated_read(ctx: &FnCtx<'_>, property: &str, byte_offset: u32) -> bool {
     gated(ctx, property)
-        // offset 0: a lane-key read codegen builds after facts (member_update.rs:296,
-        // value_records.rs:940) stays on the lane-aware path.
         && (byte_offset == 0 || ctx.wpfacts.rest_lane_reads.contains_key(&byte_offset))
 }
 
@@ -230,8 +229,7 @@ fn site_slot(ctx: &FnCtx<'_>, property: &str, byte_offset: u32) -> Option<u32> {
         .rest_lane_reads
         .get(&byte_offset)
         .copied()
-        // offset 0: a lane-key read codegen builds after facts names no site.
-        .filter(|&s| byte_offset != 0 && s < LANE_SLOTS && lanes_agree(ctx, property))
+        .filter(|&s| s < LANE_SLOTS && lanes_agree(ctx, property))
 }
 
 /// The lanes of program class `cid` as this module sees it: its local class,
