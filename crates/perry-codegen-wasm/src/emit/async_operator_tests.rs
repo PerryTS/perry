@@ -2,6 +2,32 @@
 
 use super::run_web_source;
 
+// An async body calls a function with no return value, and another async function
+// with and without its optional argument. Expected output is Node's.
+#[test]
+fn async_body_calls_a_void_function_and_an_async_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function note(label: string, value: unknown) {
+  console.log(label, JSON.stringify(value));
+}
+async function inner(x: number, y?: number): Promise<number> {
+  return x + (y ?? 10);
+}
+async function outer(): Promise<string> {
+  note("note", [1, 2]);
+  const a = await inner(1);
+  const b = await inner(1, 2);
+  return a + " " + b;
+}
+outer().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "note [1,2]\n11 3"
+    );
+}
+
 // An async body computes `**`, the bitwise and shift operators (compound assignments
 // included), unary `~` / `+`, and `in` as a synchronous one does, and runs `for...in`,
 // whose lowering uses `&` and `in`; `in` evaluates its property before its object in
@@ -191,5 +217,32 @@ arrays().then((v) => console.log(v), (e) => console.log("threw " + e.message));
 "#
         ),
         "4|2|3,3|2,true,false,1,2,6,1|2|3,30|10|20,6,2,true"
+    );
+}
+
+// A function that throws inside an async body started under a synchronous `try` rejects
+// that body, at the call, whether or not it returns a value. Expected output is Node's.
+#[test]
+fn async_body_stops_at_a_throwing_call_under_a_synchronous_try() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function bad(x: number) { if (x) throw new Error("void " + x); }
+function badValue(x: number): number { if (x) throw new Error("value " + x); return 1; }
+function optional(a: number, b?: number) { return a + "/" + b; }
+async function caught(): Promise<string> {
+  try { bad(1); return "no throw"; } catch (e: any) { return "caught " + e.message; }
+}
+async function rejected(): Promise<string> { return "no throw " + badValue(2) + optional(1); }
+try {
+  caught().then((v) => console.log(v));
+  rejected().then((v) => console.log(v), (e) => console.log("rejected " + e.message));
+  console.log("after");
+} catch (e: any) { console.log("sync " + e.message); }
+async function calls(): Promise<string> { return optional(1) + " " + optional(1, 2); }
+calls().then((v) => console.log(v));
+"#
+        ),
+        "after\ncaught void 1\nrejected value 2\n1/undefined 1/2"
     );
 }
