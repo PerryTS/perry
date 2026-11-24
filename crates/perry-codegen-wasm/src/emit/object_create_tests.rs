@@ -170,3 +170,21 @@ console.log(msg);
         "TypeError"
     );
 }
+
+// The key is converted before the descriptor is read. Expected output is Node's.
+#[test]
+fn define_property_converts_the_key_before_the_descriptor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Mixed { get value() { return 2; } set get(f: any) {} }
+class Key { toString(): string { throw new Error("key"); } }
+const key: any = new Key();
+let msg = "none";
+try { Object.defineProperty({}, key, new Mixed() as any); } catch (e: any) { msg = e.message; }
+console.log(msg);
+"#
+        ),
+        "key"
+    );
+}
