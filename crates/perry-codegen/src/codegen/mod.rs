@@ -315,10 +315,10 @@ mod number_exactness_tests;
 mod opts;
 mod program_facts_view;
 pub use program_facts_view::{
-    DirectAbi, ElisionFacts, FactsArrRep, FactsBody, FactsClass, FactsElemRep, FactsElementRead,
-    FactsEnc, FactsField, FactsFieldReadCall, FactsIndexedOwner, FactsNumericExpr,
-    FactsNumericFunction, FactsRecRep, FactsRecordBirth, FactsRecordFn, FactsRecordLanes,
-    FactsRecordLayout, FactsRecv, FactsRep, FactsSignature, ProgramFactsView,
+    AccessorKind, DirectAbi, ElisionFacts, FactsArrRep, FactsBody, FactsClass, FactsElemRep,
+    FactsElementRead, FactsEnc, FactsField, FactsFieldReadCall, FactsIndexedOwner,
+    FactsNumericExpr, FactsNumericFunction, FactsRecRep, FactsRecordBirth, FactsRecordFn,
+    FactsRecordLanes, FactsRecordLayout, FactsRecv, FactsRep, FactsSignature, ProgramFactsView,
 };
 #[cfg(test)]
 mod ordinary_param_guard_tests;

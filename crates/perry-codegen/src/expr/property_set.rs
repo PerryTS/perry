@@ -172,9 +172,13 @@ pub(crate) fn try_lower_proven_setter(
     value: &Expr,
     offset: u32,
 ) -> Result<Option<String>> {
-    let Some((fn_name, nullable)) =
-        super::wpfacts_access::proven_accessor_fn(ctx, object, property, offset, true)
-    else {
+    let Some((fn_name, nullable)) = super::wpfacts_access::proven_accessor_fn(
+        ctx,
+        object,
+        property,
+        offset,
+        crate::codegen::AccessorKind::Set,
+    ) else {
         return Ok(None);
     };
     let strict = ctx.is_strict_fn;
@@ -541,6 +545,18 @@ pub(crate) fn class_key_attributed(ctx: &FnCtx<'_>, class: &str, property: &str)
 /// modes (`lower_put_value_property_set_by_name`). The strict tail used to be an
 /// own-property store that skipped the prototype walk; see the helper.
 pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
+    // A compound's GetValue is its `UpdateGet` site while the store lowers
+    // (`Expr::compound_get`); any other read stays the `Get` site.
+    let outer = std::mem::replace(
+        &mut ctx.compound_get,
+        expr.compound_get().map(|g| g as *const Expr),
+    );
+    let lowered = lower_paired(ctx, expr, assignment_strict);
+    ctx.compound_get = outer;
+    lowered
+}
+
+fn lower_paired(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Result<String> {
     // I32 at rest (PR C): a store of a key some class keeps in an I32 lane.
     if let Some(value) = super::rest_fields::try_lower_set(ctx, expr, assignment_strict)? {
         return Ok(value);
@@ -594,13 +610,9 @@ fn lower_store(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Res
                             && matches!((object.as_ref(), read_object.as_ref()),
                                 (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b)
                         {
-                            if let Some(v) = try_lower_proven_setter(
-                                ctx,
-                                object,
-                                property,
-                                value,
-                                *byte_offset,
-                            )? {
+                            if let Some(v) =
+                                try_lower_proven_setter(ctx, object, property, value, *byte_offset)?
+                            {
                                 return Ok(v);
                             }
                         }
