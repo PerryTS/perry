@@ -1,0 +1,1 @@
+On the web target, a `do...while` loop inside an async function runs: its condition no longer calls an `isTruthy` helper the web runtime does not define, which threw `ReferenceError: isTruthy is not defined`.

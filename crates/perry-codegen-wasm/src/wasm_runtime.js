@@ -72,12 +72,16 @@ const stringTable = [];
 const handleStore = new Map();
 let nextHandleId = 1;
 const objectHandles = new WeakMap();
+// A Map, not the WeakMap: a registered symbol cannot be a weak key.
+const symbolHandles = new Map();
 
 function allocHandle(obj) {
   const reference = obj !== null && (typeof obj === 'object' || typeof obj === 'function');
   if (reference && objectHandles.has(obj)) return objectHandles.get(obj);
+  if (typeof obj === 'symbol' && symbolHandles.has(obj)) return symbolHandles.get(obj);
   const id = nextHandleId++;
   if (reference) objectHandles.set(obj, id);
+  else if (typeof obj === 'symbol') symbolHandles.set(obj, id);
   handleStore.set(id, obj);
   return id;
 }
@@ -676,11 +680,12 @@ function buildImports() {
       class_new: (classNameVal, fieldCount) => {
         return nanboxPointer(allocHandle(__classInstance(getString(classNameVal))));
       },
-      // class_set_method(class_id_str, method_name_str, func_table_idx)
-      class_set_method: (classId, methodName, funcIdx) => {
+      // class_set_method(class_id_str, method_name_str, func_table_idx, proto_kind)
+      class_set_method: (classId, methodName, funcIdx, protoKind) => {
         const cls = getString(classId);
         if (!classMethodTable[cls]) classMethodTable[cls] = {};
         classMethodTable[cls][getString(methodName)] = funcIdx | 0;
+        if (protoKind) __methodProtoKinds.set(funcIdx | 0, protoKind | 0);
       },
       // class_call_method(handle, method_name_id, args_array_handle) -> result
       // method_name_id is a plain f64 string table index (not NaN-boxed).
@@ -1684,6 +1689,13 @@ const __fnKindProtos = [
   Object.getPrototypeOf(function* () {}),
   Object.getPrototypeOf(async function* () {}),
 ];
+// A compiled method's `__fnKindProtos` index by table index, when not plain.
+const __methodProtoKinds = new Map();
+// A host function standing for a function of `kind` has that kind's prototype.
+function __withKindProto(fn, kind) {
+  if (kind) Object.setPrototypeOf(fn, __fnKindProtos[kind]);
+  return fn;
+}
 // A closure's host prototype is its class's; the program sees its kind's.
 function __programPrototype(obj, proto) {
   return proto === __PerryClosure.prototype || proto === __PerryReceiverClosure.prototype
@@ -1757,7 +1769,7 @@ function __hostAdder(obj, name) {
     };
   }
   if (typeof fn !== 'function') throw new TypeError(`'${String(fn)}' returned for property '${name}' of object '#<${obj.constructor.name}>' is not a function`);
-  return (...args) => fn.apply(obj, args);
+  return (...args) => Reflect.apply(fn, obj, args);
 }
 // A Map or WeakMap constructor's entries: the adder is read once before the iteration,
 // so a subclass override sees them, and an entry is any object whose keys 0 and 1 are
@@ -2008,7 +2020,7 @@ function __classStaticMethodFn(template, name, funcIdx, evaluation) {
   };
   Object.defineProperty(fn, 'name', { value: name });
   __classMethodFns.add(fn);
-  return fn;
+  return __withKindProto(fn, __methodProtoKinds.get(funcIdx));
 }
 // The i64 entry an array bridge calls for `cb`: a Perry closure's compiled function
 // after its captures, or a class method value with no table entry of its own through
@@ -2079,14 +2091,15 @@ function __classStaticGet(cls, name, receiver, fallback) {
 // A computed member (`RegisterClassComputedMethod` / `...Accessor`). An instance
 // member goes in the template's method table, so every evaluation's instances
 // dispatch it; a static one is a property of the class value.
-function __classDefineComputed(className, ctorIdx, key, kind, isStatic, a, b) {
+function __classDefineComputed(className, ctorIdx, key, kind, isStatic, a, b, protoKind) {
   const evaluation = __classDefiningOf(className);
+  if (protoKind) __methodProtoKinds.set(a, protoKind);
   if (isStatic) {
     const target = evaluation || __classRef(className, ctorIdx);
     if (kind === 0) {
       const fn = function (...args) { return __classMemberCall(a, evaluation, this, args); };
       __classMethodFns.add(fn);
-      __defineHidden(target, key, fn);
+      __defineHidden(target, key, __withKindProto(fn, protoKind));
       return;
     }
     const prev = Object.getOwnPropertyDescriptor(target, key);
@@ -2180,7 +2193,7 @@ function __iteratorClose(iter) {
   const ret = iter.return;
   if (ret === undefined || ret === null) return;
   if (typeof ret !== "function") throw new TypeError(`${String(ret)} is not a function`);
-  const result = ret.call(iter);
+  const result = Reflect.apply(ret, iter, []);
   if (!__isObject(result)) throw new TypeError(`Iterator result ${String(result)} is not an object`);
 }
 function __iteratorStep(iter, next, read) {
@@ -2338,11 +2351,11 @@ const __memDispatch = {
   // Objects — args are plain JS values (obj is the object itself, key is a string, etc.)
   object_new: () => ({}),
   object_set: (obj, key, value) => {
-    if (obj && typeof obj === 'object') obj[String(key)] = value; return obj;
+    if (obj && typeof obj === 'object') obj[typeof key === 'symbol' ? key : String(key)] = value; return obj;
   },
   object_get: (obj, key) => {
     if (!obj || typeof obj !== 'object') return undefined;
-    return obj[String(key)];
+    return obj[typeof key === 'symbol' ? key : String(key)];
   },
   // A literal's property is defined, so a setter on its prototype does not run.
   object_literal_define: (obj, key, value) => {
@@ -2367,6 +2380,7 @@ const __memDispatch = {
   object_super_get: (home, receiver, key) => __superGet(home, key, receiver),
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
+    if (typeof obj === 'symbol') return obj[key];
     if (!__holdsProperties(obj)) return undefined;
     return obj[key];
   },
@@ -2413,6 +2427,14 @@ const __memDispatch = {
     return (key in obj) ? 1 : 0;
   },
   object_coerce: (v) => Object(v),
+  // HIR names a well-known symbol `@@__perry_wk_<name>`.
+  symbol_for: (key) => {
+    const k = String(key);
+    const wellKnown = k.startsWith('@@__perry_wk_') ? Symbol[k.slice(13)] : undefined;
+    return typeof wellKnown === 'symbol' ? wellKnown : Symbol.for(k);
+  },
+  symbol_new: (...desc) => Symbol(...desc),
+  symbol_key_for: (sym) => Symbol.keyFor(sym),
   // `key in Object(v)` without handing the temporary wrapper back as a handle.
   object_coerce_has_property: (obj, key) => (key in Object(obj)) ? 1 : 0,
   object_assign: (target, source) => {
@@ -2613,7 +2635,7 @@ const __memDispatch = {
   },
   reflect_apply: (fn, thisArg, args) => {
     const argArr = Array.isArray(args) ? args : args !== null && typeof args === 'object' ? Array.from(args) : [];
-    if (__classMethodFns.has(fn)) return fn.apply(thisArg, argArr);
+    if (__classMethodFns.has(fn)) return Reflect.apply(fn, thisArg, argArr);
     if (typeof fn === 'function') return __callHostFunction(fn, argArr, thisArg);
     return __callClosureMethod(fn, thisArg, argArr);
   },
@@ -2768,8 +2790,8 @@ const __memDispatch = {
     if ((funcIdx | 0) >= 0) __classStaticRun(String(className), __classDefiningTop(), funcIdx | 0);
   },
   class_eval_end: (className) => __classDefining.pop(),
-  class_define_computed: (className, ctorIdx, key, kind, isStatic, a, b) =>
-    __classDefineComputed(String(className), ctorIdx | 0, key, kind | 0, !!isStatic, a | 0, b | 0),
+  class_define_computed: (className, ctorIdx, key, kind, isStatic, a, b, protoKind) =>
+    __classDefineComputed(String(className), ctorIdx | 0, key, kind | 0, !!isStatic, a | 0, b | 0, protoKind | 0),
   // `static [key] = value` of a class declared once.
   class_static_define: (className, ctorIdx, key, value) => {
     const cls = String(className);
@@ -2856,14 +2878,16 @@ const __memDispatch = {
     }
     return __memDispatch.class_instanceof(obj, classId) === 1;
   },
-  class_set_method: (classId, methodName, funcIdx) => {
+  class_set_method: (classId, methodName, funcIdx, protoKind) => {
     const cls = String(classId);
     if (!classMethodTable[cls]) classMethodTable[cls] = {};
     classMethodTable[cls][String(methodName)] = funcIdx | 0;
+    if (protoKind) __methodProtoKinds.set(funcIdx | 0, protoKind | 0);
   },
   // A class value made before registration gets the method too.
-  class_set_static_method: (classId, methodName, funcIdx) => {
+  class_set_static_method: (classId, methodName, funcIdx, protoKind) => {
     const cls = String(classId);
+    if (protoKind) __methodProtoKinds.set(funcIdx | 0, protoKind | 0);
     const name = String(methodName);
     (classStaticMethodTable[cls] ||= Object.create(null))[name] = funcIdx | 0;
     __classStaticMethodValues.get(cls)?.delete(name);
@@ -2954,6 +2978,7 @@ const __memDispatch = {
   class_get_field: (obj, name) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, name);
     if (typeof obj === 'function') return __classStaticGet(__classNameOfValue(obj), String(name), obj, obj);
+    if (typeof obj === 'symbol') return obj[String(name)];
     if (!__holdsProperties(obj)) return undefined;
     const fname = String(name);
     // Check for compiled getter method — WASM uses i64 (BigInt). A nearer class's
@@ -3044,7 +3069,7 @@ const __memDispatch = {
   // Calls what class_super_get read, after the arguments were evaluated. A compiled
   // method gets its arguments as Perry values; a non-callable throws, as in JS.
   class_super_call: (fn, obj, mname, args) => {
-    if (__classMethodFns.has(fn)) return fn.apply(obj, args);
+    if (__classMethodFns.has(fn)) return Reflect.apply(fn, obj, args);
     if (typeof fn === 'function') return __callHostFunction(fn, args, obj);
     if (fn && typeof fn === 'object' && typeof fn.funcIdx !== 'undefined') return __callClosureMethod(fn, obj, args);
     throw new TypeError(`(intermediate value)${mname === undefined ? '' : '.' + String(mname)} is not a function`);
@@ -6158,11 +6183,11 @@ function __hostDescriptors(props) {
 function __hostCallback(value) {
   if (!__isPerryClosure(value)) return value;
   if (!hostCallbacks.has(value)) {
-    hostCallbacks.set(value, (...args) => {
+    hostCallbacks.set(value, __withKindProto((...args) => {
       const result = callWasmClosure(value, ...args);
       __memDispatch.propagate_exception(true);
       return result;
-    });
+    }, __PerryClosure.protoKindOf(value)));
   }
   return hostCallbacks.get(value);
 }
@@ -6189,6 +6214,7 @@ function __classMethodValue(cls, mname, evaluation) {
     __defineHidden(fn, 'funcIdx', funcIdx);
     __defineHidden(fn, 'captures', [TAG_UNDEFINED]);
     __classMethodFns.add(fn);
+    __withKindProto(fn, __methodProtoKinds.get(funcIdx));
     byName.set(mname, fn);
   }
   return fn;
@@ -6292,8 +6318,8 @@ function __jsMethodInvoke(ref, args) {
   }
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
   // A compiled class method takes Perry values, as `reflect_apply` passes them.
-  if (__classMethodFns.has(ref.f)) return ref.f.apply(ref.r, args);
-  return ref.f.apply(ref.r, args.map(__hostCallback));
+  if (__classMethodFns.has(ref.f)) return Reflect.apply(ref.f, ref.r, args);
+  return Reflect.apply(ref.f, ref.r, args.map(__hostCallback));
 }
 
 // Own keys only: `mname in methods` would also find Object.prototype's names.

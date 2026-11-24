@@ -228,3 +228,73 @@ console.log([K.prototype === kp, D2.prototype === dp].join(","));
         "true,true"
     );
 }
+
+// A static field with a computed key is stored under the key its expression evaluates
+// to: a well-known symbol, a registered symbol or a string (#15112). Expected output is Node's.
+#[test]
+fn a_computed_static_field_is_stored_under_its_evaluated_key() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const s = Symbol.for("k");
+class A { static [Symbol.iterator] = 1; static [s] = 2; static ["x" + 1] = 3; }
+const K: any = A;
+console.log(JSON.stringify(Object.keys(A)) + " " + K[Symbol.iterator] + " " + K[s] + " " + K.x1);
+console.log((s === Symbol.for("k")) + " " + (Symbol.iterator === Symbol["iterator"]) + " " + String(Symbol.asyncIterator));
+console.log(String(Symbol.for("@@__perry_wk_noSuchName")));
+"#
+        ),
+        "[\"x1\"] 1 2 3\ntrue true Symbol(Symbol.asyncIterator)\nSymbol(@@__perry_wk_noSuchName)"
+    );
+}
+
+// A symbol key computed in an object literal after a spread stays a symbol.
+// Expected output is Node's.
+#[test]
+fn a_symbol_key_after_an_object_spread_stays_a_symbol() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const base = { a: 1 };
+const o: any = { ...base, [Symbol.iterator]: 2 };
+console.log(o[Symbol.iterator] + " " + JSON.stringify(Object.keys(o)) + " " + (Symbol.iterator in o));
+"#
+        ),
+        "2 [\"a\"] true"
+    );
+}
+
+// Evaluating the same symbol again reuses its handle rather than taking a new one.
+#[test]
+fn a_repeated_symbol_reuses_its_handle() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+const K: any = class {};
+let n = 0;
+for (let i = 0; i < 200; i++) if (K[Symbol.iterator] === undefined) n++;
+console.log(n);
+"#,
+            "console.log(handleStore.size < 200);"
+        ),
+        "200\ntrue"
+    );
+}
+
+// #15285: Symbol(), Symbol.keyFor, description and toString. Expected output is Node's.
+#[test]
+fn symbol_constructor_key_for_description_and_to_string_evaluate() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const s = Symbol("k");
+const u = Symbol();
+console.log(typeof s, s.description, s.toString(), Symbol.keyFor(Symbol.for("g")));
+console.log(String(u.description), u.toString(), String(Symbol.keyFor(s)), s === Symbol("k"));
+const key = "description";
+console.log((s as any)[key]);
+"#
+        ),
+        "symbol k Symbol(k) g\nundefined Symbol() undefined false\nk"
+    );
+}

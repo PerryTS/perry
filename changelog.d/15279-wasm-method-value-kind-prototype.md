@@ -1,0 +1,1 @@
+`--target web`: `Object.getPrototypeOf` on a class method value (an async, generator or async generator method, instance or static) and on a closure passed to a host function such as `Reflect.apply` returns its function kind's prototype instead of `Function.prototype` (#15276).
