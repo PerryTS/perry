@@ -1327,13 +1327,16 @@ impl<'a> Gen<'a> {
             Expr::InstanceOf { expr, ty, ty_expr } => {
                 let lhs = self.expr(fx, expr);
                 // The right-hand side is a value: the dynamic type
-                // expression, or the user class `ty` names (codegen
+                // expression, the user class `ty` names (codegen
                 // `class_ids`: a local or imported user class, called with
-                // its class value). InstanceofOperator runs its
-                // `@@hasInstance` (GetMethod) either way.
+                // its class value), else the global binding `ty` names,
+                // which this program site reads (owner 2026-11-24 RTREAD
+                // (B): it sees the program's store there).
+                // InstanceofOperator runs its `@@hasInstance` (GetMethod)
+                // either way.
                 let rhs = match ty_expr {
                     Some(t) => Some(self.expr(fx, t)),
-                    None => self.instanceof_class(mi, ty),
+                    None => self.instanceof_class(mi, ty).or_else(|| self.global_binding(ty)),
                 };
                 if let Some(tv) = rhs {
                     // Symbol.hasInstance is a protocol method, called with

@@ -877,18 +877,24 @@ impl<'a> Gen<'a> {
         if let Some(&n) = self.mods[mi as usize].scope.get(name) {
             return n;
         }
-        // No binding of the program: [[Get]] of the global object under the
-        // name (ECMA-262 9.1.1.4.6; `AbortSignal`): the realm's declared
-        // member while the program writes no value under the key
-        // (`native_written`), what it wrote once it does, and `undefined`
-        // (the runtime's ReferenceError) for a name nobody declares.
-        if !self.m.unit_mode {
-            let g = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
-            let gn = self.tok_node(g);
-            let a = self.m.atom(name);
-            return self.load(gn, Key::Named(a));
+        self.global_binding(name)
+            .unwrap_or_else(|| self.m.top_val(&format!("unresolved class value {name}")))
+    }
+
+    /// No binding of the program: [[Get]] of the global object under the
+    /// name (ECMA-262 9.1.1.4.6; `AbortSignal`): the realm's declared
+    /// member while the program writes no value under the key
+    /// (`native_written`), what it wrote once it does, and `undefined`
+    /// (the runtime's ReferenceError) for a name nobody declares. `None` in
+    /// unit mode (another unit may bind the name).
+    pub(crate) fn global_binding(&mut self, name: &str) -> Option<NodeId> {
+        if self.m.unit_mode {
+            return None;
         }
-        self.m.top_val(&format!("unresolved class value {name}"))
+        let g = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        let gn = self.tok_node(g);
+        let a = self.m.atom(name);
+        Some(self.load(gn, Key::Named(a)))
     }
 
     /// The class value of `instanceof Name` when `Name` is a user class

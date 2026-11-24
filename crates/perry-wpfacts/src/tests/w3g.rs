@@ -127,12 +127,23 @@ fn w3g_keep_sinks() {
         "(Array.prototype as any).zz = (x: any) => x;",
         "(Object.prototype as any).zz = (x: any) => x;",
         "(Function.prototype as any).zz = (x: any) => x;",
-        "g[\"Promise\"] = class P { constructor(f: any) { f(() => 0, () => 0); } };",
-        // `Error` is read by name by natives (assert, child_process).
-        "g[\"Error\"] = class E { constructor(m: any) { console.log(m); } };",
     ] {
         assert!(held(&program(store)), "{store}: still a sink, realm held");
     }
+    // owner 11-24: only names perry-runtime reads at run time make a global store escape; since 72ce74b350/ec0f0972b3/06245f1d0e the runtime uses the birth Error, so a program store under Error stays the program's.
+    assert!(
+        !held(&program(
+            "g[\"Error\"] = class E { constructor(m: any) { console.log(m); } };"
+        )),
+        "Error: the runtime uses the birth Error, realm not held"
+    );
+    // // owner 11-24: only names perry-runtime reads at run time (derived; today: onmessage) make a global store escape; Promise is not one of them.
+    assert!(
+        !held(&program(
+            "g[\"Promise\"] = class P { constructor(f: any) { f(() => 0, () => 0); } };"
+        )),
+        "Promise: not read at run time, realm not held"
+    );
 }
 
 /// KEEP: `globalThis.globalThis = x` and the non-writable globals

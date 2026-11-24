@@ -96,17 +96,16 @@ pub fn plain_namespace_own_store(m: &Model, t: Tok, key: Key) -> bool {
 }
 
 /// R-GLOBAL-NAME: may a store under `key` on the global object `t` write a
-/// global the runtime itself reads by name? The runtime reads a built-in
-/// constructor's global by name (`js_get_global_this_builtin_value`,
-/// `builtin_value_core`, `builtin_prototype_value`: instanceof, class
-/// metadata, the realm's own inheritance links, messaging), so a key the
-/// realm declares with a function value (or with no native value the model
-/// knows) keeps E20; so do the names `members::global_runtime_reads`
-/// declares, `process` and the host objects. A declared object the runtime
-/// cannot call (`performance`, `Math`) is the program's field
-/// (`declared_callable`). Any other named key (`globalThis`, an undeclared global such
-/// as `web3d`) is an own property of the global object that only program
-/// code reads, through its field. A computed key may name any global.
+/// global the runtime itself reads by name? Owner decision 2026-11-24
+/// (RTREAD): only a name perry-runtime reads at run time
+/// (`members::global_runtime_reads`, derived from the runtime's code),
+/// `process` and the host objects keep E20. A realm constructor's global
+/// (`EventTarget`, `Map`) is read by name only at program sites
+/// (`x instanceof Name`, `extends Name`, a bare identifier), which read the
+/// global binding and see the store; any other named key (`globalThis`,
+/// `performance`, an undeclared global such as `web3d`) is an own property
+/// of the global object that only program code reads, through its field. A
+/// computed key may name any global.
 /// A named key the realm declares as the global object's reference to
 /// itself (`globalThis`, `global`). The runtime reaches the global object
 /// through `js_get_global_this`, never by reading these names, but a bare
@@ -129,6 +128,12 @@ pub fn global_store_escapes(m: &mut Model, t: Tok, key: Key) -> bool {
     if members::global_runtime_reads(&name) {
         return true;
     }
+    // The global object's self-reference (`globalThis`, `global`): a bare
+    // read of the name is the global object, so `tok_store` decides what a
+    // store there hands on (`global_self_key`).
+    if global_self_key(m, t, key) {
+        return true;
+    }
     let Some(p) = m.native_property(t, &name) else {
         return false;
     };
@@ -142,30 +147,24 @@ pub fn global_store_escapes(m: &mut Model, t: Tok, key: Key) -> bool {
     if p.native.is_none() && p.get.is_some() && p.set.is_none() {
         return false;
     }
-    // The declared value: its native identity, else the realm declaration
-    // the global is named after (`performance`, `Math`: a namespace row).
-    let identity = p.native.unwrap_or(name.as_str());
     // `process` and the host objects (`console`) keep E20, as their own
     // stores do (`plain_namespace_own_store`).
-    if ns_by_name(&name).is_some_and(|ns| ns == BuiltinNs::Process || members::is_host(ns)) {
-        return true;
-    }
-    declared_callable(identity)
+    ns_by_name(&name).is_some_and(|ns| ns == BuiltinNs::Process || members::is_host(ns))
 }
 
 /// Owner decision 2026-11-19: a key the realm declares on the global
-/// object as a writable data property holding an object the runtime cannot
-/// call (`performance`, `Math`, `JSON`: a `Reference` own of `%Global%` to
-/// a non-callable declaration) is the program's field once the program
+/// object as a writable data property holding an object (`performance`,
+/// `Math`, `JSON`; owner 2026-11-24 RTREAD: a constructor such as `Array`
+/// or `EventTarget` too, whose global the runtime never reads by name: a
+/// `Reference` own of `%Global%`) is the program's field once the program
 /// stores it, the same field `global_store_escapes` keeps the stored value
 /// in and `declared_global_value` reads back. [[Set]] (ECMA-262 10.1.9.2
 /// step 2.c-2.d) replaces the value of a writable own data property; the
 /// realm's non-writable global data properties are its primitive constants
 /// (`NaN`, `Infinity`, `undefined`, 19.1), which hold no `Reference`.
-/// Callable values (constructors, functions), `global_runtime_reads`
-/// (`WebAssembly`), `process`, the host objects (`console`) and accessors
-/// (`navigator`, `crypto`) stay out: the runtime reads those by name or
-/// through a getter.
+/// `global_runtime_reads` (`WebAssembly`), `process`, the host objects
+/// (`console`) and accessors (`navigator`, `crypto`) stay out: the runtime
+/// reads those by name or through a getter.
 pub fn declared_data_global(m: &Model, t: Tok, name: &str) -> bool {
     use perry_hir::realm_manifest::RealmOwnValue;
     if members::global_runtime_reads(name)
@@ -188,30 +187,7 @@ pub fn declared_data_global(m: &Model, t: Tok, name: &str) -> bool {
                 _ => None,
             })
     });
-    reference.is_some_and(|r| !declared_callable(p.native.unwrap_or(r)))
-}
-
-/// Is the realm's declared value `identity` callable (a constructor, a
-/// function)? The runtime reads a callable global by name; a declared
-/// object it cannot call (`performance`, `Math`, `JSON`, `Reflect`, `Intl`,
-/// `Atomics`: a `Namespace` in the realm table) it reaches through its own
-/// cells, never by reading the global (the names it does read are
-/// `members::global_runtime_reads`). An identity the table does not list
-/// (no native value the model knows) keeps E20.
-fn declared_callable(identity: &str) -> bool {
-    use perry_hir::realm_manifest::RealmKind;
-    crate::native_effects::realm()
-        .iter()
-        .find(|e| e.name == identity)
-        .is_none_or(|e| {
-            !matches!(
-                e.kind,
-                RealmKind::Namespace
-                    | RealmKind::Exotic
-                    | RealmKind::Prototype
-                    | RealmKind::Constant
-            )
-        })
+    reference.is_some()
 }
 
 /// A described built-in object and its chain declare no such program key.
