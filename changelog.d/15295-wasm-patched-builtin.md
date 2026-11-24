@@ -1,0 +1,1 @@
+On `--target web`, a program that replaces a builtin namespace member (`Math.max = f`, `Math[k] = f`, `JSON.stringify = f`) calls the replacement instead of aborting at startup with `Cannot read properties of undefined (reading 'Math')`, and the runtime glue's own argument handling no longer calls the program's replacement.

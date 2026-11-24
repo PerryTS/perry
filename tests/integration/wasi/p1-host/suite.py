@@ -330,13 +330,15 @@ def net_connect_roundtrip(run: Run) -> None:
 
 
 @case("net_destroy_resolving", net=True, peer="listen", dns=["slow.test=127.0.0.1,delay=300"],
-      stdout="first closed\nliteral connected\ngot pong after the lookup's deadline\nliteral closed\n",
+      stdout="literal connected\nfirst closed\ngot pong after the lookup's deadline\nliteral closed\n",
       stats=lambda s: (attempts(1)(s),
                        check(len(s["connects"]) == 2 and s["connects"][0] == s["connects"][1],
                              f"the freed descriptor was not reused: {s['connects']}")))
 def net_destroy_resolving(run: Run) -> None:
     # Only the literal reaches the network: the destroyed lookup never connects,
-    # not even when its delay runs out while the replacement is in use.
+    # not even when its delay runs out while the replacement is in use. 'close'
+    # follows the handle's close in the closing phase, after the poll phase that
+    # connects the literal.
     assert run.serve_once(b"pong") == b"ping"
 
 

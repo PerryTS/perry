@@ -691,11 +691,6 @@ pub extern "C" fn js_arguments_object_map_index(
 }
 
 pub(crate) fn is_arguments_object(obj: *const ObjectHeader) -> bool {
-    #[cfg(test)]
-    TEST_ARGUMENTS_REGISTRY_PROBES.with(|c| c.set(c.get().wrapping_add(1)));
-    // #7854: nothing has ever been created ⟹ nothing can be found. Checked
-    // first because it is the only arm that never touches the receiver. See
-    // `ARGUMENTS_OBJECTS_EVER_USED`.
     if obj.is_null() {
         return false;
     }
@@ -709,19 +704,6 @@ pub(crate) fn is_arguments_object(obj: *const ObjectHeader) -> bool {
         "arguments identity did not revoke ordinary read proofs"
     );
     found
-}
-
-#[cfg(test)]
-thread_local! {
-/// Every entry into [`is_arguments_object`]. Twin of
-/// `set::TEST_SET_REGISTRY_PROBES` — lets a test assert that the latch
-/// actually short-circuits rather than merely that nothing threw.
-    static TEST_ARGUMENTS_REGISTRY_PROBES: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-pub(crate) fn test_arguments_registry_probe_count() -> u64 {
-    TEST_ARGUMENTS_REGISTRY_PROBES.with(|c| c.get())
 }
 
 /// The birth word of an arguments object's meta record as (length, birth

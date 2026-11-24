@@ -513,8 +513,9 @@ fn console_make_named_function(
     closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
         crate::object::set_builtin_closure_length(closure as usize, exposed_length)
     });
-    closure_handle
-        .with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| crate::value::js_nanbox_pointer(closure as i64))
+    closure_handle.with_mut_ptr::<crate::closure::ClosureHeader, _>(|closure| {
+        crate::value::js_nanbox_pointer(closure as i64)
+    })
 }
 
 /// The key is allocated before `obj` and `value` are read, so neither copy
@@ -605,7 +606,9 @@ pub extern "C" fn js_console_context(name: f64) -> f64 {
         console_set_field(&obj_handle, method, &func_handle);
     }
 
-    obj_handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64))
+    obj_handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        crate::value::js_nanbox_pointer(obj as i64)
+    })
 }
 
 /// `console.createTask(name)` is V8 inspector async-stack tagging. The
@@ -629,7 +632,9 @@ pub extern "C" fn js_console_create_task(name: f64) -> f64 {
     );
     let run_handle = scope.root_nanbox_f64(run);
     console_set_field(&obj_handle, "run", &run_handle);
-    obj_handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| crate::value::js_nanbox_pointer(obj as i64))
+    obj_handle.with_mut_ptr::<crate::object::ObjectHeader, _>(|obj| {
+        crate::value::js_nanbox_pointer(obj as i64)
+    })
 }
 
 /// Debug trace for module initialization order.

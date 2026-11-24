@@ -1,0 +1,1 @@
+On the web target, inside an async function body, a function declaration used as a value is a callable function, the same value a synchronous body sees; calling it threw `Cannot convert 1 to a BigInt` (#15297). Folded builtin method calls such as `a.map(f)`, `a.filter(f)` and `a.some(f)` in an async body call the method; they were `undefined`.
