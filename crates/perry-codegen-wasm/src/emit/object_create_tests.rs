@@ -135,3 +135,20 @@ console.log([o.x, reads].join(","));
         "1,1"
     );
 }
+
+// A descriptor's `get` is checked before its `set` is read. Expected output is Node's.
+#[test]
+fn define_property_rejects_a_class_instance_getter_before_reading_set() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const seen: string[] = [];
+class G { get get(): any { seen.push("get"); return 1; } get set(): any { seen.push("set"); return undefined; } }
+let msg = "none";
+try { Object.defineProperty({}, "x", new G() as any); } catch (e: any) { msg = e.name + ": " + e.message; }
+console.log(msg + "|" + seen.join(","));
+"#
+        ),
+        "TypeError: Getter must be a function: 1|get"
+    );
+}
