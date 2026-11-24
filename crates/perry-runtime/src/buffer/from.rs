@@ -644,7 +644,8 @@ pub extern "C" fn js_uint8array_new(val: f64) -> *mut BufferHeader {
                     len,
                     super::store::Init::Uninit,
                 ));
-                result.with_mut_ptr::<BufferHeader, _>(|r| super::store::set_length(r as usize, len));
+                result
+                    .with_mut_ptr::<BufferHeader, _>(|r| super::store::set_length(r as usize, len));
                 for i in 0..len as usize {
                     let value = source.with_const_ptr(|src| {
                         crate::typedarray_hook_slots::js_typed_array_get(src, i as i32)
@@ -1113,10 +1114,10 @@ pub extern "C" fn js_buffer_fill_value_range(
         })
     });
     super::bytes::no_gc(|scope| unsafe {
-        let current = target
-            .with_mut_ptr::<BufferHeader, _>(|current| crate::value::js_nanbox_pointer(current as i64));
-        let Ok(dst) = super::bytes::bytes_mut(current, scope)
-        else {
+        let current = target.with_mut_ptr::<BufferHeader, _>(|current| {
+            crate::value::js_nanbox_pointer(current as i64)
+        });
+        let Ok(dst) = super::bytes::bytes_mut(current, scope) else {
             return;
         };
         let clamp = |x: i32| {

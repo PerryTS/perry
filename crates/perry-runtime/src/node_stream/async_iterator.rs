@@ -888,8 +888,7 @@ extern "C" fn ns_readable_iterator_return(
             crate::fn_info!(ns_readable_iterator_return_after_pull, 1; with_declared(1)),
             1,
         ));
-        continuation
-            .with_mut_ptr(|c| js_closure_set_capture_f64(c, 0, iterator.get_nanbox_f64()));
+        continuation.with_mut_ptr(|c| js_closure_set_capture_f64(c, 0, iterator.get_nanbox_f64()));
         let then = continuation.with_mut_ptr(|c| {
             crate::promise::js_promise_then(
                 crate::value::js_nanbox_get_pointer(last.get_nanbox_f64())

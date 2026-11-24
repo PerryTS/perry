@@ -542,8 +542,9 @@ pub(crate) fn class_declaration_value_store_known(
                 });
                 arr_h.set_raw_mut_ptr(arr);
             }
-            let arr = arr_h
-                .with_mut_ptr::<crate::ArrayHeader, _>(|arr| crate::value::js_nanbox_pointer(arr as i64));
+            let arr = arr_h.with_mut_ptr::<crate::ArrayHeader, _>(|arr| {
+                crate::value::js_nanbox_pointer(arr as i64)
+            });
             // SAFETY: as above.
             unsafe {
                 crate::closure::props::state_internal_set(
@@ -574,8 +575,9 @@ pub(crate) fn class_declaration_value_store_known(
             });
             arr_h.set_raw_mut_ptr(grown);
         }
-        let grown = arr_h
-            .with_mut_ptr::<crate::ArrayHeader, _>(|arr| crate::value::js_nanbox_pointer(arr as i64));
+        let grown = arr_h.with_mut_ptr::<crate::ArrayHeader, _>(|arr| {
+            crate::value::js_nanbox_pointer(arr as i64)
+        });
         // SAFETY: as above.
         unsafe {
             crate::closure::props::state_internal_set(
