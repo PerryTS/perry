@@ -107,7 +107,9 @@ pub(crate) fn emit_namespace_patched(ctx: &mut crate::expr::FnCtx<'_>, ns: &str)
 fn guarded_member(generic: &perry_hir::Expr) -> Option<&str> {
     use perry_hir::Expr;
     let callee = match generic {
-        Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => callee,
+        Expr::Call { callee, .. }
+        | Expr::RegionCall { callee, .. }
+        | Expr::CallSpread { callee, .. } => callee,
         _ => return None,
     };
     match callee.as_ref() {
@@ -125,7 +127,7 @@ fn compact_generic<'e>(
     generic: &'e perry_hir::Expr,
 ) -> Option<(usize, &'e str, &'e [perry_hir::Expr])> {
     use perry_hir::Expr;
-    let Expr::Call { callee, args, .. } = generic else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = generic else {
         return None;
     };
     let Expr::PropertyGet {
@@ -331,7 +333,9 @@ pub(crate) fn lower_namespace_guard(
         }
     }
     let guarded = match fast {
-        perry_hir::Expr::Call { callee, .. } | perry_hir::Expr::CallSpread { callee, .. } => {
+        perry_hir::Expr::Call { callee, .. }
+        | perry_hir::Expr::RegionCall { callee, .. }
+        | perry_hir::Expr::CallSpread { callee, .. } => {
             callee.as_ref() as *const perry_hir::Expr as usize
         }
         _ => 0,

@@ -73,7 +73,13 @@ fn rewrite(
             i += 1;
             continue;
         };
-        let Stmt::Expr(Expr::Call { callee, args, .. }) = body.remove(i) else {
+        let Stmt::Expr(Expr::Call {
+            callee,
+            args,
+            byte_offset,
+            ..
+        }) = body.remove(i)
+        else {
             unreachable!();
         };
         let Expr::PropertyGet { object, .. } = *callee else {
@@ -85,6 +91,7 @@ fn rewrite(
             i..i,
             [
                 Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id,
                     name: "__field_push_receiver".into(),
                     ty,
@@ -92,6 +99,7 @@ fn rewrite(
                     init: Some(*object),
                 },
                 Stmt::Expr(Expr::NativeMethodCall {
+                    byte_offset,
                     module: "array".into(),
                     class_name: None,
                     method: "push_field_single".into(),
@@ -109,7 +117,8 @@ fn candidate(
     types: &HashMap<LocalId, Type>,
     fields: &HashMap<(String, String), Type>,
 ) -> Option<Type> {
-    let Stmt::Expr(Expr::Call { callee, args, .. }) = stmt else {
+    let Stmt::Expr(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = stmt
+    else {
         return None;
     };
     if args.len() != 1 {

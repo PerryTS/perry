@@ -68,6 +68,7 @@ mod solve;
 mod summary;
 #[cfg(test)]
 mod tests;
+pub mod topstop;
 mod units;
 mod unksrc;
 mod zero_sign;
@@ -342,7 +343,7 @@ pub struct ProgramFacts {
     pub diag_stream: Option<(std::path::PathBuf, Vec<(u64, u64)>)>,
     /// Dump-only: the addresses of the HIR sites the analyses recorded
     /// (`ledger::census` compares them with the HIR).
-    pub(crate) diagnostic_sites: Vec<(usize, &'static str, u32)>,
+    pub(crate) diagnostic_sites: Vec<(usize, String, &'static str, u32)>,
     /// DECISIONS 225: the activation pass's count (the whole program).
     pub activation: Option<String>,
     /// DECISIONS 225: escaped functions of the final solve whose body was
@@ -396,9 +397,10 @@ pub struct ProgramFacts {
     /// [`ProgramFacts::interp_guard`]'s.
     pub fnproto_bind_written: Option<String>,
     /// ASSUMED (`FactsConfig::native_externs`): the extern call sites
-    /// (module path, byte offset) modeled by the native-extern assumption;
-    /// every fact of the program rests on it when this is non-empty.
-    pub native_extern_sites: Vec<(String, u32)>,
+    /// (module path, the call's byte offset; `None`: a spread call) modeled
+    /// by the native-extern assumption; every fact of the program rests on
+    /// it when this is non-empty.
+    pub native_extern_sites: Vec<(String, Option<u32>)>,
     /// #13645: an array's `@@iterator` may not be the builtin, and why
     /// (`Model::array_iteration_writes`); `None`: compiled code never
     /// changes it. Interpreted code is [`ProgramFacts::interp_guard`]'s.
@@ -739,6 +741,19 @@ fn generate<'a>(
         });
     }
     g.m.prof_mark(crate::model::NO_NODE, "summaries");
+    // Each function stands at its declaration (`this`, the result).
+    if let Some(s) = g.m.stop_top.as_mut() {
+        for (i, fi) in g.m.funcs.iter().enumerate() {
+            let sp = g
+                .modules
+                .get(fi.module as usize)
+                .and_then(|(_, m)| m.closure_source_text.get(&fi.func_id))
+                .and_then(|x| x.source_span);
+            if let Some(sp) = sp {
+                s.fn_pos.insert(i as u32, (fi.module, sp.0));
+            }
+        }
+    }
     if (cfg.profile || cfg.explain) && loud {
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }
@@ -1312,7 +1327,7 @@ fn compute_act<'a>(
     } else {
         g.m.array_iteration_writes()
     };
-    let native_extern_sites: Vec<(String, u32)> =
+    let native_extern_sites: Vec<(String, Option<u32>)> =
         g.m.native_extern_fired
             .iter()
             .map(|&(mi, off)| {

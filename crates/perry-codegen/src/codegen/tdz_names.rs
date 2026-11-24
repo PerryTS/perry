@@ -70,7 +70,7 @@ impl Names {
                 }
                 Stmt::PreallocateTdzBoxes(ids) => self.tdz.extend(ids),
                 Stmt::Expr(expr) | Stmt::Throw(expr) => self.expr(expr),
-                Stmt::Return(expr) => {
+                Stmt::Return(expr, _) => {
                     if let Some(expr) = expr {
                         self.expr(expr);
                     }
@@ -122,6 +122,7 @@ impl Names {
                 Stmt::Switch {
                     discriminant,
                     cases,
+                    ..
                 } => {
                     self.expr(discriminant);
                     for case in cases {
@@ -150,6 +151,7 @@ mod tests {
     #[test]
     fn collects_nested_lexical_names_without_naming_ordinary_boxes() {
         let local = |id, name: &str| Stmt::Let {
+            byte_offset: 0,
             id,
             name: name.into(),
             ty: Type::Any,
@@ -163,6 +165,7 @@ mod tests {
             local(0, "ordinary"),
             local(1, "later"),
             Stmt::Expr(Expr::Closure {
+                byte_offset: 0,
                 func_id: 0,
                 params: Vec::new(),
                 return_type: Type::Any,

@@ -45,7 +45,7 @@ pub fn detect_math_imul_polyfill(f: &Function) -> bool {
     }
 
     // Last stmt: Return(Some(Binary { BitOr, ..., Integer(0) }))
-    matches!(&f.body[4], Stmt::Return(Some(Expr::Binary { op: BinaryOp::BitOr, right, .. })) if matches!(right.as_ref(), Expr::Integer(0)))
+    matches!(&f.body[4], Stmt::Return(Some(Expr::Binary { op: BinaryOp::BitOr, right, .. }), _) if matches!(right.as_ref(), Expr::Integer(0)))
 }
 
 /// Check if an expression extracts the hi or lo 16-bit half of a parameter.
@@ -58,6 +58,7 @@ pub fn is_half_extract(e: &Expr, p0: LocalId, p1: LocalId) -> Option<(LocalId, b
             op: BinaryOp::BitAnd,
             left,
             right,
+            ..
         } => {
             if !matches!(right.as_ref(), Expr::Integer(0xffff)) {
                 return None;
@@ -67,6 +68,7 @@ pub fn is_half_extract(e: &Expr, p0: LocalId, p1: LocalId) -> Option<(LocalId, b
                     op: BinaryOp::UShr | BinaryOp::Shr,
                     left: inner,
                     right: shift_amt,
+                    ..
                 } => {
                     if !matches!(shift_amt.as_ref(), Expr::Integer(16)) {
                         return None;
@@ -101,10 +103,12 @@ pub fn rewrite_imul_calls_in_stmts(stmts: &mut [Stmt], imul_ids: &HashSet<FuncId
 
 pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
     // Check if this expr is a call to an imul polyfill
-    let is_imul = matches!(e, Expr::Call { callee, args, .. }
+    let is_imul = matches!(e, Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
         if args.len() == 2 && matches!(callee.as_ref(), Expr::FuncRef(fid) if imul_ids.contains(fid)));
     if is_imul {
-        if let Expr::Call { args, .. } = std::mem::replace(e, Expr::Undefined) {
+        if let Expr::Call { args, .. } | Expr::RegionCall { args, .. } =
+            std::mem::replace(e, Expr::Undefined)
+        {
             let mut args = args;
             let b = args.pop().unwrap();
             let a = args.pop().unwrap();
@@ -131,19 +135,20 @@ pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             rewrite_imul_calls_in_expr(condition, imul_ids);
             rewrite_imul_calls_in_expr(then_expr, imul_ids);
             rewrite_imul_calls_in_expr(else_expr, imul_ids);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             rewrite_imul_calls_in_expr(callee, imul_ids);
             for arg in args {
                 rewrite_imul_calls_in_expr(arg, imul_ids);
             }
         }
         Expr::LocalSet(_, val) => rewrite_imul_calls_in_expr(val, imul_ids),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             rewrite_imul_calls_in_expr(object, imul_ids);
             rewrite_imul_calls_in_expr(index, imul_ids);
         }
@@ -216,6 +221,7 @@ mod tests {
                 body: Box::new(counted_loop(vec![imul_call()])),
             },
             Stmt::Switch {
+                byte_offset: 0,
                 discriminant: Expr::Integer(0),
                 cases: vec![SwitchCase {
                     test: None,

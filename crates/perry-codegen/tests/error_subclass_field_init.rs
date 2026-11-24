@@ -38,6 +38,7 @@ fn ir_opts() -> CompileOptions {
 
 fn field(name: &str, init: Expr) -> ClassField {
     ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -51,6 +52,7 @@ fn field(name: &str, init: Expr) -> ClassField {
 
 fn ctor(id: u32, body: Vec<Stmt>) -> Function {
     Function {
+        byte_offset: 0,
         id,
         name: "constructor".to_string(),
         type_params: Vec::new(),
@@ -107,6 +109,7 @@ fn class(
 
 fn module_with(classes: Vec<Class>, body: Vec<Stmt>) -> Module {
     Module {
+        byte_offset: 0,
         name: "error_subclass_field_init.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -116,6 +119,7 @@ fn module_with(classes: Vec<Class>, body: Vec<Stmt>) -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -244,9 +248,10 @@ fn own_ctor_error_subclass_installs_its_fields_after_super() {
         vec![field("n", Expr::Integer(7))],
         Some(ctor(
             2,
-            vec![Stmt::Expr(Expr::SuperCall(vec![Expr::String(
-                "m".to_string(),
-            )]))],
+            vec![Stmt::Expr(Expr::SuperCall(
+                vec![Expr::String("m".to_string())],
+                0,
+            ))],
         )),
     );
     let ir = ir_for(vec![e], vec![Stmt::Expr(new_expr("E"))]);
@@ -271,9 +276,10 @@ fn an_error_rooted_chain_installs_each_level_once() {
         vec![field("m", Expr::Integer(1))],
         Some(ctor(
             2,
-            vec![Stmt::Expr(Expr::SuperCall(vec![Expr::String(
-                "m".to_string(),
-            )]))],
+            vec![Stmt::Expr(Expr::SuperCall(
+                vec![Expr::String("m".to_string())],
+                0,
+            ))],
         )),
     );
     let leaf = class(
@@ -283,9 +289,10 @@ fn an_error_rooted_chain_installs_each_level_once() {
         vec![field("n", Expr::Integer(2))],
         Some(ctor(
             3,
-            vec![Stmt::Expr(Expr::SuperCall(vec![Expr::String(
-                "m".to_string(),
-            )]))],
+            vec![Stmt::Expr(Expr::SuperCall(
+                vec![Expr::String("m".to_string())],
+                0,
+            ))],
         )),
     );
     let ir = ir_for(vec![mid, leaf], vec![Stmt::Expr(new_expr("Leaf"))]);

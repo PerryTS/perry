@@ -35,10 +35,12 @@ fn root_slots(ir: &str) -> usize {
 fn guarded_string_literal_parameter_length_is_numeric_only_in_the_guarded_body() {
     let mut module = Module::new("literal_length_guard_ts");
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: 10,
             name: "label".to_string(),
             ty: Type::StringLiteral("abc".to_string()),
@@ -48,16 +50,20 @@ fn guarded_string_literal_parameter_length_is_numeric_only_in_the_guarded_body()
             arguments_object: None,
         }],
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::Binary {
-            op: BinaryOp::Add,
-            left: Box::new(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(10)),
-                property: "length".to_string(),
+        body: vec![Stmt::Return(
+            Some(Expr::Binary {
                 byte_offset: 0,
+                op: BinaryOp::Add,
+                left: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(10)),
+                    property: "length".to_string(),
+                    byte_offset: 0,
+                }),
+                right: Box::new(Expr::Integer(1)),
             }),
-            right: Box::new(Expr::Integer(1)),
-        }))],
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -112,10 +118,12 @@ fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
         index_signature: None,
     });
     let render = Function {
+        byte_offset: 0,
         id: 1,
         name: "render".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: 10,
             name: "payload".to_string(),
             ty: Type::Named("Payload".to_string()),
@@ -125,16 +133,20 @@ fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
             arguments_object: None,
         }],
         return_type: Type::String,
-        body: vec![Stmt::Return(Some(Expr::Binary {
-            op: BinaryOp::Add,
-            left: Box::new(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(10)),
-                property: "label".to_string(),
+        body: vec![Stmt::Return(
+            Some(Expr::Binary {
                 byte_offset: 0,
+                op: BinaryOp::Add,
+                left: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(10)),
+                    property: "label".to_string(),
+                    byte_offset: 0,
+                }),
+                right: Box::new(Expr::String("!".to_string())),
             }),
-            right: Box::new(Expr::String("!".to_string())),
-        }))],
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -212,6 +224,7 @@ fn public_guard_routes_to_proof_clone_and_conservative_fallback() {
 #[test]
 fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
     let lr = Param {
+        byte_offset: 0,
         id: 10,
         name: "lr".to_string(),
         ty: Type::Any,
@@ -221,6 +234,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
         arguments_object: None,
     };
     let table = Param {
+        byte_offset: 0,
         id: 11,
         name: "table".to_string(),
         ty: Type::Any,
@@ -237,6 +251,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
         index: Box::new(Expr::Integer(0)),
     };
     let encipher = Function {
+        byte_offset: 0,
         id: 1,
         name: "encipher".to_string(),
         type_params: Vec::new(),
@@ -244,6 +259,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 12,
                 name: "value".to_string(),
                 ty: Type::Any,
@@ -261,6 +277,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
                 })],
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 13,
                 name: "accumulator".to_string(),
                 ty: Type::Number,
@@ -270,6 +287,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
             Stmt::Expr(Expr::LocalSet(
                 13,
                 Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(13)),
                     right: Box::new(Expr::Integer(1)),
@@ -278,9 +296,11 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
             Stmt::Expr(Expr::LocalSet(
                 12,
                 Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::BitXor,
                     left: Box::new(Expr::LocalGet(12)),
                     right: Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::BitXor,
                         left: Box::new(Expr::LocalGet(13)),
                         right: Box::new(Expr::IndexGet {
@@ -301,7 +321,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::LocalGet(12))),
+            Stmt::Return(Some(Expr::LocalGet(12)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -317,6 +337,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
     module.functions.push(encipher);
     module.init.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "lr".to_string(),
             ty: Type::Any,
@@ -324,6 +345,7 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
             init: Some(Expr::Array(vec![Expr::Integer(1), Expr::Integer(2)], None)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 21,
             name: "table".to_string(),
             ty: Type::Any,
@@ -371,10 +393,12 @@ fn mixed_ta_clone_guards_numeric_array_shape_at_the_direct_call() {
 #[test]
 fn numeric_by_construction_local_drops_specialized_clone_root() {
     let encipher = Function {
+        byte_offset: 0,
         id: 1,
         name: "encipher".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: 10,
             name: "table".to_string(),
             ty: Type::Any,
@@ -386,6 +410,7 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
         return_type: Type::Void,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 11,
                 name: "n".to_string(),
                 ty: Type::Number,
@@ -405,7 +430,7 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
                     }),
                 ))],
             },
-            Stmt::Return(None),
+            Stmt::Return(None, 0),
         ],
         is_async: false,
         is_generator: false,
@@ -421,6 +446,7 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
     module.functions.push(encipher);
     module.init.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "table".to_string(),
             ty: Type::Any,
@@ -465,10 +491,12 @@ fn numeric_by_construction_local_drops_specialized_clone_root() {
 #[test]
 fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
     let read = Function {
+        byte_offset: 0,
         id: 1,
         name: "read".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: 10,
             name: "table".to_string(),
             ty: Type::Any,
@@ -480,6 +508,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 11,
                 name: "i".to_string(),
                 ty: Type::Number,
@@ -487,6 +516,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
                 init: Some(Expr::Integer(0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 12,
                 name: "sum".to_string(),
                 ty: Type::Number,
@@ -495,6 +525,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
             },
             Stmt::While {
                 condition: Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(11)),
                     right: Box::new(Expr::Integer(2)),
@@ -503,6 +534,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
                     Stmt::Expr(Expr::LocalSet(
                         12,
                         Box::new(Expr::Binary {
+                            byte_offset: 0,
                             op: BinaryOp::BitXor,
                             left: Box::new(Expr::LocalGet(12)),
                             right: Box::new(Expr::IndexGet {
@@ -521,6 +553,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
                     Stmt::Expr(Expr::LocalSet(
                         12,
                         Box::new(Expr::Binary {
+                            byte_offset: 0,
                             op: BinaryOp::BitXor,
                             left: Box::new(Expr::LocalGet(12)),
                             right: Box::new(Expr::IndexGet {
@@ -538,7 +571,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
                     )),
                 ],
             },
-            Stmt::Return(Some(Expr::LocalGet(12))),
+            Stmt::Return(Some(Expr::LocalGet(12)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -554,6 +587,7 @@ fn guarded_typed_array_clone_keeps_prefix_update_indices_native() {
     module.functions.push(read);
     module.init.extend([
         Stmt::Let {
+            byte_offset: 0,
             id: 20,
             name: "table".to_string(),
             ty: Type::Any,
@@ -622,11 +656,13 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
         type_args: vec![Type::String, Type::Number],
     };
     let render = Function {
+        byte_offset: 0,
         id: 21,
         name: "renderAsync".to_string(),
         type_params: Vec::new(),
         params: vec![
             Param {
+                byte_offset: 0,
                 id: 210,
                 name: "label".to_string(),
                 ty: Type::String,
@@ -636,6 +672,7 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
                 arguments_object: None,
             },
             Param {
+                byte_offset: 0,
                 id: 211,
                 name: "weight".to_string(),
                 ty: Type::Number,
@@ -648,6 +685,7 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
         return_type: Type::Boolean,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 212,
                 name: "lookup".to_string(),
                 ty: map_type,
@@ -659,10 +697,13 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
                 key: Box::new(Expr::LocalGet(210)),
                 value: Box::new(Expr::LocalGet(211)),
             }),
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(Expr::LocalGet(212)),
-                key: Box::new(Expr::LocalGet(210)),
-            })),
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(Expr::LocalGet(212)),
+                    key: Box::new(Expr::LocalGet(210)),
+                }),
+                0,
+            ),
         ],
         is_async: true,
         is_generator: false,
@@ -684,10 +725,12 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
     });
     module.functions.push(render);
     module.functions.push(Function {
+        byte_offset: 0,
         id: 22,
         name: "renderAfterAwait".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: 220,
             name: "payload".to_string(),
             ty: Type::Named("Payload".to_string()),
@@ -697,14 +740,18 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
             arguments_object: None,
         }],
         return_type: Type::String,
-        body: vec![Stmt::Return(Some(Expr::Await(Box::new(
-            Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(220)),
-                property: "label".to_string(),
-                byte_offset: 0,
-            },
-        ))))],
+        body: vec![Stmt::Return(
+            Some(Expr::Await(
+                Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(220)),
+                    property: "label".to_string(),
+                    byte_offset: 0,
+                }),
+                0,
+            )),
+            0,
+        )],
         is_async: true,
         is_generator: false,
         is_strict: true,
@@ -721,10 +768,12 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
     // before entry. If that rule is ever weakened, this row goes red rather
     // than the fixture above silently starting to measure something else.
     module.functions.push(Function {
+        byte_offset: 0,
         id: 23,
         name: "renderReferenceParam".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: 230,
             name: "payload".to_string(),
             ty: Type::Named("Payload".to_string()),
@@ -736,6 +785,7 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
         return_type: Type::Boolean,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 231,
                 name: "lookup".to_string(),
                 ty: Type::Generic {
@@ -745,15 +795,18 @@ fn nonsuspending_async_function_needs_no_direct_call_site_for_its_guarded_clone(
                 mutable: false,
                 init: Some(Expr::MapNew),
             },
-            Stmt::Return(Some(Expr::MapHas {
-                map: Box::new(Expr::LocalGet(231)),
-                key: Box::new(Expr::PropertyGet {
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(230)),
-                    property: "label".to_string(),
-                    byte_offset: 0,
+            Stmt::Return(
+                Some(Expr::MapHas {
+                    map: Box::new(Expr::LocalGet(231)),
+                    key: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
+                        object: Box::new(Expr::LocalGet(230)),
+                        property: "label".to_string(),
+                        byte_offset: 0,
+                    }),
                 }),
-            })),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -886,6 +939,7 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
     ]);
     fn discriminant_let(id: u32, owner: u32) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: "kind".to_string(),
             ty: Type::Any,
@@ -899,10 +953,12 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
         }
     }
     let eval = Function {
+        byte_offset: 0,
         id: 31,
         name: "evalNode".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: 310,
             name: "node".to_string(),
             ty: Type::Named("FlatNode".to_string()),
@@ -919,23 +975,28 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
             // chains of discriminator checks rely on.
             Stmt::If {
                 condition: Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(311)),
                     right: Box::new(Expr::String("num".to_string())),
                 },
-                then_branch: vec![Stmt::Return(Some(Expr::Binary {
-                    op: BinaryOp::Add,
-                    left: Box::new(Expr::PropertyGet {
-                        byte_end: 0,
-                        object: Box::new(Expr::LocalGet(310)),
-                        property: "num".to_string(),
+                then_branch: vec![Stmt::Return(
+                    Some(Expr::Binary {
                         byte_offset: 0,
+                        op: BinaryOp::Add,
+                        left: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
+                            object: Box::new(Expr::LocalGet(310)),
+                            property: "num".to_string(),
+                            byte_offset: 0,
+                        }),
+                        right: Box::new(Expr::Number(1.0)),
                     }),
-                    right: Box::new(Expr::Number(1.0)),
-                }))],
+                    0,
+                )],
                 else_branch: None,
             },
-            Stmt::Return(Some(Expr::Integer(0))),
+            Stmt::Return(Some(Expr::Integer(0)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -950,10 +1011,12 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
     // Same union, same discriminant chain, but the "bin" arm recurses. The
     // call is what removes the clone.
     let eval_recursive = Function {
+        byte_offset: 0,
         id: 32,
         name: "evalRecursive".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: 320,
             name: "node".to_string(),
             ty: Type::Named("FlatNode".to_string()),
@@ -967,20 +1030,24 @@ fn guarded_discriminant_branch_narrows_a_union_parameter_inside_the_clone() {
             discriminant_let(321, 320),
             Stmt::If {
                 condition: Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(321)),
                     right: Box::new(Expr::String("bin".to_string())),
                 },
-                then_branch: vec![Stmt::Return(Some(Expr::Call {
-                    byte_end: 0,
-                    callee: Box::new(Expr::FuncRef(32)),
-                    args: vec![Expr::LocalGet(320)],
-                    type_args: Vec::new(),
-                    byte_offset: 0,
-                }))],
+                then_branch: vec![Stmt::Return(
+                    Some(Expr::Call {
+                        byte_end: 0,
+                        callee: Box::new(Expr::FuncRef(32)),
+                        args: vec![Expr::LocalGet(320)],
+                        type_args: Vec::new(),
+                        byte_offset: 0,
+                    }),
+                    0,
+                )],
                 else_branch: None,
             },
-            Stmt::Return(Some(Expr::Integer(0))),
+            Stmt::Return(Some(Expr::Integer(0)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -1097,6 +1164,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
         heritage_lexically_shadowed: false,
         fields: vec![
             perry_hir::ClassField {
+                byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "label".to_string(),
                 key_expr: None,
@@ -1107,6 +1175,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
                 decorators: Vec::new(),
             },
             perry_hir::ClassField {
+                byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "count".to_string(),
                 key_expr: None,
@@ -1135,10 +1204,12 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
         aliases: Vec::new(),
     };
     let render = Function {
+        byte_offset: 0,
         id: 42,
         name: "renderLabel".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: 420,
             name: "payload".to_string(),
             ty: Type::Named("Label".to_string()),
@@ -1155,6 +1226,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
         // any parameter evidence, and the two bodies come out identical.
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 421,
                 name: "result".to_string(),
                 ty: Type::Any,
@@ -1169,8 +1241,10 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
             Stmt::Expr(Expr::LocalSet(
                 421,
                 Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(421)),
                         right: Box::new(Expr::String(":".to_string())),
@@ -1183,7 +1257,7 @@ fn a_class_parameter_is_guarded_by_identity_and_declared_fields() {
                     }),
                 }),
             )),
-            Stmt::Return(Some(Expr::LocalGet(421))),
+            Stmt::Return(Some(Expr::LocalGet(421)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -1259,12 +1333,14 @@ fn specialized_typed_parameter_keeps_its_own_owner_root() {
     crate::temp_root_coverage::under_both_lowerings(|mode| {
         let mut module = Module::new("spec_owner.ts");
         module.functions.push(Function {
+            byte_offset: 0,
             id: 10,
             name: "read".into(),
             type_params: vec![],
             params: [1, 2]
                 .into_iter()
                 .map(|id| Param {
+                    byte_offset: 0,
                     id,
                     name: format!("p{id}"),
                     ty: Type::Any,
@@ -1283,10 +1359,14 @@ fn specialized_typed_parameter_keeps_its_own_owner_root() {
                     type_args: vec![],
                     byte_offset: 0,
                 }),
-                Stmt::Return(Some(Expr::synthetic_index_get(
-                    Box::new(Expr::LocalGet(1)),
-                    Box::new(Expr::LocalGet(2)),
-                ))),
+                Stmt::Return(
+                    Some(Expr::index_get_at(
+                        Box::new(Expr::LocalGet(1)),
+                        Box::new(Expr::LocalGet(2)),
+                        0,
+                    )),
+                    0,
+                ),
             ],
             is_async: false,
             is_generator: false,
@@ -1300,6 +1380,7 @@ fn specialized_typed_parameter_keeps_its_own_owner_root() {
         });
         module.init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 20,
                 name: "array".into(),
                 ty: Type::Named("Float64Array".into()),

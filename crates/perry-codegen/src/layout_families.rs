@@ -372,7 +372,7 @@ fn visit_stmt<'a>(
 ) {
     on_stmt(s);
     match s {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 visit_expr(e, on_stmt, on_expr);
             }
@@ -428,6 +428,7 @@ fn visit_stmt<'a>(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             visit_expr(discriminant, on_stmt, on_expr);
             for c in cases {
@@ -512,7 +513,7 @@ fn names_receiver(e: &Expr) -> bool {
     matches!(
         e,
         Expr::This
-            | Expr::SuperCall(_)
+            | Expr::SuperCall(_, _)
             | Expr::SuperCallSpread(_)
             | Expr::SuperMethodCall { .. }
             | Expr::SuperMethodCallSpread { .. }
@@ -568,7 +569,7 @@ fn before_super_free(s: &Stmt) -> bool {
     let free = std::cell::Cell::new(true);
     visit_stmt(
         s,
-        &mut |t| free.set(free.get() && !matches!(t, Stmt::Return(_))),
+        &mut |t| free.set(free.get() && !matches!(t, Stmt::Return(_, _))),
         &mut |e| free.set(free.get() && !names_receiver(e)),
     );
     free.get()
@@ -584,6 +585,7 @@ fn param_default_fill<'a>(s: &'a Stmt, params: &BTreeSet<u32>) -> Option<&'a Exp
                 op: perry_hir::CompareOp::Eq,
                 left,
                 right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -788,6 +790,7 @@ fn define_call(e: &Expr) -> Option<(DefineCall<'_>, bool)> {
             condition,
             then_expr,
             else_expr,
+            ..
         } if matches!(condition.as_ref(), Expr::NamespacePatched(ns) if ns == "Object") => {
             let (call, _) = define_call(else_expr)?;
             // The generic arm must be the same member's call on the same
@@ -803,7 +806,7 @@ fn define_call(e: &Expr) -> Option<(DefineCall<'_>, bool)> {
 /// `globalThis.Object.defineProperties(this, props)`, the generic arm of a
 /// guarded namespace pair (`perry_hir::namespace_pairs::pair_callee`).
 fn generic_define_call(e: &Expr) -> Option<DefineCall<'_>> {
-    let Expr::Call { callee, args, .. } = e else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = e else {
         return None;
     };
     let Expr::PropertyGet {
@@ -999,7 +1002,7 @@ fn own_keys(
             body = &body[1..];
         }
         match body.first() {
-            Some(Stmt::Expr(Expr::SuperCall(args))) => {
+            Some(Stmt::Expr(Expr::SuperCall(args, _))) => {
                 super_inert = open && args.iter().all(|a| inert(a, &params));
                 body = &body[1..];
             }

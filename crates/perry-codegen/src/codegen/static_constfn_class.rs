@@ -12,7 +12,7 @@ fn value_proof(e: &Expr) -> bool {
         // A direct, argument-free function effect cannot carry this receiver
         // as an argument. It may allocate/collect; final facts are validated
         // only after it returns. Receiver/property dispatch stays unsupported.
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             matches!(callee.as_ref(), Expr::FuncRef(_)) && args.is_empty()
         }
         Expr::Undefined
@@ -134,7 +134,7 @@ pub(crate) fn class_final(
             for stmt in &ctor.body {
                 let valid = match stmt {
                     Stmt::Let { init, .. } => init.as_ref().is_none_or(value_proof),
-                    Stmt::Expr(Expr::SuperCall(args)) if c.extends_name.is_some() => {
+                    Stmt::Expr(Expr::SuperCall(args, _)) if c.extends_name.is_some() => {
                         supers += 1;
                         supers == 1 && args.iter().all(value_proof)
                     }

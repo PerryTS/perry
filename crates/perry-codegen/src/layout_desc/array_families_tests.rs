@@ -86,6 +86,7 @@ fn merge_keeps_one_sorted_copy() {
 
 fn binding(id: u32, init: perry_hir::Expr) -> perry_hir::Stmt {
     perry_hir::Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: perry_hir::types::Type::Any,

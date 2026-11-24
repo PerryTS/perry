@@ -414,7 +414,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // `.toString()` always returns a string regardless of receiver
         // type, so it's safe to count as definitely-string for concat.
         // Same for other unary string-returning string methods.
-        Expr::Call { callee, .. }
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { property, .. } if matches!(
@@ -433,6 +433,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } => is_definitely_string_expr(ctx, left) || is_definitely_string_expr(ctx, right),
         // Ternary `cond ? a : b` is definitely a string when BOTH
         // branches are definitely strings. Without this, code like
@@ -510,7 +511,11 @@ pub(crate) fn is_declared_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
     matches!(
         e,
-        Expr::PropertyGet { .. } | Expr::Call { .. } | Expr::IndexGet { .. }
+        Expr::PropertyGet { .. }
+            | Expr::Call { .. }
+            | Expr::RegionCall { .. }
+            | Expr::IndexGet { .. }
+            | Expr::RegionOut { .. }
     ) && matches!(
         static_type_of(ctx, e),
         Some(HirType::String) | Some(HirType::StringLiteral(_))
@@ -601,7 +606,7 @@ pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> b
         // A string METHOD is a proof only when the receiver is one: every name
         // in `is_definitely_string_expr`'s list also exists on `Array` or on a
         // user object, where it returns something else entirely.
-        Expr::Call { callee, .. } => match callee.as_ref() {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
             Expr::PropertyGet {
                 object, property, ..
             } if matches!(
@@ -639,6 +644,7 @@ pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> b
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } => {
             string_value_is_runtime_guaranteed(ctx, left)
                 || string_value_is_runtime_guaranteed(ctx, right)
@@ -654,7 +660,7 @@ pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> b
         Expr::PropertyGet {
             object, property, ..
         } if is_process_namespace_version_property(object, property) => true,
-        Expr::PropertyGet { .. } | Expr::IndexGet { .. } => matches!(
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. } | Expr::RegionOut { .. } => matches!(
             crate::lower_call::guarded_path_type(ctx, e),
             Some(HirType::String | HirType::StringLiteral(_))
         ),
@@ -711,7 +717,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // a string-typed receiver returns a single-character string,
         // so the tokenizer pattern `input[pos] >= "0"` routes through
         // string comparison.
-        Expr::IndexGet { object, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
             match static_type_of(ctx, object) {
                 Some(HirType::Array(elem)) if matches!(*elem, HirType::String) => true,
                 Some(HirType::String) => true,
@@ -727,7 +733,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 Some(perry_hir::EnumValue::String(_))
             )
         }
-        Expr::Binary { op: BinaryOp::Add, left, right } => {
+        Expr::Binary { op: BinaryOp::Add, left, right, .. } => {
             is_string_expr(ctx, left) || is_string_expr(ctx, right)
         }
         Expr::PathToNamespacedPath(path) => is_definitely_string_expr(ctx, path),
@@ -814,7 +820,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // unary methods on a string receiver). Recognize these so
         // chained calls like `s.trimStart().trimEnd()` detect the
         // inner result as a string.
-        Expr::Call { callee, .. }
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { property, object, .. } if matches!(
@@ -904,7 +910,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // string, so it must NOT be classified here — otherwise
         // `digest().toString('hex')` skips the buffer encoding path and
         // mis-reads the bytes as Latin-1 (#1353).
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if crypto_digest_call_result(callee, args)
                 == Some(super::refine::CryptoDigestResult::String) =>
         {

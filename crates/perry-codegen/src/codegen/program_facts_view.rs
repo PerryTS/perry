@@ -164,7 +164,9 @@ impl FactsNumericExpr {
             Expr::Integer(n) => Self::Integer(*n),
             Expr::Number(n) => Self::Number(n.to_bits()),
             Expr::LocalGet(id) => Self::Param(*id),
-            Expr::Binary { op, left, right } => Self::Binary(
+            Expr::Binary {
+                op, left, right, ..
+            } => Self::Binary(
                 *op,
                 Box::new(Self::from_hir(left)?),
                 Box::new(Self::from_hir(right)?),
@@ -181,6 +183,7 @@ impl FactsNumericExpr {
             Self::Number(n) => Expr::Number(f64::from_bits(*n)),
             Self::Param(id) => Expr::LocalGet(*id),
             Self::Binary(op, l, r) => Expr::Binary {
+                byte_offset: 0, /*HPOS*/
                 op: *op,
                 left: Box::new(l.to_hir()),
                 right: Box::new(r.to_hir()),
@@ -352,6 +355,17 @@ pub struct DirectAbi {
     pub synthetic_arguments: bool,
     /// A user-written rest parameter (not the synthetic `arguments` one).
     pub user_rest: bool,
+}
+
+/// The kind of a named accessor site (`ElisionFacts::accessors`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum AccessorKind {
+    /// An ordinary `o.k` read.
+    Get,
+    /// A compound's GetValue (13.15.3 step 2, `Expr::compound_get`).
+    UpdateGet,
+    /// A named store `o.k = v`, or a compound's PutValue.
+    Set,
 }
 
 /// The slice-2 elision inputs of one module.
@@ -653,29 +667,29 @@ pub struct ElisionFacts {
     /// intrinsic only here; every other one reads the property and calls it.
     pub native_member_calls: std::collections::BTreeSet<u32>,
     /// The source offsets (the member's, as the solver records the site) of
-    /// this module's named stores whose verdict is `Verdict::AccessorSet`,
-    /// each with the program class id whose prototype holds the one setter
-    /// the store calls (10.1.9.2 OrdinarySet step 3) and that setter's
-    /// symbol, named from the holder's own module and class (the module that
-    /// defines the class emits it; any other module declares it), not from
-    /// this module's class table.
+    /// this module's named accessor sites, keyed by the site's kind: a store
+    /// whose verdict is `Verdict::AccessorSet`, a read (or a compound's
+    /// GetValue) whose verdict is `Verdict::AccessorGet`. Value: the program
+    /// class id whose prototype holds the one setter the store calls
+    /// (10.1.9.2 OrdinarySet step 3) or the one getter the read calls
+    /// (10.1.8.1), and that accessor's symbol, named from the holder's own
+    /// module and class (the module that defines the class emits it; any
+    /// other module declares it), not from this module's class table.
     /// The flag is `nullable` (COVER3): the receiver can also be
     /// `undefined` / `null` (never another primitive), so the site keeps its
-    /// one receiver test, whose nullish edge is the complete [[Set]] (it
-    /// throws the TypeError after the value was evaluated, 13.15.2).
-    pub accessor_sets: std::collections::BTreeMap<(u32, String), (u32, String, bool)>,
-    /// The same for named reads (and a compound's GetValue) whose verdict is
-    /// `Verdict::AccessorGet`: the class holding the one getter (10.1.8.1).
-    /// `nullable` as for `accessor_sets`; the nullish edge is the complete
-    /// [[Get]], whose ToObject throws the TypeError (6.2.5.5, 7.1.18).
-    pub accessor_gets: std::collections::BTreeMap<(u32, String), (u32, String, bool)>,
+    /// one receiver test, whose nullish edge is the complete operation (the
+    /// [[Set]] throws the TypeError after the value was evaluated, 13.15.2;
+    /// the [[Get]]'s ToObject throws, 6.2.5.5, 7.1.18).
+    /// A site is (module, start, kind): an ordinary read and a compound's
+    /// GetValue can stand at one offset with one key (`o.k.k += 1`).
+    pub accessors: std::collections::BTreeMap<(u32, String, AccessorKind), (u32, String, bool)>,
     /// ONCHANGE2: this module's named method calls whose verdict is
     /// `Verdict::T0Mono` / `T0Set` with one callee body and a holder class: every receiver is an object
     /// (never a primitive, never ⊤) and the key's value at every receiver is
     /// one class method body. Value: (holder class id, the body's HIR
     /// function id). Codegen calls the body with the receiver as `this`.
     /// ONCHANGE3: with the body's public entry symbol named from the
-    /// holder's own module and class (as `accessor_sets`), and the body's
+    /// holder's own module and class (as `accessors`), and the body's
     /// direct-call ABI read from its own parameters (`DirectAbi`).
     /// NULLCALL1: the first boolean says the receiver may also be `undefined` /
     /// `null` (never another primitive): the call tests it first, and the
@@ -722,8 +736,7 @@ impl ElisionFacts {
             && self.local_classes.is_empty()
             && self.class_statics.is_empty()
             && self.native_member_calls.is_empty()
-            && self.accessor_sets.is_empty()
-            && self.accessor_gets.is_empty()
+            && self.accessors.is_empty()
             && self.method_calls.is_empty()
             && self.late_call_bodies.is_empty()
             && self.record_locals.is_empty()

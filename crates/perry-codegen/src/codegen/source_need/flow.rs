@@ -563,7 +563,7 @@ impl<'a> Build<'a> {
                         }
                     }
                     if name == "_cjs" {
-                        if let Expr::Call { callee, .. } = e {
+                        if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = e {
                             if let Expr::Closure { func_id, .. } = callee.as_ref() {
                                 self.relabel
                                     .insert(Ent::Func(cx.mi, *func_id), "cjs-wrapper");
@@ -578,7 +578,7 @@ impl<'a> Build<'a> {
             Stmt::Expr(e) => {
                 self.expr(cx, e);
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     let v = self.expr(cx, e);
                     if let Some(r) = cx.ret_sink {
@@ -645,6 +645,7 @@ impl<'a> Build<'a> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(cx, discriminant);
                 for c in cases {
@@ -995,7 +996,9 @@ impl<'a> Build<'a> {
                 }
                 vec![]
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 let strict = matches!(op, perry_hir::CompareOp::Eq | perry_hir::CompareOp::Ne);
                 for x in [left, right] {
                     let v = self.expr(cx, x);
@@ -1014,6 +1017,7 @@ impl<'a> Build<'a> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 self.expr(cx, condition);
                 let mut v = self.expr(cx, then_expr);
@@ -1031,7 +1035,7 @@ impl<'a> Build<'a> {
                 self.expr(cx, x);
                 vec![]
             }
-            Expr::Await(x) => self.expr(cx, x),
+            Expr::Await(x, _) => self.expr(cx, x),
             Expr::Yield { value, .. } => {
                 if let Some(x) = value {
                     let v = self.expr(cx, x);
@@ -1039,7 +1043,9 @@ impl<'a> Build<'a> {
                 }
                 vec![]
             }
-            Expr::Call { callee, args, .. } => self.call(cx, callee, args),
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                self.call(cx, callee, args)
+            }
             // The CommonJS wrapper hands its factory to the runtime as the
             // last argument of the partial publication. The runtime's path
             // entry keeps it (no property) and only ever calls it
@@ -1122,7 +1128,7 @@ impl<'a> Build<'a> {
                 self.sink_vals(&o, Reason::ErrorMessage, "property-update");
                 vec![]
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 self.expr(cx, object);
                 let k = self.expr(cx, index);
                 self.sink_vals(&k, Reason::ToPropertyKey, "index");
@@ -1220,6 +1226,7 @@ impl<'a> Build<'a> {
                 class_name,
                 method_name,
                 args,
+                ..
             } => {
                 let target = self.class_by_name(mi, class_name).and_then(|_| {
                     self.static_sigs
@@ -1258,7 +1265,8 @@ impl<'a> Build<'a> {
                         let o = self.expr(cx, object);
                         self.sink_vals(&o, Reason::ErrorMessage, "delete");
                     }
-                    Expr::IndexGet { object, index, .. } => {
+                    Expr::IndexGet { object, index, .. }
+                    | Expr::RegionOut { object, index, .. } => {
                         let o = self.expr(cx, object);
                         self.sink_vals(&o, Reason::ErrorMessage, "delete");
                         let k = self.expr(cx, index);

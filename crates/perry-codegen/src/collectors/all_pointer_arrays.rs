@@ -249,6 +249,7 @@ mod tests {
 
     fn let_array(id: u32, elements: Vec<Expr>) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("a{id}"),
             ty: Type::Any,
@@ -442,6 +443,7 @@ mod tests {
             let_array(1, vec![]),
             push(1, object_literal()),
             Stmt::Expr(Expr::Closure {
+                byte_offset: 0,
                 func_id: 9,
                 params: vec![],
                 return_type: Type::Any,

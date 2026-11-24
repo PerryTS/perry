@@ -612,6 +612,9 @@ pub struct ClassField {
     pub is_readonly: bool,
     /// Legacy TypeScript decorators applied to this property.
     pub decorators: Vec<Decorator>,
+    /// Source offset of the field's declaration (0: built by the compiler
+    /// with no source member).
+    pub byte_offset: u32,
 }
 
 /// A global variable
@@ -635,12 +638,19 @@ pub struct Decorator {
     pub is_factory: bool,
     /// True for `@Reflect.metadata(key, value)`, which Perry lowers directly.
     pub is_reflect_metadata: bool,
+    /// Source byte offset (`span.lo.0`) of the `@decorator` construct.
+    pub byte_offset: u32,
 }
 
 /// A function definition
 #[derive(Debug, Clone)]
 pub struct Function {
     pub id: FuncId,
+    /// Source byte offset (`span.lo.0`) of the function construct (the
+    /// declaration, method, accessor or function expression); a synthesized
+    /// function takes the offset of the construct it is made for. Excluded
+    /// from stable-hashing, like `Expr::Call::byte_offset`.
+    pub byte_offset: u32,
     pub name: String,
     /// Generic type parameters (e.g., T, K in function<T, K>)
     pub type_params: Vec<TypeParam>,
@@ -706,4 +716,7 @@ pub struct Param {
     /// Metadata for the hidden raw-arguments binding used to materialize the
     /// ECMAScript `arguments` object in the callee prologue.
     pub arguments_object: Option<ArgumentsObjectMeta>,
+    /// Source byte offset of the parameter's own span (its pattern, default
+    /// and rest marker). Excluded from stable-hashing, like `Function::byte_offset`.
+    pub byte_offset: u32,
 }

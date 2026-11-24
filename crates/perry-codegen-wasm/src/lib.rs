@@ -133,6 +133,7 @@ mod max_width_tests {
     fn max_width_uses_the_runtime_bridge() {
         let mut module = Module::new("max_width");
         module.init.push(Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "perry/ui".into(),
             class_name: None,
             object: None,

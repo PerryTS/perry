@@ -6169,7 +6169,8 @@ pub fn run_with_parse_cache(
                 .is_some_and(|class| match class.extends_expr.as_deref() {
                     Some(
                         perry_hir::Expr::PropertyGet { object, .. }
-                        | perry_hir::Expr::IndexGet { object, .. },
+                        | perry_hir::Expr::IndexGet { object, .. }
+                        | perry_hir::Expr::RegionOut { object, .. },
                     ) => !matches!(object.as_ref(), perry_hir::Expr::GlobalGet(_)),
                     _ => false,
                 });

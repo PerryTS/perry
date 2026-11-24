@@ -172,7 +172,9 @@ fn try_const(e: &Expr, env: &Env) -> Option<Const> {
             op: UnaryOp::Not,
             operand,
         } => try_const(operand, env).map(|c| Const::Bool(!c.truthy())),
-        Expr::Logical { op, left, right } => {
+        Expr::Logical {
+            op, left, right, ..
+        } => {
             let l = try_const(left, env)?;
             match op {
                 LogicalOp::And => {
@@ -195,7 +197,9 @@ fn try_const(e: &Expr, env: &Env) -> Option<Const> {
                 },
             }
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             let l = try_const(left, env)?;
             let r = try_const(right, env)?;
             eval_compare(*op, &l, &r)
@@ -287,6 +291,7 @@ mod tests {
             false,
         );
         let cond = Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::EnvGet("DEV".into())),
             right: Box::new(Expr::String("true".into())),
@@ -306,6 +311,7 @@ mod tests {
         // if (process.env.NODE_ENV === "production") { B } in node_modules.
         let define = HashMap::new();
         let cond = Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::EnvGet("NODE_ENV".into())),
             right: Box::new(Expr::String("production".into())),
@@ -324,6 +330,7 @@ mod tests {
         // No define, not node_modules ⇒ condition stays runtime, if untouched.
         let define = HashMap::new();
         let cond = Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::EnvGet("DEBUG".into())),
             right: Box::new(Expr::String("1".into())),

@@ -9,6 +9,7 @@ pub(crate) fn wrap_generator_resume_body(
     done_id: LocalId,
     catch_id: LocalId,
     is_async_generator: bool,
+    fn_offset: u32,
 ) -> Vec<Stmt> {
     prepend_executing_clear_before_returns(&mut body, executing_id);
     if is_async_generator {
@@ -16,15 +17,20 @@ pub(crate) fn wrap_generator_resume_body(
     }
 
     vec![
-        generator_executing_guard(executing_id, is_async_generator),
+        generator_executing_guard(executing_id, is_async_generator, fn_offset),
         Stmt::Try {
+            byte_offset: fn_offset,
             body,
             catch: Some(CatchClause {
                 param: Some((catch_id, "__gen_exec_e".to_string())),
                 body: vec![
                     Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
                     Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(false)))),
-                    generator_resume_rethrow(Expr::LocalGet(catch_id), is_async_generator),
+                    generator_resume_rethrow(
+                        Expr::LocalGet(catch_id),
+                        is_async_generator,
+                        fn_offset,
+                    ),
                 ],
             }),
             finally: None,
@@ -47,18 +53,20 @@ pub(crate) fn wrap_async_gen_step_body(
     executing_id: LocalId,
     done_id: LocalId,
     catch_id: LocalId,
+    fn_offset: u32,
 ) -> Vec<Stmt> {
     prepend_executing_clear_before_returns(&mut body, executing_id);
     vec![
-        generator_executing_guard(executing_id, true),
+        generator_executing_guard(executing_id, true, fn_offset),
         Stmt::Try {
+            byte_offset: fn_offset,
             body,
             catch: Some(CatchClause {
                 param: Some((catch_id, "__gen_exec_e".to_string())),
                 body: vec![
                     Stmt::Expr(Expr::LocalSet(done_id, Box::new(Expr::Bool(true)))),
                     Stmt::Expr(Expr::LocalSet(executing_id, Box::new(Expr::Bool(false)))),
-                    generator_resume_rethrow(Expr::LocalGet(catch_id), true),
+                    generator_resume_rethrow(Expr::LocalGet(catch_id), true, fn_offset),
                 ],
             }),
             finally: None,
@@ -77,8 +85,10 @@ pub(crate) fn wrap_fixed_state_completion(
     executing_id: LocalId,
     done_id: LocalId,
     catch_id: LocalId,
+    fn_offset: u32,
 ) -> Vec<Stmt> {
     vec![Stmt::Try {
+        byte_offset: fn_offset,
         body,
         catch: Some(CatchClause {
             param: Some((catch_id, "__gen_exec_e".to_string())),
@@ -93,20 +103,29 @@ pub(crate) fn wrap_fixed_state_completion(
     }]
 }
 
-pub(crate) fn generator_executing_guard(executing_id: LocalId, is_async_generator: bool) -> Stmt {
+pub(crate) fn generator_executing_guard(
+    executing_id: LocalId,
+    is_async_generator: bool,
+    fn_offset: u32,
+) -> Stmt {
     Stmt::If {
         condition: Expr::LocalGet(executing_id),
         then_branch: vec![generator_resume_rethrow(
             generator_executing_type_error(),
             is_async_generator,
+            fn_offset,
         )],
         else_branch: None,
     }
 }
 
-pub(crate) fn generator_resume_rethrow(value: Expr, is_async_generator: bool) -> Stmt {
+pub(crate) fn generator_resume_rethrow(
+    value: Expr,
+    is_async_generator: bool,
+    fn_offset: u32,
+) -> Stmt {
     if is_async_generator {
-        Stmt::Return(Some(promise_reject(value)))
+        Stmt::Return(Some(promise_reject(value, fn_offset)), fn_offset)
     } else {
         Stmt::Throw(value)
     }
@@ -118,18 +137,18 @@ pub(crate) fn generator_executing_type_error() -> Expr {
     )))
 }
 
-pub(crate) fn promise_reject(value: Expr) -> Expr {
+pub(crate) fn promise_reject(value: Expr, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset,
             object: Box::new(Expr::GlobalGet(0)),
             property: "reject".to_string(),
         }),
         args: vec![value],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -176,7 +195,7 @@ pub(crate) fn prepend_executing_clear_before_returns(stmts: &mut Vec<Stmt>, exec
             }
             _ => {}
         }
-        if matches!(stmt, Stmt::Return(_)) {
+        if matches!(stmt, Stmt::Return(_, _)) {
             new_body.push(Stmt::Expr(Expr::LocalSet(
                 executing_id,
                 Box::new(Expr::Bool(false)),

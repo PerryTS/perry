@@ -188,18 +188,18 @@ pub fn make_iter_result(value: Expr, done: bool) -> Expr {
 /// from user code would produce (`Call { callee: PropertyGet {
 /// GlobalGet(0), "resolve" }, args: [x] }`), which the codegen
 /// already recognizes and lowers via `js_promise_resolved`.
-pub fn wrap_in_promise_resolve(value: Expr) -> Expr {
+pub fn wrap_in_promise_resolve(value: Expr, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset,
             object: Box::new(Expr::GlobalGet(0)),
             property: "resolve".to_string(),
         }),
         args: vec![value],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -211,9 +211,9 @@ pub fn wrap_in_promise_resolve(value: Expr) -> Expr {
 pub fn wrap_returns_in_promise(stmts: &mut Vec<Stmt>) {
     for stmt in stmts.iter_mut() {
         match stmt {
-            Stmt::Return(Some(expr)) => {
+            Stmt::Return(Some(expr), ret_offset) => {
                 let inner = std::mem::replace(expr, Expr::Undefined);
-                *expr = wrap_in_promise_resolve(inner);
+                *expr = wrap_in_promise_resolve(inner, *ret_offset);
             }
             Stmt::If {
                 then_branch,

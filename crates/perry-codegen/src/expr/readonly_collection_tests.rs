@@ -6,6 +6,7 @@ use perry_hir::{
 
 fn number_param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -18,28 +19,32 @@ fn number_param(id: u32, name: &str) -> Param {
 
 fn has_method() -> Function {
     Function {
+        byte_offset: 0,
         id: 2,
         name: "hasComponent".to_string(),
         type_params: Vec::new(),
         params: vec![number_param(1, "componentType")],
         return_type: Type::Boolean,
-        body: vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        body: vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
-                object: Box::new(Expr::PropertyGet {
+                callee: Box::new(Expr::PropertyGet {
                     byte_end: 0,
-                    object: Box::new(Expr::This),
-                    property: "componentTypeSet".to_string(),
+                    object: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
+                        object: Box::new(Expr::This),
+                        property: "componentTypeSet".to_string(),
+                        byte_offset: 0,
+                    }),
+                    property: "has".to_string(),
                     byte_offset: 0,
                 }),
-                property: "has".to_string(),
+                args: vec![Expr::LocalGet(1)],
+                type_args: Vec::new(),
                 byte_offset: 0,
             }),
-            args: vec![Expr::LocalGet(1)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }))],
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -63,6 +68,7 @@ fn archetype_class() -> Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "componentTypeSet".to_string(),
             key_expr: None,
@@ -107,11 +113,13 @@ fn executor_class() -> Class {
         fields: Vec::new(),
         constructor: None,
         methods: vec![Function {
+            byte_offset: 0,
             id: 4,
             name: "contains".to_string(),
             type_params: Vec::new(),
             params: vec![
                 Param {
+                    byte_offset: 0,
                     id: 1,
                     name: "archetype".to_string(),
                     ty: Type::Union(vec![Type::Named("Archetype".to_string()), Type::Void]),
@@ -123,23 +131,26 @@ fn executor_class() -> Class {
                 number_param(2, "componentType"),
             ],
             return_type: Type::Boolean,
-            body: vec![Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::PropertyGet {
+            body: vec![Stmt::Return(
+                Some(Expr::Call {
                     byte_end: 0,
-                    object: Box::new(Expr::PropertyGet {
+                    callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        object: Box::new(Expr::LocalGet(1)),
-                        property: "componentTypeSet".to_string(),
+                        object: Box::new(Expr::PropertyGet {
+                            byte_end: 0,
+                            object: Box::new(Expr::LocalGet(1)),
+                            property: "componentTypeSet".to_string(),
+                            byte_offset: 0,
+                        }),
+                        property: "has".to_string(),
                         byte_offset: 0,
                     }),
-                    property: "has".to_string(),
+                    args: vec![Expr::LocalGet(2)],
+                    type_args: Vec::new(),
                     byte_offset: 0,
                 }),
-                args: vec![Expr::LocalGet(2)],
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }))],
+                0,
+            )],
             is_async: false,
             is_generator: false,
             is_strict: true,
@@ -268,6 +279,7 @@ fn compile_nested_map_get_ir() -> String {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "ctx".to_string(),
             key_expr: None,
@@ -279,33 +291,37 @@ fn compile_nested_map_get_ir() -> String {
         }],
         constructor: None,
         methods: vec![Function {
+            byte_offset: 0,
             id: 3,
             name: "lookup".to_string(),
             type_params: Vec::new(),
             params: vec![number_param(1, "entityId")],
             return_type: Type::Number,
-            body: vec![Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::PropertyGet {
+            body: vec![Stmt::Return(
+                Some(Expr::Call {
                     byte_end: 0,
-                    object: Box::new(Expr::PropertyGet {
+                    callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
                         object: Box::new(Expr::PropertyGet {
                             byte_end: 0,
-                            object: Box::new(Expr::This),
-                            property: "ctx".to_string(),
+                            object: Box::new(Expr::PropertyGet {
+                                byte_end: 0,
+                                object: Box::new(Expr::This),
+                                property: "ctx".to_string(),
+                                byte_offset: 0,
+                            }),
+                            property: "entityToArchetype".to_string(),
                             byte_offset: 0,
                         }),
-                        property: "entityToArchetype".to_string(),
+                        property: "get".to_string(),
                         byte_offset: 0,
                     }),
-                    property: "get".to_string(),
+                    args: vec![Expr::LocalGet(1)],
+                    type_args: Vec::new(),
                     byte_offset: 0,
                 }),
-                args: vec![Expr::LocalGet(1)],
-                type_args: Vec::new(),
-                byte_offset: 0,
-            }))],
+                0,
+            )],
             is_async: false,
             is_generator: false,
             is_strict: true,

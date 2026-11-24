@@ -19,6 +19,7 @@ fn declared_array_read_ir(name: &str, index: Expr) -> String {
         name,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "items".to_string(),
                 ty: Type::Array(Box::new(Type::String)),
@@ -39,6 +40,7 @@ fn declared_array_read_ir(name: &str, index: Expr) -> String {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Any,
@@ -95,6 +97,7 @@ fn numeric_layout_oob_array_read_ir() -> String {
         "numeric_layout_oob_array_read",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "items".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -110,11 +113,13 @@ fn numeric_layout_oob_array_read_ir() -> String {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Number,
                 mutable: false,
                 init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::IndexGet {
                         element_offset: 0,
@@ -300,6 +305,7 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
         "unknown_dense_subclass_read",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "items".to_string(),
                 ty: Type::Any,
@@ -317,6 +323,7 @@ fn unknown_numeric_read_is_one_inline_hit_and_one_out_of_line_exit() {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Any,
@@ -461,6 +468,7 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
             name,
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: ITEMS,
                     name: "items".to_string(),
                     ty: Type::Any,
@@ -476,11 +484,13 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
                     }),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: RESULT,
                     name: "result".to_string(),
                     ty: Type::Number,
                     mutable: false,
                     init: Some(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Sub,
                         left: Box::new(Expr::IndexGet {
                             element_offset: 0,
@@ -551,9 +561,10 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
 }
 
 fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
-    let symbol_read = Expr::synthetic_index_get(
+    let symbol_read = Expr::index_get_at(
         Box::new(Expr::LocalGet(ITEMS)),
         Box::new(Expr::LocalGet(SYMBOL)),
+        0,
     );
     let result = match field {
         Some(property) => Expr::PropertyGet {
@@ -568,6 +579,7 @@ fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
         "dynamic_symbol_read",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "items".to_string(),
                 ty: Type::Any,
@@ -585,6 +597,7 @@ fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: SYMBOL,
                 name: "componentData".to_string(),
                 ty: Type::Symbol,
@@ -592,6 +605,7 @@ fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
                 init: Some(symbol_init),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Any,
@@ -645,6 +659,7 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
         "unknown_typed_array_read_brand",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "items".to_string(),
                 ty: Type::Any,
@@ -660,13 +675,15 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::synthetic_index_get(
+                init: Some(Expr::index_get_at(
                     Box::new(Expr::LocalGet(ITEMS)),
                     Box::new(Expr::Integer(0)),
+                    0,
                 )),
             },
         ],
@@ -777,6 +794,7 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
         "any_key_index_read",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "packed".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
@@ -792,6 +810,7 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: SPARSE,
                 name: "sparse".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
@@ -807,6 +826,7 @@ fn any_typed_dynamic_key_takes_the_numeric_tiers_when_it_is_an_array_index() {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Any,
@@ -861,6 +881,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
         "claimed_receiver_brand",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ITEMS,
                 name: "packed".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
@@ -876,6 +897,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: SPARSE,
                 name: "sparse".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
@@ -891,6 +913,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::Any,
@@ -926,6 +949,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
 
 fn dynamic_key_read_ir(name: &str, key_type: Type) -> String {
     let param = |id, name: &str, ty| Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -936,6 +960,7 @@ fn dynamic_key_read_ir(name: &str, key_type: Type) -> String {
     };
     let mut module = Module::new(name);
     module.functions.push(Function {
+        byte_offset: 0,
         id: 10,
         name: "read".to_string(),
         type_params: Vec::new(),
@@ -944,13 +969,16 @@ fn dynamic_key_read_ir(name: &str, key_type: Type) -> String {
             param(KEY, "key", key_type),
         ],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::IndexGet {
-            element_offset: 0,
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(ITEMS)),
-            index: Box::new(Expr::LocalGet(KEY)),
-        }))],
+        body: vec![Stmt::Return(
+            Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(ITEMS)),
+                index: Box::new(Expr::LocalGet(KEY)),
+            }),
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: true,
