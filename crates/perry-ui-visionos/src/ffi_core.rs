@@ -120,6 +120,18 @@ pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
     widgets::text::create(text_ptr as *const u8)
 }
 
+/// `Label(text, field)`: the `<label for>` binding to `field` exists on the web
+/// target only, so here a Label is its text.
+#[no_mangle]
+pub extern "C" fn perry_ui_label_create(text_ptr: i64, _field: i64) -> i64 {
+    perry_ui_text_create(text_ptr)
+}
+
+/// The accessible name is applied on the web target (`aria-label`); this backend
+/// keeps the platform's default.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_accessibility_label(_handle: i64, _text_ptr: i64) {}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     widgets::button::create(label_ptr as *const u8, on_press)

@@ -941,6 +941,17 @@ export function widgetSetOpacity(widget: Widget, opacity: number): void;
 export function widgetSetEnabled(widget: Widget, enabled: number): void;
 export function widgetSetTooltip(widget: Widget, text: string): void;
 /**
+ * The name a screen reader announces for `widget`. Web: sets `aria-label`. Native
+ * backends accept the call and keep the platform's default name.
+ */
+export function widgetSetAccessibilityLabel(widget: Widget, text: string): void;
+/**
+ * A caption for a form field. Web: a `<label for>` bound to `field` (or to the first
+ * input, textarea or select inside it), so tapping the caption focuses the field and a
+ * screen reader announces it. Native backends show `text` as a `Text`.
+ */
+export function Label(text: string, field: Widget): Widget;
+/**
  * Attach a rich (widget-tree) tooltip to `widget`. The `content` widget
  * is presented in a borderless floating panel after `hoverDelayMs` of
  * mouse hover (default 500ms when ≤0). Currently wired on macOS via

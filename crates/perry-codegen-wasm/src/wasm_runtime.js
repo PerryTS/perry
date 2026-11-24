@@ -4317,6 +4317,24 @@ function perry_ui_set_enabled(h, enabled) {
   const el = uiGet(h); if (el) { el.disabled = !enabled; el.style.pointerEvents = enabled ? "" : "none"; el.style.opacity = enabled ? "" : "0.5"; }
 }
 function perry_ui_set_tooltip(h, text) { const el = uiGet(h); if (el) el.title = text || ""; }
+function perry_ui_widget_set_accessibility_label(h, text) {
+  const el = uiGet(h); if (el) el.setAttribute("aria-label", String(text));
+}
+// A `<label for>` bound to the field, or to the first form control inside a composite
+// widget; the control gets an id when it has none.
+let labelSeq = 0;
+function perry_ui_label_create(text, field) {
+  const label = document.createElement("label");
+  label.textContent = text === undefined ? "" : String(text);
+  const f = uiGet(field);
+  if (f) {
+    const target = (f.matches && f.matches("input,textarea,select")) ? f
+      : ((f.querySelector && f.querySelector("input,textarea,select")) || f);
+    if (!target.id) target.id = "perry-field-" + (++labelSeq);
+    label.htmlFor = target.id;
+  }
+  return uiAlloc(label);
+}
 function perry_ui_set_control_size(h, size) { /* 0=regular 1=small 2=mini 3=large */
   const el = uiGet(h); if (!el) return;
   const sizes = ["", "0.85em", "0.75em", "1.2em"];
@@ -5981,6 +5999,7 @@ const __perryUiDispatch = {
   perry_ui_text_set_font_weight,
   perry_ui_set_font_family, perry_ui_set_padding, perry_ui_set_frame, perry_ui_set_corner_radius,
   perry_ui_set_border, perry_ui_set_opacity, perry_ui_set_enabled, perry_ui_set_tooltip,
+  perry_ui_widget_set_accessibility_label, perry_ui_label_create,
   perry_ui_set_control_size, perry_ui_set_widget_hidden, perry_ui_widget_set_background_gradient,
   perry_ui_widget_set_shadow,
   perry_ui_widget_set_border_color, perry_ui_widget_set_border_width,

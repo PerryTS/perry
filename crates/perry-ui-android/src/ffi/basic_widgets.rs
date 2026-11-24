@@ -30,6 +30,18 @@ pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
     })
 }
 
+/// `Label(text, field)`: the `<label for>` binding to `field` exists on the web
+/// target only, so here a Label is its text.
+#[no_mangle]
+pub extern "C" fn perry_ui_label_create(text_ptr: i64, _field: i64) -> i64 {
+    perry_ui_text_create(text_ptr)
+}
+
+/// The accessible name is applied on the web target (`aria-label`); this backend
+/// keeps the platform's default.
+#[no_mangle]
+pub extern "C" fn perry_ui_widget_set_accessibility_label(_handle: i64, _text_ptr: i64) {}
+
 /// `Text(content, id)` — create + register for `setText(id, value)`.
 /// Other platforms export this; Android was missing it, so dlopen of apps
 /// that use reactive Text ids failed with:

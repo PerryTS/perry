@@ -469,6 +469,19 @@ OAuth / callback-interception pattern and the per-platform notes.
 
 These are linked from their own pages where richer examples exist.
 
+## Label
+
+`Label(text, field)` captions a form field. On the web target it is a
+`<label for>` bound to the field (or to the first input, textarea or select
+inside a composite widget such as a `Toggle`), so tapping the caption focuses
+the field and a screen reader announces the caption as the field's name. Native
+backends show `text` as a `Text`.
+
+```typescript,no-test
+const phone = TextField("0912 345 678", (value: string) => {});
+VStack(4, [Label("Phone", phone), phone]);
+```
+
 ## Common widget helpers
 
 Every widget handle accepts these:
@@ -483,6 +496,7 @@ Every widget handle accepts these:
 | `widgetSetEnabled(w, flag)` | `0` disables, `1` enables |
 | `widgetSetHidden(w, flag)` | `0` visible, `1` hidden |
 | `widgetSetTooltip(w, text)` | Tooltip on hover (desktop only) |
+| `widgetSetAccessibilityLabel(w, text)` | Name a screen reader announces (web `aria-label`; no-op on native) |
 | `widgetSetOnClick(w, cb)` | Click handler |
 | `widgetSetOnHover(w, cb)` | Hover enter/leave (desktop only) |
 | `widgetSetOnDoubleClick(w, cb)` | Double-click handler |
