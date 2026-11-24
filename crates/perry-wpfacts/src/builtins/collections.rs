@@ -426,6 +426,11 @@ pub(super) fn getter_call(m: &mut Model, t: Tok, key: Atom) -> (CallId, bool) {
     member_call(m, t, key, true, ThisArg::Tok(t), 0)
 }
 
+/// The call of the setter of `key` with receiver `t` and one argument.
+pub(super) fn setter_call(m: &mut Model, t: Tok, key: Atom) -> (CallId, bool) {
+    member_call(m, t, key, false, ThisArg::Tok(t), 1)
+}
+
 #[track_caller]
 fn member_call(
     m: &mut Model,
@@ -2185,7 +2190,7 @@ pub(super) fn bobj_method(m: &mut Model, t: Tok, what: &str, name: Option<&str>,
         }
         (
             "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-            | "fromEntries" | "hostrecord" | "stringrecord",
+            | "fromEntries" | "hostrecord" | "stringrecord" | "nullrecord",
             Some(n),
         ) => match members::box_chain(kind) {
             members::BoxChain::Array | members::BoxChain::Unknown => {

@@ -1219,6 +1219,7 @@ impl Model {
                     && !self.settle_val_runs()
                     && !self.settle_define()
                     && !self.settle_proto_first()
+                    && !self.settle_realm_set()
                     && !self.settle_record_entry()
                     && !self.settle_not_error()
                     && !self.settle_ta_len()
@@ -1585,6 +1586,12 @@ impl Model {
         for t in toks.iter() {
             match self.toks[*t as usize] {
                 TokKind::ObjectProto => return None,
+                // A realm prototype taken as a value
+                // (`builtins::realm_proto_value`) is one object of its own:
+                // an operation through it is on it alone, and the lookups
+                // that pass it ask it under its identity
+                // (`builtins::intrinsic_miss_on`).
+                TokKind::NativeProto(..) if builtins::realm_proto_of(self, *t).is_some() => {}
                 TokKind::NativeProto(..) => native = true,
                 _ => {}
             }
@@ -1723,6 +1730,25 @@ impl Model {
                 },
                 _ => None,
             };
+            // A class linked to a realm parent by name (`Model::realm_parent`):
+            // the evaluated `extends` is exactly that constructor, else the
+            // layout the solve used is not the instances' (E11, as for a
+            // program parent linked by name).
+            if let Some(&want) = self.realm_parent.get(&tm) {
+                if realm.as_deref() != Some(want) {
+                    let inst = self.tok(TokKind::Obj(tm, NO_CTX));
+                    let what = format!(
+                        "E11 class whose evaluated `extends` is not its linked realm constructor {want} ({} tokens{}{})",
+                        toks.len(),
+                        if toks.contains(&TOP) { ", ⊤" } else { "" },
+                        if null { ", null" } else { "" }
+                    );
+                    let r = self.reason(&what);
+                    self.mark_hard(inst, Hard::E11ReflectConstruct, r);
+                    self.parent_unsettled.insert(tm);
+                    continue;
+                }
+            }
             if let Some(identity) = realm {
                 self.parent_unsettled.insert(tm);
                 if self.unit_mode || crate::builtins::declared_super_construct(&identity).is_none()

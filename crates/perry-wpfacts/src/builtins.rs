@@ -36,7 +36,7 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    declared_construct, declared_member, declared_proto_method, declared_static,
+    construct_layout, declared_construct, declared_member, declared_proto_method, declared_static,
     declared_super_construct, run_construct, run_function, run_member, run_super_construct,
 };
 
@@ -1339,7 +1339,11 @@ pub(crate) fn intrinsic_miss_on(
 /// OrdinaryGet, ECMA-262 10.1.8.1, walks them all). A program store onto
 /// any of them is a write this lookup sees, with or without the realm held.
 fn native_chain(holder: &str) -> Vec<String> {
-    let mut out = vec![holder.to_string()];
+    // Each prototype under its constructor's name (`realm_proto_value`).
+    let mut out = vec![holder
+        .strip_suffix(".prototype")
+        .unwrap_or(holder)
+        .to_string()];
     let own = loads::view_chain(Some(holder)).or_else(|| match holder.ends_with(".prototype") {
         true => members::realm_entry(holder),
         false => members::realm_entry(&format!("{holder}.prototype")),
@@ -2855,6 +2859,22 @@ pub(crate) fn native_own_load(
                 return true;
             }
         }
+        TokKind::BuiltinFn(Native::Member { identity, .. })
+            if name == "prototype" && realm_ctor_prototype(identity).is_some() =>
+        {
+            // ECMA-262 10.2.5 MakeConstructor: a realm constructor's own
+            // `prototype` is the realm prototype it declares
+            // (`EventTarget.prototype`), a value of its own whose lookups
+            // read that declaration's chain (`loads::tok_load`).
+            let born = realm_ctor_prototype(identity).expect("guarded");
+            if opaque_written(m, holder, a, NativeMiss::Load(dst)) {
+                opaque_member(m, dst);
+            } else {
+                let p = realm_proto_value(m, born);
+                m.add_tok(dst, p);
+            }
+            return true;
+        }
         TokKind::BuiltinFn(Native::Member { .. }) => {
             let property = m.native_property(holder, &name);
             let value = property.and_then(|p| p.native);
@@ -2882,6 +2902,226 @@ pub(crate) fn native_own_load(
         _ => {}
     }
     false
+}
+
+/// The realm prototype realm constructor `identity` holds as its own
+/// `prototype` (a reference the realm declares) when the realm declares
+/// every link of that prototype's chain (`members::realm_born`).
+pub(crate) fn realm_ctor_prototype(
+    identity: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    use perry_hir::realm_manifest::{RealmKind, RealmOwnValue};
+    let e = members::realm_entry(identity).filter(|e| e.kind == RealmKind::Constructor)?;
+    let p = e.own.iter().find(|p| !p.symbol && p.key == "prototype")?;
+    let RealmOwnValue::Reference(r) = p.value else {
+        return None;
+    };
+    members::realm_born(r)
+}
+
+/// The token of realm prototype `born` taken as a value: a native
+/// prototype under its declaration's name. Its declared accessors run per
+/// receiver (`realm_proto_getter`), so their keys are accessor keys
+/// (`Model::add_accessor_atom`: the lookups walk their holders).
+pub(crate) fn realm_proto_value(
+    m: &mut Model,
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+) -> Tok {
+    // One object, one token: the name a builtin object of the kind reads
+    // its prototype under (`loads` proto of `what`, `native_chain`), the
+    // constructor's (`URL` for `URL.prototype`).
+    let p = native_proto(m, born.name.strip_suffix(".prototype").unwrap_or(born.name));
+    let mut at = Some(born);
+    while let Some(e) = at {
+        for o in e.own.iter() {
+            if realm_chain_getter(born, o).is_some() || realm_chain_setter(born, o).is_some() {
+                let n = match (o.symbol, o.key.strip_prefix("@@")) {
+                    (true, Some(wk)) => format!("{WK_PREFIX}{wk}"),
+                    (true, None) => continue,
+                    (false, _) => o.key.to_string(),
+                };
+                let a = m.atom(&n);
+                m.add_accessor_atom(a);
+            }
+        }
+        at = e.proto.and_then(members::realm_entry);
+    }
+    p
+}
+
+/// The realm declaration of native prototype token `t` when it is a
+/// realm-born prototype (`realm_proto_value`).
+pub(crate) fn realm_proto_of(
+    m: &Model,
+    t: Tok,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    match &m.toks[t as usize] {
+        TokKind::NativeProto(n, None) => realm_proto_named(n),
+        _ => None,
+    }
+}
+
+/// The realm prototype a builtin kind `what` (`URL`, or a declaration's
+/// `fresh` kind `EventTarget.prototype`) reads its chain from, when the
+/// realm declares every link of it (`members::realm_born`).
+pub(crate) fn realm_proto_named(
+    what: &str,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let base = what.strip_suffix(".prototype").unwrap_or(what);
+    members::realm_born(&format!("{base}.prototype"))
+}
+
+/// The declared getter of own property `o` when the lookup of its key on
+/// `born`'s chain finds `o` (an accessor whose getter the realm declares
+/// effects for).
+fn realm_chain_getter(
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    o: &perry_hir::realm_manifest::RealmOwn,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    use perry_hir::realm_manifest::RealmOwnValue;
+    let RealmOwnValue::Accessor { get: Some(g), .. } = o.value else {
+        return None;
+    };
+    let name = match (o.symbol, o.key.strip_prefix("@@")) {
+        (true, Some(wk)) => format!("{WK_PREFIX}{wk}"),
+        (true, None) => return None,
+        (false, _) => o.key.to_string(),
+    };
+    match members::realm_chain_find(born, &name) {
+        members::RealmFind::Own(p, _) if std::ptr::eq(p, o) => {
+            members::realm_entry(g).filter(|e| !e.effects.is_empty())
+        }
+        _ => None,
+    }
+}
+
+/// What a store through own accessor `o` of `born`'s chain runs when the
+/// lookup of its key finds `o` (ECMA-262 10.1.9.2 OrdinarySetWithOwnDescriptor
+/// steps 3-7): its setter. `Object.prototype`'s (`__proto__`) is not one:
+/// that object is its own token on every chain, whose accessor the Annex B
+/// lookups run (`accessor_lookup`).
+fn realm_chain_setter(
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    o: &perry_hir::realm_manifest::RealmOwn,
+) -> Option<RealmSetter> {
+    use perry_hir::realm_manifest::RealmOwnValue;
+    let RealmOwnValue::Accessor { set, .. } = o.value else {
+        return None;
+    };
+    let name = match (o.symbol, o.key.strip_prefix("@@")) {
+        (true, Some(wk)) => format!("{WK_PREFIX}{wk}"),
+        (true, None) => return None,
+        (false, _) => o.key.to_string(),
+    };
+    let members::RealmFind::Own(p, owner) = members::realm_chain_find(born, &name) else {
+        return None;
+    };
+    if !std::ptr::eq(p, o) || owner.name == "Object.prototype" {
+        return None;
+    }
+    let Some(set) = set else {
+        return Some(RealmSetter::GetterOnly);
+    };
+    Some(
+        match members::realm_entry(set)
+            .filter(|e| !e.effects.is_empty() && effects::interpretable(e.effects))
+        {
+            Some(e) => RealmSetter::Declared(e),
+            None => RealmSetter::Undeclared(format!("{}.{name}", owner.name)),
+        },
+    )
+}
+
+/// The setter a store finds on a realm prototype's chain.
+pub(crate) enum RealmSetter {
+    /// Declared effects: they run with the receiver as `this` and the
+    /// stored value as the argument (`realm_setter_store`).
+    Declared(&'static perry_hir::realm_manifest::RealmEntry),
+    /// No setter (a getter-only accessor): OrdinarySetWithOwnDescriptor
+    /// (10.1.9.2 step 7.b) returns false; strict code's PutValue throws a
+    /// TypeError (13.15.2 step 5.d), the runtime error every `catch` already
+    /// receives (`Model::thrown`), sloppy code does nothing. Either way
+    /// nothing is written and the stored value goes nowhere.
+    GetterOnly,
+    /// A setter without declared effects: the accessor's name.
+    Undeclared(String),
+}
+
+/// The setter of key `a` on the chain of realm prototype token `holder`.
+pub(crate) fn realm_proto_setter(m: &Model, holder: Tok, a: Atom) -> Option<RealmSetter> {
+    let born = realm_proto_of(m, holder)?;
+    let members::RealmFind::Own(p, _) = members::realm_chain_find(born, &m.atoms[a as usize])
+    else {
+        return None;
+    };
+    realm_chain_setter(born, p)
+}
+
+/// The setter a store of key `name` finds on the chain of realm prototype
+/// `born` (`realm_chain_setter`).
+pub(crate) fn realm_born_setter(
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    name: &str,
+) -> Option<RealmSetter> {
+    let members::RealmFind::Own(p, _) = members::realm_chain_find(born, name) else {
+        return None;
+    };
+    realm_chain_setter(born, p)
+}
+
+/// The keys of `holder`'s realm chain a store finds a realm setter under
+/// (`realm_proto_setter`), as atoms.
+pub(crate) fn realm_proto_setter_keys(m: &mut Model, holder: Tok) -> Vec<Atom> {
+    let Some(born) = realm_proto_of(m, holder) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for k in members::realm_chain_keys(born) {
+        let a = m.atom(&k);
+        if realm_proto_setter(m, holder, a).is_some() {
+            out.push(a);
+        }
+    }
+    out
+}
+
+/// Setter `e` runs on receiver `origin` with `src` as its argument.
+pub(crate) fn realm_setter_store(
+    m: &mut Model,
+    e: &'static perry_hir::realm_manifest::RealmEntry,
+    origin: Tok,
+    a: Atom,
+    src: NodeId,
+) {
+    effects::setter_run(m, e, origin, a, src);
+}
+
+/// The getter the realm declares for key `a` on the chain of realm
+/// prototype token `holder`, which runs with each receiver of the lookup
+/// as `this` (ECMA-262 10.1.8.1 OrdinaryGet step 7), never with the
+/// prototype's shared chain value (`loads::tok_load` leaves it out).
+pub(crate) fn realm_proto_getter(
+    m: &Model,
+    holder: Tok,
+    a: Atom,
+) -> Option<&'static perry_hir::realm_manifest::RealmEntry> {
+    let born = realm_proto_of(m, holder)?;
+    let members::RealmFind::Own(p, _) = members::realm_chain_find(born, &m.atoms[a as usize])
+    else {
+        return None;
+    };
+    realm_chain_getter(born, p)
+}
+
+/// `dst` ⊇ what getter `e` returns on receiver `origin`.
+pub(crate) fn realm_getter_load(
+    m: &mut Model,
+    e: &'static perry_hir::realm_manifest::RealmEntry,
+    origin: Tok,
+    a: Atom,
+    dst: NodeId,
+) {
+    effects::getter_load(m, e, origin, a, dst);
 }
 
 /// Constructibility is the realm declaration's object shape, independent

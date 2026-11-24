@@ -648,9 +648,10 @@ impl Model {
         // `defineProperty`) is no [[Set]]: [[DefineOwnProperty]] replaces
         // the accessor (ECMA-262 10.1.6.3 step 2-3, ValidateAndApply...
         // with a data descriptor over a configurable accessor), so it takes
-        // the ordinary path: a write of that key and no other.
+        // the ordinary path: a write of that key and no other. A class field
+        // too (DefineField: CreateDataPropertyOrThrow, `own_define_site`).
         if let Key::Named(a) = key {
-            let define = self.define_site(site);
+            let define = self.own_define_site(site);
             if !elem
                 && !theirs
                 && !define
@@ -671,7 +672,7 @@ impl Model {
         if !theirs {
             if let Some(f) = self.builtin_field(t, key) {
                 self.edge(src, f);
-                if !self.define_site(site) {
+                if !self.own_define_site(site) {
                     self.accessor_walk(
                         self.store_recv.unwrap_or(t),
                         t,
@@ -1083,7 +1084,15 @@ impl Model {
         if self.unit_mode && matches!(self.toks[t as usize], TokKind::Func(..)) {
             self.note_fn_store(t, key, src);
         }
+        // OrdinarySet (10.1.9.2): a key whose lookup surely finds a realm
+        // accessor calls its setter (or, getter-only, fails) and defines no
+        // own data property; where the lookup cannot prove it, both run.
+        let realm_set = match key {
+            Key::Named(a) => slot.is_none() && self.realm_set_skip(t, a, src, site),
+            Key::Any(_) => false,
+        };
         match key {
+            Key::Named(_) if realm_set => {}
             Key::Named(a) => {
                 // A BD-A define of a non-enumerable key makes no for-in key
                 // (`field_r`, as a method definition).
@@ -1177,8 +1186,10 @@ impl Model {
         // Setters on the chain (and own accessors), including an accessor
         // installed through another token that may denote this native. A
         // definition runs none: [[DefineOwnProperty]] calls no setter
-        // (ECMA-262 10.1.6.3), so no setter's throw reaches any region.
-        if !self.define_site(site) {
+        // (ECMA-262 10.1.6.3), so no setter's throw reaches any region. A
+        // class field is one (DefineField, 10.2.10: CreateDataPropertyOrThrow),
+        // as is every `own_define_site`.
+        if !self.own_define_site(site) {
             self.builtin_field_use(
                 t,
                 key,
@@ -1240,9 +1251,64 @@ impl Model {
 }
 
 impl Model {
-    /// A store site of `defineProperty` (`Gen::define_property`,
-    /// `define_by_data`, `define_any_on`): its value is defined with
-    /// [[DefineOwnProperty]], which runs no [[Set]] and so no setter.
+    /// A site that defines an own property ([[DefineOwnProperty]], no
+    /// [[Set]]): `defineProperty`, a class field (CreateDataPropertyOrThrow,
+    /// 7.3.6 / 10.2.10 DefineField), a literal-descriptor or birth define.
+    pub(super) fn own_define_site(&self, site: SiteId) -> bool {
+        self.define_site(site)
+            || self.stores.get(site as usize).is_some_and(|s| {
+                s.define_attrs.is_some()
+                    || s.desc.starts_with("field ")
+                    || s.desc.starts_with("define ")
+            })
+    }
+
+    /// The named store of `src` into `t` under `a` at `site` writes no own
+    /// property (`realm_accessor_sure`); filed for `settle_realm_set`. A
+    /// definition makes the own property: the pair's lookup no longer finds
+    /// the accessor.
+    fn realm_set_skip(&mut self, t: Tok, a: Atom, src: NodeId, site: SiteId) -> bool {
+        if self.own_define_site(site) {
+            if self.realm_set_open.insert((t, a)) {
+                self.reopen_realm_set();
+            }
+            return false;
+        }
+        if !self.realm_accessor_sure(t, a) {
+            return false;
+        }
+        self.realm_set_skips.push((t, a, src, site));
+        true
+    }
+
+    /// Stores filed by `realm_set_skip` whose lookup is no longer sure write
+    /// their own property after all.
+    fn reopen_realm_set(&mut self) {
+        let skips = std::mem::take(&mut self.realm_set_skips);
+        let mut kept = Vec::with_capacity(skips.len());
+        let mut replay = Vec::new();
+        for (t, a, src, site) in skips {
+            if self.realm_accessor_sure(t, a) {
+                kept.push((t, a, src, site));
+            } else {
+                self.realm_set_open.insert((t, a));
+                replay.push((t, a, src, site));
+            }
+        }
+        self.realm_set_skips = kept;
+        for (t, a, src, site) in replay {
+            self.store_into(t, Key::Named(a), src, site);
+        }
+    }
+
+    pub(crate) fn settle_realm_set(&mut self) -> bool {
+        if self.realm_set_skips.is_empty() {
+            return false;
+        }
+        self.reopen_realm_set();
+        !self.wl.is_empty()
+    }
+
     pub(super) fn define_site(&self, site: SiteId) -> bool {
         self.stores
             .get(site as usize)

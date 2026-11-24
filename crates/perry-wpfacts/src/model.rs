@@ -2453,6 +2453,13 @@ pub struct Model {
     /// still evaluated (a class in a CommonJS factory, §17.4): the node the
     /// evaluated value reaches. After the solve it must be that parent.
     pub parent_checks: Vec<(TmplId, NodeId)>,
+    /// Classes whose `extends` binding statically names a realm constructor
+    /// that declares its construct and prototype (`import { Readable } from
+    /// "stream"`, `extends EventTarget`), linked at gen time: the declared
+    /// construct's fields are the instance's layout prefix. The evaluated
+    /// value (`parent_value`) must be that constructor after the solve
+    /// (`settle_parent_values`), else E11.
+    pub realm_parent: crate::pts::FxHashMap<TmplId, &'static str>,
     /// DEC 251 B: classes whose evaluated `extends` value settle could not
     /// link to one class (`settle_parent_values`): no static construction
     /// through a parent is published for them (`super_unrelinked`).
@@ -2497,6 +2504,14 @@ pub struct Model {
     /// (`proto_first_holds`); checked again whenever the worklist empties.
     pub proto_first_reads: Vec<(Tok, Atom, NodeId)>,
     pub proto_first_seen: crate::pts::FxHashSet<(Tok, Atom, NodeId)>,
+    /// Named stores that wrote no own property: the lookup of the key on
+    /// the receiver finds a realm accessor (`realm_accessor_sure`), whose
+    /// setter runs instead (10.1.9.2 step 7). Checked again whenever the
+    /// worklist empties (`settle_realm_set`).
+    pub realm_set_skips: Vec<(Tok, Atom, NodeId, SiteId)>,
+    /// (receiver, key) pairs whose lookup no longer surely finds the realm
+    /// accessor: their stores write the own property.
+    pub realm_set_open: crate::pts::FxHashSet<(Tok, Atom)>,
     /// Gen: the statements (by address) of rule 3 stores, and the class
     /// whose store statement is being walked.
     pub proto_first_stmts: FxHashMap<usize, TmplId>,
