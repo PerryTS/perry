@@ -1,0 +1,1 @@
+Native: `const x = new C(...)` whose constructor (own or inherited) has a rest parameter or uses `arguments` no longer binds that parameter to the first extra argument; such bindings are not scalar-replaced and take the heap path, which packs the argument list (#15284).
