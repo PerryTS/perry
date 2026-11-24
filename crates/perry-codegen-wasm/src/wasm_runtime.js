@@ -1961,6 +1961,16 @@ function __evaluationOf(ctor) {
 function __instanceEvaluationOf(obj) {
   return obj !== null && typeof obj === 'object' ? obj[__evaluationTag] : undefined;
 }
+// The own keys the runtime keeps on a program's functions and classes, which no own-key
+// reflection reports.
+const __internalSymbols = new Set([__classTag, __classRefName, __evaluationRecord, __evaluationTag]);
+function __isInternalKey(obj, key) {
+  if (typeof key === 'symbol') {
+    return __internalSymbols.has(key) || (key === Symbol.hasInstance && __perryClassCtors.has(obj));
+  }
+  if (key === 'funcIdx' || key === 'captures') return __isPerryClosure(obj) || __classMethodFns.has(obj);
+  return typeof key === 'string' && key.startsWith('__perry_computed_field_key_');
+}
 const __classTemplates = new Map();
 let __classEnvCall = null;
 function __classTemplate(className) {
@@ -2416,7 +2426,29 @@ const __memDispatch = {
     return Object.defineProperty(obj, k, __hostDescriptor(desc));
   },
   object_define_properties: (obj, props) => Object.defineProperties(obj, __hostDescriptors(props)),
+  reflect_define_property: (obj, key, desc) => {
+    if (!__holdsProperties(obj)) return Reflect.defineProperty(obj, key, desc);
+    const k = __holdsProperties(key) ? Reflect.ownKeys({ [key]: 0 })[0] : key;
+    return Reflect.defineProperty(obj, k, __hostDescriptor(desc));
+  },
+  reflect_has: (obj, key) => Reflect.has(obj, key),
+  reflect_own_keys: (obj) => Reflect.ownKeys(obj).filter(k => !__isInternalKey(obj, k)),
+  reflect_get_own_property_descriptor: (obj, key) => __holdsProperties(obj)
+    ? __memDispatch.object_get_own_property_descriptor(obj, key)
+    : Reflect.getOwnPropertyDescriptor(obj, key),
+  object_has_own: (obj, key) => Object.hasOwn(obj, key) && !__isInternalKey(obj, key),
+  object_get_own_property_names: (obj) => Object.getOwnPropertyNames(obj).filter(k => !__isInternalKey(obj, k)),
+  object_get_own_property_symbols: (obj) => Object.getOwnPropertySymbols(obj).filter(k => !__isInternalKey(obj, k)),
+  object_get_own_property_descriptors: (obj) => {
+    const descs = {};
+    for (const key of [...__memDispatch.object_get_own_property_names(obj), ...__memDispatch.object_get_own_property_symbols(obj)]) {
+      const value = __memDispatch.object_get_own_property_descriptor(obj, key);
+      Object.defineProperty(descs, key, { value, writable: true, enumerable: true, configurable: true });
+    }
+    return descs;
+  },
   object_get_own_property_descriptor: (obj, key) => {
+    if (__isInternalKey(obj, key)) return undefined;
     const desc = Object.getOwnPropertyDescriptor(obj, key);
     if (desc && desc.set !== undefined && classStaticFieldAccessors.get(desc.get) === desc.set) {
       return { value: desc.get.call(obj), writable: true, enumerable: desc.enumerable, configurable: desc.configurable };
@@ -2582,10 +2614,11 @@ const __memDispatch = {
   // A function declaration used as a value: one closure per function, so it keeps its
   // identity and properties across reads, with the `prototype` object an ordinary
   // function has (`prototype.constructor` is the function).
-  function_value: (funcIdx, protoKind) => {
+  function_value: (funcIdx, protoKind, name) => {
     let fn = __functionValues.get(funcIdx);
     if (!fn) {
       fn = new __PerryClosure(funcIdx, 0, protoKind);
+      Object.defineProperty(fn, 'name', { value: name, configurable: true });
       const prototype = {};
       Object.defineProperty(prototype, 'constructor', { value: fn, writable: true, configurable: true });
       Object.defineProperty(fn, 'prototype', { value: prototype, writable: true });
@@ -3099,10 +3132,26 @@ const __memDispatch = {
 
   // JSON — args are plain JS values
   json_parse: (str) => { try { return JSON.parse(String(str)); } catch (e) { if (tryDepth > 0) currentException = e; return undefined; } },
-  // A Perry closure arrives as {funcIdx, captures}; JSON.stringify needs a function.
-  json_stringify: (val, replacer, space) => JSON.stringify(val,
-    replacer && typeof replacer.funcIdx !== 'undefined'
-      ? (key, value) => callWasmClosure(replacer, key, value) : replacer, space),
+  // A Perry closure arrives as {funcIdx, captures}; JSON.stringify needs a function. A
+  // closure value is omitted as a function is, through a `toJSON` its prototype has
+  // only meanwhile; a replacer function gets the closure itself.
+  json_stringify: (val, replacer, space) => {
+    const replace = replacer && typeof replacer.funcIdx !== 'undefined'
+      ? (key, value) => {
+        const result = callWasmClosure(replacer, key, value);
+        return __isPerryClosure(result) ? undefined : result;
+      } : replacer;
+    const proto = __PerryClosure.prototype;
+    const outer = Object.getOwnPropertyDescriptor(proto, 'toJSON');
+    if (typeof replace === 'function') delete proto.toJSON;
+    else __defineHidden(proto, 'toJSON', function () { return __isPerryClosure(this) ? undefined : this; });
+    try {
+      return JSON.stringify(val, replace, space);
+    } finally {
+      if (outer) Object.defineProperty(proto, 'toJSON', outer);
+      else delete proto.toJSON;
+    }
+  },
 
   // Map — args are plain JS values (m is the Map object itself)
   map_new: () => new Map(),

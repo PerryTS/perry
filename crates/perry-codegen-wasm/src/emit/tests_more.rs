@@ -1249,6 +1249,9 @@ mod get_prototype_of;
 #[path = "object_create_tests.rs"]
 mod object_create;
 
+#[path = "reflection_tests.rs"]
+mod reflection;
+
 #[path = "object_prototype_method_tests.rs"]
 mod object_prototype_method;
 

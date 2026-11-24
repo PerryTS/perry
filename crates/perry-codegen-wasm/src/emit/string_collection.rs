@@ -66,6 +66,14 @@ impl WasmModuleEmitter {
             "object_define_property",
             "object_define_properties",
             "object_get_own_property_descriptor",
+            "object_get_own_property_descriptors",
+            "object_get_own_property_names",
+            "object_get_own_property_symbols",
+            "object_has_own",
+            "reflect_define_property",
+            "reflect_get_own_property_descriptor",
+            "reflect_has",
+            "reflect_own_keys",
             "object_entries",
             "object_rest",
             "object_has_property",
@@ -375,6 +383,9 @@ impl WasmModuleEmitter {
                 }
             }
             self.collect_strings_in_stmts(&func.body);
+        }
+        for func in &module.functions {
+            self.intern_string(Self::fn_display_name(module, func));
         }
         for stmt in &module.init {
             self.collect_strings_in_stmt(stmt);

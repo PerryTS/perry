@@ -287,6 +287,10 @@ impl WasmModuleEmitter {
     }
 
     pub(super) fn emit_js_expr(&self, expr: &Expr, locals: &BTreeMap<u32, String>) -> String {
+        if let Some((bridge, args)) = super::expr::reflection_bridge(expr) {
+            let args: Vec<String> = args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+            return format!("fromJsValue(__memDispatch.{bridge}({}))", host_args(&args));
+        }
         match expr {
             // Rust spells an infinity `inf`, which is not a JS literal.
             Expr::Number(n) if n.is_infinite() => {
@@ -923,10 +927,6 @@ impl WasmModuleEmitter {
             Expr::ObjectDefineProperties(obj, props) => {
                 let (obj, props) = (self.emit_js_expr(obj, locals), self.emit_js_expr(props, locals));
                 format!("fromJsValue(__memDispatch.object_define_properties(toJsValue({obj}), toJsValue({props})))")
-            }
-            Expr::ObjectGetOwnPropertyDescriptor(obj, key) => {
-                let (obj, key) = (self.emit_js_expr(obj, locals), self.emit_js_expr(key, locals));
-                format!("fromJsValue(__memDispatch.object_get_own_property_descriptor(toJsValue({obj}), toJsValue({key})))")
             }
             Expr::ObjectEntries(o) => {
                 let o = self.emit_js_expr(o, locals);
