@@ -4420,7 +4420,7 @@ function perry_ui_widget_set_accessibility_label(h, text) {
   const el = uiGet(h); if (el) (el._inp || el).setAttribute("aria-label", String(text));
 }
 // A `<label for>` bound to the field, or to the first form control inside a composite
-// widget; the control gets an id when it has none.
+// widget; the control gets an id the page does not use when it has none.
 let labelSeq = 0;
 function perry_ui_label_create(text, field) {
   const label = document.createElement("label");
@@ -4429,7 +4429,11 @@ function perry_ui_label_create(text, field) {
   if (f) {
     const target = (f.matches && f.matches("input,textarea,select")) ? f
       : ((f.querySelector && f.querySelector("input,textarea,select")) || f);
-    if (!target.id) target.id = "perry-field-" + (++labelSeq);
+    if (!target.id) {
+      let id;
+      do { id = "perry-field-" + (++labelSeq); } while (document.getElementById(id));
+      target.id = id;
+    }
     label.htmlFor = target.id;
   }
   return uiAlloc(label);

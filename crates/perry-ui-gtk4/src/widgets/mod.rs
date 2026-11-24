@@ -272,6 +272,35 @@ pub fn set_tooltip(handle: i64, text_ptr: *const u8) {
     }
 }
 
+/// The widget that takes an accessible name: a Toggle and a TextArea are containers.
+fn accessible_widget(handle: i64) -> Option<Widget> {
+    if let Some(check) = toggle::check_button(handle) {
+        return Some(check.upcast());
+    }
+    let widget = get_widget(handle)?;
+    let text_view = widget
+        .downcast_ref::<gtk4::ScrolledWindow>()
+        .and_then(|scrolled| scrolled.child())
+        .filter(|child| child.is::<gtk4::TextView>());
+    Some(text_view.unwrap_or(widget))
+}
+
+/// Set the name a screen reader announces.
+pub fn set_accessibility_label(handle: i64, text_ptr: *const u8) {
+    let text = unsafe { crate::app::str_from_header(text_ptr) };
+    if let Some(widget) = accessible_widget(handle) {
+        widget.update_property(&[gtk4::accessible::Property::Label(&text)]);
+    }
+}
+
+/// Name `field` with the `label` widget.
+pub fn set_labelled_by(field: i64, label: i64) {
+    if let (Some(field), Some(label)) = (accessible_widget(field), get_widget(label)) {
+        let labels = [label.upcast_ref::<gtk4::Accessible>()];
+        field.update_relation(&[gtk4::accessible::Relation::LabelledBy(&labels)]);
+    }
+}
+
 /// Set control size via CSS classes (perry-small, perry-mini, perry-large).
 pub fn set_control_size(handle: i64, size: i64) {
     if let Some(widget) = get_widget(handle) {

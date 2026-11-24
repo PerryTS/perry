@@ -30,17 +30,23 @@ pub extern "C" fn perry_ui_text_create(text_ptr: i64) -> i64 {
     })
 }
 
-/// `Label(text, field)`: the `<label for>` binding to `field` exists on the web
-/// target only, so here a Label is its text.
+/// A caption that also names `field` for a screen reader.
 #[no_mangle]
-pub extern "C" fn perry_ui_label_create(text_ptr: i64, _field: i64) -> i64 {
-    perry_ui_text_create(text_ptr)
+pub extern "C" fn perry_ui_label_create(text_ptr: i64, field: i64) -> i64 {
+    catch_panic("perry_ui_label_create", || {
+        let handle = widgets::text::create(text_ptr as *const u8);
+        widgets::set_label_for(handle, field);
+        handle
+    })
 }
 
-/// The accessible name is applied on the web target (`aria-label`); this backend
-/// keeps the platform's default.
+/// Set the name a screen reader announces.
 #[no_mangle]
-pub extern "C" fn perry_ui_widget_set_accessibility_label(_handle: i64, _text_ptr: i64) {}
+pub extern "C" fn perry_ui_widget_set_accessibility_label(handle: i64, text_ptr: i64) {
+    catch_panic_void("perry_ui_widget_set_accessibility_label", || {
+        widgets::set_accessibility_label(handle, text_ptr as *const u8);
+    });
+}
 
 /// `Text(content, id)` — create + register for `setText(id, value)`.
 /// Other platforms export this; Android was missing it, so dlopen of apps

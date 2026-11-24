@@ -247,6 +247,8 @@ FakeElement.prototype.querySelector = function (selector) {
   for (const one of selector.split(",")) { const found = byTag.call(this, one); if (found) return found; }
   return null;
 };
+// The page already uses the first generated id.
+document.getElementById = id => id === "perry-field-1" ? new FakeElement("input") : null;
 "#
     );
     assert_eq!(
@@ -271,9 +273,10 @@ for (const text of ["Phone", "Send me updates"]) {
   console.log(text + " -> " + (target === phone ? "phone" : target === toggleInput ? "toggle input" : "nothing"));
 }
 console.log(phone["aria-label"] + ", " + toggleInput["aria-label"]);
+console.log([phone.id, toggleInput.id].join(" "));
 "#
         ),
-        "Phone -> phone\nSend me updates -> toggle input\nPhone number, Updates"
+        "Phone -> phone\nSend me updates -> toggle input\nPhone number, Updates\nperry-field-2 perry-field-3"
     );
 }
 

@@ -941,14 +941,17 @@ export function widgetSetOpacity(widget: Widget, opacity: number): void;
 export function widgetSetEnabled(widget: Widget, enabled: number): void;
 export function widgetSetTooltip(widget: Widget, text: string): void;
 /**
- * The name a screen reader announces for `widget`. Web: sets `aria-label`. Native
- * backends accept the call and keep the platform's default name.
+ * The name a screen reader announces for `widget`: `aria-label` on web,
+ * `accessibilityLabel` on the Apple targets, the content description on Android, the
+ * accessible label on GTK4. On Android it replaces what TalkBack reads of a text field's
+ * value, so name a field with `Label` there. No-op on Windows.
  */
 export function widgetSetAccessibilityLabel(widget: Widget, text: string): void;
 /**
  * A caption for a form field. Web: a `<label for>` bound to `field` (or to the first
  * input, textarea or select inside it), so tapping the caption focuses the field and a
- * screen reader announces it. Native backends show `text` as a `Text`.
+ * screen reader announces it. Native: a `Text` that also names `field`, replacing a
+ * name set before; on Windows only a `Text`.
  */
 export function Label(text: string, field: Widget): Widget;
 /**

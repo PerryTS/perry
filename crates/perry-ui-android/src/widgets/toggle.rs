@@ -33,6 +33,11 @@ pub fn set_state(handle: i64, on: i64) {
     });
 }
 
+/// The Switch inside a Toggle's container.
+pub(crate) fn switch(handle: i64) -> Option<GlobalRef> {
+    TOGGLE_SWITCHES.with(|switches| switches.borrow().get(&handle).cloned())
+}
+
 /// Create a Switch with a label and onChange callback.
 /// Returns a widget handle for a LinearLayout(HORIZONTAL) containing the label and switch.
 pub fn create(label_ptr: *const u8, on_change: f64) -> i64 {
