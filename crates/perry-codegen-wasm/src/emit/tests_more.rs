@@ -1306,6 +1306,9 @@ mod thread_callback;
 #[path = "math_minmax_tests.rs"]
 mod math_minmax;
 
+#[path = "parse_int_radix_tests.rs"]
+mod parse_int_radix;
+
 #[path = "async_operator_tests.rs"]
 mod async_operator;
 
