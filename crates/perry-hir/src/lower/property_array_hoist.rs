@@ -77,11 +77,13 @@ pub(crate) fn hoist_loop_invariant_property_array(
     let hoist_id = ctx.define_local(format!("__perry_hoist_{property}"), element_ty.clone());
     ctx.immutable_locals.insert(hoist_id);
 
+    // The condition's read runs first: the hoisted read is that read.
+    let read_offset = expr_first_read(condition, recv, &property)?;
     let init = Expr::PropertyGet {
         byte_end: 0,
         object: Box::new(Expr::LocalGet(recv_id)),
         property: property.clone(),
-        byte_offset: 0,
+        byte_offset: read_offset,
     };
     let hoist = Stmt::Let {
         id: hoist_id,
@@ -361,88 +363,85 @@ fn expr_is_hoist_safe(expr: &Expr, scan: &Scan<'_>) -> bool {
 }
 
 fn stmt_reads_property(stmt: &Stmt, recv: Recv, property: &str) -> bool {
+    stmt_first_read(stmt, recv, property).is_some()
+}
+
+fn expr_reads_property(expr: &Expr, recv: Recv, property: &str) -> bool {
+    expr_first_read(expr, recv, property).is_some()
+}
+
+/// The offset of the first `RECV.PROP` read in evaluation order: the hoisted
+/// read is that read, run once before the loop, and stands at it.
+fn stmts_first_read(stmts: &[Stmt], recv: Recv, property: &str) -> Option<u32> {
+    stmts.iter().find_map(|s| stmt_first_read(s, recv, property))
+}
+
+fn stmt_first_read(stmt: &Stmt, recv: Recv, property: &str) -> Option<u32> {
+    let e = |x: &Expr| expr_first_read(x, recv, property);
     match stmt {
-        Stmt::Expr(expr) => expr_reads_property(expr, recv, property),
-        Stmt::Let { init, .. } => init
-            .as_ref()
-            .is_some_and(|expr| expr_reads_property(expr, recv, property)),
+        Stmt::Expr(expr) => e(expr),
+        Stmt::Let { init, .. } => init.as_ref().and_then(e),
         Stmt::If {
             condition,
             then_branch,
             else_branch,
-        } => {
-            expr_reads_property(condition, recv, property)
-                || then_branch
-                    .iter()
-                    .any(|s| stmt_reads_property(s, recv, property))
-                || else_branch
+        } => e(condition)
+            .or_else(|| stmts_first_read(then_branch, recv, property))
+            .or_else(|| {
+                else_branch
                     .as_ref()
-                    .is_some_and(|b| b.iter().any(|s| stmt_reads_property(s, recv, property)))
+                    .and_then(|b| stmts_first_read(b, recv, property))
+            }),
+        Stmt::While { condition, body } => {
+            e(condition).or_else(|| stmts_first_read(body, recv, property))
         }
-        Stmt::While { condition, body } | Stmt::DoWhile { body, condition } => {
-            expr_reads_property(condition, recv, property)
-                || body.iter().any(|s| stmt_reads_property(s, recv, property))
+        Stmt::DoWhile { body, condition } => {
+            stmts_first_read(body, recv, property).or_else(|| e(condition))
         }
         Stmt::For {
             init,
             condition,
             update,
             body,
-        } => {
-            init.as_ref()
-                .is_some_and(|s| stmt_reads_property(s, recv, property))
-                || condition
-                    .as_ref()
-                    .is_some_and(|e| expr_reads_property(e, recv, property))
-                || update
-                    .as_ref()
-                    .is_some_and(|e| expr_reads_property(e, recv, property))
-                || body.iter().any(|s| stmt_reads_property(s, recv, property))
-        }
-        Stmt::Labeled { body, .. } => stmt_reads_property(body, recv, property),
-        Stmt::Return(value, _) => value
+        } => init
             .as_ref()
-            .is_some_and(|e| expr_reads_property(e, recv, property)),
-        Stmt::Throw(value) => expr_reads_property(value, recv, property),
-        _ => false,
+            .and_then(|s| stmt_first_read(s, recv, property))
+            .or_else(|| condition.as_ref().and_then(e))
+            .or_else(|| stmts_first_read(body, recv, property))
+            .or_else(|| update.as_ref().and_then(e)),
+        Stmt::Labeled { body, .. } => stmt_first_read(body, recv, property),
+        Stmt::Return(value, _) => value.as_ref().and_then(e),
+        Stmt::Throw(value) => e(value),
+        _ => None,
     }
 }
 
-fn expr_reads_property(expr: &Expr, recv: Recv, property: &str) -> bool {
-    if is_target_property(expr, recv, property) {
-        return true;
-    }
-    match expr {
-        Expr::PropertyGet { object, .. } => expr_reads_property(object, recv, property),
-        Expr::IndexGet { object, index, .. } => {
-            expr_reads_property(object, recv, property)
-                || expr_reads_property(index, recv, property)
+fn expr_first_read(expr: &Expr, recv: Recv, property: &str) -> Option<u32> {
+    if let Expr::PropertyGet { byte_offset, .. } = expr {
+        if is_target_property(expr, recv, property) {
+            return Some(*byte_offset);
         }
+    }
+    let e = |x: &Expr| expr_first_read(x, recv, property);
+    match expr {
+        Expr::PropertyGet { object, .. } => e(object),
+        Expr::IndexGet { object, index, .. } => e(object).or_else(|| e(index)),
         Expr::Binary { left, right, .. }
         | Expr::Logical { left, right, .. }
-        | Expr::Compare { left, right, .. } => {
-            expr_reads_property(left, recv, property) || expr_reads_property(right, recv, property)
-        }
-        Expr::Unary { operand, .. } => expr_reads_property(operand, recv, property),
-        Expr::NumberCoerce(inner) | Expr::BooleanCoerce(inner) => {
-            expr_reads_property(inner, recv, property)
-        }
-        Expr::LocalSet(_, value) => expr_reads_property(value, recv, property),
-        Expr::PropertySet { object, value, .. } => {
-            expr_reads_property(object, recv, property)
-                || expr_reads_property(value, recv, property)
-        }
+        | Expr::Compare { left, right, .. } => e(left).or_else(|| e(right)),
+        Expr::Unary { operand, .. } => e(operand),
+        Expr::NumberCoerce(inner) | Expr::BooleanCoerce(inner) => e(inner),
+        Expr::LocalSet(_, value) => e(value),
+        Expr::PropertySet { object, value, .. } => e(object).or_else(|| e(value)),
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
             ..
-        } => {
-            expr_reads_property(condition, recv, property)
-                || expr_reads_property(then_expr, recv, property)
-                || expr_reads_property(else_expr, recv, property)
-        }
-        _ => false,
+        } => e(condition)
+            .or_else(|| e(then_expr))
+            .or_else(|| e(else_expr)),
+        _ => None,
     }
 }
 
@@ -852,16 +851,14 @@ fn hoist_this_for(
     let mut hoists: Vec<Stmt> = Vec::new();
     let mut hoisted_ids: Vec<u32> = Vec::new();
     for (field, ty) in class.arrays {
-        let reads = expr_reads_property(&cond, Recv::This, field)
-            || update
-                .as_ref()
-                .is_some_and(|u| expr_reads_property(u, Recv::This, field))
-            || body
-                .iter()
-                .any(|s| stmt_reads_property(s, Recv::This, field));
-        if !reads {
+        // The first read the loop runs (condition, body, update): the
+        // hoisted read is that read and stands at it.
+        let Some(read_offset) = expr_first_read(&cond, Recv::This, field)
+            .or_else(|| stmts_first_read(&body, Recv::This, field))
+            .or_else(|| update.as_ref().and_then(|u| expr_first_read(u, Recv::This, field)))
+        else {
             continue;
-        }
+        };
         let writable: Vec<String> = class.data.iter().filter(|f| *f != field).cloned().collect();
         let strict = || Strict {
             readable: class.data,
@@ -901,7 +898,7 @@ fn hoist_this_for(
                 byte_end: 0,
                 object: Box::new(Expr::This),
                 property: field.clone(),
-                byte_offset: 0,
+                byte_offset: read_offset,
             }),
         });
         cond = rewrite_expr(&cond, Recv::This, field, hoist_id);
