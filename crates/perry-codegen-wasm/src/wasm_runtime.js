@@ -785,36 +785,12 @@ function buildImports() {
         const obj = getHandle(handle);
         if (!obj) return u64ToF64(TAG_UNDEFINED);
         const fname = getString(name);
-        // Check for compiled getter method — WASM uses i64 (BigInt)
-        if (__classOf(obj)) {
-          let cls = __classOf(obj);
-          while (cls) {
-            const methods = classMethodTable[cls];
-            if (methods && ('__get_' + fname) in methods) {
-              const fn = wasmInstance?.exports.__indirect_function_table?.get(methods['__get_' + fname]);
-              if (fn) return u64ToF64(fn(f64ToU64(handle)));
-            }
-            cls = classParentTable[cls] || null;
-          }
-        }
         return fromJsValue(obj[fname]);
       },
       class_set_field: (handle, name, value) => {
         const obj = getHandle(handle);
         if (!obj) return;
         const fname = getString(name);
-        // Check for compiled setter method — WASM uses i64 (BigInt)
-        if (__classOf(obj)) {
-          let cls = __classOf(obj);
-          while (cls) {
-            const methods = classMethodTable[cls];
-            if (methods && ('__set_' + fname) in methods) {
-              const fn = wasmInstance?.exports.__indirect_function_table?.get(methods['__set_' + fname]);
-              if (fn) { fn(f64ToU64(handle), f64ToU64(value)); return; }
-            }
-            cls = classParentTable[cls] || null;
-          }
-        }
         obj[fname] = toJsValue(value);
       },
       class_set_static: (classId, name, value) => {
@@ -1705,15 +1681,16 @@ function __programPrototype(obj, proto) {
 
 // Class method/static/parent tables
 const classMethodTable = {};
+// A class's named and computed instance accessors, and its named static ones: key ->
+// { get, set } function table indices, -1 for none (`class_set_accessor`).
+const classAccessorTable = Object.create(null);
+const classStaticAccessorTable = Object.create(null);
 // The resolved keys of a class's computed fields (`__perry_computed_field_key_*`, see
 // `lower_class_prop`); its static fields are properties of its class value.
 const classStaticTable = {};
 // A class's named static methods: name -> function table index (`class_set_static_method`).
 // Null-prototype, so a method named `__proto__` is an own entry.
 const classStaticMethodTable = Object.create(null);
-// Its named static accessors: name -> { get, set } function table indices, -1 for none
-// (`class_set_static_accessor`).
-const classStaticAccessorTable = Object.create(null);
 const classParentTable = {};
 // A user class's constructor slot (`class_set_parent`, `class_new`), for its class value.
 const classCtorSlotTable = Object.create(null);
@@ -1742,29 +1719,25 @@ function __instanceClassOf(obj) {
 function __classProto(className) {
   const t = __classTemplate(className);
   if (t.proto) return t.proto;
-  const parent = classParentTable[className];
-  const base = parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)
-    ? __classProto(parent)
-    : __classFunctionParentProto(className);
-  t.proto = Object.create(base, { [__classTag]: { value: className } });
-  for (const m of Reflect.ownKeys(classMethodTable[className] || {})) __defineClassMember(t.proto, className, m, undefined);
+  t.proto = Object.create(__classProtoBase(className), { [__classTag]: { value: className } });
+  for (const m of Reflect.ownKeys(classMethodTable[className] || {})) {
+    __defineHidden(t.proto, m, __classMethodValue(className, m, undefined));
+  }
+  for (const [key, { get, set }] of Object.entries(classAccessorTable[className] || {})) {
+    __defineAccessor(t.proto, key, get, set, undefined);
+  }
   if (t.first === undefined && className in classCtorSlotTable) __classRef(className, classCtorSlotTable[className]);
   return t.proto;
 }
-// The property an instance member's `classMethodTable` key names.
-function __classMemberKey(m) {
-  return typeof m === 'string' && (m.startsWith('__get_') || m.startsWith('__set_')) ? m.slice(6) : m;
-}
-function __defineClassMember(proto, className, m, evaluation) {
-  const key = __classMemberKey(m);
-  if (key === m) return __defineHidden(proto, m, __classMethodValue(className, m, evaluation));
-  const idx = classMethodTable[className][m];
-  __defineAccessor(proto, key, m.startsWith('__get_') ? idx : -1, m.startsWith('__set_') ? idx : -1, evaluation);
+function __classProtoBase(className) {
+  const parent = classParentTable[className];
+  return parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)
+    ? __classProto(parent)
+    : __classFunctionParentProto(className);
 }
 // A compiled accessor as a class definition defines it: a pair's second half joins the
-// first. Either table index is -1 for none. A private one (`#x`) is not a property.
+// first. Either table index is -1 for none.
 function __defineAccessor(target, key, getIdx, setIdx, evaluation) {
-  if (typeof key === 'string' && key.startsWith('#')) return;
   const prev = Object.getOwnPropertyDescriptor(target, key);
   const { get, set } = Object.getOwnPropertyDescriptor({
     get [key]() { return __classMemberCall(getIdx, evaluation, this, []); },
@@ -1871,8 +1844,8 @@ function __isComputedKeySlot(key) {
 }
 
 // With `caps`, the constructor is one evaluation of a class expression
-// (`Expr::ClassExprFresh`) with that capture environment. Its `prototype` holds the
-// class chain's members bound to the evaluation, and its instances inherit from it.
+// (`Expr::ClassExprFresh`) with that capture environment. Its `prototype` holds
+// the class's own members bound to the evaluation, and its instances inherit from it.
 function __classCtor(className, ctorIdx, caps) {
   const evaluated = caps !== undefined;
   const ctor = function (...args) {
@@ -1912,16 +1885,16 @@ function __classCtor(className, ctorIdx, caps) {
   __perryClassCtors.add(ctor);
   if (evaluated) Object.defineProperty(ctor, __evaluationRecord, { value: { template: className, caps } });
   // A declared class's value shares its instances' prototype (see __classProto). An
-  // evaluation has its own, holding the chain's members bound to it.
-  const proto = evaluated ? {} : __classProto(className);
+  // evaluation has its own, holding the class's members bound to it.
+  const proto = evaluated ? Object.create(__classProtoBase(className)) : __classProto(className);
   __defineHidden(proto, 'constructor', ctor);
   if (evaluated) {
-    for (let c = className; c; c = classParentTable[c] || null) {
-      // A nearer class's member hides a farther one of that name, an accessor whole.
-      const nearer = new Set(Object.getOwnPropertyNames(proto));
-      for (const m of Object.keys(classMethodTable[c] || {})) {
-        if (!nearer.has(__classMemberKey(m))) __defineClassMember(proto, c, m, ctor);
-      }
+    for (const m of Object.keys(classMethodTable[className] || {})) {
+      __defineHidden(proto, m, __classMethodValue(className, m, ctor));
+    }
+    // A computed accessor is the one evaluation's that defines it.
+    for (const [key, { get, set, computed }] of Object.entries(classAccessorTable[className] || {})) {
+      if (!computed) __defineAccessor(proto, key, get, set, ctor);
     }
   }
   // Own named static members only: an inherited one is found along [[Prototype]]
@@ -2067,6 +2040,10 @@ function __classStaticRun(template, value, funcIdx) {
     __classEnvCall = outerCall;
   }
 }
+// The table entry of a class's accessor, made on first use.
+function __classAccessorPair(table, className, key) {
+  return ((table[className] ||= Object.create(null))[key] ||= { get: -1, set: -1, computed: false });
+}
 // A computed member (`RegisterClassComputedMethod` / `...Accessor`). An instance
 // member goes in the template's method table, so every evaluation's instances
 // dispatch it; a static one is a property of the class value.
@@ -2090,13 +2067,17 @@ function __classDefineComputed(className, ctorIdx, key, kind, isStatic, a, b, pr
     if (evaluation) __defineHidden(evaluation.prototype, key, __classMethodValue(className, key, evaluation));
     // A prototype made before this member was defined gets it too.
     const proto = __classTemplate(className).proto;
-    if (!evaluation && proto) __defineHidden(proto, key, __classMethodValue(className, key, undefined));
+    if (proto) __defineHidden(proto, key, __classMethodValue(className, key, undefined));
     return;
   }
-  __defineAccessor(evaluation ? evaluation.prototype : __classProto(className), key, a, b, evaluation);
-  if (typeof key === 'symbol') return;
-  if (a >= 0) methods['__get_' + key] = a;
-  if (b >= 0) methods['__set_' + key] = b;
+  if (evaluation) __defineAccessor(evaluation.prototype, key, a, b, evaluation);
+  __defineAccessor(__classProto(className), key, a, b, undefined);
+  if (typeof key === 'string') {
+    const pair = __classAccessorPair(classAccessorTable, className, key);
+    if (a >= 0) pair.get = a;
+    if (b >= 0) pair.set = b;
+    pair.computed = true;
+  }
 }
 
 // A lowered sync generator drives its resume record, a wasm closure taking
@@ -2877,12 +2858,12 @@ const __memDispatch = {
     const ref = __classRefs.get(cls);
     if (ref) __defineHidden(ref, name, __classStaticMethodValue(cls, name));
   },
-  class_set_static_accessor: (classId, name, funcIdx, isSetter) => {
-    const cls = String(classId);
-    const pair = ((classStaticAccessorTable[cls] ||= Object.create(null))[String(name)] ||= { get: -1, set: -1 });
-    pair[isSetter ? 'set' : 'get'] = funcIdx | 0;
-    const ref = __classRefs.get(cls);
-    if (ref) __defineAccessor(ref, String(name), pair.get, pair.set, undefined);
+  // A private accessor (`#x`) is not a property.
+  class_set_accessor: (classId, name, funcIdx, code) => {
+    const key = String(name);
+    if (key.startsWith('#')) return;
+    const pair = __classAccessorPair(code & 2 ? classStaticAccessorTable : classAccessorTable, String(classId), key);
+    pair[code & 1 ? 'set' : 'get'] = funcIdx | 0;
   },
   class_call_method: (obj, methodNameId, argsArr) => {
     // methodNameId is a plain number (string table index), not a decoded JS value
@@ -6181,7 +6162,11 @@ function __superGet(home, key, receiver) {
     const cls = home.__classHome__;
     // The static side reads the parent's statics as a static member access does: fields,
     // named static methods and members of its class value.
-    if (home.isStatic) return Reflect.get(__classParentRef(classParentTable[cls]) || Function.prototype, name, receiver);
+    if (home.isStatic) {
+      const ref = __classRefs.get(cls);
+      const base = ref ? Object.getPrototypeOf(ref) : __classParentRef(classParentTable[cls]) || Function.prototype;
+      return Reflect.get(base, name, receiver);
+    }
     if (classParentTable[cls] === null) __throwNullReceiver(null, name);
     // `below` is the class whose parent is `last`; a function parent's prototype is its.
     let below = cls, last = null;
@@ -6190,11 +6175,8 @@ function __superGet(home, key, receiver) {
       last = c;
       const methods = classMethodTable[c];
       if (typeof name === 'string') {
-        if (own(methods, '__get_' + name)) {
-          const fn = wasmInstance.exports.__indirect_function_table.get(methods['__get_' + name]);
-          return __bitsToJsValue(fn(__jsValueToBits(receiver)));
-        }
-        if (own(methods, '__set_' + name)) return undefined;
+        const accessor = classAccessorTable[c] && classAccessorTable[c][name];
+        if (accessor) return accessor.get >= 0 ? __classMemberCall(accessor.get, undefined, receiver, []) : undefined;
         if (own(methods, name)) return __classMethodValue(c, name, __instanceEvaluationOf(receiver));
       }
       if (classParentTable[c] === null) return undefined;

@@ -195,7 +195,7 @@ impl WasmModuleEmitter {
             "reflect_apply",
             "class_set_method",
             "class_set_static_method",
-            "class_set_static_accessor",
+            "class_set_accessor",
             "class_static_method_this",
             "class_call_method",
             "class_super_get",
@@ -443,7 +443,6 @@ impl WasmModuleEmitter {
             }
             for (name, getter) in &class.getters {
                 self.intern_string(name);
-                self.intern_string(&format!("__get_{}", name));
                 for param in &getter.params {
                     if let Some(default) = &param.default {
                         self.collect_strings_in_expr(default);
@@ -453,7 +452,6 @@ impl WasmModuleEmitter {
             }
             for (name, setter) in &class.setters {
                 self.intern_string(name);
-                self.intern_string(&format!("__set_{}", name));
                 for param in &setter.params {
                     if let Some(default) = &param.default {
                         self.collect_strings_in_expr(default);

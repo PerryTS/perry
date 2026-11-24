@@ -140,3 +140,62 @@ console.log([C.d, K.d, Object.keys(C)].join(","));
         "undefined,undefined,5,42,42,7,7,undefined,false,x,z\n6,6,x,z,d"
     );
 }
+
+// A computed accessor belongs to the evaluation that defines it and reaches a subclass,
+// and an evaluation inherits from its parent's prototype. Expected output is Node's.
+#[test]
+fn a_class_evaluation_owns_only_its_own_members() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Base { get x() { return "base"; } m() { return "m"; } }
+function make(k: string): any { return class extends Base { get [k]() { return k; } }; }
+const A = make("a"), B = make("b");
+const own = (c: any, k: string) => Object.getOwnPropertyDescriptor(c.prototype, k) !== undefined;
+const before = [own(A, "a"), own(A, "b"), own(B, "a"), own(B, "b"), own(B, "x"), own(B, "m"), new B().b, new B().x, new B().m()];
+Object.defineProperty(Base.prototype, "x", { get: () => "redefined" });
+function family(k: string): any { class P { get [k]() { return k + "!"; } [k + "M"]() { return k; } } class Q extends P {} return Q; }
+family("p");
+const q: any = new (family("q"))();
+console.log(before.join(",") + " " + new B().x + " " + q.q + " " + q.qM());
+"#
+        ),
+        "true,false,false,true,false,false,b,base,m redefined q! q"
+    );
+}
+
+// A method named like an accessor's table entry stays a method, and a computed `#x`
+// key is a public property. Expected output is Node's.
+#[test]
+fn accessor_keys_do_not_collide_with_method_names() {
+    assert_eq!(
+        run_web_source(
+            r##"
+const hash = "#label";
+class C { __get_status() { return 1; } get status() { return 2; } static __get_s() { return 3; } static get s() { return 4; } get [hash]() { return 5; } static get [hash]() { return 6; } }
+const c: any = new C(), K: any = C;
+console.log([typeof Object.getOwnPropertyDescriptor(C.prototype, "__get_status")!.value, c.__get_status(), c.status, K.__get_s(), K.s, c[hash], K[hash]].join(","));
+"##
+        ),
+        "function,1,2,3,4,5,6"
+    );
+}
+
+// `super` in a static accessor reads the class value's current prototype. Expected
+// output is Node's.
+#[test]
+fn static_super_follows_the_class_prototype() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class A { static get x() { return "A" + (this as any).tag; } }
+class B { static get x() { return "B" + (this as any).tag; } }
+class D extends A { static tag = "d"; static get y() { return super.x; } }
+const before = (D as any).y;
+Object.setPrototypeOf(D, B);
+console.log(before, (D as any).y);
+"#
+        ),
+        "Ad Bd"
+    );
+}

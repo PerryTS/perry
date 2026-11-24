@@ -875,17 +875,14 @@ impl WasmModuleEmitter {
                     let results = vec![ValType::I64];
                     let type_idx = self.get_type_idx(params, results);
                     let _ = type_idx;
-                    if class.is_static_accessor(getter) {
-                        self.class_static_accessor_map
-                            .entry(class.name.clone())
-                            .or_default()
-                            .push((name.clone(), false, user_func_idx));
-                    } else {
-                        self.class_method_map
-                            .entry(class.name.clone())
-                            .or_default()
-                            .insert(format!("__get_{}", name), user_func_idx);
-                    }
+                    self.class_accessor_map
+                        .entry(class.name.clone())
+                        .or_default()
+                        .push((
+                            name.clone(),
+                            accessor_code(false, class.is_static_accessor(getter)),
+                            user_func_idx,
+                        ));
                     self.func_param_counts.insert(user_func_idx, 1);
                     user_func_idx += 1;
                 }
@@ -895,17 +892,14 @@ impl WasmModuleEmitter {
                     let results = vec![ValType::I64];
                     let type_idx = self.get_type_idx(params, results);
                     let _ = type_idx;
-                    if class.is_static_accessor(setter) {
-                        self.class_static_accessor_map
-                            .entry(class.name.clone())
-                            .or_default()
-                            .push((name.clone(), true, user_func_idx));
-                    } else {
-                        self.class_method_map
-                            .entry(class.name.clone())
-                            .or_default()
-                            .insert(format!("__set_{}", name), user_func_idx);
-                    }
+                    self.class_accessor_map
+                        .entry(class.name.clone())
+                        .or_default()
+                        .push((
+                            name.clone(),
+                            accessor_code(true, class.is_static_accessor(setter)),
+                            user_func_idx,
+                        ));
                     self.func_param_counts.insert(user_func_idx, 2);
                     user_func_idx += 1;
                 }
@@ -1329,7 +1323,7 @@ impl WasmModuleEmitter {
                     }
                 }
             }
-            for accessors in self.class_static_accessor_map.values() {
+            for accessors in self.class_accessor_map.values() {
                 indices.extend(accessors.iter().map(|(_, _, idx)| *idx));
             }
             for idx in self.class_computed_map.values() {
@@ -1644,9 +1638,7 @@ impl WasmModuleEmitter {
                         .unwrap_or(0);
                     let class_bits = (STRING_TAG << 48) | (class_name_id as u64);
 
-                    // Register instance methods in classMethodTable (including getters/setters),
-                    // and named static methods and accessors, which a class value carries as
-                    // properties.
+                    // Register instance methods, named static methods and named accessors.
                     let methods = self.class_method_map.get(&class.name).into_iter().flatten();
                     // A static block (`__perry_static_init_N`) is not a property of the class.
                     let statics = self
@@ -1655,21 +1647,20 @@ impl WasmModuleEmitter {
                         .into_iter()
                         .flatten()
                         .filter(|(name, _)| !name.starts_with("__perry_static_init_"));
-                    let static_accessors = self
-                        .class_static_accessor_map
+                    let accessors = self
+                        .class_accessor_map
                         .get(&class.name)
                         .into_iter()
                         .flatten();
-                    // A method's last argument is its `fn_proto_code`; an accessor's says setter.
+                    // The last argument is a method's `fn_proto_code` or an `accessor_code`.
                     let registrations: Vec<(&str, String, u32, f64)> = methods
                         .map(|(name, &idx)| ("class_set_method", name, idx))
                         .chain(statics.map(|(name, &idx)| ("class_set_static_method", name, idx)))
                         .map(|(bridge, name, idx)| {
                             (bridge, name.clone(), idx, self.fn_proto_code(idx))
                         })
-                        .chain(static_accessors.map(|(name, is_setter, idx)| {
-                            let setter = f64::from(u8::from(*is_setter));
-                            ("class_set_static_accessor", name.clone(), *idx, setter)
+                        .chain(accessors.map(|(name, code, idx)| {
+                            ("class_set_accessor", name.clone(), *idx, *code)
                         }))
                         .collect();
                     for (bridge, method_name, func_idx, last) in registrations {
