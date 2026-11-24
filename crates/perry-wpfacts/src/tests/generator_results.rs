@@ -46,6 +46,23 @@ fn next_value_is_the_yielded_value() {
     assert!(proven(&v), "{v:?}");
 }
 
+/// node: prints `3`. GetIterator's result is the object the delegate's
+/// `[Symbol.iterator]()` returns, so its `next` is the step.
+#[test]
+fn a_delegated_iterable_steps_the_iterator_it_returns() {
+    let pf = facts_of(
+        "const it: any = { [Symbol.iterator]() { let n = 0; return { next: () => ({ value: new Svc(), done: n++ > 0 }) }; } }; \
+         function* outer() { yield* it; }",
+    );
+    let s = site(&pf, "size");
+    assert!(
+        s.receivers.iter().any(|r| r.contains("Svc")),
+        "{:?} {:?}",
+        s.receivers,
+        s.verdict
+    );
+}
+
 /// node: prints `3`. `yield*` re-yields the delegate's values; its inner
 /// result object rides beside them (step kind 2 is returned as-is), so the
 /// site sees `Svc` among its receivers, not only a primitive.
