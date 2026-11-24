@@ -210,7 +210,7 @@ fn infer_expr(
             property,
             0,
         ),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             let owner = normalize(ctx.aliases, &infer_expr(ctx, locals, object, depth + 1)?);
             match owner {
                 Type::Array(element) => Some(*element),
@@ -506,7 +506,9 @@ fn update_local_from_expr(
 fn root_local(expr: &Expr) -> Option<u32> {
     match expr {
         Expr::LocalGet(id) => Some(*id),
-        Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => root_local(object),
+        Expr::PropertyGet { object, .. }
+        | Expr::IndexGet { object, .. }
+        | Expr::RegionOut { object, .. } => root_local(object),
         _ => None,
     }
 }

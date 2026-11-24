@@ -1511,7 +1511,9 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
         // non-module reason (`const cfg = { name: "app", port: "3000" };
         // import(cfg[k])`) has non-relative values, so it stays deferred exactly
         // as before instead of trying to compile `"app"`/`"3000"` as modules.
-        Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+        Expr::PropertyGet { object, .. }
+        | Expr::IndexGet { object, .. }
+        | Expr::RegionOut { object, .. } => {
             // Record every const-local id on the registry's indirection chain in
             // the *outer* `visiting` set so a value that member-accesses back
             // into this (or an enclosing) registry is caught as a cycle rather

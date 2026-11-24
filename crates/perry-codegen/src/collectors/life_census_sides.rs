@@ -119,7 +119,7 @@ pub(super) fn resolve(
                 .map(|b| ("field-bodies", b.iter().map(|b| b.func_id).collect()))
                 .ok_or("field-not-only-bodies")
         }
-        Expr::IndexGet { .. } => Err("computed-callee"),
+        Expr::IndexGet { .. } | Expr::RegionOut { .. } => Err("computed-callee"),
         _ => Err("callee-expression"),
     }
 }

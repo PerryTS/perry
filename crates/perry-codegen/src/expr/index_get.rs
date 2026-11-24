@@ -714,7 +714,8 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
 ) -> Result<Option<String>> {
-    let Expr::IndexGet { object, index, .. } = expr else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr
+    else {
         return Ok(None);
     };
     if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {

@@ -672,7 +672,10 @@ pub(crate) fn lower_and_store_initial_pod_field(
 ) -> Result<()> {
     let needs_raw_f64_fallback_coercion =
         expr_may_return_boxed_value_from_raw_f64_fallback(ctx, value)
-            || matches!(value, Expr::IndexGet { .. } | Expr::PropertyGet { .. });
+            || matches!(
+                value,
+                Expr::IndexGet { .. } | Expr::RegionOut { .. } | Expr::PropertyGet { .. }
+            );
     let lowered = if matches!(field.native_rep, NativeRep::F64 | NativeRep::F32)
         && needs_raw_f64_fallback_coercion
     {

@@ -1119,6 +1119,7 @@ fn directly_accesses_byte_local(expr: &Expr, id: u32) -> bool {
     }
     let receiver = match expr {
         Expr::IndexGet { object, .. }
+        | Expr::RegionOut { object, .. }
         | Expr::IndexSet { object, .. }
         | Expr::IndexUpdate { object, .. } => Some(object.as_ref()),
         Expr::Uint8ArrayGet { array, .. } | Expr::Uint8ArraySet { array, .. } => {
@@ -2222,7 +2223,11 @@ fn expr_is_i32_shaped(expr: &Expr) -> bool {
 
 fn expr_is_numeric_shaped(expr: &Expr) -> bool {
     match expr {
-        Expr::Integer(_) | Expr::Number(_) | Expr::LocalGet(_) | Expr::IndexGet { .. } => true,
+        Expr::Integer(_)
+        | Expr::Number(_)
+        | Expr::LocalGet(_)
+        | Expr::IndexGet { .. }
+        | Expr::RegionOut { .. } => true,
         Expr::Binary { left, right, .. }
         | Expr::Compare { left, right, .. }
         | Expr::Logical { left, right, .. } => {

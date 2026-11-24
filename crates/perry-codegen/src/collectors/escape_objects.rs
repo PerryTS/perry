@@ -536,7 +536,7 @@ pub fn check_object_literal_escapes_in_expr(
         // compare answers `undefined`.
         Expr::Delete(operand) => {
             match operand.as_ref() {
-                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
                     if let Expr::LocalGet(id) = object.as_ref() {
                         if candidates.contains_key(id) {
                             escaped.insert(*id);
@@ -621,7 +621,7 @@ pub fn check_object_literal_escapes_in_expr(
                 check_object_literal_escapes_in_expr(a, candidates, escaped);
             }
         }
-        Expr::IndexGet { object, index , .. } => {
+        Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. } => {
             check_object_literal_escapes_in_expr(object, candidates, escaped);
             check_object_literal_escapes_in_expr(index, candidates, escaped);
         }

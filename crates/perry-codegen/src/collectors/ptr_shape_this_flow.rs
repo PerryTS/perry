@@ -472,7 +472,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             Expr::Delete(inner)
                 if matches!(
                     inner.as_ref(),
-                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                         if matches!(object.as_ref(), Expr::This)
                 ) =>
             {

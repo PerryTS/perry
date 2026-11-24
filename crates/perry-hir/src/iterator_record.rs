@@ -867,7 +867,7 @@ mod tests {
         };
         assert!(
             matches!(&success[0], Expr::LocalSet(101, element) if matches!(element.as_ref(),
-            Expr::IndexGet { index, .. } if matches!(index.as_ref(),
+            Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(),
                 Expr::NativeMethodCall { method, .. } if method == "arrayRecordIndex")))
         );
         assert!(

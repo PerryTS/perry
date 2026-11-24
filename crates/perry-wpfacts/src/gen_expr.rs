@@ -1717,6 +1717,7 @@ impl<'a> Gen<'a> {
                 self.load(o, Key::Named(key))
             }
             Expr::IndexGet { object, index, .. }
+            | Expr::RegionOut { object, index, .. }
             | Expr::Uint8ArrayGet {
                 array: object,
                 index,
@@ -1731,7 +1732,10 @@ impl<'a> Gen<'a> {
                 self.to_property_key(i);
                 let key = self.read_key(fx.module, index);
                 let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
-                self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Read);
+                // A split region's output read is no site of any kind.
+                if !matches!(e, Expr::RegionOut { .. }) {
+                    self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Read);
+                }
                 // A for-of walk's element (`Gen::for_of_walks`): the counter
                 // is below the length, so the read is what the iteration of
                 // the array yields (a hole's `undefined` included), as the
@@ -1958,7 +1962,8 @@ impl<'a> Gen<'a> {
                         let key = self.m.atom(property);
                         self.m.cons(o, Cons::DeleteKey { key, reason: r });
                     }
-                    Expr::IndexGet { object, index, .. } => {
+                    Expr::IndexGet { object, index, .. }
+                    | Expr::RegionOut { object, index, .. } => {
                         // ECMA-262 13.5.1.2: `delete o[k]` evaluates the
                         // reference (13.3.3 EvaluatePropertyAccessWithExpressionKey:
                         // ToPropertyKey of the key value), then deletes.

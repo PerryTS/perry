@@ -136,7 +136,7 @@ fn simple(e: &Expr) -> bool {
             else_expr,
             ..
         } => simple(condition) && simple(then_expr) && simple(else_expr),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(_)) && simple(index)
         }
         _ => false,
@@ -164,7 +164,9 @@ fn simple_word(e: &Expr) -> bool {
             ..
         } => simple_word(left) && simple(right),
         Expr::PropertyGet { .. } => place(e),
-        Expr::IndexGet { object, index, .. } => place(object) && simple(index),
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            place(object) && simple(index)
+        }
         _ => false,
     }
 }

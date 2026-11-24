@@ -507,7 +507,7 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
             walk_expr(object, in_loop, scan);
             walk_expr(value, in_loop, scan);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             walk_expr(object, in_loop, scan);
             walk_expr(index, in_loop, scan);
         }

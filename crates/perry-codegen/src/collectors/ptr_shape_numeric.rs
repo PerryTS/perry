@@ -463,7 +463,7 @@ pub(super) fn retain_unwritten_literal_arrays(
                 }
                 return;
             }
-            Expr::IndexGet { object, .. } => object,
+            Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => object,
             Expr::PropertyGet {
                 object, property, ..
             } if property == "length" => object,
@@ -838,7 +838,9 @@ fn expr_numeric_by_construction_with_region(
         // (bench_int_arithmetic: 7.7x node; `acc += (px[i] | 0)` was 2000x
         // faster than `acc += px[i]`). Both nodes read the same storage.
         let (object, index) = match x {
-            Expr::IndexGet { object, index, .. } => (object, index),
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+                (object, index)
+            }
             Expr::Uint8ArrayGet { array, index } => (array, index),
             _ => return false,
         };
@@ -897,7 +899,7 @@ fn expr_numeric_by_construction_with_region(
     match e {
         // A region read the planner proved a Number: an R-bit static-key
         // read, or a bare typed-array VIEW element read (decision 69).
-        Expr::PropertyGet { .. } | Expr::IndexGet { .. }
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. } | Expr::RegionOut { .. }
             if region_f64_reads
                 .is_some_and(|reads| reads.contains(&(e as *const Expr as usize))) =>
         {

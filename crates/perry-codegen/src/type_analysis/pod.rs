@@ -132,7 +132,7 @@ fn collect_pod_numeric_field_read_locals(ctx: &FnCtx<'_>, expr: &Expr, out: &mut
             collect_pod_numeric_field_read_locals(ctx, object, out);
             collect_pod_numeric_field_read_locals(ctx, value, out);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             collect_pod_numeric_field_read_locals(ctx, object, out);
             collect_pod_numeric_field_read_locals(ctx, index, out);
         }
@@ -249,7 +249,7 @@ fn expr_may_materialize_pod_local(ctx: &FnCtx<'_>, expr: &Expr, target_id: u32) 
                     .iter()
                     .any(|arg| expr_may_materialize_pod_local(ctx, arg, target_id))
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             expr_may_materialize_pod_local(ctx, object, target_id)
                 || expr_may_materialize_pod_local(ctx, index, target_id)
         }
@@ -479,7 +479,7 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
                     .as_ref()
                     .is_some_and(crate::typed_shape::type_is_raw_f64_candidate)
         }
-        Expr::IndexGet { object, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
             // Inside a packed/stable fast clone the guarded read either
             // produces a genuine raw double or side-exits to the slow clone
             // BEFORE the value is consumed — there is no boxed fallback edge
@@ -496,7 +496,7 @@ pub(crate) fn expr_may_return_boxed_value_from_raw_f64_fallback(
             }
             // A flat-const table element is a native `[N x i32]` load
             // (issue #50): no boxed fallback edge exists.
-            if let Expr::IndexGet { index, .. } = expr {
+            if let (Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. }) = expr {
                 if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() {
                     return false;
                 }
@@ -628,7 +628,7 @@ pub(crate) fn numeric_proof_is_declared_only(ctx: &FnCtx<'_>, expr: &Expr) -> bo
                 .unwrap_or(false);
             !ptr_shape_numeric
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             if crate::stmt::stable_packed_loop::has_numeric_index_fact(ctx, expr) {
                 return false;
             }

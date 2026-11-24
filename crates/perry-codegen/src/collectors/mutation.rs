@@ -46,7 +46,7 @@ fn collect_flat_const_row_aliases(
         match stmt {
             Stmt::Let {
                 id: alias_id,
-                init: Some(Expr::IndexGet { object, .. }),
+                init: Some(Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }),
                 mutable: false,
                 ..
             } if matches!(object.as_ref(), Expr::LocalGet(array_id) if *array_id == id) => {
@@ -202,7 +202,7 @@ fn flat_const_expr_is_safe(
         Expr::LocalGet(local_id) if *local_id == id || row_aliases.contains(local_id) => {
             use_kind == FlatConstUse::IndexObject
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             let produces_row =
                 matches!(object.as_ref(), Expr::LocalGet(array_id) if *array_id == id);
             if produces_row
@@ -456,6 +456,7 @@ fn expr_contains_call(e: &perry_hir::Expr) -> bool {
             | Expr::Unary { .. }
             | Expr::PropertyGet { .. }
             | Expr::IndexGet { .. }
+            | Expr::RegionOut { .. }
             | Expr::PropertySet { .. }
             | Expr::IndexSet { .. }
             | Expr::PropertyUpdate { .. }
@@ -477,7 +478,9 @@ pub fn is_local_get_chain(e: &perry_hir::Expr, id: u32) -> bool {
     use perry_hir::Expr;
     match e {
         Expr::LocalGet(i) => *i == id,
-        Expr::IndexGet { object, .. } => is_local_get_chain(object, id),
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
+            is_local_get_chain(object, id)
+        }
         Expr::PropertyGet { object, .. } => is_local_get_chain(object, id),
         _ => false,
     }
@@ -586,7 +589,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
                 || expr_has_mutation(value, id)
                 || expr_has_mutation(receiver, id)
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             expr_has_mutation(object, id) || expr_has_mutation(index, id)
         }
         Expr::Array(elements, _) => elements.iter().any(|e| expr_has_mutation(e, id)),

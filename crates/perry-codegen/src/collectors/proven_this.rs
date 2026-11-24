@@ -300,7 +300,7 @@ pub(crate) fn ptr_array_cache_fields(class: &Class, method: &Function) -> Vec<(S
             Expr::Delete(inner)
                 if matches!(
                     inner.as_ref(),
-                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                         if matches!(object.as_ref(), Expr::This)
                 ) =>
             {

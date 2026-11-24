@@ -632,6 +632,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                     | Expr::LocalGet(_)
                     | Expr::PropertyGet { .. }
                     | Expr::IndexGet { .. }
+                    | Expr::RegionOut { .. }
                     | Expr::Closure { .. }
                     | Expr::Logical { .. }
             );

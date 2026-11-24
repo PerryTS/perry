@@ -1806,8 +1806,13 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let n = self.local(fx.module, *id);
-                if let (false, Some(perry_hir::Expr::IndexGet { object, index, .. })) =
-                    (*mutable, init)
+                if let (
+                    false,
+                    Some(
+                        perry_hir::Expr::IndexGet { object, index, .. }
+                        | perry_hir::Expr::RegionOut { object, index, .. },
+                    ),
+                ) = (*mutable, init)
                 {
                     if let perry_hir::Expr::LocalGet(k) = index.as_ref() {
                         self.same_key_reads
@@ -2251,7 +2256,7 @@ fn for_of_walk(s: &Stmt) -> Option<(u32, u32)> {
         return None;
     }
     let Some(Stmt::Let {
-        init: Some(Expr::IndexGet { object, index, .. }),
+        init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
         ..
     }) = body.first()
     else {

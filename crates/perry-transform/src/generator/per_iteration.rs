@@ -1658,10 +1658,10 @@ mod tests {
             panic!("the read is not checked: {:?}", closure_return(&stmts));
         };
         assert!(
-            matches!(condition.as_ref(), Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::Integer(1)))
+            matches!(condition.as_ref(), Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(), Expr::Integer(1)))
         );
         assert!(
-            matches!(then_expr.as_ref(), Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::Integer(0)))
+            matches!(then_expr.as_ref(), Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(), Expr::Integer(0)))
         );
         assert!(format!("{else_expr:?}").contains(perry_hir::tdz_check::TDZ_THROW));
         // the declaration stores the value, then marks the cell initialized
@@ -1760,7 +1760,10 @@ mod tests {
         };
         assert!(matches!(slots.as_slice(), [Expr::Undefined]), "{slots:?}");
         assert!(
-            matches!(closure_return(&stmts), Expr::IndexGet { .. }),
+            matches!(
+                closure_return(&stmts),
+                Expr::IndexGet { .. } | Expr::RegionOut { .. }
+            ),
             "{:?}",
             closure_return(&stmts)
         );
@@ -1779,7 +1782,7 @@ mod tests {
             panic!("{:?}", closure_return(&stmts));
         };
         assert!(
-            matches!(value.as_ref(), Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::Integer(0))),
+            matches!(value.as_ref(), Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(), Expr::Integer(0))),
             "{value:?}"
         );
     }
@@ -1787,7 +1790,7 @@ mod tests {
     fn is_cell_value_read(e: &Expr) -> bool {
         matches!(
             e,
-            Expr::IndexGet { object, index , .. }
+            Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. }
                 if matches!(object.as_ref(), Expr::LocalGet(X))
                     && matches!(index.as_ref(), Expr::Integer(0))
         )
@@ -1820,7 +1823,7 @@ mod tests {
         };
         assert!(matches!(value.as_ref(), Expr::Integer(9)), "{value:?}");
         assert!(
-            matches!(condition.as_ref(), Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::Integer(1)))
+            matches!(condition.as_ref(), Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(), Expr::Integer(1)))
         );
         assert!(is_cell_value_read(then_expr), "{then_expr:?}");
         let Expr::Sequence(throwing) = else_expr.as_ref() else {

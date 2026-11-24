@@ -1567,7 +1567,7 @@ impl Rewriter<'_> {
                 } if property == "pop" => self.ra_of(object),
                 _ => None,
             },
-            Expr::IndexGet { object, .. } => self.ra_of(object),
+            Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => self.ra_of(object),
             _ => None,
         }
     }
@@ -1585,7 +1585,7 @@ impl Rewriter<'_> {
                 self.expr(&mut o);
                 rt(RA_POP, vec![o, t])
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 let (mut o, mut i) = (*object, *index);
                 self.expr(&mut o);
                 self.expr(&mut i);

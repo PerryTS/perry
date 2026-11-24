@@ -378,6 +378,7 @@ fn pointer_locals(
             }),
             Expr::Array(_, _) => Some(pointer_analysis_array_type()),
             Expr::IndexGet { object, index, .. }
+            | Expr::RegionOut { object, index, .. }
             | Expr::Uint8ArrayGet {
                 array: object,
                 index,

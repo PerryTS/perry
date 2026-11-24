@@ -572,7 +572,7 @@ fn expr_reads(e: &Expr, trusted: &dyn Fn(&Expr) -> bool) -> bool {
         Expr::Call { callee, args, .. } => {
             expr_reads(callee, trusted) || args.iter().any(|a| expr_reads(a, trusted))
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             expr_reads(object, trusted) || expr_reads(index, trusted)
         }
         Expr::PropertyGet { object, .. } => expr_reads(object, trusted),

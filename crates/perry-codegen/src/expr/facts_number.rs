@@ -59,7 +59,7 @@ pub(crate) enum Operand {
 /// conversion of its value is decided here.
 fn element_operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
     use crate::expr::facts_canonical::{of, Num};
-    if !matches!(e, Expr::IndexGet { .. }) {
+    if !matches!(e, Expr::IndexGet { .. } | Expr::RegionOut { .. }) {
         return None;
     }
     let k = match of(ctx, e)? {
@@ -368,7 +368,9 @@ pub(crate) fn arith_to_number(
     use crate::expr::facts_canonical::{witness, Num};
     let num_or_undef = match k {
         Operand::Number => {
-            if matches!(e, Expr::IndexGet { .. }) && element_operand(ctx, e).is_some() {
+            if matches!(e, Expr::IndexGet { .. } | Expr::RegionOut { .. })
+                && element_operand(ctx, e).is_some()
+            {
                 witness(ctx, raw, Num::Number, "arith element operand")?;
             }
             return Ok(raw.to_string());

@@ -199,7 +199,7 @@ impl Scan<'_> {
             | Expr::CallSpread { callee, .. }
             | Expr::JsCallValue { callee, .. }
                 if matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
-                    | Expr::IndexGet { object, .. }
+                    | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                     if matches!(object.as_ref(), Expr::This)) =>
             {
                 self.uses.leak = true;

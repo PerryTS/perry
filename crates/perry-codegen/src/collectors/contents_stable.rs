@@ -334,7 +334,7 @@ impl Scan {
     fn chain_indices(&mut self, e: &Expr) {
         match e {
             Expr::PropertyGet { object, .. } => self.chain_indices(object),
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 self.chain_indices(object);
                 self.expr(index, Use::Consume);
             }
@@ -379,7 +379,7 @@ impl Scan {
                     }
                 }
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 self.receiver(object);
                 self.expr(index, Use::Consume);
                 if how != Use::Consume {
@@ -441,7 +441,7 @@ impl Scan {
             }
             Expr::Delete(operand) => match operand.as_ref() {
                 Expr::PropertyGet { object, .. } => self.store(object),
-                Expr::IndexGet { object, index, .. } => {
+                Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                     self.store(object);
                     self.expr(index, Use::Consume);
                 }
@@ -468,9 +468,13 @@ impl Scan {
             Expr::Call { callee, args, .. } => {
                 match callee.as_ref() {
                     // A method call hands the receiver over as `this`.
-                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+                    Expr::PropertyGet { object, .. }
+                    | Expr::IndexGet { object, .. }
+                    | Expr::RegionOut { object, .. } => {
                         self.expr(object, Use::Value);
-                        if let Expr::IndexGet { index, .. } = callee.as_ref() {
+                        if let (Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. }) =
+                            callee.as_ref()
+                        {
                             self.expr(index, Use::Consume);
                         }
                     }
@@ -663,7 +667,9 @@ impl Scan {
 fn chain_root(e: &Expr) -> Option<u32> {
     match e {
         Expr::LocalGet(id) => Some(*id),
-        Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => chain_root(object),
+        Expr::PropertyGet { object, .. }
+        | Expr::IndexGet { object, .. }
+        | Expr::RegionOut { object, .. } => chain_root(object),
         _ => None,
     }
 }

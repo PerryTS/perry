@@ -218,7 +218,9 @@ fn expr_not_bigint(
             super::uint8array_get_reads_a_byte(index, &mut |id| numeric_locals.contains(&id))
         }
         Expr::BufferIndexGet { .. } => true,
-        Expr::IndexGet { object, .. } => index_receiver_is_numeric(object, types),
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
+            index_receiver_is_numeric(object, types)
+        }
 
         // `!x` → boolean; `+x` → Number-or-throw (never a BigInt VALUE).
         // `-x` / `~x` preserve BigInt.

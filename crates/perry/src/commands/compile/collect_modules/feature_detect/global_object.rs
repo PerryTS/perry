@@ -51,6 +51,7 @@ fn expression(expr: &Expr, sloppy: bool) -> bool {
         }
         Expr::PropertyUpdate { object, .. } if receiver(object, sloppy) => return false,
         Expr::IndexGet { object, .. }
+        | Expr::RegionOut { object, .. }
         | Expr::IndexSet { object, .. }
         | Expr::IndexUpdate { object, .. }
             if receiver(object, sloppy) =>

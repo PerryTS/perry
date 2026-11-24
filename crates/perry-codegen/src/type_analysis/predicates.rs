@@ -401,7 +401,7 @@ pub(crate) fn receiver_class_name(ctx: &FnCtx<'_>, e: &Expr) -> Option<String> {
         // `arr[i]` where `arr: ClassFoo[]` — the element type is the
         // array's parameter. Lets `items[2].display()` resolve the
         // method dispatch.
-        Expr::IndexGet { object, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
             if let Expr::LocalGet(arr_id) = object.as_ref() {
                 if let Some(HirType::Array(elem)) = ctx.stable_local_type_proof(arr_id) {
                     if let HirType::Named(name) = elem.as_ref() {
@@ -547,7 +547,7 @@ pub(crate) fn is_array_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 pub(crate) fn is_native_module_dynamic_index(e: &Expr) -> bool {
     matches!(
         e,
-        Expr::IndexGet { object, index , .. }
+        Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. }
             if matches!(object.as_ref(), Expr::NativeModuleRef(_))
                 && !matches!(index.as_ref(), Expr::String(_) | Expr::WtfString(_))
     )
@@ -803,26 +803,30 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         // statically known to be `Array<Array<T>>` / `Array<Tuple<...>>`.
         // Also handles `Record<K, V>[key]` → V so `groups["a"].length`
         // on `Record<string, number[]>` finds the array fast path.
-        Expr::IndexGet { object, index, .. } => match static_type_of(ctx, object) {
-            Some(HirType::Array(inner)) => Some(*inner),
-            // A literal, in-bounds index has the exact element type. A dynamic
-            // index could hit any element, so it's only sound when the tuple is
-            // homogeneous — otherwise stay conservative (e.g. `[string, number]`
-            // must not type `t[i]` as `string`).
-            Some(HirType::Tuple(elems)) if !elems.is_empty() => match tuple_index_literal(index) {
-                Some(i) => elems.get(i).cloned(),
-                None => {
-                    let first = &elems[0];
-                    elems.iter().all(|t| t == first).then(|| first.clone())
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            match static_type_of(ctx, object) {
+                Some(HirType::Array(inner)) => Some(*inner),
+                // A literal, in-bounds index has the exact element type. A dynamic
+                // index could hit any element, so it's only sound when the tuple is
+                // homogeneous — otherwise stay conservative (e.g. `[string, number]`
+                // must not type `t[i]` as `string`).
+                Some(HirType::Tuple(elems)) if !elems.is_empty() => {
+                    match tuple_index_literal(index) {
+                        Some(i) => elems.get(i).cloned(),
+                        None => {
+                            let first = &elems[0];
+                            elems.iter().all(|t| t == first).then(|| first.clone())
+                        }
+                    }
                 }
-            },
-            Some(HirType::Generic { base, type_args })
-                if base == "Record" && type_args.len() == 2 =>
-            {
-                Some(type_args[1].clone())
+                Some(HirType::Generic { base, type_args })
+                    if base == "Record" && type_args.len() == 2 =>
+                {
+                    Some(type_args[1].clone())
+                }
+                _ => hir_inferred_static_type(ctx, e),
             }
-            _ => hir_inferred_static_type(ctx, e),
-        },
+        }
         // `a || b` and `a ?? b` lower to `Expr::Logical`. Recognize the
         // result as Array-typed when EITHER branch is Array — `is_array_expr`
         // already accepts the Union form, so this lets `(maybeArr || []).slice()`

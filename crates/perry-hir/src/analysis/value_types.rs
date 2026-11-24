@@ -744,32 +744,34 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         } => infer_property_get_type(object, property, env),
         Expr::PropertySet { value, .. } => infer_expr_type(value, env),
         Expr::PropertyUpdate { .. } => Type::Number,
-        Expr::IndexGet { object, index, .. } => match infer_expr_type(object, env) {
-            Type::Array(elem) => *elem,
-            Type::Tuple(elems) => {
-                if elems.len() == 1 {
-                    elems.into_iter().next().unwrap_or(Type::Any)
-                } else {
-                    Type::Any
-                }
-            }
-            Type::Object(object) => {
-                if let Expr::String(name) = index.as_ref() {
-                    if let Some(property) = object.properties.get(name) {
-                        return property.ty.clone();
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            match infer_expr_type(object, env) {
+                Type::Array(elem) => *elem,
+                Type::Tuple(elems) => {
+                    if elems.len() == 1 {
+                        elems.into_iter().next().unwrap_or(Type::Any)
+                    } else {
+                        Type::Any
                     }
                 }
-                member_types(
-                    object
-                        .properties
-                        .into_values()
-                        .map(|property| property.ty)
-                        .chain(object.index_signature.map(|ty| *ty)),
-                )
+                Type::Object(object) => {
+                    if let Expr::String(name) = index.as_ref() {
+                        if let Some(property) = object.properties.get(name) {
+                            return property.ty.clone();
+                        }
+                    }
+                    member_types(
+                        object
+                            .properties
+                            .into_values()
+                            .map(|property| property.ty)
+                            .chain(object.index_signature.map(|ty| *ty)),
+                    )
+                }
+                Type::String => Type::String,
+                _ => Type::Any,
             }
-            Type::String => Type::String,
-            _ => Type::Any,
-        },
+        }
         Expr::IndexSet { value, .. } => infer_expr_type(value, env),
         Expr::IndexUpdate { .. } => Type::Number,
 

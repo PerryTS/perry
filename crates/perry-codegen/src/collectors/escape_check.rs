@@ -466,7 +466,7 @@ pub fn check_escapes_in_expr(
         // outright (ptr_shape rule 5), so no proven-path read is affected.
         Expr::Delete(operand) => {
             match operand.as_ref() {
-                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
                     if let Expr::LocalGet(id) = object.as_ref() {
                         if candidates.contains_key(id) {
                             escaped.insert(*id);
@@ -624,7 +624,7 @@ pub fn check_escapes_in_expr(
                 check_escapes_in_expr(a, candidates, classes, escaped);
             }
         }
-        Expr::IndexGet { object, index , .. } => {
+        Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. } => {
             check_escapes_in_expr(object, candidates, classes, escaped);
             check_escapes_in_expr(index, candidates, classes, escaped);
         }

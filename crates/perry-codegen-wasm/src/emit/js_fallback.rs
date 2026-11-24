@@ -433,7 +433,8 @@ impl WasmModuleEmitter {
                             host_args(&args_js)
                         )
                     }
-                    Expr::IndexGet { object, index, .. } => {
+                    Expr::IndexGet { object, index, .. }
+                    | Expr::RegionOut { object, index, .. } => {
                         let obj = self.emit_js_expr(object, locals);
                         let key = self.emit_js_expr(index, locals);
                         format!(
@@ -774,7 +775,7 @@ impl WasmModuleEmitter {
                 )
             }
             Expr::This => "__this".to_string(),
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 let obj = self.emit_js_expr(object, locals);
                 let idx = self.emit_js_expr(index, locals);
                 format!("fromJsValue(toJsValue({})[toJsValue({})])", obj, idx)

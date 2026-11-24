@@ -434,7 +434,9 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         // A removal needs a real heap `this`, so say so here -- the same rule
         // the `LocalGet` receivers get in `escape_check.rs`.
         Expr::Delete(operand) => match operand.as_ref() {
-            Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+            Expr::PropertyGet { object, .. }
+            | Expr::IndexGet { object, .. }
+            | Expr::RegionOut { object, .. }
                 if matches!(object.as_ref(), Expr::This) =>
             {
                 true
@@ -476,7 +478,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
                 .is_some_and(|o| expr_uses_this_as_value(o, fields))
                 || args.iter().any(|a| expr_uses_this_as_value(a, fields))
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             expr_uses_this_as_value(object, fields) || expr_uses_this_as_value(index, fields)
         }
         Expr::IndexSet {

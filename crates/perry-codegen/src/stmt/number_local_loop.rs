@@ -117,6 +117,7 @@ impl<'a> LoopFacts<'a> {
                 if !mutable {
                     if let Some(
                         init @ (Expr::IndexGet { .. }
+                        | Expr::RegionOut { .. }
                         | Expr::Uint8ArrayGet { .. }
                         | Expr::BufferIndexGet { .. }),
                     ) = init
@@ -207,6 +208,7 @@ impl<'a> LoopFacts<'a> {
                 }
             }
             Expr::IndexGet { object, index, .. }
+            | Expr::RegionOut { object, index, .. }
             | Expr::Uint8ArrayGet {
                 array: object,
                 index,
@@ -215,7 +217,7 @@ impl<'a> LoopFacts<'a> {
                 buffer: object,
                 index,
             } => {
-                if matches!(expr, Expr::IndexGet { .. })
+                if matches!(expr, Expr::IndexGet { .. } | Expr::RegionOut { .. })
                     && crate::expr::ta_element_read::receiver_kind(ctx, object) != Some(1)
                 {
                     return false;
@@ -233,7 +235,7 @@ impl<'a> LoopFacts<'a> {
                 {
                     // Preserve the general read's existing Number-counter
                     // admission without publishing a byte-result proof.
-                    if !matches!(expr, Expr::IndexGet { .. }) {
+                    if !matches!(expr, Expr::IndexGet { .. } | Expr::RegionOut { .. }) {
                         return false;
                     }
                 } else {
@@ -698,7 +700,7 @@ pub(super) fn has_guarded_byte_index(ctx: &FnCtx<'_>, body: &[Stmt], controls: &
     fn guarded(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
         let index = match expr {
             Expr::Uint8ArrayGet { index, .. } | Expr::BufferIndexGet { index, .. } => index,
-            Expr::IndexGet { object, index, .. }
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
                 if crate::expr::ta_element_read::receiver_kind(ctx, object) == Some(1) =>
             {
                 index

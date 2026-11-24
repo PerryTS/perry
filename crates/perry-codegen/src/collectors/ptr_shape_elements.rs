@@ -815,6 +815,9 @@ impl<'a> ArrayWalk<'a> {
         };
         let [mode, Expr::LocalGet(previous), Expr::IndexGet {
             object, index: key, ..
+        }
+        | Expr::RegionOut {
+            object, index: key, ..
         }] = runtime_call(read, "arrayRecordForValue")?
         else {
             return None;
@@ -1008,7 +1011,9 @@ impl<'a> ArrayWalk<'a> {
                     // ONLY position an element read is admitted in — see the
                     // `Expr::IndexGet` arm for why every other one is an
                     // escape of the ELEMENT (as opposed to the array).
-                    if let Expr::IndexGet { object, index, .. } = e {
+                    if let (Expr::IndexGet { object, index, .. }
+                    | Expr::RegionOut { object, index, .. }) = e
+                    {
                         if let (Expr::LocalGet(a), Expr::LocalGet(i)) =
                             (object.as_ref(), index.as_ref())
                         {
@@ -1244,11 +1249,16 @@ impl<'a> ArrayWalk<'a> {
             Expr::PropertyGet {
                 object, property, ..
             } => {
-                if let Expr::IndexGet {
+                if let (Expr::IndexGet {
                     object: array,
                     index,
                     ..
-                } = object.as_ref()
+                }
+                | Expr::RegionOut {
+                    object: array,
+                    index,
+                    ..
+                }) = object.as_ref()
                 {
                     if let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) =
                         (array.as_ref(), index.as_ref())
@@ -1384,7 +1394,7 @@ impl<'a> ArrayWalk<'a> {
             // So every unlicensed element read disqualifies the array. The
             // direct bounded declared-field form was consumed by the
             // `PropertyGet` arm above; every other form still reaches here.
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     self.disq(*id);
                 }
@@ -1642,7 +1652,7 @@ pub(super) fn element_read_seeds(
     walk_stmts(stmts, &mut |s| {
         if let Stmt::Let {
             id,
-            init: Some(Expr::IndexGet { .. } | Expr::LocalGet(_)),
+            init: Some(Expr::IndexGet { .. } | Expr::RegionOut { .. } | Expr::LocalGet(_)),
             ..
         } = s
         {

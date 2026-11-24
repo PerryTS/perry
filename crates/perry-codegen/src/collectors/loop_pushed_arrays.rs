@@ -274,7 +274,7 @@ impl Walk<'_> {
                 }
                 return;
             }
-            Expr::IndexGet { object, index, .. }
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
                 if matches!(object.as_ref(), Expr::LocalGet(_)) =>
             {
                 if let Expr::LocalGet(id) = object.as_ref() {

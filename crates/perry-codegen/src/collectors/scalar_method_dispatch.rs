@@ -457,7 +457,9 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
                     saw_names = true;
                 }
                 Expr::TypeOf(value) => {
-                    if let Expr::IndexGet { object, .. } = value.as_ref() {
+                    if let (Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }) =
+                        value.as_ref()
+                    {
                         if matches!(object.as_ref(), Expr::LocalGet(local) if local == id) {
                             allowed_local_gets.insert(object.as_ref() as *const Expr as usize);
                             saw_typeof_index = true;
@@ -470,7 +472,9 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
                     } = callee.as_ref()
                     {
                         if property == "bind" {
-                            if let Expr::IndexGet { object, .. } = object.as_ref() {
+                            if let (Expr::IndexGet { object, .. }
+                            | Expr::RegionOut { object, .. }) = object.as_ref()
+                            {
                                 if matches!(object.as_ref(), Expr::LocalGet(local) if local == id) {
                                     allowed_local_gets
                                         .insert(object.as_ref() as *const Expr as usize);
@@ -786,7 +790,9 @@ fn note_prototype_effect(
         } if is_prototype_key(property) => {
             note_prototype_holder(object, facts);
         }
-        Expr::IndexGet { object, index, .. } | Expr::IndexSet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. }
+        | Expr::RegionOut { object, index, .. }
+        | Expr::IndexSet { object, index, .. } => {
             if matches!(index.as_ref(), Expr::String(key) if is_prototype_key(key)) {
                 note_prototype_holder(object, facts);
             }

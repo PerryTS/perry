@@ -285,6 +285,7 @@ impl Probe<'_> {
                 }
             }
             Expr::IndexGet { object, index, .. }
+            | Expr::RegionOut { object, index, .. }
             | Expr::IndexUpdate { object, index, .. }
             | Expr::BufferIndexGet {
                 buffer: object,
@@ -629,7 +630,7 @@ impl<'a> Scan<'a> {
                 }
                 self.walk_children(e);
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 if let Expr::LocalGet(recv) = object.as_ref() {
                     self.note_key(*recv, index);
                 } else {
@@ -822,6 +823,7 @@ fn key_never_string_shape(e: &Expr, deps: &mut Vec<KeyDep>) -> bool {
         | Expr::MathMin(_)
         | Expr::MathMax(_) => true,
         Expr::IndexGet { object, index, .. }
+        | Expr::RegionOut { object, index, .. }
         | Expr::Uint8ArrayGet {
             array: object,
             index,

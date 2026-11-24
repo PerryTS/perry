@@ -190,7 +190,7 @@ fn shallow_expr(e: &Expr, s: &mut Shallow) {
 fn shallow_expr_at(e: &Expr, s: &mut Shallow, read: bool) {
     if read {
         match e {
-            Expr::IndexGet { object, .. } => {
+            Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     s.receivers.push(*id);
                 }

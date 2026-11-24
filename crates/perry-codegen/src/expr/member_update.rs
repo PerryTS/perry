@@ -479,11 +479,16 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             &[(DOUBLE, &obj_box), (DOUBLE, &idx_box)],
                         )
                     } else {
-                        let Expr::IndexGet {
+                        let (Expr::IndexGet {
                             object: read_object,
                             index: read_index,
                             ..
-                        } = &element_read
+                        }
+                        | Expr::RegionOut {
+                            object: read_object,
+                            index: read_index,
+                            ..
+                        }) = &element_read
                         else {
                             unreachable!()
                         };

@@ -107,7 +107,7 @@ pub(crate) fn expr_is_known_non_pointer_shadow_value(ctx: &FnCtx<'_>, expr: &Exp
         // #6750 follow-up: a masked-index read covered by an ACTIVE
         // masked-window fact is a guard-proven numeric element load — never
         // a pointer — even when the receiver's static type is erased.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             matches!(
                 object.as_ref(),
                 Expr::LocalGet(arr_id)
@@ -251,7 +251,7 @@ pub(crate) fn enable_persistent_shadow_slot_for_array_alias(
     if expr_is_known_non_pointer_shadow_value(ctx, init) {
         return;
     }
-    let Expr::IndexGet { object, .. } = init else {
+    let (Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }) = init else {
         return;
     };
     if !matches!(object.as_ref(), Expr::LocalGet(_)) {
