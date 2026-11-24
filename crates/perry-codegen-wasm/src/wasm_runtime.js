@@ -6212,11 +6212,21 @@ function __hostDescriptors(props) {
 // so an object key is handed over as a view whose conversion methods run them.
 function __hostKey(key) {
   if (!__holdsProperties(key)) return key;
+  const own = Object.prototype.hasOwnProperty;
+  const hasClassGetter = (name) => {
+    if (own.call(key, name)) return false;
+    for (let c = __classOf(key); c; c = classParentTable[c] || null) {
+      const methods = classMethodTable[c];
+      if (methods && own.call(methods, name)) return false;
+      if (methods && own.call(methods, '__get_' + name)) return true;
+    }
+    return false;
+  };
   const method = (name) => {
     // A class instance's compiled accessors live in the class table, not on the host object.
-    const viaClass = typeof name === 'string' && __classOf(key);
-    const value = viaClass ? __memDispatch.class_get_field(key, name) : key[name];
-    if (viaClass) __memDispatch.propagate_exception(true);
+    const viaGetter = typeof name === 'string' && hasClassGetter(name);
+    const value = viaGetter ? __memDispatch.class_get_field(key, name) : key[name];
+    if (viaGetter) __memDispatch.propagate_exception(true);
     const fn = __hostAccessor(value);
     return typeof fn === 'function' ? (...args) => Reflect.apply(fn, key, args) : fn;
   };
