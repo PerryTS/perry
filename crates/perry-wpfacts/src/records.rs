@@ -843,13 +843,14 @@ impl<'a, 'g> Scan<'a, 'g> {
             .iter()
             .flat_map(|mo| mo.locals.values().copied())
             .collect();
-        // DEADARM: a read of a local inside an `if` arm is the arm's gated
-        // copy of it (`Gen::region_read`, `Model::name_of`): a read of the
-        // same name, so it belongs to every set its binding is in.
+        // A read of a local that sees a node of its own (`Model::name_of`:
+        // DEADARM's gated copy inside an `if` arm, `Gen::region_read`; a
+        // guard's or an assignment's narrowing, `gen::narrow`) is a read of
+        // the same name, so it belongs to every set its binding is in.
         let gated = |of: &FxHashSet<NodeId>| -> Vec<NodeId> {
             m.name_of
                 .iter()
-                .filter(|(r, l)| of.contains(*l) && m.labels[**r as usize] == "live-read")
+                .filter(|(_, l)| of.contains(*l))
                 .map(|(r, _)| *r)
                 .collect()
         };
