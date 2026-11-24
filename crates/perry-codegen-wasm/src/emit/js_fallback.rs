@@ -294,6 +294,9 @@ impl WasmModuleEmitter {
         if let Some([module, name]) = expr::path_export_operands(expr) {
             return self.emit_js_bridge_call("path_module_export", &[module, name], locals);
         }
+        if let Some((bridge, operands)) = expr::path_operands(expr) {
+            return self.emit_js_bridge_call(bridge, &operands, locals);
+        }
         match expr {
             // Rust spells an infinity `inf`, which is not a JS literal.
             Expr::Number(n) if n.is_infinite() => {
@@ -1253,7 +1256,6 @@ impl WasmModuleEmitter {
             // `node:path` calls the bridges its WASM arms call (`emit/expr/url_process_path.rs`).
             Expr::PathSep => self.emit_js_bridge_call("path_sep", &[], locals),
             Expr::PathDelimiter => self.emit_js_bridge_call("path_delimiter", &[], locals),
-            Expr::PathJoin(a, b) => self.emit_js_bridge_call("path_join", &[a, b], locals),
             Expr::PathResolveJoin(a, b) => {
                 self.emit_js_bridge_call("path_resolve_join", &[a, b], locals)
             }
@@ -1264,13 +1266,9 @@ impl WasmModuleEmitter {
             Expr::PathBasenameExt(a, b) => {
                 self.emit_js_bridge_call("path_basename", &[a, b], locals)
             }
-            Expr::PathWin32Join(a, b) => {
-                self.emit_js_bridge_call("path_win32_join", &[a, b], locals)
-            }
             Expr::PathDirname(p) => self.emit_js_bridge_call("path_dirname", &[p], locals),
             Expr::PathBasename(p) => self.emit_js_bridge_call("path_basename", &[p], locals),
             Expr::PathExtname(p) => self.emit_js_bridge_call("path_extname", &[p], locals),
-            Expr::PathResolve(p) => self.emit_js_bridge_call("path_resolve", &[p], locals),
             Expr::PathIsAbsolute(p) => self.emit_js_bridge_call("path_is_absolute", &[p], locals),
             Expr::PathNormalize(p) => self.emit_js_bridge_call("path_normalize", &[p], locals),
             Expr::PathParse(p) => self.emit_js_bridge_call("path_parse", &[p], locals),

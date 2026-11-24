@@ -154,17 +154,28 @@ impl<'a> FuncEmitCtx<'a> {
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
             // --- Path ---
-            Expr::PathJoin(a, b) => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, a);
-                self.emit_store_arg(func, 1, b);
-                self.emit_memcall(func, "path_join", 2);
+            Expr::PathJoin(..) | Expr::PathWin32Join(..) | Expr::PathResolve(_)
+                if path_operands(expr).is_some() =>
+            {
+                let (name, operands) = path_operands(expr).unwrap();
+                let argc = operands.len() as u32;
+                self.emit_frame_begin(func, argc);
+                for (i, operand) in operands.into_iter().enumerate() {
+                    self.emit_store_arg(func, i as u32, operand);
+                }
+                self.emit_memcall(func, name, argc);
             }
-            Expr::PathWin32Join(a, b) => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, a);
-                self.emit_store_arg(func, 1, b);
-                self.emit_memcall(func, "path_win32_join", 2);
+            Expr::PathWin32 {
+                method: perry_hir::PathWin32Method::Resolve,
+                ..
+            } if path_operands(expr).is_some() => {
+                let (name, operands) = path_operands(expr).unwrap();
+                let argc = operands.len() as u32;
+                self.emit_frame_begin(func, argc);
+                for (i, operand) in operands.into_iter().enumerate() {
+                    self.emit_store_arg(func, i as u32, operand);
+                }
+                self.emit_memcall(func, name, argc);
             }
             Expr::PathWin32 { method, args } => {
                 let (name, expected_args) = path_win32_bridge(*method);
@@ -188,11 +199,6 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, p);
                 self.emit_memcall(func, "path_extname", 1);
-            }
-            Expr::PathResolve(p) => {
-                self.emit_frame_begin(func, 1);
-                self.emit_store_arg(func, 0, p);
-                self.emit_memcall(func, "path_resolve", 1);
             }
             Expr::PathIsAbsolute(p) => {
                 self.emit_frame_begin(func, 1);
@@ -310,6 +316,67 @@ impl<'a> FuncEmitCtx<'a> {
             _ => return false,
         }
         true
+    }
+}
+
+/// The bridge and operands of a `join` or `resolve` call. HIR folds `join(a, b, c)` into
+/// `PathJoin(PathJoin(a, b), c)` and `resolve(a, b, c)` into
+/// `PathResolve(PathResolveJoin(PathResolveJoin(a, b), c))`; the web target calls Node's
+/// n-ary function once with every operand, in source order, because joining or resolving
+/// pairwise normalizes (or resolves) the intermediate result: `join("", "", "/b")` is
+/// `"/b"`, and `win32.resolve("C:/base", "D:tmp", "C:leaf")` is `C:\base\leaf`. An explicit
+/// `join(join(a, b), c)` has the same HIR, so it is joined in one call too.
+pub(in crate::emit) fn path_operands(expr: &Expr) -> Option<(&'static str, Vec<&Expr>)> {
+    use perry_hir::PathWin32Method as M;
+    fn chain<'e>(
+        mut expr: &'e Expr,
+        split: impl Fn(&'e Expr) -> Option<(&'e Expr, &'e Expr)>,
+    ) -> Vec<&'e Expr> {
+        let mut operands = Vec::new();
+        while let Some((left, right)) = split(expr) {
+            operands.push(right);
+            expr = left;
+        }
+        operands.push(expr);
+        operands.reverse();
+        operands
+    }
+    match expr {
+        Expr::PathJoin(..) => Some((
+            "path_join",
+            chain(expr, |e| match e {
+                Expr::PathJoin(a, b) => Some((a, b)),
+                _ => None,
+            }),
+        )),
+        Expr::PathWin32Join(..) => Some((
+            "path_win32_join",
+            chain(expr, |e| match e {
+                Expr::PathWin32Join(a, b) => Some((a, b)),
+                _ => None,
+            }),
+        )),
+        Expr::PathResolve(p) => Some((
+            "path_resolve",
+            chain(p, |e| match e {
+                Expr::PathResolveJoin(a, b) => Some((a, b)),
+                _ => None,
+            }),
+        )),
+        Expr::PathWin32 {
+            method: M::Resolve,
+            args,
+        } if args.len() == 1 => Some((
+            "path_win32_resolve",
+            chain(&args[0], |e| match e {
+                Expr::PathWin32 {
+                    method: M::ResolveJoin,
+                    args,
+                } if args.len() == 2 => Some((&args[0], &args[1])),
+                _ => None,
+            }),
+        )),
+        _ => None,
     }
 }
 

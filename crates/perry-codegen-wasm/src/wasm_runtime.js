@@ -2035,10 +2035,11 @@ function __classStaticMethodFn(template, name, funcIdx, evaluation) {
   return __withKindProto(fn, __methodProtoKinds.get(funcIdx));
 }
 // The i64 entry an array bridge calls for `cb`: a Perry closure's compiled function
-// after its captures, or a class method value with no table entry of its own through
-// its host wrapper, which supplies its `this` and class evaluation.
+// after its captures, or a host function with no table entry of its own (a class
+// method value, whose wrapper supplies its `this` and class evaluation, or a runtime
+// function such as `path.normalize`) called with decoded arguments.
 function __arrayCallback(cb) {
-  if (typeof cb === 'function' && cb.funcIdx === undefined && __classMethodFns.has(cb)) {
+  if (typeof cb === 'function' && cb.funcIdx === undefined) {
     return (...bits) => __jsValueToBits(cb(...bits.map(__bitsToJsValue)));
   }
   if (!cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return undefined;
@@ -3461,6 +3462,8 @@ function isPathSeparator(code) {
     }
     return p;
   }
+  // brace-expansion's limits: at most 100000 expansions, 4000000 characters in all.
+  const EXPANSION_MAX = 1e5, EXPANSION_MAX_LENGTH = 4e6;
   function braceSequence(body, alpha) {
     const n = body.split('..');
     const num = (s) => isNaN(s) ? s.charCodeAt(0) : parseInt(s, 10);
@@ -3469,23 +3472,31 @@ function isPathSeparator(code) {
     if (y < x) step = -step;
     const pad = n.some((s) => /^-?0\d/.test(s));
     const out = [];
-    for (let i = x; step > 0 ? i <= y : i >= y; i += step) {
+    let length = 0;
+    for (let i = x; (step > 0 ? i <= y : i >= y) && out.length < EXPANSION_MAX; i += step) {
       let c = alpha ? String.fromCharCode(i) : String(i);
       if (alpha && c === '\\') c = '';
       if (!alpha && pad && width > c.length) {
         const z = '0'.repeat(width - c.length);
         c = i < 0 ? `-${z}${c.slice(1)}` : z + c;
       }
+      if (length + c.length > EXPANSION_MAX_LENGTH) break;
       out.push(c);
+      length += c.length;
     }
     return out;
   }
   function combine(acc, pre, values, dropEmpties) {
     const out = [];
+    let length = 0;
     for (const a of acc) {
       for (const v of values) {
+        if (out.length >= EXPANSION_MAX) return out;
         const expansion = a + pre + v;
-        if (!dropEmpties || expansion) out.push(expansion);
+        if (dropEmpties && !expansion) continue;
+        if (length + expansion.length > EXPANSION_MAX_LENGTH) return out;
+        out.push(expansion);
+        length += expansion.length;
       }
     }
     return out;
@@ -3532,7 +3543,16 @@ function isPathSeparator(code) {
           }
         }
         const dropsEmpties = dropEmpties && !post.length && !pre && !acc.some((a) => a);
-        values = n.flatMap((part) => expandBraces(part, false)).filter((v) => !dropsEmpties || v);
+        values = [];
+        let length = 0;
+        outer: for (const part of n) {
+          for (const v of expandBraces(part, false)) {
+            if (dropsEmpties && !v) continue;
+            if (values.length >= EXPANSION_MAX || length + v.length > EXPANSION_MAX_LENGTH) break outer;
+            values.push(v);
+            length += v.length;
+          }
+        }
       }
       acc = combine(acc, pre, values, dropEmpties && !post.length);
       if (!post.length) break;
@@ -3612,40 +3632,81 @@ function isPathSeparator(code) {
         (src.startsWith('\\.\\.') && '[.'.includes(src[4] || '-'))) return '(?!\\.\\.?$)';
     return '[.'.includes(src[0] || '-') ? '(?!\\.)' : '';
   }
-  // A segment pattern as { src, literal (when it has no magic), u }.
-  function globSource(segment, atStart) {
-    let src = '', literal = '', magic = false, u = false;
+  const isExtglob = (segment, i) => '@+*?!'.includes(segment[i]) && segment[i + 1] === '(';
+  // minimatch parses extglobs three levels deep, and deeper only where the outer type can
+  // adopt the inner one (its adoptionAnyMap), which costs no level.
+  const EXTGLOB_ADOPTS = { '!': '?@', '?': '?@', '@': '?@', '*': '*+?@', '+': '+@?*' };
+  const extglobDepth = (type, depth, c) => {
+    const adopts = type !== null && EXTGLOB_ADOPTS[type].includes(c);
+    return depth <= 2 || adopts ? (adopts ? depth : depth + 1) : -1;
+  };
+  // The arms of the extglob whose `(` is at `open`, as minimatch's parser finds them: a
+  // `|` or `)` inside a `[...]` class or a nested extglob does not end an arm, and a bare
+  // `(` is a literal. `null` when the group is not closed.
+  function extglobArms(segment, open, depth, type) {
+    const arms = [];
+    let start = open + 1, inClass = false, classStart = -1, classNeg = false;
+    for (let i = open + 1; i < segment.length;) {
+      const c = segment[i++];
+      if (inClass) {
+        if (i === classStart + 1) {
+          if (c === '^' || c === '!') classNeg = true;
+        } else if (c === ']' && !(i === classStart + 2 && classNeg)) {
+          inClass = false;
+        }
+        continue;
+      }
+      if (c === '[') {
+        inClass = true;
+        classStart = i;
+        classNeg = false;
+      } else if (isExtglob(segment, i - 1) && extglobDepth(type, depth, c) >= 0) {
+        const inner = extglobArms(segment, i, extglobDepth(type, depth, c), c);
+        if (!inner) return null;
+        i = inner.close + 1;
+      } else if (c === '|' || c === ')') {
+        arms.push(segment.slice(start, i - 1));
+        start = i;
+        if (c === ')') return { arms, close: i - 1 };
+      }
+    }
+    return null;
+  }
+  // A segment pattern as { src, literal (when it has no magic), u }. `tail` is the source
+  // of what follows this pattern up to the end of the segment, which a negative extglob
+  // inside it must also exclude (minimatch's fillNegs).
+  function globSource(segment, atStart, tail = '', depth = 0, type = null) {
+    let src = '', literal = '', magic = false, u = false, inOpenClass = false;
     const noEmpty = atStart && /^\*+$/.test(segment);
     for (let i = 0; i < segment.length; i++) {
       const c = segment[i];
-      if ('@+*?!'.includes(c) && segment[i + 1] === '(') {
-        let depth = 0, j = i + 2, from = j;
-        const arms = [];
-        for (; j < segment.length; j++) {
-          const d = segment[j];
-          if (d === '(') depth++;
-          else if (d === ')' && depth-- === 0) break;
-          else if (d === '|' && depth === 0) { arms.push(segment.slice(from, j)); from = j + 1; }
+      const inner = !inOpenClass && isExtglob(segment, i) ? extglobDepth(type, depth, c) : -1;
+      const group = inner >= 0 ? extglobArms(segment, i + 1, inner, c) : null;
+      // A whole-segment extglob with an empty body is the literal text (`@()`).
+      const emptyWhole = group && type === null && i === 0 && group.close === segment.length - 1 &&
+        c !== '!' && group.arms.every((a) => a === '');
+      if (group && !emptyWhole) {
+        const j = group.close;
+        const rest = segment.slice(j + 1);
+        // Only a negative extglob reads the continuation; building it for every group
+        // would compile the rest of the segment once per group.
+        const needsTail = c === '!' || group.arms.some((a) => a.includes('!('));
+        const restTail = needsTail ? globSource(rest, false, tail, depth, type).src + tail : '';
+        const guarded = atStart && i === 0;
+        const parts = group.arms.map((a) => globSource(a, false, c === '!' ? '' : restTail, inner, c));
+        u ||= parts.some((p) => p.u);
+        const open = parts.map((p) => p.src).join('|');
+        const first = guarded ? parts.map((p) => startGuard(p.src) + p.src).join('|') : open;
+        if (c === '!') {
+          src += `(?:(?!(?:${open})${restTail}$)${guarded ? '(?!\\.)' : ''}[^/]*?)`;
+        } else if ((c === '+' || c === '*') && first !== open) {
+          src += `(?:(?:${first})(?:${open})*?)${c === '*' ? '?' : ''}`;
+        } else {
+          src += `(?:${first})${c === '@' ? '' : c}`;
         }
-        if (j < segment.length) {
-          arms.push(segment.slice(from, j));
-          const guarded = atStart && i === 0;
-          const parts = arms.map((a) => globSource(a, false));
-          u ||= parts.some((p) => p.u);
-          const open = parts.map((p) => p.src).join('|');
-          const first = guarded ? parts.map((p) => startGuard(p.src) + p.src).join('|') : open;
-          if (c === '!') {
-            const rest = globSource(segment.slice(j + 1), false);
-            src += `(?:(?!(?:${open})${rest.src}$)${guarded ? '(?!\\.)' : ''}[^/]*?)`;
-          } else if ((c === '+' || c === '*') && first !== open) {
-            src += `(?:(?:${first})(?:${open})*?)${c === '*' ? '?' : ''}`;
-          } else {
-            src += `(?:${first})${c === '@' ? '' : c}`;
-          }
-          magic = true;
-          i = j;
-          continue;
-        }
+        magic = true;
+        i = j;
+        continue;
       }
       if (c === '*') {
         while (segment[i + 1] === '*') i++;
@@ -3661,6 +3722,11 @@ function isPathSeparator(code) {
         magic ||= classLiteral === null;
         u ||= unicode;
         i += consumed - 1;
+      } else if (c === '[') {
+        // An unclosed class: a literal `[`, and no extglob after it in this segment.
+        src += escapeRe(c);
+        literal += c;
+        inOpenClass = true;
       } else {
         src += escapeRe(c);
         literal += c;
@@ -3789,9 +3855,14 @@ function isPathSeparator(code) {
     }
     return null;
   }
+  // Literal `{` / `}` and NUL around brace expansion: NUL is escaped first, so a marker
+  // can never be confused with the pattern's own text.
+  const ESC_NUL = '\0z';
+  const unescapeBraces = (s) => s.replace(/\0([zoc])/g, (_, k) => k === 'z' ? '\0' : k === 'o' ? '{' : '}');
   function matchGlob(path, pattern, win) {
     validateString(path, 'path');
     validateString(pattern, 'pattern');
+    if (pattern.length > 65536) throw new TypeError('pattern is too long');
     if (pattern === '') return path === '';
     const split = (p) => win && /^\/\/[^/]+/.test(p) ? ['', ...p.split(/\/+/)] : p.split(/\/+/);
     const drive = (s) => win && typeof s === 'string' && /^[a-z]:$/i.test(s);
@@ -3799,19 +3870,32 @@ function isPathSeparator(code) {
     const file = raw.slice();
     foldSegments(file, win, false);
     const slashed = pattern.replace(/\\/g, '/');
-    const expanded = /\{(?:(?!\{).)*\}/.test(slashed) ?
-      expandBraces(slashed.startsWith('{}') ? ESC_OPEN + ESC_CLOSE + slashed.slice(2) : slashed, true)
-        .map((s) => s.replaceAll(ESC_OPEN, '{').replaceAll(ESC_CLOSE, '}')) : [slashed];
+    let expanded = [slashed];
+    if (/\{(?:(?!\{).)*\}/.test(slashed)) {
+      const escaped = slashed.replace(/\0/g, ESC_NUL);
+      expanded = expandBraces(escaped.startsWith('{}') ? ESC_OPEN + ESC_CLOSE + escaped.slice(2) : escaped, true)
+        .map(unescapeBraces);
+    }
     for (const parts of preprocess([...new Set(expanded)].map(split), win)) {
       const compiled = parts.map((s) => {
         if (s === '**') return GLOBSTAR;
         const { src, literal, u } = globSource(s, true);
         return literal ?? new RegExp(`^${src}$`, u ? 'u' : '');
       });
-      if (drive(raw[0]) && drive(compiled[0]) && compiled[0].toLowerCase() === raw[0].toLowerCase()) {
-        compiled[0] = raw[0];
+      // win32 roots: `//?/C:` is the drive `C:`, and drives compare without case.
+      let fileStart = 0, patternStart = 0;
+      if (win) {
+        if (parts[0] === '' && parts[1] === '' && parts[2] === '?' && drive(compiled[3])) compiled[2] = '?';
+        const unc = (p) => p[0] === '' && p[1] === '' && p[2] === '?' && drive(p[3]);
+        const fdi = drive(raw[0]) ? 0 : unc(raw) ? 3 : -1;
+        const pdi = drive(compiled[0]) ? 0 : unc(compiled) ? 3 : -1;
+        if (fdi >= 0 && pdi >= 0 && raw[fdi].toLowerCase() === compiled[pdi].toLowerCase()) {
+          compiled[pdi] = raw[fdi];
+          fileStart = fdi;
+          patternStart = pdi;
+        }
       }
-      if (matchParts(file, compiled)) return true;
+      if (matchParts(file.slice(fileStart), compiled.slice(patternStart))) return true;
     }
     return false;
   }
@@ -3819,14 +3903,22 @@ function isPathSeparator(code) {
 })();
 
 // An ES module namespace over a CommonJS module object: its keys plus `default`, sorted,
-// on a null prototype, tagged `Module` and not extensible.
+// on a null prototype, tagged `Module`, not extensible, and refusing writes, redefinitions
+// and deletions of its exports as a module namespace object does.
 function __esmNamespace(module) {
   const ns = Object.create(null);
   for (const key of [...Object.keys(module), 'default'].sort()) {
-    ns[key] = key === 'default' ? module : module[key];
+    const value = key === 'default' ? module : module[key];
+    Object.defineProperty(ns, key, { value, writable: true, enumerable: true, configurable: false });
   }
   Object.defineProperty(ns, Symbol.toStringTag, { value: 'Module' });
-  return Object.preventExtensions(ns);
+  Object.preventExtensions(ns);
+  return new Proxy(ns, {
+    set: () => false,
+    defineProperty: () => false,
+    deleteProperty: (target, key) => !Object.hasOwn(target, key),
+    setPrototypeOf: (target, proto) => proto === null,
+  });
 }
 const __nodePathNamespaces = { posix: undefined, win32: undefined };
 
@@ -4133,11 +4225,11 @@ const __memDispatch = {
   array_unshift: (arr, value) => { if (Array.isArray(arr)) arr.unshift(value); },
   // The host join owns element conversion (nested arrays, nullish elements) and the
   // separator's: an undefined one is ",", not "undefined".
-  array_join: (arr, separator) => {
-    if (Array.isArray(arr)) return arr.join(separator);
-    // Another object's one-argument `join` (a path module value): its own method.
+  array_join: (arr, ...separator) => {
+    if (Array.isArray(arr)) return arr.join(...separator);
+    // Another object's `join` with at most one argument (a path module value): its own method.
     return arr !== null && typeof arr === 'object' && typeof arr.join === 'function'
-      ? arr.join(separator) : '';
+      ? arr.join(...separator) : '';
   },
   array_index_of: (arr, value) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value); },
   array_includes: (arr, value) => { if (!Array.isArray(arr)) return 0; return arr.includes(value) ? 1 : 0; },
@@ -4991,13 +5083,13 @@ const __memDispatch = {
   path_win32_namespace: () => (__nodePathNamespaces.win32 ??= __esmNamespace(__nodePath.win32)),
   path_sep: () => __nodePath.sep,
   path_delimiter: () => __nodePath.delimiter,
-  path_join: (a, b) => __nodePath.join(a, b),
+  path_join: (...parts) => __nodePath.join(...parts),
   path_dirname: (p) => __nodePath.dirname(p),
   path_basename: (p, ext) => __nodePath.basename(p, ext),
   path_extname: (p) => __nodePath.extname(p),
-  path_resolve: (p) => __nodePath.resolve(p),
-  // One step of a multi-argument `resolve`: its result is absolute, so the next step
-  // and the final `path_resolve` keep it.
+  path_resolve: (...parts) => __nodePath.resolve(...parts),
+  // `join` and `resolve` take every operand of the call (`path_operands` in
+  // `emit/expr/url_process_path.rs`); a `resolve` step outside one is resolved alone.
   path_resolve_join: (a, b) => __nodePath.resolve(a, b),
   path_is_absolute: (p) => __nodePath.isAbsolute(p),
   path_normalize: (p) => __nodePath.normalize(p),
@@ -5006,7 +5098,7 @@ const __memDispatch = {
   path_format: (o) => __nodePath.format(o),
   path_to_namespaced_path: (p) => __nodePath.toNamespacedPath(p),
   path_matches_glob: (p, pattern) => __nodePath.matchesGlob(p, pattern),
-  path_win32_join: (a, b) => __nodePath.win32.join(a, b),
+  path_win32_join: (...parts) => __nodePath.win32.join(...parts),
   path_win32_dirname: (p) => __nodePath.win32.dirname(p),
   path_win32_basename: (p) => __nodePath.win32.basename(p),
   path_win32_basename_ext: (p, ext) => __nodePath.win32.basename(p, ext),
@@ -5016,7 +5108,7 @@ const __memDispatch = {
   path_win32_parse: (p) => __nodePath.win32.parse(p),
   path_win32_format: (o) => __nodePath.win32.format(o),
   path_win32_relative: (from, to) => __nodePath.win32.relative(from, to),
-  path_win32_resolve: (p) => __nodePath.win32.resolve(p),
+  path_win32_resolve: (...parts) => __nodePath.win32.resolve(...parts),
   path_win32_resolve_join: (a, b) => __nodePath.win32.resolve(a, b),
   path_win32_to_namespaced_path: (p) => __nodePath.win32.toNamespacedPath(p),
   path_win32_matches_glob: (p, pattern) => __nodePath.win32.matchesGlob(p, pattern),

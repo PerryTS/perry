@@ -137,3 +137,69 @@ console.log([j("a", "b"), join(...args), win32.sep, (w as any)["join"]("C:\\x", 
         )
     );
 }
+
+// Review cases (#15325): minimatch's class-aware extglob arms, `//?/C:` drive roots,
+// literal NUL-o text around braces, a nested negative extglob's continuation, UTF-16
+// wildcard width, brace-expansion's limits, the pattern length check and a regular
+// expression too large; n-ary `join`/`resolve` (one call over every operand, which run
+// first); zero-argument `join()` on a namespace value; a path function as an array
+// callback. Expected output is Node's.
+#[test]
+fn review_cases_answer_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+import * as path from "path";
+let marked = 0;
+const mark = (v: string) => { marked++; return v; };
+const w = path.win32;
+const glob = [
+  path.matchesGlob("a|b", "@(a[|]b|c)"), path.matchesGlob("|", "@([|]|x)"),
+  path.win32.matchesGlob("//?/C:/a.txt", "c:/*.txt"), path.matchesGlob("x\0oA", "x\0o{A,B}"),
+  path.matchesGlob("wxb", "@(w!(x)|q)b"), path.matchesGlob("wyb", "@(w!(x)|q)b"),
+  path.matchesGlob("\u{1F600}", "?"), path.matchesGlob("9223372036854775807", "{9223372036854775807..9223372036854775807}"),
+  path.matchesGlob("99999", "{1..200000}"), path.matchesGlob("150000", "{1..200000}"), path.matchesGlob("@()", "@()"),
+];
+console.log(glob.join("|"));
+console.log(JSON.stringify([path.join("", "", "/b"), path.win32.join("", "", "/b"), path.win32.resolve("C:/base", "D:tmp", "C:leaf"), path.join(), w.join()]));
+console.log(path.resolve(1 as any, "x", mark("/ok")), marked);
+console.log(["a/../b", "c/./d"].map(path.normalize).join(","));
+let tooLong = "";
+try { path.matchesGlob("a", "x".repeat(65537)); } catch (e: any) { tooLong = e.name + ": " + e.message; }
+let tooLarge = "";
+try { path.matchesGlob("bbb", "!(a)".repeat(16)); } catch (e: any) { tooLarge = e.name; }
+console.log(tooLong, tooLarge);
+async function inAsync(): Promise<string> {
+  return JSON.stringify([path.join("", "", "/b"), path.win32.resolve("C:/base", "D:tmp", "C:leaf"), w.join()]);
+}
+inAsync().then((v) => console.log("async " + v));
+"#
+        ),
+        concat!(
+            "true|true|true|true|false|true|false|false|true|false|true\n",
+            r#"["/b","\\b","C:\\base\\leaf",".","."]"#,
+            "\n/ok 1\nb,c/d\nTypeError: pattern is too long SyntaxError\n",
+            r#"async ["/b","C:\\base\\leaf","."]"#
+        )
+    );
+}
+
+// `import * as path` observed as an object is an ES module namespace: writes,
+// redefinitions and deletions of its exports fail. Expected output is Node's.
+#[test]
+fn path_namespace_view_rejects_export_writes() {
+    assert_eq!(
+        super::run_web_source_then(
+            "console.log(1);",
+            r#"const ns = __memDispatch.path_namespace();
+console.log([Reflect.set(ns, "sep", "!"), ns.sep, Reflect.deleteProperty(ns, "sep"),
+  Reflect.defineProperty(ns, "sep", { value: "!" }), Object.isExtensible(ns), Object.isFrozen(ns),
+  JSON.stringify(Object.getOwnPropertyDescriptor(ns, "sep")), Object.keys(ns).slice(0, 4).join(","),
+  ns === __memDispatch.path_namespace(), ns.default === __memDispatch.path_module()].join("|"));"#
+        ),
+        concat!(
+            "1\n",
+            r#"false|/|false|false|false|false|{"value":"/","writable":true,"enumerable":true,"configurable":false}|_makeLong,basename,default,delimiter|true|true"#
+        )
+    );
+}
