@@ -620,11 +620,11 @@ fn a_field_read_call_is_in_the_floor_by_its_own_key() {
             "{c:?}"
         );
     }
-    assert!(of("this.at(r * 16)").in_floor);
-    assert!(of("this.at(move & 127)").in_floor);
+    assert!(of("at(r * 16)").in_floor);
+    assert!(of("at(move & 127)").in_floor);
     // `[-16, 111]` leaves the floor below; `[15, 56]` is inside.
-    assert!(!of("this.at((move & 127)").in_floor);
-    assert!(of("this.at(this.ep + 16").in_floor);
+    assert!(!of("at((move & 127)").in_floor);
+    assert!(of("at(this.ep + 16").in_floor);
 }
 
 #[test]
@@ -633,7 +633,7 @@ fn a_key_past_the_floor_is_not_in_it_unless_sabotaged() {
     let past = |cfg| {
         b1(&src, cfg)
             .into_iter()
-            .find(|(t, _)| t.starts_with("this.at(this.ep + 100"))
+            .find(|(t, _)| t.starts_with("at(this.ep + 100"))
             .expect("the call is a field read")
             .1
             .in_floor
