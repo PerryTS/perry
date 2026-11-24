@@ -91,6 +91,23 @@ f().then((v) => console.log("async " + v));
     );
 }
 
+// A static field reads back as a data property.
+// Expected output is Node's.
+#[test]
+fn get_own_property_descriptor_of_a_static_field_is_a_data_descriptor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class C { static x = 1; }
+C.x = 3;
+const d: any = Object.getOwnPropertyDescriptor(C, "x");
+console.log([d.value, d.writable, d.enumerable, d.configurable, "get" in d].join(","));
+"#
+        ),
+        "3,true,true,true,false"
+    );
+}
+
 // `Object.defineProperty` and `Object.defineProperties` accessors that are Perry
 // closures run with the receiver as `this`. Expected output is Node's.
 #[test]
