@@ -1,0 +1,1 @@
+`--target web`: an array's `keys()`, `entries()` and `values()` return their iterators instead of `undefined` (so `[...a.keys()]` is no longer empty), and an array literal with a hole (`[1, , 3]`) keeps its elements and length (#15291).

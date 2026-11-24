@@ -178,7 +178,7 @@ impl<'a> Gen<'a> {
     /// `v[Symbol.iterator]()`, then `.next()` on the result and on `v`
     /// itself, then `.value`.
     pub(crate) fn iterate(&mut self, v: NodeId) -> NodeId {
-        self.iterate_with(v, false)
+        self.iterate_with(v, false).0
     }
 
     /// `iterate` by a consumer that can stop before the iterator is done:
@@ -189,11 +189,16 @@ impl<'a> Gen<'a> {
     /// iterator (IteratorClose, ECMA-262 7.4.11): `return` is called on it,
     /// a protocol call as the for-of record's close is (`gen/glue.rs`).
     pub(crate) fn iterate_closed(&mut self, v: NodeId) -> NodeId {
+        self.iterate_closed_with_iterator(v).0
+    }
+
+    /// `iterate_closed`, with the iterator `v[Symbol.iterator]()` returned.
+    pub(crate) fn iterate_closed_with_iterator(&mut self, v: NodeId) -> (NodeId, NodeId) {
         let close = self.m.reach_iter_close;
         self.iterate_with(v, close)
     }
 
-    fn iterate_with(&mut self, v: NodeId, close: bool) -> NodeId {
+    fn iterate_with(&mut self, v: NodeId, close: bool) -> (NodeId, NodeId) {
         let out = self.tmp("iterated");
         let ik = self.m.iter_key();
         self.m.cons(v, Cons::Load { key: ik, dst: out });
@@ -228,7 +233,7 @@ impl<'a> Gen<'a> {
                 self.m.cons(recv, Cons::MCall { key: ra, call: rc });
             }
         }
-        out
+        (out, it)
     }
 
     /// The consumer's read of `done` on the step results in `result`

@@ -239,22 +239,13 @@ impl<'a> FuncEmitCtx<'a> {
                         return true;
                     }
                     "Date" => {
-                        if let Some(arg) = args.first() {
-                            self.emit_expr(func, arg);
-                        } else {
-                            func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
-                        }
-                        self.emit_frame_begin(func, 1);
-                        func.instruction(&Instruction::LocalSet(self.temp_local));
-                        self.emit_slot_addr(func, 0);
-                        func.instruction(&Instruction::LocalGet(self.temp_local));
-                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                            offset: 0,
-                            align: 3,
-                            memory_index: 0,
-                        }));
                         // Same bridge as `Expr::DateNew`; see date_error.rs.
-                        self.emit_memcall(func, "date_new_val", args.len().min(1) as u32);
+                        let argc = args.len() as u32;
+                        self.emit_frame_begin(func, argc);
+                        for (slot, arg) in (0..).zip(args) {
+                            self.emit_store_arg(func, slot, arg);
+                        }
+                        self.emit_memcall(func, "date_new_val", argc);
                         return true;
                     }
                     // `new Array()` / `new Array(n)` / `new Array(a, b, ...)`.
