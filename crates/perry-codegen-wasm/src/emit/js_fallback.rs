@@ -1269,12 +1269,22 @@ impl WasmModuleEmitter {
                 }
                 format!("fromJsValue({closure})")
             }
+            // The function's one value, as the WASM arm in `emit/expr/classes.rs` makes it:
+            // the raw export takes i64 parameters, so a JS caller cannot pass it numbers.
             Expr::FuncRef(id) => {
-                if let Some(&func_idx) = self.func_map.get(id) {
-                    format!("fromJsValue(wasmInstance.exports.__wasm_func_{})", func_idx)
-                } else {
-                    "u64ToF64(TAG_UNDEFINED)".to_string()
-                }
+                let Some(&func_idx) = self.func_map.get(id) else {
+                    return "u64ToF64(TAG_UNDEFINED)".to_string();
+                };
+                let table_idx = self
+                    .func_to_table_idx
+                    .get(&func_idx)
+                    .copied()
+                    .unwrap_or(func_idx);
+                format!(
+                    "fromJsValue(__memDispatch.function_value({}, {}))",
+                    table_idx,
+                    self.fn_proto_code(func_idx)
+                )
             }
             Expr::New {
                 class_name, args, ..
@@ -1363,6 +1373,24 @@ impl WasmModuleEmitter {
                 "fromJsValue(__memDispatch.rt_arrayIterationPatched())".to_string()
             }
             _ => {
+                // A folded builtin-method node (`a.map(f)`, `m.get(k)`, ...) is the call
+                // `receiver.method(...args)`, made as an unfolded method call is.
+                if let Some(call) = perry_hir::folded_call::folded_call(expr) {
+                    let receiver = match call.receiver {
+                        perry_hir::folded_call::Receiver::Expr(e) => self.emit_js_expr(e, locals),
+                        perry_hir::folded_call::Receiver::Local(id) => {
+                            self.emit_js_expr(&Expr::LocalGet(id), locals)
+                        }
+                    };
+                    let args_js: Vec<String> =
+                        call.args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+                    return format!(
+                        "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), {}), [{}]))",
+                        receiver,
+                        js_string_literal(call.method),
+                        host_args(&args_js)
+                    );
+                }
                 // Fallback: return undefined for unhandled expressions
                 "u64ToF64(TAG_UNDEFINED)".to_string()
             }
