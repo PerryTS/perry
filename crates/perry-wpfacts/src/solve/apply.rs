@@ -214,6 +214,14 @@ impl Model {
                 self.store_region = None;
             }
             Cons::Call { call } => {
+                // RTREAD14: the runtime's message event is born when a value
+                // first reaches a handler field it reads by name.
+                if !self.runtime_event_born
+                    && toks.len() > 0
+                    && self.runtime_global_calls.iter().any(|&(_, c)| c == call)
+                {
+                    self.with_b(|m| builtins::runtime_global_event(m, call));
+                }
                 for &t in toks {
                     self.prov_tok(pv, t);
                     self.call_tok(call, t, None);

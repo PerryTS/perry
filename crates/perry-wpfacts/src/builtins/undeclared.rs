@@ -125,9 +125,10 @@ pub fn global_store_escapes(m: &mut Model, t: Tok, key: Key) -> bool {
         return true;
     };
     let name = m.atoms[a as usize].clone();
-    if members::global_runtime_reads(&name) {
-        return true;
-    }
+    // A name the runtime reads at run time (`onmessage`,
+    // `RUNTIME_GLOBAL_READS`) is the program's field too: the runtime's
+    // whole use of it is the handler call `Gen::runtime_global_handlers`
+    // hangs on that field (RTREAD14), no escape.
     // The global object's self-reference (`globalThis`, `global`): a bare
     // read of the name is the global object, so `tok_store` decides what a
     // store there hands on (`global_self_key`).

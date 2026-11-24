@@ -132,18 +132,16 @@ fn e20g_named_global_reads_back_the_store() {
 #[test]
 fn e20g_runtime_read_globals_still_sink() {
     let mut bad = Vec::new();
-    // Owner 11-24: the runtime reads `onmessage` at run time and calls it
-    // (worker inbox, channel pump), so the stored value escapes when stored,
-    // under the E20 store's reason; the realm is held.
+    // Owner 11-24 + Phase B 11-23 (RTREAD14): the runtime reads `onmessage`
+    // only to call a callable value with its message event
+    // (`Gen::runtime_global_handlers`); a non-callable value is never
+    // touched. So the stored N is the program's: no escape, no realm hold.
     let src = program("(globalThis as any).onmessage = n;");
-    assert!(held(&src), "onmessage: the runtime reads it, realm held");
+    assert!(!held(&src), "onmessage: the realm is not held");
     let pf = facts(&src);
     let esc = escape_of(&pf, "v");
-    assert!(
-        esc.as_deref().is_some_and(|e| e.contains("E20")),
-        "onmessage: the stored N must escape under the E20 store, got {esc:?}\n{}",
-        pf.dump_text()
-    );
+    assert!(esc.is_none(), "onmessage: the stored N must not escape, got {esc:?}\n{}", pf.dump_text());
+    assert!(v_proven(&src), "onmessage: n.v proven");
     for store in [
         "(globalThis as any).console = n;",
         "(globalThis as any).process = n;",
@@ -154,6 +152,70 @@ fn e20g_runtime_read_globals_still_sink() {
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// RTREAD14 (owner 11-23 Phase B, 11-24): a worker's handler stored under
+/// the run-time-read name `onmessage` is called by the runtime with `this` =
+/// the global object and its MessageEvent, whose `data` is the structured
+/// clone (`Gen::runtime_global_handlers`, the W-HOST model): the handler runs,
+/// nothing escapes, the realm is not held, and a typed-array construction
+/// elsewhere (`new Float32Array(buffer)` reads `ArrayBuffer.prototype
+/// [@@iterator]`) stays exact and its reads proven.
+#[test]
+fn e20g_worker_onmessage_calls_the_handler() {
+    for store in [
+        "(globalThis as any).onmessage",
+        "(globalThis as any)[k]",
+    ] {
+        let src = format!(
+            "class Ctx {{ w: any = 1; }}
+            class N {{ v = 1; }}
+            const ctx = new Ctx();
+            const k: any = process.argv[2];
+            function tables(): N {{
+                const buffer = new ArrayBuffer(16);
+                const floatView = new Float32Array(buffer);
+                const uintView = new Uint32Array(buffer);
+                floatView[0] = 1.5;
+                const n = new N();
+                n.v = uintView[0];
+                return n;
+            }}
+            {store} = function (this: any, event: any) {{ ctx.w = event.data; ctx.w = this; }};
+            const n = tables();
+            console.log(/*A*/ n.v, ctx.w);"
+        );
+        let mut bad = Vec::new();
+        if held(&src) {
+            bad.push("realm held: the runtime only calls the handler".to_string());
+        }
+        if !v_proven(&src) {
+            bad.push("n.v after the typed-array tables not proven".to_string());
+        }
+        let pf = facts(&src);
+        let esc = escape_of(&pf, "w");
+        if esc.is_some() {
+            bad.push(format!("ctx must not escape, got {esc:?}"));
+        }
+        // The handler ran with the runtime event: `ctx.w` holds the clone
+        // tree (builtin objects), never unknown.
+        let w = field_kind(&pf, "w");
+        if w.top || w.builtin_objs == 0 {
+            bad.push(format!("ctx.w must hold the message clone, not unknown: {w:?}"));
+        }
+        assert!(bad.is_empty(), "{store}: {}\n{}", bad.join("\n"), pf.dump_text());
+    }
+}
+
+/// The kind of field `key` of the main.ts template that has it.
+fn field_kind(pf: &ProgramFacts, key: &str) -> crate::derive::KindFact {
+    pf.templates
+        .iter()
+        .filter(|t| t.display.starts_with("main.ts"))
+        .find_map(|t| t.fields.iter().find(|f| f.key == key))
+        .unwrap_or_else(|| panic!("no main.ts template with field {key}\n{}", pf.dump_text()))
+        .kind
+        .clone()
 }
 
 /// Is the first store site of `key` after `/*S*/` proven?

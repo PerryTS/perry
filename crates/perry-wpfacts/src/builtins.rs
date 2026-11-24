@@ -53,7 +53,8 @@ pub use native_protocol::{
     native_parent_keys, native_parent_summarized, native_parent_value, native_proto,
     native_writers_why, native_written, native_written_by, note_foreign_holds, note_global_in_top,
     note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write,
-    note_realm_held, program_global_fn, require_parts, settle_native_given, GlobalAnyRead,
+    note_realm_held, program_global_fn, require_parts, runtime_global_call, settle_native_given,
+    GlobalAnyRead,
     WriteValue,
 };
 use native_protocol::{native_method, native_skips, opaque_written};
@@ -511,6 +512,53 @@ fn all_arg_values(m: &mut Model, call: CallId) -> NodeId {
         m.cons(s, Cons::Load { key: ek, dst: out });
     }
     out
+}
+
+/// RTREAD14: the event the runtime calls a handler it reads by global name
+/// with (`Gen::runtime_global_handlers`), born at that call when a value
+/// first reaches the handler's field: a MessageEvent (perry-runtime
+/// event_target/message_event.rs `delivery_with_ports`, [[Prototype]]
+/// %MessageEvent.prototype%, no own property) whose [[data]] is the
+/// structured clone of what the parent posted (perry-stdlib
+/// channel_pump.rs `deserialize_message`; thread/clone_write.rs Message
+/// mode): fresh ordinary objects and arrays, Map, Set, Date, RegExp, Error,
+/// ArrayBuffer and typed arrays, each holding the others and any primitive;
+/// never a program object, function or prototype. The same model as the
+/// main side's Worker message (`Gen::worker_host`).
+pub(crate) fn runtime_global_event(m: &mut Model, call: CallId) {
+    let Some(ev) = m.runtime_event else {
+        return;
+    };
+    m.runtime_event_born = true;
+    let mut tree = Vec::new();
+    for what in [
+        "json",
+        "Array",
+        "Map",
+        "Set",
+        "Date",
+        "RegExp",
+        "Error",
+        "ArrayBuffer",
+        "TypedArray",
+    ] {
+        tree.push(site_tmpl(m, call, what));
+    }
+    for &o in &tree {
+        let fa = m.field_any(o);
+        m.add_prim(fa, prim::ALL);
+        for &x in &tree {
+            m.add_tok(fa, x);
+        }
+    }
+    let mev = site_tmpl(m, call, "MessageEvent.prototype");
+    let da = worker_slot_atom(m, "data");
+    let data = m.field_r(mev, da);
+    m.add_prim(data, prim::ALL);
+    for &x in &tree {
+        m.add_tok(data, x);
+    }
+    m.add_tok(ev, mev);
 }
 
 /// A per-call-site template (solve-time births: promises, arrays …).

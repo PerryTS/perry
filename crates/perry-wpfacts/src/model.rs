@@ -3157,6 +3157,13 @@ pub struct Model {
     pub global_any_reads: Vec<(crate::builtins::GlobalAnyRead, NodeId)>,
     /// G2: every `new K(...)` of a literal global name `K`.
     pub global_any_news: Vec<(String, u32)>,
+    /// RTREAD14: the runtime's call of each global it reads by name
+    /// (`builtins::runtime_global_call`).
+    pub runtime_global_calls: Vec<(String, u32)>,
+    /// RTREAD14: the argument node of those calls (the runtime's message
+    /// event) and whether its event is born yet (`runtime_global_event`).
+    pub runtime_event: Option<NodeId>,
+    pub runtime_event_born: bool,
     /// G2: the realm navigator's [[Prototype]] was linked to what the
     /// any-key stores' `prototype` holds (perry-runtime navigator.rs:119
     /// reads the live `Navigator` at the first `navigator` read).
