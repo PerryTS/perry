@@ -185,8 +185,9 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     *byte_end = span.hi.0;
                 }
             }
+            // An update stands at its member token, as its read and store.
             (
-                ast::Expr::Update(_),
+                ast::Expr::Update(update),
                 Expr::PropertyUpdate {
                     byte_offset,
                     byte_end,
@@ -198,7 +199,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     ..
                 },
             ) => {
-                *byte_offset = span.lo.0;
+                *byte_offset = crate::lower::update_token(update);
                 if dump {
                     *byte_end = span.hi.0;
                 }
