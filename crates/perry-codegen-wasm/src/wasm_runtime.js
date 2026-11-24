@@ -2224,6 +2224,1594 @@ function __iterableToArray(v) {
 // A tagged template's strings array per call site, keyed by the HIR site id's halves.
 const __taggedTemplates = new Map();
 
+// `node:path` for the web target: `posix` with `posix.win32`, as Node.js v26.12.1
+// has them. The path functions are lib/path.js from Node.js, with primordials
+// spelled as method calls; `matchGlob` is Perry's own. The browser has no
+// working directory, so `resolve` and `relative` resolve against what this
+// runtime's `process.cwd()` answers, and win32 sees that directory as `\`.
+//
+// lib/path.js carries this notice:
+//
+// Copyright Joyent, Inc. and other Node contributors.
+//
+// Permission is hereby granted, free of charge, to any person obtaining a
+// copy of this software and associated documentation files (the
+// "Software"), to deal in the Software without restriction, including
+// without limitation the rights to use, copy, modify, merge, publish,
+// distribute, sublicense, and/or sell copies of the Software, and to permit
+// persons to whom the Software is furnished to do so, subject to the
+// following conditions:
+//
+// The above copyright notice and this permission notice shall be included
+// in all copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS
+// OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
+// MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN
+// NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM,
+// DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR
+// OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+// USE OR OTHER DEALINGS IN THE SOFTWARE.
+const __nodePath = (() => {
+  const CHAR_UPPERCASE_A = 65, CHAR_LOWERCASE_A = 97, CHAR_UPPERCASE_Z = 90,
+    CHAR_LOWERCASE_Z = 122, CHAR_DOT = 46, CHAR_FORWARD_SLASH = 47,
+    CHAR_BACKWARD_SLASH = 92, CHAR_COLON = 58, CHAR_QUESTION_MARK = 63;
+  const cwd = () => __memDispatch.process_cwd();
+  // Node's ERR_INVALID_ARG_TYPE message, for the value kinds a path argument can be.
+  function invalidArgType(name, expected, value) {
+    let received;
+    if (value == null) {
+      received = ` Received ${value}`;
+    } else if (typeof value === 'function') {
+      received = ` Received function ${value.name}`;
+    } else if (typeof value === 'object') {
+      received = value.constructor?.name ?
+        ` Received an instance of ${value.constructor.name}` : ' Received [Object: null prototype]';
+    } else {
+      let shown = typeof value === 'bigint' ? `${value}n` : String(value);
+      if (shown.length > 28) shown = `${shown.slice(0, 25)}...`;
+      if (typeof value === 'string') shown = `'${shown}'`;
+      received = ` Received type ${typeof value} (${shown})`;
+    }
+    const error = new TypeError(`The "${name}" argument must be of type ${expected}.${received}`);
+    error.code = 'ERR_INVALID_ARG_TYPE';
+    return error;
+  }
+  function validateString(value, name) {
+    if (typeof value !== 'string') throw invalidArgType(name, 'string', value);
+  }
+  function validateObject(value, name) {
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) throw invalidArgType(name, 'object', value);
+  }
+function isPathSeparator(code) {
+    return code === CHAR_FORWARD_SLASH || code === CHAR_BACKWARD_SLASH;
+  }
+  function isPosixPathSeparator(code) {
+    return code === CHAR_FORWARD_SLASH;
+  }
+  const WINDOWS_RESERVED_NAMES = [
+    'CON', 'PRN', 'AUX', 'NUL',
+    'COM1', 'COM2', 'COM3', 'COM4', 'COM5', 'COM6', 'COM7', 'COM8', 'COM9',
+    'LPT1', 'LPT2', 'LPT3', 'LPT4', 'LPT5', 'LPT6', 'LPT7', 'LPT8', 'LPT9',
+    'COM\xb9', 'COM\xb2', 'COM\xb3',
+    'LPT\xb9', 'LPT\xb2', 'LPT\xb3',
+  ];
+  function isWindowsReservedName(path, colonIndex) {
+    const devicePart = (path.slice(0, colonIndex)).toUpperCase();
+    return WINDOWS_RESERVED_NAMES.includes(devicePart);
+  }
+  function isWindowsDeviceRoot(code) {
+    return (code >= CHAR_UPPERCASE_A && code <= CHAR_UPPERCASE_Z) ||
+           (code >= CHAR_LOWERCASE_A && code <= CHAR_LOWERCASE_Z);
+  }
+  function normalizeString(path, allowAboveRoot, separator, isPathSeparator) {
+    let res = '';
+    let lastSegmentLength = 0;
+    let lastSlash = -1;
+    let dots = 0;
+    let code = 0;
+    for (let i = 0; i <= path.length; ++i) {
+      if (i < path.length)
+        code = path.charCodeAt(i);
+      else if (isPathSeparator(code))
+        break;
+      else
+        code = CHAR_FORWARD_SLASH;
+      if (isPathSeparator(code)) {
+        if (lastSlash === i - 1 || dots === 1) {
+        } else if (dots === 2) {
+          if (res.length < 2 || lastSegmentLength !== 2 ||
+              res.charCodeAt(res.length - 1) !== CHAR_DOT ||
+              res.charCodeAt(res.length - 2) !== CHAR_DOT) {
+            if (res.length > 2) {
+              const lastSlashIndex = res.length - lastSegmentLength - 1;
+              if (lastSlashIndex === -1) {
+                res = '';
+                lastSegmentLength = 0;
+              } else {
+                res = res.slice(0, lastSlashIndex);
+                lastSegmentLength =
+                  res.length - 1 - res.lastIndexOf(separator);
+              }
+              lastSlash = i;
+              dots = 0;
+              continue;
+            } else if (res.length !== 0) {
+              res = '';
+              lastSegmentLength = 0;
+              lastSlash = i;
+              dots = 0;
+              continue;
+            }
+          }
+          if (allowAboveRoot) {
+            res += res.length > 0 ? `${separator}..` : '..';
+            lastSegmentLength = 2;
+          }
+        } else {
+          if (res.length > 0)
+            res += `${separator}${path.slice(lastSlash + 1, i)}`;
+          else
+            res = path.slice(lastSlash + 1, i);
+          lastSegmentLength = i - lastSlash - 1;
+        }
+        lastSlash = i;
+        dots = 0;
+      } else if (code === CHAR_DOT && dots !== -1) {
+        ++dots;
+      } else {
+        dots = -1;
+      }
+    }
+    return res;
+  }
+  function formatExt(ext) {
+    return ext ? `${ext[0] === '.' ? '' : '.'}${ext}` : '';
+  }
+  function _format(sep, pathObject) {
+    validateObject(pathObject, 'pathObject');
+    const dir = pathObject.dir || pathObject.root;
+    const base = pathObject.base ||
+      `${pathObject.name || ''}${formatExt(pathObject.ext)}`;
+    if (!dir) {
+      return base;
+    }
+    return dir === pathObject.root ? `${dir}${base}` : `${dir}${sep}${base}`;
+  }
+  const forwardSlashRegExp = /\//g;
+  const win32 = {
+    resolve(...args) {
+      let resolvedDevice = '';
+      let resolvedTail = '';
+      let resolvedAbsolute = false;
+      for (let i = args.length - 1; i >= -1; i--) {
+        let path;
+        if (i >= 0) {
+          path = args[i];
+          validateString(path, `paths[${i}]`);
+          if (path.length === 0) {
+            continue;
+          }
+        } else if (resolvedDevice.length === 0) {
+          path = cwd();
+          if (args.length === 0 || ((args.length === 1 && (args[0] === '' || args[0] === '.')) &&
+              isPathSeparator(path.charCodeAt(0)))) {
+            return path.replace(forwardSlashRegExp, '\\');
+          }
+        } else {
+          path = cwd();
+          if (path === undefined ||
+              ((path.slice(0, 2)).toLowerCase() !==
+              resolvedDevice.toLowerCase() &&
+              path.charCodeAt(2) === CHAR_BACKWARD_SLASH)) {
+            path = `${resolvedDevice}\\`;
+          }
+        }
+        const len = path.length;
+        let rootEnd = 0;
+        let device = '';
+        let isAbsolute = false;
+        const code = path.charCodeAt(0);
+        if (len === 1) {
+          if (isPathSeparator(code)) {
+            rootEnd = 1;
+            isAbsolute = true;
+          }
+        } else if (isPathSeparator(code)) {
+          isAbsolute = true;
+          if (isPathSeparator(path.charCodeAt(1))) {
+            let j = 2;
+            let last = j;
+            while (j < len &&
+                   !isPathSeparator(path.charCodeAt(j))) {
+              j++;
+            }
+            if (j < len && j !== last) {
+              const firstPart = path.slice(last, j);
+              last = j;
+              while (j < len &&
+                     isPathSeparator(path.charCodeAt(j))) {
+                j++;
+              }
+              if (j < len && j !== last) {
+                last = j;
+                while (j < len &&
+                       !isPathSeparator(path.charCodeAt(j))) {
+                  j++;
+                }
+                if (j === len || j !== last) {
+                  if (firstPart !== '.' && firstPart !== '?') {
+                    device =
+                      `\\\\${firstPart}\\${path.slice(last, j)}`;
+                    rootEnd = j;
+                  } else {
+                    device = `\\\\${firstPart}`;
+                    rootEnd = 4;
+                  }
+                }
+              }
+            }
+          } else {
+            rootEnd = 1;
+          }
+        } else if (isWindowsDeviceRoot(code) &&
+                    path.charCodeAt(1) === CHAR_COLON) {
+          device = path.slice(0, 2);
+          rootEnd = 2;
+          if (len > 2 && isPathSeparator(path.charCodeAt(2))) {
+            isAbsolute = true;
+            rootEnd = 3;
+          }
+        }
+        if (device.length > 0) {
+          if (resolvedDevice.length > 0) {
+            if (device.toLowerCase() !==
+                resolvedDevice.toLowerCase())
+              continue;
+          } else {
+            resolvedDevice = device;
+          }
+        }
+        if (resolvedAbsolute) {
+          if (resolvedDevice.length > 0)
+            break;
+        } else {
+          resolvedTail =
+            `${path.slice(rootEnd)}\\${resolvedTail}`;
+          resolvedAbsolute = isAbsolute;
+          if (isAbsolute && resolvedDevice.length > 0) {
+            break;
+          }
+        }
+      }
+      resolvedTail = normalizeString(resolvedTail, !resolvedAbsolute, '\\',
+                                     isPathSeparator);
+      return resolvedAbsolute ?
+        `${resolvedDevice}\\${resolvedTail}` :
+        `${resolvedDevice}${resolvedTail}` || '.';
+    },
+    normalize(path) {
+      validateString(path, 'path');
+      const len = path.length;
+      if (len === 0)
+        return '.';
+      let rootEnd = 0;
+      let device;
+      let isAbsolute = false;
+      const code = path.charCodeAt(0);
+      if (len === 1) {
+        return isPosixPathSeparator(code) ? '\\' : path;
+      }
+      if (isPathSeparator(code)) {
+        isAbsolute = true;
+        if (isPathSeparator(path.charCodeAt(1))) {
+          let j = 2;
+          let last = j;
+          while (j < len &&
+                 !isPathSeparator(path.charCodeAt(j))) {
+            j++;
+          }
+          if (j < len && j !== last) {
+            const firstPart = path.slice(last, j);
+            last = j;
+            while (j < len &&
+                   isPathSeparator(path.charCodeAt(j))) {
+              j++;
+            }
+            if (j < len && j !== last) {
+              last = j;
+              while (j < len &&
+                     !isPathSeparator(path.charCodeAt(j))) {
+                j++;
+              }
+              if (j === len || j !== last) {
+                if (firstPart === '.' || firstPart === '?') {
+                  device = `\\\\${firstPart}`;
+                  rootEnd = 4;
+                  const colonIndex = path.indexOf(':');
+                  const possibleDevice = path.slice(4, colonIndex + 1);
+                  if (isWindowsReservedName(possibleDevice, possibleDevice.length - 1)) {
+                    device = `\\\\?\\${possibleDevice}`;
+                    rootEnd = 4 + possibleDevice.length;
+                  }
+                } else if (j === len) {
+                  return `\\\\${firstPart}\\${path.slice(last)}\\`;
+                } else {
+                  device =
+                    `\\\\${firstPart}\\${path.slice(last, j)}`;
+                  rootEnd = j;
+                }
+              }
+            }
+          }
+        } else {
+          rootEnd = 1;
+        }
+      } else {
+        const colonIndex = path.indexOf(':');
+        if (colonIndex > 0) {
+          if (isWindowsDeviceRoot(code) && colonIndex === 1) {
+            device = path.slice(0, 2);
+            rootEnd = 2;
+            if (len > 2 && isPathSeparator(path.charCodeAt(2))) {
+              isAbsolute = true;
+              rootEnd = 3;
+            }
+          } else if (isWindowsReservedName(path, colonIndex)) {
+            device = path.slice(0, colonIndex + 1);
+            rootEnd = colonIndex + 1;
+          }
+        }
+      }
+      let tail = rootEnd < len ?
+        normalizeString(path.slice(rootEnd),
+                        !isAbsolute, '\\', isPathSeparator) :
+        '';
+      if (tail.length === 0 && !isAbsolute)
+        tail = '.';
+      if (tail.length > 0 &&
+          isPathSeparator(path.charCodeAt(len - 1)))
+        tail += '\\';
+      if (!isAbsolute && device === undefined && path.includes(':')) {
+        if (tail.length >= 2 &&
+            isWindowsDeviceRoot(tail.charCodeAt(0)) &&
+            tail.charCodeAt(1) === CHAR_COLON) {
+          return `.\\${tail}`;
+        }
+        let index = path.indexOf(':');
+        do {
+          if (index === len - 1 || isPathSeparator(path.charCodeAt(index + 1))) {
+            return `.\\${tail}`;
+          }
+        } while ((index = path.indexOf(':', index + 1)) !== -1);
+      }
+      const colonIndex = path.indexOf(':');
+      if (isWindowsReservedName(path, colonIndex)) {
+        return `.\\${device ?? ''}${tail}`;
+      }
+      if (device === undefined) {
+        return isAbsolute ? `\\${tail}` : tail;
+      }
+      return isAbsolute ? `${device}\\${tail}` : `${device}${tail}`;
+    },
+    isAbsolute(path) {
+      validateString(path, 'path');
+      const len = path.length;
+      if (len === 0)
+        return false;
+      const code = path.charCodeAt(0);
+      return isPathSeparator(code) ||
+        (len > 2 &&
+        isWindowsDeviceRoot(code) &&
+        path.charCodeAt(1) === CHAR_COLON &&
+        isPathSeparator(path.charCodeAt(2)));
+    },
+    join(...args) {
+      if (args.length === 0)
+        return '.';
+      const path = [];
+      for (let i = 0; i < args.length; ++i) {
+        const arg = args[i];
+        validateString(arg, 'path');
+        if (arg.length > 0) {
+          path.push(arg);
+        }
+      }
+      if (path.length === 0)
+        return '.';
+      const firstPart = path[0];
+      let joined = path.join('\\');
+      let needsReplace = true;
+      let slashCount = 0;
+      if (isPathSeparator(firstPart.charCodeAt(0))) {
+        ++slashCount;
+        const firstLen = firstPart.length;
+        if (firstLen > 1 &&
+            isPathSeparator(firstPart.charCodeAt(1))) {
+          ++slashCount;
+          if (firstLen > 2) {
+            if (isPathSeparator(firstPart.charCodeAt(2)))
+              ++slashCount;
+            else {
+              needsReplace = false;
+            }
+          }
+        }
+      }
+      if (needsReplace) {
+        while (slashCount < joined.length &&
+               isPathSeparator(joined.charCodeAt(slashCount))) {
+          slashCount++;
+        }
+        if (slashCount >= 2)
+          joined = `\\${joined.slice(slashCount)}`;
+      }
+      const parts = [];
+      let part = '';
+      for (let i = 0; i < joined.length; i++) {
+        if (joined[i] === '\\') {
+          if (part) parts.push(part);
+          part = '';
+          while (i + 1 < joined.length && joined[i + 1] === '\\') i++;
+        } else {
+          part += joined[i];
+        }
+      }
+      if (part) parts.push(part);
+      if (parts.some((p) => {
+        const colonIndex = p.indexOf(':');
+        return colonIndex !== -1 && isWindowsReservedName(p, colonIndex);
+      })) {
+        let result = '';
+        for (let i = 0; i < joined.length; i++) {
+          result += joined[i] === '/' ? '\\' : joined[i];
+        }
+        return result;
+      }
+      return win32.normalize(joined);
+    },
+    relative(from, to) {
+      validateString(from, 'from');
+      validateString(to, 'to');
+      if (from === to)
+        return '';
+      const fromOrig = win32.resolve(from);
+      const toOrig = win32.resolve(to);
+      if (fromOrig === toOrig)
+        return '';
+      from = fromOrig.toLowerCase();
+      to = toOrig.toLowerCase();
+      if (from === to)
+        return '';
+      if (fromOrig.length !== from.length || toOrig.length !== to.length) {
+        const fromSplit = fromOrig.split('\\');
+        const toSplit = toOrig.split('\\');
+        if (fromSplit[fromSplit.length - 1] === '') {
+          fromSplit.pop();
+        }
+        if (toSplit[toSplit.length - 1] === '') {
+          toSplit.pop();
+        }
+        const fromLen = fromSplit.length;
+        const toLen = toSplit.length;
+        const length = fromLen < toLen ? fromLen : toLen;
+        let i;
+        for (i = 0; i < length; i++) {
+          if (fromSplit[i].toLowerCase() !== toSplit[i].toLowerCase()) {
+            break;
+          }
+        }
+        if (i === 0) {
+          return toOrig;
+        } else if (i === length) {
+          if (toLen > length) {
+            return (toSplit.slice(i)).join('\\');
+          }
+          if (fromLen > length) {
+            return ('..\\').repeat(fromLen - 1 - i) + '..';
+          }
+          return '';
+        }
+        return ('..\\').repeat(fromLen - i) + (toSplit.slice(i)).join('\\');
+      }
+      let fromStart = 0;
+      while (fromStart < from.length &&
+             from.charCodeAt(fromStart) === CHAR_BACKWARD_SLASH) {
+        fromStart++;
+      }
+      let fromEnd = from.length;
+      while (
+        fromEnd - 1 > fromStart &&
+        from.charCodeAt(fromEnd - 1) === CHAR_BACKWARD_SLASH
+      ) {
+        fromEnd--;
+      }
+      const fromLen = fromEnd - fromStart;
+      let toStart = 0;
+      while (toStart < to.length &&
+             to.charCodeAt(toStart) === CHAR_BACKWARD_SLASH) {
+        toStart++;
+      }
+      let toEnd = to.length;
+      while (toEnd - 1 > toStart &&
+             to.charCodeAt(toEnd - 1) === CHAR_BACKWARD_SLASH) {
+        toEnd--;
+      }
+      const toLen = toEnd - toStart;
+      const length = fromLen < toLen ? fromLen : toLen;
+      let lastCommonSep = -1;
+      let i = 0;
+      for (; i < length; i++) {
+        const fromCode = from.charCodeAt(fromStart + i);
+        if (fromCode !== to.charCodeAt(toStart + i))
+          break;
+        else if (fromCode === CHAR_BACKWARD_SLASH)
+          lastCommonSep = i;
+      }
+      if (i !== length) {
+        if (lastCommonSep === -1)
+          return toOrig;
+      } else {
+        if (toLen > length) {
+          if (to.charCodeAt(toStart + i) ===
+              CHAR_BACKWARD_SLASH) {
+            return toOrig.slice(toStart + i + 1);
+          }
+          if (i === 2) {
+            return toOrig.slice(toStart + i);
+          }
+        }
+        if (fromLen > length) {
+          if (from.charCodeAt(fromStart + i) ===
+              CHAR_BACKWARD_SLASH) {
+            lastCommonSep = i;
+          } else if (i === 2) {
+            lastCommonSep = 3;
+          }
+        }
+        if (lastCommonSep === -1)
+          lastCommonSep = 0;
+      }
+      let out = '';
+      for (i = fromStart + lastCommonSep + 1; i <= fromEnd; ++i) {
+        if (i === fromEnd ||
+            from.charCodeAt(i) === CHAR_BACKWARD_SLASH) {
+          out += out.length === 0 ? '..' : '\\..';
+        }
+      }
+      toStart += lastCommonSep;
+      if (out.length > 0)
+        return `${out}${toOrig.slice(toStart, toEnd)}`;
+      if (toOrig.charCodeAt(toStart) === CHAR_BACKWARD_SLASH)
+        ++toStart;
+      return toOrig.slice(toStart, toEnd);
+    },
+    toNamespacedPath(path) {
+      if (typeof path !== 'string' || path.length === 0)
+        return path;
+      const resolvedPath = win32.resolve(path);
+      if (resolvedPath.length <= 2)
+        return path;
+      if (resolvedPath.charCodeAt(0) === CHAR_BACKWARD_SLASH) {
+        if (resolvedPath.charCodeAt(1) === CHAR_BACKWARD_SLASH) {
+          const code = resolvedPath.charCodeAt(2);
+          if (code !== CHAR_QUESTION_MARK && code !== CHAR_DOT) {
+            return `\\\\?\\UNC\\${resolvedPath.slice(2)}`;
+          }
+        }
+      } else if (
+        isWindowsDeviceRoot(resolvedPath.charCodeAt(0)) &&
+        resolvedPath.charCodeAt(1) === CHAR_COLON &&
+        resolvedPath.charCodeAt(2) === CHAR_BACKWARD_SLASH
+      ) {
+        return `\\\\?\\${resolvedPath}`;
+      }
+      return resolvedPath;
+    },
+    dirname(path) {
+      validateString(path, 'path');
+      const len = path.length;
+      if (len === 0)
+        return '.';
+      let rootEnd = -1;
+      let offset = 0;
+      const code = path.charCodeAt(0);
+      if (len === 1) {
+        return isPathSeparator(code) ? path : '.';
+      }
+      if (isPathSeparator(code)) {
+        rootEnd = offset = 1;
+        if (isPathSeparator(path.charCodeAt(1))) {
+          let j = 2;
+          let last = j;
+          while (j < len &&
+                 !isPathSeparator(path.charCodeAt(j))) {
+            j++;
+          }
+          if (j < len && j !== last) {
+            last = j;
+            while (j < len &&
+                   isPathSeparator(path.charCodeAt(j))) {
+              j++;
+            }
+            if (j < len && j !== last) {
+              last = j;
+              while (j < len &&
+                     !isPathSeparator(path.charCodeAt(j))) {
+                j++;
+              }
+              if (j === len) {
+                return path;
+              }
+              if (j !== last) {
+                rootEnd = offset = j + 1;
+              }
+            }
+          }
+        }
+      } else if (isWindowsDeviceRoot(code) &&
+                 path.charCodeAt(1) === CHAR_COLON) {
+        rootEnd =
+          len > 2 && isPathSeparator(path.charCodeAt(2)) ? 3 : 2;
+        offset = rootEnd;
+      }
+      let end = -1;
+      let matchedSlash = true;
+      for (let i = len - 1; i >= offset; --i) {
+        if (isPathSeparator(path.charCodeAt(i))) {
+          if (!matchedSlash) {
+            end = i;
+            break;
+          }
+        } else {
+          matchedSlash = false;
+        }
+      }
+      if (end === -1) {
+        if (rootEnd === -1)
+          return '.';
+        end = rootEnd;
+      }
+      return path.slice(0, end);
+    },
+    basename(path, suffix) {
+      if (suffix !== undefined)
+        validateString(suffix, 'suffix');
+      validateString(path, 'path');
+      let start = 0;
+      let end = -1;
+      let matchedSlash = true;
+      if (path.length >= 2 &&
+          isWindowsDeviceRoot(path.charCodeAt(0)) &&
+          path.charCodeAt(1) === CHAR_COLON) {
+        start = 2;
+      }
+      if (suffix !== undefined && suffix.length > 0 && suffix.length <= path.length) {
+        if (suffix === path)
+          return '';
+        let extIdx = suffix.length - 1;
+        let firstNonSlashEnd = -1;
+        for (let i = path.length - 1; i >= start; --i) {
+          const code = path.charCodeAt(i);
+          if (isPathSeparator(code)) {
+            if (!matchedSlash) {
+              start = i + 1;
+              break;
+            }
+          } else {
+            if (firstNonSlashEnd === -1) {
+              matchedSlash = false;
+              firstNonSlashEnd = i + 1;
+            }
+            if (extIdx >= 0) {
+              if (code === suffix.charCodeAt(extIdx)) {
+                if (--extIdx === -1) {
+                  end = i;
+                }
+              } else {
+                extIdx = -1;
+                end = firstNonSlashEnd;
+              }
+            }
+          }
+        }
+        if (start === end)
+          end = firstNonSlashEnd;
+        else if (end === -1)
+          end = path.length;
+        return path.slice(start, end);
+      }
+      for (let i = path.length - 1; i >= start; --i) {
+        if (isPathSeparator(path.charCodeAt(i))) {
+          if (!matchedSlash) {
+            start = i + 1;
+            break;
+          }
+        } else if (end === -1) {
+          matchedSlash = false;
+          end = i + 1;
+        }
+      }
+      if (end === -1)
+        return '';
+      return path.slice(start, end);
+    },
+    extname(path) {
+      validateString(path, 'path');
+      let start = 0;
+      let startDot = -1;
+      let startPart = 0;
+      let end = -1;
+      let matchedSlash = true;
+      let preDotState = 0;
+      if (path.length >= 2 &&
+          path.charCodeAt(1) === CHAR_COLON &&
+          isWindowsDeviceRoot(path.charCodeAt(0))) {
+        start = startPart = 2;
+      }
+      for (let i = path.length - 1; i >= start; --i) {
+        const code = path.charCodeAt(i);
+        if (isPathSeparator(code)) {
+          if (!matchedSlash) {
+            startPart = i + 1;
+            break;
+          }
+          continue;
+        }
+        if (end === -1) {
+          matchedSlash = false;
+          end = i + 1;
+        }
+        if (code === CHAR_DOT) {
+          if (startDot === -1)
+            startDot = i;
+          else if (preDotState !== 1)
+            preDotState = 1;
+        } else if (startDot !== -1) {
+          preDotState = -1;
+        }
+      }
+      if (startDot === -1 ||
+          end === -1 ||
+          preDotState === 0 ||
+          (preDotState === 1 &&
+           startDot === end - 1 &&
+           startDot === startPart + 1)) {
+        return '';
+      }
+      return path.slice(startDot, end);
+    },
+    format: _format.bind(null, '\\'),
+    parse(path) {
+      validateString(path, 'path');
+      const ret = { root: '', dir: '', base: '', ext: '', name: '' };
+      if (path.length === 0)
+        return ret;
+      const len = path.length;
+      let rootEnd = 0;
+      let code = path.charCodeAt(0);
+      if (len === 1) {
+        if (isPathSeparator(code)) {
+          ret.root = ret.dir = path;
+          return ret;
+        }
+        ret.base = ret.name = path;
+        return ret;
+      }
+      if (isPathSeparator(code)) {
+        rootEnd = 1;
+        if (isPathSeparator(path.charCodeAt(1))) {
+          let j = 2;
+          let last = j;
+          while (j < len &&
+                 !isPathSeparator(path.charCodeAt(j))) {
+            j++;
+          }
+          if (j < len && j !== last) {
+            last = j;
+            while (j < len &&
+                   isPathSeparator(path.charCodeAt(j))) {
+              j++;
+            }
+            if (j < len && j !== last) {
+              last = j;
+              while (j < len &&
+                     !isPathSeparator(path.charCodeAt(j))) {
+                j++;
+              }
+              if (j === len) {
+                rootEnd = j;
+              } else if (j !== last) {
+                rootEnd = j + 1;
+              }
+            }
+          }
+        }
+      } else if (isWindowsDeviceRoot(code) &&
+                 path.charCodeAt(1) === CHAR_COLON) {
+        if (len <= 2) {
+          ret.root = ret.dir = path;
+          return ret;
+        }
+        rootEnd = 2;
+        if (isPathSeparator(path.charCodeAt(2))) {
+          if (len === 3) {
+            ret.root = ret.dir = path;
+            return ret;
+          }
+          rootEnd = 3;
+        }
+      }
+      if (rootEnd > 0)
+        ret.root = path.slice(0, rootEnd);
+      let startDot = -1;
+      let startPart = rootEnd;
+      let end = -1;
+      let matchedSlash = true;
+      let i = path.length - 1;
+      let preDotState = 0;
+      for (; i >= rootEnd; --i) {
+        code = path.charCodeAt(i);
+        if (isPathSeparator(code)) {
+          if (!matchedSlash) {
+            startPart = i + 1;
+            break;
+          }
+          continue;
+        }
+        if (end === -1) {
+          matchedSlash = false;
+          end = i + 1;
+        }
+        if (code === CHAR_DOT) {
+          if (startDot === -1)
+            startDot = i;
+          else if (preDotState !== 1)
+            preDotState = 1;
+        } else if (startDot !== -1) {
+          preDotState = -1;
+        }
+      }
+      if (end !== -1) {
+        if (startDot === -1 ||
+            preDotState === 0 ||
+            (preDotState === 1 &&
+             startDot === end - 1 &&
+             startDot === startPart + 1)) {
+          ret.base = ret.name = path.slice(startPart, end);
+        } else {
+          ret.name = path.slice(startPart, startDot);
+          ret.base = path.slice(startPart, end);
+          ret.ext = path.slice(startDot, end);
+        }
+      }
+      if (startPart > 0 && startPart !== rootEnd)
+        ret.dir = path.slice(0, startPart - 1);
+      else
+        ret.dir = ret.root;
+      return ret;
+    },
+    matchesGlob(path, pattern) {
+      return matchGlob(path, pattern, true);
+    },
+    sep: '\\',
+    delimiter: ';',
+    win32: null,
+    posix: null,
+  };
+  const posixCwd = cwd;
+  const posix = {
+    resolve(...args) {
+      if (args.length === 0 || (args.length === 1 && (args[0] === '' || args[0] === '.'))) {
+        const cwd = posixCwd();
+        if (cwd.charCodeAt(0) === CHAR_FORWARD_SLASH) {
+          return cwd;
+        }
+      }
+      let resolvedPath = '';
+      let resolvedAbsolute = false;
+      for (let i = args.length - 1; i >= 0 && !resolvedAbsolute; i--) {
+        const path = args[i];
+        validateString(path, `paths[${i}]`);
+        if (path.length === 0) {
+          continue;
+        }
+        resolvedPath = `${path}/${resolvedPath}`;
+        resolvedAbsolute = path[0] === '/';
+      }
+      if (!resolvedAbsolute) {
+        const cwd = posixCwd();
+        resolvedPath = `${cwd}/${resolvedPath}`;
+        resolvedAbsolute =
+          cwd.charCodeAt(0) === CHAR_FORWARD_SLASH;
+      }
+      resolvedPath = normalizeString(resolvedPath, !resolvedAbsolute, '/',
+                                     isPosixPathSeparator);
+      if (resolvedAbsolute) {
+        return `/${resolvedPath}`;
+      }
+      return resolvedPath.length > 0 ? resolvedPath : '.';
+    },
+    normalize(path) {
+      validateString(path, 'path');
+      if (path.length === 0)
+        return '.';
+      const isAbsolute = path[0] === '/';
+      const trailingSeparator = path[path.length - 1] === '/';
+      path = normalizeString(path, !isAbsolute, '/', isPosixPathSeparator);
+      if (path.length === 0) {
+        if (isAbsolute)
+          return '/';
+        return trailingSeparator ? './' : '.';
+      }
+      if (trailingSeparator)
+        path += '/';
+      return isAbsolute ? `/${path}` : path;
+    },
+    isAbsolute(path) {
+      validateString(path, 'path');
+      return path.length > 0 &&
+             path.charCodeAt(0) === CHAR_FORWARD_SLASH;
+    },
+    join(...args) {
+      if (args.length === 0)
+        return '.';
+      const path = [];
+      for (let i = 0; i < args.length; ++i) {
+        const arg = args[i];
+        validateString(arg, 'path');
+        if (arg.length > 0) {
+          path.push(arg);
+        }
+      }
+      if (path.length === 0)
+        return '.';
+      return posix.normalize(path.join('/'));
+    },
+    relative(from, to) {
+      validateString(from, 'from');
+      validateString(to, 'to');
+      if (from === to)
+        return '';
+      from = posix.resolve(from);
+      to = posix.resolve(to);
+      if (from === to)
+        return '';
+      const fromStart = 1;
+      const fromEnd = from.length;
+      const fromLen = fromEnd - fromStart;
+      const toStart = 1;
+      const toLen = to.length - toStart;
+      const length = (fromLen < toLen ? fromLen : toLen);
+      let lastCommonSep = -1;
+      let i = 0;
+      for (; i < length; i++) {
+        const fromCode = from.charCodeAt(fromStart + i);
+        if (fromCode !== to.charCodeAt(toStart + i))
+          break;
+        else if (fromCode === CHAR_FORWARD_SLASH)
+          lastCommonSep = i;
+      }
+      if (i === length) {
+        if (toLen > length) {
+          if (to.charCodeAt(toStart + i) === CHAR_FORWARD_SLASH) {
+            return to.slice(toStart + i + 1);
+          }
+          if (i === 0) {
+            return to.slice(toStart + i);
+          }
+        } else if (fromLen > length) {
+          if (from.charCodeAt(fromStart + i) ===
+              CHAR_FORWARD_SLASH) {
+            lastCommonSep = i;
+          } else if (i === 0) {
+            lastCommonSep = 0;
+          }
+        }
+      }
+      let out = '';
+      for (i = fromStart + lastCommonSep + 1; i <= fromEnd; ++i) {
+        if (i === fromEnd ||
+            from.charCodeAt(i) === CHAR_FORWARD_SLASH) {
+          out += out.length === 0 ? '..' : '/..';
+        }
+      }
+      return `${out}${to.slice(toStart + lastCommonSep)}`;
+    },
+    toNamespacedPath(path) {
+      return path;
+    },
+    dirname(path) {
+      validateString(path, 'path');
+      if (path.length === 0)
+        return '.';
+      const hasRoot = path.charCodeAt(0) === CHAR_FORWARD_SLASH;
+      let end = -1;
+      let matchedSlash = true;
+      for (let i = path.length - 1; i >= 1; --i) {
+        if (path.charCodeAt(i) === CHAR_FORWARD_SLASH) {
+          if (!matchedSlash) {
+            end = i;
+            break;
+          }
+        } else {
+          matchedSlash = false;
+        }
+      }
+      if (end === -1)
+        return hasRoot ? '/' : '.';
+      if (hasRoot && end === 1)
+        return '//';
+      return path.slice(0, end);
+    },
+    basename(path, suffix) {
+      if (suffix !== undefined)
+        validateString(suffix, 'suffix');
+      validateString(path, 'path');
+      let start = 0;
+      let end = -1;
+      let matchedSlash = true;
+      if (suffix !== undefined && suffix.length > 0 && suffix.length <= path.length) {
+        if (suffix === path)
+          return '';
+        let extIdx = suffix.length - 1;
+        let firstNonSlashEnd = -1;
+        for (let i = path.length - 1; i >= 0; --i) {
+          const code = path.charCodeAt(i);
+          if (code === CHAR_FORWARD_SLASH) {
+            if (!matchedSlash) {
+              start = i + 1;
+              break;
+            }
+          } else {
+            if (firstNonSlashEnd === -1) {
+              matchedSlash = false;
+              firstNonSlashEnd = i + 1;
+            }
+            if (extIdx >= 0) {
+              if (code === suffix.charCodeAt(extIdx)) {
+                if (--extIdx === -1) {
+                  end = i;
+                }
+              } else {
+                extIdx = -1;
+                end = firstNonSlashEnd;
+              }
+            }
+          }
+        }
+        if (start === end)
+          end = firstNonSlashEnd;
+        else if (end === -1)
+          end = path.length;
+        return path.slice(start, end);
+      }
+      for (let i = path.length - 1; i >= 0; --i) {
+        if (path.charCodeAt(i) === CHAR_FORWARD_SLASH) {
+          if (!matchedSlash) {
+            start = i + 1;
+            break;
+          }
+        } else if (end === -1) {
+          matchedSlash = false;
+          end = i + 1;
+        }
+      }
+      if (end === -1)
+        return '';
+      return path.slice(start, end);
+    },
+    extname(path) {
+      validateString(path, 'path');
+      let startDot = -1;
+      let startPart = 0;
+      let end = -1;
+      let matchedSlash = true;
+      let preDotState = 0;
+      for (let i = path.length - 1; i >= 0; --i) {
+        const char = path[i];
+        if (char === '/') {
+          if (!matchedSlash) {
+            startPart = i + 1;
+            break;
+          }
+          continue;
+        }
+        if (end === -1) {
+          matchedSlash = false;
+          end = i + 1;
+        }
+        if (char === '.') {
+          if (startDot === -1)
+            startDot = i;
+          else if (preDotState !== 1)
+            preDotState = 1;
+        } else if (startDot !== -1) {
+          preDotState = -1;
+        }
+      }
+      if (startDot === -1 ||
+          end === -1 ||
+          preDotState === 0 ||
+          (preDotState === 1 &&
+           startDot === end - 1 &&
+           startDot === startPart + 1)) {
+        return '';
+      }
+      return path.slice(startDot, end);
+    },
+    format: _format.bind(null, '/'),
+    parse(path) {
+      validateString(path, 'path');
+      const ret = { root: '', dir: '', base: '', ext: '', name: '' };
+      if (path.length === 0)
+        return ret;
+      const isAbsolute =
+        path.charCodeAt(0) === CHAR_FORWARD_SLASH;
+      let start;
+      if (isAbsolute) {
+        ret.root = '/';
+        start = 1;
+      } else {
+        start = 0;
+      }
+      let startDot = -1;
+      let startPart = 0;
+      let end = -1;
+      let matchedSlash = true;
+      let i = path.length - 1;
+      let preDotState = 0;
+      for (; i >= start; --i) {
+        const char = path[i];
+        if (char === '/') {
+          if (!matchedSlash) {
+            startPart = i + 1;
+            break;
+          }
+          continue;
+        }
+        if (end === -1) {
+          matchedSlash = false;
+          end = i + 1;
+        }
+        if (char === '.') {
+          if (startDot === -1)
+            startDot = i;
+          else if (preDotState !== 1)
+            preDotState = 1;
+        } else if (startDot !== -1) {
+          preDotState = -1;
+        }
+      }
+      if (end !== -1) {
+        const start = startPart === 0 && isAbsolute ? 1 : startPart;
+        if (startDot === -1 ||
+            preDotState === 0 ||
+            (preDotState === 1 &&
+            startDot === end - 1 &&
+            startDot === startPart + 1)) {
+          ret.base = ret.name = path.slice(start, end);
+        } else {
+          ret.name = path.slice(start, startDot);
+          ret.base = path.slice(start, end);
+          ret.ext = path.slice(startDot, end);
+        }
+      }
+      if (startPart > 0)
+        ret.dir = path.slice(0, startPart - 1);
+      else if (isAbsolute)
+        ret.dir = '/';
+      return ret;
+    },
+    matchesGlob(path, pattern) {
+      return matchGlob(path, pattern, false);
+    },
+    sep: '/',
+    delimiter: ':',
+    win32: null,
+    posix: null,
+  };
+  posix.win32 = win32.win32 = win32;
+  posix.posix = win32.posix = posix;
+  win32._makeLong = win32.toNamespacedPath;
+  posix._makeLong = posix.toNamespacedPath;
+  // `matchesGlob`: minimatch 10 as lib/internal/fs/glob.js configures it (nonegate,
+  // nocomment, windowsPathsNoEscape, optimizationLevel 2), case-sensitive. Brace
+  // expansion follows brace-expansion; segments compile as minimatch's AST does.
+  const GLOBSTAR = {};
+  const ESC_OPEN = '\0o', ESC_CLOSE = '\0c';
+  function balancedBraces(str) {
+    let ai = str.indexOf('{'), bi = str.indexOf('}', ai + 1), i = ai;
+    let left = str.length, right, result;
+    if (ai < 0 || bi <= 0) return null;
+    const begs = [];
+    while (i >= 0 && !result) {
+      if (i === ai) {
+        begs.push(i);
+        ai = str.indexOf('{', i + 1);
+      } else if (begs.length === 1) {
+        result = [begs.pop(), bi];
+      } else {
+        const beg = begs.pop();
+        if (beg < left) { left = beg; right = bi; }
+        bi = str.indexOf('}', i + 1);
+      }
+      i = ai < bi && ai >= 0 ? ai : bi;
+    }
+    if (begs.length && right !== undefined) result = [left, right];
+    return result && { pre: str.slice(0, result[0]), body: str.slice(result[0] + 1, result[1]),
+      post: str.slice(result[1] + 1) };
+  }
+  function commaParts(str) {
+    if (!str) return [''];
+    const m = balancedBraces(str);
+    if (!m) return str.split(',');
+    const p = m.pre.split(',');
+    p[p.length - 1] += `{${m.body}}`;
+    const post = commaParts(m.post);
+    if (m.post.length) {
+      p[p.length - 1] += post.shift();
+      p.push(...post);
+    }
+    return p;
+  }
+  function braceSequence(body, alpha) {
+    const n = body.split('..');
+    const num = (s) => isNaN(s) ? s.charCodeAt(0) : parseInt(s, 10);
+    const x = num(n[0]), y = num(n[1]), width = Math.max(n[0].length, n[1].length);
+    let step = n.length === 3 ? Math.max(Math.abs(num(n[2])), 1) : 1;
+    if (y < x) step = -step;
+    const pad = n.some((s) => /^-?0\d/.test(s));
+    const out = [];
+    for (let i = x; step > 0 ? i <= y : i >= y; i += step) {
+      let c = alpha ? String.fromCharCode(i) : String(i);
+      if (alpha && c === '\\') c = '';
+      if (!alpha && pad && width > c.length) {
+        const z = '0'.repeat(width - c.length);
+        c = i < 0 ? `-${z}${c.slice(1)}` : z + c;
+      }
+      out.push(c);
+    }
+    return out;
+  }
+  function combine(acc, pre, values, dropEmpties) {
+    const out = [];
+    for (const a of acc) {
+      for (const v of values) {
+        const expansion = a + pre + v;
+        if (!dropEmpties || expansion) out.push(expansion);
+      }
+    }
+    return out;
+  }
+  function expandBraces(str, isTop) {
+    let acc = [''], dropEmpties = false, firstGroup = true;
+    for (;;) {
+      const m = balancedBraces(str);
+      if (!m) return combine(acc, str, [''], dropEmpties);
+      const { pre, body, post } = m;
+      if (pre.endsWith('$')) {
+        acc = combine(acc, `${pre}{${body}}`, [''], dropEmpties && !post.length);
+        firstGroup = false;
+        if (!post.length) break;
+        str = post;
+        continue;
+      }
+      const numeric = /^-?\d+\.\.-?\d+(?:\.\.-?\d+)?$/.test(body);
+      const alpha = /^[a-zA-Z]\.\.[a-zA-Z](?:\.\.-?\d+)?$/.test(body);
+      if (!numeric && !alpha && !body.includes(',')) {
+        if (/,(?!,).*\}/.test(post)) {
+          str = `${pre}{${body}${ESC_CLOSE}${post}`;
+          isTop = true;
+          continue;
+        }
+        return combine(acc, `${pre}{${body}}${post}`, [''], dropEmpties);
+      }
+      if (firstGroup) {
+        dropEmpties = isTop && !numeric && !alpha;
+        firstGroup = false;
+      }
+      let values;
+      if (numeric || alpha) {
+        values = braceSequence(body, alpha);
+      } else {
+        let n = commaParts(body);
+        if (n.length === 1) {
+          n = expandBraces(n[0], false).map((s) => `{${s}}`);
+          if (n.length === 1) {
+            acc = combine(acc, pre + n[0], [''], dropEmpties && !post.length);
+            if (!post.length) break;
+            str = post;
+            continue;
+          }
+        }
+        const dropsEmpties = dropEmpties && !post.length && !pre && !acc.some((a) => a);
+        values = n.flatMap((part) => expandBraces(part, false)).filter((v) => !dropsEmpties || v);
+      }
+      acc = combine(acc, pre, values, dropEmpties && !post.length);
+      if (!post.length) break;
+      str = post;
+    }
+    return acc;
+  }
+  const POSIX_CLASSES = {
+    '[:alnum:]': ['\\p{L}\\p{Nl}\\p{Nd}', true], '[:alpha:]': ['\\p{L}\\p{Nl}', true],
+    '[:ascii:]': ['\\x00-\\x7f', false], '[:blank:]': ['\\p{Zs}\\t', true],
+    '[:cntrl:]': ['\\p{Cc}', true], '[:digit:]': ['\\p{Nd}', true],
+    '[:graph:]': ['\\p{Z}\\p{C}', true, true], '[:lower:]': ['\\p{Ll}', true],
+    '[:print:]': ['\\p{C}', true], '[:punct:]': ['\\p{P}', true],
+    '[:space:]': ['\\p{Z}\\t\\r\\n\\v\\f', true], '[:upper:]': ['\\p{Lu}', true],
+    '[:word:]': ['\\p{L}\\p{Nl}\\p{Nd}\\p{Pc}', true], '[:xdigit:]': ['A-Fa-f0-9', false],
+  };
+  const escapeRe = (s) => s.replace(/[-[\]{}()*+?.,\\^$|#\s]/g, '\\$&');
+  // A `[...]` class at `pos`: [source, literal or null, length consumed, needs the u flag].
+  function globClass(glob, pos) {
+    const ranges = [], negs = [], esc = (s) => s.replace(/[[\]\\-]/g, '\\$&');
+    let i = pos + 1, sawStart = false, u = false, negate = false, endPos = pos, rangeStart = '';
+    scan: while (i < glob.length) {
+      const c = glob[i];
+      if ((c === '!' || c === '^') && i === pos + 1) {
+        negate = true;
+        i++;
+        continue;
+      }
+      if (c === ']' && sawStart) {
+        endPos = i + 1;
+        break;
+      }
+      sawStart = true;
+      if (c === '[') {
+        for (const cls in POSIX_CLASSES) {
+          if (glob.startsWith(cls, i)) {
+            if (rangeStart) return ['$.', null, glob.length - pos, false];
+            const [source, unicode, negated] = POSIX_CLASSES[cls];
+            i += cls.length;
+            (negated ? negs : ranges).push(source);
+            u ||= unicode;
+            continue scan;
+          }
+        }
+      }
+      if (rangeStart) {
+        if (c > rangeStart) ranges.push(`${esc(rangeStart)}-${esc(c)}`);
+        else if (c === rangeStart) ranges.push(esc(c));
+        rangeStart = '';
+        i++;
+      } else if (glob.startsWith('-]', i + 1)) {
+        ranges.push(esc(c + '-'));
+        i += 2;
+      } else if (glob.startsWith('-', i + 1)) {
+        rangeStart = c;
+        i += 2;
+      } else {
+        ranges.push(esc(c));
+        i++;
+      }
+    }
+    if (endPos < i) return null;
+    if (!ranges.length && !negs.length) return ['$.', null, glob.length - pos, false];
+    if (!negs.length && ranges.length === 1 && /^\\?.$/.test(ranges[0]) && !negate) {
+      const r = ranges[0].slice(-1);
+      return [escapeRe(r), r, endPos - pos, false];
+    }
+    const sranges = `[${negate ? '^' : ''}${ranges.join('')}]`;
+    const snegs = `[${negate ? '' : '^'}${negs.join('')}]`;
+    const source = ranges.length && negs.length ? `(${sranges}|${snegs})` : ranges.length ? sranges : snegs;
+    return [source, null, endPos - pos, u];
+  }
+  // minimatch's guard at the start of a segment: a wildcard does not match a leading
+  // `.`, and a pattern starting with `.` and a wildcard does not match `.` or `..`.
+  function startGuard(src) {
+    if ((src.startsWith('\\.') && '[.'.includes(src[2] || '-')) ||
+        (src.startsWith('\\.\\.') && '[.'.includes(src[4] || '-'))) return '(?!\\.\\.?$)';
+    return '[.'.includes(src[0] || '-') ? '(?!\\.)' : '';
+  }
+  // A segment pattern as { src, literal (when it has no magic), u }.
+  function globSource(segment, atStart) {
+    let src = '', literal = '', magic = false, u = false;
+    const noEmpty = atStart && /^\*+$/.test(segment);
+    for (let i = 0; i < segment.length; i++) {
+      const c = segment[i];
+      if ('@+*?!'.includes(c) && segment[i + 1] === '(') {
+        let depth = 0, j = i + 2, from = j;
+        const arms = [];
+        for (; j < segment.length; j++) {
+          const d = segment[j];
+          if (d === '(') depth++;
+          else if (d === ')' && depth-- === 0) break;
+          else if (d === '|' && depth === 0) { arms.push(segment.slice(from, j)); from = j + 1; }
+        }
+        if (j < segment.length) {
+          arms.push(segment.slice(from, j));
+          const guarded = atStart && i === 0;
+          const parts = arms.map((a) => globSource(a, false));
+          u ||= parts.some((p) => p.u);
+          const open = parts.map((p) => p.src).join('|');
+          const first = guarded ? parts.map((p) => startGuard(p.src) + p.src).join('|') : open;
+          if (c === '!') {
+            const rest = globSource(segment.slice(j + 1), false);
+            src += `(?:(?!(?:${open})${rest.src}$)${guarded ? '(?!\\.)' : ''}[^/]*?)`;
+          } else if ((c === '+' || c === '*') && first !== open) {
+            src += `(?:(?:${first})(?:${open})*?)${c === '*' ? '?' : ''}`;
+          } else {
+            src += `(?:${first})${c === '@' ? '' : c}`;
+          }
+          magic = true;
+          i = j;
+          continue;
+        }
+      }
+      if (c === '*') {
+        while (segment[i + 1] === '*') i++;
+        src += noEmpty ? '[^/]+?' : '[^/]*?';
+        magic = true;
+      } else if (c === '?') {
+        src += '[^/]';
+        magic = true;
+      } else if (c === '[' && globClass(segment, i)) {
+        const [classSrc, classLiteral, consumed, unicode] = globClass(segment, i);
+        src += classSrc;
+        literal += classLiteral ?? '';
+        magic ||= classLiteral === null;
+        u ||= unicode;
+        i += consumed - 1;
+      } else {
+        src += escapeRe(c);
+        literal += c;
+      }
+    }
+    if (atStart && !(/^[@+*?!]\(/.test(segment)) && segment !== '.' && segment !== '..') {
+      src = startGuard(src) + src;
+    }
+    return { src, literal: magic ? null : literal, u };
+  }
+  // minimatch's optimizationLevel 2 on a split path or pattern, in place: drop `.` and
+  // empty inner segments and fold `x/..`. Answers whether anything changed.
+  function foldSegments(parts, win, isPattern) {
+    let changed = false;
+    for (let again = true; again;) {
+      again = false;
+      for (let i = 1; i < parts.length - 1; i++) {
+        if (i === 1 && parts[1] === '' && parts[0] === '') continue;
+        if (parts[i] === '.' || parts[i] === '') {
+          parts.splice(i--, 1);
+          again = true;
+        }
+      }
+      if (parts[0] === '.' && parts.length === 2 && (parts[1] === '.' || parts[1] === '')) {
+        parts.pop();
+        again = true;
+      }
+      for (let dd = 1; dd < parts.length; dd++) {
+        const p = parts[dd - 1];
+        if (parts[dd] === '..' && p && p !== '.' && p !== '..' && p !== '**' &&
+            (isPattern || !(win && /^[a-z]:$/i.test(p)))) {
+          parts.splice(dd - 1, 2, ...(isPattern && dd === 1 && parts[dd + 1] === '**' ? ['.'] : []));
+          again = true;
+          break;
+        }
+      }
+      changed ||= again;
+    }
+    if (parts.length === 0) parts.push('');
+    return changed;
+  }
+  // minimatch's first preprocessing phase: collapse `**/**`, and split `**/../a/b`
+  // into `../a/b` and `**/a/b`.
+  function preprocess(patterns, win) {
+    const named = (s) => s && s !== '.' && s !== '..';
+    for (let changed = true; changed;) {
+      changed = false;
+      for (const parts of patterns) {
+        for (let gs = parts.indexOf('**'); gs !== -1; gs = parts.indexOf('**', gs + 1)) {
+          let gss = gs;
+          while (parts[gss + 1] === '**') gss++;
+          if (gss > gs) parts.splice(gs + 1, gss - gs);
+          if (parts[gs + 1] !== '..' || !named(parts[gs + 2]) || !named(parts[gs + 3])) continue;
+          changed = true;
+          parts.splice(gs, 1);
+          const other = parts.slice();
+          other[gs] = '**';
+          patterns.push(other);
+          gs--;
+        }
+        changed = foldSegments(parts, win, true) || changed;
+      }
+    }
+    return patterns;
+  }
+  const hidden = (segment) => segment !== undefined && segment[0] === '.';
+  function matchSegments(file, pattern, fi) {
+    let pi = 0;
+    for (; fi < file.length && pi < pattern.length; fi++, pi++) {
+      const p = pattern[pi];
+      if (typeof p === 'string' ? file[fi] !== p : !p.test(file[fi])) return false;
+    }
+    if (pi < pattern.length) return false;
+    return fi === file.length || (fi === file.length - 1 && file[fi] === '');
+  }
+  // minimatch's globstar walk: a head before the first `**`, a tail after the last,
+  // and the sections between them placed left to right.
+  function matchParts(file, pattern) {
+    const first = pattern.indexOf(GLOBSTAR);
+    if (first === -1) return matchSegments(file, pattern, 0);
+    const last = pattern.lastIndexOf(GLOBSTAR);
+    const head = pattern.slice(0, first), tail = pattern.slice(last + 1);
+    let fi = head.length;
+    if (fi && !matchSegments(file.slice(0, fi), head, 0)) return false;
+    let tailMatch = 0;
+    if (tail.length) {
+      if (tail.length + fi > file.length) return false;
+      if (matchSegments(file, tail, file.length - tail.length)) {
+        tailMatch = tail.length;
+      } else {
+        if (file[file.length - 1] !== '' || fi + tail.length === file.length ||
+            !matchSegments(file, tail, file.length - tail.length - 1)) return false;
+        tailMatch = tail.length + 1;
+      }
+    }
+    const sections = [[]];
+    for (const p of pattern.slice(first + 1, last)) {
+      if (p === GLOBSTAR) sections.push([]);
+      else sections[sections.length - 1].push(p);
+    }
+    const end = file.length - tailMatch;
+    if (first === last) {
+      for (let i = fi; i < end; i++) if (hidden(file[i])) return false;
+      return tailMatch > 0 || fi < end;
+    }
+    let after = end;
+    for (const section of sections) after -= section.length;
+    const bounds = sections.map((section) => (after += section.length) - section.length);
+    return !!matchSections(file, sections, bounds, fi, 0, tailMatch > 0);
+  }
+  function matchSections(file, sections, bounds, fi, si, sawTail) {
+    const body = sections[si];
+    if (!body) {
+      for (; fi < file.length; fi++) {
+        sawTail = true;
+        if (hidden(file[fi])) return false;
+      }
+      return sawTail;
+    }
+    for (; fi <= bounds[si]; fi++) {
+      if (matchSegments(file.slice(0, fi + body.length), body, fi) && si < 200) {
+        const sub = matchSections(file, sections, bounds, fi + body.length, si + 1, sawTail);
+        if (sub !== false) return sub;
+      }
+      if (hidden(file[fi])) return false;
+    }
+    return null;
+  }
+  function matchGlob(path, pattern, win) {
+    validateString(path, 'path');
+    validateString(pattern, 'pattern');
+    if (pattern === '') return path === '';
+    const split = (p) => win && /^\/\/[^/]+/.test(p) ? ['', ...p.split(/\/+/)] : p.split(/\/+/);
+    const drive = (s) => win && typeof s === 'string' && /^[a-z]:$/i.test(s);
+    const raw = split(win ? path.replace(/\\/g, '/') : path);
+    const file = raw.slice();
+    foldSegments(file, win, false);
+    const slashed = pattern.replace(/\\/g, '/');
+    const expanded = /\{(?:(?!\{).)*\}/.test(slashed) ?
+      expandBraces(slashed.startsWith('{}') ? ESC_OPEN + ESC_CLOSE + slashed.slice(2) : slashed, true)
+        .map((s) => s.replaceAll(ESC_OPEN, '{').replaceAll(ESC_CLOSE, '}')) : [slashed];
+    for (const parts of preprocess([...new Set(expanded)].map(split), win)) {
+      const compiled = parts.map((s) => {
+        if (s === '**') return GLOBSTAR;
+        const { src, literal, u } = globSource(s, true);
+        return literal ?? new RegExp(`^${src}$`, u ? 'u' : '');
+      });
+      if (drive(raw[0]) && drive(compiled[0]) && compiled[0].toLowerCase() === raw[0].toLowerCase()) {
+        compiled[0] = raw[0];
+      }
+      if (matchParts(file, compiled)) return true;
+    }
+    return false;
+  }
+  return posix;
+})();
+
 // The bridge tables have no prototype: mem_call indexes them by a call site's method name,
 // and `o.isPrototypeOf(x)` must fall through to __classDispatch, not find Object.prototype's.
 const __memDispatch = {
@@ -3309,13 +4897,38 @@ const __memDispatch = {
   },
   crypto_md5: () => undefined,
 
-  // Path — args are plain JS strings
-  path_join: (a, b) => (String(a) + '/' + String(b)).replace(/\/+/g, '/'),
-  path_dirname: (str) => { const s = String(str); const idx = s.lastIndexOf('/'); return idx >= 0 ? (s.substring(0, idx) || '/') : '.'; },
-  path_basename: (str) => { const s = String(str); const idx = s.lastIndexOf('/'); return idx >= 0 ? s.substring(idx + 1) : s; },
-  path_extname: (str) => { const s = String(str); const base = s.substring(s.lastIndexOf('/') + 1); const idx = base.lastIndexOf('.'); return idx > 0 ? base.substring(idx) : ''; },
-  path_resolve: (str) => String(str),
-  path_is_absolute: (str) => { const s = String(str); return (s.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(s)) ? 1 : 0; },
+  // Path — `__nodePath`; the web target's `path` is the posix one.
+  path_sep: () => __nodePath.sep,
+  path_delimiter: () => __nodePath.delimiter,
+  path_join: (a, b) => __nodePath.join(a, b),
+  path_dirname: (p) => __nodePath.dirname(p),
+  path_basename: (p, ext) => __nodePath.basename(p, ext),
+  path_extname: (p) => __nodePath.extname(p),
+  path_resolve: (p) => __nodePath.resolve(p),
+  // One step of a multi-argument `resolve`: its result is absolute, so the next step
+  // and the final `path_resolve` keep it.
+  path_resolve_join: (a, b) => __nodePath.resolve(a, b),
+  path_is_absolute: (p) => __nodePath.isAbsolute(p),
+  path_normalize: (p) => __nodePath.normalize(p),
+  path_relative: (from, to) => __nodePath.relative(from, to),
+  path_parse: (p) => __nodePath.parse(p),
+  path_format: (o) => __nodePath.format(o),
+  path_to_namespaced_path: (p) => __nodePath.toNamespacedPath(p),
+  path_matches_glob: (p, pattern) => __nodePath.matchesGlob(p, pattern),
+  path_win32_join: (a, b) => __nodePath.win32.join(a, b),
+  path_win32_dirname: (p) => __nodePath.win32.dirname(p),
+  path_win32_basename: (p) => __nodePath.win32.basename(p),
+  path_win32_basename_ext: (p, ext) => __nodePath.win32.basename(p, ext),
+  path_win32_extname: (p) => __nodePath.win32.extname(p),
+  path_win32_is_absolute: (p) => __nodePath.win32.isAbsolute(p),
+  path_win32_normalize: (p) => __nodePath.win32.normalize(p),
+  path_win32_parse: (p) => __nodePath.win32.parse(p),
+  path_win32_format: (o) => __nodePath.win32.format(o),
+  path_win32_relative: (from, to) => __nodePath.win32.relative(from, to),
+  path_win32_resolve: (p) => __nodePath.win32.resolve(p),
+  path_win32_resolve_join: (a, b) => __nodePath.win32.resolve(a, b),
+  path_win32_to_namespaced_path: (p) => __nodePath.win32.toNamespacedPath(p),
+  path_win32_matches_glob: (p, pattern) => __nodePath.win32.matchesGlob(p, pattern),
 
   // Process/OS — return plain JS values
   os_platform: () => 'wasm',

@@ -53,6 +53,12 @@ before changing the array, inserts every supplied item, and returns the removed
 elements. With no insertion items, it only deletes; omitting `deleteCount`
 deletes from `start` to the end.
 
+`node:path` answers as Node's does: `path` is the POSIX flavor and `path.win32`
+the Windows one, and `path.matchesGlob` follows the minimatch options Node uses,
+matching case-sensitively. A browser has no working directory, so `resolve` and
+`relative` resolve a relative path against `process.cwd()`, which is `/` (`\`
+for `path.win32`).
+
 ## UI Mapping
 
 Perry widgets map to HTML elements:

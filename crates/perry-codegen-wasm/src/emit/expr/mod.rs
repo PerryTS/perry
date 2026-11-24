@@ -32,6 +32,7 @@ use super::*;
 
 pub(super) use iterator_records::BRIDGES as ITERATOR_RECORD_BRIDGES;
 pub(super) use iterator_records::EAGER as ITERATOR_RECORD_EAGER;
+pub(super) use url_process_path::path_win32_bridge;
 
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn emit_expr(&mut self, func: &mut Function, expr: &Expr) {

@@ -1188,6 +1188,39 @@ impl WasmModuleEmitter {
                 self.emit_js_expr(&Expr::LocalGet(*set_id), locals),
                 self.emit_js_expr(value, locals)
             ),
+            // `node:path` calls the bridges its WASM arms call (`emit/expr/url_process_path.rs`).
+            Expr::PathSep => self.emit_js_bridge_call("path_sep", &[], locals),
+            Expr::PathDelimiter => self.emit_js_bridge_call("path_delimiter", &[], locals),
+            Expr::PathJoin(a, b) => self.emit_js_bridge_call("path_join", &[a, b], locals),
+            Expr::PathResolveJoin(a, b) => {
+                self.emit_js_bridge_call("path_resolve_join", &[a, b], locals)
+            }
+            Expr::PathRelative(a, b) => self.emit_js_bridge_call("path_relative", &[a, b], locals),
+            Expr::PathMatchesGlob(a, b) => {
+                self.emit_js_bridge_call("path_matches_glob", &[a, b], locals)
+            }
+            Expr::PathBasenameExt(a, b) => {
+                self.emit_js_bridge_call("path_basename", &[a, b], locals)
+            }
+            Expr::PathWin32Join(a, b) => {
+                self.emit_js_bridge_call("path_win32_join", &[a, b], locals)
+            }
+            Expr::PathDirname(p) => self.emit_js_bridge_call("path_dirname", &[p], locals),
+            Expr::PathBasename(p) => self.emit_js_bridge_call("path_basename", &[p], locals),
+            Expr::PathExtname(p) => self.emit_js_bridge_call("path_extname", &[p], locals),
+            Expr::PathResolve(p) => self.emit_js_bridge_call("path_resolve", &[p], locals),
+            Expr::PathIsAbsolute(p) => self.emit_js_bridge_call("path_is_absolute", &[p], locals),
+            Expr::PathNormalize(p) => self.emit_js_bridge_call("path_normalize", &[p], locals),
+            Expr::PathParse(p) => self.emit_js_bridge_call("path_parse", &[p], locals),
+            Expr::PathFormat(p) => self.emit_js_bridge_call("path_format", &[p], locals),
+            Expr::PathToNamespacedPath(p) => {
+                self.emit_js_bridge_call("path_to_namespaced_path", &[p], locals)
+            }
+            Expr::PathWin32 { method, args } => {
+                let (bridge, arity) = expr::path_win32_bridge(*method);
+                let operands: Vec<&Expr> = args.iter().take(arity as usize).collect();
+                self.emit_js_bridge_call(bridge, &operands, locals)
+            }
             Expr::Sequence(exprs) => {
                 if exprs.is_empty() {
                     "u64ToF64(TAG_UNDEFINED)".to_string()
