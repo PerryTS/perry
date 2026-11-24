@@ -1,0 +1,1 @@
+`--target web`: inside an `async` function, calling another `async` function no longer throws `__wasm_func_N is not a function`, and calling a function that returns nothing no longer throws `Cannot convert undefined to a BigInt` (#15328, #15329).

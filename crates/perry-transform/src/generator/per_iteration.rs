@@ -278,7 +278,7 @@ fn stmt_contains_suspend(stmt: &Stmt) -> bool {
 }
 
 fn expr_contains_suspend(expr: &Expr) -> bool {
-    if matches!(expr, Expr::Yield { .. } | Expr::Await(_)) {
+    if matches!(expr, Expr::Yield { .. } | Expr::Await(_, _)) {
         return true;
     }
     if matches!(expr, Expr::Closure { .. }) {
@@ -303,7 +303,7 @@ fn each_expr<F: FnMut(&Expr)>(stmt: &Stmt, f: &mut F) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 f(e);
             }
@@ -329,6 +329,7 @@ fn each_expr<F: FnMut(&Expr)>(stmt: &Stmt, f: &mut F) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -534,6 +535,7 @@ fn walk_snapshot(
         for (orig, snap) in pairs {
             introduced.insert(snap);
             out.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: snap,
                 name: format!("__periter_{}", snap),
                 ty: Type::Any,
@@ -678,7 +680,7 @@ fn each_expr_mut<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 f(e);
             }
@@ -704,6 +706,7 @@ fn each_expr_mut<F: FnMut(&mut Expr)>(stmt: &mut Stmt, f: &mut F) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -1070,6 +1073,7 @@ fn declare_forward_cell(stmts: &mut [Stmt], id: LocalId) -> Option<(String, Type
             ty,
             mutable,
             init,
+            ..
         } = stmt
         {
             if *declared == id {
@@ -1141,6 +1145,7 @@ fn hoist_forward_cell_inits(
                 hoisted.checked.insert(id, name.clone());
             }
             predeclared.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name,
                 ty,
@@ -1245,8 +1250,10 @@ fn cell_flag_set(id: LocalId) -> Expr {
 /// access of a dead-zone cell, where `on_initialized` is the access itself and
 /// `on_dead_zone` runs before the throw.
 fn cell_checked(id: LocalId, name: &str, on_initialized: Expr, on_dead_zone: Option<Expr>) -> Expr {
-    let throw = perry_hir::tdz_check::throw(name);
+    let throw =
+        perry_hir::tdz_check::throw(name, 0 /*HPOS LocalGet/LocalSet: the access offset*/);
     Expr::Conditional {
+        byte_offset: 0, /*HPOS*/
         condition: Box::new(cell_slot(id, 1)),
         then_expr: Box::new(on_initialized),
         else_expr: Box::new(match on_dead_zone {
@@ -1454,13 +1461,14 @@ mod tests {
             condition: Expr::Bool(true),
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id,
                     name: "value".into(),
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::String("x".into())),
                 },
-                Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)))),
+                Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)), 0)),
                 Stmt::Expr(Expr::LocalGet(id)),
             ],
         }];
@@ -1477,13 +1485,14 @@ mod tests {
             update: None,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id,
                     name: "value".into(),
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::String("x".into())),
                 },
-                Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)))),
+                Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)), 0)),
                 Stmt::Expr(Expr::LocalGet(id)),
             ],
         }];
@@ -1523,6 +1532,7 @@ mod tests {
     ) -> Vec<Stmt> {
         let (x, read) = (X, 3);
         let closure = Expr::Closure {
+            byte_offset: 0,
             func_id: 900,
             params: Vec::new(),
             return_type: Type::Any,
@@ -1541,6 +1551,7 @@ mod tests {
         let mut loop_body = vec![
             prealloc,
             Stmt::Let {
+                byte_offset: 0,
                 id: read,
                 name: "read".into(),
                 ty: Type::Any,
@@ -1551,16 +1562,18 @@ mod tests {
         let mut rest = between;
         rest.extend([
             Stmt::Let {
+                byte_offset: 0,
                 id: x,
                 name: "x".into(),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Integer(1)),
             },
-            Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)))),
+            Stmt::Expr(Expr::Await(Box::new(Expr::Integer(0)), 0)),
         ]);
         if rest_in_try {
             loop_body.push(Stmt::Try {
+                byte_offset: 0,
                 body: rest,
                 catch: None,
                 finally: Some(vec![Stmt::Expr(Expr::Undefined)]),
@@ -1592,14 +1605,14 @@ mod tests {
     }
 
     fn closure_return(stmts: &[Stmt]) -> &Expr {
-        let [Stmt::Return(Some(read))] = closure_body(stmts) else {
+        let [Stmt::Return(Some(read), _)] = closure_body(stmts) else {
             panic!("the closure body changed shape: {:?}", closure_body(stmts));
         };
         read
     }
 
     fn reads_closure(read: Expr) -> Vec<Stmt> {
-        vec![Stmt::Return(Some(read))]
+        vec![Stmt::Return(Some(read), 0)]
     }
 
     fn writes_closure(write: Expr) -> Vec<Stmt> {
@@ -1647,15 +1660,16 @@ mod tests {
             condition,
             then_expr,
             else_expr,
+            ..
         } = closure_return(&stmts)
         else {
             panic!("the read is not checked: {:?}", closure_return(&stmts));
         };
         assert!(
-            matches!(condition.as_ref(), Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::Integer(1)))
+            matches!(condition.as_ref(), Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(), Expr::Integer(1)))
         );
         assert!(
-            matches!(then_expr.as_ref(), Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::Integer(0)))
+            matches!(then_expr.as_ref(), Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(), Expr::Integer(0)))
         );
         assert!(format!("{else_expr:?}").contains(perry_hir::tdz_check::TDZ_THROW));
         // the declaration stores the value, then marks the cell initialized
@@ -1754,7 +1768,10 @@ mod tests {
         };
         assert!(matches!(slots.as_slice(), [Expr::Undefined]), "{slots:?}");
         assert!(
-            matches!(closure_return(&stmts), Expr::IndexGet { .. }),
+            matches!(
+                closure_return(&stmts),
+                Expr::IndexGet { .. } | Expr::RegionOut { .. }
+            ),
             "{:?}",
             closure_return(&stmts)
         );
@@ -1773,7 +1790,7 @@ mod tests {
             panic!("{:?}", closure_return(&stmts));
         };
         assert!(
-            matches!(value.as_ref(), Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::Integer(0))),
+            matches!(value.as_ref(), Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(), Expr::Integer(0))),
             "{value:?}"
         );
     }
@@ -1781,7 +1798,7 @@ mod tests {
     fn is_cell_value_read(e: &Expr) -> bool {
         matches!(
             e,
-            Expr::IndexGet { object, index , .. }
+            Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. }
                 if matches!(object.as_ref(), Expr::LocalGet(X))
                     && matches!(index.as_ref(), Expr::Integer(0))
         )
@@ -1807,13 +1824,14 @@ mod tests {
             condition,
             then_expr,
             else_expr,
+            ..
         }] = write.as_slice()
         else {
             panic!("{write:?}");
         };
         assert!(matches!(value.as_ref(), Expr::Integer(9)), "{value:?}");
         assert!(
-            matches!(condition.as_ref(), Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::Integer(1)))
+            matches!(condition.as_ref(), Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(), Expr::Integer(1)))
         );
         assert!(is_cell_value_read(then_expr), "{then_expr:?}");
         let Expr::Sequence(throwing) = else_expr.as_ref() else {
@@ -1907,6 +1925,7 @@ mod tests {
                 captures: vec![read_x()],
             }),
             Stmt::Expr(Expr::RefreshClassExprCaptures {
+                byte_offset: 0,
                 class_value: Box::new(Expr::Undefined),
                 captures: vec![read_x()],
                 env_class: None,

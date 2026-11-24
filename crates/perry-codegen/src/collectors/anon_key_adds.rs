@@ -13,7 +13,7 @@ type Binding = (bool, u32); // global/local namespaces are distinct
 fn seed<'a>(expr: &'a Expr, facts: &'a ModuleDispatchFacts) -> Option<&'a str> {
     match expr {
         Expr::New { class_name, .. } => Some(class_name),
-        Expr::Call { callee, .. } => match callee.as_ref() {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
             Expr::FuncRef(id) => facts.return_shape_class(*id),
             Expr::LocalGet(id) => facts
                 .closure_binding_func(*id)
@@ -86,7 +86,7 @@ pub(crate) fn anon_receiver_added_keys(
             Expr::Update { id, .. } => {
                 writes.insert((false, *id));
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 let func = match callee.as_ref() {
                     Expr::FuncRef(id) => Some(*id),
                     Expr::LocalGet(id) => facts.closure_binding_func(*id),
@@ -242,7 +242,7 @@ fn binding_of(expr: &Expr) -> Option<Binding> {
 /// The array binding an element read `a[i]` / `a.at(i)` reads from.
 fn indexed_array(expr: &Expr) -> Option<Binding> {
     match expr {
-        Expr::IndexGet { object, .. } => binding_of(object),
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => binding_of(object),
         Expr::ArrayAt { array, .. } => binding_of(array),
         _ => None,
     }
@@ -346,7 +346,7 @@ fn visit_stmt<'a>(
 ) {
     stmt(s);
     match s {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 visit_expr(e, home, stmt, expr);
             }
@@ -398,6 +398,7 @@ fn visit_stmt<'a>(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             visit_expr(discriminant, home, stmt, expr);
             for c in cases {

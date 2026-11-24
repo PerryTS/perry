@@ -102,7 +102,7 @@ fn apply_stmts(body: &mut [Stmt], fix: &mut dyn FnMut(FuncId, &mut [Param])) {
                     apply_expr(e, fix)
                 }
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     apply_expr(e, fix)
                 }
@@ -158,6 +158,7 @@ fn apply_stmts(body: &mut [Stmt], fix: &mut dyn FnMut(FuncId, &mut [Param])) {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 apply_expr(discriminant, fix);
                 for c in cases.iter_mut() {

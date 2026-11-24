@@ -61,6 +61,12 @@ pub(super) struct WasmModuleEmitter {
     /// The classes `declares_no_constructor` holds for: `new` forwards their
     /// arguments to a built-in parent's constructor.
     pub(super) implicit_ctor_classes: std::collections::BTreeSet<String>,
+    /// Classes whose compiled constructor is synthesized from the parent's
+    /// (`constructor_of`): its `super(...)` passes its parameters on as they are, a
+    /// rest parameter already as one array.
+    pub(super) forwarding_ctor_classes: std::collections::BTreeSet<String>,
+    /// Each class's constructor parameters that hold its captures, by name and local id.
+    pub(super) ctor_cap_params: BTreeMap<String, Vec<(String, u32)>>,
     /// Enum member values: (enum_name, member_name) → numeric value or string
     pub(super) enum_values: BTreeMap<(String, String), EnumResolvedValue>,
     /// Global index for NaN-safe temp storage (global.set/get may preserve NaN in Firefox)
@@ -151,6 +157,8 @@ impl WasmModuleEmitter {
             class_parent_map: BTreeMap::new(),
             user_classes: std::collections::BTreeSet::new(),
             implicit_ctor_classes: std::collections::BTreeSet::new(),
+            forwarding_ctor_classes: std::collections::BTreeSet::new(),
+            ctor_cap_params: BTreeMap::new(),
             enum_values: BTreeMap::new(),
             nan_temp_global: 0, // set during compile()
             async_func_imports: Vec::new(),

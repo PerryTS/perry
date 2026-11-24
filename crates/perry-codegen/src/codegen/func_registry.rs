@@ -139,6 +139,7 @@ mod tests {
 
     fn function(id: u32, name: &str) -> Function {
         Function {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             type_params: Vec::new(),

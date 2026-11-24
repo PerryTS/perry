@@ -94,7 +94,7 @@ fn chunked_args(m: &Module) -> &Vec<Expr> {
 fn slot_inits<'a>(m: &'a Module, calls: &[Expr]) -> Vec<(&'a str, u32, &'a Expr, &'a Function)> {
     let mut out = Vec::new();
     for call in calls {
-        let Expr::Call { callee, args, .. } = call else {
+        let Expr::RegionCall { callee, args } = call else {
             panic!("a chunk is a call: {call:?}");
         };
         let Expr::FuncRef(fid) = callee.as_ref() else {

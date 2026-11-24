@@ -62,12 +62,20 @@ impl Model {
                 self.activate(f, "escape");
             }
         }
-        if self.diagnostic.is_none() {
-            return self.escape_body(t, reason);
+        if self.stop_top.is_some() {
+            let src = self.cur_src;
+            self.stop_top.as_mut().unwrap().esc.push((t, reason, src));
         }
-        let first = self.diagnostic_escape_begin(t, reason);
-        self.escape_body(t, reason);
-        self.diagnostic_escape_end(t, first);
+        if self.diagnostic.is_none() {
+            self.escape_body(t, reason);
+        } else {
+            let first = self.diagnostic_escape_begin(t, reason);
+            self.escape_body(t, reason);
+            self.diagnostic_escape_end(t, first);
+        }
+        if let Some(s) = self.stop_top.as_mut() {
+            s.esc.pop();
+        }
     }
 
     fn escape_body(&mut self, t: Tok, reason: u32) {
@@ -388,6 +396,7 @@ impl Model {
         }
     }
 
+    #[track_caller]
     pub(super) fn mark_escaped(&mut self, t: Tok, reason: u32) {
         // A few hard/contract paths mark directly rather than entering escape.
         // Retain those actual events too; this data never feeds the solver.
@@ -426,6 +435,19 @@ impl Model {
         }
         let fresh = self.esc_bits[w] & (1 << (t & 63)) == 0;
         self.esc_bits[w] |= 1 << (t & 63);
+        if fresh
+            && self.stop_top.is_some()
+            && super::escaped_beside_top(&self.esc_bits, &self.param_marker, &self.arg_bits, t)
+        {
+            let why = format!(
+                "a value is marked escaped ({}): beside ⊤ it is that ⊤ (escaped_beside_top)",
+                self.reasons
+                    .get(reason as usize)
+                    .map_or("?", |s| s.as_str())
+                    .replace(['\n', '\r'], " ")
+            );
+            self.top_marker_created(t, &why, std::panic::Location::caller());
+        }
         if fresh {
             self.late_esc.push(t);
             self.enum_escaped(t);

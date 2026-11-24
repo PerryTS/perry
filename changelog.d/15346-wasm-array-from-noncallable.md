@@ -1,0 +1,1 @@
+`--target web`: `Array.from(x, mapFn)` throws a `TypeError` when `mapFn` is not callable (also for an empty source), and `Array.from(x, undefined)` copies `x` instead of mapping every element to `undefined` (#15326).

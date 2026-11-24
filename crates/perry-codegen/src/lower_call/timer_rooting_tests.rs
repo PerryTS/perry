@@ -42,6 +42,7 @@ use perry_hir::{Expr, Function, Module as HirModule, Stmt};
 fn compile_body(name: &str, body: Vec<Stmt>) -> String {
     let mut hir = HirModule::new(name);
     hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),

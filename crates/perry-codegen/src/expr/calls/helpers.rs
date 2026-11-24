@@ -128,7 +128,7 @@ pub(crate) fn hash_input_is_buffer(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     // all return a BufferHeader (Uint8Array-marked) — the HIR cannot infer
     // that statically without this hint, so without it `createHmac(secretKey, ...)`
     // would route to the string fast-path that misreads buffer bytes as UTF-8.
-    if let Expr::Call { callee, .. } = e {
+    if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = e {
         if let Expr::PropertyGet {
             object, property, ..
         } = callee.as_ref()

@@ -532,13 +532,15 @@ mod by_name_method_closure_tests {
     pub(super) fn method_literal_ir() -> String {
         let closure = |func_id: u32, captures: Vec<u32>| {
             let param_id = 10 + func_id;
-            let mut body = vec![Stmt::Return(Some(Expr::LocalGet(param_id)))];
+            let mut body = vec![Stmt::Return(Some(Expr::LocalGet(param_id)), 0)];
             if !captures.is_empty() {
                 body.insert(0, Stmt::Expr(Expr::LocalGet(captures[0])));
             }
             Expr::Closure {
+                byte_offset: 0,
                 func_id,
                 params: vec![Param {
+                    byte_offset: 0,
                     id: param_id,
                     name: "k".to_string(),
                     ty: Type::Any,
@@ -563,6 +565,7 @@ mod by_name_method_closure_tests {
         };
         let mut hir = HirModule::new("objlit_by_name_test");
         hir.functions.push(Function {
+            byte_offset: 0,
             id: 0,
             name: "build".to_string(),
             type_params: Vec::new(),
@@ -570,21 +573,25 @@ mod by_name_method_closure_tests {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 5,
                     name: "base".to_string(),
                     ty: Type::Number,
                     mutable: false,
                     init: Some(Expr::Number(1.0)),
                 },
-                Stmt::Return(Some(Expr::Object(vec![
-                    ("add".to_string(), closure(1, Vec::new())),
-                    // Allocating initializers AFTER each closure: that is what
-                    // makes `protect_handle` true, i.e. what puts the closure
-                    // values in a window at all.
-                    ("tag".to_string(), Expr::Object(Vec::new())),
-                    ("scale".to_string(), closure(2, vec![5])),
-                    ("last".to_string(), Expr::Object(Vec::new())),
-                ]))),
+                Stmt::Return(
+                    Some(Expr::Object(vec![
+                        ("add".to_string(), closure(1, Vec::new())),
+                        // Allocating initializers AFTER each closure: that is what
+                        // makes `protect_handle` true, i.e. what puts the closure
+                        // values in a window at all.
+                        ("tag".to_string(), Expr::Object(Vec::new())),
+                        ("scale".to_string(), closure(2, vec![5])),
+                        ("last".to_string(), Expr::Object(Vec::new())),
+                    ])),
+                    0,
+                ),
             ],
             is_async: false,
             is_generator: false,

@@ -38,7 +38,7 @@ fn pair_ir(name: &str, left: i64, right: i64) -> String {
         vec![
             buffer_let(1, "left", int(left)),
             buffer_let(2, "right", int(right)),
-            Stmt::Return(Some(proven_equals(1, 2))),
+            Stmt::Return(Some(proven_equals(1, 2)), 0),
         ],
     )
 }
@@ -71,7 +71,7 @@ fn proven_equals_decides_lengths_and_identity() {
             vec![
                 buffer_let(1, "l", int(8)),
                 buffer_let(2, "r", int(16)),
-                Stmt::Return(Some(proven_equals(1, 2))),
+                Stmt::Return(Some(proven_equals(1, 2)), 0),
             ],
             perry_codegen::nanbox::TAG_FALSE_I64,
         ),
@@ -80,7 +80,7 @@ fn proven_equals_decides_lengths_and_identity() {
             vec![
                 buffer_let(1, "l", int(0)),
                 buffer_let(2, "r", int(0)),
-                Stmt::Return(Some(proven_equals(1, 2))),
+                Stmt::Return(Some(proven_equals(1, 2)), 0),
             ],
             perry_codegen::nanbox::TAG_TRUE_I64,
         ),
@@ -88,7 +88,7 @@ fn proven_equals_decides_lengths_and_identity() {
             "buffer_equals_self.ts",
             vec![
                 buffer_let(1, "l", int(32)),
-                Stmt::Return(Some(proven_equals(1, 1))),
+                Stmt::Return(Some(proven_equals(1, 1)), 0),
             ],
             perry_codegen::nanbox::TAG_TRUE_I64,
         ),
@@ -116,7 +116,7 @@ fn proven_equals_takes_a_uint8array_argument() {
                 perry_hir::TYPED_ARRAY_KIND_UINT8,
                 int(16),
             ),
-            Stmt::Return(Some(proven_equals(1, 2))),
+            Stmt::Return(Some(proven_equals(1, 2)), 0),
         ],
     );
     assert!(ir.contains(MEMCMP), "a Uint8Array argument folds:\n{ir}");
@@ -137,7 +137,7 @@ fn a_uint8clampedarray_argument_is_the_method_call() {
                 perry_hir::TYPED_ARRAY_KIND_UINT8_CLAMPED,
                 int(16),
             ),
-            Stmt::Return(Some(proven_equals(1, 2))),
+            Stmt::Return(Some(proven_equals(1, 2)), 0),
         ],
     );
     assert!(
@@ -154,7 +154,7 @@ fn an_unproven_equals_is_the_ordinary_method_call() {
         vec![
             buffer_let(1, "l", int(16)),
             buffer_let(2, "r", int(16)),
-            Stmt::Return(Some(equals_at(0, 1, 2))),
+            Stmt::Return(Some(equals_at(0, 1, 2)), 0),
         ],
         proven_opts(),
     );
@@ -180,7 +180,7 @@ fn an_exposed_argument_is_the_method_call() {
                 object: Box::new(local(2)),
                 property: "buffer".to_string(),
             }),
-            Stmt::Return(Some(proven_equals(1, 2))),
+            Stmt::Return(Some(proven_equals(1, 2)), 0),
         ],
     );
     assert!(!ir.contains(MEMCMP), "no fold for an exposed view:\n{ir}");

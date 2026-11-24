@@ -116,7 +116,8 @@ pub(crate) fn closure_free(ctx: &FnCtx<'_>, id: u32) -> bool {
 /// The read `expr` when it is `a[k]` of an indexed receiver `a` with `k`
 /// proven below its length (module docs): the slot's double.
 pub(super) fn try_lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> {
-    let Expr::IndexGet { object, index, .. } = expr else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr
+    else {
         return Ok(None);
     };
     let (Expr::LocalGet(a), Expr::LocalGet(k)) = (object.as_ref(), index.as_ref()) else {

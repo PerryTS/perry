@@ -97,6 +97,7 @@ pub(crate) fn cloned_bool_select_read<'e>(
         condition,
         then_expr,
         else_expr,
+        ..
     } = expr
     else {
         return None;

@@ -151,7 +151,7 @@ fn closed_construction(class: &Class) -> Option<Closed> {
     }
     for stmt in &ctor.body {
         match stmt {
-            Stmt::Return(None) => {}
+            Stmt::Return(None, _) => {}
             Stmt::Expr(e) => {
                 let (name, value) = own_field_store(e)?;
                 if has_accessor(class, name) || !is_value(value) {

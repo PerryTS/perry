@@ -7,6 +7,7 @@
 use super::*;
 
 use anyhow::Result;
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 fn global_builtin_constructor_name(ctx: &LoweringContext, argument: &ast::Expr) -> Option<String> {
@@ -40,7 +41,7 @@ fn preserve_builtin_constructor_value(
         if matches!(&lowered, Expr::GlobalGet(0)) {
             return Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: argument.span().lo.0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: name,
             };

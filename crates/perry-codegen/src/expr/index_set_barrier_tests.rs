@@ -60,6 +60,7 @@ const VAL_ID: u32 = 13;
 
 fn any_field(name: &str) -> ClassField {
     ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -91,10 +92,12 @@ fn any_field(name: &str) -> ClassField {
 ///   statically and puts the store on the live-test tier at all.
 fn setter() -> Function {
     Function {
+        byte_offset: 0,
         id: 91,
         name: "set".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: VAL_ID,
             name: "v".to_string(),
             ty: Type::Any,
@@ -106,6 +109,7 @@ fn setter() -> Function {
         return_type: Type::Void,
         body: vec![Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: IDX_ID,
                 name: "i".to_string(),
                 ty: Type::Number,
@@ -113,6 +117,7 @@ fn setter() -> Function {
                 init: Some(Expr::Integer(0)),
             })),
             condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(IDX_ID)),
                 right: Box::new(Expr::Integer(8)),
@@ -184,6 +189,7 @@ fn probe_module() -> Module {
     // The class method is what carries the subject; the init only has to make
     // the class reachable, so it allocates one instance and nothing else.
     m.init = vec![Stmt::Let {
+        byte_offset: 0,
         id: RECV_ID,
         name: "b".to_string(),
         ty: Type::Named("Bag".to_string()),

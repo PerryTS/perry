@@ -147,7 +147,7 @@ impl<'a> Flow<'a> {
                 }
                 self.edge(expr(value), here);
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 if let Expr::String(key) = index.as_ref() {
                     let field = self.field(scope, object, key);
                     self.edge(field, here);
@@ -177,7 +177,7 @@ impl<'a> Flow<'a> {
                 let here = self.node(here);
                 self.refs.push((here, *id));
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 let call = (self.node(here), self.node(expr(callee)));
                 let args = args.iter().map(|a| self.node(expr(a))).collect();
                 self.calls.push((call.0, call.1, args));
@@ -239,7 +239,7 @@ impl<'a> Flow<'a> {
                     }
                     self.expression(scope, e);
                 }
-                Stmt::Return(Some(e)) => {
+                Stmt::Return(Some(e), _) => {
                     self.edge(expr(e), Node::Return(scope));
                     self.expression(scope, e);
                 }
@@ -294,6 +294,7 @@ impl<'a> Flow<'a> {
                 Stmt::Switch {
                     discriminant,
                     cases,
+                    ..
                 } => {
                     self.expression(scope, discriminant);
                     for case in cases {
@@ -651,7 +652,7 @@ fn stmts_mut(body: &mut [Stmt], f: &mut impl FnMut(&mut Expr)) {
             Stmt::Let { init: Some(e), .. }
             | Stmt::Expr(e)
             | Stmt::Throw(e)
-            | Stmt::Return(Some(e)) => expr_mut(e, f),
+            | Stmt::Return(Some(e), _) => expr_mut(e, f),
             Stmt::If {
                 condition,
                 then_branch,
@@ -702,6 +703,7 @@ fn stmts_mut(body: &mut [Stmt], f: &mut impl FnMut(&mut Expr)) {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 expr_mut(discriminant, f);
                 for case in cases {

@@ -54,6 +54,7 @@ impl Model {
                 ));
             return;
         }
+        self.add_tok(self.reflect_new_targets, new_target);
         if target == TOP {
             // TOP may denote a retained program constructor. Its actual
             // Reflect call supplies both the allocation and the arguments.

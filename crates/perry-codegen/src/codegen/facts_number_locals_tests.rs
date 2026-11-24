@@ -12,6 +12,7 @@ use perry_hir::{BinaryOp, CompareOp, Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Any,
@@ -24,6 +25,7 @@ fn param(id: u32) -> Param {
 
 fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -32,6 +34,7 @@ fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
 
 fn let_(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("l{id}"),
         ty: Type::Any,
@@ -44,6 +47,7 @@ fn let_(id: u32, init: Expr) -> Stmt {
 fn module() -> Module {
     let mut m = Module::new("facts_num.ts");
     m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".into(),
         type_params: vec![],
@@ -52,15 +56,20 @@ fn module() -> Module {
         body: vec![
             let_(3, bin(BinaryOp::Add, Expr::LocalGet(1), Expr::LocalGet(2))),
             let_(4, bin(BinaryOp::Mul, Expr::LocalGet(3), Expr::Integer(2))),
-            Stmt::Return(Some(Expr::Conditional {
-                condition: Box::new(Expr::Compare {
-                    op: CompareOp::Lt,
-                    left: Box::new(Expr::LocalGet(4)),
-                    right: Box::new(Expr::Integer(100)),
+            Stmt::Return(
+                Some(Expr::Conditional {
+                    byte_offset: 0,
+                    condition: Box::new(Expr::Compare {
+                        byte_offset: 0,
+                        op: CompareOp::Lt,
+                        left: Box::new(Expr::LocalGet(4)),
+                        right: Box::new(Expr::Integer(100)),
+                    }),
+                    then_expr: Box::new(Expr::LocalGet(4)),
+                    else_expr: Box::new(Expr::LocalGet(3)),
                 }),
-                then_expr: Box::new(Expr::LocalGet(4)),
-                else_expr: Box::new(Expr::LocalGet(3)),
-            })),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,

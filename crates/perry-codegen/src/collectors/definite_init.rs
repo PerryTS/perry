@@ -190,7 +190,7 @@ fn shallow_expr(e: &Expr, s: &mut Shallow) {
 fn shallow_expr_at(e: &Expr, s: &mut Shallow, read: bool) {
     if read {
         match e {
-            Expr::IndexGet { object, .. } => {
+            Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     s.receivers.push(*id);
                 }
@@ -260,7 +260,7 @@ fn shallow_expr_at(e: &Expr, s: &mut Shallow, read: bool) {
 /// level, in source order.
 fn for_each_stmt_expr<'a>(stmt: &'a Stmt, f: &mut impl FnMut(&'a Expr)) {
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 f(e);
             }
@@ -316,6 +316,7 @@ fn for_each_stmt_expr<'a>(stmt: &'a Stmt, f: &mut impl FnMut(&'a Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -505,7 +506,10 @@ impl<'a> Model<'a> {
         let note_chunks =
             |stmts: &'a [Stmt], owner: Option<u32>, out: &mut HashMap<u32, Option<u32>>| {
                 for st in stmts {
-                    if let Stmt::Expr(Expr::Call { callee, args, .. }) = st {
+                    if let Stmt::Expr(
+                        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. },
+                    ) = st
+                    {
                         if let Expr::FuncRef(id) = callee.as_ref() {
                             if args.is_empty() && chunks.contains_key(id) {
                                 out.insert(*id, owner);
@@ -814,13 +818,13 @@ fn top_level_let_count(stmts: &[&Stmt], id: u32) -> usize {
 /// ...; return a; }())`.
 fn iife_returns_array(m: &Model<'_>, body: &[Stmt]) -> bool {
     let stmts: Vec<&Stmt> = body.iter().collect();
-    let Some(Stmt::Return(Some(_))) = stmts.last() else {
+    let Some(Stmt::Return(Some(_), _)) = stmts.last() else {
         return false;
     };
     for (i, st) in stmts.iter().enumerate() {
         let mut ok = true;
         for_each_stmt(st, &mut |s| {
-            if let Stmt::Return(r) = s {
+            if let Stmt::Return(r, _) = s {
                 ok &= match r {
                     Some(e) if is_array_literal(e) => true,
                     Some(Expr::LocalGet(a)) => array_local_before(m, &stmts, *a, i),
@@ -862,7 +866,7 @@ fn initializer_kind(m: &Model<'_>, init: &Expr) -> Option<HirType> {
     if let Some(class) = crate::collectors::spec_abi_sites::typed_array_new_class(init) {
         return Some(HirType::Named(class.to_string()));
     }
-    if let Expr::Call { callee, args, .. } = init {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = init {
         if let Expr::Closure {
             params,
             body,
@@ -924,13 +928,13 @@ fn confined(m: &Model<'_>, v: u32, init: &Expr) -> bool {
     if matches!(init, Expr::Array(_, _)) {
         return true;
     }
-    let Expr::Call { callee, .. } = init else {
+    let (Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) = init else {
         return false;
     };
     let Expr::Closure { func_id, body, .. } = callee.as_ref() else {
         return false;
     };
-    let Some(Stmt::Return(Some(Expr::LocalGet(a)))) = body.last() else {
+    let Some(Stmt::Return(Some(Expr::LocalGet(a)), _)) = body.last() else {
         return false;
     };
     let Some(node) = m.nodes.get(func_id) else {
@@ -953,7 +957,7 @@ fn confined(m: &Model<'_>, v: u32, init: &Expr) -> bool {
     let mut other_returns = false;
     for st in &stmts {
         for_each_stmt(st, &mut |s| {
-            if let Stmt::Return(r) = s {
+            if let Stmt::Return(r, _) = s {
                 match r {
                     Some(Expr::LocalGet(x)) if x == a => returns += 1,
                     _ => other_returns = true,

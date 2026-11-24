@@ -67,6 +67,7 @@ fn compile_body_with_params_and_strict(
 ) -> String {
     let mut hir = HirModule::new(name);
     hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
@@ -93,6 +94,7 @@ fn compile_body_with_params_and_strict(
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -198,6 +200,7 @@ fn calls(ir: &str, callee: &str) -> bool {
 fn with_native_f64_view(tail: Stmt) -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "owner".to_string(),
             ty: Type::Any,
@@ -205,6 +208,7 @@ fn with_native_f64_view(tail: Stmt) -> Vec<Stmt> {
             init: Some(Expr::NativeArenaAlloc(Box::new(Expr::Integer(64)))),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 11,
             name: "view".to_string(),
             ty: Type::Named("Float64Array".to_string()),
@@ -266,6 +270,7 @@ fn arr_length_store_roots_the_receiver_across_an_allocating_rhs() {
         |value| {
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "arr".to_string(),
                     ty: Type::Array(Box::new(Type::Number)),
@@ -298,6 +303,7 @@ fn array_string_key_store_roots_both_operands_across_an_allocating_rhs() {
         |value| {
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "arr".to_string(),
                     ty: Type::Array(Box::new(Type::Any)),
@@ -305,16 +311,18 @@ fn array_string_key_store_roots_both_operands_across_an_allocating_rhs() {
                     init: Some(Expr::Array(vec![Expr::Number(1.0)], None)),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "key".to_string(),
                     ty: Type::String,
                     mutable: false,
                     init: Some(Expr::String("k".to_string())),
                 },
-                Stmt::Expr(Expr::synthetic_index_set(
+                Stmt::Expr(Expr::index_set_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(Expr::LocalGet(2)),
                     Box::new(value),
+                    0,
                 )),
             ]
         },
@@ -332,6 +340,7 @@ fn polymorphic_index_store_roots_both_operands_across_an_allocating_rhs() {
         |value| {
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "recv".to_string(),
                     ty: Type::Any,
@@ -339,16 +348,18 @@ fn polymorphic_index_store_roots_both_operands_across_an_allocating_rhs() {
                     init: Some(Expr::Object(Vec::new())),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "key".to_string(),
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::Object(Vec::new())),
                 },
-                Stmt::Expr(Expr::synthetic_index_set(
+                Stmt::Expr(Expr::index_set_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(Expr::LocalGet(2)),
                     Box::new(value),
+                    0,
                 )),
             ]
         },
@@ -365,10 +376,14 @@ fn typed_array_runtime_key_read_roots_receiver_only_when_key_collects() {
         compile_body_with_params(
             label,
             vec![param(1, "ta", Type::Named("Int32Array".to_string()))],
-            vec![Stmt::Return(Some(Expr::synthetic_index_get(
-                Box::new(Expr::LocalGet(1)),
-                Box::new(key),
-            )))],
+            vec![Stmt::Return(
+                Some(Expr::index_get_at(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(key),
+                    0,
+                )),
+                0,
+            )],
         )
     };
     let collecting = compile("ta_runtime_key_collecting", allocating_value());
@@ -407,10 +422,11 @@ fn typed_array_runtime_key_store_roots_operands_only_when_rhs_collects() {
                 param(1, "ta", Type::Named("Int32Array".to_string())),
                 param(2, "key", Type::Any),
             ],
-            vec![Stmt::Expr(Expr::synthetic_index_set(
+            vec![Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::LocalGet(2)),
                 Box::new(value),
+                0,
             ))],
         )
     };
@@ -455,10 +471,11 @@ fn erased_receiver_inline_store_roots_receiver_and_key_across_rhs() {
         compile_body_with_params(
             label,
             vec![param(1, "receiver", Type::Any), param(2, "key", Type::Any)],
-            vec![Stmt::Expr(Expr::synthetic_index_set(
+            vec![Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::LocalGet(2)),
                 Box::new(value),
+                0,
             ))],
         )
     };
@@ -535,10 +552,11 @@ fn put_value_index_fast_path_preserves_explicit_module_strictness() {
 fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
     let inert_store = compile_body(
         "native_view_inert_store",
-        with_native_f64_view(Stmt::Expr(Expr::synthetic_index_set(
+        with_native_f64_view(Stmt::Expr(Expr::index_set_at(
             Box::new(Expr::LocalGet(11)),
             Box::new(Expr::Integer(0)),
             Box::new(Expr::Number(1.0)),
+            0,
         ))),
     );
     assert!(
@@ -555,10 +573,11 @@ fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
 
     let collecting_store = compile_body(
         "native_view_collecting_store",
-        with_native_f64_view(Stmt::Expr(Expr::synthetic_index_set(
+        with_native_f64_view(Stmt::Expr(Expr::index_set_at(
             Box::new(Expr::LocalGet(11)),
             Box::new(Expr::Integer(0)),
             Box::new(Expr::NumberCoerce(Box::new(allocating_value()))),
+            0,
         ))),
     );
     assert!(
@@ -573,16 +592,21 @@ fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
     );
 
     let collecting_index = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitAnd,
         left: Box::new(Expr::NumberCoerce(Box::new(allocating_value()))),
         right: Box::new(Expr::Integer(0)),
     };
     let collecting_load = compile_body(
         "native_view_collecting_load",
-        with_native_f64_view(Stmt::Return(Some(Expr::synthetic_index_get(
-            Box::new(Expr::LocalGet(11)),
-            Box::new(collecting_index),
-        )))),
+        with_native_f64_view(Stmt::Return(
+            Some(Expr::index_get_at(
+                Box::new(Expr::LocalGet(11)),
+                Box::new(collecting_index),
+                0,
+            )),
+            0,
+        )),
     );
     assert!(
         calls(&collecting_load, "js_typed_array_get"),
@@ -606,6 +630,7 @@ fn compile_masked_window_with_key(
         body.insert(
             0,
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "key".to_string(),
                 ty: Type::Any,
@@ -626,6 +651,7 @@ fn compile_masked_window_loop(key_ty: Type, value: Expr) -> String {
         false,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "sum".to_string(),
                 ty: Type::Number,
@@ -634,6 +660,7 @@ fn compile_masked_window_loop(key_ty: Type, value: Expr) -> String {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: 4,
                     name: "i".to_string(),
                     ty: Type::Any,
@@ -641,6 +668,7 @@ fn compile_masked_window_loop(key_ty: Type, value: Expr) -> String {
                     init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(4)),
                     right: Box::new(Expr::Integer(2)),
@@ -652,13 +680,14 @@ fn compile_masked_window_loop(key_ty: Type, value: Expr) -> String {
                 }),
                 body: vec![Stmt::Expr(Expr::LocalSet(3, Box::new(value)))],
             },
-            Stmt::Return(Some(Expr::LocalGet(3))),
+            Stmt::Return(Some(Expr::LocalGet(3)), 0),
         ],
     )
 }
 
 fn masked_window_index_coercion_loop(key_ty: Type) -> String {
     let masked_index = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::BitAnd,
         left: Box::new(Expr::Unary {
             op: UnaryOp::Pos,
@@ -673,6 +702,7 @@ fn masked_window_index_coercion_loop(key_ty: Type) -> String {
         vec![
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: 4,
                     name: "i".to_string(),
                     ty: Type::Any,
@@ -680,6 +710,7 @@ fn masked_window_index_coercion_loop(key_ty: Type) -> String {
                     init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(4)),
                     right: Box::new(Expr::Integer(2)),
@@ -691,25 +722,32 @@ fn masked_window_index_coercion_loop(key_ty: Type) -> String {
                 }),
                 // A bare read isolates the property under test: whether the
                 // unary index coercion is non-collecting.
-                body: vec![Stmt::Expr(Expr::synthetic_index_get(
+                body: vec![Stmt::Expr(Expr::index_get_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(masked_index),
+                    0,
                 ))],
             },
-            Stmt::Return(Some(Expr::Integer(0))),
+            Stmt::Return(Some(Expr::Integer(0)), 0),
         ],
     )
 }
 
 fn masked_window_rhs_coercion_loop(key_ty: Type) -> String {
     let read = |index| {
-        Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(index)))
+        Expr::index_get_at(
+            Box::new(Expr::LocalGet(1)),
+            Box::new(Expr::Integer(index)),
+            0,
+        )
     };
     compile_masked_window_loop(
         key_ty,
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(read(0)),
                 right: Box::new(Expr::Unary {
@@ -725,11 +763,17 @@ fn masked_window_rhs_coercion_loop(key_ty: Type) -> String {
 fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
     let value = || {
         let read = |index| {
-            Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(index)))
+            Expr::index_get_at(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Integer(index)),
+                0,
+            )
         };
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(read(0)),
                 right: Box::new(Expr::Unary {
@@ -741,6 +785,7 @@ fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
         }
     };
     let mut body = vec![Stmt::Let {
+        byte_offset: 0,
         id: 3,
         name: "sum".into(),
         ty: Type::Number,
@@ -750,15 +795,20 @@ fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
     for _ in 0..4 {
         body.push(Stmt::Expr(Expr::LocalSet(3, Box::new(value()))));
     }
-    body.push(Stmt::Return(Some(Expr::LocalGet(3))));
+    body.push(Stmt::Return(Some(Expr::LocalGet(3)), 0));
     compile_masked_window_with_key("masked_window_rhs_coercion_region", key_ty, false, body)
 }
 
 fn masked_window_pair_sum() -> Expr {
     let read = |index| {
-        Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(index)))
+        Expr::index_get_at(
+            Box::new(Expr::LocalGet(1)),
+            Box::new(Expr::Integer(index)),
+            0,
+        )
     };
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(read(0)),
         right: Box::new(read(1)),
@@ -772,6 +822,7 @@ fn masked_window_standalone_update_loop(key_ty: Type) -> String {
         true,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "sum".into(),
                 ty: Type::Number,
@@ -780,6 +831,7 @@ fn masked_window_standalone_update_loop(key_ty: Type) -> String {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: 4,
                     name: "i".into(),
                     ty: Type::Any,
@@ -787,6 +839,7 @@ fn masked_window_standalone_update_loop(key_ty: Type) -> String {
                     mutable: true,
                 })),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(4)),
                     right: Box::new(Expr::Integer(2)),
@@ -806,13 +859,14 @@ fn masked_window_standalone_update_loop(key_ty: Type) -> String {
                     Stmt::Expr(Expr::LocalSet(3, Box::new(masked_window_pair_sum()))),
                 ],
             },
-            Stmt::Return(Some(Expr::LocalGet(3))),
+            Stmt::Return(Some(Expr::LocalGet(3)), 0),
         ],
     )
 }
 
 fn masked_window_standalone_update_region(key_ty: Type) -> String {
     let mut body = vec![Stmt::Let {
+        byte_offset: 0,
         id: 3,
         name: "sum".into(),
         ty: Type::Number,
@@ -834,7 +888,7 @@ fn masked_window_standalone_update_region(key_ty: Type) -> String {
             Box::new(masked_window_pair_sum()),
         )));
     }
-    body.push(Stmt::Return(Some(Expr::LocalGet(3))));
+    body.push(Stmt::Return(Some(Expr::LocalGet(3)), 0));
     compile_masked_window_with_key("masked_window_standalone_update_region", key_ty, true, body)
 }
 
@@ -960,16 +1014,18 @@ fn growing_array_store_uses_the_reallocated_head_for_its_barrier() {
         "array_grow_barrier_head",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "arr".to_string(),
                 ty: Type::Array(Box::new(Type::Any)),
                 mutable: false,
                 init: Some(Expr::Array(vec![Expr::Undefined], None)),
             },
-            Stmt::Expr(Expr::synthetic_index_set(
+            Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::Integer(8)),
                 Box::new(allocating_value()),
+                0,
             )),
         ],
     );

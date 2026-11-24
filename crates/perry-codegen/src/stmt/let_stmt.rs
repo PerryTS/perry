@@ -279,7 +279,11 @@ pub(crate) fn lower_let(
     // Only fires for non-mutable lets (reassignment would invalidate
     // the alias relationship).
     if !mutable {
-        if let Some(perry_hir::Expr::IndexGet { object, index, .. }) = init {
+        if let Some(
+            perry_hir::Expr::IndexGet { object, index, .. }
+            | perry_hir::Expr::RegionOut { object, index, .. },
+        ) = init
+        {
             if let perry_hir::Expr::LocalGet(const_id) = object.as_ref() {
                 if ctx.flat_const_arrays.contains_key(const_id) {
                     ctx.array_row_aliases
@@ -629,7 +633,11 @@ pub(crate) fn lower_let(
 
     // Keep non-escaping uppercase results virtual for fused consumers while
     // snapshotting the receiver against later source-local writes.
-    if let Some(perry_hir::Expr::Call { callee, args, .. }) = init {
+    if let Some(
+        perry_hir::Expr::Call { callee, args, .. }
+        | perry_hir::Expr::RegionCall { callee, args, .. },
+    ) = init
+    {
         if ctx.fusible_uppercase_locals.contains(&id)
             && args.is_empty()
             && matches!(
@@ -673,7 +681,11 @@ pub(crate) fn lower_let(
     // small constant-index reads does not need an ArrayHeader or unobserved
     // substring allocations. The escape collector admits this exact shape and
     // rejects `.length`, mutation, captures, and dynamic indices.
-    if let Some(perry_hir::Expr::Call { callee, args, .. }) = init {
+    if let Some(
+        perry_hir::Expr::Call { callee, args, .. }
+        | perry_hir::Expr::RegionCall { callee, args, .. },
+    ) = init
+    {
         if ctx.non_escaping_arrays.contains_key(&id) && is_scalar_split(ctx, callee, args) {
             let perry_hir::Expr::PropertyGet { object, .. } = callee.as_ref() else {
                 unreachable!();

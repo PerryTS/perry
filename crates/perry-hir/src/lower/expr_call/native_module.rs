@@ -108,7 +108,7 @@ fn is_node_stream_class_name(name: &str) -> bool {
 /// reads and stores are the ordinary `[[Get]]`/`[[Set]]` node performs, so an
 /// accessor on a user prototype level sees them. The call's value is
 /// `undefined`.
-fn event_emitter_constructor_call(args: Vec<Expr>) -> Expr {
+fn event_emitter_constructor_call(args: Vec<Expr>, byte_offset: u32) -> Expr {
     let mut it = args.into_iter();
     let receiver = it.next().unwrap_or(Expr::Undefined);
     let options = it.next().unwrap_or(Expr::Undefined);
@@ -121,7 +121,7 @@ fn event_emitter_constructor_call(args: Vec<Expr>) -> Expr {
         }),
         args: vec![receiver, options],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     }];
     exprs.extend(it);
     exprs.push(Expr::Undefined);
@@ -153,6 +153,7 @@ fn lower_os_module_method_call(
         "networkInterfaces" => Some(Expr::OsNetworkInterfaces),
         "userInfo" => Some(user_info_expr_for_call(call, args.to_vec())),
         "getPriority" | "setPriority" => Some(Expr::NativeMethodCall {
+            byte_offset: crate::lower::call_token(call),
             module: "os".to_string(),
             class_name: None,
             object: None,
@@ -370,6 +371,7 @@ pub(super) fn try_native_module_methods(
             Some(("inspector/promises", Some("Session")))
         ) {
             return Ok(Ok(Expr::NativeMethodCall {
+                byte_offset: crate::lower::call_token(call),
                 module: "inspector/promises".to_string(),
                 class_name: None,
                 object: None,
@@ -412,6 +414,7 @@ pub(super) fn try_native_module_methods(
                 if let ast::MemberProp::Ident(method_ident) = &member.prop {
                     if method_ident.sym.as_ref() == "from" {
                         return Ok(Ok(Expr::NativeMethodCall {
+                            byte_offset: crate::lower::call_token(call),
                             module: "readable_stream".to_string(),
                             class_name: Some("ReadableStream".to_string()),
                             object: None,
@@ -422,7 +425,13 @@ pub(super) fn try_native_module_methods(
                 }
             }
 
-            args = match process_module::try_process_module_methods(ctx, member, &obj_name, args)? {
+            args = match process_module::try_process_module_methods(
+                ctx,
+                member,
+                &obj_name,
+                args,
+                call.span.lo.0,
+            )? {
                 Ok(expr) => return Ok(Ok(expr)),
                 Err(rest) => rest,
             };
@@ -470,6 +479,7 @@ pub(super) fn try_native_module_methods(
                         | "getHeapSnapshot"
                         | "writeHeapSnapshot" => {
                             return Ok(Ok(Expr::NativeMethodCall {
+                                byte_offset: crate::lower::call_token(call),
                                 module: "v8".to_string(),
                                 class_name: None,
                                 object: None,

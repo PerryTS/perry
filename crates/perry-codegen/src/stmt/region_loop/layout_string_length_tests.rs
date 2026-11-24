@@ -5,6 +5,7 @@ use perry_hir::{BinaryOp, CompareOp, Expr, Stmt};
 
 fn bin(left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -48,6 +49,7 @@ fn sum_lengths_ir_with(tree: Expr) -> String {
     ];
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 4,
             name: "h".into(),
             ty: Type::Number,
@@ -56,6 +58,7 @@ fn sum_lengths_ir_with(tree: Expr) -> String {
         },
         Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: 0,
                 id: 5,
                 name: "k".into(),
                 ty: Type::Number,
@@ -63,6 +66,7 @@ fn sum_lengths_ir_with(tree: Expr) -> String {
                 init: Some(Expr::Integer(0)),
             })),
             condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(5)),
                 right: Box::new(Expr::LocalGet(2)),
@@ -74,9 +78,10 @@ fn sum_lengths_ir_with(tree: Expr) -> String {
             }),
             body: loop_body,
         },
-        Stmt::Return(Some(Expr::LocalGet(4))),
+        Stmt::Return(Some(Expr::LocalGet(4)), 0),
     ];
     let param = |id: u32, name: &str, ty: Type| Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty,
@@ -87,6 +92,7 @@ fn sum_lengths_ir_with(tree: Expr) -> String {
     };
     let mut m = Module::new("strlen_tree");
     m.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "run".into(),
         type_params: vec![],

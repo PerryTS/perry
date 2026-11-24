@@ -122,7 +122,7 @@ impl Scan {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.expr(e);
                 }
@@ -220,6 +220,7 @@ impl Scan {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 self.expr(condition);
                 self.expr(then_expr);
@@ -234,6 +235,7 @@ impl Scan {
                 op: CompareOp::Eq | CompareOp::Ne,
                 left,
                 right,
+                ..
             } => {
                 self.expr(left);
                 self.expr(right);

@@ -11,6 +11,7 @@ use perry_hir::{CatchClause, Param, SwitchCase};
 
 fn let_mut(id: u32, init: Option<Expr>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: HirType::Number,
@@ -21,6 +22,7 @@ fn let_mut(id: u32, init: Option<Expr>) -> Stmt {
 
 fn let_const(id: u32, value: i64) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("c{id}"),
         ty: HirType::Number,
@@ -47,6 +49,7 @@ fn dec(id: u32) -> Expr {
 
 fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(l),
         right: Box::new(r),
@@ -55,6 +58,7 @@ fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
 
 fn cmp(op: CompareOp, l: Expr, r: Expr) -> Expr {
     Expr::Compare {
+        byte_offset: 0,
         op,
         left: Box::new(l),
         right: Box::new(r),
@@ -63,6 +67,7 @@ fn cmp(op: CompareOp, l: Expr, r: Expr) -> Expr {
 
 fn and(l: Expr, r: Expr) -> Expr {
     Expr::Logical {
+        byte_offset: 0,
         op: LogicalOp::And,
         left: Box::new(l),
         right: Box::new(r),
@@ -71,6 +76,7 @@ fn and(l: Expr, r: Expr) -> Expr {
 
 fn or(l: Expr, r: Expr) -> Expr {
     Expr::Logical {
+        byte_offset: 0,
         op: LogicalOp::Or,
         left: Box::new(l),
         right: Box::new(r),
@@ -533,6 +539,7 @@ fn a_written_bound_is_not_a_constant() {
     // reassigned, so it cannot serve as a compile-time bound.
     let stmts = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "LIMIT".into(),
             ty: HirType::Number,
@@ -656,6 +663,7 @@ fn a_write_from_a_closure_disqualifies() {
         condition: Some(cmp(CompareOp::Lt, Expr::LocalGet(2), Expr::Integer(10))),
         update: Some(inc(2)),
         body: vec![Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 0,
             params: Vec::<Param>::new(),
             return_type: HirType::Void,
@@ -798,6 +806,7 @@ fn step_in_a_switch_case_and_a_finally_are_both_counted() {
     // into the per-iteration total, not silently skipped.
     let body = vec![
         Stmt::Switch {
+            byte_offset: 0,
             discriminant: Expr::LocalGet(2),
             cases: vec![SwitchCase {
                 test: Some(Expr::Integer(0)),
@@ -805,6 +814,7 @@ fn step_in_a_switch_case_and_a_finally_are_both_counted() {
             }],
         },
         Stmt::Try {
+            byte_offset: 0,
             body: vec![],
             catch: Some(CatchClause {
                 param: None,

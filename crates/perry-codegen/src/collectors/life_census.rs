@@ -537,7 +537,7 @@ fn position(parent: Option<&Expr>) -> String {
         ) => "field-initializer".to_string(),
         Some(Expr::New { .. }) => "constructor-argument".to_string(),
         Some(Expr::PropertyGet { .. }) => "field-read".to_string(),
-        Some(Expr::IndexGet { .. }) => "indexed-read".to_string(),
+        Some(Expr::IndexGet { .. } | Expr::RegionOut { .. }) => "indexed-read".to_string(),
         Some(p) => format!("other:{}", kind(p)),
         None => "statement-other".to_string(),
     }
@@ -1024,7 +1024,7 @@ impl Census<'_> {
                 },
             },
             Stmt::Let { init: None, .. } => {}
-            Stmt::Return(Some(e)) => match self.cand(e) {
+            Stmt::Return(Some(e), _) => match self.cand(e) {
                 Some(c) => self.block(c, "returned"),
                 None if birth(e).is_some() => {
                     let side = match self.body {
@@ -1107,6 +1107,7 @@ impl Census<'_> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant, None);
                 for c in cases {
@@ -1116,7 +1117,7 @@ impl Census<'_> {
                     self.stmts(&c.body);
                 }
             }
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -1344,7 +1345,8 @@ impl Census<'_> {
                             | Expr::PropertySet { .. }
                             | Expr::IndexSet { .. }
                             | Expr::PropertyGet { .. }
-                            | Expr::IndexGet { .. },
+                            | Expr::IndexGet { .. }
+                            | Expr::RegionOut { .. },
                         )
                         | None => "-".to_string(),
                         Some(p) => sides::node_side(self.m, p, e),
@@ -1372,7 +1374,9 @@ impl Census<'_> {
                     _ => self.block(c, "read-unproven"),
                 }
             }
-            Expr::IndexGet { object, index, .. } if self.cand(object).is_some() => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
+                if self.cand(object).is_some() =>
+            {
                 let c = self.cand(object).expect("candidate");
                 let constant = super::escape_arrays::const_index(index).is_some();
                 if !(self.cand_kind(c) == Kind::Array && constant) {
@@ -1380,7 +1384,7 @@ impl Census<'_> {
                 }
                 self.expr(index, Some(e));
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 let (fn_id, what) = match callee.as_ref() {
                     Expr::FuncRef(f) => (Some(*f), "direct function"),
                     Expr::LocalGet(c)
@@ -1460,7 +1464,9 @@ impl Census<'_> {
                     self.call_site = saved;
                 }
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 let address = match op {
                     CompareOp::Eq | CompareOp::Ne => true,
                     CompareOp::LooseEq | CompareOp::LooseNe => {

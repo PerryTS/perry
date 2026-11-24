@@ -321,7 +321,7 @@ fn nested_method_constructs_forward_declared_sibling_class() {
     assert!(
         matches!(
             make_child.body.as_slice(),
-            [crate::Stmt::Return(Some(crate::Expr::New { class_name, .. }))]
+            [crate::Stmt::Return(Some(crate::Expr::New { class_name, .. }), _)]
                 if class_name == "Child"
         ),
         "forward sibling construction must remain a static class construct: {:#?}",
@@ -364,7 +364,7 @@ fn nested_method_constructs_collision_renamed_forward_sibling_class() {
     assert!(
         matches!(
             make_child.body.as_slice(),
-            [crate::Stmt::Return(Some(crate::Expr::New { class_name, .. }))]
+            [crate::Stmt::Return(Some(crate::Expr::New { class_name, .. }), _)]
                 if class_name.starts_with("Child$")
         ),
         "collision-renamed forward sibling construction must remain a static class construct: {:#?}",
@@ -409,7 +409,7 @@ fn fresh_class_declaration_collision_keeps_lexical_binding() {
         .expect("fresh class is bound under source name");
     assert_ne!(template, "C", "second template should be collision-renamed");
     assert!(second.body.iter().any(|stmt| {
-        matches!(stmt, crate::Stmt::Return(Some(crate::Expr::LocalGet(id))) if *id == binding_id)
+        matches!(stmt, crate::Stmt::Return(Some(crate::Expr::LocalGet(id)), _) if *id == binding_id)
     }));
     assert!(second.body.iter().any(|stmt| {
         matches!(

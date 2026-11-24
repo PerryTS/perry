@@ -51,7 +51,7 @@ pub(crate) fn lower_member_tail(
                     }),
                     args: vec![],
                     type_args: vec![],
-                    byte_offset: member.span.lo.0,
+                    byte_offset: crate::lower::member_token(member),
                 });
             }
         }
@@ -83,7 +83,7 @@ pub(crate) fn lower_member_tail(
                 {
                     object_expr = Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(Expr::GlobalGet(0)),
                         property: obj_name.to_string(),
                     };
@@ -549,7 +549,7 @@ pub(crate) fn lower_member_tail(
             {
                 object_expr = Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset: crate::lower::member_token(member),
                     object: Box::new(Expr::GlobalGet(0)),
                     property: name.to_string(),
                 };
@@ -821,7 +821,7 @@ pub(crate) fn lower_member_tail(
                 byte_end: 0,
                 // #5247: carry the member access's source offset so a nullish
                 // receiver ("Cannot read properties of undefined") localizes.
-                byte_offset: member.span.lo.0,
+                byte_offset: crate::lower::member_token(member),
                 object,
                 property,
             })
@@ -960,7 +960,7 @@ pub(crate) fn lower_member_tail(
                         byte_end: 0,
                         // #5247: `obj["prop"]` folds to a PropertyGet — carry the
                         // member offset so a nullish receiver localizes too.
-                        byte_offset: member.span.lo.0,
+                        byte_offset: crate::lower::member_token(member),
                         object,
                         property: key.clone(),
                     });
@@ -988,12 +988,12 @@ pub(crate) fn lower_member_tail(
                     }),
                     args: vec![*index],
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: crate::lower::member_token(member),
                 });
             }
             Ok(Expr::IndexGet {
                 element_offset: member.span.lo.0,
-                byte_offset: 0,
+                byte_offset: crate::lower::member_token(member),
                 byte_end: 0,
                 object,
                 index,
@@ -1010,7 +1010,7 @@ pub(crate) fn lower_member_tail(
                 byte_end: 0,
                 // #5247: `this.#field` — carry the member offset for nullish-receiver
                 // localization (consistency with the public-property path).
-                byte_offset: member.span.lo.0,
+                byte_offset: crate::lower::member_token(member),
                 object,
                 property,
             })

@@ -91,7 +91,8 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
     // and died on React's "Invalid hook call" null-dispatcher TypeError.
     // (`createElement` reads `props.children` the same way the jsx-runtime
     // does, so folding children into props is shared between both paths.)
-    if let Some(react_element_call) = react_create_element_call(ctx, type_expr.clone(), &props_expr)
+    if let Some(react_element_call) =
+        react_create_element_call(ctx, type_expr.clone(), &props_expr, jsx.span.lo.0)
     {
         return Ok(react_element_call);
     }
@@ -105,7 +106,7 @@ pub(crate) fn lower_jsx_element(ctx: &mut LoweringContext, jsx: &ast::JSXElement
         }),
         args: vec![type_expr, props_expr],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset: jsx.span.lo.0,
     })
 }
 
@@ -116,6 +117,7 @@ fn react_create_element_call(
     ctx: &mut LoweringContext,
     type_expr: Expr,
     props_expr: &Expr,
+    byte_offset: u32,
 ) -> Option<Expr> {
     let react_local = ctx.react_default_import_local.clone()?;
     // Resolve the react binding the same way ordinary ident lowering would:
@@ -135,13 +137,13 @@ fn react_create_element_call(
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset,
             object: Box::new(object),
             property: "createElement".to_string(),
         }),
         args: vec![type_expr, props_expr.clone()],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     })
 }
 
@@ -182,7 +184,7 @@ pub(crate) fn lower_jsx_fragment(
     if let Some(react_local) = ctx.react_default_import_local.clone() {
         let fragment_type = Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: jsx.span.lo.0,
             object: Box::new(if let Some(id) = ctx.lookup_local(&react_local) {
                 Expr::LocalGet(id)
             } else {
@@ -197,7 +199,9 @@ pub(crate) fn lower_jsx_fragment(
             }),
             property: "Fragment".to_string(),
         };
-        if let Some(call) = react_create_element_call(ctx, fragment_type, &props_expr) {
+        if let Some(call) =
+            react_create_element_call(ctx, fragment_type, &props_expr, jsx.span.lo.0)
+        {
             return Ok(call);
         }
     }
@@ -213,7 +217,7 @@ pub(crate) fn lower_jsx_fragment(
         // `type === "__Fragment"` to detect fragment elements.
         args: vec![Expr::String("__Fragment".to_string()), props_expr],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset: jsx.span.lo.0,
     })
 }
 
@@ -280,7 +284,7 @@ pub(crate) fn lower_jsx_element_name(
             let obj_expr = lower_jsx_object(ctx, &member.obj)?;
             Ok(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: member.prop.span.lo.0,
                 object: Box::new(obj_expr),
                 property: member.prop.sym.to_string(),
             })
@@ -319,7 +323,7 @@ pub(crate) fn lower_jsx_object(ctx: &mut LoweringContext, obj: &ast::JSXObject) 
             let obj_expr = lower_jsx_object(ctx, &member.obj)?;
             Ok(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: member.prop.span.lo.0,
                 object: Box::new(obj_expr),
                 property: member.prop.sym.to_string(),
             })
@@ -416,10 +420,10 @@ mod tests {
         ctx.react_default_import_local = Some("React".to_string());
         ctx.register_imported_func("React".to_string(), "React".to_string());
         let call =
-            react_create_element_call(&mut ctx, Expr::String("div".to_string()), &Expr::Null)
+            react_create_element_call(&mut ctx, Expr::String("div".to_string()), &Expr::Null, 0)
                 .expect("react mode must produce a createElement call");
         match call {
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 match *callee {
                     Expr::PropertyGet { property, .. } => assert_eq!(property, "createElement"),
                     other => panic!("expected PropertyGet callee, got {other:?}"),
@@ -434,7 +438,7 @@ mod tests {
     fn jsx_keeps_native_adapter_without_react_import() {
         let mut ctx = LoweringContext::new("test.tsx");
         assert!(
-            react_create_element_call(&mut ctx, Expr::String("div".to_string()), &Expr::Null)
+            react_create_element_call(&mut ctx, Expr::String("div".to_string()), &Expr::Null, 0)
                 .is_none(),
             "without a react import the native js_jsx adapter must stay in effect"
         );

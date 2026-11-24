@@ -838,6 +838,7 @@ js_class_capture_value_for_receiver	f64	f64,i32u,i32u
 js_class_capture_value_or	f64	i32u,i32u,f64
 js_class_computed_field_key	f64	f64,i32u,ptr,usize
 js_class_constructor_called	f64	ptr,i64
+js_class_direct_method_owner	f64	f64,i32u
 js_class_env_current	f64	f64,i32u
 js_class_env_evaluate	void	i32u,f64,f64
 js_class_env_get	f64	f64,i32u,i32u

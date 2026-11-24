@@ -379,7 +379,7 @@ impl Model {
         if d == TOP {
             let r = self.reason("spread into a value from unmodeled code");
             let all = if s == TOP {
-                self.top_tok_node
+                self.top_src("spread of ⊤ into ⊤")
             } else if builtins::builtin_function(self, s) {
                 let read = self.node_l("spread-native-fields");
                 self.builtin_field_use(s, Key::any(), ChainAct::Load(read, self.thrown));
