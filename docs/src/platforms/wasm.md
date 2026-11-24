@@ -54,8 +54,9 @@ elements. With no insertion items, it only deletes; omitting `deleteCount`
 deletes from `start` to the end.
 
 `node:path` answers as Node's does: `path` is the POSIX flavor and `path.win32`
-the Windows one, and `path.matchesGlob` follows the minimatch options Node uses,
-matching case-sensitively. A browser has no working directory, so `resolve` and
+the Windows one, also when the module or a sub-namespace is used as a value, and
+`path.matchesGlob` follows the minimatch options Node uses, matching
+case-sensitively (as the native targets do). A browser has no working directory, so `resolve` and
 `relative` resolve a relative path against `process.cwd()`, which is `/` (`\`
 for `path.win32`).
 
