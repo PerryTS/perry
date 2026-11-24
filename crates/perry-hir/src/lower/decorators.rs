@@ -216,7 +216,7 @@ fn append_method_decorator_init(
                 Expr::String(method.name.clone()),
             ],
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset: method.byte_offset,
         },
     )]);
     append_decorator_invocations(
@@ -261,7 +261,7 @@ fn append_decorator_invocations_inner(
     invocation_args: Vec<Expr>,
     class_name_for_replacement_check: Option<&str>,
 ) {
-    let mut callees: Vec<(Expr, String)> = Vec::with_capacity(decorators.len());
+    let mut callees: Vec<(Expr, String, u32)> = Vec::with_capacity(decorators.len());
     for dec in decorators {
         if dec.is_reflect_metadata {
             append_reflect_metadata_decorator(out, dec, &invocation_args);
@@ -271,6 +271,7 @@ fn append_decorator_invocations_inner(
         if dec.is_factory {
             let temp_id = ctx.fresh_local();
             out.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: temp_id,
                 name: format!("__perry_dec_{}", temp_id),
                 ty: Type::Function(FunctionType {
@@ -285,27 +286,28 @@ fn append_decorator_invocations_inner(
                     callee: Box::new(base),
                     args: dec.args.clone(),
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: dec.byte_offset,
                 }),
             });
-            callees.push((Expr::LocalGet(temp_id), dec.name.clone()));
+            callees.push((Expr::LocalGet(temp_id), dec.name.clone(), dec.byte_offset));
         } else {
-            callees.push((base, dec.name.clone()));
+            callees.push((base, dec.name.clone(), dec.byte_offset));
         }
     }
 
-    for (callee, dec_name) in callees.into_iter().rev() {
+    for (callee, dec_name, dec_offset) in callees.into_iter().rev() {
         let call = Expr::Call {
             byte_end: 0,
             callee: Box::new(callee),
             args: invocation_args.clone(),
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset: dec_offset,
         };
         match class_name_for_replacement_check {
             Some(class_name) => {
                 let ret_id = ctx.fresh_local();
                 out.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: ret_id,
                     name: format!("__perry_dec_ret_{}", ret_id),
                     ty: Type::Any,
@@ -329,15 +331,18 @@ the decorator running for side effects only."
                 // original strict undefined-only check.
                 let ret_get = Expr::LocalGet(ret_id);
                 let ne_undef = Expr::Compare {
+                    byte_offset: dec_offset,
                     op: CompareOp::Ne,
                     left: Box::new(ret_get.clone()),
                     right: Box::new(Expr::Undefined),
                 };
                 let condition = match invocation_args.first() {
                     Some(target_expr) => Expr::Logical {
+                        byte_offset: dec_offset,
                         op: LogicalOp::And,
                         left: Box::new(ne_undef),
                         right: Box::new(Expr::Compare {
+                            byte_offset: dec_offset,
                             op: CompareOp::Ne,
                             left: Box::new(ret_get),
                             right: Box::new(target_expr.clone()),

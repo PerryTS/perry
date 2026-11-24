@@ -125,12 +125,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, receiver: &Expr, value: &Expr) -> Resul
 fn lookup_method(ctx: &mut FnCtx<'_>, receiver: &Expr) -> Result<String> {
     lower_expr(
         ctx,
-        &Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(receiver.clone()),
-            property: "push".into(),
-            byte_offset: 0,
-        },
+        &Expr::property_get_unsited(Box::new(receiver.clone()), "push".into()),
     )
 }
 

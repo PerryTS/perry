@@ -121,6 +121,7 @@ const ARRAY_BIRTH: &str = "label %arrlit.fast.";
 
 fn shadow_hygiene_module() -> Module {
     Module {
+        byte_offset: 0,
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -133,6 +134,7 @@ fn shadow_hygiene_module() -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -140,6 +142,7 @@ fn shadow_hygiene_module() -> Module {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "dead".to_string(),
                     ty: Type::Any,
@@ -147,6 +150,7 @@ fn shadow_hygiene_module() -> Module {
                     init: Some(Expr::MapNew),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "numeric".to_string(),
                     ty: Type::Any,
@@ -154,13 +158,14 @@ fn shadow_hygiene_module() -> Module {
                     init: Some(Expr::Number(42.0)),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 3,
                     name: "live".to_string(),
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::Array(Vec::new(), None)),
                 },
-                Stmt::Return(Some(Expr::LocalGet(3))),
+                Stmt::Return(Some(Expr::LocalGet(3)), 0),
             ],
             is_async: false,
             is_generator: false,
@@ -204,6 +209,7 @@ fn shadow_hygiene_module() -> Module {
 
 fn top_level_shadow_module(name: &str) -> Module {
     Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -219,6 +225,7 @@ fn top_level_shadow_module(name: &str) -> Module {
         init_is_strict: false,
         init: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "dead".to_string(),
                 ty: Type::Any,
@@ -226,6 +233,7 @@ fn top_level_shadow_module(name: &str) -> Module {
                 init: Some(Expr::MapNew),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 11,
                 name: "numeric".to_string(),
                 ty: Type::Any,
@@ -233,6 +241,7 @@ fn top_level_shadow_module(name: &str) -> Module {
                 init: Some(Expr::Number(42.0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 12,
                 name: "live".to_string(),
                 ty: Type::Any,
@@ -277,6 +286,7 @@ fn top_level_loop_shadow_module() -> Module {
         update: None,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 20,
                 name: "loop_value".to_string(),
                 ty: Type::Any,
@@ -293,6 +303,7 @@ fn persistent_index_alias_shadow_module() -> Module {
     let mut module = top_level_shadow_module("entry_persistent_index_alias_shadow.ts");
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 21,
             name: "items".to_string(),
             ty: Type::Array(Box::new(Type::Any)),
@@ -305,6 +316,7 @@ fn persistent_index_alias_shadow_module() -> Module {
             update: None,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 22,
                     name: "item".to_string(),
                     ty: Type::Any,
@@ -326,6 +338,7 @@ fn persistent_index_alias_shadow_module() -> Module {
 
 fn flat_const_row_alias_shadow_module() -> Module {
     Module {
+        byte_offset: 0,
         name: "entry_flat_const_shadow.ts".to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -341,6 +354,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
         init_is_strict: false,
         init: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 30,
                 name: "kernel".to_string(),
                 ty: Type::Array(Box::new(Type::Array(Box::new(Type::Number)))),
@@ -354,6 +368,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
                 )),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 31,
                 name: "krow".to_string(),
                 ty: Type::Any,
@@ -367,6 +382,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 32,
                 name: "k".to_string(),
                 ty: Type::Any,
@@ -411,6 +427,7 @@ fn flat_const_row_alias_shadow_module() -> Module {
 
 fn reassigned_any_shadow_module() -> Module {
     Module {
+        byte_offset: 0,
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -423,6 +440,7 @@ fn reassigned_any_shadow_module() -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
+            byte_offset: 0,
             id: 2,
             name: "probe_reassign".to_string(),
             type_params: Vec::new(),
@@ -430,6 +448,7 @@ fn reassigned_any_shadow_module() -> Module {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 40,
                     name: "value".to_string(),
                     ty: Type::Any,
@@ -437,7 +456,7 @@ fn reassigned_any_shadow_module() -> Module {
                     init: Some(Expr::Number(0.0)),
                 },
                 Stmt::Expr(Expr::LocalSet(40, Box::new(Expr::Array(Vec::new(), None)))),
-                Stmt::Return(Some(Expr::LocalGet(40))),
+                Stmt::Return(Some(Expr::LocalGet(40)), 0),
             ],
             is_async: false,
             is_generator: false,
@@ -481,6 +500,7 @@ fn reassigned_any_shadow_module() -> Module {
 
 fn mixed_any_alias_shadow_module() -> Module {
     Module {
+        byte_offset: 0,
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -493,6 +513,7 @@ fn mixed_any_alias_shadow_module() -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
+            byte_offset: 0,
             id: 4,
             name: "probe_mixed_any_alias".to_string(),
             type_params: Vec::new(),
@@ -500,6 +521,7 @@ fn mixed_any_alias_shadow_module() -> Module {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 60,
                     name: "source".to_string(),
                     ty: Type::Any,
@@ -508,6 +530,7 @@ fn mixed_any_alias_shadow_module() -> Module {
                 },
                 Stmt::Expr(Expr::LocalSet(60, Box::new(Expr::Array(Vec::new(), None)))),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 61,
                     name: "alias".to_string(),
                     ty: Type::Any,
@@ -516,13 +539,14 @@ fn mixed_any_alias_shadow_module() -> Module {
                 },
                 Stmt::Expr(Expr::LocalSet(60, Box::new(Expr::Number(2.0)))),
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 62,
                     name: "later".to_string(),
                     ty: Type::Any,
                     mutable: true,
                     init: Some(Expr::Array(Vec::new(), None)),
                 },
-                Stmt::Return(Some(Expr::LocalGet(61))),
+                Stmt::Return(Some(Expr::LocalGet(61)), 0),
             ],
             is_async: false,
             is_generator: false,
@@ -566,6 +590,7 @@ fn mixed_any_alias_shadow_module() -> Module {
 
 fn closure_captured_write_shadow_module() -> Module {
     Module {
+        byte_offset: 0,
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -578,6 +603,7 @@ fn closure_captured_write_shadow_module() -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
+            byte_offset: 0,
             id: 3,
             name: "probe_closure_write".to_string(),
             type_params: Vec::new(),
@@ -585,6 +611,7 @@ fn closure_captured_write_shadow_module() -> Module {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 50,
                     name: "value".to_string(),
                     ty: Type::Any,
@@ -592,17 +619,19 @@ fn closure_captured_write_shadow_module() -> Module {
                     init: Some(Expr::Number(0.0)),
                 },
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 51,
                     name: "writer".to_string(),
                     ty: Type::Any,
                     mutable: false,
                     init: Some(Expr::Closure {
+                        byte_offset: 0,
                         func_id: 30,
                         params: Vec::new(),
                         return_type: Type::Any,
                         body: vec![
                             Stmt::Expr(Expr::LocalSet(50, Box::new(Expr::Array(Vec::new(), None)))),
-                            Stmt::Return(Some(Expr::LocalGet(50))),
+                            Stmt::Return(Some(Expr::LocalGet(50)), 0),
                         ],
                         captures: vec![50],
                         mutable_captures: vec![50],
@@ -616,7 +645,7 @@ fn closure_captured_write_shadow_module() -> Module {
                         is_strict: false,
                     }),
                 },
-                Stmt::Return(Some(Expr::LocalGet(51))),
+                Stmt::Return(Some(Expr::LocalGet(51)), 0),
             ],
             is_async: false,
             is_generator: false,
@@ -665,6 +694,7 @@ fn duplicate_var_decl_shadow_module() -> Module {
     let mut module = shadow_hygiene_module();
     module.name = "dup_var_shadow.ts".to_string();
     module.functions = vec![Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -672,6 +702,7 @@ fn duplicate_var_decl_shadow_module() -> Module {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "dup".to_string(),
                 ty: Type::Any,
@@ -680,6 +711,7 @@ fn duplicate_var_decl_shadow_module() -> Module {
             },
             // Same id, second declaration site.
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "dup".to_string(),
                 ty: Type::Any,
@@ -687,13 +719,14 @@ fn duplicate_var_decl_shadow_module() -> Module {
                 init: Some(Expr::MapNew),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "later".to_string(),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Array(Vec::new(), None)),
             },
-            Stmt::Return(Some(Expr::LocalGet(2))),
+            Stmt::Return(Some(Expr::LocalGet(2)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -1180,6 +1213,7 @@ fn closure_body_write_to_captured_outer_local_is_visible_to_shadow_analysis() {
 
 fn canonical_str_shadow_module() -> Module {
     Module {
+        byte_offset: 0,
         script_global_functions: Vec::new(),
         references_global_this: false,
         annexb_global_undefined_names: Vec::new(),
@@ -1192,6 +1226,7 @@ fn canonical_str_shadow_module() -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe_str".to_string(),
             type_params: Vec::new(),
@@ -1199,6 +1234,7 @@ fn canonical_str_shadow_module() -> Module {
             return_type: Type::Any,
             body: vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 1,
                     name: "acc".to_string(),
                     ty: Type::String,
@@ -1209,6 +1245,7 @@ fn canonical_str_shadow_module() -> Module {
                 Stmt::Expr(Expr::LocalSet(
                     1,
                     Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: perry_hir::BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(1)),
                         right: Box::new(Expr::String("x".to_string())),
@@ -1221,6 +1258,7 @@ fn canonical_str_shadow_module() -> Module {
                 // tower. Use a separate non-reassigned local for the
                 // `.length` assertion.)
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 2,
                     name: "src".to_string(),
                     ty: Type::String,
@@ -1228,12 +1266,15 @@ fn canonical_str_shadow_module() -> Module {
                     init: Some(Expr::String("measure me".to_string())),
                 },
                 // src.length — the canonical `.length` tag dispatch.
-                Stmt::Return(Some(Expr::PropertyGet {
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(2)),
-                    property: "length".to_string(),
-                    byte_offset: 0,
-                })),
+                Stmt::Return(
+                    Some(Expr::PropertyGet {
+                        byte_end: 0,
+                        object: Box::new(Expr::LocalGet(2)),
+                        property: "length".to_string(),
+                        byte_offset: 0,
+                    }),
+                    0,
+                ),
             ],
             is_async: false,
             is_generator: false,
@@ -1281,6 +1322,7 @@ fn declared_string_lie_self_append_module() -> Module {
     module.functions[0].name = "probe_declared_string_lie".to_string();
     module.functions[0].body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "value".to_string(),
             ty: Type::String,
@@ -1292,12 +1334,13 @@ fn declared_string_lie_self_append_module() -> Module {
         Stmt::Expr(Expr::LocalSet(
             1,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: perry_hir::BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(1)),
                 right: Box::new(Expr::Number(1.0)),
             }),
         )),
-        Stmt::Return(Some(Expr::LocalGet(1))),
+        Stmt::Return(Some(Expr::LocalGet(1)), 0),
     ];
     module
 }

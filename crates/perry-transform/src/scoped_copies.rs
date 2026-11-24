@@ -155,7 +155,7 @@ fn copy_at(stmt: &Stmt, avail: &Avail, cx: &Census) -> Option<(LocalId, LocalId)
 /// Folds the lists and closure bodies inside one statement.
 fn fold_nested(stmt: &mut Stmt, avail: &mut Avail, cx: &Census) {
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 fold_expr(e, cx);
             }
@@ -211,6 +211,7 @@ fn fold_nested(stmt: &mut Stmt, avail: &mut Avail, cx: &Census) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             fold_expr(discriminant, cx);
             for case in cases {
@@ -252,7 +253,7 @@ fn reads_in_stmts(stmts: &[Stmt], q: LocalId) -> usize {
 fn reads_in_stmt(stmt: &Stmt, q: LocalId) -> usize {
     let opt = |e: &Option<Expr>| e.as_ref().map_or(0, |e| reads_in_expr(e, q));
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => opt(init),
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => opt(init),
         Stmt::Expr(e) | Stmt::Throw(e) => reads_in_expr(e, q),
         Stmt::If {
             condition,
@@ -291,6 +292,7 @@ fn reads_in_stmt(stmt: &Stmt, q: LocalId) -> usize {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             reads_in_expr(discriminant, q)
                 + cases
@@ -325,7 +327,7 @@ fn rename_in_stmts(stmts: &mut [Stmt], q: LocalId, p: LocalId) {
 
 fn rename_in_stmt(stmt: &mut Stmt, q: LocalId, p: LocalId) {
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 rename_in_expr(e, q, p);
             }
@@ -381,6 +383,7 @@ fn rename_in_stmt(stmt: &mut Stmt, q: LocalId, p: LocalId) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             rename_in_expr(discriminant, q, p);
             for c in cases {

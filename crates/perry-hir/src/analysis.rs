@@ -180,7 +180,7 @@ pub fn collect_local_refs_stmt(
         Stmt::Expr(expr) => {
             collect_local_refs_expr(expr, refs, visited);
         }
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(e) = expr {
                 collect_local_refs_expr(e, refs, visited);
             }
@@ -258,6 +258,7 @@ pub fn collect_local_refs_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             collect_local_refs_expr(discriminant, refs, visited);
             for case in cases {
@@ -293,7 +294,7 @@ pub(crate) fn collect_assigned_locals_stmt(stmt: &Stmt, assigned: &mut Vec<Local
         Stmt::Expr(expr) => {
             collect_assigned_locals_expr(expr, assigned);
         }
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(e) = expr {
                 collect_assigned_locals_expr(e, assigned);
             }
@@ -371,6 +372,7 @@ pub(crate) fn collect_assigned_locals_stmt(stmt: &Stmt, assigned: &mut Vec<Local
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             collect_assigned_locals_expr(discriminant, assigned);
             for case in cases {
@@ -563,7 +565,7 @@ fn substitute_lexical_this_in_stmt(stmt: &mut Stmt, replacement: &Expr) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => on_expr(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 on_expr(e);
             }
@@ -618,6 +620,7 @@ fn substitute_lexical_this_in_stmt(stmt: &mut Stmt, replacement: &Expr) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             on_expr(discriminant);
             for case in cases {
@@ -726,7 +729,7 @@ fn remap_local_ids_in_stmt_propagating(
             }
         }
         Stmt::Expr(e) => remap_with_propagation(e, map, fp),
-        Stmt::Return(Some(e)) => remap_with_propagation(e, map, fp),
+        Stmt::Return(Some(e), _) => remap_with_propagation(e, map, fp),
         Stmt::If {
             condition,
             then_branch,
@@ -776,6 +779,7 @@ fn remap_local_ids_in_stmt_propagating(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             remap_with_propagation(discriminant, map, fp);
             for c in cases {
@@ -874,7 +878,7 @@ fn remap_local_ids_in_stmt(stmt: &mut Stmt, map: &std::collections::HashMap<Loca
             }
         }
         Stmt::Expr(e) => remap_local_ids_in_expr(e, map),
-        Stmt::Return(Some(e)) => remap_local_ids_in_expr(e, map),
+        Stmt::Return(Some(e), _) => remap_local_ids_in_expr(e, map),
         Stmt::If {
             condition,
             then_branch,
@@ -924,6 +928,7 @@ fn remap_local_ids_in_stmt(stmt: &mut Stmt, map: &std::collections::HashMap<Loca
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             remap_local_ids_in_expr(discriminant, map);
             for c in cases {
@@ -1086,7 +1091,7 @@ fn replace_this_in_stmt(stmt: &mut Stmt, this_id: LocalId) {
             }
         }
         Stmt::Expr(e) => replace_this_in_expr(e, this_id),
-        Stmt::Return(Some(e)) => replace_this_in_expr(e, this_id),
+        Stmt::Return(Some(e), _) => replace_this_in_expr(e, this_id),
         Stmt::If {
             condition,
             then_branch,
@@ -1136,6 +1141,7 @@ fn replace_this_in_stmt(stmt: &mut Stmt, this_id: LocalId) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             replace_this_in_expr(discriminant, this_id);
             for c in cases {
@@ -1151,7 +1157,7 @@ fn replace_this_in_stmt(stmt: &mut Stmt, this_id: LocalId) {
             replace_this_in_expr(condition, this_id);
         }
         Stmt::Labeled { body, .. } => replace_this_in_stmt(body, this_id),
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -1175,7 +1181,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
         }
         Expr::Unary { operand, .. } => replace_this_in_expr(operand, this_id),
         Expr::Update { .. } => {}
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             replace_this_in_expr(callee, this_id);
             for a in args {
                 replace_this_in_expr(a, this_id);
@@ -1195,7 +1201,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             replace_this_in_expr(value, this_id);
         }
         Expr::PropertyUpdate { object, .. } => replace_this_in_expr(object, this_id),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             replace_this_in_expr(object, this_id);
             replace_this_in_expr(index, this_id);
         }
@@ -1255,12 +1261,13 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             replace_this_in_expr(condition, this_id);
             replace_this_in_expr(then_expr, this_id);
             replace_this_in_expr(else_expr, this_id);
         }
-        Expr::Await(inner) => replace_this_in_expr(inner, this_id),
+        Expr::Await(inner, _) => replace_this_in_expr(inner, this_id),
         // #10445: a `for…of`/`for await…of` iterable that can't be proven a
         // plain Array/Map/Set lowers to one of these wrapper exprs around the
         // ORIGINAL receiver expression (see `stmt_loops.rs`'s
@@ -1318,7 +1325,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
                 replace_this_in_expr(a, this_id);
             }
         }
-        Expr::SuperCall(args) => {
+        Expr::SuperCall(args, _) => {
             for a in args {
                 replace_this_in_expr(a, this_id);
             }
@@ -1357,6 +1364,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
             key,
             receiver,
             args,
+            ..
         } => {
             replace_this_in_expr(home, this_id);
             replace_this_in_expr(key, this_id);
@@ -1444,6 +1452,7 @@ mod local_refs_depth_tests {
                 let mut expr = Expr::LocalGet(DEPTH);
                 for id in 0..DEPTH {
                     expr = Expr::Conditional {
+                        byte_offset: 0,
                         condition: Box::new(Expr::LocalGet(id)),
                         then_expr: Box::new(Expr::Undefined),
                         else_expr: Box::new(expr),

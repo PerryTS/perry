@@ -17,12 +17,13 @@ const PREFIX: &str = "producer_ts";
 
 fn reader(id: u32, name: &str, local: u32) -> Function {
     Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::LocalGet(local)))],
+        body: vec![Stmt::Return(Some(Expr::LocalGet(local)), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -37,6 +38,7 @@ fn reader(id: u32, name: &str, local: u32) -> Function {
 
 fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -50,6 +52,7 @@ fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
 fn producer(reassign: bool) -> Module {
     let mut module = Module::new("producer.ts");
     let computed = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::String("computed-leaf-".into())),
         right: Box::new(Expr::Number(1.0)),
@@ -80,7 +83,7 @@ fn producer(reassign: bool) -> Module {
         condition: Expr::LocalGet(1),
         body: vec![
             Stmt::Expr(Expr::LocalGet(2)),
-            Stmt::Return(Some(Expr::LocalGet(1))),
+            Stmt::Return(Some(Expr::LocalGet(1)), 0),
         ],
     }];
     module.functions.push(looped);

@@ -145,7 +145,7 @@ pub(super) fn collect_entry_env_literals(hir: &HirModule) -> Vec<(String, String
         if depth >= 4 {
             return;
         }
-        if let Expr::Call { callee, .. } = expr {
+        if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = expr {
             if let Expr::Closure { body, .. } = callee.as_ref() {
                 scan(body, out, depth + 1);
             }

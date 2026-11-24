@@ -1215,6 +1215,7 @@ pub fn lower_class_decl(
                     .count();
                 let synthetic_name = format!("__perry_static_init_{}", block_idx);
                 static_methods.push(Function {
+                    byte_offset: block.span.lo.0,
                     id: ctx.fresh_func(),
                     name: synthetic_name,
                     type_params: Vec::new(),
@@ -1274,6 +1275,7 @@ pub fn lower_class_decl(
                                 crate::ClassFieldOrigin::Definition
                             };
                             param_prop_fields.push(ClassField {
+                                byte_offset: ts_prop.span.lo.0,
                                 origin,
                                 name: param_name,
                                 key_expr: None,
@@ -1397,6 +1399,9 @@ pub fn lower_class_decl(
                 && !method_names.contains(&fname)
             {
                 fields.push(ClassField {
+                    // No source member: a constructor store reserves it, and
+                    // that store carries its own position.
+                    byte_offset: 0,
                     origin: crate::ClassFieldOrigin::ConstructorStore,
                     name: fname,
                     key_expr: None,
@@ -1498,6 +1503,7 @@ pub fn lower_class_decl(
     synthesize_class_captures(
         ctx,
         &name,
+        class_decl.class.span.lo.0,
         capture_parent_name.as_deref(),
         extends.is_some()
             || extends_name.is_some()

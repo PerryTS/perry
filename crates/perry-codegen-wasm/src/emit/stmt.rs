@@ -159,7 +159,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_expr(func, expr);
                 func.instruction(&Instruction::Drop);
             }
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     self.emit_expr(func, expr);
                 } else {
@@ -315,6 +315,8 @@ impl<'a> FuncEmitCtx<'a> {
                         self.cursor_loop_wrapped = true;
                         // The step local is dead once the loop ends, so it holds the error.
                         let wrapped = Stmt::Try {
+                            // Built by codegen after facts: no fact keys this wrapper.
+                            byte_offset: 0,
                             body: vec![stmt.clone()],
                             catch: Some(perry_hir::CatchClause {
                                 param: Some((step, String::new())),
@@ -511,6 +513,7 @@ impl<'a> FuncEmitCtx<'a> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 // Compile switch as cascading if/else blocks
                 // Strategy: store discriminant in a local-like pattern, compare each case
@@ -611,7 +614,7 @@ pub(super) fn collection_cursor_release(condition: &Expr, threw: bool) -> Option
 /// Check if a statement or its children contain a return statement
 pub(super) fn has_return(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Return(_) => true,
+        Stmt::Return(_, _) => true,
         Stmt::If {
             then_branch,
             else_branch,

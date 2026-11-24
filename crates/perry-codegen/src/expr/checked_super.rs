@@ -200,7 +200,8 @@ pub(crate) fn call(
                     &class.name,
                     crate::lower_call::FieldInitMode::AncestorsOnly,
                 )?;
-                super::this_super_call::lower_checked(ctx, &Expr::SuperCall(args.to_vec()))
+                // Codegen's own call node, after the facts: no position is read.
+                super::this_super_call::lower_checked(ctx, &Expr::SuperCall(args.to_vec(), 0))
             },
             |ctx| super::super_constructor::call_live(ctx, class, args),
         )

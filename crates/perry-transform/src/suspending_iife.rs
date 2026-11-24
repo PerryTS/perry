@@ -28,7 +28,7 @@ fn builder_body(expr: &Expr) -> Option<&[Stmt]> {
         return None;
     }
     let (last, steps) = body.split_last()?;
-    if !matches!(last, Stmt::Return(Some(Expr::LocalGet(id))) if *id == param.id)
+    if !matches!(last, Stmt::Return(Some(Expr::LocalGet(id)), _) if *id == param.id)
         || !steps
             .iter()
             .all(|stmt| matches!(stmt, Stmt::Let { .. } | Stmt::Expr(_)))
@@ -59,7 +59,7 @@ pub(crate) fn inline(
     predicate: fn(&Expr) -> bool,
     hoist: fn(&mut Vec<Stmt>, &mut LocalId),
 ) -> bool {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return false;
     };
     if args.len() != 1 || !contains(callee, predicate) {
@@ -71,6 +71,7 @@ pub(crate) fn inline(
     let param = &params[0];
     let id = param.id;
     let mut steps = vec![Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name: param.name.clone(),
         ty: Type::Any,

@@ -150,7 +150,7 @@ fn reflect_script_var_initializers(
             }
             Stmt::Let { .. }
             | Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -223,6 +223,7 @@ fn reflect_script_var_update_expr(
             let temp_id = *next_local_id;
             *next_local_id += 1;
             temp_decls.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: temp_id,
                 name: format!("__perry_script_var_postfix_{temp_id}"),
                 ty: Type::Any,
@@ -773,6 +774,7 @@ pub fn lower_module_full_with_platform_globals(
     // to `ctx.module_strict`, rather than at the end of lowering, so a later
     // early return cannot ship a module that claims to be sloppy.
     module.init_is_strict = ctx.module_strict;
+    module.byte_offset = ast_module.span.lo.0;
     if should_enable_react_automatic_jsx(name, ast_module) {
         enable_react_automatic_jsx(&mut module, &mut ctx);
     }
@@ -939,6 +941,7 @@ pub fn lower_module_full_with_platform_globals(
                     ctx.var_hoisted_ids.insert(local_id);
                 }
                 module.init.push(Stmt::Let {
+                    byte_offset: fn_decl.function.span.lo.0,
                     id: local_id,
                     name: func_name.clone(),
                     ty: Type::Any,
@@ -1169,6 +1172,7 @@ pub fn lower_module_full_with_platform_globals(
                 // The nested `Stmt::Let` later reuses this slot via the
                 // redeclaration → LocalSet path in codegen's lower_let.
                 module.init.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id,
                     name,
                     ty: Type::Any,
@@ -1252,6 +1256,7 @@ pub fn lower_module_full_with_platform_globals(
                 module.annexb_global_undefined_names.push(name.clone());
             }
             module.init.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name: name.clone(),
                 ty: Type::Any,
@@ -1586,6 +1591,7 @@ pub fn lower_module_full_with_platform_globals(
                     with_implicit_unset_let(*id, name.clone())
                 } else {
                     Stmt::Let {
+                        byte_offset: 0, /*HPOS*/
                         id: *id,
                         name: name.clone(),
                         ty: Type::Any,
@@ -1599,18 +1605,20 @@ pub fn lower_module_full_with_platform_globals(
         module.init = implicit_globals;
     }
 
-    if let Some(id) = ctx.import_meta_require_local {
+    if let Some((id, require_offset)) = ctx.import_meta_require_local {
         let (url, _, _) = super::expr_misc::import_meta_paths(&ctx);
         // Reuse createRequire's synchronous builtin/compiled-module resolver,
         // rooted in module storage and initialized before source statements.
         module.init.insert(
             0,
             Stmt::Let {
+                byte_offset: require_offset,
                 id,
                 name: format!("__perry_import_meta_require_{id}"),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::NativeMethodCall {
+                    byte_offset: require_offset,
                     module: "module".to_string(),
                     class_name: None,
                     object: None,

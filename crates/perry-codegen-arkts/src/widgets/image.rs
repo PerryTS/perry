@@ -64,6 +64,7 @@ pub(crate) fn resolve_string_arg(expr: &Expr, bindings: &HashMap<LocalId, Expr>)
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 // Same heuristic as the widget Conditional emit: if the
                 // condition const-folds, pick the corresponding branch;

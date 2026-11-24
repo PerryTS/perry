@@ -1720,8 +1720,9 @@ pub struct Model {
     /// `FactsConfig::native_externs` (ASSUMED, owner 2026-11-16).
     pub native_externs: std::collections::BTreeMap<String, crate::NativeResult>,
     /// The extern calls the native-extern assumption modeled: (module,
-    /// byte offset), reported as `ProgramFacts::native_extern_sites`.
-    pub native_extern_fired: Vec<(u32, u32)>,
+    /// the call's site; `None`: a spread call, which has none), reported as
+    /// `ProgramFacts::native_extern_sites`.
+    pub native_extern_fired: Vec<(u32, Option<u32>)>,
     /// −0 tolerance (`internals/representation.md` §3, PR D; `zero_sign`): the interval
     /// rules give `0 * negative`, `-x` and `%` their integer hull with the
     /// `-0` bit, and a node may keep an integer interval while it may hold
@@ -3116,7 +3117,7 @@ pub struct Model {
     /// the next `cons_untagged` queues its replay (consumed at its entry).
     pub chain_active: bool,
     pub chain_defer: bool,
-    pub chain_q: Vec<(NodeId, Cons)>,
+    pub chain_q: Vec<(NodeId, Cons, u32)>,
     /// Past the work bound (`Model::past_work_bound`): a call that would
     /// make a new calling context runs the function's shared instance
     /// (`Model::bind_layout`), so the solve reaches a coarser fixpoint.
@@ -3529,6 +3530,8 @@ pub struct Model {
     pub top_pred: FxHashMap<NodeId, (NodeId, u32)>,
     pub cur_src: NodeId,
     pub cur_why: u32,
+    /// `PERRY_FACTS_STOP_ON_TOP` (`topstop`): `None` when off.
+    pub stop_top: Option<Box<crate::topstop::StopTop>>,
     pub top_vals: FxHashMap<String, NodeId>,
     /// The function whose body generation is walking (`NO_FN` outside).
     pub cur_fn: FnIdx,

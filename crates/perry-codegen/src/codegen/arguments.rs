@@ -96,12 +96,16 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32, defer_apply: bool) -
             // G8: a forwarding apply reads the binding at the site itself,
             // where an unborn object is answered by its bundle
             // ([`deferred_forward_apply_binding`]).
-            Expr::Call { callee, args, .. } if defer_apply && is_forward_apply_of(expr, id) => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
+                if defer_apply && is_forward_apply_of(expr, id) =>
+            {
                 observes(callee, id) || observes(&args[0], id)
             }
             Expr::LocalGet(local) => *local == id,
             Expr::PropertyGet { object, .. } => observes(object, id),
-            Expr::IndexGet { object, index, .. } => observes(object, id) || observes(index, id),
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+                observes(object, id) || observes(index, id)
+            }
             Expr::Unary { operand, .. } => observes(operand, id),
             Expr::Binary { left, right, .. } | Expr::Compare { left, right, .. } => {
                 observes(left, id) || observes(right, id)
@@ -111,9 +115,10 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32, defer_apply: bool) -
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => observes(condition, id) || (observes(then_expr, id) && observes(else_expr, id)),
             Expr::Sequence(exprs) => exprs.iter().any(|expr| observes(expr, id)),
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 observes(callee, id) || args.iter().any(|arg| observes(arg, id))
             }
             Expr::CallSpread { callee, args, .. } => {
@@ -165,7 +170,7 @@ fn arguments_observed_on_every_path(body: &[Stmt], id: u32, defer_apply: bool) -
                     }
                 }
                 Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => FALLTHROUGH,
-                Stmt::Return(expr) => {
+                Stmt::Return(expr, _) => {
                     if expr.as_ref().is_some_and(|expr| observes(expr, id)) {
                         0
                     } else {
@@ -397,7 +402,7 @@ pub(crate) fn ensure_arguments_object(ctx: &mut FnCtx<'_>, id: u32) {
 /// G8: `X.apply(y, arguments)` with exactly these two arguments, the second
 /// the local `id`.
 pub(crate) fn is_forward_apply_of(expr: &Expr, id: u32) -> bool {
-    matches!(expr, Expr::Call { callee, args, .. }
+    matches!(expr, Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
         if args.len() == 2
             && matches!(&args[1], Expr::LocalGet(l) if *l == id)
             && matches!(callee.as_ref(), Expr::PropertyGet { property, .. } if property == "apply"))
@@ -669,7 +674,7 @@ impl LocalUses {
         let is_member = |e: &Expr| {
             matches!(
                 e,
-                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                     if is_local(object)
             )
         };
@@ -678,9 +683,15 @@ impl LocalUses {
             Expr::PropertyGet {
                 object, property, ..
             } if property == "length" && is_local(object) => self.length_reads += 1,
-            Expr::IndexGet { object, .. } if is_local(object) => self.index_reads += 1,
+            Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } if is_local(object) => {
+                self.index_reads += 1
+            }
             Expr::Delete(target) if is_member(target) => self.reference_uses += 1,
-            Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } if is_member(callee) => {
+            Expr::Call { callee, .. }
+            | Expr::RegionCall { callee, .. }
+            | Expr::CallSpread { callee, .. }
+                if is_member(callee) =>
+            {
                 self.reference_uses += 1
             }
             Expr::Closure { captures, body, .. } => {
@@ -726,7 +737,7 @@ pub(crate) fn lower_elided_arguments_length(ctx: &mut FnCtx<'_>, id: u32) -> Opt
 pub(crate) fn is_elided_arguments_index_get(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     matches!(
         expr,
-        Expr::IndexGet { object, .. }
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
             if matches!(object.as_ref(), Expr::LocalGet(id) if ctx.elided_arguments.get(id).is_some_and(|binding| binding.deferred.is_none()))
     )
 }
@@ -960,34 +971,41 @@ mod length_only_tests {
 
     #[test]
     fn accepts_exact_length_reads_at_arbitrary_depth() {
-        let body = vec![Stmt::Return(Some(Expr::Binary {
-            op: perry_hir::BinaryOp::Add,
-            left: Box::new(Expr::Integer(1)),
-            right: Box::new(length()),
-        }))];
+        let body = vec![Stmt::Return(
+            Some(Expr::Binary {
+                byte_offset: 0,
+                op: perry_hir::BinaryOp::Add,
+                left: Box::new(Expr::Integer(1)),
+                right: Box::new(length()),
+            }),
+            0,
+        )];
         assert!(arguments_used_only_for_length(&body, ARGUMENTS));
     }
 
     #[test]
     fn rejects_identity_index_and_mixed_uses() {
         assert!(!arguments_used_only_for_length(
-            &[Stmt::Return(Some(Expr::LocalGet(ARGUMENTS)))],
+            &[Stmt::Return(Some(Expr::LocalGet(ARGUMENTS)), 0)],
             ARGUMENTS
         ));
         assert!(!arguments_used_only_for_length(
-            &[Stmt::Return(Some(Expr::IndexGet {
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(ARGUMENTS)),
-                index: Box::new(Expr::Integer(0)),
-            }))],
+            &[Stmt::Return(
+                Some(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(ARGUMENTS)),
+                    index: Box::new(Expr::Integer(0)),
+                }),
+                0
+            )],
             ARGUMENTS
         ));
         assert!(!arguments_used_only_for_length(
             &[
                 Stmt::Expr(length()),
-                Stmt::Return(Some(Expr::LocalGet(ARGUMENTS))),
+                Stmt::Return(Some(Expr::LocalGet(ARGUMENTS)), 0),
             ],
             ARGUMENTS
         ));
@@ -997,7 +1015,7 @@ mod length_only_tests {
     fn rejects_specialized_local_bearing_operations() {
         let body = vec![
             Stmt::Expr(length()),
-            Stmt::Return(Some(Expr::ArrayPop(ARGUMENTS))),
+            Stmt::Return(Some(Expr::ArrayPop(ARGUMENTS)), 0),
         ];
         assert!(!arguments_used_only_for_length(&body, ARGUMENTS));
     }
@@ -1014,6 +1032,7 @@ mod elision_tests {
 
     fn param(id: u32, name: &str) -> Param {
         Param {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             ty: Type::Any,
@@ -1064,24 +1083,28 @@ mod elision_tests {
     fn reads() -> Vec<Stmt> {
         vec![
             Stmt::Expr(length()),
-            Stmt::Return(Some(Expr::IndexGet {
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-                object: args(),
-                index: Box::new(Expr::Binary {
-                    op: perry_hir::BinaryOp::Sub,
-                    left: Box::new(length()),
-                    right: Box::new(index(0)),
+            Stmt::Return(
+                Some(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: args(),
+                    index: Box::new(Expr::Binary {
+                        byte_offset: 0,
+                        op: perry_hir::BinaryOp::Sub,
+                        left: Box::new(length()),
+                        right: Box::new(index(0)),
+                    }),
                 }),
-            })),
+                0,
+            ),
         ]
     }
 
     #[test]
     fn birth_abi_follows_materialization_and_parameter_mapping() {
         use super::arguments_object_flags;
-        let escape = vec![Stmt::Return(Some(*args()))];
+        let escape = vec![Stmt::Return(Some(*args()), 0)];
         assert_eq!(arguments_object_flags(&params(false), &reads()), 0);
         assert_eq!(
             arguments_object_flags(&params(false), &escape),
@@ -1094,7 +1117,7 @@ mod elision_tests {
         let cold = vec![Stmt::If {
             condition: Expr::Bool(false),
             then_branch: escape.clone(),
-            else_branch: Some(vec![Stmt::Return(Some(Expr::Number(1.0)))]),
+            else_branch: Some(vec![Stmt::Return(Some(Expr::Number(1.0)), 0)]),
         }];
         assert_eq!(arguments_object_flags(&params(false), &cold), 0);
         let mut rest = params(false);
@@ -1107,7 +1130,7 @@ mod elision_tests {
         use super::arguments_object_flags;
         let object =
             crate::runtime_abi::FN_ARGUMENTS_OBJECT | crate::runtime_abi::FN_ARGUMENTS_RESTRICTED;
-        let observe = Stmt::Return(Some(*args()));
+        let observe = Stmt::Return(Some(*args()), 0);
         let setup = vec![Stmt::Expr(Expr::Number(1.0)), observe.clone()];
         assert_eq!(arguments_object_flags(&params(false), &setup), object);
         let branches = vec![Stmt::If {
@@ -1119,24 +1142,28 @@ mod elision_tests {
         let early_exit = vec![
             Stmt::If {
                 condition: Expr::LocalGet(A),
-                then_branch: vec![Stmt::Return(Some(Expr::Number(0.0)))],
+                then_branch: vec![Stmt::Return(Some(Expr::Number(0.0)), 0)],
                 else_branch: None,
             },
             observe,
         ];
         assert_eq!(arguments_object_flags(&params(false), &early_exit), 0);
-        let conditional = vec![Stmt::Return(Some(Expr::Logical {
-            op: perry_hir::LogicalOp::And,
-            left: Box::new(Expr::Bool(false)),
-            right: args(),
-        }))];
+        let conditional = vec![Stmt::Return(
+            Some(Expr::Logical {
+                byte_offset: 0,
+                op: perry_hir::LogicalOp::And,
+                left: Box::new(Expr::Bool(false)),
+                right: args(),
+            }),
+            0,
+        )];
         assert_eq!(arguments_object_flags(&params(false), &conditional), 0);
     }
 
     #[test]
     fn length_and_index_reads_elide() {
         assert_eq!(
-            arguments_elision(&params(false), &[Stmt::Return(Some(length()))]),
+            arguments_elision(&params(false), &[Stmt::Return(Some(length()), 0)]),
             Some(ArgumentsElision::LengthOnly)
         );
         assert_eq!(
@@ -1192,7 +1219,7 @@ mod elision_tests {
         // needs the Reads proof (uncaptured, mapped parameters unchanged),
         // never the length-only one.
         for regular in [false, true] {
-            let body = vec![Stmt::Return(Some(forward(regular)))];
+            let body = vec![Stmt::Return(Some(forward(regular)), 0)];
             assert_eq!(
                 arguments_elision(&params(false), &body),
                 Some(ArgumentsElision::Reads)
@@ -1205,13 +1232,13 @@ mod elision_tests {
             );
         }
         assert!(!super::arguments_used_only_for_length(
-            &[Stmt::Expr(length()), Stmt::Return(Some(forward(false)))],
+            &[Stmt::Expr(length()), Stmt::Return(Some(forward(false)), 0)],
             ARGUMENTS
         ));
         // A written mapped parameter is visible through the object.
         let written = vec![
             Stmt::Expr(Expr::LocalSet(A, Box::new(Expr::Integer(9)))),
-            Stmt::Return(Some(forward(false))),
+            Stmt::Return(Some(forward(false)), 0),
         ];
         assert_eq!(arguments_elision(&params(true), &written), None);
         assert_eq!(
@@ -1226,20 +1253,26 @@ mod elision_tests {
         // a spread nested in an argument are not call-spread operands.
         let spread = perry_hir::CallArg::Spread(*args());
         for body in [
-            vec![Stmt::Return(Some(Expr::NewDynamicSpread {
-                callee: Box::new(Expr::LocalGet(A)),
-                args: vec![spread.clone()],
-                byte_offset: 0,
-                byte_end: 0,
-            }))],
+            vec![Stmt::Return(
+                Some(Expr::NewDynamicSpread {
+                    callee: Box::new(Expr::LocalGet(A)),
+                    args: vec![spread.clone()],
+                    byte_offset: 0,
+                    byte_end: 0,
+                }),
+                0,
+            )],
             vec![Stmt::Expr(Expr::SuperCallSpread(vec![spread.clone()]))],
-            vec![Stmt::Return(Some(Expr::CallSpread {
-                callee: Box::new(Expr::LocalGet(A)),
-                args: vec![perry_hir::CallArg::Expr(*args())],
-                type_args: Vec::new(),
-                byte_offset: 0,
-                byte_end: 0,
-            }))],
+            vec![Stmt::Return(
+                Some(Expr::CallSpread {
+                    callee: Box::new(Expr::LocalGet(A)),
+                    args: vec![perry_hir::CallArg::Expr(*args())],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                    byte_end: 0,
+                }),
+                0,
+            )],
         ] {
             assert_eq!(arguments_elision(&params(false), &body), None);
         }
@@ -1275,6 +1308,7 @@ mod elision_tests {
         // `var a = 5` re-declaring the parameter reuses its id.
         assert_eq!(
             with(Stmt::Let {
+                byte_offset: 0,
                 id: A,
                 name: "a".to_string(),
                 ty: Type::Any,
@@ -1289,7 +1323,7 @@ mod elision_tests {
                 &params(true),
                 &[
                     Stmt::Expr(Expr::LocalSet(A, Box::new(Expr::Integer(9)))),
-                    Stmt::Return(Some(length())),
+                    Stmt::Return(Some(length()), 0),
                 ]
             ),
             Some(ArgumentsElision::LengthOnly)

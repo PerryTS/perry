@@ -524,7 +524,7 @@ impl WasmModuleEmitter {
                 }
             }
             Stmt::Expr(e) => self.collect_strings_in_expr(e),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.collect_strings_in_expr(e);
                 }
@@ -586,6 +586,7 @@ impl WasmModuleEmitter {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.collect_strings_in_expr(discriminant);
                 for case in cases {
@@ -616,7 +617,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(right);
             }
             Expr::Unary { operand, .. } => self.collect_strings_in_expr(operand),
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 self.collect_strings_in_expr(callee);
                 for a in args {
                     self.collect_strings_in_expr(a);
@@ -629,6 +630,7 @@ impl WasmModuleEmitter {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 self.collect_strings_in_expr(condition);
                 self.collect_strings_in_expr(then_expr);
@@ -648,6 +650,7 @@ impl WasmModuleEmitter {
                 args,
                 class_name,
                 object,
+                ..
             } => {
                 for a in args {
                     self.collect_strings_in_expr(a);
@@ -711,7 +714,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(value);
                 self.intern_string(property);
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 self.collect_strings_in_expr(object);
                 self.collect_strings_in_expr(index);
             }
@@ -741,7 +744,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(value);
                 self.collect_strings_in_expr(receiver);
             }
-            Expr::Await(e) | Expr::TypeOf(e) | Expr::Void(e) => {
+            Expr::Await(e, _) | Expr::TypeOf(e) | Expr::Void(e) => {
                 self.collect_strings_in_expr(e);
             }
             Expr::New { args, .. } => {
@@ -773,6 +776,7 @@ impl WasmModuleEmitter {
                 class_name,
                 field_name,
                 value,
+                ..
             } => {
                 self.intern_string(class_name);
                 self.intern_string(field_name);
@@ -782,6 +786,7 @@ impl WasmModuleEmitter {
                 class_name,
                 method_name,
                 args,
+                ..
             } => {
                 self.intern_string(class_name);
                 self.intern_string(method_name);
@@ -1170,7 +1175,7 @@ impl WasmModuleEmitter {
                 self.collect_strings_in_expr(object);
                 self.collect_strings_in_expr(index);
             }
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 for a in args {
                     self.collect_strings_in_expr(a);
                 }

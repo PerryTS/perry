@@ -43,6 +43,7 @@ fn shape(
         op: CompareOp::Lt,
         left,
         right,
+        ..
     }) = condition
     else {
         return None;

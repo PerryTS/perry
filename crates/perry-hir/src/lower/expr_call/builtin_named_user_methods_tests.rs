@@ -269,7 +269,7 @@ fn qualified_type_receiver_return<'a>(module: &'a Module, name: &str) -> &'a cra
         .body
         .iter()
         .find_map(|statement| match statement {
-            crate::ir::Stmt::Return(Some(value)) => Some(value),
+            crate::ir::Stmt::Return(Some(value), _) => Some(value),
             _ => None,
         })
         .expect("the source function must return an expression")
