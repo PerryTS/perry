@@ -86,6 +86,10 @@ pub enum Cons {
     /// derive reads (R4). Generated only under
     /// `PERRY_FACTS_VALUE_RECORDS=1` (`Model::value_records`).
     Identity { route: IdentityRoute },
+    /// D2: a rule an inert body attached to a node it does not own, set
+    /// aside at its index until the body activates (`Act::foreign`): no
+    /// flow, no effect.
+    Detached,
     /// The node is the value a contract function `f` stores under `key`
     /// into its parameter `dst`'s argument (`reach`: into what it reaches)
     /// (DECISIONS 118; `dst` `u32::MAX`: into what its receiver reaches,
@@ -1149,6 +1153,7 @@ impl Cons {
     pub fn kind_name(&self) -> &'static str {
         match self {
             Cons::Identity { .. } => "identity",
+            Cons::Detached => "detached",
             Cons::Load { .. } => "load",
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",

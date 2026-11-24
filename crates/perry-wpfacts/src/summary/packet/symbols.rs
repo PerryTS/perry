@@ -46,6 +46,7 @@ impl Model {
             Cons::IndexHoleIn { key } => format!("IndexHoleIn {key}"),
             Cons::IndexKept => format!("IndexKept"),
             Cons::Identity { route } => format!("Identity route={}", route.name()),
+            Cons::Detached => format!("Detached"),
             Cons::HasProp { key, idx } => {
                 format!("HasProp key={:?} idx={idx}", self.packet_key(key))
             }

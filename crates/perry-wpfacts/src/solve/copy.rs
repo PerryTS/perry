@@ -64,6 +64,32 @@ impl Model {
         if self.nodes[a as usize].obs && !self.nodes[b as usize].obs {
             return;
         }
+        if self.foreign_rule(a) {
+            // D2: an inert body's edge out of a node it does not own: in the
+            // graph for the summaries, never delivered until it activates.
+            let f = self.cur_fn;
+            if self.succ_insert(a, b) {
+                self.act.as_mut().unwrap().foreign_edges.insert((a, b));
+            }
+            let a2 = self.act.as_mut().unwrap();
+            a2.foreign.entry(f).or_default().push(crate::model::Foreign::Edge(a, b));
+            return;
+        }
+        if !self.succ_insert(a, b) {
+            // An equal edge an inert body set aside becomes this rule's.
+            let claimed = self
+                .act
+                .as_mut()
+                .is_some_and(|x| !x.foreign_edges.is_empty() && x.foreign_edges.remove(&(a, b)));
+            if !claimed {
+                return;
+            }
+        }
+        self.edge_after_insert(a, b, log);
+    }
+
+    /// Adds `b` to `a`'s successors; false when it is there already.
+    pub(crate) fn succ_insert(&mut self, a: NodeId, b: NodeId) -> bool {
         // Dedup against short successor lists only: a duplicate edge costs
         // a little propagation, a global edge set costs gigabytes.
         {
@@ -76,12 +102,12 @@ impl Model {
             match &mut node.succ_set {
                 Some(set) => {
                     if !std::rc::Rc::make_mut(set).insert(b) {
-                        return;
+                        return false;
                     }
                 }
                 None => {
                     if node.succ.contains(&b) {
-                        return;
+                        return false;
                     }
                     if node.succ.len() >= 16 {
                         let mut set: crate::pts::FxHashSet<NodeId> =
@@ -93,6 +119,20 @@ impl Model {
             }
             node.succ.push(b);
         }
+        true
+    }
+
+    /// Removes `b` from `a`'s successors (D2: a foreign edge set aside).
+    pub(crate) fn succ_remove(&mut self, a: NodeId, b: NodeId) {
+        let node = &mut self.nodes[a as usize];
+        if let Some(set) = node.succ_set.as_mut() {
+            std::rc::Rc::make_mut(set).remove(&b);
+        }
+        node.succ.retain(|&x| x != b);
+    }
+
+    #[track_caller]
+    fn edge_after_insert(&mut self, a: NodeId, b: NodeId, log: bool) {
         // The edge's program position (the operation that made it).
         if self.stop_top.is_some() {
             let p = self.stop_top.as_ref().unwrap().cur_pos();
@@ -127,6 +167,15 @@ impl Model {
         }
         // Over a bound the program gets no facts: nothing more to propagate.
         if self.aborted {
+            return;
+        }
+        self.register_copy(a, b);
+    }
+
+    /// The registration of edge a -> b: `b` gets what `a` holds now (D2:
+    /// nothing while `a` belongs to an inert body; its activation sends it).
+    pub(crate) fn register_copy(&mut self, a: NodeId, b: NodeId) {
+        if self.inert_node(a) {
             return;
         }
         let prim = self.nodes[a as usize].prim;

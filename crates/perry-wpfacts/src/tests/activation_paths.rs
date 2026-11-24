@@ -155,6 +155,55 @@ console.log((new G() as any).x);
     assert!(!hit_runs(src, None), "hit active through an instance read");
 }
 
+/// ACT2 (owner 11-24, PROF C1): the active set comes from the precise
+/// solve. `id` is summarized, so each call gets its own result: `b` holds
+/// only `other`, and `hit`, which only the first call's result holds, is
+/// never called. A context-insensitive pass joins both results and calls
+/// `hit` through `b()`.
+#[test]
+fn a_call_the_precise_solve_rules_out_does_not_activate() {
+    let src = r#"
+function hit() { return 1; }
+function other() { return 2; }
+function id(f: () => number) { return f; }
+const a = id(hit);
+const b = id(other);
+console.log(b(), typeof a);
+"#;
+    assert!(!hit_runs(src, None), "hit active through a merged context");
+}
+
+/// ACT2: a body reached only through a bound function's `this`/method pair
+/// stays active.
+#[test]
+fn a_bound_method_pair_stays_active() {
+    let src = r#"
+function hit() { return 1; }
+class C { m() { return hit(); } }
+const c = new C();
+const f = c.m.bind(c);
+console.log(f());
+"#;
+    assert!(hit_runs(src, None), "hit inactive through a bound method");
+}
+
+/// ACT2: a dead closure that calls its live parent's captured function
+/// does not activate it (the call is a rule on the parent's node).
+#[test]
+fn a_dead_closure_calling_a_captured_function_does_not_activate_it() {
+    let src = r#"
+function hit() { return 1; }
+function live() {
+  let g: () => number = () => 0;
+  if (Math.random() > 2) g = hit;
+  const dead = () => g();
+  return typeof dead;
+}
+console.log(live());
+"#;
+    assert!(!hit_runs(src, None), "hit active through a dead closure");
+}
+
 #[test]
 fn each_fixture_runs_its_body() {
     for (name, src, _, _) in FIXTURES {
@@ -335,4 +384,73 @@ fn owned_async_module_body_is_active_only_when_its_module_runs() {
         .live_dynamic_imports()
         .expect("complete")
         .contains(&("t.ts".into(), "./target.ts".into())));
+}
+
+/// ACT3 (D2): a class whose static block runs feeds its methods' `this`
+/// at generation; methods nobody calls stay inert (their summaries' shared
+/// `this` instance waits for their activation), so `hit` stays inactive.
+#[test]
+fn a_static_block_does_not_activate_uncalled_methods() {
+    let src = r#"
+function hit() { return 1; }
+class C {
+  static x = 1;
+  static { C.x = 2; }
+  static m() { return hit(); }
+  n() { return hit(); }
+}
+const o = { k: 1, m() { return hit(); } };
+console.log(C.x, o.k);
+"#;
+    assert!(!hit_runs(src, None), "hit active through an uncalled method");
+}
+
+/// ACT3 (D2), the control: the static block calls the static method.
+#[test]
+fn a_static_block_calling_a_method_activates_it() {
+    let src = r#"
+function hit() { return 1; }
+class C {
+  static x = 1;
+  static { C.x = this.m(); }
+  static m() { return hit(); }
+}
+console.log(C.x);
+"#;
+    assert!(hit_runs(src, None), "hit inactive through a static block call");
+}
+
+/// ACT3 (D2): an inert closure's edge out of its live parent's local
+/// (a foreign holder) delivers nothing until the closure runs: the closure
+/// stores the parent's function into a global only when called.
+#[test]
+fn a_dead_closure_storing_a_captured_function_does_not_activate_it() {
+    let src = r#"
+function hit() { return 1; }
+const box: { f: () => number } = { f: () => 0 };
+function live() {
+  const g = hit;
+  const dead = () => { box.f = g; };
+  return typeof dead;
+}
+console.log(live(), box.f());
+"#;
+    assert!(!hit_runs(src, None), "hit active through a dead closure's store");
+}
+
+/// ACT3 (D2), the control: the same closure called.
+#[test]
+fn a_live_closure_storing_a_captured_function_activates_it() {
+    let src = r#"
+function hit() { return 1; }
+const box: { f: () => number } = { f: () => 0 };
+function live() {
+  const g = hit;
+  const run = () => { box.f = g; };
+  run();
+  return 0;
+}
+console.log(live(), box.f());
+"#;
+    assert!(hit_runs(src, None), "hit inactive through a live closure's store");
 }

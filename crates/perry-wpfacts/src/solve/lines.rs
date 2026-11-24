@@ -6,6 +6,7 @@ impl Model {
     pub fn cons_line(&self, n: NodeId, c: &Cons) -> String {
         match c {
             Cons::Identity { route } => format!("identity {n} {}", route.name()),
+            Cons::Detached => format!("detached {n}"),
             Cons::HasProp { key, idx } => format!("hasprop {n} {key:?} {idx}"),
             Cons::OwnProp { key, idx } => format!("ownprop {n} {key:?} {idx}"),
             Cons::DeleteIdx { idx, .. } => format!("deleteidx {n} {idx}"),

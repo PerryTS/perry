@@ -40,6 +40,7 @@ pub fn map_cons(
         IndexHoleIn { key } => IndexHoleIn { key: n(key) },
         IndexKept => IndexKept,
         Identity { route } => Identity { route },
+        Detached => Detached,
         HasProp { key, idx } => HasProp {
             key,
             idx: if idx == NO_NODE { NO_NODE } else { n(idx) },

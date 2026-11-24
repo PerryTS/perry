@@ -1129,6 +1129,20 @@ impl<'a> Gen<'a> {
             self.pending_walk.entry(f).or_default().push(w);
             return true;
         }
+        // D2: every body is generated; one not active is inert until it
+        // activates.
+        if let Some(a) = self.m.act.as_ref().filter(|a| a.inert) {
+            let on = a.on.contains(&self.m.act_key(f));
+            let a = self.m.act.as_mut().unwrap();
+            let i = f as usize;
+            if a.state.len() <= i {
+                a.state.resize(i + 1, crate::model::FN_LIVE);
+            }
+            if !on && a.state[i] == crate::model::FN_LIVE {
+                a.state[i] = crate::model::FN_INERT;
+            }
+            return false;
+        }
         if self.m.body_active(f) {
             return false;
         }

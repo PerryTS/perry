@@ -3744,6 +3744,45 @@ pub struct Act {
     /// transfer, such as a call into a summarized callee and its instance,
     /// are left out together).
     pub sabotage: Option<String>,
+    /// D2 (owner 11-24, PROF C1 A): the final solve decides the set. Every
+    /// body is generated (and summarized) whole-program; a body outside
+    /// the set is inert: its nodes deliver nothing and the rules it attached
+    /// to nodes it does not own are kept aside (`Act::foreign`) until it
+    /// activates (`Model::wake_activated`).
+    pub inert: bool,
+    /// By `FnIdx`, inert mode: `FN_LIVE` (not met at a deferral point, or
+    /// met already active), `FN_INERT`, `FN_ACTIVE`.
+    pub state: Vec<u8>,
+    /// By `FnIdx`, inert mode: the nodes a function not yet active owns
+    /// (`Model::set_owner`), re-delivered when it activates.
+    pub fn_nodes: Vec<Vec<NodeId>>,
+    /// What an inert body attached in generation to nodes it does not own,
+    /// unapplied; detached once the summaries are built
+    /// (`Model::detach_foreign`), re-attached when the body activates.
+    pub foreign: FxHashMap<FnIdx, Vec<Foreign>>,
+    /// The foreign edges no live rule made as well (an equal edge a live
+    /// rule adds is that rule's: it stays).
+    pub foreign_edges: crate::pts::FxHashSet<(NodeId, NodeId)>,
+    /// Activated inert functions waiting for re-delivery (the solve's fill
+    /// step).
+    pub woken: Vec<FnIdx>,
+    /// The bodies generation walked (inert mode; `walked` is derived).
+    pub walked_fns: Vec<FnIdx>,
+}
+
+/// `Act::state` values.
+pub const FN_LIVE: u8 = 0;
+pub const FN_INERT: u8 = 1;
+pub const FN_ACTIVE: u8 = 2;
+
+/// A rule an inert body attached to a node it does not own (`Act::foreign`).
+#[derive(Clone, Copy, Debug)]
+pub enum Foreign {
+    /// The edge holder -> dst.
+    Edge(NodeId, NodeId),
+    /// The holder's constraint at its index; `true` once detached (the
+    /// index holds `Cons::Detached`).
+    Cons(NodeId, u32, Cons, bool),
 }
 
 /// The accessors of one holder under one key (or every key, `Key::Any`),

@@ -513,7 +513,57 @@ impl Model {
 
     /// `n` belongs to the body generation is walking.
     pub fn own(&mut self, n: NodeId) {
-        self.node_fn[n as usize] = self.cur_fn;
+        self.set_owner(n, self.cur_fn);
+    }
+
+    /// `n` belongs to the body of `f` (`Model::node_fn`); in inert mode a
+    /// function not yet active lists it for its activation (`Act::fn_nodes`).
+    pub fn set_owner(&mut self, n: NodeId, f: FnIdx) {
+        self.node_fn[n as usize] = f;
+        if f == NO_FN {
+            return;
+        }
+        if let Some(a) = self.act.as_mut().filter(|a| a.inert) {
+            let i = f as usize;
+            if a.state.get(i).copied() != Some(crate::model::FN_ACTIVE) {
+                if a.fn_nodes.len() <= i {
+                    a.fn_nodes.resize_with(i + 1, Vec::new);
+                }
+                a.fn_nodes[i].push(n);
+            }
+        }
+    }
+
+    /// D2: the body of `f` is inert (generated, not active).
+    #[inline]
+    pub fn fn_inert(&self, f: FnIdx) -> bool {
+        match &self.act {
+            Some(a) if a.inert => a.state.get(f as usize) == Some(&crate::model::FN_INERT),
+            _ => false,
+        }
+    }
+
+    /// D2: `n` belongs to an inert body: it delivers nothing yet.
+    #[inline]
+    pub fn inert_node(&self, n: NodeId) -> bool {
+        match &self.act {
+            Some(a) if a.inert => {
+                let f = self.node_fn[n as usize];
+                f != NO_FN && a.state.get(f as usize) == Some(&crate::model::FN_INERT)
+            }
+            _ => false,
+        }
+    }
+
+    /// D2: generation attaches a rule of an inert body to `holder`, a node
+    /// that body does not own: it is set aside (`Act::foreign`).
+    #[inline]
+    pub fn foreign_rule(&self, holder: NodeId) -> bool {
+        let f = self.cur_fn;
+        f != NO_FN
+            && !self.sum.ready
+            && self.node_fn[holder as usize] != f
+            && self.fn_inert(f)
     }
 
     #[track_caller]
@@ -896,8 +946,29 @@ impl Model {
         }
         let k = self.act_key(f);
         let a = self.act.as_mut().unwrap();
+        if a.inert {
+            let i = f as usize;
+            if a.state.len() <= i {
+                a.state.resize(i + 1, crate::model::FN_LIVE);
+            }
+            match a.state[i] {
+                // Its nodes and set-aside rules are re-delivered by the
+                // solve's fill step.
+                crate::model::FN_INERT => a.woken.push(f),
+                // Never inert: its nodes delivered all along.
+                crate::model::FN_LIVE => {
+                    if let Some(v) = a.fn_nodes.get_mut(i) {
+                        *v = Vec::new();
+                    }
+                }
+                _ => {}
+            }
+            a.state[i] = crate::model::FN_ACTIVE;
+        }
         if a.on.insert(k) {
-            a.queue.push(f);
+            if !a.inert {
+                a.queue.push(f);
+            }
             if let Some(pat) = why_act() {
                 let name = &self.funcs[f as usize].name;
                 if name.contains(pat.as_str()) {
@@ -910,7 +981,9 @@ impl Model {
     /// DECISIONS 225: generation walks the body of `f` (noted once the
     /// activation set is final).
     pub fn note_walked(&mut self, f: FnIdx) {
-        if self.act.as_ref().is_some_and(|a| a.fixed) {
+        if let Some(a) = self.act.as_mut().filter(|a| a.inert) {
+            a.walked_fns.push(f);
+        } else if self.act.as_ref().is_some_and(|a| a.fixed) {
             let k = self.act_key(f);
             self.act.as_mut().unwrap().walked.insert(k);
         }
@@ -920,6 +993,7 @@ impl Model {
     pub fn body_active(&self, f: FnIdx) -> bool {
         match &self.act {
             None => true,
+            Some(a) if a.inert => a.state.get(f as usize) != Some(&crate::model::FN_INERT),
             Some(a) => {
                 let k = self.act_key(f);
                 a.on.contains(&k) || (a.fixed && !a.seen.is_empty() && !a.seen.contains(&k))

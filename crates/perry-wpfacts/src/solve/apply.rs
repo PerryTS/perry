@@ -5,7 +5,7 @@ impl Model {
         let pv = self.prov.is_some();
         match *c {
             // An observation for the value-record derive: no flow.
-            Cons::Identity { .. } => {}
+            Cons::Identity { .. } | Cons::Detached => {}
             // `k in o`: no flow on an ordinary object; OrdinaryHasProperty
             // (10.1.7.1 step 3) goes on with parent.[[HasProperty]]: the same
             // rule on the object's prototype closure (once per object, key
@@ -488,7 +488,7 @@ impl Model {
                         Some(v) => v,
                         None => {
                             let v = self.node_named("stored", || "stored-vals".into());
-                            self.node_fn[v as usize] = f;
+                            self.set_owner(v, f);
                             self.store_flows.entry(k).or_default().vals = Some(v);
                             v
                         }

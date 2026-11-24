@@ -1111,6 +1111,12 @@ impl Model {
         if self.aborted {
             return;
         }
+        if self.foreign_rule(n) {
+            let f = self.cur_fn;
+            let a = self.act.as_mut().unwrap();
+            a.foreign.entry(f).or_default().push(crate::model::Foreign::Cons(n, ci, c, false));
+            return;
+        }
         self.own_refuted_cons(n, c);
         if defer {
             // SKINROOT27: replayed by the draining EnumChain (`Model::chain_q`).
@@ -1122,6 +1128,9 @@ impl Model {
 
     /// Apply the attached constraint `c` of `n` to what `n` holds now.
     pub(crate) fn replay_cons(&mut self, n: NodeId, c: Cons, ci: u32) {
+        if matches!(c, Cons::Detached) || self.inert_node(n) {
+            return;
+        }
         let prim = self.nodes[n as usize].prim;
         if self.nodes[n as usize].pts.is_empty() && prim == 0 {
             return;
@@ -1164,7 +1173,110 @@ impl Model {
     /// contract check's escapes and the instances they make) is part of
     /// the unit's facts only once solved.
     pub(crate) fn unsolved(&self) -> bool {
-        !self.wl.is_empty() || !self.sum.pending.is_empty() || !self.marker_links.is_empty()
+        !self.wl.is_empty()
+            || !self.sum.pending.is_empty()
+            || !self.marker_links.is_empty()
+            || self.act.as_ref().is_some_and(|a| !a.woken.is_empty())
+    }
+
+    /// D2: once the summaries are built, the rules inert bodies attached
+    /// to nodes they do not own leave the graph (an observation holder's
+    /// stay: a summary template, delivering nothing outside instances).
+    pub(crate) fn detach_foreign(&mut self) {
+        let Some(a) = self.act.as_mut().filter(|a| a.inert) else {
+            return;
+        };
+        let mut foreign = std::mem::take(&mut a.foreign);
+        let mut edges = Vec::new();
+        for (&f, list) in foreign.iter_mut() {
+            if !self.fn_inert(f) {
+                continue;
+            }
+            for e in list.iter_mut() {
+                match e {
+                    crate::model::Foreign::Cons(h, ci, _, det) => {
+                        if !self.nodes[*h as usize].obs {
+                            self.nodes[*h as usize].cons[*ci as usize] = Cons::Detached;
+                            *det = true;
+                        }
+                    }
+                    crate::model::Foreign::Edge(x, y) => edges.push((*x, *y)),
+                }
+            }
+        }
+        for (x, y) in edges {
+            let set_aside = self
+                .act
+                .as_ref()
+                .is_some_and(|a| a.foreign_edges.contains(&(x, y)));
+            if set_aside && !self.nodes[x as usize].obs {
+                self.succ_remove(x, y);
+            }
+        }
+        self.act.as_mut().unwrap().foreign = foreign;
+    }
+
+    /// D2: the inert bodies activated since the last fill: each node they
+    /// own sends what it holds along its edges and through its rules (as
+    /// registration and attachment would have, had the body been active),
+    /// the rules they set aside are attached again, and a summarized one's
+    /// generation-fed `this` gets its shared instance.
+    pub(crate) fn wake_activated(&mut self) {
+        loop {
+            let q = match self.act.as_mut() {
+                Some(a) if !a.woken.is_empty() => std::mem::take(&mut a.woken),
+                _ => return,
+            };
+            for f in q {
+                if self.aborted {
+                    return;
+                }
+                let a = self.act.as_mut().unwrap();
+                let nodes = a
+                    .fn_nodes
+                    .get_mut(f as usize)
+                    .map(std::mem::take)
+                    .unwrap_or_default();
+                let foreign = a.foreign.remove(&f).unwrap_or_default();
+                for &n in &nodes {
+                    let mut i = 0;
+                    while i < self.nodes[n as usize].succ.len() {
+                        let b = self.nodes[n as usize].succ[i];
+                        self.register_copy(n, b);
+                        i += 1;
+                    }
+                    let mut ci = 0;
+                    while ci < self.nodes[n as usize].cons.len() {
+                        let c = self.nodes[n as usize].cons[ci];
+                        self.replay_cons(n, c, ci as u32);
+                        ci += 1;
+                    }
+                    let node = &mut self.nodes[n as usize];
+                    if !node.in_wl {
+                        node.in_wl = true;
+                        self.wl.push_back(n);
+                    }
+                }
+                let saved = self.cur_fn;
+                self.cur_fn = f;
+                for e in foreign {
+                    match e {
+                        crate::model::Foreign::Cons(h, ci, c, det) => {
+                            if det {
+                                self.nodes[h as usize].cons[ci as usize] = c;
+                            }
+                            self.own_refuted_cons(h, c);
+                            self.replay_cons(h, c, ci);
+                        }
+                        crate::model::Foreign::Edge(x, y) => self.edge_quiet(x, y),
+                    }
+                }
+                self.cur_fn = saved;
+                if self.sum.of.contains_key(&f) {
+                    self.eager_this(f);
+                }
+            }
+        }
     }
 
     pub fn solve(&mut self) {
@@ -1231,6 +1343,8 @@ impl Model {
         self.members_settled.get_mut().clear();
         let mut delta = crate::delta::Delta::default();
         loop {
+            self.prof_mark(NO_NODE, "activations");
+            self.wake_activated();
             self.prof_mark(NO_NODE, "instances");
             self.fill_instances();
             self.prof_mark(NO_NODE, "marker links");
@@ -1245,6 +1359,7 @@ impl Model {
             let Some(n) = self.wl.pop_front() else {
                 if self.sum.pending.is_empty()
                     && self.marker_links.is_empty()
+                    && self.act.as_ref().is_none_or(|a| a.woken.is_empty())
                     && !self.settle_for_in()
                     && !self.settle_val_runs()
                     && !self.settle_define()
@@ -1264,6 +1379,12 @@ impl Model {
             self.prof_mark(n, "");
             if self.aborted {
                 return;
+            }
+            if self.inert_node(n) {
+                // D2: an inert body's node keeps what it holds; its
+                // activation re-delivers it (`wake_activated`).
+                self.nodes[n as usize].in_wl = false;
+                continue;
             }
             if self.profile.is_some() && self.pops & 0x3ffff == 0 {
                 eprintln!("perry: wpfacts progress {}", self.size_line());

@@ -492,7 +492,7 @@ fn generate<'a>(
     hold: Hold,
     t0: std::time::Instant,
 ) -> (gen::Gen<'a>, f64, std::time::Instant) {
-    let loud = act.as_ref().is_none_or(|a| a.fixed);
+    let loud = act.as_ref().is_none_or(|a| a.fixed || a.inert);
     // Node IDs name the final observed model. Never apply its diagnostic
     // suppression selector to intermediate liveness models with other IDs.
     let birth_census = cfg.diagnostics && loud && cfg.birth_census;
@@ -927,7 +927,16 @@ fn compute_act<'a>(
     let act = match gate {
         None => None,
         Some(Some(given)) => given.over(&sorted),
-        Some(None) => activation_pass(&sorted, cfg, t0).map(|(a, _)| a),
+        // D2 (owner 11-24, PROF C1 A): the final solve decides the set.
+        Some(None) => Some(model::Act {
+            inert: true,
+            sabotage: cfg
+                .sabotage
+                .as_deref()
+                .and_then(|s| s.strip_prefix("activation:"))
+                .map(str::to_string),
+            ..Default::default()
+        }),
     };
     let activation = act.as_ref().map(|a| a.on.len());
     let again = act.clone();
@@ -964,6 +973,44 @@ fn compute_act<'a>(
         g.m.solve();
     }
     let checks_ms = t1.elapsed().as_secs_f64() * 1000.0 - first_solve_ms;
+    // D2: the set at the fixpoint is final: the walked bodies outside it
+    // were inert.
+    let mut activation = activation;
+    if g.m.act.as_ref().is_some_and(|a| a.inert && !a.fixed) {
+        let a = g.m.act.as_ref().unwrap();
+        let live: Vec<model::FnIdx> = a
+            .walked_fns
+            .iter()
+            .copied()
+            .filter(|&f| a.state.get(f as usize) != Some(&model::FN_INERT))
+            .collect();
+        let walked = live.into_iter().map(|f| g.m.act_key(f)).collect();
+        let seen = (0..g.m.funcs.len() as u32).map(|f| g.m.act_key(f)).collect();
+        // An inert body's sites get no verdict (generic code), as an
+        // unwalked body's never had one.
+        let inert = |m: &model::Model, f: model::FnIdx| m.fn_inert(f);
+        let m = &g.m;
+        g.read_sites.retain(|s| !inert(m, s.func));
+        g.store_sites.retain(|s| !inert(m, s.func));
+        let a = g.m.act.as_mut().unwrap();
+        a.walked = walked;
+        a.seen = seen;
+        a.fixed = true;
+        let inert = a.state.iter().filter(|&&s| s == model::FN_INERT).count();
+        activation = Some(format!(
+            "active={} functions={} inert={inert}",
+            a.on.len(),
+            g.m.funcs.len()
+        ));
+        if cfg.profile {
+            eprintln!(
+                "perry: wpfacts activation (final solve): {} active of {} functions, {} walked, {inert} inert",
+                a.on.len(),
+                g.m.funcs.len(),
+                a.walked.len()
+            );
+        }
+    }
     let escaped_inactive = g.m.act.is_some().then(|| g.m.escaped_inactive());
     g.m.settle_keyed_uses();
     g.settle_parent_layouts();
@@ -1422,7 +1469,11 @@ fn compute_act<'a>(
         g.m.act
             .as_ref()
             .map(|a| {
-                let holding = g.read_sites.iter().map(|s| g.m.act_key(s.func));
+                let holding = g
+                    .read_sites
+                    .iter()
+                    .filter(|s| !g.m.fn_inert(s.func))
+                    .map(|s| g.m.act_key(s.func));
                 // `on` is the activate predicate itself; a body it admits is
                 // reached even when generation walked it under no pending entry.
                 a.walked
