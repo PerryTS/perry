@@ -6332,6 +6332,12 @@ function __jsMethodGet(obj, mname) {
   return { r: obj, m: mname, f };
 }
 
+// The host array methods that call their first argument. Every other argument of a host
+// array method is data and keeps its identity.
+const __arrayCallbackMethods = new Set(['map', 'filter', 'forEach', 'find', 'findIndex', 'findLast',
+  'findLastIndex', 'some', 'every', 'flatMap', 'reduce', 'reduceRight', 'sort', 'toSorted']
+  .map((name) => Array.prototype[name]));
+
 function __jsMethodInvoke(ref, args) {
   if (ref.user) {
     // As __invokeWasmCallback: a compiled method that threw under an enclosing WASM
@@ -6348,7 +6354,8 @@ function __jsMethodInvoke(ref, args) {
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
   // A compiled class method takes Perry values, as `reflect_apply` passes them.
   if (__classMethodFns.has(ref.f)) return Reflect.apply(ref.f, ref.r, args);
-  return Reflect.apply(ref.f, ref.r, args.map(__hostCallback));
+  const callbacks = ref.f !== Array.prototype[ref.m] ? args.length : +__arrayCallbackMethods.has(ref.f);
+  return Reflect.apply(ref.f, ref.r, args.map((a, i) => i < callbacks ? __hostCallback(a) : a));
 }
 
 // Own keys only: `mname in methods` would also find Object.prototype's names.

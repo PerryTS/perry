@@ -92,3 +92,29 @@ mutate().then((v) => console.log(v), (e) => console.log("threw " + e.message));
         "1 3 3 true false 2,3,1 1,2,3 1 3 1,3,2,1 1,1,2,3 3,2,1,1 1,8,9,1 1,2 7,2,3,1 1,2,3,1\n1 5 2 4 4 4 1 7,8 20,21,10 10,20,21 10,20,21 21,20,10 20,10,10 10,10,10  1,2\n3 2,4,6 1 1 aa,bb"
     );
 }
+
+// A closure passed as data, not as the callback, keeps its identity. Expected output is
+// Node's.
+#[test]
+fn async_body_array_methods_keep_closures_passed_as_data() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const cb = () => 1;
+  const xs: any[] = [cb];
+  const out: any[] = [xs.includes(cb), xs.indexOf(cb), xs.lastIndexOf(cb), xs.with(0, cb)[0] === cb];
+  xs.unshift(cb);
+  out.push(xs[0] === cb, xs.toSpliced(0, 1, cb)[0] === cb, [1].reduce((a: any, x) => a, cb) === cb);
+  xs.splice(0, 2, cb);
+  xs.push(...[cb]);
+  xs.push(cb, cb);
+  out.push(xs[0] === cb, xs[1] === cb, xs[3] === cb, xs.map(x => x())[0]);
+  return out.join(" ");
+}
+f().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "true 0 0 true true true true true true true 1"
+    );
+}
