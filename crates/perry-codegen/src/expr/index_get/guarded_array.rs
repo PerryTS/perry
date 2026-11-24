@@ -1247,6 +1247,9 @@ mod compact_read_tests {
             compile_module(
                 &module,
                 CompileOptions {
+                    // Apple aarch64 inlines a thread-cache lookup with its
+                    // own null tests.
+                    target: Some("x86_64-unknown-linux-gnu".into()),
                     emit_ir_only: true,
                     ..Default::default()
                 },

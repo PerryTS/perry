@@ -277,7 +277,11 @@ fn registered_closure_ids(ir: &str) -> Vec<u32> {
 
 #[test]
 fn closure_display_names_are_emitted_in_func_id_order() {
-    let ids = registered_closure_ids(&ir(&closure_display_module()));
+    // `$fnrec` has this plain spelling only on ELF.
+    let mut opts = ir_opts();
+    opts.target = Some("x86_64-unknown-linux-gnu".to_string());
+    let llvm = String::from_utf8(compile_module(&closure_display_module(), opts).unwrap()).unwrap();
+    let ids = registered_closure_ids(&llvm);
     // Liveness: the construct under test was actually emitted.
     assert_eq!(
         ids.len(),

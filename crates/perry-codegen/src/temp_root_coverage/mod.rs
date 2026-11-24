@@ -173,7 +173,18 @@ pub(crate) fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
 
 /// The `main` body a module-init fixture compiles into.
 pub(crate) fn main_ir_for(name: &str, init: Vec<Stmt>) -> String {
-    let bytes = compile_module(&module_with_init(name, init), entry_opts())
+    main_ir_with(name, init, entry_opts())
+}
+
+/// [`main_ir_for`] for a lowering only `target` takes.
+pub(crate) fn main_ir_for_target(name: &str, init: Vec<Stmt>, target: &str) -> String {
+    let mut opts = entry_opts();
+    opts.target = Some(target.to_string());
+    main_ir_with(name, init, opts)
+}
+
+fn main_ir_with(name: &str, init: Vec<Stmt>, opts: CompileOptions) -> String {
+    let bytes = compile_module(&module_with_init(name, init), opts)
         .unwrap_or_else(|e| panic!("codegen failed for {name}: {e}"));
     let ir = String::from_utf8(bytes).expect("LLVM IR should be UTF-8");
     crate::testing::root_slots::function_slice(&ir, "main").to_string()

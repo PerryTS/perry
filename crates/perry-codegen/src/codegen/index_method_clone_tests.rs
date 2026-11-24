@@ -376,6 +376,8 @@ fn fixture() -> Module {
 
 fn emit() -> String {
     let opts = CompileOptions {
+        // Apple aarch64 inlines a thread-cache lookup with its own null tests.
+        target: Some("x86_64-unknown-linux-gnu".into()),
         emit_ir_only: true,
         output_type: "executable".to_string(),
         disable_constfn_shapes: false,

@@ -170,7 +170,7 @@ fn ir(rep: FactsRep) -> String {
         index_arg: 0,
         default: Some(0f64.to_bits()),
         element_offset: at("this.board[sq]"),
-        field_offset: at("this.board[sq]"),
+        field_offset: at("board[sq]"),
         in_floor: None,
         rest: None,
     };
@@ -181,7 +181,8 @@ fn ir(rep: FactsRep) -> String {
         ("this.at(i & 127); this.board", (0, 127), Some(128)),
         ("this.at(i & 127) * 2", (0, 127), Some(128)),
     ] {
-        let site = at(call);
+        // A method call's site is its member token.
+        let site = at(call) + "this.".len() as u32;
         elision.field_read_calls.insert(
             site,
             FactsFieldReadCall {
