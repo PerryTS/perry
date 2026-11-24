@@ -211,6 +211,7 @@ impl WasmModuleEmitter {
             "class_call_method",
             "class_super_get",
             "class_super_call",
+            "super_call_spread",
             "class_get_field",
             "class_set_field",
             "generator_new",

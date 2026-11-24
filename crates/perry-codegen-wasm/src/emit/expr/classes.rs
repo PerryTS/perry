@@ -186,7 +186,10 @@ impl<'a> FuncEmitCtx<'a> {
 
             // --- Class instantiation ---
             Expr::New {
-                class_name, args, ..
+                class_name,
+                args,
+                cap_args_appended,
+                ..
             } => {
                 // Handle built-in constructors that need native JS objects
                 match class_name.as_str() {
@@ -379,9 +382,11 @@ impl<'a> FuncEmitCtx<'a> {
                 if let Some(ctor_idx) = ctor {
                     // Stack: [instance_handle]
                     let ctor_args: &[Expr] = if forwarded { &[] } else { args };
-                    let ctor_args = self
-                        .emitter
-                        .with_rest_packed_after_receiver(ctor_idx, ctor_args);
+                    let ctor_args = self.emitter.with_rest_packed_after_receiver(
+                        ctor_idx,
+                        ctor_args,
+                        *cap_args_appended,
+                    );
                     for arg in ctor_args.iter() {
                         self.emit_expr(func, arg);
                     }
@@ -470,7 +475,7 @@ impl<'a> FuncEmitCtx<'a> {
                                 std::borrow::Cow::Borrowed(ctor_args)
                             } else {
                                 self.emitter
-                                    .with_rest_packed_after_receiver(ctor_idx, ctor_args)
+                                    .with_rest_packed_after_receiver(ctor_idx, ctor_args, 0)
                             };
                             // Call parent constructor with this + args
                             func.instruction(&Instruction::LocalGet(0)); // this
@@ -518,6 +523,86 @@ impl<'a> FuncEmitCtx<'a> {
                         self.emit_expr(func, arg);
                         func.instruction(&Instruction::Drop);
                     }
+                }
+                func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+            }
+            // `super(a, ...xs)`: the argument list is built as the array literal
+            // `[a, ...xs]` would be, then the parent's constructor runs on `this` with it,
+            // through its table slot since the list's length is known only at run time.
+            Expr::SuperCallSpread(args) => {
+                let list = Expr::ArraySpread(
+                    args.iter()
+                        .map(|arg| match arg {
+                            CallArg::Expr(e) => ArrayElement::Expr(e.clone()),
+                            CallArg::Spread(e) => ArrayElement::Spread(e.clone()),
+                        })
+                        .collect(),
+                );
+                let current_class = self.current_class.clone().unwrap_or_default();
+                let parent_ctor = self
+                    .emitter
+                    .class_parent_map
+                    .get(&current_class)
+                    .and_then(|parent| Some((parent, *self.emitter.class_ctor_map.get(parent)?)));
+                if let Some((parent_name, ctor_idx)) = parent_ctor {
+                    // As in `Expr::SuperCall`: a parent with only synthesized constructors
+                    // hands the arguments to the built-in's, and itself gets none.
+                    let implicit = &self.emitter.implicit_ctor_classes;
+                    let forwarded = implicit.contains(parent_name)
+                        && !implicit.contains(&current_class)
+                        && self.host_base_parent(&current_class).is_some();
+                    let ctor_args = if forwarded {
+                        func.instruction(&Instruction::LocalGet(0));
+                        self.emit_host_super_init_list(func, &list);
+                        func.instruction(&Instruction::Drop);
+                        Expr::Array(Vec::new(), None)
+                    } else {
+                        list
+                    };
+                    let slot = self
+                        .emitter
+                        .func_to_table_idx
+                        .get(&ctor_idx)
+                        .map_or(-1.0, |&slot| slot as f64);
+                    // A derived class holds its parent's captures in parameters of the same
+                    // names.
+                    let cap_params = &self.emitter.ctor_cap_params;
+                    let own = cap_params.get(&current_class);
+                    let caps = cap_params
+                        .get(parent_name)
+                        .into_iter()
+                        .flatten()
+                        .map(|(name, _)| {
+                            own.and_then(|own| own.iter().find(|(n, _)| n == name))
+                                .map_or(Expr::Undefined, |&(_, id)| Expr::LocalGet(id))
+                        })
+                        .collect();
+                    let caps = Expr::Array(caps, None);
+                    self.emit_frame_begin(func, 4);
+                    self.emit_store_arg(func, 0, &Expr::This);
+                    self.emit_store_arg(func, 1, &Expr::Number(slot));
+                    self.emit_store_arg(func, 2, &ctor_args);
+                    self.emit_store_arg(func, 3, &caps);
+                    self.emit_memcall(func, "super_call_spread", 4);
+                    func.instruction(&Instruction::Drop);
+                } else if self.extends_builtin_error(&current_class) {
+                    let message = Expr::IndexGet {
+                        object: Box::new(list),
+                        index: Box::new(Expr::Number(0.0)),
+                        byte_offset: 0,
+                        byte_end: 0,
+                        element_offset: 0,
+                    };
+                    func.instruction(&Instruction::LocalGet(0));
+                    self.emit_error_super_init(func, &[message]);
+                    func.instruction(&Instruction::Drop);
+                } else if self.host_base_parent(&current_class).is_some() {
+                    func.instruction(&Instruction::LocalGet(0));
+                    self.emit_host_super_init_list(func, &list);
+                    func.instruction(&Instruction::Drop);
+                } else {
+                    self.emit_expr(func, &list);
+                    func.instruction(&Instruction::Drop);
                 }
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
             }
@@ -1008,6 +1093,11 @@ impl FuncEmitCtx<'_> {
     /// Stack: [instance] -> [instance], with the built-in's constructor applied to
     /// `args` on the instance, as `super(...args)` does.
     fn emit_host_super_init(&mut self, func: &mut Function, args: &[Expr]) {
+        self.emit_host_super_init_list(func, &Expr::Array(args.to_vec(), None));
+    }
+
+    /// `emit_host_super_init` with the argument list as one array-valued expression.
+    fn emit_host_super_init_list(&mut self, func: &mut Function, list: &Expr) {
         self.emit_frame_begin(func, 2);
         func.instruction(&Instruction::LocalSet(self.temp_local));
         self.emit_slot_addr(func, 0);
@@ -1017,7 +1107,7 @@ impl FuncEmitCtx<'_> {
             align: 3,
             memory_index: 0,
         }));
-        self.emit_store_arg(func, 1, &Expr::Array(args.to_vec(), None));
+        self.emit_store_arg(func, 1, list);
         self.emit_memcall(func, "host_super_init", 2);
     }
 

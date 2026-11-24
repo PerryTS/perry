@@ -1334,7 +1334,10 @@ impl WasmModuleEmitter {
                 )
             }
             Expr::New {
-                class_name, args, ..
+                class_name,
+                args,
+                cap_args_appended,
+                ..
             } => {
                 let args_js: Vec<String> =
                     args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
@@ -1368,8 +1371,9 @@ impl WasmModuleEmitter {
                 // under an enclosing WASM `try` is left pending, and this rethrows it
                 // here instead of handing back `this` as if it had succeeded.
                 format!(
-                    "u64ToF64(__invokeWasmCallback(wasmInstance.exports.__wasm_func_{}, {}))",
+                    "u64ToF64(__invokeConstructor(wasmInstance.exports.__wasm_func_{}, {}, {}))",
                     ctor_idx,
+                    cap_args_appended,
                     call_args.join(", ")
                 )
             }
