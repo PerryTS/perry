@@ -422,7 +422,7 @@ impl Model {
                 .is_some_and(|v| v.iter().any(|&(_, n, store)| store && self.node_held(n)))
     }
 
-    fn node_held(&self, n: NodeId) -> bool {
+    pub(crate) fn node_held(&self, n: NodeId) -> bool {
         let nd = &self.nodes[n as usize];
         !nd.pts.is_empty() || nd.prim != 0
     }

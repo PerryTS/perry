@@ -452,11 +452,16 @@ pub fn map_cons(
             call: k(call),
             shape,
         },
-        ForInBody { obj, call } => ForInBody {
+        ForInBody { obj, call, list } => ForInBody {
             obj: n(obj),
             call: k(call),
+            list,
         },
-        ForInKeys { ft, call } => ForInKeys { ft, call: k(call) },
+        ForInKeys { ft, call, list } => ForInKeys {
+            ft,
+            call: k(call),
+            list,
+        },
         DefineKeyed {
             o,
             reason,

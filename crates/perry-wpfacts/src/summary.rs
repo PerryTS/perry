@@ -102,7 +102,7 @@ pub enum Deferred {
     ReflectConstruct(CallId, Tok, Tok),
     NewNamed(Atom, CallId),
     /// A for-in body token run over an object token (`Model::for_in_tok`).
-    ForIn(CallId, Tok, Tok),
+    ForIn(CallId, Tok, Tok, KeyList),
     /// A native method run at a call (`builtins::own_method`,
     /// `proto_method`, `prim_method`): like a birth, it waits for summaries,
     /// so what the method births and calls at a summary's call is per
@@ -1136,8 +1136,12 @@ impl Model {
             NO_CTX => NO_VC,
             c => self.sum.ctx_vc[c as usize],
         };
+        // A loop body's run for one key (kind 6, FVA 4.3b) is keyed by that
+        // key's String as such a run is: what it births and the closures it
+        // makes (a wrapper capturing `p[k]`) are that key's.
         let vc = match val {
             v if v != NO_VAL && s.switch.is_some() && s.called.is_none() => self.vc_of(pvc, f, v),
+            _ if key.0 == 6 => self.vc_of(pvc, f, key.1),
             _ => pvc,
         };
         self.sum.insts.push(Inst {
@@ -2434,7 +2438,7 @@ impl Model {
                     self.reflect_construct(call, target, new_target)
                 }
                 Deferred::NewNamed(name, call) => self.new_named(name, call),
-                Deferred::ForIn(call, ft, t) => self.for_in_tok(call, ft, t),
+                Deferred::ForIn(call, ft, t, l) => self.for_in_tok(call, ft, t, l),
                 // A summary's call: its instances run the method.
                 Deferred::Native(_, _, call) if self.sum.templates.contains(&call) => {}
                 Deferred::Native(r, key, call) => self.with_native(call, |m, call| {

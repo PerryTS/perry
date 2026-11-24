@@ -18,11 +18,15 @@ use perry_hir::{Class, Expr, Function, Stmt};
 
 /// A for-in loop as HIR lowers it.
 pub(crate) struct ForIn<'s> {
-    /// The iterated object's local (`__forin_obj`).
+    /// The iterated object's local (`__forin_obj`; for a for-of over its
+    /// keys, the operand of `Object.keys` / `getOwnPropertyNames`).
     pub obj: u32,
     /// The loop variable.
     pub key: u32,
-    pub guard: &'s Expr,
+    /// The for-in's guard (a for-of walk has none).
+    pub guard: Option<&'s Expr>,
+    /// Which keys the loop visits.
+    pub list: KeyList,
     /// `const k = __keys[i]`.
     pub bind: &'s Stmt,
     pub body: &'s [Stmt],
@@ -94,7 +98,10 @@ pub(crate) fn subj_path(mut e: &Expr) -> Option<SubjPath> {
     Some(SubjPath { root, members })
 }
 
-fn for_in_shape<'s>(body: &'s [Stmt], keys_of: impl Fn(u32) -> Option<u32>) -> Option<ForIn<'s>> {
+fn for_in_shape<'s>(
+    body: &'s [Stmt],
+    keys_of: impl Fn(u32) -> Option<(u32, KeyList)>,
+) -> Option<ForIn<'s>> {
     let [Stmt::If {
         condition,
         then_branch,
@@ -115,10 +122,52 @@ fn for_in_shape<'s>(body: &'s [Stmt], keys_of: impl Fn(u32) -> Option<u32>) -> O
     let (Expr::LocalGet(keys), Expr::LocalGet(_)) = (object.as_ref(), index.as_ref()) else {
         return None;
     };
+    let (obj, list) = keys_of(*keys)?;
+    if list != KeyList::ForIn {
+        return None;
+    }
     Some(ForIn {
-        obj: keys_of(*keys)?,
+        obj,
         key: *id,
-        guard: condition,
+        guard: Some(condition),
+        list,
+        bind,
+        body: rest,
+    })
+}
+
+/// E1: the body of a counted for-of walk (`Gen::for_of_walks`) over the
+/// keys Array of `Object.keys(o)` / `Object.getOwnPropertyNames(o)`
+/// (`Gen::for_in_keys_of`): `const k = arr[i]; body`, `i` the walk's
+/// counter. Each iteration binds one element of the fresh Array, one key
+/// of `o` (ECMA-262 14.7.5.6 ForIn/OfBodyEvaluation over the Array
+/// iterator, 23.1.5.1), so the body is a function of its key as a for-in's.
+fn for_of_keys_shape<'s>(
+    body: &'s [Stmt],
+    keys_of: impl Fn(u32) -> Option<(u32, KeyList)>,
+    walked: impl Fn(u32, u32) -> bool,
+) -> Option<ForIn<'s>> {
+    let (bind, rest) = body.split_first()?;
+    let Stmt::Let {
+        id,
+        init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
+        ..
+    } = bind
+    else {
+        return None;
+    };
+    let (Expr::LocalGet(arr), Expr::LocalGet(i)) = (object.as_ref(), index.as_ref()) else {
+        return None;
+    };
+    let (obj, list) = keys_of(*arr)?;
+    if list == KeyList::ForIn || !walked(*arr, *i) {
+        return None;
+    }
+    Some(ForIn {
+        obj,
+        key: *id,
+        guard: None,
+        list,
         bind,
         body: rest,
     })
@@ -228,7 +277,7 @@ fn defining_loops<'s>(body: &'s [Stmt]) -> Vec<(&'s Expr, ForIn<'s>)> {
             {
                 continue;
             }
-            let Some(f) = for_in_shape(fb, |k| (k == *keys).then_some(*obj)) else {
+            let Some(f) = for_in_shape(fb, |k| (k == *keys).then_some((*obj, KeyList::ForIn))) else {
                 continue;
             };
             let mut defines = false;
@@ -257,7 +306,10 @@ impl<'a> Gen<'a> {
         if fx.ctor_of.is_some() || (top_level && self.unit_view(mi as usize).is_some()) {
             return None;
         }
-        let f = for_in_shape(body, |k| self.for_in_keys_of.get(&(mi, k)).copied())?;
+        let keys_of = |k| self.for_in_keys_of.get(&(mi, k)).copied();
+        let f = for_in_shape(body, keys_of).or_else(|| {
+            for_of_keys_shape(body, keys_of, |a, i| self.for_of_walks.contains(&(mi, a, i)))
+        })?;
         if self.unstable_locals(mi).contains(&f.key) || !runs_in_place(f.body) {
             return None;
         }
@@ -292,7 +344,9 @@ impl<'a> Gen<'a> {
     /// the object.
     pub(crate) fn for_in_body(&mut self, fx: &Fx, f: &ForIn<'_>) {
         let mi = fx.module;
-        let _ = self.expr(fx, f.guard);
+        if let Some(g) = f.guard {
+            let _ = self.expr(fx, g);
+        }
         self.stmt(fx, f.bind);
         let g = self.m.funcs.len() as FnIdx;
         #[cfg(test)]
@@ -376,14 +430,27 @@ impl<'a> Gen<'a> {
             self.packet_reads(packet_read_start);
             self.m.packet_end(packet_prior, true);
         }
-        let on = self.local(mi, f.obj);
+        // A for-of over the keys of local `o`: the keys Array was made from
+        // `o` as read at the loop (narrowed there: `p !== Object.prototype`
+        // in an enclosing loop's test), so the runs are over that read.
+        let on = match f.list {
+            KeyList::ForIn => self.local(mi, f.obj),
+            _ => self.expr(fx, &Expr::LocalGet(f.obj)),
+        };
         let gn = self.tok_node(tok);
         // The template call's key: any String only once a run with every
         // key is made (`Model::for_in_every_key`); a per-key run binds its
         // own constant key.
         let k = self.tmp("forin-key");
         let (call, _) = self.new_call(ThisArg::Undef, vec![k], vec![]);
-        self.m.cons(gn, Cons::ForInBody { obj: on, call });
+        self.m.cons(
+            gn,
+            Cons::ForInBody {
+                obj: on,
+                call,
+                list: f.list,
+            },
+        );
     }
 
     /// ENUM1: the for-in of `body` (outlined or a loop) when neither its

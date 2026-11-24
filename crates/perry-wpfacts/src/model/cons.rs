@@ -67,6 +67,22 @@ impl IdentityRoute {
     }
 }
 
+/// The keys a loop body run per key visits (FVA 4.3b, `Cons::ForInBody`).
+/// A run per key exists exactly where the rule that lists the keys gives
+/// String constants; any other value runs the body with every key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum KeyList {
+    /// `for (k in o)`: the enumerable String keys of `o` and its chain
+    /// (ECMA-262 14.7.5.9 EnumerateObjectProperties; `Model::enum_keys`).
+    ForIn,
+    /// `for (const k of Object.keys(o))`: the own enumerable String keys
+    /// (20.1.2.18, 7.3.23; rule EK, `Model::own_keys_of`).
+    OwnKeys,
+    /// `for (const k of Object.getOwnPropertyNames(o))`: the own String keys
+    /// (20.1.2.10, 10.1.11.1; rule PK, `Model::proto_names`).
+    OwnNames,
+}
+
 /// Rule PXINV: the internal methods `Cons::Meta` runs (ECMA-262 10.5).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum MetaOp {
@@ -780,12 +796,20 @@ pub enum Cons {
     /// The node is the value of a for-in body (FVA 4.3b, `gen/for_in.rs`):
     /// each body token runs per value of `obj` (`ForInKeys`), its runs bound
     /// through the template call `call` (one argument: the key).
-    ForInBody { obj: NodeId, call: CallId },
+    ForInBody {
+        obj: NodeId,
+        call: CallId,
+        list: KeyList,
+    },
     /// The node is the object for-in body `ft` iterates: a literal whose keys
     /// are exactly its birth keys runs the body once per key, that run's key
     /// parameter holding the one key (`Model::key_nodes`); any other value
     /// runs it once through `call`, with every key.
-    ForInKeys { ft: Tok, call: CallId },
+    ForInKeys {
+        ft: Tok,
+        call: CallId,
+        list: KeyList,
+    },
     /// The node is the key of `defineProperty(o, k, desc)` in a for-in body:
     /// a run's one key defines it as a constant key does (`DefineKey`);
     /// any other key is E5 HARD.

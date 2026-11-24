@@ -3006,7 +3006,7 @@ pub struct Model {
     pub shaped_of: FxHashMap<Tok, Vec<(KeyShapeId, NodeId, bool)>>,
     /// For-in bodies run per key: (call, body token, the literal), checked
     /// again once the worklist is empty (`settle_for_in`).
-    pub for_in_runs: Vec<(CallId, Tok, Tok)>,
+    pub for_in_runs: Vec<(CallId, Tok, Tok, KeyList)>,
     /// Runs of one function value (`bind_layout_run`): (call, function
     /// token, receiver, receiver primitives, the value), checked again once
     /// the worklist is empty (`settle_val_runs`).
@@ -3021,7 +3021,7 @@ pub struct Model {
     pub spelled_atoms: Option<usize>,
     /// FORIN1: (call, body token, the literal) of a shared run over named
     /// keys (`for_in_named_run`), checked again in `settle_for_in`.
-    pub for_in_named: Vec<(CallId, Tok, Tok)>,
+    pub for_in_named: Vec<(CallId, Tok, Tok, KeyList)>,
     /// Rule EK: (literal, key node) of each `Cons::OwnKeys` that gave the
     /// literal's known keys (`own_keys_of`), checked again in
     /// `settle_for_in`; the set dedups.

@@ -479,11 +479,14 @@ impl Model {
                 call,
                 self.packet_shape(shape)
             ),
-            Cons::ForInBody { obj, call } => format!("ForInBody obj={:?} call={:?}", obj, call),
-            Cons::ForInKeys { ft, call } => format!(
-                "ForInKeys ft={:?} call={:?}",
+            Cons::ForInBody { obj, call, list } => {
+                format!("ForInBody obj={:?} call={:?} list={:?}", obj, call, list)
+            }
+            Cons::ForInKeys { ft, call, list } => format!(
+                "ForInKeys ft={:?} call={:?} list={:?}",
                 self.packet_token(ft, packet),
-                call
+                call,
+                list
             ),
             Cons::DefineKeyed {
                 o,

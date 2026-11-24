@@ -2397,16 +2397,16 @@ impl Model {
                     }
                 }
             }
-            Cons::ForInBody { obj, call } => {
+            Cons::ForInBody { obj, call, list } => {
                 for &t in toks {
                     if matches!(self.toks[t as usize], TokKind::Func(..))
                         && self.for_in_on.insert((obj, t, call))
                     {
-                        self.cons(obj, Cons::ForInKeys { ft: t, call });
+                        self.cons(obj, Cons::ForInKeys { ft: t, call, list });
                     }
                 }
             }
-            Cons::ForInKeys { ft, call } => {
+            Cons::ForInKeys { ft, call, list } => {
                 // A primitive's keys (a string's indices) are no literal's.
                 // `undefined` and `null` run no iteration (ECMA-262 14.7.5.6
                 // ForIn/OfHeadEvaluation step 6.a).
@@ -2414,7 +2414,7 @@ impl Model {
                     self.for_in_every_key(call, ft);
                 }
                 for &t in toks {
-                    self.for_in_tok(call, ft, t);
+                    self.for_in_tok(call, ft, t, list);
                 }
             }
             Cons::DefineAnyKey {

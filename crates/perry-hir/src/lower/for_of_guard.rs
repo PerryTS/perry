@@ -174,7 +174,9 @@ pub(crate) fn admitted_typed_array_holder(
 /// than the walk: a (parenthesized or cast) array literal keeps the record's
 /// scalar custody and constant bound, and `x.values()` / `x.keys()` /
 /// `x.entries()` keep the Map/Set view's index path, which matches that call
-/// as the loop's own source.
+/// as the loop's own source: a call of no arguments
+/// (`for_head::rewrite_collection_view_for_of`). A call with arguments
+/// (`Object.keys(o)`) is an ordinary source.
 fn has_own_route(e: &ast::Expr) -> bool {
     match e {
         ast::Expr::Paren(p) => has_own_route(&p.expr),
@@ -184,7 +186,7 @@ fn has_own_route(e: &ast::Expr) -> bool {
         ast::Expr::TsTypeAssertion(t) => has_own_route(&t.expr),
         ast::Expr::TsConstAssertion(t) => has_own_route(&t.expr),
         ast::Expr::Array(_) => true,
-        ast::Expr::Call(call) => matches!(
+        ast::Expr::Call(call) => call.args.is_empty() && matches!(
             &call.callee,
             ast::Callee::Expr(callee) if matches!(
                 callee.as_ref(),

@@ -280,8 +280,8 @@ impl Model {
             Cons::IdxKeyCall {
                 obj, prim, call, ..
             } => format!("idxkeycall {n} {obj} {prim} {call}"),
-            Cons::ForInBody { obj, call } => format!("forinbody {n} {obj} {call}"),
-            Cons::ForInKeys { ft, call } => format!("forinkeys {n} {ft} {call}"),
+            Cons::ForInBody { obj, call, list } => format!("forinbody {n} {obj} {call} {list:?}"),
+            Cons::ForInKeys { ft, call, list } => format!("forinkeys {n} {ft} {call} {list:?}"),
             Cons::DefineKeyed {
                 o,
                 reason,

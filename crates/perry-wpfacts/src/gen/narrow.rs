@@ -865,6 +865,27 @@ pub(crate) enum Presence {
     /// reaches `%Error.prototype%`, while the global holds the intrinsic
     /// constructor.
     NotError,
+    /// Rule RP2: `arrayRecordNeedsIterator(local)` true (`Cons::RecordEntry`):
+    /// no Array the runtime takes the array arm for.
+    RecordProtocol,
+}
+
+/// The source local of `arrayRecordNeedsIterator(t)`: the test of a guarded
+/// for-of (`perry-hir` `lower/for_of_guard.rs` `source_for_of`), whose
+/// IteratorRecord arm runs only when it is true.
+fn needs_iterator_of(e: &Expr) -> Option<&Expr> {
+    match e {
+        Expr::NativeMethodCall {
+            module,
+            method,
+            object: None,
+            args,
+            ..
+        } if module == "__perry_runtime" && method == "arrayRecordNeedsIterator" && args.len() == 1 => {
+            args.first()
+        }
+        _ => None,
+    }
 }
 
 /// What condition `c` implies when it is `positive`ly true (false): a clip
@@ -934,6 +955,29 @@ fn implied<'p>(
             implied(body, positive, &inner, pred, depth + 1, &mut found);
             // Only a fact of a parameter that the call binds to a local.
             out.extend(found);
+        }
+        // Rule RP2: `arrayRecordNeedsIterator(t)` decided true, bare or
+        // compared with a Boolean constant (ECMA-262 7.2.16: only `b` is
+        // `b`): what runs there never sees `t` an Array the runtime takes
+        // the array arm for.
+        Expr::Compare {
+            op: op @ (CompareOp::Eq | CompareOp::Ne),
+            left,
+            right,
+            ..
+        } if needs_iterator_of(left).is_some() && matches!(right.as_ref(), Expr::Bool(_)) => {
+            let Expr::Bool(b) = right.as_ref() else {
+                return;
+            };
+            let needs = *b == ((*op == CompareOp::Eq) == positive);
+            if let Some(id) = needs.then(|| needs_iterator_of(left)).flatten().and_then(|t| host_of(t, subst, depth)) {
+                out.push(Implied::Present(id, Presence::RecordProtocol));
+            }
+        }
+        Expr::NativeMethodCall { .. } if positive && needs_iterator_of(c).is_some() => {
+            if let Some(id) = needs_iterator_of(c).and_then(|t| host_of(t, subst, depth)) {
+                out.push(Implied::Present(id, Presence::RecordProtocol));
+            }
         }
         // Rule G2: a truthy `local.key` (module docs, "Guards"); rule
         // G2-false: a falsy one, through the same forms negated.
@@ -1705,6 +1749,9 @@ impl<'a> Gen<'a> {
                 }
                 Implied::Present(_, Presence::NotNull) => {
                     self.m.cons(src, Cons::NotNull { dst: start })
+                }
+                Implied::Present(_, Presence::RecordProtocol) => {
+                    self.m.cons(src, Cons::RecordEntry { dst: start })
                 }
                 Implied::Present(_, Presence::TypeIs(mask)) => {
                     self.m.cons(src, Cons::TypeIs { mask, dst: start })

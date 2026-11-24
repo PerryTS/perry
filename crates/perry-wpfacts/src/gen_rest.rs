@@ -536,8 +536,10 @@ impl<'a> Gen<'a> {
                     );
                     ops.push(v);
                 }
-                let (t, n) = self.bobj(mi, "arraybox");
-                let fa = self.m.field_any(t);
+                // A fresh Array of the keys (CreateArrayFromList, ECMA-262
+                // 7.3.18): an ordinary Array, its elements the keys, no other
+                // own property (rule RP2, `Model::ordinary_arrays`).
+                let fa = self.tmp("ownkeys");
                 // ECMA-262 20.1.2.18 / 20.1.2.10: Strings; 20.1.2.11:
                 // Symbols; 28.1.11 Reflect.ownKeys: both. Rule PK:
                 // getOwnPropertyNames gives the operand's own names; rule
@@ -552,6 +554,7 @@ impl<'a> Gen<'a> {
                     (Expr::ReflectOwnKeys(..), _) => self.m.add_prim(fa, prim::STR | prim::SYMBOL),
                     _ => self.m.add_prim(fa, prim::STR),
                 }
+                let n = self.new_ordinary_arr_from(mi, "keys", &[fa]);
                 n
             }
             Expr::NamespacePatched(_) => self.prim_node(prim::BOOL),

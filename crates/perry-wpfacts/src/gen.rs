@@ -556,8 +556,10 @@ pub struct Gen<'a> {
     /// `H.call(o,k)`, `o` of `o.hasOwnProperty(k)`).
     pub(crate) own_test_recv: Option<NodeId>,
     /// FVA 4.3b: (module, `__keys` local) -> the `__forin_obj` local whose
-    /// `ForInKeys` it holds.
-    pub(crate) for_in_keys_of: FxHashMap<(u32, u32), u32>,
+    /// `ForInKeys` it holds; or (E1) the for-of source local (and its
+    /// `__forof_lit_arr_` copy) holding `Object.keys(o)` /
+    /// `Object.getOwnPropertyNames(o)` of local `o`, with the key list.
+    pub(crate) for_in_keys_of: FxHashMap<(u32, u32), (u32, crate::model::KeyList)>,
     /// The for-in bodies being walked: (module, loop variable, key parameter).
     pub(crate) for_in_key: Vec<(u32, u32, NodeId)>,
     /// ENUM1: the for-in loops being walked, outlined or not, whose key and

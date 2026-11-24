@@ -1910,9 +1910,33 @@ impl<'a> Gen<'a> {
                     self.list_birth(fx.module, *id, list_tmpl);
                 }
                 self.direct_arr = None;
-                if let Some(perry_hir::Expr::ForInKeys(o)) = init {
+                // FVA 4.3b / E1: the keys local of a for-in, and the source of
+                // a for-of over `Object.keys(o)` / `getOwnPropertyNames(o)`
+                // written in the loop head (a fresh Array no other code sees;
+                // the counted walk binds exactly its elements, `for_of_walk`).
+                use crate::model::KeyList;
+                let keys_src = match init {
+                    Some(perry_hir::Expr::ForInKeys(o)) => Some((o, KeyList::ForIn)),
+                    Some(perry_hir::Expr::ObjectKeys(o)) if name.starts_with("__forof_lit_src_") => {
+                        Some((o, KeyList::OwnKeys))
+                    }
+                    Some(perry_hir::Expr::ObjectGetOwnPropertyNames(o))
+                        if name.starts_with("__forof_lit_src_") =>
+                    {
+                        Some((o, KeyList::OwnNames))
+                    }
+                    _ => None,
+                };
+                if let Some((o, list)) = keys_src {
                     if let perry_hir::Expr::LocalGet(obj) = o.as_ref() {
-                        self.for_in_keys_of.insert((fx.module, *id), *obj);
+                        self.for_in_keys_of.insert((fx.module, *id), (*obj, list));
+                    }
+                }
+                if let (Some(perry_hir::Expr::LocalGet(src)), true) =
+                    (init, name.starts_with("__forof_lit_arr_"))
+                {
+                    if let Some(&v) = self.for_in_keys_of.get(&(fx.module, *src)) {
+                        self.for_in_keys_of.insert((fx.module, *id), v);
                     }
                 }
                 if let Some(perry_hir::Expr::LocalGet(src)) = init {
