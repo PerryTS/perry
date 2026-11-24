@@ -1666,6 +1666,8 @@ class __PerryReceiverClosure extends __PerryClosure {}
 let __closureReceiver;
 // One value per function declaration, keyed by its table index (`function_value`).
 const __functionValues = new Map();
+// One namespace object per source module, keyed by its module index (`module_namespace`).
+const __moduleNamespaces = new Map();
 function __isPerryClosure(v) {
   return __PerryClosure.is(v);
 }
@@ -2392,6 +2394,25 @@ const __memDispatch = {
   is_null_or_undefined: (val) => (val === null || val === undefined) ? 1 : 0,
   // SameValue: NaN is itself and 0 is not -0, unlike `===`.
   object_is: (a, b) => Object.is(a, b),
+  // `import * as ns` used as a value: the source module's exports sorted on a null
+  // prototype, tagged `Module`, not extensible. `globals` names the wasm global of each
+  // promoted-let export, read on every access so the binding stays live.
+  module_namespace: (id, values, globals) => {
+    let ns = __moduleNamespaces.get(id);
+    if (ns) return ns;
+    ns = Object.create(null);
+    for (const key of [...Object.keys(values), ...Object.keys(globals)].sort()) {
+      if (Object.hasOwn(globals, key)) {
+        const cell = wasmInstance.exports[`__wasm_global_${globals[key]}`];
+        Object.defineProperty(ns, key, { get: () => toJsValue(u64ToF64(cell.value)), enumerable: true });
+      } else {
+        Object.defineProperty(ns, key, { value: values[key], writable: true, enumerable: true });
+      }
+    }
+    Object.defineProperty(ns, Symbol.toStringTag, { value: 'Module' });
+    __moduleNamespaces.set(id, Object.preventExtensions(ns));
+    return ns;
+  },
 
   // Objects — args are plain JS values (obj is the object itself, key is a string, etc.)
   object_new: () => ({}),

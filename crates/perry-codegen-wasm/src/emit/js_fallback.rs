@@ -287,7 +287,7 @@ impl WasmModuleEmitter {
     }
 
     /// JS for `emit_function_value`'s call.
-    fn js_function_value(&self, func_idx: u32) -> String {
+    pub(super) fn js_function_value(&self, func_idx: u32) -> String {
         let table_idx = self
             .func_to_table_idx
             .get(&func_idx)
@@ -741,6 +741,11 @@ impl WasmModuleEmitter {
             Expr::PropertyGet {
                 object, property, ..
             } => {
+                if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+                    if let Some(member) = self.js_namespace_member(name, property) {
+                        return member;
+                    }
+                }
                 let obj = self.emit_js_expr(object, locals);
                 format!(
                     "fromJsValue(toJsValue({})[{}])",
@@ -1292,6 +1297,9 @@ impl WasmModuleEmitter {
                     format!("({})", parts.join(", "))
                 }
             }
+            Expr::ExternFuncRef { name, .. } if self.namespace_import(name).is_some() => self
+                .js_namespace_value(name)
+                .unwrap_or_else(|| "u64ToF64(TAG_UNDEFINED)".to_string()),
             Expr::ExternFuncRef { name, .. } => {
                 // Issue #1071: prefer imported-variable global over a like-named
                 // function. In JS context the WASM exports include a getter for
@@ -1631,7 +1639,7 @@ fn host_args(args_js: &[String]) -> String {
 }
 
 /// A double-quoted JS string literal holding exactly `s`.
-fn js_string_literal(s: &str) -> String {
+pub(super) fn js_string_literal(s: &str) -> String {
     let escaped = s
         .replace('\\', "\\\\")
         .replace('"', "\\\"")
