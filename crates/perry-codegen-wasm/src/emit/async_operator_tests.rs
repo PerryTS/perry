@@ -170,3 +170,26 @@ run().then((v) => console.log(v), (e) => console.log("threw " + e.message));
         "3,7,function,2|3|4,6,8,true,true,true"
     );
 }
+
+// A builtin method call HIR folds into its own node (`a.map(f)`, `a.some(f)`, ...) runs
+// in an async body as it does in a synchronous one. Expected output is Node's.
+#[test]
+fn async_body_folded_array_methods_call_the_method() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function arrays(): Promise<string> {
+  const xs = [3, 1, 2];
+  const seen: number[] = [];
+  xs.forEach((x) => seen.push(x * 10));
+  return [xs.map((x) => x + 1).join("|"), xs.filter((x) => x > 1).join("|"), xs.some((x) => x > 2),
+    xs.every((x) => x > 2), xs.find((x) => x < 3), xs.findIndex((x) => x === 2),
+    xs.reduce((s, x) => s + x, 0), xs.slice().sort((a, b) => a - b).join("|"), seen.join("|"),
+    xs.flatMap((x) => [x, x]).length, xs.indexOf(2), xs.includes(1)].join(",");
+}
+arrays().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "4|2|3,3|2,true,false,1,2,6,1|2|3,30|10|20,6,2,true"
+    );
+}

@@ -1370,6 +1370,24 @@ impl WasmModuleEmitter {
                 "fromJsValue(__memDispatch.rt_arrayIterationPatched())".to_string()
             }
             _ => {
+                // A folded builtin-method node (`a.map(f)`, `m.get(k)`, ...) is the call
+                // `receiver.method(...args)`, made as an unfolded method call is.
+                if let Some(call) = perry_hir::folded_call::folded_call(expr) {
+                    let receiver = match call.receiver {
+                        perry_hir::folded_call::Receiver::Expr(e) => self.emit_js_expr(e, locals),
+                        perry_hir::folded_call::Receiver::Local(id) => {
+                            self.emit_js_expr(&Expr::LocalGet(id), locals)
+                        }
+                    };
+                    let args_js: Vec<String> =
+                        call.args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+                    return format!(
+                        "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), {}), [{}]))",
+                        receiver,
+                        js_string_literal(call.method),
+                        host_args(&args_js)
+                    );
+                }
                 // Fallback: return undefined for unhandled expressions
                 "u64ToF64(TAG_UNDEFINED)".to_string()
             }
