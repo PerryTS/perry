@@ -99,6 +99,7 @@ pub(super) fn lower_nested_fn_decl(
         ctx.shadow_native_instance_if_present(&param_name);
         ctx.shadow_native_module_if_present(&param_name);
         params.push(Param {
+            byte_offset: param.span.lo.0,
             id: param_id,
             name: param_name,
             ty: Type::Any,
@@ -152,6 +153,7 @@ pub(super) fn lower_nested_fn_decl(
             simple_parameters,
             !mapped,
             mapped_parameter_ids,
+            fn_decl.function.span.lo.0,
         );
     }
     for (param, pat) in params.iter_mut().zip(default_param_pats.iter()) {
@@ -311,6 +313,7 @@ pub(super) fn lower_nested_fn_decl(
     ctx.closure_display_names.insert(func_id, display_name);
 
     let closure = Expr::Closure {
+        byte_offset: fn_decl.function.span.lo.0,
         func_id,
         params,
         return_type: Type::Any,
@@ -329,6 +332,7 @@ pub(super) fn lower_nested_fn_decl(
         is_strict,
     };
     result.push(Stmt::Let {
+        byte_offset: fn_decl.function.span.lo.0,
         id: local_id,
         name: func_name,
         ty: Type::Any,

@@ -199,3 +199,21 @@ fn a_relational_or_fractional_test_is_no_int_consumer() {
     assert_eq!(r["x"], Rep::F64, "{r:?}");
     assert_eq!(r["z"], Rep::F64, "{r:?}");
 }
+
+#[test]
+fn demand_on_a_read_after_an_assignment_is_demand_on_the_local() {
+    // A read of `k` after `const k = ...` sees the assignment's version
+    // node (`Gen::narrow_assigned`); it reads the local's slot, so its
+    // demand is the local's. Top level and function body alike.
+    let src = "const a: number[] = [1, 2, 3, 4];\n\
+               let acc = 0.5;\n\
+               for (let i = 0; i < 4; i++) { const k = i + 1; acc = acc * 1.5 + a[k & 3]; }\n\
+               console.log(acc);";
+    for s in [
+        src.to_string(),
+        format!("function main() {{ {src} }}\nmain();"),
+    ] {
+        let r = reps(&s);
+        assert_eq!(r["k"], Rep::I32, "{s}: {r:?}");
+    }
+}

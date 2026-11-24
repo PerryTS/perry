@@ -162,10 +162,10 @@ impl Walk<'_> {
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
             // Returning the array hands it out only as the function ends.
-            Stmt::Return(Some(Expr::LocalGet(id))) => {
+            Stmt::Return(Some(Expr::LocalGet(id)), _) => {
                 self.mentioned.insert(*id);
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.expr(e);
                 }
@@ -224,6 +224,7 @@ impl Walk<'_> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant);
                 for c in cases {
@@ -273,7 +274,7 @@ impl Walk<'_> {
                 }
                 return;
             }
-            Expr::IndexGet { object, index, .. }
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
                 if matches!(object.as_ref(), Expr::LocalGet(_)) =>
             {
                 if let Expr::LocalGet(id) = object.as_ref() {

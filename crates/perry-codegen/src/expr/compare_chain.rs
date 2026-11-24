@@ -70,6 +70,7 @@ fn plan(
             op: LogicalOp::And,
             left,
             right,
+            ..
         } => {
             let next = plan(ctx, right, yes, no, nodes)?;
             plan(ctx, left, next, no, nodes)
@@ -78,11 +79,14 @@ fn plan(
             op: LogicalOp::Or,
             left,
             right,
+            ..
         } => {
             let next = plan(ctx, right, yes, no, nodes)?;
             plan(ctx, left, yes, next, nodes)
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             let left = operand(ctx, left)?;
             let right = operand(ctx, right)?;
             nodes.push(Node {

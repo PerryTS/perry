@@ -1693,6 +1693,7 @@ pub fn declare_phase_b_strings(module: &mut LlModule) {
     module.declare_function("js_class_env_set", VOID, &[DOUBLE, I32, I32, DOUBLE]);
     module.declare_function("js_class_env_stamp", DOUBLE, &[DOUBLE, I32, DOUBLE]);
     module.declare_function("js_class_env_current", DOUBLE, &[DOUBLE, I32]);
+    module.declare_function("js_class_direct_method_owner", DOUBLE, &[DOUBLE, I32]);
     module.declare_function(
         "js_class_capture_value_for_receiver",
         DOUBLE,

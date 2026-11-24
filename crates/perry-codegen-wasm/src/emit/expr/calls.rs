@@ -8,7 +8,7 @@ use super::*;
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_calls(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, byte_offset, .. } => {
                 // A direct callee's rest parameter receives its arguments as one array.
                 let direct_idx = match callee.as_ref() {
                     Expr::FuncRef(id) => self.emitter.func_map.get(id).copied(),
@@ -93,6 +93,7 @@ impl<'a> FuncEmitCtx<'a> {
                             self.emit_expr(
                                 func,
                                 &Expr::StaticMethodCall {
+                                    byte_offset: *byte_offset,
                                     class_name: class_name.clone(),
                                     method_name: property.clone(),
                                     args: args.to_vec(),
@@ -154,7 +155,11 @@ impl<'a> FuncEmitCtx<'a> {
                 // extern arm (args dropped, `undefined`).
                 if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
                     // ToPropertyKey of a computed member name.
-                    if name == "js_to_property_key" && args.len() == 1 {
+                    if matches!(
+                        name.as_str(),
+                        "js_to_property_key" | "js_object_literal_to_property_key"
+                    ) && args.len() == 1
+                    {
                         self.emit_frame_begin(func, 1);
                         self.emit_store_arg(func, 0, &args[0]);
                         self.emit_memcall(func, "to_property_key", 1);
@@ -175,9 +180,14 @@ impl<'a> FuncEmitCtx<'a> {
                         "setInterval" => Some(("set_interval", 2u32)),
                         "clearTimeout" => Some(("clear_timeout", 1u32)),
                         "clearInterval" => Some(("clear_interval", 1u32)),
-                        // A literal that needs its own builder (`__proto__`, a method
-                        // using `super`) defines its keys and prototype through these.
-                        "js_object_literal_define" => Some(("object_literal_define", 3u32)),
+                        // A literal that needs its own builder (a computed key, `__proto__`,
+                        // a method using `super`) defines its keys and prototype through these.
+                        "js_object_literal_define" | "js_object_literal_set_computed" => {
+                            Some(("object_literal_define", 3u32))
+                        }
+                        "js_object_define_accessor" => {
+                            Some(("object_literal_define_accessor", 4u32))
+                        }
                         "js_object_literal_set_prototype" => {
                             Some(("object_literal_set_prototype", 2u32))
                         }

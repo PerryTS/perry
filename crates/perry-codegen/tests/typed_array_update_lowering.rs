@@ -13,6 +13,7 @@ use perry_hir::{BinaryOp, Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -33,6 +34,7 @@ fn module_with_update(receiver: (Type, Expr), op: BinaryOp, prefix: bool) -> Mod
         // `i | 0`: a Number in every clone, including the generic one, whose
         // parameters carry no type.
         index: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::BitOr,
             left: Box::new(Expr::LocalGet(1)),
             right: Box::new(Expr::Integer(0)),
@@ -45,6 +47,7 @@ fn module_with_update(receiver: (Type, Expr), op: BinaryOp, prefix: bool) -> Mod
         byte_end: 0,
     };
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "bump".to_string(),
         type_params: Vec::new(),
@@ -52,13 +55,14 @@ fn module_with_update(receiver: (Type, Expr), op: BinaryOp, prefix: bool) -> Mod
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "a".to_string(),
                 ty,
                 mutable: false,
                 init: Some(init),
             },
-            Stmt::Return(Some(update)),
+            Stmt::Return(Some(update), 0),
         ],
         is_async: false,
         is_generator: false,

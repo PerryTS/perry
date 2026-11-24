@@ -3,6 +3,7 @@ use perry_hir::{Expr, Param, Stmt};
 
 fn runtime(method: &str, args: Vec<Expr>) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -14,6 +15,7 @@ fn runtime(method: &str, args: Vec<Expr>) -> Expr {
 fn private_resume_frame_uses_parent_owner_and_nonzero_offset() {
     crate::temp_root_coverage::under_both_lowerings(|mode| {
         let let_any = |id, init| Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("frame{id}"),
             ty: Type::Any,
@@ -23,6 +25,7 @@ fn private_resume_frame_uses_parent_owner_and_nonzero_offset() {
         let params = [100, 101]
             .into_iter()
             .map(|id| Param {
+                byte_offset: 0,
                 id,
                 name: format!("p{id}"),
                 ty: Type::Any,
@@ -38,9 +41,10 @@ fn private_resume_frame_uses_parent_owner_and_nonzero_offset() {
                 Box::new(Expr::Array(vec![Expr::Number(4.0)], Default::default())),
             )),
             Stmt::Expr(Expr::LocalSet(5, Box::new(Expr::Number(0.0)))),
-            Stmt::Return(Some(Expr::LocalGet(7))),
+            Stmt::Return(Some(Expr::LocalGet(7)), 0),
         ];
         let closure = Expr::Closure {
+            byte_offset: 0,
             func_id: 1,
             params,
             return_type: Type::Any,
@@ -138,6 +142,7 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
         let params = [100, 101]
             .into_iter()
             .map(|id| Param {
+                byte_offset: 0,
                 id,
                 name: format!("p{id}"),
                 ty: if id == 101 { Type::Boolean } else { Type::Any },
@@ -148,6 +153,7 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
             })
             .collect();
         let closure = Expr::Closure {
+            byte_offset: 0,
             func_id: 1,
             params,
             return_type: Type::Any,
@@ -155,6 +161,7 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
                 Stmt::Expr(Expr::LocalSet(
                     8,
                     Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: perry_hir::BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(8)),
                         right: Box::new(Expr::Integer(1)),
@@ -164,10 +171,13 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
                     7,
                     Box::new(Expr::Array(vec![Expr::Number(4.0)], None)),
                 )),
-                Stmt::Return(Some(Expr::AsyncStepDone {
-                    value: Box::new(Expr::LocalGet(7)),
-                    step_closure: Box::new(Expr::CurrentStepClosure),
-                })),
+                Stmt::Return(
+                    Some(Expr::AsyncStepDone {
+                        value: Box::new(Expr::LocalGet(7)),
+                        step_closure: Box::new(Expr::CurrentStepClosure),
+                    }),
+                    0,
+                ),
             ],
             captures: vec![7, 8],
             mutable_captures: vec![],
@@ -182,6 +192,7 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
         };
         let init = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 8,
                 name: "ordinary_spelling".into(),
                 ty: Type::Any,
@@ -189,6 +200,7 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
                 init: Some(Expr::Number(0.0)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 7,
                 name: "pointer".into(),
                 ty: Type::Any,
@@ -196,6 +208,7 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
                 init: Some(Expr::Undefined),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 10,
                 name: "owner".into(),
                 ty: Type::Any,
@@ -269,6 +282,7 @@ fn async_adapter_queues_the_allocation_owner_and_keeps_managed_slot_barriers() {
 
 fn private_resume_ir(body: Vec<Stmt>) -> String {
     let let_any = |id, init| Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("frame{id}"),
         ty: Type::Any,
@@ -278,6 +292,7 @@ fn private_resume_ir(body: Vec<Stmt>) -> String {
     let params = [100, 101]
         .into_iter()
         .map(|id| Param {
+            byte_offset: 0,
             id,
             name: format!("p{id}"),
             ty: Type::Any,
@@ -288,6 +303,7 @@ fn private_resume_ir(body: Vec<Stmt>) -> String {
         })
         .collect();
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 1,
         params,
         return_type: Type::Any,
@@ -366,7 +382,7 @@ fn resume_locals_write_back_on_every_exit() {
                 then_branch: vec![set(1, Expr::Number(4.0)), Stmt::Throw(Expr::Number(1.0))],
                 else_branch: None,
             },
-            Stmt::Return(Some(Expr::LocalGet(7))),
+            Stmt::Return(Some(Expr::LocalGet(7)), 0),
         ];
         let def = private_definition(&private_resume_ir(body));
         let exits = def.matches("ret double").count() + def.matches("@js_throw(").count();
@@ -388,7 +404,7 @@ fn resume_locals_keep_executing_in_the_frame() {
         let body = vec![
             set(4, Expr::Bool(true)),
             set(1, Expr::Number(2.0)),
-            Stmt::Return(Some(Expr::LocalGet(7))),
+            Stmt::Return(Some(Expr::LocalGet(7)), 0),
         ];
         let def = private_definition(&private_resume_ir(body));
         // state and kind are localized (entry allocas); executing (id 4, frame

@@ -940,7 +940,7 @@ pub(crate) const API_MANIFEST_PART_2: &[ApiEntry] = &[
     // up in the dispatch-table extraction.
     method("crypto", "randomBytes", false, None),
     method("crypto", "randomUUID", false, None),
-    internal_method("crypto", "randomUUIDv7", false, None),
+    method("crypto", "randomUUIDv7", false, None),
     method("crypto", "randomInt", false, None),
     method("crypto", "hash", false, None),
     internal_method("crypto", "sha256", false, None),

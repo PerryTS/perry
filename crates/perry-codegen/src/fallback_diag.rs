@@ -292,7 +292,9 @@ pub(crate) fn enter_expr(ctx: &crate::expr::FnCtx<'_>, expr: &Expr) -> Option<Ex
                 "has",
                 0,
             ),
-            Expr::IndexGet { object, .. } => (Some(object.as_ref()), "computed", "computed get", 0),
+            Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
+                (Some(object.as_ref()), "computed", "computed get", 0)
+            }
             Expr::IndexSet { object, .. } => {
                 (Some(object.as_ref()), "computed", "computed store", 0)
             }

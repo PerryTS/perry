@@ -38,7 +38,7 @@ fn find_candidates(stmts: &[Stmt], candidates: &mut HashSet<u32>) {
         match stmt {
             Stmt::Let {
                 id,
-                init: Some(Expr::Call { callee, args, .. }),
+                init: Some(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }),
                 ..
             } if args.is_empty()
                 && matches!(
@@ -119,7 +119,7 @@ fn check_uses_in_stmts(
     for stmt in stmts {
         if let Stmt::Let {
             id,
-            init: Some(Expr::Call { callee, args, .. }),
+            init: Some(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }),
             ..
         } = stmt
         {
@@ -191,7 +191,7 @@ fn check_uses_in_stmt(
             used_array_indices,
             length_only_array_indices,
         ),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(expr) = expr {
                 check_uses_in_expr(
                     expr,
@@ -354,6 +354,7 @@ fn check_uses_in_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             check_uses_in_expr(
                 discriminant,
@@ -410,7 +411,7 @@ fn check_uses_in_expr(
     used_array_indices: &HashMap<u32, HashSet<u32>>,
     length_only_array_indices: &HashMap<u32, HashSet<u32>>,
 ) {
-    if let Expr::Call { callee, args, .. } = expr {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = expr {
         if args.len() == 1
             && matches!(args.as_slice(), [Expr::String(_)])
             && matches!(

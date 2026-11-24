@@ -179,6 +179,7 @@ fn empty_opts() -> CompileOptions {
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -191,6 +192,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 
 fn field(name: &str, ty: Type) -> ClassField {
     ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -263,6 +265,7 @@ fn module_with_classes(
     body: Vec<Stmt>,
 ) -> Module {
     Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -272,6 +275,7 @@ fn module_with_classes(
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -434,12 +438,15 @@ fn typed_feedback_instruments_property_and_method_boundaries() {
                 type_args: Vec::new(),
                 byte_offset: 0,
             }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                property: "x".to_string(),
-            })),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "x".to_string(),
+                }),
+                0,
+            ),
         ],
     ));
 
@@ -538,12 +545,15 @@ fn sloppy_property_set_uses_strictness_aware_put_value() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                property: "x".to_string(),
-            })),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "x".to_string(),
+                }),
+                0,
+            ),
         ],
     ));
 
@@ -623,12 +633,15 @@ fn a_default_build_emits_no_typed_feedback_recording_calls() {
                 type_args: Vec::new(),
                 byte_offset: 0,
             }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                property: "x".to_string(),
-            })),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "x".to_string(),
+                }),
+                0,
+            ),
         ],
     ));
 
@@ -704,16 +717,20 @@ fn typed_feedback_guards_direct_class_field_specialization() {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::Binary {
-                op: BinaryOp::Sub,
-                left: Box::new(Expr::PropertyGet {
-                    byte_end: 0,
+            Stmt::Return(
+                Some(Expr::Binary {
                     byte_offset: 0,
-                    object: Box::new(Expr::LocalGet(1)),
-                    property: "x".to_string(),
+                    op: BinaryOp::Sub,
+                    left: Box::new(Expr::PropertyGet {
+                        byte_end: 0,
+                        byte_offset: 0,
+                        object: Box::new(Expr::LocalGet(1)),
+                        property: "x".to_string(),
+                    }),
+                    right: Box::new(Expr::Integer(1)),
                 }),
-                right: Box::new(Expr::Integer(1)),
-            })),
+                0,
+            ),
         ],
     ));
 
@@ -802,7 +819,7 @@ fn full_outline_ic_collapses_class_field_set_to_single_call() {
                     byte_offset: 0,
                     byte_end: 0,
                 }),
-                Stmt::Return(Some(Expr::Number(0.0))),
+                Stmt::Return(Some(Expr::Number(0.0)), 0),
             ],
         )
     };
@@ -844,12 +861,15 @@ fn full_outline_ic_collapses_class_field_get_to_single_call() {
             vec![point],
             vec![param(1, "p", Type::Named("Point".to_string()))],
             Type::Number,
-            vec![Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                property: "x".to_string(),
-            }))],
+            vec![Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "x".to_string(),
+                }),
+                0,
+            )],
         )
     };
 
@@ -904,10 +924,13 @@ fn full_outline_array_literal_uses_builder_call() {
             "outline_arr.ts",
             vec![param(1, "x", Type::Number)],
             Type::Any,
-            vec![Stmt::Return(Some(Expr::Array(
-                vec![Expr::LocalGet(1), Expr::Number(2.0), Expr::LocalGet(1)],
-                None,
-            )))],
+            vec![Stmt::Return(
+                Some(Expr::Array(
+                    vec![Expr::LocalGet(1), Expr::Number(2.0), Expr::LocalGet(1)],
+                    None,
+                )),
+                0,
+            )],
         )
     };
 
@@ -945,12 +968,13 @@ fn full_outline_ic_auto_gate_counts_class_methods() {
         let mut big = class(150, "Big", vec![field("x", Type::Number)]);
         for i in 0..methods {
             big.methods.push(Function {
+                byte_offset: 0,
                 id: 200 + i,
                 name: format!("m{i}"),
                 type_params: Vec::new(),
                 params: Vec::new(),
                 return_type: Type::Number,
-                body: vec![Stmt::Return(Some(Expr::Number(0.0)))],
+                body: vec![Stmt::Return(Some(Expr::Number(0.0)), 0)],
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -969,10 +993,13 @@ fn full_outline_ic_auto_gate_counts_class_methods() {
             vec![big],
             vec![param(1, "x", Type::Number)],
             Type::Any,
-            vec![Stmt::Return(Some(Expr::Array(
-                vec![Expr::LocalGet(1), Expr::Number(2.0), Expr::LocalGet(1)],
-                None,
-            )))],
+            vec![Stmt::Return(
+                Some(Expr::Array(
+                    vec![Expr::LocalGet(1), Expr::Number(2.0), Expr::LocalGet(1)],
+                    None,
+                )),
+                0,
+            )],
         )
     };
 
@@ -1027,7 +1054,7 @@ fn class_field_set_elides_write_barrier_for_nonpointer_value() {
                     byte_offset: 0,
                     byte_end: 0,
                 }),
-                Stmt::Return(Some(Expr::Number(0.0))),
+                Stmt::Return(Some(Expr::Number(0.0)), 0),
             ],
         )
     };
@@ -1063,12 +1090,13 @@ fn typed_feedback_guards_direct_class_method_specialization() {
     let _g = EnvVarGuard::set("PERRY_FULL_OUTLINE_IC", Some("0"));
     let mut point = class(103, "Point", vec![field("x", Type::Number)]);
     point.methods.push(Function {
+        byte_offset: 0,
         id: 7,
         name: "inc".to_string(),
         type_params: Vec::new(),
         params: vec![param(2, "n", Type::Number)],
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::LocalGet(2)))],
+        body: vec![Stmt::Return(Some(Expr::LocalGet(2)), 0)],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -1084,18 +1112,21 @@ fn typed_feedback_guards_direct_class_method_specialization() {
         vec![point],
         vec![param(1, "p", Type::Named("Point".to_string()))],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "inc".to_string(),
+                }),
+                args: vec![Expr::Number(5.0)],
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                property: "inc".to_string(),
             }),
-            args: vec![Expr::Number(5.0)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }))],
+            0,
+        )],
     ));
 
     assert!(ir.contains("method_direct_call_guard"));
@@ -1128,12 +1159,14 @@ fn typed_feedback_guards_direct_class_method_specialization() {
 fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
     let mut counter = class(104, "Counter", Vec::new());
     counter.methods.push(Function {
+        byte_offset: 0,
         id: 8,
         name: "count".to_string(),
         type_params: Vec::new(),
         params: vec![
             param(2, "value", Type::Any),
             Param {
+                byte_offset: 0,
                 id: 3,
                 name: "arguments".to_string(),
                 ty: Type::Any,
@@ -1149,12 +1182,15 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
             },
         ],
         return_type: Type::Number,
-        body: vec![Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(3)),
-            property: "length".to_string(),
-            byte_offset: 0,
-        }))],
+        body: vec![Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(3)),
+                property: "length".to_string(),
+                byte_offset: 0,
+            }),
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -1166,10 +1202,12 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
         construct_only: false,
     });
     counter.methods.push(Function {
+        byte_offset: 0,
         id: 9,
         name: "identity".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: 4,
             name: "arguments".to_string(),
             ty: Type::Any,
@@ -1184,7 +1222,7 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
             }),
         }],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::LocalGet(4)))],
+        body: vec![Stmt::Return(Some(Expr::LocalGet(4)), 0)],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -1200,18 +1238,21 @@ fn synthetic_arguments_only_method_uses_shape_guarded_direct_call() {
         vec![counter],
         vec![param(1, "counter", Type::Named("Counter".to_string()))],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        vec![Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
-                object: Box::new(Expr::LocalGet(1)),
-                property: "count".to_string(),
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(1)),
+                    property: "count".to_string(),
+                    byte_offset: 0,
+                }),
+                args: vec![Expr::Number(7.0)],
+                type_args: Vec::new(),
                 byte_offset: 0,
             }),
-            args: vec![Expr::Number(7.0)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }))],
+            0,
+        )],
     ));
     let probe_start = ir
         .find("define double @perry_fn_synthetic_arguments_method_guard_ts__probe")
@@ -1274,15 +1315,17 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
         Type::Number,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "cb".to_string(),
                 ty: closure_ty,
                 mutable: false,
                 init: Some(Expr::Closure {
+                    byte_offset: 0,
                     func_id: 44,
                     params: vec![param(3, "x", Type::Number)],
                     return_type: Type::Number,
-                    body: vec![Stmt::Return(Some(Expr::LocalGet(3)))],
+                    body: vec![Stmt::Return(Some(Expr::LocalGet(3)), 0)],
                     captures: Vec::new(),
                     mutable_captures: Vec::new(),
                     captures_this: false,
@@ -1295,13 +1338,16 @@ fn typed_feedback_guards_direct_closure_call_specialization() {
                     is_strict: false,
                 }),
             },
-            Stmt::Return(Some(Expr::Call {
-                byte_end: 0,
-                callee: Box::new(Expr::LocalGet(2)),
-                args: vec![Expr::Number(9.0)],
-                type_args: Vec::new(),
-                byte_offset: 0,
-            })),
+            Stmt::Return(
+                Some(Expr::Call {
+                    byte_end: 0,
+                    callee: Box::new(Expr::LocalGet(2)),
+                    args: vec![Expr::Number(9.0)],
+                    type_args: Vec::new(),
+                    byte_offset: 0,
+                }),
+                0,
+            ),
         ],
     ));
 
@@ -1325,15 +1371,20 @@ fn typed_feedback_guards_array_index_specialization() {
         vec![param(1, "xs", array_ty)],
         Type::Number,
         vec![
-            Stmt::Expr(Expr::synthetic_index_set(
+            Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::Number(0.0)),
                 Box::new(Expr::Number(7.0)),
+                0,
             )),
-            Stmt::Return(Some(Expr::synthetic_index_get(
-                Box::new(Expr::LocalGet(1)),
-                Box::new(Expr::Number(0.0)),
-            ))),
+            Stmt::Return(
+                Some(Expr::index_get_at(
+                    Box::new(Expr::LocalGet(1)),
+                    Box::new(Expr::Number(0.0)),
+                    0,
+                )),
+                0,
+            ),
         ],
     ));
 
@@ -1358,6 +1409,7 @@ fn typed_feedback_guards_numeric_array_push_specialization() {
         array_ty.clone(),
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "xs".to_string(),
                 ty: array_ty,
@@ -1369,7 +1421,7 @@ fn typed_feedback_guards_numeric_array_push_specialization() {
                 value: Box::new(Expr::Number(7.0)),
                 field_writeback: None,
             }),
-            Stmt::Return(Some(Expr::LocalGet(1))),
+            Stmt::Return(Some(Expr::LocalGet(1)), 0),
         ],
     ));
 
@@ -1392,18 +1444,22 @@ fn typed_feedback_marks_numeric_array_literals() {
         "typed_feedback_numeric_array_literal.ts",
         Vec::new(),
         Type::Any,
-        vec![Stmt::Return(Some(Expr::Array(
-            vec![
-                Expr::Number(1.0),
-                Expr::Integer(2),
-                Expr::Binary {
-                    op: perry_hir::BinaryOp::Mul,
-                    left: Box::new(Expr::Number(3.0)),
-                    right: Box::new(Expr::Number(4.0)),
-                },
-            ],
-            None,
-        )))],
+        vec![Stmt::Return(
+            Some(Expr::Array(
+                vec![
+                    Expr::Number(1.0),
+                    Expr::Integer(2),
+                    Expr::Binary {
+                        byte_offset: 0,
+                        op: perry_hir::BinaryOp::Mul,
+                        left: Box::new(Expr::Number(3.0)),
+                        right: Box::new(Expr::Number(4.0)),
+                    },
+                ],
+                None,
+            )),
+            0,
+        )],
     ));
 
     // GcHeader: size=56 (8-byte GcHeader, 24-byte ArrayHeader with its
@@ -1417,10 +1473,13 @@ fn typed_feedback_marks_numeric_array_literals() {
         "typed_feedback_mixed_array_literal.ts",
         Vec::new(),
         Type::Any,
-        vec![Stmt::Return(Some(Expr::Array(
-            vec![Expr::Number(1.0), Expr::String("x".to_string())],
-            None,
-        )))],
+        vec![Stmt::Return(
+            Some(Expr::Array(
+                vec![Expr::Number(1.0), Expr::String("x".to_string())],
+                None,
+            )),
+            0,
+        )],
     ));
 
     assert!(!mixed_ir.contains("call i32 @js_array_mark_numeric_f64_layout"));
@@ -1437,23 +1496,25 @@ fn typed_feedback_inline_array_writes_note_numeric_downgrade() {
         Type::Any,
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "xs".to_string(),
                 ty: array_ty,
                 mutable: true,
                 init: Some(Expr::Array(vec![Expr::Number(1.0)], None)),
             },
-            Stmt::Expr(Expr::synthetic_index_set(
+            Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(2)),
                 Box::new(Expr::Number(0.0)),
                 Box::new(Expr::String("not-number".to_string())),
+                0,
             )),
             Stmt::Expr(Expr::ArrayPush {
                 array_id: 2,
                 value: Box::new(Expr::String("still-not-number".to_string())),
                 field_writeback: None,
             }),
-            Stmt::Return(Some(Expr::LocalGet(2))),
+            Stmt::Return(Some(Expr::LocalGet(2)), 0),
         ],
     ));
 
@@ -1470,14 +1531,19 @@ fn typed_feedback_guards_computed_numeric_array_index_hot_path() {
         "typed_feedback_computed_array.ts",
         vec![param(1, "xs", array_ty), param(2, "i", Type::Number)],
         Type::Number,
-        vec![Stmt::Return(Some(Expr::synthetic_index_get(
-            Box::new(Expr::LocalGet(1)),
-            Box::new(Expr::Binary {
-                op: BinaryOp::BitAnd,
-                left: Box::new(Expr::LocalGet(2)),
-                right: Box::new(Expr::Integer(63)),
-            }),
-        )))],
+        vec![Stmt::Return(
+            Some(Expr::index_get_at(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::BitAnd,
+                    left: Box::new(Expr::LocalGet(2)),
+                    right: Box::new(Expr::Integer(63)),
+                }),
+                0,
+            )),
+            0,
+        )],
     ));
 
     // The default lowering of a number[] read is the inline guard (receiver
@@ -1506,10 +1572,14 @@ fn profile_replay_selects_numeric_read_with_guard_fallback_and_deterministic_ir(
         "replay.ts",
         vec![param(1, "xs", Type::Array(Box::new(Type::Any)))],
         Type::Any,
-        vec![Stmt::Return(Some(Expr::synthetic_index_get(
-            Box::new(Expr::LocalGet(1)),
-            Box::new(Expr::Number(0.0)),
-        )))],
+        vec![Stmt::Return(
+            Some(Expr::index_get_at(
+                Box::new(Expr::LocalGet(1)),
+                Box::new(Expr::Number(0.0)),
+                0,
+            )),
+            0,
+        )],
     );
     let identity = ModuleIdentity {
         module: source.name.clone(),

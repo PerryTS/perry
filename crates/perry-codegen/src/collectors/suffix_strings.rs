@@ -24,7 +24,7 @@ pub(crate) fn literal_index(expr: &Expr) -> Option<i32> {
 }
 
 pub(crate) fn method(expr: &Expr, name: &str) -> Option<(u32, i32)> {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return None;
     };
     let Expr::PropertyGet {
@@ -160,7 +160,7 @@ fn mask_expr(expr: &mut Expr, allowed: &HashSet<u32>, updates: &mut HashSet<u32>
 
 fn mask_stmt(stmt: &mut Stmt, allowed: &HashSet<u32>, updates: &mut HashSet<u32>) {
     match stmt {
-        Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) | Stmt::Throw(e) => {
+        Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) | Stmt::Throw(e) => {
             mask_expr(e, allowed, updates, false)
         }
         Stmt::Expr(e) => mask_expr(e, allowed, updates, true),

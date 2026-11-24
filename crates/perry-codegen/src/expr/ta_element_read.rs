@@ -81,7 +81,9 @@ pub(crate) fn byte_read_is_numeric(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     let (object, index) = match expr {
         Expr::Uint8ArrayGet { array, index } => (array, index),
         Expr::BufferIndexGet { buffer, index } => (buffer, index),
-        Expr::IndexGet { object, index, .. } if receiver_kind(ctx, object) == Some(1) => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
+            if receiver_kind(ctx, object) == Some(1) =>
+        {
             (object, index)
         }
         _ => return false,
@@ -115,7 +117,9 @@ fn byte_read_number_key(ctx: &FnCtx<'_>, index: &Expr) -> bool {
                 contains_void(ty)
             }) && crate::type_analysis::is_numeric_expr(ctx, index)
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             use perry_hir::BinaryOp;
             matches!(
                 op,
@@ -496,6 +500,7 @@ mod tests {
             "Float64Array",
         ] {
             let param = |id, name: &str, ty| Param {
+                byte_offset: 0,
                 id,
                 name: name.to_owned(),
                 ty,
@@ -506,6 +511,7 @@ mod tests {
             };
             let mut module = Module::new("typed_loop_read.ts");
             module.functions.push(Function {
+                byte_offset: 0,
                 id: 10,
                 name: "scan".to_owned(),
                 type_params: vec![],
@@ -516,13 +522,16 @@ mod tests {
                 return_type: Type::Any,
                 body: vec![Stmt::While {
                     condition: Expr::LocalGet(2),
-                    body: vec![Stmt::Return(Some(Expr::IndexGet {
-                        element_offset: 0,
-                        byte_offset: 0,
-                        byte_end: 0,
-                        object: Box::new(Expr::LocalGet(1)),
-                        index: Box::new(Expr::LocalGet(2)),
-                    }))],
+                    body: vec![Stmt::Return(
+                        Some(Expr::IndexGet {
+                            element_offset: 0,
+                            byte_offset: 0,
+                            byte_end: 0,
+                            object: Box::new(Expr::LocalGet(1)),
+                            index: Box::new(Expr::LocalGet(2)),
+                        }),
+                        0,
+                    )],
                 }],
                 is_async: false,
                 is_generator: false,

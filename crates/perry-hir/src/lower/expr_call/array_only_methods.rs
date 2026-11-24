@@ -1415,6 +1415,7 @@ pub(super) fn try_array_only_methods(
                             let array_expr = lower_expr(ctx, &member.obj)?;
                             if args.len() <= 1 {
                                 return Ok(Ok(Expr::NativeMethodCall {
+                                    byte_offset: crate::lower::call_token(call),
                                     module: "array".to_string(),
                                     method: "push_single".to_string(),
                                     class_name: None,
@@ -1430,11 +1431,11 @@ pub(super) fn try_array_only_methods(
                                     byte_end: 0,
                                     object: Box::new(array_expr),
                                     property: "push".to_string(),
-                                    byte_offset: call.span.lo.0,
+                                    byte_offset: crate::lower::call_token(call),
                                 }),
                                 args,
                                 type_args: vec![],
-                                byte_offset: call.span.lo.0,
+                                byte_offset: crate::lower::call_token(call),
                             }));
                         }
                     }

@@ -166,7 +166,9 @@ pub(crate) fn uint8array_get_reads_a_byte(
             matches!(op, UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot)
                 && uint8array_get_reads_a_byte(operand, is_numeric_local)
         }
-        Expr::Binary { op, left, right } => match op {
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
             // ToInt32/ToUint32 — a number regardless of operand shape.
             BinaryOp::BitAnd
             | BinaryOp::BitOr

@@ -14,7 +14,7 @@ fn a_node_that_left_out_a_top_marker_never_takes_a_shared_set() {
     let a = m.tok(TokKind::ModNs(901));
     let b = m.tok(TokKind::ModNs(902));
     let (s, d, e) = (m.node_l("s"), m.node_l("d"), m.node_l("e"));
-    m.set_marker_top(mk);
+    m.set_marker_top(mk, "test");
     m.add(s, &[mk, a], 0);
     m.add_tok(d, TOP);
     m.edge(s, d);

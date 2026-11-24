@@ -175,7 +175,7 @@ pub fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_for_max_local(e, max_id),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 scan_expr_for_max_local(e, max_id);
             }
@@ -248,6 +248,7 @@ pub fn scan_stmt_for_max_local(stmt: &Stmt, max_id: &mut LocalId) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             scan_expr_for_max_local(discriminant, max_id);
             for case in cases {
@@ -413,7 +414,7 @@ pub fn scan_stmts_for_max_func(stmts: &[Stmt], max_id: &mut FuncId) {
 
 pub fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
     match stmt {
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+        Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
             scan_expr_for_max_func(expr, max_id);
         }
         Stmt::Let {
@@ -475,6 +476,7 @@ pub fn scan_stmt_for_max_func(stmt: &Stmt, max_id: &mut FuncId) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             scan_expr_for_max_func(discriminant, max_id);
             for case in cases {
@@ -542,8 +544,10 @@ mod tests {
     #[test]
     fn object_assign_sources_visible_to_id_scans() {
         let closure = Expr::Closure {
+            byte_offset: 0,
             func_id: 7,
             params: vec![Param {
+                byte_offset: 0,
                 id: 9,
                 name: "x".to_string(),
                 ty: Type::Any,
@@ -553,7 +557,7 @@ mod tests {
                 arguments_object: None,
             }],
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::Integer(1)))],
+            body: vec![Stmt::Return(Some(Expr::Integer(1)), 0)],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -591,15 +595,17 @@ mod tests {
 
     fn arrow_field(name: &str, func_id: FuncId) -> ClassField {
         ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: name.to_string(),
             key_expr: None,
             ty: Type::Any,
             init: Some(Expr::Closure {
+                byte_offset: 0,
                 func_id,
                 params: Vec::new(),
                 return_type: Type::Any,
-                body: vec![Stmt::Return(Some(Expr::Integer(0)))],
+                body: vec![Stmt::Return(Some(Expr::Integer(0)), 0)],
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,
@@ -686,13 +692,16 @@ mod tests {
     #[test]
     fn class_field_initializer_locals_visible_to_max_local_id() {
         let field = ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "request".to_string(),
             key_expr: None,
             ty: Type::Any,
             init: Some(Expr::Closure {
+                byte_offset: 0,
                 func_id: 3,
                 params: vec![Param {
+                    byte_offset: 0,
                     id: 91,
                     name: "input".to_string(),
                     ty: Type::Any,
@@ -702,7 +711,7 @@ mod tests {
                     arguments_object: None,
                 }],
                 return_type: Type::Any,
-                body: vec![Stmt::Return(Some(Expr::LocalGet(91)))],
+                body: vec![Stmt::Return(Some(Expr::LocalGet(91)), 0)],
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,
@@ -738,8 +747,10 @@ mod tests {
     #[test]
     fn default_param_closure_ids_visible_to_max_scans() {
         let default_closure = Expr::Closure {
+            byte_offset: 0,
             func_id: 42,
             params: vec![Param {
+                byte_offset: 0,
                 id: 77,
                 name: "x".to_string(),
                 ty: Type::Any,
@@ -749,7 +760,7 @@ mod tests {
                 arguments_object: None,
             }],
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::LocalGet(77)))],
+            body: vec![Stmt::Return(Some(Expr::LocalGet(77)), 0)],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -763,10 +774,12 @@ mod tests {
         };
         let mut module = Module::new("test");
         module.functions.push(Function {
+            byte_offset: 0,
             id: 1,
             name: "f".to_string(),
             type_params: Vec::new(),
             params: vec![Param {
+                byte_offset: 0,
                 id: 2,
                 name: "cb".to_string(),
                 ty: Type::Any,
@@ -804,10 +817,11 @@ mod tests {
     #[test]
     fn method_default_param_closure_ids_visible_to_max_scans() {
         let default_closure = Expr::Closure {
+            byte_offset: 0,
             func_id: 60,
             params: Vec::new(),
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::LocalGet(88)))],
+            body: vec![Stmt::Return(Some(Expr::LocalGet(88)), 0)],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -821,10 +835,12 @@ mod tests {
         };
         let mut class = class_with_fields("C", Vec::new());
         class.methods.push(Function {
+            byte_offset: 0,
             id: 2,
             name: "m".to_string(),
             type_params: Vec::new(),
             params: vec![Param {
+                byte_offset: 0,
                 id: 3,
                 name: "cb".to_string(),
                 ty: Type::Any,
@@ -867,10 +883,11 @@ mod tests {
         let dec_with_closure = |func_id: FuncId, local_id: LocalId| Decorator {
             name: "dec".to_string(),
             args: vec![Expr::Closure {
+                byte_offset: 0,
                 func_id,
                 params: Vec::new(),
                 return_type: Type::Any,
-                body: vec![Stmt::Return(Some(Expr::LocalGet(local_id)))],
+                body: vec![Stmt::Return(Some(Expr::LocalGet(local_id)), 0)],
                 captures: Vec::new(),
                 mutable_captures: Vec::new(),
                 captures_this: false,
@@ -884,9 +901,11 @@ mod tests {
             }],
             is_factory: true,
             is_reflect_metadata: false,
+            byte_offset: 0,
         };
         let mut module = Module::new("test");
         module.functions.push(Function {
+            byte_offset: 0,
             id: 1,
             name: "f".to_string(),
             type_params: Vec::new(),
@@ -922,12 +941,13 @@ mod tests {
         let mut module = Module::new("test");
         let mut class = class_with_fields("Methods", Vec::new());
         let member = |id| Function {
+            byte_offset: 0,
             id,
             name: "member".into(),
             type_params: Vec::new(),
             params: Vec::new(),
             return_type: Type::Any,
-            body: vec![Stmt::Return(Some(Expr::Integer(1)))],
+            body: vec![Stmt::Return(Some(Expr::Integer(1)), 0)],
             is_async: false,
             is_generator: false,
             is_strict: false,

@@ -1,0 +1,1 @@
+`--target web`: a host callback (`f().then(console.log)`) or `Promise.all` over an `async` function now receives its string, boolean, `null`, `undefined` or object result instead of `NaN`, and a promise returned from an `async` function is adopted (#15374).

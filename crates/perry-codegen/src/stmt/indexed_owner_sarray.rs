@@ -22,7 +22,9 @@ pub(super) fn read(e: &Expr) -> Option<(u32, &Expr)> {
     if property != "length" {
         return None;
     }
-    let Expr::IndexGet { object, index, .. } = object.as_ref() else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) =
+        object.as_ref()
+    else {
         return None;
     };
     let Expr::LocalGet(id) = object.as_ref() else {

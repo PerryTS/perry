@@ -401,6 +401,10 @@ pub enum HeaderImageSource {
 }
 
 pub(crate) struct FnCtx<'a> {
+    /// The compound GetValue read of the `o.k op= v` store being lowered
+    /// (`Expr::compound_get`): that read is the `UpdateGet` site, not a
+    /// `Get` site, though both stand at the member's offset.
+    pub compound_get: Option<*const Expr>,
     /// The for-in loops of this function: receiver local -> the entry slot
     /// of the loop fact taken beside the snapshot (`js_for_in_loop_fact`).
     /// Per-loop state: born zero per invocation, written at loop start.
@@ -2700,7 +2704,7 @@ pub(crate) fn element_shape_loop_fact_for_property_get<'f>(
         return None;
     }
     match object {
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             let Expr::LocalGet(array_local_id) = object.as_ref() else {
                 return None;
             };
@@ -4906,7 +4910,9 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             op: perry_hir::LogicalOp::And | perry_hir::LogicalOp::Or,
             ..
         } => binary::lower_boolean_logical_value(ctx, expr),
-        Expr::Compare { op, left, right } => lower_compare_value(ctx, *op, left, right),
+        Expr::Compare {
+            op, left, right, ..
+        } => lower_compare_value(ctx, *op, left, right),
         Expr::Unary {
             op: UnaryOp::Not,
             operand,
@@ -4975,7 +4981,9 @@ pub(crate) fn lower_expr_value(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Optio
             }
             Ok(None)
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             if let Some(lowered) = lower_bitwise_binary_value(ctx, *op, left, right)? {
                 return Ok(Some(lowered));
             }

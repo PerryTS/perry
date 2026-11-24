@@ -134,8 +134,9 @@ fn simple(e: &Expr) -> bool {
             condition,
             then_expr,
             else_expr,
+            ..
         } => simple(condition) && simple(then_expr) && simple(else_expr),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(_)) && simple(index)
         }
         _ => false,
@@ -160,9 +161,12 @@ fn simple_word(e: &Expr) -> bool {
             op: LogicalOp::Coalesce,
             left,
             right,
+            ..
         } => simple_word(left) && simple(right),
         Expr::PropertyGet { .. } => place(e),
-        Expr::IndexGet { object, index, .. } => place(object) && simple(index),
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            place(object) && simple(index)
+        }
         _ => false,
     }
 }
@@ -201,7 +205,10 @@ fn node<'a>(ctx: &FnCtx<'_>, e: &'a Expr, depth: u32) -> Result<Node<'a>, &'stat
     if depth >= 16 {
         return Err("depth");
     }
-    let Expr::Binary { op, left, right } = e else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = e
+    else {
         return Err("leaf");
     };
     if !matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) {

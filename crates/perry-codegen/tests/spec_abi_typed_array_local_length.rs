@@ -4,6 +4,7 @@ use perry_hir::{Expr, Function, Module, Param, Stmt, TYPED_ARRAY_KIND_FLOAT64};
 
 fn param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -40,6 +41,7 @@ fn function_ir_section<'a>(ir: &'a str, symbol: &str) -> &'a str {
 fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entry() {
     let mut module = Module::new("spec_abi_typed_array_local_length.ts");
     module.functions.push(Function {
+        byte_offset: 0,
         id: 7,
         name: "fill".to_string(),
         type_params: Vec::new(),
@@ -47,11 +49,13 @@ fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entr
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 102,
                 name: "index".to_string(),
                 ty: Type::Number,
                 mutable: false,
                 init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: perry_hir::BinaryOp::Sub,
                     left: Box::new(Expr::LocalGet(101)),
                     right: Box::new(Expr::Integer(10_000)),
@@ -67,7 +71,7 @@ fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entr
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::Number(1.25))),
+            Stmt::Return(Some(Expr::Number(1.25)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -81,6 +85,7 @@ fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entr
     });
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "nodes".to_string(),
             ty: Type::Number,
@@ -88,6 +93,7 @@ fn const_literal_length_local_routes_float64array_helper_to_raw_specialized_entr
             init: Some(Expr::Integer(10_000)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "values".to_string(),
             ty: Type::Named("Float64Array".to_string()),

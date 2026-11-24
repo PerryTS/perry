@@ -308,24 +308,18 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::ArrayIndexOf {
                 array,
                 value,
-                from_index: _,
+                from_index,
             } => {
-                // NOTE: the wasm backend's array_index_of helper does not yet
-                // honor the optional fromIndex (#2804 covers the native path).
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, array);
-                self.emit_store_arg(func, 1, value);
-                self.emit_memcall(func, "array_index_of", 2);
+                let argc = self.emit_array_search_frame(func, array, value, from_index);
+                self.emit_memcall(func, "array_index_of", argc);
             }
             Expr::ArrayIncludes {
                 array,
                 value,
-                from_index: _,
+                from_index,
             } => {
-                self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, array);
-                self.emit_store_arg(func, 1, value);
-                self.emit_memcall_i32(func, "array_includes", 2);
+                let argc = self.emit_array_search_frame(func, array, value, from_index);
+                self.emit_memcall_i32(func, "array_includes", argc);
                 // Convert i32 to NaN-boxed boolean
                 func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
                     ValType::I64,
@@ -358,12 +352,15 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "array_from", 1);
             }
             Expr::ArrayFromMapped {
-                iterable, map_fn, ..
+                iterable,
+                map_fn,
+                this_arg,
             } => {
-                self.emit_frame_begin(func, 2);
+                self.emit_frame_begin(func, 3);
                 self.emit_store_arg(func, 0, iterable);
                 self.emit_store_arg(func, 1, map_fn);
-                self.emit_memcall(func, "array_from_mapped", 2);
+                self.emit_store_arg(func, 2, this_arg.as_deref().unwrap_or(&Expr::Undefined));
+                self.emit_memcall(func, "array_from_mapped", 3);
             }
 
             // --- Array higher-order methods ---
@@ -398,6 +395,38 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 1, callback);
                 self.emit_memcall(func, "array_find_index", 2);
             }
+            Expr::ArrayFindLast { array, callback } => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, array);
+                self.emit_store_arg(func, 1, callback);
+                self.emit_memcall(func, "array_find_last", 2);
+            }
+            Expr::ArrayFindLastIndex { array, callback } => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, array);
+                self.emit_store_arg(func, 1, callback);
+                self.emit_memcall(func, "array_find_last_index", 2);
+            }
+            // `some` / `every` answer through the i32 bridges the unfolded method call
+            // uses (`emit/method_call.rs`).
+            Expr::ArraySome { array, callback } | Expr::ArrayEvery { array, callback } => {
+                let bridge = if matches!(expr, Expr::ArraySome { .. }) {
+                    "array_some"
+                } else {
+                    "array_every"
+                };
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, array);
+                self.emit_store_arg(func, 1, callback);
+                self.emit_memcall_i32(func, bridge, 2);
+                func.instruction(&Instruction::If(wasm_encoder::BlockType::Result(
+                    ValType::I64,
+                )));
+                func.instruction(&Instruction::I64Const(TAG_TRUE as i64));
+                func.instruction(&Instruction::Else);
+                func.instruction(&Instruction::I64Const(TAG_FALSE as i64));
+                func.instruction(&Instruction::End);
+            }
             Expr::ArraySort { array, comparator } => {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, array);
@@ -408,13 +437,7 @@ impl<'a> FuncEmitCtx<'a> {
                 array,
                 callback,
                 initial,
-            }
-            | Expr::ArrayReduceRight {
-                array,
-                callback,
-                initial,
             } => {
-                let is_right = matches!(expr, Expr::ArrayReduceRight { .. });
                 self.emit_expr(func, array);
                 self.emit_expr(func, callback);
                 if let Some(init) = initial {
@@ -447,12 +470,22 @@ impl<'a> FuncEmitCtx<'a> {
                     align: 3,
                     memory_index: 0,
                 }));
-                let name = if is_right {
-                    "array_reduce_right"
-                } else {
-                    "array_reduce"
-                };
-                self.emit_memcall(func, name, 3);
+                self.emit_memcall(func, "array_reduce", 3);
+            }
+            // The argument count says whether the call passed an initial value.
+            Expr::ArrayReduceRight {
+                array,
+                callback,
+                initial,
+            } => {
+                let argc = 2 + u32::from(initial.is_some());
+                self.emit_frame_begin(func, argc);
+                self.emit_store_arg(func, 0, array);
+                self.emit_store_arg(func, 1, callback);
+                if let Some(init) = initial {
+                    self.emit_store_arg(func, 2, init);
+                }
+                self.emit_memcall(func, "array_reduce_right", argc);
             }
             Expr::ArrayToReversed { array } => {
                 self.emit_frame_begin(func, 1);
@@ -475,14 +508,17 @@ impl<'a> FuncEmitCtx<'a> {
                 array,
                 start,
                 delete_count,
-                items: _,
+                items,
             } => {
-                self.emit_frame_begin(func, 3);
+                let argc = 3 + items.len() as u32;
+                self.emit_frame_begin(func, argc);
                 self.emit_store_arg(func, 0, array);
                 self.emit_store_arg(func, 1, start);
                 self.emit_store_arg(func, 2, delete_count);
-                // items passed as count only for now (WASM doesn't support varargs easily)
-                self.emit_memcall(func, "array_to_spliced", 3);
+                for (slot, item) in (3..).zip(items) {
+                    self.emit_store_arg(func, slot, item);
+                }
+                self.emit_memcall(func, "array_to_spliced", argc);
             }
             Expr::ArrayWith {
                 array,
@@ -502,16 +538,7 @@ impl<'a> FuncEmitCtx<'a> {
                 end,
             } => {
                 self.emit_frame_begin(func, if end.is_some() { 4 } else { 3 });
-                // emit local get for array_id
-                func.instruction(&Instruction::LocalGet(*array_id));
-                func.instruction(&Instruction::LocalSet(self.temp_local));
-                self.emit_slot_addr(func, 0);
-                func.instruction(&Instruction::LocalGet(self.temp_local));
-                func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
-                    offset: 0,
-                    align: 3,
-                    memory_index: 0,
-                }));
+                self.emit_store_arg(func, 0, &Expr::LocalGet(*array_id));
                 self.emit_store_arg(func, 1, target);
                 self.emit_store_arg(func, 2, start);
                 if let Some(e) = end {
@@ -540,5 +567,24 @@ impl<'a> FuncEmitCtx<'a> {
             _ => return false,
         }
         true
+    }
+
+    /// Opens the frame of `indexOf` / `includes`: the array, the value and, when given,
+    /// fromIndex. Returns the slot count.
+    fn emit_array_search_frame(
+        &mut self,
+        func: &mut Function,
+        array: &Expr,
+        value: &Expr,
+        from_index: &Option<Box<Expr>>,
+    ) -> u32 {
+        let argc = if from_index.is_some() { 3 } else { 2 };
+        self.emit_frame_begin(func, argc);
+        self.emit_store_arg(func, 0, array);
+        self.emit_store_arg(func, 1, value);
+        if let Some(from) = from_index {
+            self.emit_store_arg(func, 2, from);
+        }
+        argc
     }
 }

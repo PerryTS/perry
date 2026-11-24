@@ -84,7 +84,7 @@ fn prefix(body: &[Stmt], parent: Option<&Layout>) -> Layout {
     let mut need_super = parent.is_some();
     for s in body {
         match s {
-            Stmt::Expr(Expr::SuperCall(args)) if need_super => {
+            Stmt::Expr(Expr::SuperCall(args, _)) if need_super => {
                 if args.iter().any(mentions_this_or_closure) {
                     return Layout {
                         keys,

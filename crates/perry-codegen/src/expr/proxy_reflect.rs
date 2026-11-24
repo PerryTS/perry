@@ -604,6 +604,7 @@ fn same_put_value_receiver_expr(target: &Expr, receiver: &Expr) -> bool {
                 object: a_object,
                 method: a_method,
                 args: a_args,
+                ..
             },
             Expr::NativeMethodCall {
                 module: b_module,
@@ -611,6 +612,7 @@ fn same_put_value_receiver_expr(target: &Expr, receiver: &Expr) -> bool {
                 object: b_object,
                 method: b_method,
                 args: b_args,
+                ..
             },
         ) => {
             a_module == b_module
@@ -644,8 +646,18 @@ fn same_put_value_receiver_expr(target: &Expr, receiver: &Expr) -> bool {
                 object: a_object,
                 index: a_index,
                 ..
+            }
+            | Expr::RegionOut {
+                object: a_object,
+                index: a_index,
+                ..
             },
             Expr::IndexGet {
+                object: b_object,
+                index: b_index,
+                ..
+            }
+            | Expr::RegionOut {
                 object: b_object,
                 index: b_index,
                 ..

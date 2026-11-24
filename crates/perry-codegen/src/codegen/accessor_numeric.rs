@@ -78,8 +78,8 @@ pub(crate) fn preserves_layout(
         }
     }
     method.body.iter().all(|s| match s {
-        Stmt::Return(Some(e)) | Stmt::Expr(e) => safe(e, &own),
-        Stmt::Return(None) => true,
+        Stmt::Return(Some(e), _) | Stmt::Expr(e) => safe(e, &own),
+        Stmt::Return(None, _) => true,
         Stmt::Let { init: Some(e), .. } => safe(e, &own),
         _ => false,
     })

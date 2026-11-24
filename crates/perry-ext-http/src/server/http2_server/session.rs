@@ -205,10 +205,13 @@ pub unsafe extern "C" fn js_node_http2_connect(
     // preface went to a TLS listener and the peer answered
     // `InvalidContentType`.
     if crate::server::turnloop_h2::enabled() {
+        // Each option read can collect and move the options object.
+        let roots = perry_ffi::TransientRootScope::enter();
+        let options = roots.root_nanbox(options_f64);
         let tls = secure.then(|| crate::server::turnloop_h2::ClientTls {
-            servername: host.clone(),
-            verify: client_reject_unauthorized(options_f64),
-            ca: client_ca_material(options_f64),
+            servername: client_servername(options.get()).unwrap_or_else(|| host.clone()),
+            verify: client_reject_unauthorized(options.get()),
+            ca: client_ca_material(options.get()),
         });
         if let Some(conn_id) =
             crate::server::turnloop_h2::connect_client(session_handle, &host, port, tls)
@@ -266,6 +269,18 @@ unsafe fn client_reject_unauthorized(options: f64) -> bool {
         return true;
     }
     value.to_bool()
+}
+
+/// `options.servername`: the name sent as SNI and verified against the
+/// certificate in place of the authority's host. Anything but a non-empty
+/// string falls back to the host.
+unsafe fn client_servername(options: f64) -> Option<String> {
+    let value =
+        perry_ffi::object_field_by_name(JsValue::from_bits(options.to_bits()), "servername");
+    if !value.is_any_string() {
+        return None;
+    }
+    jsvalue_to_owned_string(f64::from_bits(value.bits())).filter(|name| !name.is_empty())
 }
 
 /// `options.ca` — a PEM string, a Buffer, or an array of either.

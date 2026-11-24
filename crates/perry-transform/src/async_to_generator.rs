@@ -301,7 +301,7 @@ fn rewrite_async_closures_in_stmt(
         Stmt::Expr(e) | Stmt::Throw(e) => {
             rewrite_async_closures_in_expr(e, work, next_local_id, next_func_id)
         }
-        Stmt::Return(Some(e)) => {
+        Stmt::Return(Some(e), _) => {
             rewrite_async_closures_in_expr(e, work, next_local_id, next_func_id)
         }
         Stmt::If {
@@ -353,6 +353,7 @@ fn rewrite_async_closures_in_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             rewrite_async_closures_in_expr(discriminant, work, next_local_id, next_func_id);
             for case in cases.iter_mut() {
@@ -398,6 +399,7 @@ fn rewrite_async_closures_in_expr(
             enclosing_class,
             is_strict,
             is_async,
+            byte_offset,
             ..
         } = expr
         {
@@ -438,6 +440,7 @@ fn rewrite_async_closures_in_expr(
                     *is_strict,
                     next_local_id,
                     next_func_id,
+                    *byte_offset,
                 );
                 *body = new_body;
                 *is_async = false;
@@ -510,7 +513,7 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
         Stmt::Expr(e) => {
             hoist_awaits_avoiding_top_level(e, next_id, hoisted);
         }
-        Stmt::Return(Some(e)) => {
+        Stmt::Return(Some(e), _) => {
             hoist_awaits_avoiding_top_level(e, next_id, hoisted);
         }
         Stmt::Throw(e) => {
@@ -575,6 +578,7 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
                 //   }
                 let first = alloc_local(next_id);
                 hoisted.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id: first,
                     name: format!("__dw_first_{}", first),
                     ty: Type::Any,
@@ -590,6 +594,7 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
                 new_body.append(body);
                 let while_stmt = Stmt::While {
                     condition: Expr::Logical {
+                        byte_offset: cond.byte_offset().unwrap_or(0),
                         op: LogicalOp::Or,
                         left: Box::new(Expr::LocalGet(first)),
                         right: Box::new(cond),
@@ -636,6 +641,7 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
                 if let Some(c) = cond_taken {
                     let t = alloc_local(next_id);
                     new_body.push(Stmt::Let {
+                        byte_offset: 0, /*HPOS*/
                         id: t,
                         name: format!("__loop_cond_await_{}", t),
                         ty: Type::Any,
@@ -704,6 +710,7 @@ fn hoist_awaits_in_stmt(mut stmt: Stmt, next_id: &mut LocalId, hoisted: &mut Vec
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             hoist_awaits_in_expr_full(discriminant, next_id, hoisted);
             for case in cases.iter_mut() {
@@ -744,6 +751,7 @@ fn lift_scoped_temp_with_await(
         unreachable!()
     };
     let mut declaration = vec![Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name: format!("__optional_base_{id}"),
         ty: Type::Any,
@@ -814,7 +822,7 @@ fn hoist_awaits_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
     perry_hir::walker::walk_expr_children_mut(expr, &mut |child| {
         hoist_awaits_in_expr_full(child, next_id, hoisted);
     });
-    if matches!(expr, Expr::Await(_)) {
+    if matches!(expr, Expr::Await(_, _)) {
         let id = alloc_local(next_id);
         let mut original = std::mem::replace(expr, Expr::LocalGet(id));
         // Issue #617: hoist a fetchWithAuth/fetchPostWithAuth operand
@@ -822,6 +830,7 @@ fn hoist_awaits_in_expr_full(expr: &mut Expr, next_id: &mut LocalId, hoisted: &m
         // longer comment in `hoist_awaits_avoiding_top_level`.
         hoist_fetch_with_auth_inside_await(&mut original, next_id, hoisted);
         hoisted.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id,
             name: format!("__await_{}", id),
             ty: Type::Any,
@@ -867,7 +876,7 @@ fn hoist_fetch_with_auth_inside_await(
     next_id: &mut LocalId,
     hoisted: &mut Vec<Stmt>,
 ) {
-    let Expr::Await(inner) = await_expr else {
+    let Expr::Await(inner, _) = await_expr else {
         return;
     };
     let should_hoist = matches!(
@@ -875,6 +884,7 @@ fn hoist_fetch_with_auth_inside_await(
         Expr::FetchGetWithAuth { .. }
             | Expr::FetchPostWithAuth { .. }
             | Expr::Call { .. }
+            | Expr::RegionCall { .. }
             | Expr::CallSpread { .. }
             | Expr::NativeMethodCall { .. }
             | Expr::StaticMethodCall { .. }
@@ -893,6 +903,7 @@ fn hoist_fetch_with_auth_inside_await(
     let id = alloc_local(next_id);
     let original = std::mem::replace(inner.as_mut(), Expr::LocalGet(id));
     hoisted.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name: format!("__await_fetch_{}", id),
         ty: Type::Any,
@@ -913,10 +924,10 @@ fn hoist_awaits_avoiding_top_level(
         hoist_awaits_avoiding_top_level(expr, next_id, hoisted);
         return;
     }
-    if let Expr::Await(_) = expr {
+    if let Expr::Await(_, _) = expr {
         // Outer is an await — keep it but recursively hoist nested awaits
         // inside the operand fully (they are nested, not top-level).
-        if let Expr::Await(inner) = expr {
+        if let Expr::Await(inner, _) = expr {
             hoist_awaits_in_expr_full(inner.as_mut(), next_id, hoisted);
         }
         // Issue #617: hoist fetchWithAuth/fetchPostWithAuth operand into
@@ -1015,7 +1026,7 @@ fn conditional_branches_contain_await(expr: &Expr) -> bool {
 }
 
 fn expr_contains_await(expr: &Expr) -> bool {
-    if matches!(expr, Expr::Await(_)) {
+    if matches!(expr, Expr::Await(_, _)) {
         return true;
     }
     if matches!(expr, Expr::Closure { .. }) {
@@ -1046,6 +1057,7 @@ fn restructure_awaited_loop_cond(cond: Expr, body: Vec<Stmt>, next_id: &mut Loca
     let t = alloc_local(next_id);
     let mut new_body = Vec::with_capacity(body.len() + 2);
     new_body.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: t,
         name: format!("__loop_cond_await_{}", t),
         ty: Type::Any,
@@ -1088,9 +1100,11 @@ fn lift_conditional_with_await_branches(
         condition,
         then_expr,
         else_expr,
+        ..
     } = owned
     {
         hoisted.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: temp_id,
             name: format!("__cond_await_{}", temp_id),
             ty: Type::Any,
@@ -1145,8 +1159,15 @@ fn logical_rhs_contains_await(expr: &Expr) -> bool {
 fn lift_logical_with_await_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: &mut Vec<Stmt>) {
     let temp_id = alloc_local(next_id);
     let owned = std::mem::replace(expr, Expr::LocalGet(temp_id));
-    if let Expr::Logical { op, left, right } = owned {
+    if let Expr::Logical {
+        op,
+        left,
+        right,
+        byte_offset,
+    } = owned
+    {
         hoisted.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: temp_id,
             name: format!("__logic_await_{}", temp_id),
             ty: Type::Any,
@@ -1168,6 +1189,7 @@ fn lift_logical_with_await_rhs(expr: &mut Expr, next_id: &mut LocalId, hoisted: 
             },
             LogicalOp::And => Expr::LocalGet(temp_id),
             LogicalOp::Coalesce => Expr::Compare {
+                byte_offset,
                 op: CompareOp::LooseEq,
                 left: Box::new(Expr::LocalGet(temp_id)),
                 right: Box::new(Expr::Null),
@@ -1202,7 +1224,7 @@ fn rewrite_stmt(stmt: &mut Stmt, had_await: &mut bool) {
     match stmt {
         Stmt::Let { init: Some(e), .. } => rewrite_expr(e, had_await),
         Stmt::Expr(e) => rewrite_expr(e, had_await),
-        Stmt::Return(Some(e)) => rewrite_expr(e, had_await),
+        Stmt::Return(Some(e), _) => rewrite_expr(e, had_await),
         Stmt::Throw(e) => rewrite_expr(e, had_await),
         Stmt::If {
             condition,
@@ -1257,6 +1279,7 @@ fn rewrite_stmt(stmt: &mut Stmt, had_await: &mut bool) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             rewrite_expr(discriminant, had_await);
             for case in cases.iter_mut() {
@@ -1313,8 +1336,8 @@ fn strip_in_stmt(stmt: &mut Stmt, non_promise: &mut HashSet<LocalId>) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => strip_in_expr(e, non_promise),
-        Stmt::Return(Some(e)) => strip_in_expr(e, non_promise),
-        Stmt::Return(None)
+        Stmt::Return(Some(e), _) => strip_in_expr(e, non_promise),
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -1369,6 +1392,7 @@ fn strip_in_stmt(stmt: &mut Stmt, non_promise: &mut HashSet<LocalId>) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             strip_in_expr(discriminant, non_promise);
             for case in cases {
@@ -1390,7 +1414,7 @@ fn strip_in_expr(expr: &mut Expr, non_promise: &HashSet<LocalId>) {
         return;
     }
     perry_hir::walker::walk_expr_children_mut(expr, &mut |c| strip_in_expr(c, non_promise));
-    if let Expr::Await(inner) = expr {
+    if let Expr::Await(inner, _) = expr {
         if let Some(stripped) = try_strip_promise_resolve(inner, non_promise) {
             **inner = stripped;
         }
@@ -1398,7 +1422,7 @@ fn strip_in_expr(expr: &mut Expr, non_promise: &HashSet<LocalId>) {
 }
 
 fn try_strip_promise_resolve(expr: &Expr, non_promise: &HashSet<LocalId>) -> Option<Expr> {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return None;
     };
     if args.len() != 1 {
@@ -1449,7 +1473,7 @@ fn is_non_promise_expr(expr: &Expr, non_promise: &HashSet<LocalId>) -> bool {
         // `await X` for non-Promise X resolves to X itself (1 microtask hop),
         // so the result is non-Promise. The peephole above handles the
         // Promise.resolve(non-Promise) sub-case before we even ask here.
-        Expr::Await(inner) => is_non_promise_expr(inner, non_promise),
+        Expr::Await(inner, _) => is_non_promise_expr(inner, non_promise),
         _ => false,
     }
 }
@@ -1473,12 +1497,13 @@ fn is_non_promise_type(ty: &Type) -> bool {
 }
 
 fn rewrite_expr(expr: &mut Expr, had_await: &mut bool) {
-    if matches!(expr, Expr::Await(_)) {
+    if matches!(expr, Expr::Await(_, _)) {
         *had_await = true;
-        if let Expr::Await(inner) = std::mem::replace(expr, Expr::Undefined) {
+        if let Expr::Await(inner, off) = std::mem::replace(expr, Expr::Undefined) {
             let mut inner = *inner;
             rewrite_expr(&mut inner, had_await);
             *expr = Expr::Yield {
+                byte_offset: off,
                 value: Some(Box::new(inner)),
                 delegate: false,
             };
@@ -1579,7 +1604,7 @@ fn scan_stmt_for_async_closures(
     match stmt {
         Stmt::Let { init: Some(e), .. } => scan_expr_for_async_closures(e, found),
         Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_for_async_closures(e, found),
-        Stmt::Return(Some(e)) => scan_expr_for_async_closures(e, found),
+        Stmt::Return(Some(e), _) => scan_expr_for_async_closures(e, found),
         Stmt::If {
             condition,
             then_branch,
@@ -1629,6 +1654,7 @@ fn scan_stmt_for_async_closures(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             scan_expr_for_async_closures(discriminant, found);
             for case in cases {
@@ -1686,7 +1712,7 @@ fn stmt_contains_await(stmt: &Stmt, found: &mut bool) -> bool {
     match stmt {
         Stmt::Let { init: Some(e), .. } => expr_contains_await_shallow(e, found),
         Stmt::Expr(e) | Stmt::Throw(e) => expr_contains_await_shallow(e, found),
-        Stmt::Return(Some(e)) => expr_contains_await_shallow(e, found),
+        Stmt::Return(Some(e), _) => expr_contains_await_shallow(e, found),
         Stmt::If {
             condition,
             then_branch,
@@ -1729,6 +1755,7 @@ fn stmt_contains_await(stmt: &Stmt, found: &mut bool) -> bool {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             expr_contains_await_shallow(discriminant, found)
                 || cases.iter().any(|c| body_contains_await(&c.body))
@@ -1745,7 +1772,7 @@ fn expr_contains_await_shallow(expr: &Expr, found: &mut bool) -> bool {
     if *found {
         return true;
     }
-    if matches!(expr, Expr::Await(_)) {
+    if matches!(expr, Expr::Await(_, _)) {
         *found = true;
         return true;
     }

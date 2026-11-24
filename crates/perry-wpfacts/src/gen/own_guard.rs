@@ -81,21 +81,23 @@ fn pure(e: &Expr) -> bool {
 fn own_test(cond: &Expr) -> Option<(OwnTest, &Expr, &Expr)> {
     let t = match cond {
         Expr::ObjectHasOwn(o, k) => (OwnTest::HasOwn, o.as_ref(), k.as_ref()),
-        Expr::Call { callee, args, .. } => match (callee.as_ref(), args.as_slice()) {
-            (Expr::PropertyGet { property, .. }, [o, k]) if property == "call" => {
-                (OwnTest::Call, o, k)
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+            match (callee.as_ref(), args.as_slice()) {
+                (Expr::PropertyGet { property, .. }, [o, k]) if property == "call" => {
+                    (OwnTest::Call, o, k)
+                }
+                (
+                    Expr::PropertyGet {
+                        object, property, ..
+                    },
+                    [k],
+                ) if property == "hasOwnProperty" => (OwnTest::Method, object.as_ref(), k),
+                (Expr::LocalGet(_) | Expr::FuncRef(_) | Expr::ExternFuncRef { .. }, [o, k]) => {
+                    (OwnTest::Helper, o, k)
+                }
+                _ => return None,
             }
-            (
-                Expr::PropertyGet {
-                    object, property, ..
-                },
-                [k],
-            ) if property == "hasOwnProperty" => (OwnTest::Method, object.as_ref(), k),
-            (Expr::LocalGet(_) | Expr::FuncRef(_) | Expr::ExternFuncRef { .. }, [o, k]) => {
-                (OwnTest::Helper, o, k)
-            }
-            _ => return None,
-        },
+        }
         _ => return None,
     };
     (binding(t.1) && binding(t.2)).then_some(t)
@@ -127,14 +129,18 @@ fn first(e: &Expr, o: &Expr, k: &Expr) -> First {
         return First::Pure;
     }
     match e {
-        Expr::IndexGet { object, index, .. } if same(object, o) && same(index, k) => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
+            if same(object, o) && same(index, k) =>
+        {
             First::Read(e as *const Expr as usize)
         }
-        Expr::IndexGet { object, index, .. } => then_stop(seq(&[object, index], o, k)),
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            then_stop(seq(&[object, index], o, k))
+        }
         Expr::PropertyGet { object, .. } => then_stop(first(object, o, k)),
         // `x.m(…)`: `x`, then the member read; `f(…)`: `f` (a binding is a
         // value whose call may run first only after the arguments).
-        Expr::Call { callee, .. } => match callee.as_ref() {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
             Expr::PropertyGet { object, .. } => then_stop(first(object, o, k)),
             c => then_stop(first(c, o, k)),
         },
@@ -180,7 +186,7 @@ fn first_stmts(stmts: &[Stmt], o: &Expr, k: &Expr) -> First {
             Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => First::Pure,
             // A new binding: never `o` or `k`.
             Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } => first(e, o, k),
-            Stmt::Return(Some(e)) => then_stop(first(e, o, k)),
+            Stmt::Return(Some(e), _) => then_stop(first(e, o, k)),
             _ => First::Stop,
         };
         match f {
@@ -240,7 +246,7 @@ impl<'a> Gen<'a> {
         {
             return None;
         }
-        let [Stmt::Return(Some(e))] = body else {
+        let [Stmt::Return(Some(e), _)] = body else {
             return None;
         };
         // Lowering lifts a binding's TDZ check over its member/call. It
@@ -252,7 +258,7 @@ impl<'a> Gen<'a> {
                     return None;
                 };
                 if !perry_hir::tdz_check::is_read_check(check)
-                    || !matches!(check, Expr::Call { args, .. }
+                    || !matches!(check, Expr::Call { args, .. } | Expr::RegionCall { args, .. }
                         if matches!(args.as_slice(), [Expr::LocalGet(_), Expr::String(_)]))
                 {
                     return None;
@@ -273,7 +279,7 @@ impl<'a> Gen<'a> {
         match form {
             OwnTest::HasOwn => Some(form),
             OwnTest::Call => {
-                let Expr::Call { callee, .. } = e else {
+                let (Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) = e else {
                     return None;
                 };
                 let Expr::PropertyGet { object, .. } = callee.as_ref() else {

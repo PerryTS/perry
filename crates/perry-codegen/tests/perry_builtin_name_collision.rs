@@ -132,6 +132,7 @@ fn call_extern(name: &str, args: Vec<Expr>) -> Stmt {
 
 fn module_with(imports: Vec<Import>, init: Vec<Stmt>) -> Module {
     Module {
+        byte_offset: 0,
         name: "app.ts".to_string(),
         imports,
         exports: Vec::new(),

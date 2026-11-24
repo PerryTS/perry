@@ -30,6 +30,7 @@ use perry_hir::{Expr, Function, Module as HirModule, Stmt};
 fn compile_body(name: &str, body: Vec<Stmt>) -> String {
     let mut hir = HirModule::new(name);
     hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
@@ -454,7 +455,7 @@ fn process_env_literal_key_loads_below_the_value() {
 
 fn await_body(n: usize) -> Vec<Stmt> {
     (0..n)
-        .map(|i| Stmt::Expr(Expr::Await(Box::new(allocating(&format!("p{i}"))))))
+        .map(|i| Stmt::Expr(Expr::Await(Box::new(allocating(&format!("p{i}"))), 0)))
         .collect()
 }
 
@@ -579,6 +580,7 @@ fn class_expr_capture_refresh_rereads_its_capture_array_below_each_capture() {
     let ir = compile_body(
         "refresh_class_expr_captures",
         vec![Stmt::Expr(Expr::RefreshClassExprCaptures {
+            byte_offset: 0,
             class_value: Box::new(Expr::Undefined),
             captures: vec![allocating("first"), allocating("second")],
             env_class: None,
@@ -621,6 +623,7 @@ fn capture_refresh(name: &str, captures: Vec<Expr>) -> String {
     compile_body(
         name,
         vec![Stmt::Expr(Expr::RefreshClassExprCaptures {
+            byte_offset: 0,
             class_value: Box::new(Expr::Undefined),
             captures,
             env_class: None,

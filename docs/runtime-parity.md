@@ -4864,7 +4864,7 @@ These are exclusively on `Bun.*` (or built-in modules like `bun:*`); Node.js has
 | `Bun.sleepSync(ms)` | ✗ | ✓ | Blocking. Node analog: none (use `Atomics.wait` workaround) |
 | `Bun.which(bin, options?)` | ✗ | ✓ | Resolves executable in PATH. Node analog: `which` npm pkg |
 | `Bun.openInEditor(path, options?)` | ✗ | ✓ | Open file in editor (`$VISUAL`/`$EDITOR`) |
-| `Bun.randomUUIDv7(encoding?, timestamp?)` | ✗ | ✓ | UUID v7. Node 24+ adds `crypto.randomUUID({ disableEntropyCache })` but no v7 |
+| `Bun.randomUUIDv7(encoding?, timestamp?)` | ✗ | ✓ | UUID v7. Node analog: `crypto.randomUUIDv7()` (Node 24.16+ / 26.1+) |
 | `Bun.peek(promise)` | ✗ | ✓ | Synchronously read settled promise |
 | `Bun.peek.status(promise)` | ✗ | ✓ | `"pending"` / `"fulfilled"` / `"rejected"` |
 | `Bun.deepEquals(a, b, strict?)` | ✗ | ✓ | Recursive equality |

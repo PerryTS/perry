@@ -457,20 +457,24 @@ fn read_only_prototype_reads(hir: &Module) -> HashSet<usize> {
                     saw_names = true;
                 }
                 Expr::TypeOf(value) => {
-                    if let Expr::IndexGet { object, .. } = value.as_ref() {
+                    if let (Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }) =
+                        value.as_ref()
+                    {
                         if matches!(object.as_ref(), Expr::LocalGet(local) if local == id) {
                             allowed_local_gets.insert(object.as_ref() as *const Expr as usize);
                             saw_typeof_index = true;
                         }
                     }
                 }
-                Expr::Call { callee, .. } => {
+                Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
                     if let Expr::PropertyGet {
                         object, property, ..
                     } = callee.as_ref()
                     {
                         if property == "bind" {
-                            if let Expr::IndexGet { object, .. } = object.as_ref() {
+                            if let (Expr::IndexGet { object, .. }
+                            | Expr::RegionOut { object, .. }) = object.as_ref()
+                            {
                                 if matches!(object.as_ref(), Expr::LocalGet(local) if local == id) {
                                     allowed_local_gets
                                         .insert(object.as_ref() as *const Expr as usize);
@@ -786,7 +790,9 @@ fn note_prototype_effect(
         } if is_prototype_key(property) => {
             note_prototype_holder(object, facts);
         }
-        Expr::IndexGet { object, index, .. } | Expr::IndexSet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. }
+        | Expr::RegionOut { object, index, .. }
+        | Expr::IndexSet { object, index, .. } => {
             if matches!(index.as_ref(), Expr::String(key) if is_prototype_key(key)) {
                 note_prototype_holder(object, facts);
             }
@@ -883,7 +889,7 @@ pub fn mark_unstable_scalar_method_receivers(
     let writes = collect_candidate_property_writes(stmts, candidates);
 
     for_each_expr_in_stmts(stmts, &mut |expr| {
-        let Expr::Call { callee, args, .. } = expr else {
+        let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
             return;
         };
         let Expr::PropertyGet {
@@ -939,7 +945,7 @@ pub(crate) fn for_each_expr_in_stmts(stmts: &[Stmt], f: &mut dyn FnMut(&Expr)) {
 fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
     match stmt {
         Stmt::Expr(expr) | Stmt::Throw(expr) => for_each_expr(expr, f),
-        Stmt::Return(Some(expr)) => for_each_expr(expr, f),
+        Stmt::Return(Some(expr), _) => for_each_expr(expr, f),
         Stmt::Let {
             init: Some(expr), ..
         } => for_each_expr(expr, f),
@@ -992,6 +998,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             for_each_expr(discriminant, f);
             for case in cases {
@@ -1002,7 +1009,7 @@ fn for_each_expr_in_stmt(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             }
         }
         Stmt::Labeled { body, .. } => for_each_expr_in_stmt(body, f),
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Let { init: None, .. }
         | Stmt::Break
         | Stmt::Continue
@@ -1035,6 +1042,7 @@ mod tests {
             extends_expr: None,
             heritage_lexically_shadowed: false,
             fields: vec![ClassField {
+                byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: "value".to_string(),
                 key_expr: None,
@@ -1046,17 +1054,21 @@ mod tests {
             }],
             constructor: None,
             methods: vec![Function {
+                byte_offset: 0,
                 id: 2,
                 name: "getValue".to_string(),
                 type_params: Vec::new(),
                 params: Vec::new(),
                 return_type: Type::Number,
-                body: vec![Stmt::Return(Some(Expr::PropertyGet {
-                    byte_end: 0,
-                    byte_offset: 0,
-                    object: Box::new(Expr::This),
-                    property: "value".to_string(),
-                }))],
+                body: vec![Stmt::Return(
+                    Some(Expr::PropertyGet {
+                        byte_end: 0,
+                        byte_offset: 0,
+                        object: Box::new(Expr::This),
+                        property: "value".to_string(),
+                    }),
+                    0,
+                )],
                 is_async: false,
                 is_generator: false,
                 is_strict: false,
@@ -1086,6 +1098,7 @@ mod tests {
 
     fn new_receiver_stmt(class_name: &str) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id: RECEIVER,
             name: "obj".to_string(),
             ty: Type::Named(class_name.to_string()),
@@ -1102,18 +1115,21 @@ mod tests {
     }
 
     fn call_method_stmt(method: &str) -> Stmt {
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::PropertyGet {
+        Stmt::Return(
+            Some(Expr::Call {
                 byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(RECEIVER)),
+                    property: method.to_string(),
+                }),
+                args: Vec::new(),
+                type_args: Vec::new(),
                 byte_offset: 0,
-                object: Box::new(Expr::LocalGet(RECEIVER)),
-                property: method.to_string(),
             }),
-            args: Vec::new(),
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }))
+            0,
+        )
     }
 
     /// `(obj as any).<key> = () => 99` — lowers to `PutValueSet` since #4126.
@@ -1217,6 +1233,7 @@ mod tests {
         let class = summarizable_class("C");
         let mut module = Module::new("m.ts");
         module.functions.push(Function {
+            byte_offset: 0,
             id: 9,
             name: "mutate".to_string(),
             type_params: Vec::new(),
@@ -1274,6 +1291,7 @@ mod tests {
         const PROTO: u32 = 41;
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: PROTO,
                 name: "proto".to_string(),
                 ty: Type::Any,
@@ -1355,6 +1373,7 @@ mod tests {
         let class = summarizable_class("C");
         let mut module = Module::new("m.ts");
         module.init.push(Stmt::Let {
+            byte_offset: 0,
             id: 7,
             name: "p".to_string(),
             ty: Type::Any,

@@ -53,11 +53,11 @@ pub fn count_body_nodes(stmts: &[Stmt]) -> usize {
 fn is_safepoint(e: &Expr) -> bool {
     matches!(
         e,
-        Expr::Call { .. }
+        Expr::Call { .. } | Expr::RegionCall { .. }
             | Expr::CallSpread { .. }
             | Expr::NativeMethodCall { .. }
             | Expr::StaticMethodCall { .. }
-            | Expr::SuperCall(_)
+            | Expr::SuperCall(_, _)
             | Expr::SuperCallSpread(_)
             | Expr::SuperMethodCall { .. }
             | Expr::SuperMethodCallSpread { .. }
@@ -65,7 +65,7 @@ fn is_safepoint(e: &Expr) -> bool {
             | Expr::New { .. }
             | Expr::NewDynamic { .. }
             | Expr::NewDynamicSpread { .. }
-            | Expr::Await(_)
+            | Expr::Await(_, _)
             | Expr::Yield { .. }
             | Expr::AsyncFirstCall { .. }
             // #8583 (unit-4 / `__33499`): object and array literals allocate via
@@ -117,8 +117,8 @@ fn count_in_stmt(s: &Stmt, n: &mut usize, all: bool) {
         Stmt::Let { init: Some(e), .. }
         | Stmt::Expr(e)
         | Stmt::Throw(e)
-        | Stmt::Return(Some(e)) => count_in_expr(e, n, all),
-        Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+        | Stmt::Return(Some(e), _) => count_in_expr(e, n, all),
+        Stmt::Let { init: None, .. } | Stmt::Return(None, _) => {}
         Stmt::If {
             condition,
             then_branch,
@@ -183,6 +183,7 @@ fn count_in_stmt(s: &Stmt, n: &mut usize, all: bool) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             count_in_expr(discriminant, n, all);
             for c in cases {
@@ -223,6 +224,7 @@ mod tests {
 
     fn empty_closure(body: Vec<Stmt>) -> Expr {
         Expr::Closure {
+            byte_offset: 0,
             func_id: 0,
             params: vec![],
             return_type: Type::Any,
@@ -250,7 +252,7 @@ mod tests {
             },
             // A call buried in a nested closure body must NOT be counted.
             Stmt::Expr(empty_closure(vec![Stmt::Expr(call(vec![]))])),
-            Stmt::Return(Some(call(vec![]))),
+            Stmt::Return(Some(call(vec![])), 0),
         ];
         assert_eq!(count_safepoint_sites(&stmts), 3);
     }

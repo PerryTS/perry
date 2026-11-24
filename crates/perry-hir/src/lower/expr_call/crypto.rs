@@ -100,7 +100,11 @@ pub(super) fn is_passthrough_method(method: &str) -> bool {
 /// - `randomUUID()` → `Expr::CryptoRandomUUID`; option-bearing calls keep
 ///   the generic call shape so codegen can pass the options value through.
 /// - `randomBytes(size)` → `Expr::CryptoRandomBytes`.
-pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<Expr> {
+pub(super) fn lower_crypto_passthrough(
+    method: &str,
+    args: Vec<Expr>,
+    byte_offset: u32,
+) -> Option<Expr> {
     match method {
         "randomFillSync" => {
             if args.is_empty() {
@@ -121,13 +125,13 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
             byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset,
                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                 property: "randomUUID".to_string(),
             }),
             args,
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset,
         }),
         // `randomUUIDv7([options])` — options accepted for shape parity but
         // do not affect the generated value (#2550).
@@ -146,13 +150,13 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset,
                         object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                         property: "randomBytes".to_string(),
                     }),
                     args,
                     type_args: vec![],
-                    byte_offset: 0,
+                    byte_offset,
                 });
             }
             Some(Expr::CryptoRandomBytes(Box::new(
@@ -215,13 +219,13 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
             byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset,
                 object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                 property: method.to_string(),
             }),
             args,
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset,
         }),
         // `crypto.hash(alg, data, enc?)` — Node 21+ one-shot helper.
         // Expand into the `createHash(alg).update(data).digest(enc)`
@@ -239,35 +243,35 @@ pub(super) fn lower_crypto_passthrough(method: &str, args: Vec<Expr>) -> Option<
                 byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset,
                     object: Box::new(Expr::Call {
                         byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset,
                             object: Box::new(Expr::Call {
                                 byte_end: 0,
                                 callee: Box::new(Expr::PropertyGet {
                                     byte_end: 0,
-                                    byte_offset: 0,
+                                    byte_offset,
                                     object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                                     property: "createHash".to_string(),
                                 }),
                                 args: vec![alg],
                                 type_args: vec![],
-                                byte_offset: 0,
+                                byte_offset,
                             }),
                             property: "update".to_string(),
                         }),
                         args: vec![data],
                         type_args: vec![],
-                        byte_offset: 0,
+                        byte_offset,
                     }),
                     property: "digest".to_string(),
                 }),
                 args: vec![enc],
                 type_args: vec![],
-                byte_offset: 0,
+                byte_offset,
             })
         }
         _ => None,

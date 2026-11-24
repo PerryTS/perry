@@ -91,7 +91,7 @@ fn synthetic_counter_inits(stmts: &[Stmt]) -> Vec<Expr> {
 
 fn unsigned_integer_seed(expr: &Expr) -> bool {
     matches!(expr, Expr::NativeMethodCall { module, method, args,
-        class_name: None, object: None }
+        class_name: None, object: None, .. }
         if module == "__perry_runtime" && method == "arrayRecordIndex"
             && matches!(args.as_slice(), [Expr::Integer(0)]))
 }

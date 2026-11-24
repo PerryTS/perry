@@ -463,7 +463,7 @@ pub(super) fn retain_unwritten_literal_arrays(
                 }
                 return;
             }
-            Expr::IndexGet { object, .. } => object,
+            Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => object,
             Expr::PropertyGet {
                 object, property, ..
             } if property == "length" => object,
@@ -838,7 +838,9 @@ fn expr_numeric_by_construction_with_region(
         // (bench_int_arithmetic: 7.7x node; `acc += (px[i] | 0)` was 2000x
         // faster than `acc += px[i]`). Both nodes read the same storage.
         let (object, index) = match x {
-            Expr::IndexGet { object, index, .. } => (object, index),
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+                (object, index)
+            }
             Expr::Uint8ArrayGet { array, index } => (array, index),
             _ => return false,
         };
@@ -897,7 +899,7 @@ fn expr_numeric_by_construction_with_region(
     match e {
         // A region read the planner proved a Number: an R-bit static-key
         // read, or a bare typed-array VIEW element read (decision 69).
-        Expr::PropertyGet { .. } | Expr::IndexGet { .. }
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. } | Expr::RegionOut { .. }
             if region_f64_reads
                 .is_some_and(|reads| reads.contains(&(e as *const Expr as usize))) =>
         {
@@ -931,7 +933,9 @@ fn expr_numeric_by_construction_with_region(
             perry_hir::UnaryOp::Neg | perry_hir::UnaryOp::BitNot => rec(operand),
             _ => false,
         },
-        Expr::Binary { op, left, right } => match op {
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
             // `+` concatenates strings; both sides must be numbers.
             BinaryOp::Add => {
                 (rec(left) || numeric_view_value_or_undefined(left))
@@ -1124,6 +1128,7 @@ mod region_number_tests {
 
     fn let_read(id: u32) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("n{id}"),
             ty: perry_hir::types::Type::Any,
@@ -1136,6 +1141,7 @@ mod region_number_tests {
         Stmt::Expr(Expr::LocalSet(
             ACC,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: perry_hir::BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(ACC)),
                 right: Box::new(Expr::LocalGet(id)),
@@ -1251,6 +1257,7 @@ mod region_number_tests {
         let numeric_write = Expr::LocalSet(
             ACC,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: perry_hir::BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(ACC)),
                 right: Box::new(Expr::Number(1.0)),

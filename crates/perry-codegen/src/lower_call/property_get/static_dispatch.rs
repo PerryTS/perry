@@ -146,7 +146,7 @@ pub(crate) fn try_lower_static_dispatch(
                 //     constructor's ordinary property lookup.
                 let recv_box = match object {
                     Expr::ClassRef(_) => lower_expr(ctx, object)?,
-                    Expr::Call { .. } => lower_expr(ctx, object)?,
+                    Expr::Call { .. } | Expr::RegionCall { .. } => lower_expr(ctx, object)?,
                     Expr::Sequence(_) => lower_expr(ctx, object)?,
                     // #1787: a class-expression value is a real heap class
                     // object whose per-evaluation static fields are OWN

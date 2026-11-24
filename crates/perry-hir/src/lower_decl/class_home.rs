@@ -36,6 +36,7 @@ pub(super) fn finish(
     body.insert(
         0,
         Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id,
             name: "__perry_method_home".into(),
             ty: crate::types::Type::Any,

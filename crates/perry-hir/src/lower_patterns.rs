@@ -241,7 +241,7 @@ pub(crate) fn lower_assign_target_to_expr(
                     let property = ident.sym.to_string();
                     Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object,
                         property,
                     })
@@ -250,7 +250,7 @@ pub(crate) fn lower_assign_target_to_expr(
                     let index = Box::new(lower_expr(ctx, &computed.expr)?);
                     Ok(Expr::IndexGet {
                         element_offset: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         byte_end: 0,
                         object,
                         index,
@@ -268,7 +268,7 @@ pub(crate) fn lower_assign_target_to_expr(
                     let property = private_storage_property(ctx, &private_name);
                     Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: member.span.lo.0,
+                        byte_offset: crate::lower::member_token(member),
                         object,
                         property,
                     })
@@ -1038,6 +1038,7 @@ pub(crate) fn predeclare_implicit_assignment_targets(
         };
         if ctx.scope_depth == 0 || !ctx.sloppy_implicit_global_ids.contains(&id) {
             stmts.push(Stmt::Let {
+                byte_offset: expr.span().lo.0,
                 id,
                 name,
                 ty: Type::Any,

@@ -585,7 +585,7 @@ fn lower_impl(ctx: &mut FnCtx<'_>, expr: &Expr, heritage_checked: bool) -> Resul
         // `current_class.extends.and_then(class_id_to_name)`. For Phase
         // C.2 we use `extends_name` which is always populated when
         // there's a parent.
-        Expr::SuperCall(super_args) => {
+        Expr::SuperCall(super_args, _) => {
             // Soft fallback for super() outside a class context: lower
             // args and return undefined.
             let Some(current_class_name) = ctx.class_stack.last().cloned() else {

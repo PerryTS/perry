@@ -111,6 +111,7 @@ pub(crate) fn enum_value_binding(
     let computed = own.iter().any(|m| matches!(m.value, EnumValue::Computed));
     let stmt = if existing.is_none() && !computed {
         Stmt::Let {
+            byte_offset: decl.span.lo.0,
             id,
             name: name.to_string(),
             ty: Type::Any,
@@ -154,7 +155,7 @@ pub(crate) fn enum_value_binding(
                 index: Box::new(Expr::String(member.name.clone())),
                 value: Box::new(value),
                 element_offset: 0,
-                byte_offset: 0,
+                byte_offset: ast_member.span.lo.0,
                 byte_end: 0,
             };
             if matches!(member.value, EnumValue::Computed) {
@@ -165,7 +166,7 @@ pub(crate) fn enum_value_binding(
                     index: Box::new(forward),
                     value: Box::new(Expr::String(member.name.clone())),
                     element_offset: 0,
-                    byte_offset: 0,
+                    byte_offset: ast_member.span.lo.0,
                     byte_end: 0,
                 });
                 continue;
@@ -182,7 +183,7 @@ pub(crate) fn enum_value_binding(
                     index: Box::new(key),
                     value: Box::new(Expr::String(member.name.clone())),
                     element_offset: 0,
-                    byte_offset: 0,
+                    byte_offset: ast_member.span.lo.0,
                     byte_end: 0,
                 });
             }
@@ -192,6 +193,7 @@ pub(crate) fn enum_value_binding(
         } else {
             stores.push(Expr::LocalGet(id));
             Stmt::Let {
+                byte_offset: decl.span.lo.0,
                 id,
                 name: name.to_string(),
                 ty: Type::Any,

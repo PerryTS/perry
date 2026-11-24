@@ -106,6 +106,7 @@ pub(super) fn emit_class_expression_value_binding(
     ctx.inferred_class_bindings
         .record_binding(id, bind_name.to_string());
     module.init.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name: bind_name.to_string(),
         ty,
@@ -316,7 +317,8 @@ fn emit_for_of_pattern_protocol(
     *var_idx += spans.len();
     let bound = match pat {
         ast::Pat::Array(arr_pat) => {
-            let plan = crate::destructuring::plan_for_unproven_source(ctx, source, out);
+            let plan =
+                crate::destructuring::plan_for_unproven_source(ctx, source, out, arr_pat.span.lo.0);
             crate::destructuring::lower_array_pattern_binding_guarded(
                 ctx, arr_pat, plan, false, false, out,
             )
@@ -346,6 +348,7 @@ fn emit_for_of_pattern_binding_indexed(
             let (name, id) = var_ids[*var_idx].clone();
             *var_idx += 1;
             out.push(Stmt::Let {
+                byte_offset: pat.span().lo.0,
                 id,
                 name,
                 ty: Type::Any,
@@ -369,6 +372,7 @@ fn emit_for_of_pattern_binding_indexed(
             let tmp_name = format!("__destruct_{}", tmp_id);
             ctx.locals.push((tmp_name.clone(), tmp_id, arr_ty.clone()));
             out.push(Stmt::Let {
+                byte_offset: pat.span().lo.0,
                 id: tmp_id,
                 name: tmp_name,
                 ty: arr_ty,
@@ -389,7 +393,7 @@ fn emit_for_of_pattern_binding_indexed(
                 }
                 let elem_src = Expr::IndexGet {
                     element_offset: 0,
-                    byte_offset: 0,
+                    byte_offset: elem_pat.span().lo.0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(tmp_id)),
                     index: Box::new(Expr::Number(idx as f64)),
@@ -403,6 +407,7 @@ fn emit_for_of_pattern_binding_indexed(
             let tmp_name = format!("__destruct_{}", tmp_id);
             ctx.locals.push((tmp_name.clone(), tmp_id, Type::Any));
             out.push(Stmt::Let {
+                byte_offset: pat.span().lo.0,
                 id: tmp_id,
                 name: tmp_name,
                 ty: Type::Any,
@@ -415,14 +420,16 @@ fn emit_for_of_pattern_binding_indexed(
                         let key = assign.key.sym.to_string();
                         let prop_access = Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: assign.span.lo.0,
                             object: Box::new(Expr::LocalGet(tmp_id)),
                             property: key,
                         };
                         let init = if let Some(default_expr) = &assign.value {
                             let default_val = lower_expr(ctx, default_expr)?;
                             Expr::Conditional {
+                                byte_offset: assign.span.lo.0,
                                 condition: Box::new(Expr::Compare {
+                                    byte_offset: assign.span.lo.0,
                                     op: CompareOp::Ne,
                                     left: Box::new(prop_access.clone()),
                                     right: Box::new(Expr::Undefined),
@@ -436,6 +443,7 @@ fn emit_for_of_pattern_binding_indexed(
                         let (name, id) = var_ids[*var_idx].clone();
                         *var_idx += 1;
                         out.push(Stmt::Let {
+                            byte_offset: pat.span().lo.0,
                             id,
                             name,
                             ty: Type::Any,
@@ -469,6 +477,7 @@ fn emit_for_of_pattern_binding_indexed(
             let tmp_name = format!("__destruct_{}", tmp_id);
             ctx.locals.push((tmp_name.clone(), tmp_id, Type::Any));
             out.push(Stmt::Let {
+                byte_offset: pat.span().lo.0,
                 id: tmp_id,
                 name: tmp_name,
                 ty: Type::Any,
@@ -477,6 +486,7 @@ fn emit_for_of_pattern_binding_indexed(
             });
             let default_val = lower_expr(ctx, &assign_pat.right)?;
             let with_default = Expr::Conditional {
+                byte_offset: assign_pat.span.lo.0,
                 condition: Box::new(Expr::IsUndefinedOrBareNan(Box::new(Expr::LocalGet(tmp_id)))),
                 then_expr: Box::new(default_val),
                 else_expr: Box::new(Expr::LocalGet(tmp_id)),
@@ -701,6 +711,7 @@ fn lower_stmt_inner(
                                     if let Some(p_name) = proxy_alias {
                                         let proxy_id = ctx.define_local(p_name.clone(), Type::Any);
                                         module.init.push(Stmt::Let {
+                                            byte_offset: stmt.span().lo.0,
                                             id: proxy_id,
                                             name: p_name.clone(),
                                             ty: Type::Any,
@@ -720,6 +731,7 @@ fn lower_stmt_inner(
                                             let rev_id =
                                                 ctx.define_local(r_name.clone(), Type::Any);
                                             module.init.push(Stmt::Let {
+                                                byte_offset: stmt.span().lo.0,
                                                 id: rev_id,
                                                 name: r_name,
                                                 ty: Type::Any,
@@ -910,7 +922,7 @@ fn lower_stmt_inner(
                         for s in &stmts {
                             if let Stmt::Let {
                                 name,
-                                init: Some(Expr::Await(inner)),
+                                init: Some(Expr::Await(inner, _)),
                                 ..
                             } = s
                             {
@@ -1096,7 +1108,8 @@ fn lower_stmt_inner(
                             // sock as ("net", "Socket").
                             if let Stmt::Let {
                                 name,
-                                init: Some(Expr::Call { callee, .. }),
+                                init:
+                                    Some(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }),
                                 ..
                             } = s
                             {
@@ -1177,6 +1190,7 @@ fn lower_stmt_inner(
                         };
                         ctx.record_local_source_span(class_local_id, class_decl.ident.span);
                         module.init.push(Stmt::Let {
+                            byte_offset: stmt.span().lo.0,
                             id: class_local_id,
                             name: binding_name,
                             ty: Type::Any,
@@ -1285,6 +1299,7 @@ fn lower_stmt_inner(
                                 let id = ctx.fresh_local();
                                 ctx.locals.push((name.clone(), id, ty.clone()));
                                 module.init.push(Stmt::Let {
+                                    byte_offset: stmt.span().lo.0,
                                     id,
                                     name,
                                     ty,
@@ -1513,6 +1528,7 @@ fn lower_stmt_inner(
                                 );
                                 ctx.var_hoisted_ids.insert(id);
                                 module.init.push(Stmt::Let {
+                                    byte_offset: stmt.span().lo.0,
                                     id,
                                     name,
                                     ty: Type::Any,
@@ -1583,6 +1599,7 @@ fn lower_stmt_inner(
                                 );
                                 ctx.classic_for_lexical_bindings.insert(id);
                                 module.init.push(Stmt::Let {
+                                    byte_offset: stmt.span().lo.0,
                                     id,
                                     name,
                                     ty,
@@ -1631,6 +1648,7 @@ fn lower_stmt_inner(
                                         decl.name.span(),
                                     );
                                     Some(Box::new(Stmt::Let {
+                                        byte_offset: stmt.span().lo.0,
                                         id,
                                         name,
                                         ty,
@@ -1754,6 +1772,7 @@ fn lower_stmt_inner(
             };
 
             module.init.push(Stmt::Try {
+                byte_offset: try_stmt.span.lo.0,
                 body,
                 catch,
                 finally,
@@ -1813,6 +1832,7 @@ fn lower_stmt_inner(
                 // environment; fallthrough must not allocate a second cell.
                 let id = ctx.fresh_local();
                 module.init.push(Stmt::Let {
+                    byte_offset: stmt.span().lo.0,
                     id,
                     name: "__switch_discriminant".into(),
                     ty: Type::Any,
@@ -1823,6 +1843,7 @@ fn lower_stmt_inner(
                 discriminant = Expr::LocalGet(id);
             }
             module.init.push(Stmt::Switch {
+                byte_offset: switch_stmt.span.lo.0,
                 discriminant,
                 cases,
             });
@@ -1843,6 +1864,7 @@ fn lower_stmt_inner(
             let insert_at = module.init.len();
             let env_id = ctx.define_local("__perry_with_env".to_string(), Type::Any);
             module.init.push(Stmt::Let {
+                byte_offset: stmt.span().lo.0,
                 id: env_id,
                 name: format!("__perry_with_env_{}", env_id),
                 ty: Type::Any,

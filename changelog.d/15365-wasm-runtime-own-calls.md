@@ -1,0 +1,1 @@
+`--target web`: a program that overwrites `Function.prototype.call` or `Function.prototype.apply` no longer breaks the runtime's own calls: imports, class member dispatch, iteration and property descriptors (#15339).
