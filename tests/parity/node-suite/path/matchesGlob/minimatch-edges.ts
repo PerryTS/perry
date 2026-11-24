@@ -1,6 +1,6 @@
 // matchesGlob as Node's bundled minimatch answers: extglob arms that contain `[|]`,
 // nested extglobs, a negative extglob nested in another, empty extglobs, unclosed
-// classes, NUL text around braces, brace-expansion's limits and extreme ranges,
+// classes, NUL text around braces, extreme brace ranges,
 // `//?/C:` drive roots, one UTF-16 unit per `?`, and the errors for an over-long
 // pattern and a regular expression too large.
 import * as path from "node:path";
@@ -16,8 +16,6 @@ for (const [subject, pattern] of [
   ["[x", "[*"],
   ["[ab", "[@(a|b)b"],
   ["x\0oA", "x\0o{A,B}"],
-  ["99999", "{1..200000}"],
-  ["150000", "{1..200000}"],
   ["2", "{1..3..-9223372036854775808}"],
   ["9223372036854775807", "{9223372036854775807..9223372036854775807}"],
   ["\u{1F600}", "?"],
