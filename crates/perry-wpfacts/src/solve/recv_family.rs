@@ -102,6 +102,11 @@ impl Model {
         let TokKind::Func(f, _) = self.toks[ft as usize] else {
             return;
         };
+        // CWN ruling K3BUILD13 1: a method whose home key is computed and
+        // not a known string or symbol has no family (no `rfam_home`: its
+        // `this` stays ⊤, it is never in `rfam_live`, the runtime never
+        // checks it). `NO_HOME_KEY` names a holder field, never a home key.
+        debug_assert!(!keys.contains(&NO_HOME_KEY));
         if self.funcs[f as usize].lexical_this || keys.is_empty() {
             return;
         }
@@ -259,6 +264,14 @@ impl Model {
     }
 
     /// Tokens arrived at a node stored into ⊤ (`rfam_top_holder`).
+    ///
+    /// Why `U={}; U.k=f; U.k()` in unknown code is no hole (CWN ruling
+    /// K3BUILD13 3, approved premises, not the runtime check): unknown code
+    /// is the runtime/host acting per builtin contract (owner Phase B
+    /// 11-23), and its contract calls are modelled (handed calls, checked
+    /// by `rfam_handed_this` / `settle_family`); a program store of `f` into
+    /// a ⊤ object switches the family off here (CWN Q2, T13); a value from
+    /// an unmodelled seed keeps today's sound rule (owner 11-24 D1 (A)).
     pub(crate) fn rfam_top_held(&mut self, ts: &[Tok]) {
         for &t in ts {
             if let TokKind::Func(f, _) = self.toks[t as usize] {
@@ -385,8 +398,28 @@ impl Model {
     /// member that escaped (`Model::escaped`, monotone: `settle_family`
     /// gives a member once it escapes). A member no unknown code holds is
     /// never its receiver there.
+    ///
+    /// "Class prototype" is the same notion as the runtime check's
+    /// (`closure::dispatch::family`, CWN ruling K3BUILD13 2): a declared
+    /// class's prototype object (`C.prototype`, final per C7a), which the
+    /// runtime names by its declared-prototype link. An object merely used
+    /// as a prototype (an `Object.create(h)` result, a plain function's
+    /// `F.prototype`, a literal) is an ordinary member when its chain
+    /// holds the function, and the runtime accepts it.
     fn fam_this(&self, t: Tok) -> bool {
-        !matches!(self.toks[t as usize], TokKind::Proto(_)) && self.escaped.contains_key(&t)
+        !self.class_prototype(t) && self.escaped.contains_key(&t)
+    }
+
+    /// `t` is a declared class's prototype object (`fam_this`). A literal
+    /// shape class has no declared prototype object the program can reach.
+    fn class_prototype(&self, t: Tok) -> bool {
+        let TokKind::Proto(tm) = self.toks[t as usize] else {
+            return false;
+        };
+        matches!(
+            self.tmpls[tm as usize].kind,
+            crate::model::TmplKind::Class { literal_shape: false, .. }
+        )
     }
 
     /// `PERRY_K3_FAMOFF` (report only): where the chain of `h` comes from.
@@ -482,10 +515,7 @@ impl Model {
             .fams
             .iter()
             .filter(|(_, r)| !r.off && !r.keys.is_empty())
-            .map(|(&f, r)| {
-                let keys = r.keys.iter().filter(|&&k| k != NO_HOME_KEY);
-                (f, keys.map(|&k| self.atoms[k as usize].clone()).collect())
-            })
+            .map(|(&f, r)| (f, r.keys.iter().map(|&k| self.atoms[k as usize].clone()).collect()))
             .collect();
         v.sort_unstable_by_key(|e| e.0);
         v

@@ -389,3 +389,34 @@ fn k3c_t17_live_family_is_listed_with_its_home_key() {
     assert!(live.values().any(|k| k == &["m".to_string()]), "P::m is not listed live: {live:?}");
     assert!(!live.values().any(|k| k.iter().any(|k| k == "n")), "Q::n (family off) is listed: {live:?}");
 }
+
+/// T18 (CWN ruling K3BUILD13 1): a class method under a computed key that
+/// is no known string or symbol has no family: an escaped instance hands
+/// it to unknown code, which may call it on anything, so `this` is ⊤.
+#[test]
+fn k3c_t18_computed_key_method_keeps_top_this() {
+    let src = format!(
+        "{DECL}declare const k: string;\nclass P {{ x = 1; [k]() {{ return /*A*/ this.x; }} }}\nconst p: any = new P();\np[k]();\nsink(p);\n"
+    );
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(top, "a computed-key method got a family this: {v} {r:?}");
+    let live = one(&src).recv_family_live.expect("the solve completed");
+    assert!(live.is_empty(), "a computed-key method is listed live: {live:?}");
+}
+
+/// T19 (CWN ruling K3BUILD13 2): an object merely used as a prototype is
+/// an ordinary member when its chain holds the method: a plain function's
+/// `F.prototype` it is copied onto under its home key is a receiver, as
+/// is an `Object.create` result over an instance; the declared class
+/// prototype is not (T11).
+#[test]
+fn k3c_t19_plain_function_prototype_is_a_member() {
+    let src = format!(
+        "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nfunction F(this: any) {{ this.x = 5; }}\n(F.prototype as any).m = P.prototype.m;\nconst p = new P();\np.m();\nconst o = Object.create(p);\nsink(P.prototype.m); sink(F.prototype); sink(o); sink(P.prototype);\n"
+    );
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(!top, "{v} {r:?}");
+    assert!(r.iter().any(|n| n.starts_with("proto:new ") && n.ends_with(":F")), "F.prototype is no receiver: {r:?}");
+    assert!(r.iter().any(|n| n.contains("Object.create")), "the Object.create result is no receiver: {r:?}");
+    assert!(!r.iter().any(|n| n.starts_with("proto:") && !n.starts_with("proto:new ")), "the class prototype is a receiver: {r:?}");
+}
