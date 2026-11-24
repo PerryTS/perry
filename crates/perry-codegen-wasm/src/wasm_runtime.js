@@ -2759,6 +2759,24 @@ const __memDispatch = {
     arr.sort((a, b) => { const r = call(__jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
     return arr;
   },
+  // `reduceRight`, the change-by-copy methods and `copyWithin` run the host's own, so
+  // hole handling, argument coercions and errors are the host's. `initial` is empty when
+  // the call passes none: an explicit undefined is an initial value.
+  array_reduce_right: (arr, cb, ...initial) => {
+    const call = __arrayCallback(cb);
+    const fn = call ? (...args) => __bitsToJsValue(call(...args.map(__jsValueToBits))) : cb;
+    return Array.prototype.reduceRight.call(arr, fn, ...initial);
+  },
+  array_to_reversed: (arr) => Array.prototype.toReversed.call(arr),
+  array_to_sorted: (arr) => Array.prototype.toSorted.call(arr),
+  array_to_sorted_cmp: (arr, cb) => {
+    const call = __arrayCallback(cb);
+    const cmp = call ? (a, b) => __bitsToJsValue(call(__jsValueToBits(a), __jsValueToBits(b))) : cb;
+    return Array.prototype.toSorted.call(arr, cmp);
+  },
+  array_to_spliced: (arr, start, deleteCount, ...items) => Array.prototype.toSpliced.call(arr, start, deleteCount, ...items),
+  array_with: (arr, index, value) => Array.prototype.with.call(arr, index, value),
+  array_copy_within: (arr, target, start, end) => Array.prototype.copyWithin.call(arr, target, start, end),
   array_some: (arr, cb) => {
     const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
     if (!call) return 0;

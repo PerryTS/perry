@@ -1231,6 +1231,9 @@ console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
 #[path = "class_eval_tests.rs"]
 mod class_eval;
 
+#[path = "array_copy_method_tests.rs"]
+mod array_copy_method;
+
 #[path = "collection_for_of_tests.rs"]
 mod collection_for_of;
 
