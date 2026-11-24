@@ -147,15 +147,22 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     *byte_end = span.hi.0;
                 }
             }
+            // A computed read stands at its member token (`[`), as a named
+            // read does: in `a[i][j]` the two reads are two sites.
             (
-                ast::Expr::Member(_),
+                ast::Expr::Member(member),
                 Expr::IndexGet {
                     byte_offset,
                     byte_end,
                     ..
                 },
-            )
-            | (
+            ) => {
+                *byte_offset = crate::lower::member_token(member);
+                if dump {
+                    *byte_end = span.hi.0;
+                }
+            }
+            (
                 ast::Expr::Assign(_),
                 Expr::PropertySet {
                     byte_offset,
