@@ -30,6 +30,13 @@ mod tests {
         assert!(text(js_bcrypt_gen_salt_sync(f64::NAN)).starts_with("$2b$10$"));
         assert!(text(js_bcrypt_gen_salt_sync(2.0)).starts_with("$2b$04$"));
         assert!(text(js_bcrypt_gen_salt_sync(20.0)).starts_with("$2b$20$"));
+        assert!(text(js_bcrypt_gen_salt_sync(f64::INFINITY)).starts_with("$2b$04$"));
+        assert!(text(js_bcrypt_gen_salt_sync(f64::NEG_INFINITY)).starts_with("$2b$04$"));
+        assert!(text(js_bcrypt_gen_salt_sync(-5.0)).starts_with("$2b$31$"));
+        assert!(text(js_bcrypt_gen_salt_sync(-0.5)).starts_with("$2b$04$"));
+        assert!(text(js_bcrypt_gen_salt_sync(-252.0)).starts_with("$2b$04$"));
+        assert!(text(js_bcrypt_gen_salt_sync(266.0)).starts_with("$2b$10$"));
+        assert!(text(js_bcrypt_gen_salt_sync(4294967308.0)).starts_with("$2b$12$"));
     }
 
     #[test]
