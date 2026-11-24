@@ -4,7 +4,9 @@
 //! fresh TypeError. No method runs, so neither the buffer nor what the loop
 //! binds reaches unknown code. Named control: once a program writes
 //! `@@iterator` onto the buffer's prototype, the iteration runs what was
-//! written, as an unknown method.
+//! written: the program's own function (the runtime applies the store: the
+//! key is absent there, and adding a member to `ArrayBuffer.prototype` is
+//! not locked, DEC 250).
 use super::*;
 
 const KINDS: [&str; 3] = [
@@ -39,11 +41,23 @@ fn iterating_a_buffer_runs_no_method() {
 }
 
 #[test]
-fn a_written_buffer_iterator_runs_as_unknown_code() {
+fn a_written_buffer_iterator_runs_the_programs_function() {
+    // owner 11-24: E20 hold dropped; a program store onto a builtin prototype is a member reads see (PSTORE): the written @@iterator is the program's function.
     let pf = iterated(
-        "(ArrayBuffer.prototype as any)[Symbol.iterator] = function () { return [][Symbol.iterator](); };",
+        "class R { y = 2; }\n(ArrayBuffer.prototype as any)[Symbol.iterator] = function () { return [new R()][Symbol.iterator](); };",
         "new ArrayBuffer(4)",
     );
     let y = site(&pf, "y");
-    assert!(y.top, "{}", pf.dump_text());
+    // The written function's body runs: the loop binds what its iterator
+    // yields (an R), beside the direct call's Q, and nothing unknown.
+    assert!(
+        !y.top
+            && y.receivers.iter().any(|r| r.ends_with(":R"))
+            && y.receivers.iter().any(|r| r.ends_with(":Q"))
+            && y.receivers
+                .iter()
+                .all(|r| r.ends_with(":R") || r.ends_with(":Q")),
+        "{}",
+        pf.dump_text()
+    );
 }
