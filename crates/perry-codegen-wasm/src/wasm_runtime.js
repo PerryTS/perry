@@ -2728,6 +2728,26 @@ const __memDispatch = {
     arr.sort((a, b) => { const r = call(__jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
     return arr;
   },
+  array_reduce_right: (arr, cb, initial) => {
+    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
+    if (!call) return undefined;
+    let i = arr.length - 1;
+    let acc = initial === undefined ? __jsValueToBits(arr[i--]) : __jsValueToBits(initial);
+    for (; i >= 0; i--) acc = call(acc, __jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr));
+    return __bitsToJsValue(acc);
+  },
+  // The change-by-copy methods and `copyWithin` run the host's own, so their argument
+  // coercions and range errors are the host's.
+  array_to_reversed: (arr) => Array.prototype.toReversed.call(arr),
+  array_to_sorted: (arr) => Array.prototype.toSorted.call(arr),
+  array_to_sorted_cmp: (arr, cb) => {
+    const call = __arrayCallback(cb);
+    const cmp = call ? (a, b) => __bitsToJsValue(call(__jsValueToBits(a), __jsValueToBits(b))) : cb;
+    return Array.prototype.toSorted.call(arr, cmp);
+  },
+  array_to_spliced: (arr, start, deleteCount, ...items) => Array.prototype.toSpliced.call(arr, start, deleteCount, ...items),
+  array_with: (arr, index, value) => Array.prototype.with.call(arr, index, value),
+  array_copy_within: (arr, target, start, end) => Array.prototype.copyWithin.call(arr, target, start, end),
   array_some: (arr, cb) => {
     const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
     if (!call) return 0;
