@@ -4,8 +4,9 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use super::super::output_path::is_apple_target;
-use super::{is_windows_target, CompilationContext};
+use perry_codegen::target_os_of;
+
+use super::CompilationContext;
 
 pub(in crate::commands::compile) fn staticlib_link_args(
     ctx: &CompilationContext,
@@ -13,17 +14,18 @@ pub(in crate::commands::compile) fn staticlib_link_args(
     well_known_libs: &[PathBuf],
 ) -> Vec<String> {
     let mut cmd = Command::new("cc");
-    let apple = is_apple_target(target);
+    let os = target.map_or(Some(std::env::consts::OS), target_os_of);
+    let apple = matches!(os, Some("macos" | "ios" | "tvos" | "watchos" | "visionos"));
     if apple {
         // Perry's own link drops unreached code, and with it references to
         // wrapper archives the program does not link.
         cmd.arg("-Wl,-dead_strip");
     }
-    if !is_windows_target(target) {
+    if os != Some("windows") {
         super::runtime_layouts::add_link_args(&mut cmd, apple, false, false);
         super::wrapper_hooks::add_link_args(&mut cmd, apple, false, false, well_known_libs);
     }
-    if target == Some("macos") || (target.is_none() && apple) {
+    if os == Some("macos") {
         super::macos_libs::add_system_libs(&mut cmd, ctx);
         if ctx.needs_ui {
             super::macos_libs::add_ui_frameworks(&mut cmd);
@@ -52,7 +54,7 @@ mod tests {
 
     #[test]
     fn apple_hosts_admit_every_weak_runtime_reference() {
-        for target in ["macos", "ios", "tvos-simulator"] {
+        for target in ["macos", "macos-x86_64", "ios", "tvos-simulator"] {
             let args = args(target, false, false, &[]);
             assert!(has(&args, "-Wl,-dead_strip"), "{target}");
             assert!(has(&args, "-Wl,-U,_js_ext_net_nm_install"), "{target}");
@@ -87,6 +89,7 @@ mod tests {
         assert!(!has(&runtime_only, "-framework"));
         let stdlib = args("macos", true, false, &[]);
         assert!(has(&stdlib, "Security") && has(&stdlib, "-lobjc"));
+        assert_eq!(args("macos-x86_64", true, false, &[]), stdlib);
         assert!(!has(&stdlib, "AppKit"));
         assert!(has(&args("macos", false, true, &[]), "AppKit"));
         assert!(!has(&args("ios", true, true, &[]), "-framework"));
