@@ -273,13 +273,25 @@ impl<'a> Gen<'a> {
     }
 
     /// The node a read of local `id` sees under a narrowing, if any.
-    pub(crate) fn narrowed_read(&self, mi: u32, id: u32) -> Option<NodeId> {
-        let f = self.m.cur_fn;
-        self.narrow
+    ///
+    /// An outlined for-in body (`Gen::for_in_body`) runs in place, between
+    /// the enclosing loops' tests and their updates: its read of the
+    /// enclosing function's local sees that function's narrowings, as its
+    /// write reaches them (`narrowed_write`, `write_fns`), as a capture of
+    /// the narrowed node.
+    pub(crate) fn narrowed_read(&mut self, mi: u32, id: u32) -> Option<NodeId> {
+        let cur = self.m.cur_fn;
+        let fs = self.write_fns(cur);
+        let n = self
+            .narrow
             .iter()
             .rev()
-            .find(|n| n.mi == mi && n.id == id && n.f == f)
-            .map(|n| if n.written { n.end } else { n.start })
+            .find(|n| n.mi == mi && n.id == id && fs.contains(&n.f))
+            .map(|n| if n.written { n.end } else { n.start })?;
+        if cur != NO_FN && self.m.node_fn[n as usize] != cur {
+            self.m.captures.insert((n, cur));
+        }
+        Some(n)
     }
 
     /// A write of `vn` into local `id`: it reaches every narrowing's end

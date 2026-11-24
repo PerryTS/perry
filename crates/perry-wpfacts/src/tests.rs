@@ -226,6 +226,7 @@ mod object_proto_test;
 mod objproto_protocol;
 mod opaque_models;
 mod option_name_merge;
+mod outlined_body_narrowing;
 mod own_data_stops_chain;
 mod own_guarded_read;
 mod own_helper_guard;
