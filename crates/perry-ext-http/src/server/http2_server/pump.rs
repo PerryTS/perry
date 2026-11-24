@@ -313,8 +313,9 @@ pub(crate) fn process_pending_h2_events() -> i32 {
                 let listeners = get_handle::<Http2StreamHandle>(stream_handle)
                     .and_then(|s| s.listeners.get("close").cloned())
                     .unwrap_or_default();
-                for cb in listeners {
-                    call0(cb);
+                let scope = perry_ffi::TransientRootScope::enter();
+                for cb in scope.root_addrs(&listeners) {
+                    call0(cb.get());
                     unsafe {
                         js_promise_run_microtasks();
                     }
