@@ -506,7 +506,10 @@ pub(crate) fn emit_nullish_write_guard(
 /// receiver's class is no slot store's: a non-writable one's `[[Set]]` fails,
 /// which only the by-name `[[Set]]` sees.
 pub(crate) fn attributed_class_key(ctx: &FnCtx<'_>, object: &Expr, property: &str) -> bool {
-    let shape_class = || ctx.ptr_shape_store_fact(object).map(|f| f.class_name.clone());
+    let shape_class = || {
+        ctx.ptr_shape_store_fact(object)
+            .map(|f| f.class_name.clone())
+    };
     receiver_class_name(ctx, object)
         .or_else(shape_class)
         .is_some_and(|class| class_key_attributed(ctx, &class, property))

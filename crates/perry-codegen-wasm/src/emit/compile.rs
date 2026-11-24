@@ -833,6 +833,10 @@ impl WasmModuleEmitter {
                     self.class_ctor_map
                         .insert(class.name.clone(), user_func_idx);
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.record_rest_param(user_func_idx, 1, &ctor.params);
+                    if class.constructor.is_none() {
+                        self.forwarding_ctor_classes.insert(class.name.clone());
+                    }
                     user_func_idx += 1;
                 }
                 // Instance methods: params = this + declared params
@@ -847,6 +851,8 @@ impl WasmModuleEmitter {
                         .or_default()
                         .insert(method.name.clone(), user_func_idx);
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.fn_proto_kinds
+                        .insert(user_func_idx, FnProtoKind::of_function(module, method));
                     self.record_rest_param(user_func_idx, 1, &method.params);
                     user_func_idx += 1;
                 }
@@ -865,6 +871,8 @@ impl WasmModuleEmitter {
                     self.func_name_map
                         .insert(format!("{}_{}", class.name, method.name), user_func_idx);
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.fn_proto_kinds
+                        .insert(user_func_idx, FnProtoKind::of_function(module, method));
                     self.record_rest_param(user_func_idx, 0, &method.params);
                     user_func_idx += 1;
                 }
@@ -907,6 +915,10 @@ impl WasmModuleEmitter {
                         user_func_idx,
                     );
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.fn_proto_kinds.insert(
+                        user_func_idx,
+                        FnProtoKind::of_function(module, &member.function),
+                    );
                     self.record_rest_param(user_func_idx, 1, &member.function.params);
                     user_func_idx += 1;
                 }
@@ -990,19 +1002,6 @@ impl WasmModuleEmitter {
         for key in boxed {
             if !self.module_let_globals.contains_key(&key) {
                 self.boxed_locals.insert(key);
-            }
-        }
-
-        // Async function JS generation (Phase 2): now that per-module func_maps are complete,
-        // generate the JS code for async functions with correct FuncRef resolution.
-        for (mod_idx, (_, module)) in modules.iter().enumerate() {
-            self.func_map = self.module_func_maps[mod_idx].clone();
-            self.current_mod_idx = mod_idx;
-            for func in &module.functions {
-                if func.is_async {
-                    let js_code = self.emit_js_async_function(func);
-                    self.async_js_code.push(js_code);
-                }
             }
         }
 
@@ -1345,6 +1344,19 @@ impl WasmModuleEmitter {
             self.func_to_table_idx.insert(func_idx, table_idx as u32);
         }
 
+        // Async function JS generation: after the per-module func_maps and the table
+        // positions are complete, since a closure in an async body names its table slot.
+        for (mod_idx, (_, module)) in modules.iter().enumerate() {
+            self.func_map = self.module_func_maps[mod_idx].clone();
+            self.current_mod_idx = mod_idx;
+            for func in &module.functions {
+                if func.is_async {
+                    let js_code = self.emit_js_async_function(func);
+                    self.async_js_code.push(js_code);
+                }
+            }
+        }
+
         let table_size = all_func_indices.len() as u32;
         {
             let mut table_section = TableSection::new();
@@ -1676,9 +1688,18 @@ impl WasmModuleEmitter {
                             align: 3,
                             memory_index: 0,
                         }));
+                        func.instruction(&Instruction::I32Const(0xFF18));
+                        func.instruction(&Instruction::I64Const(
+                            self.fn_proto_code(func_idx).to_bits() as i64,
+                        ));
+                        func.instruction(&Instruction::I64Store(wasm_encoder::MemArg {
+                            offset: 0,
+                            align: 3,
+                            memory_index: 0,
+                        }));
                         let csm_id = self.string_map.get(bridge).copied().unwrap_or(0);
                         func.instruction(&f64_const(csm_id as f64));
-                        func.instruction(&f64_const(3.0));
+                        func.instruction(&f64_const(4.0));
                         func.instruction(&Instruction::I32Const(0xFF00));
                         func.instruction(&Instruction::Call(rt.mem_call));
                         func.instruction(&Instruction::Drop);
@@ -1800,6 +1821,26 @@ impl WasmModuleEmitter {
         let Some(&slot) = idx.and_then(|idx| self.rest_params.get(&idx)) else {
             return std::borrow::Cow::Borrowed(args);
         };
+        let mut packed: Vec<Expr> = args.iter().take(slot).cloned().collect();
+        packed.resize(slot, Expr::Undefined);
+        packed.push(Expr::Array(
+            args.get(slot..).unwrap_or_default().to_vec(),
+            None,
+        ));
+        std::borrow::Cow::Owned(packed)
+    }
+
+    /// `with_rest_packed` for a call of `idx` whose receiver is passed ahead of
+    /// `args`, as `new` and `super(...)` pass a constructor's `this`.
+    pub(super) fn with_rest_packed_after_receiver<'e>(
+        &self,
+        idx: u32,
+        args: &'e [Expr],
+    ) -> std::borrow::Cow<'e, [Expr]> {
+        let Some(&slot) = self.rest_params.get(&idx) else {
+            return std::borrow::Cow::Borrowed(args);
+        };
+        let slot = slot.saturating_sub(1);
         let mut packed: Vec<Expr> = args.iter().take(slot).cloned().collect();
         packed.resize(slot, Expr::Undefined);
         packed.push(Expr::Array(

@@ -56,3 +56,30 @@ console.log([Object.getPrototypeOf(ae) === AsyncProto, Object.getPrototypeOf(ge)
         "true,true,true,true,true\ntrue,true,true,true,true\ntrue,true,true"
     );
 }
+
+// A class method read as a value, and a function passed to a host function
+// (`gp(af)`, `Reflect.apply`), answer their kind's prototype. Expected output is Node's.
+#[test]
+fn get_prototype_of_a_method_value_or_host_argument_answers_its_kind() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class C { *g() {} async a() {} async *ag() {} m() {} static *sg() {} static async sa() {} }
+const AsyncProto = Object.getPrototypeOf(async () => {});
+const GenProto = Object.getPrototypeOf(function* () {});
+const AsyncGenProto = Object.getPrototypeOf(async function* () {});
+const c = new C();
+console.log([Object.getPrototypeOf(c.g) === GenProto, Object.getPrototypeOf(c.a) === AsyncProto, Object.getPrototypeOf(c.ag) === AsyncGenProto, Object.getPrototypeOf(c.m) === Function.prototype, Object.getPrototypeOf(C.sg) === GenProto, Object.getPrototypeOf(C.sa) === AsyncProto].join(","));
+const gp = Object.getPrototypeOf;
+const af = async () => {};
+console.log([gp(af) === AsyncProto, Reflect.apply(gp, null, [af]) === AsyncProto, gp(c.g) === GenProto, Reflect.apply(gp, null, [function* () {}]) === GenProto].join(","));
+const k = "cg";
+class D { *[k]() {} static async [k]() {} }
+console.log([Object.getPrototypeOf(new D().cg) === GenProto, Object.getPrototypeOf((D as any).cg) === AsyncProto].join(","));
+(GenProto as any).apply = null;
+console.log(typeof Reflect.apply(c.g, c, []));
+"#
+        ),
+        "true,true,true,true,true,true\ntrue,true,true,true\ntrue,true\nobject"
+    );
+}

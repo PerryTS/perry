@@ -61,6 +61,10 @@ pub(super) struct WasmModuleEmitter {
     /// The classes `declares_no_constructor` holds for: `new` forwards their
     /// arguments to a built-in parent's constructor.
     pub(super) implicit_ctor_classes: std::collections::BTreeSet<String>,
+    /// Classes whose compiled constructor is synthesized from the parent's
+    /// (`constructor_of`): its `super(...)` passes its parameters on as they are, a
+    /// rest parameter already as one array.
+    pub(super) forwarding_ctor_classes: std::collections::BTreeSet<String>,
     /// Enum member values: (enum_name, member_name) → numeric value or string
     pub(super) enum_values: BTreeMap<(String, String), EnumResolvedValue>,
     /// Global index for NaN-safe temp storage (global.set/get may preserve NaN in Firefox)
@@ -69,6 +73,9 @@ pub(super) struct WasmModuleEmitter {
     pub(super) async_func_imports: Vec<(String, u32, usize)>, // (name, import_idx, param_count)
     /// Generated JS code for async functions
     pub(super) async_js_code: Vec<String>,
+    /// The async body being emitted: boxed locals whose cell a `PreallocateBoxes`
+    /// already created, so their `Let` fills it.
+    pub(super) js_preallocated: std::cell::RefCell<std::collections::BTreeSet<LocalId>>,
     /// Per-module func_map snapshots: FuncRef(id) is only unique within a module,
     /// so each module needs its own FuncId→wasm_idx mapping.
     pub(super) module_func_maps: Vec<BTreeMap<FuncId, u32>>,
@@ -148,6 +155,7 @@ impl WasmModuleEmitter {
             class_parent_map: BTreeMap::new(),
             user_classes: std::collections::BTreeSet::new(),
             implicit_ctor_classes: std::collections::BTreeSet::new(),
+            forwarding_ctor_classes: std::collections::BTreeSet::new(),
             enum_values: BTreeMap::new(),
             nan_temp_global: 0, // set during compile()
             async_func_imports: Vec::new(),
@@ -157,6 +165,7 @@ impl WasmModuleEmitter {
             func_param_counts: BTreeMap::new(),
             rest_params: BTreeMap::new(),
             async_js_code: Vec::new(),
+            js_preallocated: Default::default(),
             imported_var_globals: BTreeMap::new(),
             imported_ns_funcs: BTreeMap::new(),
             imported_func_indices: BTreeMap::new(),

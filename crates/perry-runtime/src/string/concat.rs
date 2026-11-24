@@ -811,7 +811,8 @@ pub extern "C" fn js_string_concat(
             let scope = crate::gc::RuntimeHandleScope::new();
             let left = scope.root_string_ptr(a);
             let right = scope.root_string_ptr(b);
-            let ((ptr, data), a) = left.across_const::<StringHeader, _>(|| string_storage_alloc(total_blen));
+            let ((ptr, data), a) =
+                left.across_const::<StringHeader, _>(|| string_storage_alloc(total_blen));
             (ptr, data, a, right.with_const_ptr::<StringHeader, _>(|b| b))
         }
     };
@@ -1508,7 +1509,8 @@ fn concat_primitive_rooted_copy<const MAX_PARTS: usize>(
                 continue;
             }
             if let Some(handle) = handles[i] {
-                piece_ptrs[i] = handle.with_const_ptr::<StringHeader, _>(|piece| string_data(piece));
+                piece_ptrs[i] =
+                    handle.with_const_ptr::<StringHeader, _>(|piece| string_data(piece));
             }
             ptr::copy_nonoverlapping(piece_ptrs[i], cursor, len);
             cursor = cursor.add(len);

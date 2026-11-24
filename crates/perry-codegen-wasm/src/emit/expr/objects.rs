@@ -75,6 +75,12 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 1, props);
                 self.emit_memcall(func, "object_define_properties", 2);
             }
+            Expr::ObjectGetOwnPropertyDescriptor(obj, key) => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, obj);
+                self.emit_store_arg(func, 1, key);
+                self.emit_memcall(func, "object_get_own_property_descriptor", 2);
+            }
             Expr::ObjectSetPrototypeOf(obj, proto) => {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, obj);
@@ -90,6 +96,12 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, obj);
                 self.emit_memcall(func, "reflect_get_prototype_of", 1);
+            }
+            Expr::ObjectIs(a, b) => {
+                self.emit_frame_begin(func, 2);
+                self.emit_store_arg(func, 0, a);
+                self.emit_store_arg(func, 1, b);
+                self.emit_memcall(func, "object_is", 2);
             }
             Expr::Object(fields) => {
                 self.emit_frame_begin(func, 0);
@@ -518,6 +530,19 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, key);
                 self.emit_memcall(func, "symbol_for", 1);
+            }
+            Expr::SymbolNew(desc) => {
+                let argc = desc.is_some() as u32;
+                self.emit_frame_begin(func, argc);
+                if let Some(desc) = desc {
+                    self.emit_store_arg(func, 0, desc);
+                }
+                self.emit_memcall(func, "symbol_new", argc);
+            }
+            Expr::SymbolKeyFor(sym) => {
+                self.emit_frame_begin(func, 1);
+                self.emit_store_arg(func, 0, sym);
+                self.emit_memcall(func, "symbol_key_for", 1);
             }
             Expr::In { property, object } => {
                 // JS evaluates the property before the object.

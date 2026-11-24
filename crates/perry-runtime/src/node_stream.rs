@@ -1069,7 +1069,8 @@ fn install_pipe_destination_listeners(src: f64, dest: f64) {
         crate::fn_info!(pipe_finish_callback, 0; with_declared(0)),
         6,
     ));
-    let value = |listener: &crate::gc::RuntimeHandle<'_>| listener.with_const_ptr(pipe_listener_value);
+    let value =
+        |listener: &crate::gc::RuntimeHandle<'_>| listener.with_const_ptr(pipe_listener_value);
     for listener in [&unpipe, &error, &close, &finish] {
         // Boxing a listener allocates nothing, so the captures name current cells.
         let values = [value(&unpipe), value(&error), value(&close), value(&finish)];

@@ -309,23 +309,24 @@ impl<'a> Gen<'a> {
                 let v = self.expr(fx, x);
                 // Rule RP2: the GetIterator of a guarded record's protocol
                 // arm never sees an Array the runtime takes the array arm for.
-                let v = match x.as_ref() {
-                    Expr::LocalGet(s)
-                        if matches!(e, Expr::GetIterator(_))
-                            && self.record_locals.contains(&(mi, *s)) =>
-                    {
-                        self.record_entry(v)
-                    }
-                    _ => v,
-                };
+                let record = matches!(x.as_ref(), Expr::LocalGet(s)
+                    if matches!(e, Expr::GetIterator(_))
+                        && self.record_locals.contains(&(mi, *s)));
+                let v = if record { self.record_entry(v) } else { v };
                 // The iterator yields what iterating `v` yields (holes
                 // included, `Model::hole` of `v`), and nothing else.
-                let it = self.iterate_closed(v);
+                let (it, returned) = self.iterate_closed_with_iterator(v);
                 let (tm, out) = self.new_dense_arr_tmpl(mi, "iterator", &[it]);
                 if matches!(e, Expr::GetIterator(_)) {
                     self.m.get_iterator_src.insert(tm, v);
                 }
                 self.m.edge(v, out);
+                // A record's payload holds `v` in the returned iterator's place
+                // (`Cons::IterNext` steps it); any other reader (a `yield*`
+                // delegation) reads `next` off the iterator itself.
+                if !record {
+                    self.m.edge(returned, out);
+                }
                 out
             }
             Expr::ObjectCoerce(x) => {
