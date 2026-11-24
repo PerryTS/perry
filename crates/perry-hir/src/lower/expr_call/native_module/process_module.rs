@@ -42,11 +42,11 @@ pub(super) fn try_process_module_methods(
                         byte_end: 0,
                         callee: Box::new(crate::lower::expr_member::process_native_property(
                             method_name,
-                            member.span.lo.0,
+                            crate::lower::member_token(member),
                         )),
                         args,
                         type_args: vec![],
-                        byte_offset: member.span.lo.0,
+                        byte_offset: crate::lower::member_token(member),
                     }));
                 }
                 "uptime" => return Ok(Ok(Expr::ProcessUptime)),

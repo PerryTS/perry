@@ -687,6 +687,7 @@ pub(super) fn try_module_static_methods(
                             };
                             return Ok(Ok(super::patched_builtin_call::dynamic_member_call(
                                 call,
+                                member,
                                 math,
                                 method_name.to_string(),
                                 a,

@@ -82,6 +82,7 @@ pub(super) fn borrowed_call_folds(
     if !drops_this || !patched_builtin_call::duplicable(&args) {
         let generic = patched_builtin_call::dynamic_member_call(
             call,
+            outer,
             Expr::LocalGet(id),
             method.to_string(),
             args,
@@ -104,6 +105,7 @@ pub(super) fn borrowed_call_folds(
     }
     let generic = patched_builtin_call::dynamic_member_call(
         call,
+        outer,
         Expr::LocalGet(id),
         method.to_string(),
         args,
@@ -159,10 +161,10 @@ fn reflective_object_borrow(
     }
     let source = Expr::PropertyGet {
         byte_end: 0,
-        byte_offset: outer.span.lo.0,
+        byte_offset: crate::lower::member_token(source),
         object: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: outer.span.lo.0,
+            byte_offset: base.span.lo.0,
             object: Box::new(Expr::GlobalThisExpr),
             property: "Object".to_string(),
         }),
@@ -175,6 +177,7 @@ fn reflective_object_borrow(
         .collect::<Result<Vec<_>>>()?;
     Ok(Some(patched_builtin_call::dynamic_member_call(
         call,
+        outer,
         source,
         method.to_string(),
         args,

@@ -151,7 +151,7 @@ pub(super) fn try_patched_builtin_call(
     if namespace_member_patched(&ns, &method) {
         let object = live_namespace(&ns, member.obj.span().lo.0);
         return Ok(NamespaceCall::Dynamic(dynamic_member_call(
-            call, object, method, args,
+            call, member, object, method, args,
         )));
     }
     if !namespace_call_guarded() {
@@ -166,11 +166,12 @@ pub(super) fn try_patched_builtin_call(
         // A definition in the arguments: the one dynamic call.
         let object = live_namespace(&ns, member.obj.span().lo.0);
         return Ok(NamespaceCall::Dynamic(dynamic_member_call(
-            call, object, method, args,
+            call, member, object, method, args,
         )));
     }
     let generic = dynamic_member_call(
         call,
+        member,
         live_namespace(&ns, member.obj.span().lo.0),
         method,
         args.clone(),
@@ -180,16 +181,18 @@ pub(super) fn try_patched_builtin_call(
 
 /// `object.method(args…)` as an ordinary property-get-then-call: the callee is
 /// read off the live receiver and invoked with it as `this`, carrying `call`'s
-/// spread arguments.
+/// spread arguments. The member read stands at `member`'s token (the callee
+/// member of `call`, as the plain member call's read), the call at `call`.
 pub(super) fn dynamic_member_call(
     call: &ast::CallExpr,
+    member: &ast::MemberExpr,
     object: Expr,
     method: String,
     args: Vec<Expr>,
 ) -> Expr {
     let callee = Box::new(Expr::PropertyGet {
         byte_end: 0,
-        byte_offset: call.span.lo.0,
+        byte_offset: crate::lower::member_token(member),
         object: Box::new(object),
         property: method,
     });
