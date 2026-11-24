@@ -1231,6 +1231,9 @@ console.log(Reflect.apply(hi, { name: "o" }, ["hi "]));
 #[path = "class_eval_tests.rs"]
 mod class_eval;
 
+#[path = "array_copy_method_tests.rs"]
+mod array_copy_method;
+
 #[path = "collection_for_of_tests.rs"]
 mod collection_for_of;
 
@@ -1269,6 +1272,9 @@ mod class_prototype;
 
 #[path = "builtin_subclass_tests.rs"]
 mod builtin_subclass;
+
+#[path = "array_from_tests.rs"]
+mod array_from;
 
 #[path = "rest_param_tests.rs"]
 mod rest_param;
@@ -1313,3 +1319,6 @@ for (const name of ["phone", "email", "count", "box", "pin"]) {
         "phone tel\nemail email\ncount number\nbox text\npin password"
     );
 }
+
+#[path = "array_iterator_tests.rs"]
+mod array_iterator;
