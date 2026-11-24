@@ -1552,9 +1552,11 @@ impl Model {
                     }
                 }
             }
-            Cons::BirthField { key, src } => {
+            Cons::BirthField { key, src, tm } => {
                 for &t in toks {
-                    if t == TOP {
+                    // Only the literal's own tokens: the holder node may
+                    // also hold values from an outer source.
+                    if !matches!(self.toks[t as usize], TokKind::Obj(b, _) if b == tm) {
                         continue;
                     }
                     let f = match key {

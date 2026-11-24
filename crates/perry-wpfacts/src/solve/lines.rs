@@ -223,8 +223,8 @@ impl Model {
                 )
             }
             Cons::ProtoFrom { src } => format!("protofrom {n} {src}"),
-            Cons::BirthField { key, src } => {
-                format!("birthfield {n} {} {src}", self.key_name(*key))
+            Cons::BirthField { key, src, tm } => {
+                format!("birthfield {n} {} {src} {tm}", self.key_name(*key))
             }
             Cons::ProtoOf { dst } => format!("protoof {n} {dst}"),
             Cons::ProtoValues { dst } => format!("protovalues {n} {dst}"),

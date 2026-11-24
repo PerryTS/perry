@@ -337,8 +337,13 @@ impl Model {
                 self.packet_token(origin, packet)
             ),
             Cons::ThisFrom { recv } => format!("ThisFrom recv={:?}", recv),
-            Cons::BirthField { key, src } => {
-                format!("BirthField key={:?} src={:?}", self.packet_key(key), src)
+            Cons::BirthField { key, src, tm } => {
+                format!(
+                    "BirthField key={:?} src={:?} tm={}",
+                    self.packet_key(key),
+                    src,
+                    self.tmpls[tm as usize].display
+                )
             }
             Cons::Accessor {
                 holder,

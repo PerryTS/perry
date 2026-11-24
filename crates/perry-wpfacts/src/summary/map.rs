@@ -312,7 +312,11 @@ pub fn map_cons(
             origin,
         },
         ThisFrom { recv } => ThisFrom { recv: n(recv) },
-        BirthField { key, src } => BirthField { key, src: n(src) },
+        BirthField { key, src, tm } => BirthField {
+            key,
+            src: n(src),
+            tm,
+        },
         Accessor {
             holder,
             key,

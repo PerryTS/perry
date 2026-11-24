@@ -589,10 +589,12 @@ pub enum Cons {
     /// The node holds method closures installed on `recv` (literal methods):
     /// their `this` is `recv`.
     ThisFrom { recv: NodeId },
-    /// A literal's own content: every token here gets `src` in field `key`
-    /// (no store: a birth, as generation's direct field edges are). A
-    /// summary's form of a literal born in its body.
-    BirthField { key: Key, src: NodeId },
+    /// A literal's own content: every token of template `tm` here gets
+    /// `src` in field `key` (no store: a birth, as generation's direct
+    /// field edges are). A summary's form of a literal born in its body;
+    /// the node may also hold other values (a holder slot fed by an
+    /// outer source), which the birth does not write.
+    BirthField { key: Key, src: NodeId, tm: TmplId },
     /// The node holds getter/setter functions installed on the objects of
     /// `holder` under `key`.
     Accessor {

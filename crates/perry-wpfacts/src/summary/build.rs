@@ -1418,7 +1418,7 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
             }
             for &h in &roots {
                 for &src in &srcs {
-                    s.cons.push((enc(h), BodyCons::birth_field(*k, src)));
+                    s.cons.push((enc(h), BodyCons::birth_field(*k, src, b.tm)));
                 }
             }
         }
