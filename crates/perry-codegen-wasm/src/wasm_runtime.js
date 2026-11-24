@@ -3196,7 +3196,7 @@ const __memDispatch = {
 
   // Date — arg is a plain JS value (the Date object itself once created)
   date_new: () => new Date(),
-  date_new_val: (...args) => (args.length === 0) ? new Date() : new Date(args[0]),
+  date_new_val: (...args) => new Date(...args),
   date_now: () => Date.now(),
   date_parse: (s) => Date.parse(String(s)),
   date_utc: (...args) => Date.UTC(...args.map(Number)),
@@ -3209,6 +3209,7 @@ const __memDispatch = {
   date_to_locale_date_string: (d) => (d instanceof Date) ? d.toLocaleDateString() : '',
   date_to_locale_time_string: (d) => (d instanceof Date) ? d.toLocaleTimeString() : '',
   date_to_json: (d) => (d instanceof Date) ? d.toJSON() : null,
+  date_to_utc_string: (d) => Date.prototype.toUTCString.call(d),
   date_get_full_year: (d) => (d instanceof Date) ? d.getFullYear() : 0,
   date_get_month: (d) => (d instanceof Date) ? d.getMonth() : 0,
   date_get_date: (d) => (d instanceof Date) ? d.getDate() : 0,
@@ -3226,13 +3227,23 @@ const __memDispatch = {
   date_get_utc_seconds: (d) => (d instanceof Date) ? d.getUTCSeconds() : 0,
   date_get_utc_milliseconds: (d) => (d instanceof Date) ? d.getUTCMilliseconds() : 0,
   date_get_timezone_offset: (d) => (d instanceof Date) ? d.getTimezoneOffset() : 0,
-  date_set_utc_full_year: (d, v) => (d instanceof Date) ? d.setUTCFullYear(Number(v)) : 0,
-  date_set_utc_month: (d, v) => (d instanceof Date) ? d.setUTCMonth(Number(v)) : 0,
-  date_set_utc_date: (d, v) => (d instanceof Date) ? d.setUTCDate(Number(v)) : 0,
-  date_set_utc_hours: (d, v) => (d instanceof Date) ? d.setUTCHours(Number(v)) : 0,
-  date_set_utc_minutes: (d, v) => (d instanceof Date) ? d.setUTCMinutes(Number(v)) : 0,
-  date_set_utc_seconds: (d, v) => (d instanceof Date) ? d.setUTCSeconds(Number(v)) : 0,
-  date_set_utc_milliseconds: (d, v) => (d instanceof Date) ? d.setUTCMilliseconds(Number(v)) : 0,
+  // A setter takes every argument the call passed and a non-Date receiver throws, as
+  // the host's own setter does.
+  date_set_utc_full_year: (d, ...v) => Date.prototype.setUTCFullYear.apply(d, v),
+  date_set_utc_month: (d, ...v) => Date.prototype.setUTCMonth.apply(d, v),
+  date_set_utc_date: (d, ...v) => Date.prototype.setUTCDate.apply(d, v),
+  date_set_utc_hours: (d, ...v) => Date.prototype.setUTCHours.apply(d, v),
+  date_set_utc_minutes: (d, ...v) => Date.prototype.setUTCMinutes.apply(d, v),
+  date_set_utc_seconds: (d, ...v) => Date.prototype.setUTCSeconds.apply(d, v),
+  date_set_utc_milliseconds: (d, ...v) => Date.prototype.setUTCMilliseconds.apply(d, v),
+  date_set_full_year: (d, ...v) => Date.prototype.setFullYear.apply(d, v),
+  date_set_month: (d, ...v) => Date.prototype.setMonth.apply(d, v),
+  date_set_date: (d, ...v) => Date.prototype.setDate.apply(d, v),
+  date_set_hours: (d, ...v) => Date.prototype.setHours.apply(d, v),
+  date_set_minutes: (d, ...v) => Date.prototype.setMinutes.apply(d, v),
+  date_set_seconds: (d, ...v) => Date.prototype.setSeconds.apply(d, v),
+  date_set_milliseconds: (d, ...v) => Date.prototype.setMilliseconds.apply(d, v),
+  date_set_time: (d, ...v) => Date.prototype.setTime.apply(d, v),
 
   // Error — args are plain JS values
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),

@@ -1153,6 +1153,13 @@ impl WasmModuleEmitter {
             }
             Expr::MathRandom => "Math.random()".to_string(),
             Expr::DateNow => "Date.now()".to_string(),
+            Expr::DateNew(args) => {
+                let operands: Vec<&Expr> = args.iter().collect();
+                self.emit_js_bridge_call("date_new_val", &operands, locals)
+            }
+            Expr::DateToUTCString(d) => {
+                self.emit_js_bridge_call("date_to_utc_string", &[d], locals)
+            }
             // `new` on a constructor value (`new Map<K, V>([...])` among others) and the Map and
             // Set nodes call the bridges their WASM arms call (`emit/expr/classes.rs`,
             // `emit/expr/map_set.rs`).

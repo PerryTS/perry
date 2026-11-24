@@ -1237,6 +1237,9 @@ mod collection_for_of;
 #[path = "static_method_tests.rs"]
 mod static_method;
 
+#[path = "date_setter_tests.rs"]
+mod date_setter;
+
 #[path = "class_value_tests.rs"]
 mod class_value;
 
