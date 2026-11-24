@@ -833,6 +833,10 @@ impl WasmModuleEmitter {
                     self.class_ctor_map
                         .insert(class.name.clone(), user_func_idx);
                     self.func_param_counts.insert(user_func_idx, param_count);
+                    self.record_rest_param(user_func_idx, 1, &ctor.params);
+                    if class.constructor.is_none() {
+                        self.forwarding_ctor_classes.insert(class.name.clone());
+                    }
                     user_func_idx += 1;
                 }
                 // Instance methods: params = this + declared params
@@ -1800,6 +1804,26 @@ impl WasmModuleEmitter {
         let Some(&slot) = idx.and_then(|idx| self.rest_params.get(&idx)) else {
             return std::borrow::Cow::Borrowed(args);
         };
+        let mut packed: Vec<Expr> = args.iter().take(slot).cloned().collect();
+        packed.resize(slot, Expr::Undefined);
+        packed.push(Expr::Array(
+            args.get(slot..).unwrap_or_default().to_vec(),
+            None,
+        ));
+        std::borrow::Cow::Owned(packed)
+    }
+
+    /// `with_rest_packed` for a call of `idx` whose receiver is passed ahead of
+    /// `args`, as `new` and `super(...)` pass a constructor's `this`.
+    pub(super) fn with_rest_packed_after_receiver<'e>(
+        &self,
+        idx: u32,
+        args: &'e [Expr],
+    ) -> std::borrow::Cow<'e, [Expr]> {
+        let Some(&slot) = self.rest_params.get(&idx) else {
+            return std::borrow::Cow::Borrowed(args);
+        };
+        let slot = slot.saturating_sub(1);
         let mut packed: Vec<Expr> = args.iter().take(slot).cloned().collect();
         packed.resize(slot, Expr::Undefined);
         packed.push(Expr::Array(
