@@ -91,7 +91,9 @@ pub(crate) fn runs(ss: &[Stmt]) -> Vec<Run> {
                     init: Some(Expr::Closure { .. }),
                     ..
                 } => continue,
-                Stmt::Expr(Expr::Call { callee, args, .. }) => {
+                Stmt::Expr(
+                    Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. },
+                ) => {
                     let Expr::PropertyGet {
                         object,
                         property,
@@ -105,10 +107,10 @@ pub(crate) fn runs(ss: &[Stmt]) -> Vec<Run> {
                         break;
                     };
                     let quiet = args.iter().all(|a| match a {
-                            Expr::LocalGet(l) => *l != e,
-                            Expr::Closure { .. } => true,
-                            a => literal(a),
-                        });
+                        Expr::LocalGet(l) => *l != e,
+                        Expr::Closure { .. } => true,
+                        a => literal(a),
+                    });
                     if !quiet {
                         break;
                     }

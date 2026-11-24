@@ -1501,6 +1501,7 @@ fn expr_region_ender_with_trusted_operation(
         // the soundness implication below exact. Phase 2 is where a direct
         // call to an audited non-collecting helper stops ending a region.
         Expr::Call { .. }
+        | Expr::RegionCall { .. }
         | Expr::CallSpread { .. }
         | Expr::NativeMethodCall { .. }
         | Expr::StaticMethodCall { .. }

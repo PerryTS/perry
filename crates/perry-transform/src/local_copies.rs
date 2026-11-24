@@ -85,6 +85,7 @@ fn inspect_expr(expr: &Expr, uses: &mut Uses) -> bool {
         | Expr::TypeOf(_)
         | Expr::Void(_)
         | Expr::Call { .. }
+        | Expr::RegionCall { .. }
         | Expr::PropertyGet { .. }
         | Expr::PropertySet { .. }
         | Expr::IndexGet { .. }

@@ -841,7 +841,7 @@ pub(crate) fn find_return_shape_candidates(
     walk_stmts(stmts, &mut |s| {
         let Stmt::Let {
             id,
-            init: Some(Expr::Call { callee, .. }),
+            init: Some(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }),
             ..
         } = s
         else {

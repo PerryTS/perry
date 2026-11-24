@@ -968,7 +968,7 @@ fn substitute(e: &Expr, map: &std::collections::HashMap<u32, Expr>) -> Expr {
 
 fn inline_this_calls(e: &Expr, class: &ThisClass<'_>, used: &mut Vec<String>) -> Expr {
     map_expr(e, &mut |x| {
-        let Expr::Call { callee, args, .. } = x else {
+        let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = x else {
             return None;
         };
         let Expr::PropertyGet {

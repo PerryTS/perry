@@ -1248,7 +1248,9 @@ impl<'a> UseWalk<'a> {
                     // as arguments still escape and a tracked method receiver
                     // records the call for pass 3's `this`-flow audit.
                     if self.return_seeded.contains(id) {
-                        if let Some(call @ Expr::Call { .. }) = init.as_ref() {
+                        if let Some(call @ (Expr::Call { .. } | Expr::RegionCall { .. })) =
+                            init.as_ref()
+                        {
                             self.walk_expr(call);
                             return;
                         }
@@ -1542,7 +1544,7 @@ impl<'a> UseWalk<'a> {
             // Method call on a tracked member: receiver-position use is safe
             // when the method is chain-resolvable; `this`-flow safety is
             // vetted in pass 3. Tracked references in ARGS still escape.
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if let Expr::PropertyGet {
                     object, property, ..
                 } = callee.as_ref()

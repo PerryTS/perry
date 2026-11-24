@@ -155,7 +155,7 @@ pub fn try_lower_native_chain_method_call(
 pub(crate) fn native_receiver_module(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::NativeMethodCall { module, .. } => Some(module.as_str()),
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()

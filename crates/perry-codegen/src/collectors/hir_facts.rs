@@ -1785,7 +1785,7 @@ impl ArrayFactCollector {
                     self.collect_expr(child);
                 });
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 self.mark_unknown_call_escape();
                 self.collect_expr(callee);
                 for arg in args {

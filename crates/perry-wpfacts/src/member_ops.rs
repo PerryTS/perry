@@ -598,7 +598,7 @@ pub(crate) fn class(e: &Expr) -> Op {
         | Expr::BufferIndexGet { .. }
         | Expr::BufferIndexSet { .. }
         | Expr::BufferLength { .. }
-        | Expr::Call { .. }
+        | Expr::Call { .. } | Expr::RegionCall { .. }
         | Expr::CallSpread { .. }
         | Expr::ClassCaptureValue { .. }
         | Expr::ClassEnvCurrent { .. }

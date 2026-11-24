@@ -733,7 +733,7 @@ pub(super) fn collect_return_class(
     ) -> Option<String> {
         match expr {
             Expr::ClassRef(name) => Some(name.clone()),
-            Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
                 Expr::FuncRef(fid) => func_returns_class.get(fid).cloned(),
                 _ => None,
             },

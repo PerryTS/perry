@@ -180,7 +180,7 @@ mod tests {
     fn has_call(stmts: &[Stmt], id: FuncId) -> bool {
         stmts.iter().any(|stmt| stmt_any_expr(stmt, &mut |expr| {
             fn check(expr: &Expr, id: FuncId) -> bool {
-                if matches!(expr, Expr::Call { callee, .. } if matches!(callee.as_ref(), Expr::FuncRef(n) if *n == id)) {
+                if matches!(expr, Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } if matches!(callee.as_ref(), Expr::FuncRef(n) if *n == id)) {
                     return true;
                 }
                 let mut found = false;

@@ -175,7 +175,7 @@ pub(super) fn emit_eh_dispatch(
 fn iterator_cleanup_expr(expr: &perry_hir::Expr) -> bool {
     use perry_hir::Expr;
     match expr {
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             matches!(&**callee, Expr::ExternFuncRef { name, .. } if name == "js_iterator_close_on_throw")
         }
         Expr::NativeMethodCall {

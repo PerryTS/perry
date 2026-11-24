@@ -563,7 +563,7 @@ impl<'a> Build<'a> {
                         }
                     }
                     if name == "_cjs" {
-                        if let Expr::Call { callee, .. } = e {
+                        if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = e {
                             if let Expr::Closure { func_id, .. } = callee.as_ref() {
                                 self.relabel
                                     .insert(Ent::Func(cx.mi, *func_id), "cjs-wrapper");
@@ -1043,7 +1043,9 @@ impl<'a> Build<'a> {
                 }
                 vec![]
             }
-            Expr::Call { callee, args, .. } => self.call(cx, callee, args),
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                self.call(cx, callee, args)
+            }
             // The CommonJS wrapper hands its factory to the runtime as the
             // last argument of the partial publication. The runtime's path
             // entry keeps it (no property) and only ever calls it

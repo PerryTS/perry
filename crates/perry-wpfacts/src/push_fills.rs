@@ -119,8 +119,7 @@ fn this_push(e: &Expr) -> Option<(&str, u32, &Expr)> {
     else {
         return None;
     };
-    matches!(owner.as_ref(), Expr::This)
-        .then(|| (property.as_str(), *byte_offset, &args[0]))
+    matches!(owner.as_ref(), Expr::This).then(|| (property.as_str(), *byte_offset, &args[0]))
 }
 
 /// An empty Array birth: `[]`, or `new Array()`.
@@ -196,6 +195,7 @@ impl Scan<'_> {
             }
             // `this.f(...)`: the callee runs with `this` as its receiver.
             Expr::Call { callee, .. }
+            | Expr::RegionCall { callee, .. }
             | Expr::CallSpread { callee, .. }
             | Expr::JsCallValue { callee, .. }
                 if matches!(callee.as_ref(), Expr::PropertyGet { object, .. }

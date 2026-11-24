@@ -1088,7 +1088,7 @@ pub(crate) fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
     if free(e, keys) {
         return RunValue::Free;
     }
-    if let Expr::Call { callee, args, .. } = e {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = e {
         if let Expr::PropertyGet {
             object, property, ..
         } = callee.as_ref()

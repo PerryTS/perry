@@ -167,16 +167,18 @@ fn impure_scalar_aggregate_init_is_safe(stmts: &[Stmt], target: &Function) -> bo
 
     fn expr_is_safe(expr: &Expr, target: &Function, saw_target: &mut bool) -> bool {
         match expr {
-            Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::FuncRef(id) if *id == target.id) =>
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } if matches!(callee.as_ref(), Expr::FuncRef(id) if *id == target.id) =>
             {
                 *saw_target = true;
                 scalar_aggregate_call_len(target, args).is_some()
                     && args.iter().all(|arg| expr_is_safe(arg, target, saw_target))
             }
-            Expr::Call { callee, args, .. } if is_console_log(callee) => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
+                if is_console_log(callee) =>
+            {
                 args.iter().all(|arg| expr_is_safe(arg, target, saw_target))
             }
-            Expr::Call { .. } | Expr::CallSpread { .. } => false,
+            Expr::Call { .. } | Expr::RegionCall { .. } | Expr::CallSpread { .. } => false,
             Expr::New {
                 class_name,
                 args,

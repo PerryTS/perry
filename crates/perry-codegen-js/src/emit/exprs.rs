@@ -28,10 +28,10 @@ impl JsEmitter {
             {
                 (else_expr.as_ref(), None)
             }
-            Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(local) if *local == id) => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } if matches!(callee.as_ref(), Expr::LocalGet(local) if *local == id) => {
                 (callee.as_ref(), Some(args))
             }
-            Expr::Call { callee, args, .. } if matches!(callee.as_ref(), Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id)) => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } if matches!(callee.as_ref(), Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id)) => {
                 (callee.as_ref(), Some(args))
             }
             _ => return false,
@@ -249,7 +249,7 @@ impl JsEmitter {
             // --- Function calls ---
             // #11826: module-level TDZ checks. Emitted JS declares its own
             // `let`/`const`, so the engine enforces the dead zone itself.
-            Expr::Call { callee, args, .. }
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                 if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
                     if name == perry_hir::tdz_check::TDZ_CHECK
                         || name == perry_hir::tdz_check::TDZ_CHECK_THEN
@@ -272,7 +272,7 @@ impl JsEmitter {
                     self.output.push_str(" + \"' before initialization\"); })()");
                 }
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 self.emit_expr(callee);
                 self.output.push('(');
                 for (i, arg) in args.iter().enumerate() {

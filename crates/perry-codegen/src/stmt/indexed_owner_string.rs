@@ -2,7 +2,7 @@
 use super::*;
 
 pub(super) fn read(e: &Expr) -> Option<(u32, &Expr)> {
-    let Expr::Call { callee, args, .. } = e else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = e else {
         return None;
     };
     let Expr::PropertyGet {

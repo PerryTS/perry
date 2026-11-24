@@ -433,7 +433,7 @@ fn collect_used_new_fields_in_expr(
             collect_used_new_fields_in_expr(then_expr, non_escaping_news, used);
             collect_used_new_fields_in_expr(else_expr, non_escaping_news, used);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             collect_used_new_fields_in_expr(callee, non_escaping_news, used);
             for arg in args {
                 collect_used_new_fields_in_expr(arg, non_escaping_news, used);

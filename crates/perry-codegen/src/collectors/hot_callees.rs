@@ -448,7 +448,7 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
         // The two forms that resolve to a known local function. Record the
         // callee (count + in-loop flag), then keep descending — args can
         // themselves contain calls / closures.
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             record_callee(callee, in_loop, scan);
             walk_expr(callee, in_loop, scan);
             for a in args {

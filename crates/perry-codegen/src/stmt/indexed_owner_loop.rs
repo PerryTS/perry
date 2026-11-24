@@ -152,7 +152,7 @@ impl Plan {
         }
         match e {
             Expr::MathSqrt(v) => self.numeric(ctx, v),
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 numeric_function(ctx, callee).is_some_and(|f| args.len() == f.params.len())
                     && args.iter().all(|a| self.numeric(ctx, a))
             }
@@ -1077,7 +1077,7 @@ fn numeric(
             let v = numeric(ctx, p, v, values, storage).f64(ctx);
             Number::F(ctx.block().call(DOUBLE, "llvm.sqrt.f64", &[(DOUBLE, &v)]))
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             let f = numeric_function(ctx, callee)
                 .expect("proved pure numeric leaf")
                 .clone();

@@ -117,7 +117,8 @@ fn candidate(
     types: &HashMap<LocalId, Type>,
     fields: &HashMap<(String, String), Type>,
 ) -> Option<Type> {
-    let Stmt::Expr(Expr::Call { callee, args, .. }) = stmt else {
+    let Stmt::Expr(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = stmt
+    else {
         return None;
     };
     if args.len() != 1 {

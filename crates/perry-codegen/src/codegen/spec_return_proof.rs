@@ -287,7 +287,7 @@ fn infer_expr(
                 Some(Type::Union(vec![then_ty, else_ty]))
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             let Expr::FuncRef(function_id) = callee.as_ref() else {
                 return None;
             };
@@ -574,7 +574,7 @@ fn observe_expr_effects(ctx: &ProofCtx<'_>, locals: &mut HashMap<u32, Type>, exp
     }
 
     match expr {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             let proven = match callee.as_ref() {
                 Expr::FuncRef(id) => call_is_proven(ctx, locals, *id, args),
                 _ => false,

@@ -102,7 +102,7 @@ pub(crate) fn rewrite_state_in_expr(e: &mut Expr, reg: &HashMap<LocalId, StateBi
     // also rewritten. Each variant unrolls its sub-Exprs explicitly so
     // we don't miss any HIR shape.
     match e {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             rewrite_state_in_expr(callee, reg);
             for a in args.iter_mut() {
                 rewrite_state_in_expr(a, reg);

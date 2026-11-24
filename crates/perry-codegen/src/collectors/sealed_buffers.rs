@@ -333,13 +333,13 @@ impl Probe<'_> {
             } if property == "length" && matches!(object.as_ref(), Expr::LocalGet(_)) => {}
             Expr::Uint8ArrayLength(array) if matches!(array.as_ref(), Expr::LocalGet(_)) => {}
             // A proven `Buffer.prototype.equals` on two locals keeps neither.
-            Expr::Call { callee, args, .. }
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                 if crate::lower_call::buffer_intrinsic::is_proven_local_buffer_equals(
                     self.proven,
                     callee,
                     args,
                 ) => {}
-            Expr::Call { callee, args, .. }
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                 if matches!(
                     callee.as_ref(),
                     Expr::PropertyGet { object, property, .. }
@@ -715,40 +715,42 @@ impl<'a> Scan<'a> {
             Expr::PropertyGet {
                 object, property, ..
             } if property == "length" && matches!(object.as_ref(), Expr::LocalGet(_)) => {}
-            Expr::Call { callee, args, .. } => match callee.as_ref() {
-                Expr::FuncRef(f) => {
-                    self.call_sites.entry(*f).or_default().push(args);
-                    for (pos, arg) in args.iter().enumerate() {
-                        if let Expr::LocalGet(id) = arg {
-                            self.call_args.push((*id, *f, pos, self.body));
-                        } else {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                match callee.as_ref() {
+                    Expr::FuncRef(f) => {
+                        self.call_sites.entry(*f).or_default().push(args);
+                        for (pos, arg) in args.iter().enumerate() {
+                            if let Expr::LocalGet(id) = arg {
+                                self.call_args.push((*id, *f, pos, self.body));
+                            } else {
+                                self.walk_expr(arg);
+                            }
+                        }
+                    }
+                    // A proven `Buffer.prototype.equals` on two locals keeps neither.
+                    Expr::PropertyGet { .. }
+                        if self.proven.is_some_and(|p| {
+                            crate::lower_call::buffer_intrinsic::is_proven_local_buffer_equals(
+                                p, callee, args,
+                            )
+                        }) => {}
+                    Expr::PropertyGet {
+                        object, property, ..
+                    } if matches!(object.as_ref(), Expr::LocalGet(_))
+                        && crate::lower_call::buffer_intrinsic::is_buffer_numeric_read_method(
+                            property,
+                        )
+                        && self.proven.is_some_and(|p| {
+                            crate::builtin_proto::native_member_site_proven(p, callee)
+                        }) =>
+                    {
+                        for arg in args {
                             self.walk_expr(arg);
                         }
                     }
+                    _ => self.walk_children(e),
                 }
-                // A proven `Buffer.prototype.equals` on two locals keeps neither.
-                Expr::PropertyGet { .. }
-                    if self.proven.is_some_and(|p| {
-                        crate::lower_call::buffer_intrinsic::is_proven_local_buffer_equals(
-                            p, callee, args,
-                        )
-                    }) => {}
-                Expr::PropertyGet {
-                    object, property, ..
-                } if matches!(object.as_ref(), Expr::LocalGet(_))
-                    && crate::lower_call::buffer_intrinsic::is_buffer_numeric_read_method(
-                        property,
-                    )
-                    && self.proven.is_some_and(|p| {
-                        crate::builtin_proto::native_member_site_proven(p, callee)
-                    }) =>
-                {
-                    for arg in args {
-                        self.walk_expr(arg);
-                    }
-                }
-                _ => self.walk_children(e),
-            },
+            }
             Expr::Closure { params, body, .. } => {
                 let outer = self.enter_body();
                 self.opaque_params(params);
@@ -844,7 +846,7 @@ fn key_never_string_shape(e: &Expr, deps: &mut Vec<KeyDep>) -> bool {
         }
         // The arguments are evaluated (and scanned) on their own; the value
         // is whatever the callee's own `return`s produce, or `undefined`.
-        Expr::Call { callee, .. } => match callee.as_ref() {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
             Expr::FuncRef(f) => {
                 deps.push(KeyDep::Return(*f));
                 true

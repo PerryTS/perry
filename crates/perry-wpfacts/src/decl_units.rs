@@ -288,7 +288,7 @@ fn closed(
                 _ => {}
             }
             match e {
-                Expr::Call { callee, args, .. } => {
+                Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                     if let Some(id) = perry_hir::tdz_check::checked_binding(e) {
                         uses.entry((false, id)).or_default().checks += 1;
                     }

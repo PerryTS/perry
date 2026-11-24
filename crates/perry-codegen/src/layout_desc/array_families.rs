@@ -177,7 +177,7 @@ impl<'a> Flow<'a> {
                 let here = self.node(here);
                 self.refs.push((here, *id));
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 let call = (self.node(here), self.node(expr(callee)));
                 let args = args.iter().map(|a| self.node(expr(a))).collect();
                 self.calls.push((call.0, call.1, args));

@@ -62,7 +62,7 @@ fn source(e: &Expr) -> Option<Source> {
             Expr::LocalGet(id) => Some(Source::Create(*id)),
             _ => None,
         },
-        Expr::Call { callee, .. } => match callee.as_ref() {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
             Expr::FuncRef(f) => Some(Source::Call(*f)),
             _ => None,
         },

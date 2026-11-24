@@ -175,6 +175,7 @@ fn unshared(f: &Function) -> FxHashMap<u32, u32> {
                 }
             }
             Expr::Call { callee, .. }
+            | Expr::RegionCall { callee, .. }
             | Expr::CallSpread { callee, .. }
             | Expr::JsCallValue { callee, .. } => {
                 if let Expr::IndexGet { object, .. }

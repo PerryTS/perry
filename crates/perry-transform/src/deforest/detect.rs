@@ -552,7 +552,9 @@ fn flag_producer_calls_in_expr(
     out: &mut HashSet<FuncId>,
 ) {
     match e {
-        Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => {
+        Expr::Call { callee, .. }
+        | Expr::RegionCall { callee, .. }
+        | Expr::CallSpread { callee, .. } => {
             if let Expr::FuncRef(id) = callee.as_ref() {
                 if candidates.contains_key(id) {
                     out.insert(*id);

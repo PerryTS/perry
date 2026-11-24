@@ -1595,6 +1595,7 @@ fn receiver_must_eval_once(e: &Expr) -> bool {
     matches!(
         e,
         Expr::Call { .. }
+            | Expr::RegionCall { .. }
             | Expr::CallSpread { .. }
             | Expr::NativeMethodCall { .. }
             | Expr::StaticMethodCall { .. }

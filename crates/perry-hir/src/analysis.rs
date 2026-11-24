@@ -1181,7 +1181,7 @@ fn replace_this_in_expr(expr: &mut Expr, this_id: LocalId) {
         }
         Expr::Unary { operand, .. } => replace_this_in_expr(operand, this_id),
         Expr::Update { .. } => {}
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             replace_this_in_expr(callee, this_id);
             for a in args {
                 replace_this_in_expr(a, this_id);

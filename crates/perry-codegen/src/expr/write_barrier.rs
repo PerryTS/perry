@@ -113,7 +113,7 @@ fn static_value(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             else_expr,
             ..
         } => store_free(condition) && static_value(ctx, then_expr) && static_value(ctx, else_expr),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             let Expr::FuncRef(id) = callee.as_ref() else {
                 return false;
             };
@@ -175,6 +175,7 @@ fn store_free(e: &Expr) -> bool {
             | Expr::PropertySet { .. }
             | Expr::IndexSet { .. }
             | Expr::Call { .. }
+            | Expr::RegionCall { .. }
             | Expr::New { .. }
             | Expr::Closure { .. }
     );

@@ -569,7 +569,7 @@ pub fn check_object_literal_escapes_in_expr(
             check_object_literal_escapes_in_expr(then_expr, candidates, escaped);
             check_object_literal_escapes_in_expr(else_expr, candidates, escaped);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             // Issue #518: `cur.toArray()` where `cur` is a scalar-replaceable
             // object literal — the PropertyGet handler above treats it as
             // safe because `toArray` is a known field, but in CALLEE position

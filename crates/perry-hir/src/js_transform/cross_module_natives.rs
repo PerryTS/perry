@@ -251,7 +251,7 @@ pub fn scan_for_native_func_returns(
                     other => other,
                 };
                 // Check if it's a call to a function that returns a native instance
-                if let Expr::Call { callee, .. } = call_expr {
+                if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = call_expr {
                     let func_name = match callee.as_ref() {
                         Expr::ExternFuncRef { name, .. } => Some(name.as_str()),
                         Expr::FuncRef(_) => None, // local funcs already handled by lower.rs
@@ -553,7 +553,7 @@ pub fn scan_expr_for_closure_returns(
                 );
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             scan_expr_for_closure_returns(
                 callee,
                 func_return_instances,
@@ -636,7 +636,7 @@ pub fn scan_expr_for_closure_returns(
                 Expr::Await(inner, _) => inner.as_ref(),
                 other => other,
             };
-            if let Expr::Call { callee, .. } = call_expr {
+            if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = call_expr {
                 if let Expr::ExternFuncRef { name, .. } = callee.as_ref() {
                     if let Some((module, class)) = func_return_instances.get(name.as_str()) {
                         local_id_native_instances.insert(*id, (module.clone(), class.clone()));

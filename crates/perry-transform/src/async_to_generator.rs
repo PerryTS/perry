@@ -884,6 +884,7 @@ fn hoist_fetch_with_auth_inside_await(
         Expr::FetchGetWithAuth { .. }
             | Expr::FetchPostWithAuth { .. }
             | Expr::Call { .. }
+            | Expr::RegionCall { .. }
             | Expr::CallSpread { .. }
             | Expr::NativeMethodCall { .. }
             | Expr::StaticMethodCall { .. }
@@ -1421,7 +1422,7 @@ fn strip_in_expr(expr: &mut Expr, non_promise: &HashSet<LocalId>) {
 }
 
 fn try_strip_promise_resolve(expr: &Expr, non_promise: &HashSet<LocalId>) -> Option<Expr> {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return None;
     };
     if args.len() != 1 {

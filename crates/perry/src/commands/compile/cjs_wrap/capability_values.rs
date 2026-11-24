@@ -488,7 +488,7 @@ impl<'a> Proof<'a> {
                 }
                 v
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 let c = self.expr(callee, function);
                 let a: Vec<_> = args.iter().map(|a| self.expr(a, function)).collect();
                 let receiver = if let Expr::PropertyGet { object, .. }

@@ -414,7 +414,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // `.toString()` always returns a string regardless of receiver
         // type, so it's safe to count as definitely-string for concat.
         // Same for other unary string-returning string methods.
-        Expr::Call { callee, .. }
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { property, .. } if matches!(
@@ -513,6 +513,7 @@ pub(crate) fn is_declared_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         e,
         Expr::PropertyGet { .. }
             | Expr::Call { .. }
+            | Expr::RegionCall { .. }
             | Expr::IndexGet { .. }
             | Expr::RegionOut { .. }
     ) && matches!(
@@ -605,7 +606,7 @@ pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> b
         // A string METHOD is a proof only when the receiver is one: every name
         // in `is_definitely_string_expr`'s list also exists on `Array` or on a
         // user object, where it returns something else entirely.
-        Expr::Call { callee, .. } => match callee.as_ref() {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
             Expr::PropertyGet {
                 object, property, ..
             } if matches!(
@@ -819,7 +820,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // unary methods on a string receiver). Recognize these so
         // chained calls like `s.trimStart().trimEnd()` detect the
         // inner result as a string.
-        Expr::Call { callee, .. }
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { property, object, .. } if matches!(
@@ -909,7 +910,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // string, so it must NOT be classified here — otherwise
         // `digest().toString('hex')` skips the buffer encoding path and
         // mis-reads the bytes as Latin-1 (#1353).
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if crypto_digest_call_result(callee, args)
                 == Some(super::refine::CryptoDigestResult::String) =>
         {

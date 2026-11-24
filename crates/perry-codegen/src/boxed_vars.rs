@@ -552,7 +552,7 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
         Expr::Unary { operand, .. } => {
             collect_nested_closure_boxed_vars_in_expr(operand, out);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             collect_nested_closure_boxed_vars_in_expr(callee, out);
             for a in args {
                 collect_nested_closure_boxed_vars_in_expr(a, out);
@@ -986,7 +986,7 @@ fn collect_closure_refs_and_writes_in_expr(
         // handled by `collect_write_ids_in_stmts` triggered from the
         // Expr::Closure arm above.
         Expr::Update { .. } => {}
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             collect_closure_refs_and_writes_in_expr(callee, refs, writes);
             for a in args {
                 collect_closure_refs_and_writes_in_expr(a, refs, writes);
@@ -1185,7 +1185,7 @@ fn collect_outer_writes_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) 
 fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
     use perry_hir::Expr;
     // Same mutating-method detection as the closure walker.
-    if let Expr::Call { callee, .. } = expr {
+    if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = expr {
         if let Expr::PropertyGet {
             object, property, ..
         } = callee.as_ref()
@@ -1246,7 +1246,7 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
             collect_outer_writes_in_expr(right, out);
         }
         Expr::Unary { operand, .. } => collect_outer_writes_in_expr(operand, out),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             collect_outer_writes_in_expr(callee, out);
             for a in args {
                 collect_outer_writes_in_expr(a, out);
@@ -1402,7 +1402,7 @@ fn collect_write_ids_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) {
 fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
     use perry_hir::Expr;
     // Mutating method calls count as writes on the receiver.
-    if let Expr::Call { callee, .. } = expr {
+    if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = expr {
         if let Expr::PropertyGet {
             object, property, ..
         } = callee.as_ref()
@@ -1461,7 +1461,7 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
             collect_write_ids_in_expr(right, out);
         }
         Expr::Unary { operand, .. } => collect_write_ids_in_expr(operand, out),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             collect_write_ids_in_expr(callee, out);
             for a in args {
                 collect_write_ids_in_expr(a, out);
@@ -1799,7 +1799,7 @@ fn collect_closure_let_types_in_expr(
             collect_closure_let_types_in_expr(right, out);
         }
         Expr::Unary { operand, .. } => collect_closure_let_types_in_expr(operand, out),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             collect_closure_let_types_in_expr(callee, out);
             for a in args {
                 collect_closure_let_types_in_expr(a, out);

@@ -96,7 +96,7 @@ pub fn direct_map_call(callee: &Expr, arity: usize) -> bool {
 
 /// The fill operand when this call can realize the published allocation length.
 pub fn fill_birth_value(call: &Expr, len: u32) -> Result<&Expr, &'static str> {
-    let Expr::Call { callee, args, .. } = call else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = call else {
         return Err("shape");
     };
     let Expr::PropertyGet {

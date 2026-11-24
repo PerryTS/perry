@@ -71,7 +71,7 @@ pub(crate) fn is_promise_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             _ => false,
         },
         // Promise.resolve / reject / all / race / allSettled / any
-        Expr::Call { callee, .. } => match callee.as_ref() {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
             Expr::PropertyGet {
                 object, property, ..
             } => {
@@ -757,7 +757,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         // `.length` / `[i]` to follow the array fast path.
         // Also: `str.match(regex)` produces an array. `matchAll` deliberately
         // stays dynamic because it returns a RegExp String Iterator object.
-        Expr::Call { callee, .. }
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { property, object, .. } if matches!(
@@ -771,7 +771,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         // returns a Buffer. Recognizing the inline chain (not just a bound
         // local) lets `...digest().toString('hex')` / `...digest()[i]` take
         // the buffer dispatch instead of the Latin-1 string path (#1353).
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if crypto_digest_call_result(callee, args)
                 == Some(super::refine::CryptoDigestResult::Buffer) =>
         {
@@ -781,7 +781,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         // Array<string>. Recognize this even in expression position so
         // chained `.includes(...)` uses Array SameValueZero instead of
         // falling through to dynamic/string dispatch.
-        Expr::Call { callee, .. }
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
             if matches!(
                 callee.as_ref(),
                 Expr::PropertyGet { property, object, .. }
@@ -791,7 +791,7 @@ pub(crate) fn static_type_of(ctx: &FnCtx<'_>, e: &Expr) -> Option<HirType> {
         {
             Some(HirType::Array(Box::new(HirType::String)))
         }
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             if let Some(HirType::Function(ft)) = static_type_of(ctx, callee.as_ref()) {
                 return Some((*ft.return_type).clone());
             }

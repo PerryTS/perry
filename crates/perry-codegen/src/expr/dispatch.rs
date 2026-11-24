@@ -702,7 +702,9 @@ fn lower_expr_inner(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         | Expr::SetSize(..)
         | Expr::FsWriteFileSync(..)
         | Expr::FsAppendFileSync(..) => super::bigint_set::lower(ctx, expr),
-        Expr::NativeMethodCall { .. } | Expr::Call { .. } => super::calls::lower(ctx, expr),
+        Expr::NativeMethodCall { .. } | Expr::Call { .. } | Expr::RegionCall { .. } => {
+            super::calls::lower(ctx, expr)
+        }
         Expr::ProxyNew { .. }
         | Expr::ProxyGet { .. }
         | Expr::ProxySet { .. }

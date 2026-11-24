@@ -117,7 +117,7 @@ pub(crate) fn inline_literal(e: &Expr, s: &str) -> Option<String> {
 
 /// The receiver of `e` when `e` is `recv.charAt(..)`.
 fn char_at_receiver(e: &Expr) -> Option<&Expr> {
-    let Expr::Call { callee, .. } = e else {
+    let (Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) = e else {
         return None;
     };
     match callee.as_ref() {

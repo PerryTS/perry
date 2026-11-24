@@ -24,7 +24,7 @@ pub(crate) fn literal_index(expr: &Expr) -> Option<i32> {
 }
 
 pub(crate) fn method(expr: &Expr, name: &str) -> Option<(u32, i32)> {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return None;
     };
     let Expr::PropertyGet {

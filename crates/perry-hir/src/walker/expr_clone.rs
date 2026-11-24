@@ -404,6 +404,10 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             byte_offset: byte_offset.clone(),
             byte_end: byte_end.clone(),
         },
+        Expr::RegionCall { callee, args } => Expr::RegionCall {
+            callee: Shallow::shallow(callee, n),
+            args: Shallow::shallow(args, n),
+        },
         Expr::RegionOut { object, index } => Expr::RegionOut {
             object: Shallow::shallow(object, n),
             index: Shallow::shallow(index, n),

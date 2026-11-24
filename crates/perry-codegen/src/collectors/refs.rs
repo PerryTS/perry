@@ -356,7 +356,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
                 walk(a, out);
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             walk(callee, out);
             for a in args {
                 walk(a, out);
@@ -1063,7 +1063,7 @@ fn refs_expr<const FREE: bool>(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
 /// with a rhs that's typically not int32-producing, so mutably-captured
 /// locals naturally fall out. Read-only captures remain qualified.
 pub fn is_clamp_call(e: &perry_hir::Expr, clamp_fn_ids: &HashSet<u32>) -> bool {
-    if let perry_hir::Expr::Call { callee, .. } = e {
+    if let perry_hir::Expr::Call { callee, .. } | perry_hir::Expr::RegionCall { callee, .. } = e {
         if let perry_hir::Expr::FuncRef(fid) = callee.as_ref() {
             return clamp_fn_ids.contains(fid);
         }

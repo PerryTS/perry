@@ -432,7 +432,10 @@ fn only_member_reads(module: &Module, id: u32) -> bool {
     for_each_expr(module, &mut |expr| {
         reads += usize::from(matches!(expr, Expr::LocalGet(local) if *local == id));
         // A method call can mutate its receiver; it is not a passive read.
-        if let Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } = expr {
+        if let Expr::Call { callee, .. }
+        | Expr::RegionCall { callee, .. }
+        | Expr::CallSpread { callee, .. } = expr
+        {
             reads += usize::from(matches!(callee.as_ref(),
                 Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                 if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id)));
@@ -579,7 +582,10 @@ pub(super) fn for_each_expr(module: &Module, visit: &mut impl FnMut(&Expr)) {
         // A statically named namespace call does not pass the namespace as
         // a value. Keep the member itself (notably fs/promises.open), and
         // recurse into arguments: fs.readFileSync(helper(fs), "utf8") escapes.
-        if let Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } = expr {
+        if let Expr::Call { callee, .. }
+        | Expr::RegionCall { callee, .. }
+        | Expr::CallSpread { callee, .. } = expr
+        {
             perry_hir::walker::walk_expr_children(expr, &mut |child| {
                 if std::ptr::eq(child, callee.as_ref()) {
                     callee_visit(child, visit);
