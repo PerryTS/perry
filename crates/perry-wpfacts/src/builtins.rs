@@ -3300,13 +3300,53 @@ pub(crate) fn ns_native(m: &Model, t: Tok, ns: BuiltinNs, a: Atom, call: bool) -
     if m.native_property(t, name).is_some_and(|p| p.get.is_some()) {
         return false;
     }
-    let own = match members::ns_member(ns, name) {
+    let mem = members::ns_member(ns, name);
+    let own = match mem {
         Some(Some(Mem::Fn)) => namespace_native(m, t, ns, name).is_some(),
         Some(Some(Mem::Prim(_))) => !call,
         Some(Some(Mem::Proto)) => !call && name == "prototype",
         _ => false,
     };
     own && !native_written(m, t, a)
+        && !(store_replaces(ns, name, mem) && program_stored(m, t, a))
+}
+
+/// May a program store (OrdinarySet, ECMA-262 10.1.9.2) replace the
+/// realm's member `name` of namespace `ns`? Only a writable data property:
+/// a function-valued static (clause 18: { [[Writable]]: true } unless
+/// stated otherwise) and V8's `Error.stackTraceLimit` (writable, also as
+/// inherited by the NativeErrors). The value statics (`Math.PI`,
+/// `Number.EPSILON`, the well-known symbols, `BYTES_PER_ELEMENT`,
+/// `@@toStringTag`, `length`, `name`) and `prototype` are non-writable, so
+/// the store fails (OrdinarySetWithOwnDescriptor step 2.a) and the member
+/// keeps the realm's value.
+fn store_replaces(ns: BuiltinNs, name: &str, mem: Option<Option<Mem>>) -> bool {
+    match mem {
+        Some(Some(Mem::Fn)) => true,
+        Some(Some(Mem::Prim(_))) => {
+            name == "stackTraceLimit"
+                && matches!(
+                    ns,
+                    BuiltinNs::Error | BuiltinNs::NativeError(_) | BuiltinNs::AggregateError
+                )
+        }
+        _ => false,
+    }
+}
+
+/// STOP10 Q1: did a program store reach key `a` of builtin object `t`: a
+/// named store of the key, or a store under a key the solve cannot name
+/// (`put(Array, k, f)`), whose value is in `t`'s fields, not in
+/// `native_writes`? Then the member may hold that value (ECMA-262
+/// 10.1.9.2 OrdinarySet makes it an own data property), not the realm's.
+fn program_stored(m: &Model, t: Tok, a: Atom) -> bool {
+    let holds = |n: Option<&NodeId>| {
+        n.is_some_and(|&n| {
+            let nd = &m.nodes[n as usize];
+            nd.dropped || !nd.pts.is_empty() || nd.prim != 0
+        })
+    };
+    holds(m.fields.get(&(t, a))) || holds(m.field_any.get(&t))
 }
 
 /// R9READ9: named key `a` is absent on builtin function value `t` and its

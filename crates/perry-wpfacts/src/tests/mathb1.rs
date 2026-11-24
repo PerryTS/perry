@@ -505,3 +505,120 @@ fn mathb2_unrelated_object_written() {
     let src = p("const Math2: any = { sin: 0 };\nMath2.sin = f;\nconsole.log(Math2.sin(String(Math.random())));");
     present(&src, "sin", "Math.sin");
 }
+
+/// STOP10 Q1 (CWN ruling 2026-11-24; owner 11-24 decision 1 drops the E20
+/// hold): a program store onto a builtin constructor under an unknown key
+/// through a handed reference (`put(Array, k, f)`) may replace any of its
+/// statics. The direct call `Array.from(…)` evaluates the member and calls
+/// that value (ECMA-262 13.3.6.1), maybe `f`: its member read is no
+/// NativeMember, the driver takes no intrinsic arm, and the call's result
+/// may be `f`'s. RED before: `ns_native` counted the native writes only,
+/// not the program's own stores into the constructor's fields, so the
+/// site was NativeMember and the driver called the intrinsic.
+#[test]
+fn stop10_store_through_handed_constructor_reaches_its_statics() {
+    let mut bad = Vec::new();
+    for call in [
+        "Array.from([1] as any)",
+        "Array.isArray([1])",
+        "Array.of(1)",
+        "Object.keys({ a: 1 })",
+        "Number.isInteger(1)",
+        "String.fromCharCode(65)",
+        "Promise.resolve(1)",
+    ] {
+        let (ns, rest) = call.split_once('.').unwrap();
+        let member = rest.split_once('(').unwrap().0;
+        let src = format!(
+            "function put(o: any, k: string, v: any): void {{ o[k] = v; }}\n\
+             put({ns}, process.argv[2] ?? \"q\", function () {{ return {{ qq: 7 }}; }});\n\
+             const r: any = /*A*/ {call};\nconsole.log(r.qq);\n"
+        );
+        let pf = solve(&src);
+        let at = src.find("/*A*/").unwrap() as u32;
+        let Some(site) = pf
+            .sites
+            .iter()
+            .filter(|s| s.module == 0 && s.is_call && s.key == member && s.byte_offset >= at)
+            .min_by_key(|s| s.byte_offset)
+        else {
+            bad.push(format!("{call}: no call site"));
+            continue;
+        };
+        if matches!(site.verdict, Verdict::NativeMember) {
+            bad.push(format!("{call}: the member read is NativeMember"));
+        }
+        if crate::native_member_calls_of(&pf, 0, true).contains(&site.byte_offset) {
+            bad.push(format!("{call}: the driver takes the intrinsic arm"));
+        }
+        let qq: Vec<String> = pf
+            .sites
+            .iter()
+            .filter(|s| s.module == 0 && s.key == "qq" && !s.access.is_store())
+            .map(|s| format!("{:?} {:?}", s.verdict, s.receivers))
+            .collect();
+        // The stored function returns an object literal (`__AnonShape_*`):
+        // the read of `qq` on the result must see it. Until the E20 realm
+        // hold is dropped (owner 11-24 decision 1, the next commit) the
+        // Promise static's load is the realm-held field and the read is TOP
+        // (unproven; it includes the stored value).
+        let seen = |x: &String| x.contains("__AnonShape_") || x.contains("(TOP)");
+        if !qq.iter().any(seen) {
+            bad.push(format!("{call}: the stored function's result is not read: {qq:?}"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// KEEP: with no store onto the constructor its static reads the intrinsic
+/// and the driver takes the intrinsic arm.
+#[test]
+fn stop10_unwritten_constructor_static_stays_native() {
+    let src = "const r: any = /*A*/ Array.from([1] as any);\nconsole.log(r.length);\n";
+    let pf = solve(src);
+    let at = src.find("/*A*/").unwrap() as u32;
+    let site = pf
+        .sites
+        .iter()
+        .filter(|s| s.module == 0 && s.is_call && s.key == "from" && s.byte_offset >= at)
+        .min_by_key(|s| s.byte_offset)
+        .expect("Array.from site");
+    assert!(
+        crate::native_member_calls_of(&pf, 0, true).contains(&site.byte_offset),
+        "Array.from: {:?}",
+        site.verdict
+    );
+}
+
+/// CWN ruling 2026-11-24 (STOP10): a refusal always wins. A NativeMember
+/// call site whose namespace twin refuses the callee is no native call,
+/// with namespace pairs on or off (the doc of `native_member_calls_of`).
+/// RED before: the refusal was counted only for twins that were not
+/// NativeMember, and not at all with pairs off.
+#[test]
+fn stop10_refused_twin_removes_a_native_member_call() {
+    let src = "const r: any = /*A*/ Array.from([1] as any);\nconsole.log(r.length);\n";
+    let mut pf = solve(src);
+    let at = src.find("/*A*/").unwrap() as u32;
+    let off = pf
+        .sites
+        .iter()
+        .filter(|s| s.module == 0 && s.is_call && s.key == "from" && s.byte_offset >= at)
+        .map(|s| s.byte_offset)
+        .min()
+        .expect("Array.from site");
+    let mut seeded = false;
+    for s in pf.sites.iter_mut().filter(|s| s.module == 0 && s.is_call && s.byte_offset == off) {
+        seeded |= matches!(s.verdict, Verdict::NativeMember);
+        s.verdict = Verdict::NativeMember;
+        s.intrinsic_callee = Some(crate::derive::IntrinsicCallee::No("test refusal".into()));
+    }
+    assert!(seeded, "the unwritten Array.from site is NativeMember");
+    for pairs in [true, false] {
+        assert!(
+            !crate::native_member_calls_of(&pf, 0, pairs).contains(&off),
+            "pairs={pairs}: a refused twin must remove the native call"
+        );
+    }
+}
+

@@ -13,7 +13,10 @@ pub enum IntrinsicCallee {
 
 /// The driver's native-member offsets. NativeMember sites seed the set;
 /// namespace pairs add exact builtin callees only if no twin is unproven.
-/// An explicitly refused namespace twin removes the offset in either case.
+/// A refusal always wins: a twin whose namespace verdict refuses the
+/// callee (`IntrinsicCallee::No`, or an exact callee of another name)
+/// removes the offset, even one a NativeMember verdict seeded and with
+/// namespace pairs off (CWN ruling 2026-11-24, STOP10).
 /// Dispatch certificates additionally require every named and HIR twin to
 /// satisfy their stricter route/operand proof.
 pub fn native_member_calls_of(
@@ -31,27 +34,30 @@ pub fn native_member_calls_of(
         })
         .map(|s| s.byte_offset)
         .collect();
-    if !namespace_pairs {
-        return out;
-    }
     let here = |s: &&crate::SiteFacts| s.module as usize == module && s.is_call;
     let exact = |s: &crate::SiteFacts| {
         matches!(&s.intrinsic_callee, Some(IntrinsicCallee::Exact(n))
             if n.rsplit('.').next() == Some(s.key.as_str()))
     };
-    let mut unproven = BTreeSet::new();
-    let mut refused = BTreeSet::new();
-    for s in pf.sites.iter().filter(here) {
-        if !exact(s) && !matches!(s.verdict, crate::Verdict::NativeMember) {
-            unproven.insert(s.byte_offset);
-            if s.intrinsic_callee.is_some() {
-                refused.insert(s.byte_offset);
+    let refused: BTreeSet<u32> = pf
+        .sites
+        .iter()
+        .filter(here)
+        .filter(|s| s.intrinsic_callee.is_some() && !exact(s))
+        .map(|s| s.byte_offset)
+        .collect();
+    if namespace_pairs {
+        let unproven: BTreeSet<u32> = pf
+            .sites
+            .iter()
+            .filter(here)
+            .filter(|s| !exact(s) && !matches!(s.verdict, crate::Verdict::NativeMember))
+            .map(|s| s.byte_offset)
+            .collect();
+        for s in pf.sites.iter().filter(here) {
+            if exact(s) && !unproven.contains(&s.byte_offset) {
+                out.insert(s.byte_offset);
             }
-        }
-    }
-    for s in pf.sites.iter().filter(here) {
-        if exact(s) && !unproven.contains(&s.byte_offset) {
-            out.insert(s.byte_offset);
         }
     }
     out.retain(|o| !refused.contains(o));
