@@ -46,6 +46,8 @@ pub(super) struct WasmModuleEmitter {
     pub(super) class_method_map: BTreeMap<String, BTreeMap<String, u32>>,
     /// Class static method map: class_name → {method_name → wasm function index}
     pub(super) class_static_map: BTreeMap<String, BTreeMap<String, u32>>,
+    /// Class -> its named static accessors: name, whether a setter, function index.
+    pub(super) class_static_accessor_map: BTreeMap<String, Vec<(String, bool, u32)>>,
     /// Computed member function: (class_name, function name) → wasm function index
     pub(super) class_computed_map: BTreeMap<(String, String), u32>,
     /// Function name → wasm function index (for cross-module ExternFuncRef resolution)
@@ -145,6 +147,7 @@ impl WasmModuleEmitter {
             class_ctor_map: BTreeMap::new(),
             class_method_map: BTreeMap::new(),
             class_static_map: BTreeMap::new(),
+            class_static_accessor_map: BTreeMap::new(),
             class_computed_map: BTreeMap::new(),
             func_name_map: BTreeMap::new(),
             ffi_imports: Vec::new(),

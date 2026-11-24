@@ -1252,6 +1252,9 @@ mod object_create;
 #[path = "object_prototype_method_tests.rs"]
 mod object_prototype_method;
 
+#[path = "class_descriptor_tests.rs"]
+mod class_descriptor;
+
 #[path = "class_prototype_tests.rs"]
 mod class_prototype;
 
