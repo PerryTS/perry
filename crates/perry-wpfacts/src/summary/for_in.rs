@@ -16,7 +16,7 @@ impl Model {
             self.activate(f, "for-in");
         }
         if !self.sum.ready {
-            self.sum.deferred.push(Deferred::ForIn(call, ft, t, list));
+            self.defer(Deferred::ForIn(call, ft, t, list));
             return;
         }
         let f = self.tok_fn(ft);

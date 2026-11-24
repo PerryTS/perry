@@ -468,9 +468,7 @@ impl Model {
         }
         if !self.sum.ready {
             // Summaries do not exist yet: bind once they do.
-            self.sum
-                .deferred
-                .push(crate::summary::Deferred::Bind(call, t));
+            self.defer(crate::summary::Deferred::Bind(call, t));
             return;
         }
         if self.sum.templates.contains(&call) {
@@ -842,9 +840,7 @@ impl Model {
     /// `new Name(...)` of a builtin constructor, once per call.
     pub(crate) fn new_named(&mut self, name: Atom, call: CallId) {
         if !self.sum.ready {
-            self.sum
-                .deferred
-                .push(crate::summary::Deferred::NewNamed(name, call));
+            self.defer(crate::summary::Deferred::NewNamed(name, call));
             return;
         }
         if !self.construct_done.insert((call, TOP)) {
@@ -921,9 +917,7 @@ impl Model {
     pub fn construct(&mut self, call: CallId, t: Tok) {
         self.diagnostic_callee(call, t);
         if !self.sum.ready {
-            self.sum
-                .deferred
-                .push(crate::summary::Deferred::Construct(call, t));
+            self.defer(crate::summary::Deferred::Construct(call, t));
             return;
         }
         if !self.construct_done.insert((call, t)) {
@@ -1270,9 +1264,7 @@ impl Model {
     /// result when summarized, so known once bindings run).
     pub(crate) fn ctor_ret_objects(&mut self, call: CallId, f: Tok, dst: NodeId) {
         if !self.sum.ready {
-            self.sum
-                .deferred
-                .push(crate::summary::Deferred::RetObjects(call, f, dst));
+            self.defer(crate::summary::Deferred::RetObjects(call, f, dst));
             return;
         }
         let r = self.ret_for(call, f);

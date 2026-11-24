@@ -2340,9 +2340,7 @@ impl Model {
     pub(crate) fn group_bind(&mut self, holder: Tok, key: Key, ft: Tok, setter: bool) {
         if !matches!(self.toks[ft as usize], TokKind::Func(..)) {
             if !self.sum.ready {
-                self.sum
-                    .deferred
-                    .push(crate::summary::Deferred::Group(holder, key, ft, setter));
+                self.defer(crate::summary::Deferred::Group(holder, key, ft, setter));
                 return;
             }
             return self.group_call(holder, key, ft, setter);
@@ -2360,9 +2358,7 @@ impl Model {
         let rs = if setter { g.rs } else { g.rg };
         self.edge(raise, rs);
         if !self.sum.ready {
-            self.sum
-                .deferred
-                .push(crate::summary::Deferred::Group(holder, key, ft, setter));
+            self.defer(crate::summary::Deferred::Group(holder, key, ft, setter));
             return;
         }
         let (sp, ar, this) = {

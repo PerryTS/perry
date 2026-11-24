@@ -185,6 +185,10 @@ pub struct Summary {
     pub edge_reach: FxHashMap<(NodeId, NodeId), u64>,
     pub cons_reach: Vec<u64>,
     pub call_reach: Vec<u64>,
+    /// Under `PERRY_FACTS_STOP_ON_TOP`: the program position of each rule
+    /// (parallel to `cons`; empty when off): an instance's copy of a rule
+    /// stands where the body's rule does.
+    pub cons_pos: Vec<(u32, u32)>,
 }
 
 /// Every run reaches it (a reach mask).
@@ -242,6 +246,9 @@ pub struct SumState {
     /// Summaries exist: bindings run directly instead of being queued.
     pub ready: bool,
     pub deferred: Vec<Deferred>,
+    /// Under `PERRY_FACTS_STOP_ON_TOP`: the program position of each
+    /// deferred step (parallel to `deferred`; empty when off).
+    pub deferred_pos: Vec<(u32, u32)>,
     pub of: FxHashMap<FnIdx, Rc<Summary>>,
     pub insts: Vec<Inst>,
     /// (kind, layout/site/node, function token) -> instance. Kinds: 0 a
@@ -1769,7 +1776,16 @@ impl Model {
                     k
                 }
             });
+            // The copy stands where the body's rule does.
+            let p = s.cons_pos.get(ci).copied();
+            let saved = match (self.stop_top.as_mut(), p) {
+                (Some(st), Some(p)) => Some(st.replay_at(p)),
+                _ => None,
+            };
             self.cons(tr(*h), c2);
+            if let (Some(st), Some(saved)) = (self.stop_top.as_mut(), saved) {
+                st.replay_done(saved);
+            }
         }
     }
 
@@ -2416,6 +2432,16 @@ impl Model {
         }
     }
 
+    /// Queue step `d` until summaries exist, at the program position of
+    /// what runs now (`StopTop::cur_pos`).
+    pub(crate) fn defer(&mut self, d: Deferred) {
+        if let Some(s) = self.stop_top.as_ref() {
+            let p = s.cur_pos();
+            self.sum.deferred_pos.push(p);
+        }
+        self.sum.deferred.push(d);
+    }
+
     /// After generation: summaries, observation nodes, then every queued
     /// binding.
     pub fn summarize_and_replay(&mut self) {
@@ -2441,8 +2467,15 @@ impl Model {
         self.run_unsummarized();
         self.mark_params();
         let deferred = std::mem::take(&mut self.sum.deferred);
+        let deferred_pos = std::mem::take(&mut self.sum.deferred_pos);
         let nd = deferred.len();
-        for d in deferred {
+        for (di, d) in deferred.into_iter().enumerate() {
+            // The step stands where generation deferred it.
+            let p = deferred_pos.get(di).copied();
+            let saved = match (self.stop_top.as_mut(), p) {
+                (Some(s), Some(p)) => Some(s.replay_at(p)),
+                _ => None,
+            };
             match d {
                 Deferred::Bind(call, t) => self.bind_args(call, t),
                 Deferred::Escape(f, reason) => self.escape_fn_params(f, reason),
@@ -2467,6 +2500,9 @@ impl Model {
                 Deferred::Native(r, key, call) => self.with_native(call, |m, call| {
                     crate::builtins::native_method_at(m, r, key, call)
                 }),
+            }
+            if let (Some(s), Some(saved)) = (self.stop_top.as_mut(), saved) {
+                s.replay_done(saved);
             }
         }
         // A `this` with values from generation (static blocks, field

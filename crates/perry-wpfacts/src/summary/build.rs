@@ -1419,6 +1419,10 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
             for &h in &roots {
                 for &src in &srcs {
                     s.cons.push((enc(h), BodyCons::birth_field(*k, src, b.tm)));
+                    // A birth's field stands at the literal holding it.
+                    if let Some(st) = m.stop_top.as_ref() {
+                        s.cons_pos.push(st.pos_of(h));
+                    }
                 }
             }
         }
@@ -1493,6 +1497,10 @@ fn batch_body_input(m: &Model, f: FnIdx, p: BodyPlan<'_>) -> (BodyInput, Vec<(To
     for &(h, i) in &e.cons {
         let c = &m.nodes[h as usize].cons[i as usize];
         s.cons.push((enc(h), BodyCons::capture(c, enc, kenc)));
+        if let Some(st) = m.stop_top.as_ref() {
+            let p = st.cons_pos.get(&(h, i)).copied();
+            s.cons_pos.push(p.unwrap_or(crate::topstop::NOPOS));
+        }
         if sw {
             s.cons_reach
                 .push(m.cons_reach.get(&(h, i)).copied().unwrap_or(REACH_ALL));

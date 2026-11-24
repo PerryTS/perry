@@ -238,6 +238,26 @@ impl StopTop {
         (self.rule, self.rule_pos, self.shared_pos, self.rule_ci) = r;
     }
 
+    /// A step recorded at program position `p` runs now (a generation step
+    /// deferred until summaries exist, an instance's copy of its body's
+    /// rule): what it attaches and makes stands at `p`, not at the rule or
+    /// expression running when it is replayed. Restore with `replay_done`.
+    pub(crate) fn replay_at(&mut self, p: (u32, u32)) -> ((u32, u32), (u32, u32)) {
+        (
+            std::mem::replace(&mut self.gen_pos, p),
+            std::mem::replace(&mut self.rule_pos, p),
+        )
+    }
+
+    pub(crate) fn replay_done(&mut self, saved: ((u32, u32), (u32, u32))) {
+        (self.gen_pos, self.rule_pos) = saved;
+    }
+
+    /// The program position of node `n` (`node_pos`).
+    pub(crate) fn pos_of(&self, n: NodeId) -> (u32, u32) {
+        self.node_pos.get(n as usize).copied().unwrap_or(NOPOS)
+    }
+
     /// The program position of what runs now: the shared operation being
     /// built, else the expression that attached the rule being applied
     /// (also when generation replays it), else the expression generation

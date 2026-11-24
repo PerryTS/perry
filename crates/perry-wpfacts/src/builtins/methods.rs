@@ -148,7 +148,7 @@ fn native_waits(m: &mut Model, r: NativeRecv, key: Key, call: CallId) -> bool {
     if m.sum.ready {
         return false;
     }
-    m.sum.deferred.push(Deferred::Native(r, key, call));
+    m.defer(Deferred::Native(r, key, call));
     true
 }
 

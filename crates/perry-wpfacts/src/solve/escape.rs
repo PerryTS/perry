@@ -558,9 +558,7 @@ impl Model {
     }
     fn escape_fn_params_run(&mut self, ft: Tok, reason: u32) {
         if !self.sum.ready {
-            self.sum
-                .deferred
-                .push(crate::summary::Deferred::Escape(ft, reason));
+            self.defer(crate::summary::Deferred::Escape(ft, reason));
             return;
         }
         let f = self.tok_fn(ft);
