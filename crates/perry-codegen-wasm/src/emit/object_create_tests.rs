@@ -274,3 +274,20 @@ console.log(msg);
         "TypeError"
     );
 }
+
+// A primitive descriptor throws before the next descriptor is read. Expected output is Node's.
+#[test]
+fn define_properties_rejects_a_primitive_descriptor_before_reading_the_next() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Later { get value(): any { throw new Error("later"); } }
+const names: string[] = [];
+try { Object.defineProperties({}, { a: 0 as any, b: new Later() as any }); } catch (e: any) { names.push(e.name); }
+try { Object.create(null, { a: 0 as any, b: new Later() as any }); } catch (e: any) { names.push(e.name); }
+console.log(names.join(","));
+"#
+        ),
+        "TypeError,TypeError"
+    );
+}
