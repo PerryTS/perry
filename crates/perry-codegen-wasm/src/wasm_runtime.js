@@ -1769,7 +1769,7 @@ function __hostAdder(obj, name) {
     };
   }
   if (typeof fn !== 'function') throw new TypeError(`'${String(fn)}' returned for property '${name}' of object '#<${obj.constructor.name}>' is not a function`);
-  return (...args) => fn.apply(obj, args);
+  return (...args) => Reflect.apply(fn, obj, args);
 }
 // A Map or WeakMap constructor's entries: the adder is read once before the iteration,
 // so a subclass override sees them, and an entry is any object whose keys 0 and 1 are
