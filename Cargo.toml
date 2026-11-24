@@ -403,7 +403,7 @@ perry-base64 = { path = "crates/perry-base64" }
 swc_ecma_parser = "45.1"
 swc_ecma_ast = "29.0"
 swc_ecma_visit = "29.0"
-swc_common = "26.0"
+swc_common = "27.0"
 swc_ecma_codegen = "32.0"
 swc_bundler = "56.0"
 swc_ecma_loader = "27.0"
