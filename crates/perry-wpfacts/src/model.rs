@@ -2312,6 +2312,10 @@ pub struct Model {
     /// (`prune_late_escaped`, R-ESCLATE): that prune's work list, which it
     /// empties.
     pub late_esc: Vec<Tok>,
+    /// K3 census only (`PERRY_K3_CENSUS`): the function tokens each node
+    /// lost beside ⊤ (`escaped_beside_top`), so the census still finds a
+    /// method's home field after ⊤ covered it there. `None` otherwise.
+    pub k3_held: Option<crate::pts::FxHashMap<NodeId, Vec<Tok>>>,
     /// The work counter when the last late-escape prune ran.
     pub late_esc_at: u64,
     pub reasons: Vec<String>,

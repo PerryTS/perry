@@ -557,6 +557,7 @@ fn generate<'a>(
     g.m.ns_pairs = cfg.namespace_pairs;
     g.m.record_signatures = cfg.value_records && !cfg.no_record_signatures;
     g.m.array_fields = !cfg.no_array_fields;
+    g.m.k3_held = std::env::var_os("PERRY_K3_CENSUS").map(|_| Default::default());
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
     g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
     g.m.rest_elems = rest_elems::enabled();

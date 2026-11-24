@@ -33,6 +33,19 @@ pub(crate) fn write(g: &Gen) {
             }
         }
     }
+    // A field that came to hold ⊤ lost the escaped functions it held
+    // (`escaped_beside_top`); the solver noted them for the census.
+    if let Some(k) = &m.k3_held {
+        for (&(h, a), &n) in &m.fields {
+            for &x in k.get(&n).into_iter().flatten() {
+                held.entry(x).or_default().push((h, a));
+            }
+        }
+    }
+    for v in held.values_mut() {
+        v.sort_unstable();
+        v.dedup();
+    }
     for (&(h, a), (gs, ss)) in &m.accessors {
         for &x in gs.iter().chain(ss) {
             held.entry(x).or_default().push((h, a));

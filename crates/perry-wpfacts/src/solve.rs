@@ -232,7 +232,7 @@ impl Model {
         if !later.is_empty() {
             if top_new || node.pts.contains_tok(TOP) {
                 node.dropped = true;
-                if self.ledger.is_some() {
+                if self.ledger.is_some() || self.k3_held.is_some() {
                     ledger_gone = std::mem::take(&mut later);
                 }
             } else {
@@ -255,7 +255,7 @@ impl Model {
         // ⊤ arrived: a member listed before it and escaped since is that ⊤
         // now, and leaves the set (rebuilt) and the node's delta.
         if top_new {
-            if self.ledger.is_some() {
+            if self.ledger.is_some() || self.k3_held.is_some() {
                 let gone: Vec<Tok> = self.nodes[n as usize]
                     .pts
                     .to_sorted()
@@ -712,6 +712,10 @@ impl Model {
     /// records that, so it does not depend on whether ⊤ or the token reached
     /// `n` first.
     fn ledger_again_beside_top(&mut self, n: NodeId, toks: &[Tok]) {
+        if let Some(h) = self.k3_held.as_mut() {
+            let fs = toks.iter().copied().filter(|&t| matches!(self.toks[t as usize], TokKind::Func(..)));
+            h.entry(n).or_default().extend(fs);
+        }
         let sinks: Vec<(u32, Option<Tok>)> = self.nodes[n as usize]
             .cons
             .iter()
@@ -1153,7 +1157,7 @@ impl Model {
             if !holds {
                 continue;
             }
-            if self.ledger.is_some() {
+            if self.ledger.is_some() || self.k3_held.is_some() {
                 members.clear();
                 node.pts.sorted_into(&mut members);
                 let gone: Vec<Tok> = members.iter().copied().filter(|&t| cover(t)).collect();
