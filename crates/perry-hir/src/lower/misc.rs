@@ -403,3 +403,23 @@ pub(crate) fn is_ast_string_expr(ctx: &LoweringContext, expr: &ast::Expr) -> boo
         _ => false,
     }
 }
+
+/// Where a member operation stands: its own member token, the start of the
+/// property name (`#name` for a private name, `[` for a computed key), not
+/// the start of the whole expression. In `a.b.b` the two reads are then two
+/// sites (module, start, kind), as they are two operations.
+pub(crate) fn member_token(member: &ast::MemberExpr) -> u32 {
+    match &member.prop {
+        ast::MemberProp::Ident(name) => name.span.lo.0,
+        ast::MemberProp::PrivateName(name) => name.span.lo.0,
+        ast::MemberProp::Computed(key) => key.span.lo.0,
+    }
+}
+
+/// `super.name` / `super[key]` stands at its member token, as `member_token`.
+pub(crate) fn super_member_token(member: &ast::SuperPropExpr) -> u32 {
+    match &member.prop {
+        ast::SuperProp::Ident(name) => name.span.lo.0,
+        ast::SuperProp::Computed(key) => key.span.lo.0,
+    }
+}

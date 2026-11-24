@@ -134,7 +134,7 @@ pub(super) fn lower_super_prop(
                 let index = Box::new(lower_expr(ctx, &computed.expr)?);
                 Ok(Expr::IndexGet {
                     element_offset: 0,
-                    byte_offset: super_prop.span.lo.0,
+                    byte_offset: crate::lower::super_member_token(super_prop),
                     byte_end: 0,
                     object: Box::new(Expr::This),
                     index,

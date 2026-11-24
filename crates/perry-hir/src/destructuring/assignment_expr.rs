@@ -66,7 +66,7 @@ pub(crate) fn lower_destructuring_assignment(
                                                 object,
                                                 property,
                                                 value: Box::new(index_expr),
-                                                byte_offset: member.span.lo.0,
+                                                byte_offset: crate::lower::member_token(member),
                                                 byte_end: 0,
                                             });
                                         }
@@ -77,7 +77,7 @@ pub(crate) fn lower_destructuring_assignment(
                                                 index,
                                                 value: Box::new(index_expr),
                                                 element_offset: 0,
-                                                byte_offset: member.span.lo.0,
+                                                byte_offset: crate::lower::member_token(member),
                                                 byte_end: 0,
                                             });
                                         }
@@ -99,7 +99,7 @@ pub(crate) fn lower_destructuring_assignment(
                                                 object,
                                                 property,
                                                 value: Box::new(index_expr),
-                                                byte_offset: member.span.lo.0,
+                                                byte_offset: crate::lower::member_token(member),
                                                 byte_end: 0,
                                             });
                                         }
