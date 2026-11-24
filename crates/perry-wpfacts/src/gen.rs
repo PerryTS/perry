@@ -333,6 +333,11 @@ pub struct Gen<'a> {
     /// (`arrayRecordPayload(.., p = ..)`), whose protocol arm never sees a
     /// held Array (`Cons::RecordEntry`).
     pub(crate) record_locals: crate::pts::FxHashSet<(u32, u32)>,
+    /// The (module, local) of every iterator record's source, guarded or
+    /// not (`arrayRecordPayload(s, p = (mode ? GetIterator(s) : s), ..)`):
+    /// its GetIterator is the record's payload, which holds `s` in the
+    /// returned iterator's place (`Cons::IterNext` steps it).
+    pub(crate) record_sources: crate::pts::FxHashSet<(u32, u32)>,
     /// The (module, local, value node, `Fx::guard`) of the last local
     /// write walked (`narrow::Gen::narrow_assigned`).
     pub(crate) last_local_set: Option<(u32, u32, NodeId, Option<(NodeId, u8)>)>,
@@ -866,6 +871,7 @@ impl<'a> Gen<'a> {
             for_binding: None,
             record_steps: Default::default(),
             record_locals: Default::default(),
+            record_sources: Default::default(),
             last_local_set: None,
             narrow: Vec::new(),
             def_collect: Vec::new(),

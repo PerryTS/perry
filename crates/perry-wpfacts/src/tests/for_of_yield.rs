@@ -209,3 +209,38 @@ fn a_destructuring_past_the_end_keeps_undefined() {
         pf.dump_text()
     );
 }
+
+/// A for-of record over an array literal steps the literal through its
+/// payload, which stands for the iterator GetIterator returns (the returned
+/// Array Iterator is not a value of the loop): the loop value is the
+/// literal's strings only, never the done step's `undefined`, at module
+/// level as in a function (c08 elements.ts `for (const p of ["name", ...])
+/// reflectString(Cls, p)`). `p ?? new Svc()` is a Svc only for `undefined`.
+fn literal_loop(body: &str) -> Vec<String> {
+    let pf = facts(&format!(
+        r#"
+        class Svc {{ size = 3; }}
+        function g(a: any): number {{ return a.size; }}
+        {body}
+        "#
+    ));
+    pf.sites
+        .iter()
+        .filter(|s| s.key == "size" && !s.is_call)
+        .flat_map(|s| s.receivers.iter().cloned())
+        .collect()
+}
+
+#[test]
+fn a_module_level_literal_loop_value_is_no_done_value() {
+    let r = literal_loop(r#"for (const p of ["a", "b"]) console.log(g(p ?? new Svc()));"#);
+    assert!(!r.iter().any(|r| r.contains("Svc")), "{r:?}");
+}
+
+#[test]
+fn a_function_literal_loop_value_is_no_done_value() {
+    let r = literal_loop(
+        r#"function init(): void { for (const p of ["a", "b"]) console.log(g(p ?? new Svc())); } init();"#,
+    );
+    assert!(!r.iter().any(|r| r.contains("Svc")), "{r:?}");
+}
