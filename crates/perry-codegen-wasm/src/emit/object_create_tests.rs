@@ -258,3 +258,19 @@ console.log(msg);
         "key"
     );
 }
+
+// A primitive target throws before the key is converted. Expected output is Node's.
+#[test]
+fn define_property_rejects_a_primitive_target_before_the_key() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Key { toString(): string { throw new Error("key"); } }
+let msg = "none";
+try { Object.defineProperty(0 as any, new Key() as any, { value: 1 }); } catch (e: any) { msg = e.name; }
+console.log(msg);
+"#
+        ),
+        "TypeError"
+    );
+}
