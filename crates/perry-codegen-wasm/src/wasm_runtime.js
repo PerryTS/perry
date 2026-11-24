@@ -6245,7 +6245,11 @@ function __hostArgs(fn, args, receiver) {
   if (__hostKeyFns.has(fn)) hostArgs[0] = __hostKey(args[0]);
   else if (__hostKeyFns.has(receiver)) {
     if (fn === Function.prototype.call) hostArgs[1] = __hostKey(args[1]);
-    else if (fn === Function.prototype.apply && Array.isArray(args[1])) hostArgs[1] = __hostArgs(receiver, args[1]);
+    else if (fn === Function.prototype.apply && Array.isArray(args[1])) {
+      // Read as `apply` reads it: by index, not through the list's own `map`.
+      const list = args[1];
+      hostArgs[1] = __hostArgs(receiver, Array.from({ length: list.length }, (_, i) => list[i]));
+    }
   }
   return hostArgs;
 }

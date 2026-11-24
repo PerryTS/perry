@@ -48,10 +48,10 @@ class B extends A { [k]() { return 8; } q() { return (super[m as "m"] as any)();
 const parent: any = { kk: 10 };
 const child: any = { __proto__: parent, q() { return super[k as "kk"]; } };
 console.log([set.kk, del.kk, inc.kk, def.kk, lit.kk, destructured, k in mk(), mk()[m](2), mk()[m](...[3])].join(","));
-console.log([(A as any)[k], (new B() as any).kk(), child.q(), Object.getOwnPropertyDescriptor(mk(), k)!.value, mk().hasOwnProperty(k), mk().propertyIsEnumerable(k)].join(","));
+console.log([(A as any)[k], (new B() as any).kk(), child.q(), new B().q(), Object.getOwnPropertyDescriptor(mk(), k)!.value, mk().hasOwnProperty(k), mk().propertyIsEnumerable(k)].join(","));
 "#
         ),
-        "9,,2,3,4,1,true,3,4\n7,8,10,1,true,true"
+        "9,,2,3,4,1,true,3,4\n7,8,10,6,1,true,true"
     );
 }
 
@@ -138,9 +138,12 @@ f().then((v) => console.log(v));
             r#"
 const proxy = new Proxy({ toString: () => "kk" }, { getOwnPropertyDescriptor() { throw new Error("trap"); } });
 console.log({ kk: 1 }[__hostKey(proxy)]);
+const list = ["kk"];
+list.map = () => { throw new Error("map"); };
+console.log(__callHostFunction(Function.prototype.apply, [{ kk: 1 }, list], Object.prototype.hasOwnProperty));
 "#
         ),
-        "true,true,true\ntrue,true\n1"
+        "true,true,true\ntrue,true\n1\ntrue"
     );
 }
 
