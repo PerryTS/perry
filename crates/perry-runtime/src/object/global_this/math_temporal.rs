@@ -852,14 +852,10 @@ pub(crate) fn temporal_kind_prototype(kind: crate::temporal::TemporalKind) -> f6
     // own dereference. Root each hop and re-read its address across the key
     // allocation.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let g_handle = scope.root_nanbox_f64(super::js_get_global_this());
-    let (tkey, g) =
-        g_handle.across_nanbox(|| crate::string::js_string_from_bytes(b"Temporal".as_ptr(), 8));
-    let gp = (g.to_bits() & crate::value::POINTER_MASK) as *const ObjectHeader;
-    if gp.is_null() {
-        return undef;
-    }
-    let temporal = js_object_get_field_by_name(gp, tkey);
+    // The runtime's by-name global read (realm table `RUNTIME_GLOBAL_READS`).
+    let temporal = crate::value::JSValue::from_bits(
+        crate::object::js_get_global_this_builtin_value(b"Temporal".as_ptr(), 8).to_bits(),
+    );
     if !temporal.is_pointer() {
         return undef;
     }

@@ -1160,7 +1160,6 @@ fn webassembly_constructor_proto(ctor: *mut crate::closure::ClosureHeader) -> *m
 /// when the namespace or constructor is gone.
 pub(crate) fn wrapper_prototype(ctor_name: &[u8]) -> f64 {
     let scope = crate::gc::RuntimeHandleScope::new();
-    let global = scope.root_nanbox_f64(js_get_global_this());
     let read = |holder: &crate::gc::RuntimeHandle<'_>, key: &[u8]| -> f64 {
         let key = scope.root_string_ptr(named_key(key));
         let holder = crate::value::JSValue::from_bits(holder.get_nanbox_f64().to_bits());
@@ -1172,7 +1171,11 @@ pub(crate) fn wrapper_prototype(ctor_name: &[u8]) -> f64 {
             js_object_get_field_by_name_f64(holder, key)
         })
     };
-    let namespace = scope.root_nanbox_f64(read(&global, b"WebAssembly"));
+    // The runtime's by-name global read (realm table `RUNTIME_GLOBAL_READS`).
+    let namespace = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
+        b"WebAssembly".as_ptr(),
+        11,
+    ));
     let ctor = scope.root_nanbox_f64(read(&namespace, ctor_name));
     let ctor = crate::value::JSValue::from_bits(ctor.get_nanbox_f64().to_bits());
     if !ctor.is_pointer() {

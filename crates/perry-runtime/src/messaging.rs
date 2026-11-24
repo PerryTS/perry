@@ -92,13 +92,10 @@ fn set_field(obj: *mut ObjectHeader, name: &str, value: f64) {
     object::js_object_set_field_by_name(obj, key(name), value);
 }
 
+/// `globalThis[name]` at run time: the runtime's by-name global read (realm
+/// table `RUNTIME_GLOBAL_READS`).
 fn get_global_constructor(name: &str) -> f64 {
-    let global = object::js_get_global_this();
-    let global_obj = crate::value::js_nanbox_get_pointer(global) as *const ObjectHeader;
-    if global_obj.is_null() {
-        return js_undefined();
-    }
-    object::js_object_get_field_by_name_f64(global_obj, key(name))
+    object::js_get_global_this_builtin_value(name.as_ptr(), name.len())
 }
 
 fn constructor_prototype(name: &str) -> f64 {
