@@ -13,6 +13,7 @@ pub mod native_transport;
 mod payload_closed;
 mod payload_events;
 mod payload_io;
+pub use payload_io::{socket_error_message, socket_error_value};
 mod payload_pipe;
 mod payload_prototype;
 mod payload_provider;

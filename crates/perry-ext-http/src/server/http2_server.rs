@@ -59,6 +59,8 @@ pub(crate) use pump::{
     has_active_h2_clients, process_pending_h2, process_pending_h2_events,
     try_recv_pending_h2_nonblocking,
 };
+#[cfg(test)]
+pub(crate) use session::tests::client_session as test_client_session;
 pub(crate) use session::{
     client_request_ends_stream, local_client_connect_ready, local_server_handle_for_client,
     local_server_session_event_ready, mark_server_sessions_closed, parse_headers_object,
@@ -247,6 +249,9 @@ pub struct Http2StreamHandle {
     /// The client request went to the transport; a later `end()` must not open
     /// a second stream.
     pub request_started: bool,
+    /// A client stream's `'close'` is queued; it fires once, after whichever
+    /// terminal event (`'end'`, `'error'`, a reset) retired the stream.
+    pub close_queued: bool,
 }
 
 pub(crate) enum Http2PendingEvent {
@@ -266,6 +271,9 @@ pub(crate) enum Http2PendingEvent {
         body: Vec<u8>,
     },
     ClientEnd {
+        stream_handle: i64,
+    },
+    ClientStreamClose {
         stream_handle: i64,
     },
     ClientClose {
@@ -301,6 +309,15 @@ pub(crate) enum Http2PendingEvent {
         /// Node's `err.code`. With one, `'error'` gets an `Error` carrying it;
         /// without one, the bare message string.
         code: Option<String>,
+    },
+    /// A socket failure on a session, as `net` reports it: an `Error` reading
+    /// `connect ECONNREFUSED 127.0.0.1:1`, with `.code`, `.errno`, `.syscall`
+    /// and, for a failed connect, `.address` and `.port`.
+    SessionSocketError {
+        session_handle: i64,
+        syscall: String,
+        code: String,
+        target: Option<perry_ffi::turnloop_net::Endpoint>,
     },
 }
 

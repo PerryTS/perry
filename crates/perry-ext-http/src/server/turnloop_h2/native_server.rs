@@ -266,7 +266,9 @@ extern "C" fn sink(event: *const tl::NetCompletion) {
         }
         tl::NET_ERROR => {
             if let Some(session) = session {
-                conn::on_error(Target::Session(session), unsafe { event.code() });
+                conn::on_error(Target::Session(session), unsafe { event.code() }, unsafe {
+                    event.syscall()
+                });
             }
         }
         tl::NET_SHUTDOWN => {

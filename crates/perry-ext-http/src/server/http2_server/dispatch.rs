@@ -71,6 +71,7 @@ pub unsafe extern "C" fn js_ext_http2_session_dispatch_method(
                 turnloop_conn: 0,
                 turnloop_responded: false,
                 request_started: false,
+                close_queued: false,
             });
             if end_stream {
                 start_client_request(stream_handle, Vec::new());

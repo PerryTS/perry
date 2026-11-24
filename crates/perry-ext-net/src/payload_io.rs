@@ -268,16 +268,14 @@ extern "C" fn sink(completion: *const tl::NetCompletion) {
                 shutdown(owner.get(), event.user);
             } else {
                 let target = connect_target(link, event);
-                let error = scope.root_nanbox(socket::error(
+                let error = scope.root_nanbox(socket_error_value(
                     // SAFETY: The runtime keeps the completion and its spans valid until this sink
                     // returns; these reads do not retain the borrowed metadata.
+                    unsafe { event.syscall() }.unwrap_or("read"),
+                    // SAFETY: as above.
                     unsafe { event.code() }.unwrap_or("EIO"),
-                    &error_message(event, target.as_ref()),
+                    target.as_ref(),
                 ));
-                if let Some(target) = target {
-                    p::own_set(error.get(), "address", events::string(&target.address));
-                    p::own_set(error.get(), "port", f64::from(target.port));
-                }
                 socket::destroy(owner.get(), error.get());
             }
         }
@@ -309,19 +307,42 @@ fn connect_target(link: OwnerLink, event: &tl::NetCompletion) -> Option<tl::Endp
 }
 
 fn error_message(event: &tl::NetCompletion, target: Option<&tl::Endpoint>) -> String {
-    let message = format!(
-        "{} {}",
+    socket_error_message(
         // SAFETY: The runtime keeps the completion and its spans valid until this sink returns;
         // these reads do not retain the borrowed metadata.
         unsafe { event.syscall() }.unwrap_or("read"),
         // SAFETY: The runtime keeps the completion and its spans valid until this sink returns;
         // these reads do not retain the borrowed metadata.
-        unsafe { event.code() }.unwrap_or("EIO")
-    );
+        unsafe { event.code() }.unwrap_or("EIO"),
+        target,
+    )
+}
+
+/// Node's message for a socket failure: `"<syscall> <CODE>"`, followed by the
+/// peer for a failed connect (`connect ECONNREFUSED 127.0.0.1:1`).
+pub fn socket_error_message(syscall: &str, code: &str, target: Option<&tl::Endpoint>) -> String {
     match target {
-        Some(target) => format!("{message} {}:{}", target.address, target.port),
-        None => message,
+        Some(target) => format!("{syscall} {code} {}:{}", target.address, target.port),
+        None => format!("{syscall} {code}"),
     }
+}
+
+/// The `Error` a `net.Socket` emits for a socket failure: the message from
+/// [`socket_error_message`], with `.code`, `.errno` and `.syscall`, and
+/// `.address` / `.port` when `target` names the peer a connect was attempting.
+/// Other transports on the loop (an HTTP/2 client session) build theirs here so
+/// the two cannot drift. The caller roots the result before allocating again.
+pub fn socket_error_value(syscall: &str, code: &str, target: Option<&tl::Endpoint>) -> f64 {
+    let scope = TransientRootScope::enter();
+    let error = scope.root_nanbox(socket::error(
+        code,
+        &socket_error_message(syscall, code, target),
+    ));
+    if let Some(target) = target {
+        p::own_set(error.get(), "address", events::string(&target.address));
+        p::own_set(error.get(), "port", f64::from(target.port));
+    }
+    error.get()
 }
 
 pub(crate) fn connected(owner: f64) {

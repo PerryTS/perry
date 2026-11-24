@@ -404,8 +404,8 @@ pub(crate) fn intercept(c: &tl::NetCompletion) -> bool {
         tl::NET_TIMER => on_timer(c.id),
         tl::NET_ERROR => {
             // SAFETY: same call; both point at `'static` string data.
-            let code = unsafe { c.code() };
-            on_error(c.id, code);
+            let (code, syscall) = unsafe { (c.code(), c.syscall()) };
+            on_error(c.id, code, syscall);
         }
         _ => {}
     }
@@ -595,7 +595,9 @@ pub(crate) fn connect_client(
         client_tls: tls,
         tls_session: None,
         alpn: None,
-        peer_address: String::new(),
+        // The host until the connect lands and names the real peer; a failed
+        // connect's error reports it.
+        peer_address: host.to_string(),
         peer_port: port,
         buffered: 0,
         // Node's `maxSessionMemory` default, in bytes.
@@ -1367,15 +1369,44 @@ fn cancel_queued_opens(id: impl Into<Target>, cause: &str) {
     }
 }
 
-pub(super) fn on_error(id: impl Into<Target>, code: Option<&str>) {
+/// The socket failed. The session's `'error'` is the `Error` a `net.Socket`
+/// gets for the same failure (`connect ECONNREFUSED 127.0.0.1:1`, with `.code`,
+/// `.errno`, `.syscall`, `.address`, `.port`), and each request still queued
+/// for the transport is cancelled naming that message.
+pub(super) fn on_error(id: impl Into<Target>, code: Option<&str>, syscall: Option<&str>) {
     let id = id.into();
     let session = peek(id, |conn| conn.session_handle).unwrap_or(0);
     if session != 0 {
         let code = code.unwrap_or("ECONNRESET");
-        cancel_queued_opens(id, code);
-        crate::server::http2_server::queue_turnloop_session_error(session, code);
+        let syscall = syscall.unwrap_or("read");
+        let target = match id {
+            Target::Client(client) if syscall == "connect" => connect_target(client),
+            _ => None,
+        };
+        cancel_queued_opens(
+            id,
+            &perry_ext_net::socket_error_message(syscall, code, target.as_ref()),
+        );
+        crate::server::http2_server::queue_turnloop_session_error(session, syscall, code, target);
     }
     destroy_connection(id);
+}
+
+/// The peer a failed client connect was attempting: the address the loop
+/// tried, else the host the session was given.
+fn connect_target(id: i64) -> Option<tl::Endpoint> {
+    let port = peek(id, |conn| conn.peer_port)?;
+    let address = tl::peer_address(id)
+        .map(|peer| peer.address)
+        .filter(|address| !address.is_empty())
+        .or_else(|| peek(id, |conn| conn.peer_address.clone()))
+        .filter(|address| !address.is_empty())?;
+    let family = if address.contains(':') { 6 } else { 4 };
+    Some(tl::Endpoint {
+        address,
+        port,
+        family,
+    })
 }
 
 #[cfg(test)]
@@ -1428,6 +1459,69 @@ mod prescan_tests {
             peer_settings: None,
             pending_controls: Vec::new(),
         }
+    }
+
+    /// A refused client connect errors the session with `net`'s `Error` for the
+    /// same failure, naming the peer, and cancels each request still queued for
+    /// the transport with that message as the cause.
+    #[test]
+    fn a_refused_connect_errors_the_session_with_the_socket_error() {
+        use crate::server::http2_server::{Http2PendingEvent, H2_PENDING_EVENTS};
+        let session =
+            perry_ffi::register_handle(crate::server::http2_server::test_client_session(0));
+        let id = perry_ffi::reserve_handle_id();
+        let mut connection = conn(0, false);
+        connection.id = id;
+        connection.role = Role::Client;
+        connection.session_handle = session;
+        connection.peer_address = "127.0.0.1".to_string();
+        connection.peer_port = 9;
+        connection
+            .queued_opens
+            .push(super::super::stream::QueuedOpen {
+                stream_handle: i64::MAX - 15_400,
+                headers: Vec::new(),
+                body: Vec::new(),
+            });
+        insert(connection);
+
+        on_error(id, Some("ECONNREFUSED"), Some("connect"));
+
+        let events = H2_PENDING_EVENTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let cancel: Vec<&str> = events
+            .iter()
+            .filter_map(|event| match event {
+                Http2PendingEvent::ClientError {
+                    handle, message, ..
+                } if *handle == i64::MAX - 15_400 => Some(message.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            cancel,
+            vec!["The pending stream has been canceled (caused by: connect ECONNREFUSED 127.0.0.1:9)"]
+        );
+        let session_error: Vec<String> = events
+            .iter()
+            .filter_map(|event| match event {
+                Http2PendingEvent::SessionSocketError {
+                    session_handle,
+                    syscall,
+                    code,
+                    target,
+                } if *session_handle == session => Some(format!(
+                    "{syscall} {code} {:?}",
+                    target.as_ref().map(|t| (t.address.as_str(), t.port))
+                )),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            session_error,
+            vec![r#"connect ECONNREFUSED Some(("127.0.0.1", 9))"#.to_string()]
+        );
     }
 
     #[test]
