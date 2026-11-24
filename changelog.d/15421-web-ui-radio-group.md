@@ -1,0 +1,1 @@
+Add `RadioGroup(onChange)` to `perry/ui`, with `radioGroupAddItem`, `radioGroupGetSelected` and `radioGroupSetSelected`: Picker's API for a short list where every choice stays visible. The web target renders a `<fieldset>` of radio buttons; native backends show a Picker.
