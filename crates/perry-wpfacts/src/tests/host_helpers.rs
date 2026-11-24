@@ -7,10 +7,11 @@ use super::*;
 fn verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         import * as path from "node:path";
         import * as crypto from "node:crypto";
-        class Svc {{ size = 3; leak() {{ (globalThis as any).hostTake(this); }} }}
-        class ValueOf {{ size = 3; valueOf(): any {{ (globalThis as any).hostTake(this); return 1; }} toString(): any {{ (globalThis as any).hostTake(this); return "a"; }} }}
+        class Svc {{ size = 3; leak() {{ external(this); }} }}
+        class ValueOf {{ size = 3; valueOf(): any {{ external(this); return 1; }} toString(): any {{ external(this); return "a"; }} }}
         function g(a: any) {{ return a.size; }}
         {body}
         "#

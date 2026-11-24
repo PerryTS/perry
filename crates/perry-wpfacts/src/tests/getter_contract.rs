@@ -123,10 +123,10 @@ fn g9_a_getter_through_a_barrel_is_proven_as_whole() {
 #[test]
 fn g4_a_getter_escaping_this_leaves_the_method_unproven() {
     let a = format!(
-        r#"(globalThis as any).zz = function (o: any) {{ o.createIdentifier = (t: string) => ({{ kind: 1, text: "xyz" }}); }};
+        r#"declare function external(x?: unknown): any;
 export const lib = {{
   {IDENT}
-  get item() {{ (globalThis as any).zz(this); return {{ kind: 312 }}; }},
+  get item() {{ external(this); return {{ kind: 312 }}; }},
 }};
 "#
     );

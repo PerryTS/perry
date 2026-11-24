@@ -11,10 +11,11 @@ use super::*;
 fn verdict(body: &str) -> Verdict {
     let src = format!(
         r#"
-        class Svc {{ size = 3; leak() {{ (globalThis as any).hostTake(this); }} }}
-        class ValueOf {{ size = 3; valueOf(): any {{ (globalThis as any).hostTake(this); return 1; }} }}
-        class ToPrim {{ size = 3; [Symbol.toPrimitive](): any {{ (globalThis as any).hostTake(this); return 1; }} }}
-        class ToStr {{ size = 3; toString(): any {{ (globalThis as any).hostTake(this); return 'utf-8'; }} }}
+        declare function external(x?: unknown): any;
+        class Svc {{ size = 3; leak() {{ external(this); }} }}
+        class ValueOf {{ size = 3; valueOf(): any {{ external(this); return 1; }} }}
+        class ToPrim {{ size = 3; [Symbol.toPrimitive](): any {{ external(this); return 1; }} }}
+        class ToStr {{ size = 3; toString(): any {{ external(this); return 'utf-8'; }} }}
         function g(a: any) {{ return a.size; }}
         {body}
         "#
@@ -53,13 +54,13 @@ case!(map_result_is_coerced, true,
 case!(sort_comparator_result_is_coerced, true,
  "const ta = new Uint8Array(4); const o: any = new ValueOf(); ta.sort(() => o); console.log(g(o));");
 case!(map_callback_is_given_the_array, true,
- "class TA extends Uint8Array { size = 3; } const o: any = new TA(2); o.map((_v: any, _i: any, arr: any) => { (globalThis as any).hostTake(arr); return 0; }); console.log(g(o));");
+ "class TA extends Uint8Array { size = 3; } const o: any = new TA(2); o.map((_v: any, _i: any, arr: any) => { external(arr); return 0; }); console.log(g(o));");
 case!(map_callback_gets_this_arg, true,
  "const ta = new Uint8Array(4); const o: any = new Svc(); ta.map(function (this: any) { this.leak(); return 0; }, o); console.log(g(o));");
 case!(species_constructor_runs, true,
  "const ta: any = new Uint8Array(4); const o: any = new Svc(); ta.constructor = { [Symbol.species]: class C { constructor(n: number) { o.leak(); return new Uint8Array(n); } } }; ta.slice(0); console.log(g(o));");
 case!(to_string_calls_a_replaced_join, true,
- "const ta = new Uint8Array(4); const o: any = new Svc(); (ta as any).join = function () { (globalThis as any).hostTake(o); return ''; }; ta.toString(); console.log(g(o));");
+ "const ta = new Uint8Array(4); const o: any = new Svc(); (ta as any).join = function () { external(o); return ''; }; ta.toString(); console.log(g(o));");
 case!(
     constructor_array_like_elements_are_coerced,
     true,

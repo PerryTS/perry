@@ -26,11 +26,12 @@ const WRAPPERS: [&str; 6] = [
 fn read(wrapper: &str, give: &str) -> crate::ProgramFacts {
     facts(&format!(
         r#"
+        declare function external(x?: unknown): any;
         class R {{ y = 1; }}
         const o: any = {{ m(a: any) {{ return a.y; }} }};
         const r: any = new R();
         const w: any = {wrapper};
-        const k: string = String((globalThis as any).hostKey());
+        const k: string = String(external());
         {give}
         const f: any = w[k];
         try {{ f(r); }} catch (e) {{}}
@@ -56,7 +57,7 @@ fn a_computed_key_on_a_wrapper_reads_its_realm_chain() {
 fn an_own_value_is_read() {
     let pf = read(
         "Object(1)",
-        "w[String((globalThis as any).hostKey())] = (globalThis as any).hostFn();",
+        "w[String(external())] = external();",
     );
     assert!(tmpl(&pf, "R").escape.is_some(), "{}", pf.dump_text());
 }
@@ -67,7 +68,7 @@ fn an_own_value_is_read() {
 fn a_value_stored_on_the_chain_is_read() {
     let pf = read(
         "Object(1)",
-        "(Number.prototype as any)[String((globalThis as any).hostKey())] = (globalThis as any).hostFn();",
+        "(Number.prototype as any)[String(external())] = external();",
     );
     assert!(tmpl(&pf, "R").escape.is_some(), "{}", pf.dump_text());
 }

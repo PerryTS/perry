@@ -150,11 +150,11 @@ fn date_store_under_a_c_key_sinks_once_date_escapes() {
     let mut bad = Vec::new();
     for (store, interp) in [
         (
-            "(Date as any)[`c${k}`] = n; (globalThis as any).u(Date);",
+            "(Date as any)[`c${k}`] = n; external(Date);",
             false,
         ),
         (
-            "(globalThis as any).u(Date); (Date as any)[`c${k}`] = n;",
+            "external(Date); (Date as any)[`c${k}`] = n;",
             false,
         ),
     ] {

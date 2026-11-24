@@ -91,7 +91,7 @@ fn control_written_key_callee_is_still_top() {
     let src = unseen(
         "class P { x: number; constructor() { this.x = 1; } }\n\
          const k: string = process.argv[2] ?? \"k\";\n\
-         const u: any = (globalThis as any).hostObj;\n\
+         const u: any = external();\n\
          u[k] = 1;\n\
          const p = new P();\n\
          const f: any = ({} as any)[k];\n\

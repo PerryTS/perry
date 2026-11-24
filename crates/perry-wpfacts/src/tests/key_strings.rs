@@ -18,6 +18,7 @@ use super::*;
 fn src(extra: &str) -> String {
     format!(
         r#"
+        declare function external(x?: unknown): any;
         declare const w: boolean;
         const plain: any = {{ x: 1 }};
         function readAny(o: any, k: string) {{ return o[k]; }}
@@ -111,7 +112,7 @@ fn an_any_key_string_store_into_the_resolver_is_any_string() {
 #[test]
 fn an_escaped_resolver_is_any_string() {
     // (c3) unknown code holds `R1` and may write its field.
-    assert!(!no_give("(globalThis as any).hostFn(R1);"));
+    assert!(!no_give("external(R1);"));
 }
 
 #[test]

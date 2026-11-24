@@ -28,7 +28,7 @@ fn r1_exposed_buffer_leaves_named_keys() {
     let k = "ta.tag = new M();";
     let a = reads("new ArrayBuffer(8)", k);
     let b = reads(
-        "Math.random() < 2 ? new ArrayBuffer(8) : (globalThis as any).zz",
+        "Math.random() < 2 ? new ArrayBuffer(8) : external()",
         "ta.tag = new M(); console.log(ta.buffer.byteLength, ta[0] + 1);",
     );
     eprintln!("SKINROOT35 base={a:?}\nSKINROOT35 b1={b:?}");

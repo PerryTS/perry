@@ -14,7 +14,7 @@ use super::*;
 fn run(body: &str) -> (bool, bool) {
     let src = format!(
         r#"
-        (globalThis as any).hostTake = (_x: any) => {{}};
+        declare function external(x?: unknown): any;
         class V {{ zz = 1; probe() {{ return this.zz; }} }}
         class Svc {{ marker = 3; }}
         function g(a: any) {{ return a.marker; }}
@@ -40,6 +40,7 @@ fn run(body: &str) -> (bool, bool) {
 fn proven(body: &str, key: &str) -> bool {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ marker = 3; }}
         function pick(x: any) {{ return x; }}
         {body}
@@ -137,7 +138,7 @@ fn value_calls_answer_as_the_direct_call() {
 /// escape `o`; Object.create with a ⊤ prototype answers as the direct call.
 #[test]
 fn controls_keep_todays_answer() {
-    assert_eq!(run("(globalThis as any).hostTake(o);"), (true, true));
+    assert_eq!(run("external(o);"), (true, true));
     assert_eq!(
         run("const hf: any = (globalThis as any)[process.argv[3]]; hf(o);"),
         (true, true)

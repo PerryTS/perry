@@ -28,8 +28,9 @@ fn read(read: &str, give: &str) -> crate::ProgramFacts {
 fn minted(read: &str) -> u32 {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         const A: any = Array;
-        const k: string = String((globalThis as any).hostKey());
+        const k: string = String(external());
         const f: any = {read};
         console.log(f);
     "#
@@ -59,7 +60,7 @@ fn a_static_the_realm_does_not_install_reads_undefined() {
 fn a_value_on_its_chain_is_read() {
     let pf = read(
         "A.fromAsync",
-        "(Function.prototype as any).fromAsync = (globalThis as any).hostFn();",
+        "(Function.prototype as any).fromAsync = external();",
     );
     assert!(escape(&pf).is_some(), "{}", pf.dump_text());
 }

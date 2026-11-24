@@ -147,7 +147,7 @@ const ACCESSORS: &[(&str, &str)] = &[
     (
         "a getter on Date.prototype, an unknown receiver",
         "Object.defineProperty(Date.prototype, \"zed\", { get(this: any) { hit(); return 1; }, configurable: true });\n\
-         const u: any = (globalThis as any).someHostValue;\n\
+         const u: any = external();\n\
          if (u) console.log(u.zed);",
     ),
 ];

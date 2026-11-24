@@ -8,12 +8,13 @@ use super::*;
 fn verdict(tail: &str) -> Verdict {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         function use(mm: any, x: any) {{ return mm.get(x); }}
         const s = new Svc();
         const m = new Map<string, any>();
-        m.set("h", (x: any) => {{ (globalThis as any).hostTake(x); }});
+        m.set("h", (x: any) => {{ external(x); }});
         {tail}
         console.log(g(s));
         "#
@@ -42,6 +43,6 @@ fn a_held_value_read_out_still_runs() {
 /// node: `hostTake` gets `s` (an own `get` property shadows `Map.prototype.get`).
 #[test]
 fn a_computed_property_store_still_shadows() {
-    let v = verdict("const k = [\"get\"][0]; (m as any)[k] = (x: any) => { (globalThis as any).hostTake(x); }; use(m, s);");
+    let v = verdict("const k = [\"get\"][0]; (m as any)[k] = (x: any) => { external(x); }; use(m, s);");
     assert!(!proven(&v), "{v:?}");
 }

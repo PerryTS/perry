@@ -8,7 +8,7 @@ use super::*;
 
 /// The map is a local of a function: a script's top-level binding is
 /// reachable by any code the host runs. The sink is a method of an unknown
-/// value (as in `console_output_arguments`), not of the global object: a call `globalThis.hostTake(x)` hands unknown code the
+/// value (as in `console_output_arguments`), not of the global object: a call `external(x)` hands unknown code the
 /// global object as `this`, which may then replace the global `Map` that
 /// `new Map` reads (ECMA-262 13.3.5.1 step 2 evaluates the constructor
 /// expression: a [[Get]] of the live global binding), so every `new Map`
@@ -16,6 +16,7 @@ use super::*;
 fn verdict(tail: &str) -> Verdict {
     let src = format!(
         r#"
+        declare function external(x?: unknown): any;
         class Svc {{ size = 3; }}
         function g(a: any) {{ return a.size; }}
         const s = new Svc();

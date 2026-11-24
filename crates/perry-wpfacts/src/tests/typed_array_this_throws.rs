@@ -12,8 +12,8 @@ use super::*;
 fn check(body: &str, yes: bool) {
     let src = format!(
         r#"
-        (globalThis as any).hostTake = (_x: any) => {{}};
-        class Svc {{ marker = 3; length = 1; leak() {{ (globalThis as any).hostTake(this); }} }}
+        declare function external(x?: unknown): any;
+        class Svc {{ marker = 3; length = 1; leak() {{ external(this); }} }}
         function g(a: any) {{ return a.marker; }}
         const o: any = new Svc(); const a: any = new Uint8Array([1, 2]);
         const j: any = Uint8Array.prototype.join;
@@ -87,7 +87,7 @@ fn a_typed_array_receiver_keeps_the_method() {
 #[test]
 fn an_unknown_receiver_keeps_the_unknown_call() {
     check(
-        "try { j.call((globalThis as any).hostGet(), o); } catch (e) {}",
+        "try { j.call(external(), o); } catch (e) {}",
         false,
     );
 }
