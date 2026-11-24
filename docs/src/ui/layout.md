@@ -95,10 +95,11 @@ VStack(8, [Link("Requests", "/requests"), Link("Helpers", "/helpers"), view]);
 ```
 
 Native backends have no URL: `routerNavigate` and `routerOnChange` do nothing,
-and `routerCurrentPath()` returns `""`. A `Link` there is a Text whose click opens
-an `http`, `https`, `mailto` or `tel` URL in its default app; any other `href` does
-nothing. Like any clickable Text it takes no keyboard focus. On tvOS, watchOS and
-HarmonyOS the text cannot be activated.
+and `routerCurrentPath()` returns `""`, except on HarmonyOS, where its value must
+not be used. A `Link` there is a Text whose click opens an `http`, `https`,
+`mailto` or `tel` URL in its default app; any other `href` does nothing. Like any
+clickable Text it takes no keyboard focus. On tvOS, watchOS and HarmonyOS the text
+cannot be activated.
 
 A `javascript:` `href` is ignored on every target: the `Link` is only its text.
 

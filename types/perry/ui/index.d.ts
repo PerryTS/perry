@@ -1511,7 +1511,7 @@ export function navstackPop(navStack: Widget): void;
 // ---------------------------------------------------------------------------
 // Link and router. The router follows the browser's location and history, so it
 // acts on the web target only: on native, routerNavigate and routerOnChange do
-// nothing and routerCurrentPath returns "".
+// nothing and routerCurrentPath returns "" (not on HarmonyOS, see below).
 // ---------------------------------------------------------------------------
 
 /**
@@ -1538,7 +1538,10 @@ export function routerNavigate(path: string): void;
  * registered during a notification waits for the next. Never called on native.
  */
 export function routerOnChange(onChange: (path: string) => void): void;
-/** The current route, `location.pathname + search + hash`; `""` on native. */
+/**
+ * The current route, `location.pathname + search + hash`; `""` on native, except on
+ * HarmonyOS, where the value must not be used.
+ */
 export function routerCurrentPath(): string;
 
 // ---------------------------------------------------------------------------
