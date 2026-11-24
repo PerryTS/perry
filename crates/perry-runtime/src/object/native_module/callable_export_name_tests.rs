@@ -3,6 +3,8 @@
 use super::static_exports::{
     js_native_export_68747470_5f636f6e6e656374696f6e4c697374656e6572 as esm_http_connection_listener,
     js_native_export_6d6f64756c65_72756e4d61696e as esm_module_run_main,
+    js_native_export_75726c_7061727365 as esm_url_parse,
+    js_native_export_75726c_7265736f6c7665 as esm_url_resolve,
     js_native_export_75726c_7265736f6c76654f626a656374 as esm_url_resolve_object,
 };
 
@@ -20,6 +22,8 @@ fn renamed_exports_carry_the_node_name_on_both_mints() {
     std::thread::spawn(|| {
         let _lock = crate::gc::global_side_table_test_lock();
         let _no_move = crate::gc::GcSuppressScope::new();
+        assert_eq!(name_of(esm_url_parse(0)), "urlParse");
+        assert_eq!(name_of(esm_url_resolve(0)), "urlResolve");
         assert_eq!(name_of(esm_url_resolve_object(0)), "urlResolveObject");
         assert_eq!(
             name_of(esm_http_connection_listener(0)),
@@ -27,6 +31,8 @@ fn renamed_exports_carry_the_node_name_on_both_mints() {
         );
         assert_eq!(name_of(esm_module_run_main(0)), "executeUserEntryPoint");
         for (module, property, name) in [
+            ("url", "parse", "urlParse"),
+            ("url", "resolve", "urlResolve"),
             ("url", "resolveObject", "urlResolveObject"),
             ("http", "_connectionListener", "connectionListener"),
             ("module", "runMain", "executeUserEntryPoint"),

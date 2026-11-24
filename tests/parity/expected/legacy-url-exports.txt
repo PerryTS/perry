@@ -3,6 +3,10 @@ keys has resolveObject: true
 Url typeof: function
 Url name: Url
 Url length: 0
+parse name: urlParse
+parse import name: urlParse
+resolve name: urlResolve
+resolve import name: urlResolve
 resolveObject typeof: function
 resolveObject name: urlResolveObject
 resolveObject length: 2

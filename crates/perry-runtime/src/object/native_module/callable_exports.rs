@@ -412,6 +412,8 @@ pub(super) fn native_callable_export_display_name<'a>(module: &str, prop: &'a st
         }
     } else {
         match (module, prop) {
+            ("url", "parse") => realm_native_url_parse_metadata!(name),
+            ("url", "resolve") => realm_native_url_resolve_metadata!(name),
             ("url", "resolveObject") => realm_native_url_resolveObject_metadata!(name),
             ("http", "_connectionListener") => realm_native_http_connectionListener_metadata!(name),
             ("module", "runMain") => realm_native_module_runMain_metadata!(name),
