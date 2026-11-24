@@ -1366,9 +1366,17 @@ impl Model {
             });
             self.add_prim(w, prim::ALL);
         }
-        self.escaped_accessor_runs(t, w, reason);
+        // K3 (A, Phase B, owner 2026-11-23): a value handed by contract only
+        // (`wr` false) is invoked only at its contract's invoke points, which
+        // the builtin's arm binds as program calls: no accessor runs, no call
+        // or construction by unknown code. The first escape that hands it to
+        // code that may write it (`wr`, the up path included: the contract
+        // escape before it ran none of this) runs them, once.
+        if wr {
+            self.escaped_accessor_runs(t, w, reason);
+        }
         match self.toks[t as usize].clone() {
-            TokKind::Func(f, _) if !up => {
+            TokKind::Func(f, _) if wr => {
                 let fi = self.funcs[f as usize].clone();
                 if !fi.lexical_this {
                     self.escape_this(t, reason);
@@ -1379,7 +1387,7 @@ impl Model {
             TokKind::ClassObj(tm) => {
                 let p = self.tok(TokKind::Proto(tm));
                 self.escape(p, reason);
-                if up || !self.unknown_constructible(t) {
+                if !wr || !self.unknown_constructible(t) {
                     return;
                 }
                 // Unknown code may construct it with unknown arguments.
