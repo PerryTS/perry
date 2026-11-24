@@ -80,6 +80,25 @@ f().then((v) => console.log(v));
     );
 }
 
+// A conversion method a class getter returns is read through the getter. Expected output
+// is Node's.
+#[test]
+fn an_object_key_reads_its_conversion_method_through_a_class_getter() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class Got { n = "kk"; get toString(): any { return () => this.n; } }
+class Throws { get toString(): any { throw new RangeError("getter"); } }
+const o: any = { kk: 1 };
+let msg = "none";
+try { o[new Throws() as any]; } catch (e: any) { msg = e.message; }
+console.log([o[new Got() as any], msg].join(","));
+"#
+        ),
+        "1,getter"
+    );
+}
+
 // A key that cannot be converted throws, after a nullish receiver does. Expected output
 // is Node's.
 #[test]

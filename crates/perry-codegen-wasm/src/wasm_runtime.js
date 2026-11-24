@@ -6213,7 +6213,11 @@ function __hostDescriptors(props) {
 function __hostKey(key) {
   if (!__holdsProperties(key)) return key;
   const method = (name) => {
-    const fn = __hostAccessor(key[name]);
+    // A class instance's compiled accessors live in the class table, not on the host object.
+    const viaClass = typeof name === 'string' && __classOf(key);
+    const value = viaClass ? __memDispatch.class_get_field(key, name) : key[name];
+    if (viaClass) __memDispatch.propagate_exception(true);
+    const fn = __hostAccessor(value);
     return typeof fn === 'function' ? (...args) => Reflect.apply(fn, key, args) : fn;
   };
   return {
