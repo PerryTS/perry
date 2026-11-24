@@ -2539,16 +2539,15 @@ const __memDispatch = {
   // String methods — args are plain JS strings
   string_charAt: (str, idx) => String(str).charAt(idx),
   string_substring: (str, start, end) => String(str).substring(start, end),
-  // Codegen picks these five bridges by method name alone and passes every argument:
-  // a string takes String.prototype's method, any other receiver its own.
-  string_indexOf: (str, ...args) => __stringOrOwnMethod(str, 'indexOf', args),
-  string_slice: (str, ...args) => __stringOrOwnMethod(str, 'slice', args),
+  // Codegen picks these five bridges by method name alone and passes every argument.
+  string_indexOf: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'indexOf'), args),
+  string_slice: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'slice'), args),
   string_toLowerCase: (str) => String(str).toLowerCase(),
   string_toUpperCase: (str) => String(str).toUpperCase(),
   string_trim: (str) => String(str).trim(),
-  string_includes: (str, ...args) => __stringOrOwnMethod(str, 'includes', args),
-  string_startsWith: (str, ...args) => __stringOrOwnMethod(str, 'startsWith', args),
-  string_endsWith: (str, ...args) => __stringOrOwnMethod(str, 'endsWith', args),
+  string_includes: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'includes'), args),
+  string_startsWith: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'startsWith'), args),
+  string_endsWith: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'endsWith'), args),
   string_replace: (str, pattern, replacement) => {
     const s = String(str);
     const p = (pattern instanceof RegExp) ? pattern : String(pattern);
@@ -6420,10 +6419,6 @@ function __classHasMethod(cls, mname) {
     if (methods && __hasOwn(methods, mname)) return true;
   }
   return false;
-}
-
-function __stringOrOwnMethod(recv, mname, args) {
-  return typeof recv === 'string' ? String.prototype[mname].apply(recv, args) : __classDispatch(recv, mname, args);
 }
 
 function __classDispatch(objVal, mname, rawArgs) {
