@@ -28,8 +28,7 @@ impl<'a> Gen<'a> {
         callee: &Expr,
         args: &[Expr],
         _extra: &[NodeId],
-        byte_offset: u32,
-        byte_end: u32,
+        site: Option<(u32, u32)>,
     ) -> NodeId {
         // The object-literal IIFE: `(o => { js_object_literal_define(o, …);
         // …; return o })(seed)`. Its defines are the literal's birth.
@@ -92,8 +91,10 @@ impl<'a> Gen<'a> {
         }
         // Call arguments: the callee classifies them (`zero_sign`).
         let a: Vec<NodeId> = args.iter().map(|x| self.expr_zs(fx, x)).collect();
-        if self.int_ranges && byte_offset != 0 && matches!(callee, Expr::PropertyGet { .. }) {
-            self.call_args_at.push((fx.module, byte_offset, a.clone()));
+        if let Some((offset, _)) = site.filter(|_| self.int_ranges) {
+            if matches!(callee, Expr::PropertyGet { .. }) {
+                self.call_args_at.push((fx.module, offset, a.clone()));
+            }
         }
         self.call_lit_arg = if matches!(callee, Expr::PropertyGet { .. } | Expr::IndexGet { .. }) {
             args.first()
@@ -125,11 +126,11 @@ impl<'a> Gen<'a> {
                 return self.runtime_extern(fx, name, a, vec![], lits);
             }
         }
-        let result = self.call_with(fx, callee, a, vec![], (byte_offset, byte_end));
-        // Every call with a source offset: a method call, a direct call of
-        // a function, a call of any other callee value.
-        if byte_offset != 0 {
-            self.call_results_at.push((fx.module, byte_offset, result));
+        let result = self.call_with(fx, callee, a, vec![], site);
+        // Every call with a site: a method call, a direct call of a
+        // function, a call of any other callee value.
+        if let Some((offset, _)) = site {
+            self.call_results_at.push((fx.module, offset, result));
         }
         result
     }
@@ -150,7 +151,7 @@ impl<'a> Gen<'a> {
         callee: &Expr,
         args: Vec<NodeId>,
         spread: Vec<NodeId>,
-        (byte_offset, byte_end): (u32, u32),
+        site: Option<(u32, u32)>,
     ) -> NodeId {
         let lit = self.call_lit_arg.take();
         match callee {
@@ -208,7 +209,7 @@ impl<'a> Gen<'a> {
                         self.m.arr_len_at_site.entry(site).or_default().hole_free = true;
                         // I32 at rest (PR B): a birth an at-rest template
                         // may have, keyed as codegen keys the call.
-                        let offset = if *pb != 0 { *pb } else { byte_offset };
+                        let offset = *pb;
                         let (module, recv) = (fx.module, o);
                         let fill = crate::rest_elems::RestFill {
                             module,
@@ -245,36 +246,29 @@ impl<'a> Gen<'a> {
                 } else {
                     private
                 };
-                let (off, end) = if *pb != 0 {
-                    (*pb, *pe)
-                } else {
-                    (byte_offset, byte_end)
-                };
-                let rec = (off != 0).then(|| self.call_sites_at.len());
-                if off != 0 {
-                    self.call_sites_at.push(crate::signatures::CallSiteRec {
-                        module: fx.module,
-                        offset: off,
-                        end,
-                        args: args.clone(),
-                        spread: !spread.is_empty(),
-                        callee: None,
-                        call: crate::model::NO_CTX,
-                    });
-                }
-                if off != 0 {
-                    self.read_sites.push(ReadSite {
-                        global_get,
-                        access: crate::derive::Access::Read,
-                        module: fx.module,
-                        byte_offset: off,
-                        key: a,
-                        recv: callee_v.unwrap_or(o),
-                        is_call: true,
-                        value_call: callee_v.is_some(),
-                        func: fx.f,
-                    });
-                }
+                // The method site is the callee member read's identity.
+                let (off, end) = (*pb, *pe);
+                let rec = self.call_sites_at.len();
+                self.call_sites_at.push(crate::signatures::CallSiteRec {
+                    module: fx.module,
+                    offset: off,
+                    end,
+                    args: args.clone(),
+                    spread: !spread.is_empty(),
+                    callee: None,
+                    call: crate::model::NO_CTX,
+                });
+                self.read_sites.push(ReadSite {
+                    global_get,
+                    access: crate::derive::Access::Read,
+                    module: fx.module,
+                    byte_offset: off,
+                    key: a,
+                    recv: callee_v.unwrap_or(o),
+                    is_call: true,
+                    value_call: callee_v.is_some(),
+                    func: fx.f,
+                });
                 let this = if global_get {
                     ThisArg::Undef
                 } else {
@@ -289,9 +283,7 @@ impl<'a> Gen<'a> {
                 {
                     f.fill_site = self.m.calls[call as usize].site;
                 }
-                if let Some(i) = rec {
-                    self.call_sites_at[i].call = call;
-                }
+                self.call_sites_at[rec].call = call;
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
@@ -299,9 +291,7 @@ impl<'a> Gen<'a> {
                 match callee_v {
                     Some(callee) => self.m.cons(callee, Cons::Call { call }),
                     None => {
-                        if off != 0 {
-                            self.m.named_calls.insert(call, (a, o));
-                        }
+                        self.m.named_calls.insert(call, (a, o));
                         self.m.cons(
                             o,
                             Cons::MCall {
@@ -377,8 +367,10 @@ impl<'a> Gen<'a> {
                 let r = self
                     .native_extern(fx.module, name)
                     .unwrap_or(crate::NativeResult::Undefined);
-                self.m.native_extern_fired.push((fx.module, byte_offset));
-                let _ = (args, spread, byte_end);
+                self.m
+                    .native_extern_fired
+                    .push((fx.module, site.map(|(offset, _)| offset)));
+                let _ = (args, spread);
                 self.prim_node(match r {
                     crate::NativeResult::Number => prim::NUM,
                     crate::NativeResult::String => prim::STR,
@@ -393,12 +385,12 @@ impl<'a> Gen<'a> {
             _ => {
                 let c = self.expr(fx, callee);
                 self.own_test_recv = Some(c);
-                let rec = (byte_offset != 0).then(|| self.call_sites_at.len());
-                if byte_offset != 0 {
+                let rec = site.map(|_| self.call_sites_at.len());
+                if let Some((offset, end)) = site {
                     self.call_sites_at.push(crate::signatures::CallSiteRec {
                         module: fx.module,
-                        offset: byte_offset,
-                        end: byte_end,
+                        offset,
+                        end,
                         args: args.clone(),
                         spread: !spread.is_empty(),
                         callee: Some(c),
@@ -408,12 +400,13 @@ impl<'a> Gen<'a> {
                 // A call through a value is a site: the bodies the callee
                 // node holds. A function named by the source (a declaration,
                 // an import binding, a closure expression) is no value call.
-                if byte_offset != 0
-                    && !matches!(
+                let value_site = site.filter(|_| {
+                    !matches!(
                         callee,
                         Expr::FuncRef(_) | Expr::ExternFuncRef { .. } | Expr::Closure { .. }
                     )
-                {
+                });
+                if let Some((byte_offset, _)) = value_site {
                     let key = self.m.atom("()");
                     self.read_sites.push(ReadSite {
                         global_get: false,
@@ -494,7 +487,7 @@ impl<'a> Gen<'a> {
     /// A closure expression: register, walk its body, return its token.
     pub(crate) fn closure(&mut self, fx: &Fx, e: &Expr) -> NodeId {
         let Expr::Closure { func_id: id, .. } = e else {
-            return self.m.top_tok_node;
+            return self.m.top_src("closure(): not a closure expression");
         };
         let canonical = self.emitted_closure(fx.module, *id).unwrap_or(e);
         self.feed_closure_captures(fx.module, e, canonical);
@@ -507,7 +500,7 @@ impl<'a> Gen<'a> {
             ..
         } = canonical
         else {
-            return self.m.top_tok_node;
+            return self.m.top_src("closure(): canonical body is not a closure");
         };
         let mi = fx.module;
         let name = self.modules[mi as usize]
@@ -1182,7 +1175,7 @@ impl<'a> Gen<'a> {
                 for a in args.iter().skip(1).chain(spread.iter()) {
                     self.m.cons(*a, Cons::TopSink { reason: r });
                 }
-                arg(0).unwrap_or(self.m.top_tok_node)
+                arg(0).unwrap_or_else(|| self.m.top_src("native call without argument 0"))
             }
             "js_object_lookup_getter" | "js_object_lookup_setter" => {
                 let Some(o) = arg(0) else {
@@ -1465,7 +1458,7 @@ pub(crate) fn stmt_reads_this(stmt: &Stmt) -> bool {
 fn expr_reads_this(e: &Expr) -> bool {
     match e {
         Expr::This
-        | Expr::SuperCall(_)
+        | Expr::SuperCall(_, _)
         | Expr::SuperCallSpread(_)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }

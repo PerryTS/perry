@@ -527,6 +527,7 @@ pub(crate) fn lower_decorators(
                     args: Vec::new(),
                     is_factory: false,
                     is_reflect_metadata: false,
+                    byte_offset: dec.span.lo.0,
                 }),
                 ast::Expr::Call(call) => {
                     // Get the callee name
@@ -552,6 +553,7 @@ pub(crate) fn lower_decorators(
                                                 args,
                                                 is_factory: true,
                                                 is_reflect_metadata: true,
+                                                byte_offset: dec.span.lo.0,
                                             });
                                         }
                                     }
@@ -575,6 +577,7 @@ pub(crate) fn lower_decorators(
                                 args,
                                 is_factory: true,
                                 is_reflect_metadata: false,
+                                byte_offset: dec.span.lo.0,
                             });
                         }
                     }

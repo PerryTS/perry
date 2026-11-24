@@ -280,6 +280,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
             if is_var_decl && init.is_some() {
                 if let Some(env_id) = ctx.active_with_envs_for_ident(&name).into_iter().next() {
                     result.push(Stmt::Let {
+                        byte_offset: decl.span.lo.0,
                         id,
                         name: name.clone(),
                         ty,
@@ -317,6 +318,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 }) if matches!(value.as_ref(), Expr::New { .. } | Expr::Object(_)) => {
                     let tmp_id = ctx.define_local("__nx_member_init".to_string(), Type::Any);
                     result.push(Stmt::Let {
+                        byte_offset: decl.span.lo.0,
                         id: tmp_id,
                         name: "__nx_member_init".to_string(),
                         ty: Type::Any,
@@ -334,6 +336,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                         byte_end: 0,
                     }));
                     result.push(Stmt::Let {
+                        byte_offset: decl.span.lo.0,
                         id,
                         name,
                         ty,
@@ -395,6 +398,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 }
             }
             result.push(Stmt::Let {
+                byte_offset: decl.span.lo.0,
                 id,
                 name,
                 ty,
@@ -458,9 +462,12 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // arrays use one shape proof; known nonarrays keep GetIterator.
             if use_state_tuple.is_none() {
                 if let (ast::Pat::Array(arr_pat), Some(init)) = (pattern, decl.init.as_ref()) {
-                    if let Some((mut stmts, plan)) =
-                        super::array_fast::plan_for_source(ctx, &arr_pat.elems, init)?
-                    {
+                    if let Some((mut stmts, plan)) = super::array_fast::plan_for_source(
+                        ctx,
+                        &arr_pat.elems,
+                        init,
+                        arr_pat.span.lo.0,
+                    )? {
                         lower_array_pattern_binding_guarded(
                             ctx,
                             arr_pat,
@@ -544,6 +551,7 @@ pub(crate) fn lower_var_decl_with_destructuring(
                 ctx.mark_local_immutable(id);
             }
             result.push(Stmt::Let {
+                byte_offset: decl.span.lo.0,
                 id,
                 name,
                 ty,

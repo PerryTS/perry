@@ -34,7 +34,7 @@ pub(crate) fn walk_init_for_closure_targets_in_stmt(
     out: &mut std::collections::BTreeSet<LocalId>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => {
             walk_init_for_closure_targets_in_expr(e, out);
         }
         Stmt::If {
@@ -91,7 +91,7 @@ pub(crate) fn walk_init_for_closure_targets_in_expr(
     }
     // Otherwise descend without recording.
     match e {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             walk_init_for_closure_targets_in_expr(callee, out);
             for a in args {
                 walk_init_for_closure_targets_in_expr(a, out);
@@ -112,6 +112,7 @@ pub(crate) fn walk_init_for_closure_targets_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             walk_init_for_closure_targets_in_expr(condition, out);
             walk_init_for_closure_targets_in_expr(then_expr, out);
@@ -148,7 +149,7 @@ pub(crate) fn walk_for_set_hidden_targets_in_stmt(
     out: &mut std::collections::BTreeSet<LocalId>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => {
             walk_for_set_hidden_targets_in_expr(e, out);
         }
         Stmt::If {
@@ -210,7 +211,7 @@ pub(crate) fn walk_for_set_hidden_targets_in_expr(
         Expr::Closure { body, .. } => {
             walk_for_set_hidden_targets_in_stmts(body, out);
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             walk_for_set_hidden_targets_in_expr(callee, out);
             for a in args {
                 walk_for_set_hidden_targets_in_expr(a, out);
@@ -231,6 +232,7 @@ pub(crate) fn walk_for_set_hidden_targets_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             walk_for_set_hidden_targets_in_expr(condition, out);
             walk_for_set_hidden_targets_in_expr(then_expr, out);
@@ -298,7 +300,7 @@ pub(crate) fn walk_for_funcref_calls_in_closures_in_stmt(
     out: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => {
             walk_for_funcref_calls_in_closures_in_expr(e, out);
         }
         Stmt::If {
@@ -330,7 +332,7 @@ pub(crate) fn walk_for_funcref_calls_in_closures_in_expr(
         return;
     }
     match e {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             walk_for_funcref_calls_in_closures_in_expr(callee, out);
             for a in args {
                 walk_for_funcref_calls_in_closures_in_expr(a, out);
@@ -365,7 +367,7 @@ pub(crate) fn walk_for_funcref_calls_in_body_stmt(
     out: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => {
             walk_for_funcref_calls_in_body_expr(e, out);
         }
         Stmt::If {
@@ -392,7 +394,7 @@ pub(crate) fn walk_for_funcref_calls_in_body_expr(
     e: &Expr,
     out: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
-    if let Expr::Call { callee, args, .. } = e {
+    if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = e {
         if let Expr::FuncRef(id) = callee.as_ref() {
             out.insert(*id);
         }
@@ -427,7 +429,7 @@ pub(crate) fn walk_for_funcref_calls_top_level_in_stmts(
 ) {
     for stmt in stmts {
         if let Stmt::Expr(e) = stmt {
-            if let Expr::Call { callee, .. } = e {
+            if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = e {
                 if let Expr::FuncRef(id) = callee.as_ref() {
                     out.insert(*id);
                 }

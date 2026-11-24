@@ -382,6 +382,7 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } = e
         {
             leaves(left, out);
@@ -430,6 +431,7 @@ pub(crate) fn try_lower_fact_add_tree(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<O
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } = e
         {
             let l = fold(ctx, left, values, next);

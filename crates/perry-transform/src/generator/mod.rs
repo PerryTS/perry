@@ -342,7 +342,7 @@ fn transform_generator_closures_in_stmts(
                     Stmt::Let { init: Some(e), .. }
                     | Stmt::Expr(e)
                     | Stmt::Throw(e)
-                    | Stmt::Return(Some(e)) => push_expr(&mut stack, e),
+                    | Stmt::Return(Some(e), _) => push_expr(&mut stack, e),
                     Stmt::If {
                         condition,
                         then_branch,
@@ -392,6 +392,7 @@ fn transform_generator_closures_in_stmts(
                     Stmt::Switch {
                         discriminant,
                         cases,
+                        ..
                     } => {
                         for case in cases.iter_mut().rev() {
                             push_stmt_slice(&mut stack, &mut case.body);
@@ -439,6 +440,7 @@ fn transform_generator_closures_in_stmts(
                     enclosing_class,
                     is_strict,
                     is_async,
+                    byte_offset,
                     ..
                 } = expr
                 {
@@ -459,6 +461,7 @@ fn transform_generator_closures_in_stmts(
                         // it under the original closure func_id. Alias it across.
                         alias_prologue_len(*func_id, synth_id);
                         let mut synth = Function {
+                            byte_offset: *byte_offset,
                             id: synth_id,
                             name: "__gen_closure_body".to_string(),
                             type_params: Vec::new(),
@@ -525,6 +528,7 @@ pub fn transform_plain_async_closure_body(
     is_strict: bool,
     next_local_id: &mut LocalId,
     next_func_id: &mut FuncId,
+    closure_offset: u32,
 ) -> Vec<Stmt> {
     // Construct a temporary Function so we can reuse the existing
     // `transform_generator_function_with_extra_captures` plumbing
@@ -535,6 +539,7 @@ pub fn transform_plain_async_closure_body(
         id
     };
     let mut synth = Function {
+        byte_offset: closure_offset,
         id: synth_func_id,
         name: "__async_closure_body".to_string(),
         type_params: Vec::new(),

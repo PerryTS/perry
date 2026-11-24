@@ -275,14 +275,16 @@ fn module_uses_global_math(module: &perry_hir::Module) -> bool {
             } if matches!(object.as_ref(), Expr::GlobalGet(0)) && is_math_member(property) => {
                 return true
             }
-            Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::String(s) if s == "Math") => {
+            Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(), Expr::String(s) if s == "Math") => {
                 return true
             }
             Expr::Closure { body, .. } if stmts_any_expr(body, &mut uses) => return true,
             _ => {}
         }
         let collapsed_callee = match expr {
-            Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } => {
+            Expr::Call { callee, .. }
+            | Expr::RegionCall { callee, .. }
+            | Expr::CallSpread { callee, .. } => {
                 matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
                     if matches!(object.as_ref(), Expr::GlobalGet(0)))
                 .then_some(callee.as_ref() as *const Expr)
@@ -331,7 +333,7 @@ fn module_uses_process_object(module: &perry_hir::Module) -> bool {
             // This also covers globalThis.process and a computed literal key.
             // Unknown global keys are covered by global_object::may_escape.
             Expr::PropertyGet { property, .. } if property == "process" => return true,
-            Expr::IndexGet { index, .. } if matches!(index.as_ref(), Expr::String(key) if key == "process") =>
+            Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } if matches!(index.as_ref(), Expr::String(key) if key == "process") =>
             {
                 return true;
             }
@@ -376,7 +378,7 @@ fn module_uses_webassembly_namespace(module: &perry_hir::Module) -> bool {
         }
         // Computed keys can still be locals here, before constant propagation.
         // The caller retains the WebAssembly token guard for these reads.
-        if let Expr::IndexGet { object, .. } = expr {
+        if let (Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }) = expr {
             if is_global_receiver(object) {
                 return true;
             }
@@ -451,7 +453,7 @@ fn module_uses_json_format(module: &perry_hir::Module) -> bool {
             || matches!(expr, Expr::PropertyGet { property, .. } if property == "console")
     }
     fn expr_uses_json_format(expr: &Expr) -> bool {
-        if let Expr::Call { callee, args, .. } = expr {
+        if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = expr {
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()
@@ -486,7 +488,7 @@ fn module_uses_json_format(module: &perry_hir::Module) -> bool {
         if namespace_value(expr)
             || matches!(expr, Expr::PropertyGet { property, .. }
                 if formatter_offset(property).is_some())
-            || matches!(expr, Expr::IndexGet { object, .. }
+            || matches!(expr, Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                 if matches!(object.as_ref(), Expr::GlobalGet(0) | Expr::GlobalThisExpr))
         {
             return true;

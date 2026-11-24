@@ -297,6 +297,9 @@ impl Model {
                 l.top_seed(n, self.cur_why, std::panic::Location::caller());
             }
         }
+        if top_new && self.stop_top.is_some() {
+            self.top_created(n, std::panic::Location::caller());
+        }
         if self.pts_entries & 0xfffff == 0 && self.pts_entries != 0 {
             if self
                 .budget
@@ -411,6 +414,7 @@ impl Model {
     /// Unknown code may run in `region` (a ⊤ or opaque callee, an operation
     /// on ⊤, a native handing a value to unknown code): it may throw anything
     /// it holds there.
+    #[track_caller]
     pub fn raise_top(&mut self, region: NodeId, from: NodeId, why: &'static str) {
         if region == u32::MAX || self.nodes[region as usize].pts.contains_tok(TOP) {
             return;
@@ -426,6 +430,9 @@ impl Model {
     /// from now on to `n` (a popped node) or, with `NO_NODE`, to `phase`
     /// (PERRY_FACTS_PROFILE only).
     pub fn prof_mark(&mut self, n: NodeId, phase: &'static str) {
+        if let Some(s) = self.stop_top.as_mut() {
+            s.phase = phase;
+        }
         let Some(p) = self.prof.as_mut() else { return };
         let (at, w0, ph) = p.at;
         let w = self.work.get() - w0;
@@ -731,6 +738,7 @@ impl Model {
         }
     }
 
+    #[track_caller]
     pub fn add_tok(&mut self, n: NodeId, t: Tok) {
         self.add_tok_arm(n, t, "")
     }
@@ -741,6 +749,13 @@ impl Model {
     /// caller's location; diagnostic only).
     #[track_caller]
     pub fn add_tok_arm(&mut self, n: NodeId, t: Tok, arm: &'static str) {
+        if t == TOP {
+            if let Some(s) = self.stop_top.as_ref() {
+                if !s.quiet_top && s.cur_pos() == crate::topstop::NOPOS {
+                    self.note_nopos(std::panic::Location::caller(), "top");
+                }
+            }
+        }
         if t == TOP
             && self.diagnostic.as_ref().is_some_and(|d| d.census.is_some())
             && !self
@@ -806,6 +821,22 @@ impl Model {
     /// unmodeled thing; only interned in explain mode (diagnostics).
     #[track_caller]
     pub fn add_top(&mut self, n: NodeId, why: impl FnOnce(&Self) -> String) {
+        if self.stop_top.is_some() && !self.explain && self.diagnostic.is_none() {
+            // `add_top_inner` without diagnostics, the origin's name kept
+            // for `top_created`.
+            let w = why(self);
+            if self.stop_top.as_ref().unwrap().cur_pos() == crate::topstop::NOPOS {
+                self.note_nopos(std::panic::Location::caller(), "top");
+            }
+            let s = self.stop_top.as_mut().unwrap();
+            let old = s.why.replace(w);
+            let q = std::mem::replace(&mut s.quiet_top, true);
+            self.add_tok(n, TOP);
+            let s = self.stop_top.as_mut().unwrap();
+            s.why = old;
+            s.quiet_top = q;
+            return;
+        }
         if self.diagnostic.as_ref().is_some_and(|d| d.census.is_some()) {
             let w = why(self);
             let at = std::panic::Location::caller();
@@ -873,6 +904,16 @@ impl Model {
         }
     }
 
+    /// The shared ⊤ holder (`top_tok_node`); under `PERRY_FACTS_STOP_ON_TOP`
+    /// a named one (`top_val`), so the creation is reported with its origin.
+    #[track_caller]
+    pub fn top_src(&mut self, why: &str) -> NodeId {
+        if self.stop_top.is_some() {
+            return self.top_val(why);
+        }
+        self.top_tok_node
+    }
+
     /// A node holding only ⊤ (all kinds) for one named unmodeled origin.
     #[track_caller]
     pub fn top_val(&mut self, why: &str) -> NodeId {
@@ -880,6 +921,22 @@ impl Model {
             crate::unksrc::note("topval", why, u32::MAX, self.cur_fn as u32);
         }
         // Explain and the dump name each origin: its own node.
+        if let Some(s) = self.stop_top.as_ref() {
+            // One holder per creation point, named (`topstop`).
+            let p = s.cur_pos();
+            let n = self.node_l("TOPVAL");
+            let at = std::panic::Location::caller();
+            if p == crate::topstop::NOPOS {
+                self.note_nopos(at, "topval");
+            }
+            let s = self.stop_top.as_mut().unwrap();
+            s.topvals.insert(n, (why.to_string(), at, p));
+            let q = std::mem::replace(&mut s.quiet_top, true);
+            self.add_tok(n, TOP);
+            self.stop_top.as_mut().unwrap().quiet_top = q;
+            self.add_prim(n, prim::ALL);
+            return n;
+        }
         if !self.explain && self.diagnostic.is_none() {
             return self.top_tok_node;
         }
@@ -918,6 +975,7 @@ impl Model {
     /// Attach a complex constraint and apply it to what the node holds now.
     /// Inside a clause of a switch on a parameter the rules it adds to `n`
     /// record the clause's reach mask (rule M1, `Model::cons_reach`).
+    #[track_caller]
     pub fn cons(&mut self, n: NodeId, c: Cons) {
         let tag = match self.clause {
             Some((f, m)) if self.cur_fn == f => Some(m),
@@ -932,6 +990,7 @@ impl Model {
         }
     }
 
+    #[track_caller]
     fn cons_untagged(&mut self, n: NodeId, c: Cons) {
         let defer = std::mem::take(&mut self.chain_defer);
         #[cfg(test)]
@@ -1003,6 +1062,16 @@ impl Model {
             }
         }
         self.nodes[n as usize].cons.push(c);
+        let ci = self.nodes[n as usize].cons.len() as u32 - 1;
+        if let Some(s) = self.stop_top.as_mut() {
+            let p = s.cur_pos();
+            s.cons_pos.insert((n, ci), p);
+            if p == crate::topstop::NOPOS {
+                let at = std::panic::Location::caller();
+                s.cons_at.insert((n, ci), at);
+                self.note_nopos(at, "cons");
+            }
+        }
         if let Some(region) = self.gen_region.filter(|_| Self::may_run_code(&c)) {
             let cs = &self.nodes[n as usize].cons;
             let seen = cs
@@ -1023,14 +1092,14 @@ impl Model {
         self.own_refuted_cons(n, c);
         if defer {
             // SKINROOT27: replayed by the draining EnumChain (`Model::chain_q`).
-            self.chain_q.push((n, c));
+            self.chain_q.push((n, c, ci));
             return;
         }
-        self.replay_cons(n, c);
+        self.replay_cons(n, c, ci);
     }
 
     /// Apply the attached constraint `c` of `n` to what `n` holds now.
-    pub(crate) fn replay_cons(&mut self, n: NodeId, c: Cons) {
+    pub(crate) fn replay_cons(&mut self, n: NodeId, c: Cons, ci: u32) {
         let prim = self.nodes[n as usize].prim;
         if self.nodes[n as usize].pts.is_empty() && prim == 0 {
             return;
@@ -1056,7 +1125,11 @@ impl Model {
         } else {
             0
         };
+        let rule0 = self.stop_top.as_mut().map(|s| s.enter_rule(n, c, ci));
         self.with_s(|m| m.apply(n, &c, &toks, prim));
+        if let (Some(r0), Some(s)) = (rule0, self.stop_top.as_mut()) {
+            s.leave_rule(r0);
+        }
         (self.prov_mode, self.prov_rule) = pv;
         if on {
             self.prov_in_set(pin);
@@ -1320,7 +1393,11 @@ impl Model {
                     (self.prov_mode, self.prov_rule) = (crate::provenance::PM_RULE, Some((n, c)));
                     self.prov_in_set(0);
                 }
+                let rule0 = self.stop_top.as_mut().map(|s| s.enter_rule(n, c, i as u32));
                 self.apply_tokens(n, &c, Tokens::Pending(&delta), p);
+                if let (Some(r0), Some(s)) = (rule0, self.stop_top.as_mut()) {
+                    s.leave_rule(r0);
+                }
             }
             delta.clear();
         }
@@ -1947,6 +2024,30 @@ impl Model {
         proto: Protocol,
         region: NodeId,
     ) -> Option<NodeId> {
+        if self.stop_top.is_some() {
+            let p = self.stop_top.as_ref().unwrap().cur_pos();
+            if p == crate::topstop::NOPOS {
+                self.note_nopos(std::panic::Location::caller(), "implicit-request");
+            }
+            let what = || format!("{proto:?} touch on {}", self.tok_words(t));
+            let w = if self
+                .stop_top
+                .as_ref()
+                .unwrap()
+                .shared_key
+                .contains_key(&(t, proto))
+            {
+                String::new()
+            } else {
+                what()
+            };
+            let s = self.stop_top.as_mut().unwrap();
+            let id = s.shared_call((t, proto), || w, p);
+            if !self.implicit_done.contains_key(&(t, proto)) {
+                // `implicit` builds the touch's nodes and rules under it.
+                s.shared_pos = (crate::topstop::SHARED, id);
+            }
+        }
         if let Some(&throw) = self.implicit_done.get(&(t, proto)) {
             self.edge(throw, region);
             return None;
@@ -1967,7 +2068,13 @@ impl Model {
     /// `console.log`), so it reaches `region`: one `implicit-throw` node per
     /// `(t, proto)` is the region of the touch's calls and of the touches it
     /// runs in turn, and feeds the region of every request.
+    #[track_caller]
     pub fn implicit(&mut self, t: Tok, reason: u32, proto: Protocol, region: NodeId) {
+        self.shared_scope(|m| m.implicit_touch(t, reason, proto, region));
+    }
+
+    #[track_caller]
+    fn implicit_touch(&mut self, t: Tok, reason: u32, proto: Protocol, region: NodeId) {
         // A Proxy's ToPrimitive runs its [[Get]]s (`proxy_to_primitive`),
         // the formatter shows it running no trap (`proxy_inspect_shown`),
         // JSON serializes it through its internal methods (`proxy_json`).

@@ -430,6 +430,7 @@ fn lower_call_inner(
                         && matches!(method_name, "Database" | "DatabaseSync")
                     {
                         return Ok(Expr::NativeMethodCall {
+                            byte_offset: crate::lower::call_token(call),
                             module: "sqlite".to_string(),
                             class_name: None,
                             object: None,
@@ -511,7 +512,7 @@ fn lower_call_inner(
             if let Some(spread_args) = spread_args {
                 return Ok(Expr::SuperCallSpread(spread_args));
             }
-            Ok(Expr::SuperCall(args))
+            Ok(Expr::SuperCall(args, call.span.lo.0))
         }
         ast::Callee::Expr(expr) => {
             // Check for super.method() call
@@ -541,6 +542,7 @@ fn lower_call_inner(
                     ast::SuperProp::Ident(ident) => {
                         if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
                             return Ok(Expr::ObjectSuperMethodCall {
+                                byte_offset: crate::lower::call_token(call),
                                 home: Box::new(Expr::LocalGet(home_id)),
                                 key: Box::new(Expr::String(ident.sym.to_string())),
                                 receiver: Box::new(Expr::This),
@@ -561,6 +563,7 @@ fn lower_call_inner(
                     ast::SuperProp::Computed(computed) => {
                         if let Some(home_id) = ctx.object_super_home_stack.last().copied() {
                             return Ok(Expr::ObjectSuperMethodCall {
+                                byte_offset: crate::lower::call_token(call),
                                 home: Box::new(Expr::LocalGet(home_id)),
                                 key: Box::new(lower_expr(ctx, computed.expr.as_ref())?),
                                 receiver: Box::new(Expr::This),
@@ -618,6 +621,7 @@ fn lower_call_inner(
                                 }
                             };
                             return Ok(Expr::ObjectSuperMethodCall {
+                                byte_offset: crate::lower::call_token(call),
                                 home: Box::new(home),
                                 key: Box::new(lower_expr(ctx, computed.expr.as_ref())?),
                                 receiver: Box::new(Expr::This),
@@ -652,10 +656,11 @@ fn lower_call_inner(
                         callee: Box::new(super::lower_expr::native_module_binding_value(
                             ctx,
                             ident.sym.as_ref(),
+                            ident.span.lo.0,
                         )),
                         args,
                         type_args: Vec::new(),
-                        byte_offset: call.span.lo.0,
+                        byte_offset: crate::lower::call_token(call),
                     });
                 }
                 if native_module::namespace_call_needs_esm_binding(ctx, expr) {
@@ -663,7 +668,7 @@ fn lower_call_inner(
                         callee: Box::new(lower_expr(ctx, expr)?),
                         args,
                         type_args: Vec::new(),
-                        byte_offset: call.span.lo.0,
+                        byte_offset: crate::lower::call_token(call),
                         byte_end: 0,
                     });
                 }
@@ -682,19 +687,19 @@ fn lower_call_inner(
                     Ok(e) => return Ok(e),
                     Err(a) => a,
                 };
-                args = match try_util_types_namespace(ctx, expr, args)? {
+                args = match try_util_types_namespace(ctx, expr, args, call.span.lo.0)? {
                     Ok(e) => return Ok(e),
                     Err(a) => a,
                 };
-                args = match try_dns_promises_namespace(ctx, expr, args)? {
+                args = match try_dns_promises_namespace(ctx, expr, args, call.span.lo.0)? {
                     Ok(e) => return Ok(e),
                     Err(a) => a,
                 };
-                args = match try_punycode_ucs2_namespace(ctx, expr, args)? {
+                args = match try_punycode_ucs2_namespace(ctx, expr, args, call.span.lo.0)? {
                     Ok(e) => return Ok(e),
                     Err(a) => a,
                 };
-                args = match try_path_subnamespace(ctx, expr, args) {
+                args = match try_path_subnamespace(ctx, expr, args, call.span.lo.0) {
                     Ok(e) => return Ok(e),
                     Err(a) => a,
                 };
@@ -902,7 +907,7 @@ fn lower_call_inner(
                     // #5247: capture the call's source byte offset (same source as
                     // DynamicImport's `byte_offset` below). Codegen resolves it to a
                     // `file:line` for the runtime "X is not a function" TypeError.
-                    byte_offset: call.span.lo.0,
+                    byte_offset: crate::lower::call_token(call),
                 })
             }
         }

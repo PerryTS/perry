@@ -103,6 +103,8 @@ struct StateBinding {
     /// to compute the literal string the bound `Text` widget displays
     /// before the first `.set()` call updates it.
     initial: Expr,
+    /// Source offset of the `state<T>(initial)` call; `__state_init` stands there.
+    byte_offset: u32,
 }
 
 /// Run the desugar. No-op when the module has no `state<T>` declarations.
@@ -221,7 +223,7 @@ fn scan_stmt_handle_uses(stmt: &Stmt, out: &mut HashSet<LocalId>) {
     match stmt {
         Stmt::Let { init: Some(e), .. } => scan_expr_handle_uses(e, out),
         Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_handle_uses(e, out),
-        Stmt::Return(Some(e)) => scan_expr_handle_uses(e, out),
+        Stmt::Return(Some(e), _) => scan_expr_handle_uses(e, out),
         Stmt::If {
             condition,
             then_branch,
@@ -285,6 +287,7 @@ fn scan_stmt_handle_uses(stmt: &Stmt, out: &mut HashSet<LocalId>) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             scan_expr_handle_uses(discriminant, out);
             for case in cases {
@@ -343,6 +346,7 @@ fn collect_state_bindings(init: &[Stmt]) -> HashMap<LocalId, StateBinding> {
                 method,
                 object: None,
                 args,
+                byte_offset,
                 ..
             } = call_expr
             {
@@ -365,6 +369,7 @@ fn collect_state_bindings(init: &[Stmt]) -> HashMap<LocalId, StateBinding> {
                         StateBinding {
                             synth_id,
                             initial: args[0].clone(),
+                            byte_offset: *byte_offset,
                         },
                     );
                 }
@@ -390,9 +395,11 @@ fn rewrite_init_decls(init: &mut Vec<Stmt>, bindings: &HashMap<LocalId, StateBin
                 ref ty,
                 mutable,
                 init: Some(_),
+                ..
             } if bindings.contains_key(&id) => {
                 let binding = &bindings[&id];
                 new_stmts.push(Stmt::Let {
+                    byte_offset: 0, /*HPOS*/
                     id,
                     name: name.clone(),
                     ty: ty.clone(),
@@ -402,6 +409,7 @@ fn rewrite_init_decls(init: &mut Vec<Stmt>, bindings: &HashMap<LocalId, StateBin
                 new_stmts.push(Stmt::Expr(state_init_call(
                     &binding.synth_id,
                     binding.initial.clone(),
+                    binding.byte_offset,
                 )));
             }
             other => new_stmts.push(other),
@@ -426,7 +434,7 @@ fn rewrite_stmts(
 fn rewrite_stmt(stmt: &mut Stmt, bindings: &HashMap<LocalId, StateBinding>, fresh: &mut FreshIds) {
     match stmt {
         Stmt::Expr(e) => rewrite_expr(e, bindings, fresh),
-        Stmt::Return(Some(e)) => rewrite_expr(e, bindings, fresh),
+        Stmt::Return(Some(e), _) => rewrite_expr(e, bindings, fresh),
         Stmt::Throw(e) => rewrite_expr(e, bindings, fresh),
         Stmt::Let { init: Some(e), .. } => rewrite_expr(e, bindings, fresh),
         Stmt::If {
@@ -478,6 +486,7 @@ fn rewrite_stmt(stmt: &mut Stmt, bindings: &HashMap<LocalId, StateBinding>, fres
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             rewrite_expr(discriminant, bindings, fresh);
             for case in cases {
@@ -584,6 +593,14 @@ fn try_rewrite_foreach(
     bindings: &HashMap<LocalId, StateBinding>,
     fresh: &mut FreshIds,
 ) -> Option<Expr> {
+    let Expr::NativeMethodCall {
+        byte_offset: call_offset,
+        ..
+    } = e
+    else {
+        return None;
+    };
+    let call_offset = *call_offset;
     let (state_id, render_closure) = match e {
         Expr::NativeMethodCall {
             module,
@@ -616,11 +633,13 @@ fn try_rewrite_foreach(
 
     // let __fe_host = VStack(0);
     body_stmts.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: host_id,
         name: format!("__fe_host_{}", host_id),
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::NativeMethodCall {
+            byte_offset: call_offset,
             module: "perry/ui".to_string(),
             class_name: None,
             object: None,
@@ -632,6 +651,7 @@ fn try_rewrite_foreach(
     // __foreach_register call site sees the same SSA name as we'd want
     // to capture (avoids re-evaluating the closure construction expr).
     body_stmts.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: render_id,
         name: format!("__fe_render_{}", render_id),
         ty: Type::Any,
@@ -640,6 +660,7 @@ fn try_rewrite_foreach(
     });
     // __foreach_register("synth_id", __fe_host, __fe_render);
     body_stmts.push(Stmt::Expr(Expr::NativeMethodCall {
+        byte_offset: call_offset,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,
@@ -650,10 +671,11 @@ fn try_rewrite_foreach(
             Expr::LocalGet(render_id),
         ],
     }));
-    body_stmts.push(Stmt::Return(Some(Expr::LocalGet(host_id))));
+    body_stmts.push(Stmt::Return(Some(Expr::LocalGet(host_id)), call_offset));
 
     let func_id = fresh.fresh_func();
     let closure = Expr::Closure {
+        byte_offset: call_offset,
         func_id,
         params: Vec::<Param>::new(),
         return_type: Type::Any,
@@ -674,7 +696,7 @@ fn try_rewrite_foreach(
         callee: Box::new(closure),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: call_offset,
     })
 }
 
@@ -710,6 +732,14 @@ fn try_rewrite_navstack(
     // Detect the 2-arg shape first. Only when the call IS the documented
     // 2-arg NavStack and *we* fail to rewrite it do we emit a warning —
     // anything else is some other expression, not our concern.
+    let Expr::NativeMethodCall {
+        byte_offset: call_offset,
+        ..
+    } = e
+    else {
+        return None;
+    };
+    let call_offset = *call_offset;
     let (state_arg, route_array_arg) = match e {
         Expr::NativeMethodCall {
             module,
@@ -805,11 +835,13 @@ fn try_rewrite_navstack(
 
     // let __nav_host = NavStack();
     body_stmts.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: host_id,
         name: format!("__nav_host_{}", host_id),
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::NativeMethodCall {
+            byte_offset: call_offset,
             module: "perry/ui".to_string(),
             class_name: None,
             object: None,
@@ -822,6 +854,7 @@ fn try_rewrite_navstack(
         let route_id = fresh.fresh_local();
         // let __nav_route_N = <body>;
         body_stmts.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: route_id,
             name: format!("__nav_route_{}", route_id),
             ty: Type::Any,
@@ -830,6 +863,7 @@ fn try_rewrite_navstack(
         });
         // widgetAddChild(__nav_host, __nav_route_N);
         body_stmts.push(Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: call_offset,
             module: "perry/ui".to_string(),
             class_name: None,
             object: None,
@@ -838,6 +872,7 @@ fn try_rewrite_navstack(
         }));
         // __navstack_register_route("__state_X", "name", __nav_route_N);
         body_stmts.push(Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: call_offset,
             module: "perry/ui".to_string(),
             class_name: None,
             object: None,
@@ -849,10 +884,11 @@ fn try_rewrite_navstack(
             ],
         }));
     }
-    body_stmts.push(Stmt::Return(Some(Expr::LocalGet(host_id))));
+    body_stmts.push(Stmt::Return(Some(Expr::LocalGet(host_id)), call_offset));
 
     let func_id = fresh.fresh_func();
     let closure = Expr::Closure {
+        byte_offset: call_offset,
         func_id,
         params: Vec::<Param>::new(),
         return_type: Type::Any,
@@ -873,7 +909,7 @@ fn try_rewrite_navstack(
         callee: Box::new(closure),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: call_offset,
     })
 }
 
@@ -919,7 +955,7 @@ fn expr_kind_for_diag(e: &Expr) -> &'static str {
         Expr::GlobalGet(_) => {
             "a module-global read (imported binding) — inline as a string literal"
         }
-        Expr::Call { .. } | Expr::CallSpread { .. } => "a function call",
+        Expr::Call { .. } | Expr::RegionCall { .. } | Expr::CallSpread { .. } => "a function call",
         Expr::Closure { .. } => "a closure",
         Expr::PropertyGet { .. } => "a property access (e.g. `routes.HOME`)",
         Expr::Array(_, _) | Expr::ArraySpread(_) => "an array literal",
@@ -940,7 +976,13 @@ fn expr_kind_for_diag(e: &Expr) -> &'static str {
 /// otherwise. Does not recurse into children — the caller does that
 /// after this returns `None`.
 fn try_rewrite_state_access(e: &Expr, bindings: &HashMap<LocalId, StateBinding>) -> Option<Expr> {
-    if let Expr::Call { callee, args, .. } = e {
+    if let Expr::Call {
+        callee,
+        args,
+        byte_offset,
+        ..
+    } = e
+    {
         if let Expr::PropertyGet {
             object, property, ..
         } = callee.as_ref()
@@ -948,11 +990,15 @@ fn try_rewrite_state_access(e: &Expr, bindings: &HashMap<LocalId, StateBinding>)
             if let Expr::LocalGet(state_id) = object.as_ref() {
                 if let Some(binding) = bindings.get(state_id) {
                     return match property.as_str() {
-                        "get" if args.is_empty() => Some(state_get_call(&binding.synth_id)),
-                        "set" if args.len() == 1 => {
-                            Some(state_set_call(&binding.synth_id, args[0].clone()))
+                        "get" if args.is_empty() => {
+                            Some(state_get_call(&binding.synth_id, *byte_offset))
                         }
-                        "text" if args.is_empty() => Some(state_text_call(binding)),
+                        "set" if args.len() == 1 => Some(state_set_call(
+                            &binding.synth_id,
+                            args[0].clone(),
+                            *byte_offset,
+                        )),
+                        "text" if args.is_empty() => Some(state_text_call(binding, *byte_offset)),
                         _ => None,
                     };
                 }
@@ -960,13 +1006,16 @@ fn try_rewrite_state_access(e: &Expr, bindings: &HashMap<LocalId, StateBinding>)
         }
     }
     if let Expr::PropertyGet {
-        object, property, ..
+        object,
+        property,
+        byte_offset,
+        ..
     } = e
     {
         if property == "value" {
             if let Expr::LocalGet(state_id) = object.as_ref() {
                 if let Some(binding) = bindings.get(state_id) {
-                    return Some(state_get_call(&binding.synth_id));
+                    return Some(state_get_call(&binding.synth_id, *byte_offset));
                 }
             }
         }
@@ -984,6 +1033,7 @@ fn try_rewrite_state_access(e: &Expr, bindings: &HashMap<LocalId, StateBinding>)
         object: Some(obj),
         method,
         args,
+        byte_offset,
         ..
     } = e
     {
@@ -996,12 +1046,14 @@ fn try_rewrite_state_access(e: &Expr, bindings: &HashMap<LocalId, StateBinding>)
                 if let Some(binding) = bindings.get(state_id) {
                     return match method.as_str() {
                         "get" | "value" if args.is_empty() => {
-                            Some(state_get_call(&binding.synth_id))
+                            Some(state_get_call(&binding.synth_id, *byte_offset))
                         }
-                        "set" if args.len() == 1 => {
-                            Some(state_set_call(&binding.synth_id, args[0].clone()))
-                        }
-                        "text" if args.is_empty() => Some(state_text_call(binding)),
+                        "set" if args.len() == 1 => Some(state_set_call(
+                            &binding.synth_id,
+                            args[0].clone(),
+                            *byte_offset,
+                        )),
+                        "text" if args.is_empty() => Some(state_text_call(binding, *byte_offset)),
                         _ => None,
                     };
                 }
@@ -1011,8 +1063,9 @@ fn try_rewrite_state_access(e: &Expr, bindings: &HashMap<LocalId, StateBinding>)
     None
 }
 
-fn state_init_call(synth_id: &str, initial: Expr) -> Expr {
+fn state_init_call(synth_id: &str, initial: Expr, byte_offset: u32) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,
@@ -1021,8 +1074,9 @@ fn state_init_call(synth_id: &str, initial: Expr) -> Expr {
     }
 }
 
-fn state_get_call(synth_id: &str) -> Expr {
+fn state_get_call(synth_id: &str, byte_offset: u32) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,
@@ -1031,8 +1085,9 @@ fn state_get_call(synth_id: &str) -> Expr {
     }
 }
 
-fn state_set_call(synth_id: &str, value: Expr) -> Expr {
+fn state_set_call(synth_id: &str, value: Expr, byte_offset: u32) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,
@@ -1041,7 +1096,7 @@ fn state_set_call(synth_id: &str, value: Expr) -> Expr {
     }
 }
 
-fn state_text_call(binding: &StateBinding) -> Expr {
+fn state_text_call(binding: &StateBinding, byte_offset: u32) -> Expr {
     let initial_str = match &binding.initial {
         Expr::String(s) => s.clone(),
         Expr::Number(n) => format_number(*n),
@@ -1050,6 +1105,7 @@ fn state_text_call(binding: &StateBinding) -> Expr {
         _ => String::new(),
     };
     Expr::NativeMethodCall {
+        byte_offset,
         module: "perry/ui".to_string(),
         class_name: None,
         object: None,
@@ -1078,11 +1134,13 @@ mod tests {
 
     fn state_let(id: LocalId, method: &str, initial: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("cell_{}", id),
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::NativeMethodCall {
+                byte_offset: 0,
                 module: "perry/ui".to_string(),
                 class_name: None,
                 object: None,
@@ -1094,6 +1152,7 @@ mod tests {
 
     fn handle_call(method: &str, state_id: LocalId) -> Stmt {
         Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "perry/ui".to_string(),
             class_name: None,
             object: None,
@@ -1101,6 +1160,7 @@ mod tests {
             args: vec![
                 Expr::LocalGet(state_id),
                 Expr::Closure {
+                    byte_offset: 0,
                     func_id: 100,
                     params: vec![],
                     return_type: Type::Any,
@@ -1122,6 +1182,7 @@ mod tests {
 
     fn set_method_call(state_id: LocalId, value: &str) -> Stmt {
         Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "perry/ui".to_string(),
             class_name: Some("State".to_string()),
             object: Some(Box::new(Expr::LocalGet(state_id))),
@@ -1230,6 +1291,7 @@ mod tests {
             .init
             .push(state_let(0, "State", Expr::String("v".to_string())));
         module.functions.push(Function {
+            byte_offset: 0,
             id: 0,
             name: "main".to_string(),
             params: vec![],

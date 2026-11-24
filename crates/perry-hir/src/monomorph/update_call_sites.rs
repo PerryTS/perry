@@ -49,7 +49,7 @@ fn update_call_sites_in_stmt(
             }
         }
         Stmt::Expr(expr) => update_call_sites_in_expr(expr, ctx, lookup),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(e) = expr {
                 update_call_sites_in_expr(e, ctx, lookup);
             }
@@ -111,6 +111,7 @@ fn update_call_sites_in_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             update_call_sites_in_expr(discriminant, ctx, lookup);
             for case in cases {
@@ -231,7 +232,7 @@ fn update_call_sites_in_expr(
         Expr::PropertyUpdate { object, .. } => {
             update_call_sites_in_expr(object, ctx, lookup);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             update_call_sites_in_expr(object, ctx, lookup);
             update_call_sites_in_expr(index, ctx, lookup);
         }
@@ -273,6 +274,7 @@ fn update_call_sites_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             update_call_sites_in_expr(condition, ctx, lookup);
             update_call_sites_in_expr(then_expr, ctx, lookup);
@@ -291,8 +293,8 @@ fn update_call_sites_in_expr(
                 update_call_sites_in_expr(t, ctx, lookup);
             }
         }
-        Expr::Await(inner) => update_call_sites_in_expr(inner, ctx, lookup),
-        Expr::SuperCall(args) => {
+        Expr::Await(inner, _) => update_call_sites_in_expr(inner, ctx, lookup),
+        Expr::SuperCall(args, _) => {
             for arg in args.iter_mut() {
                 update_call_sites_in_expr(arg, ctx, lookup);
             }
@@ -331,6 +333,7 @@ fn update_call_sites_in_expr(
             key,
             receiver,
             args,
+            ..
         } => {
             update_call_sites_in_expr(home, ctx, lookup);
             update_call_sites_in_expr(key, ctx, lookup);
@@ -727,7 +730,9 @@ fn infer_expr_type_from_lookup(expr: &Expr, lookup: &InferenceLookup) -> Option<
 
         Expr::New { class_name, .. } => Some(Type::Named(class_name.clone())),
 
-        Expr::Binary { op, left, right } => match op {
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
             BinaryOp::Add
             | BinaryOp::Sub
             | BinaryOp::Mul

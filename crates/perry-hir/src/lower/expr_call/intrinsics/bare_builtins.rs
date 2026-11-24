@@ -184,19 +184,19 @@ pub(crate) fn try_iterator_from(
         let iterator = Expr::PropertyGet {
             object: Box::new(Expr::GlobalGet(0)),
             property: "Iterator".to_string(),
-            byte_offset: 0,
+            byte_offset: call.span.lo.0,
             byte_end: 0,
         };
         return Ok(Some(Expr::Call {
             callee: Box::new(Expr::PropertyGet {
                 object: Box::new(iterator),
                 property: "concat".to_string(),
-                byte_offset: 0,
+                byte_offset: crate::lower::call_token(call),
                 byte_end: 0,
             }),
             args,
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset: crate::lower::call_token(call),
             byte_end: 0,
         }));
     }

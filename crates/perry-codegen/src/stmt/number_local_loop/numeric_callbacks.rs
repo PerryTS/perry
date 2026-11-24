@@ -148,7 +148,9 @@ pub(crate) fn try_lower(
         let value = lower_expr(ctx, arg)?;
         let raw = match arg {
             Expr::LocalGet(id) => ctx.receiver_descriptors.callback_local_is_raw_f64(*id),
-            Expr::Call { callee, args, .. } => returns_number(ctx, callee, args.len()),
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
+                returns_number(ctx, callee, args.len())
+            }
             _ => false,
         };
         values.push(if raw {
@@ -227,8 +229,9 @@ pub(super) fn scalar_loop(
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => expr(ctx, condition, n) && expr(ctx, then_expr, n) && expr(ctx, else_expr, n),
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 candidate(ctx, callee, args.len()).is_some() && args.iter().all(|a| expr(ctx, a, n))
             }
             _ => false,
@@ -241,7 +244,7 @@ pub(super) fn scalar_loop(
         use perry_hir::Stmt;
         match s {
             Stmt::Expr(e) | Stmt::Throw(e) => expr(ctx, e, n),
-            Stmt::Let { init, .. } | Stmt::Return(init) => {
+            Stmt::Let { init, .. } | Stmt::Return(init, _) => {
                 init.as_ref().is_none_or(|e| expr(ctx, e, n))
             }
             Stmt::If {

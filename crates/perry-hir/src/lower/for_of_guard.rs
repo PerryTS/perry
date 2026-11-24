@@ -110,8 +110,9 @@ fn admitted_binding(stmt: &ast::ForOfStmt) -> Option<(&ast::VarDecl, &ast::Bindi
     (!labeled.0).then_some((var_decl.as_ref(), binding))
 }
 
-fn runtime(method: &str, args: Vec<Expr>) -> Expr {
+fn runtime(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -140,11 +141,13 @@ pub(crate) fn admitted_typed_array_holder(
     ctx: &mut LoweringContext,
     source: Expr,
     out: &mut Vec<Stmt>,
+    byte_offset: u32,
 ) -> Expr {
     let id = ctx.fresh_local();
     let name = format!("{TEMP_PREFIX}ta_{id}");
     ctx.locals.push((name.clone(), id, Type::Any));
     out.push(Stmt::Let {
+        byte_offset,
         id,
         name,
         ty: Type::Any,
@@ -152,9 +155,15 @@ pub(crate) fn admitted_typed_array_holder(
         init: Some(source),
     });
     Expr::Conditional {
+        byte_offset,
         condition: Box::new(Expr::Compare {
+            byte_offset,
             op: CompareOp::Eq,
-            left: Box::new(runtime("typedArrayForOfAdmits", vec![Expr::LocalGet(id)])),
+            left: Box::new(runtime(
+                "typedArrayForOfAdmits",
+                vec![Expr::LocalGet(id)],
+                byte_offset,
+            )),
             right: Box::new(Expr::Bool(true)),
         }),
         then_expr: Box::new(Expr::LocalGet(id)),
@@ -264,6 +273,7 @@ fn source_for_of(
         ctx.locals
             .push((source_name.clone(), source, source_ty.clone()));
         out.push(Stmt::Let {
+            byte_offset: stmt.span.lo.0,
             id: source,
             name: source_name.clone(),
             ty: source_ty.clone(),
@@ -323,12 +333,13 @@ fn source_for_of(
         ctx.pop_block_scope(body_scope);
         let body = body?;
         let mut loop_body = vec![Stmt::Let {
+            byte_offset: stmt.span.lo.0,
             id: x,
             name,
             ty: element_ty,
             mutable: var_decl.kind != ast::VarDeclKind::Const,
             init: Some(Expr::IndexGet {
-                byte_offset: 0,
+                byte_offset: stmt.span.lo.0,
                 byte_end: 0,
                 element_offset: walk_site_key(binding),
                 object: Box::new(Expr::LocalGet(array)),
@@ -338,6 +349,7 @@ fn source_for_of(
         loop_body.extend(body);
         let counted = Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: stmt.span.lo.0,
                 id: counter,
                 name: counter_name,
                 ty: Type::Number,
@@ -345,10 +357,11 @@ fn source_for_of(
                 init: Some(Expr::Integer(0)),
             })),
             condition: Some(Expr::Compare {
+                byte_offset: stmt.span.lo.0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(counter)),
                 right: Box::new(Expr::PropertyGet {
-                    byte_offset: 0,
+                    byte_offset: stmt.span.lo.0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(array)),
                     property: "length".into(),
@@ -371,6 +384,7 @@ fn source_for_of(
             protocol_source = format!("{TEMP_PREFIX}any_{any}");
             ctx.locals.push((protocol_source.clone(), any, Type::Any));
             protocol.push(Stmt::Let {
+                byte_offset: stmt.span.lo.0,
                 id: any,
                 name: protocol_source.clone(),
                 ty: Type::Any,
@@ -397,17 +411,24 @@ fn source_for_of(
         }
         let plain = if typed {
             Expr::Compare {
+                byte_offset: stmt.span.lo.0,
                 op: CompareOp::Eq,
                 left: Box::new(runtime(
                     "typedArrayForOfAdmits",
                     vec![Expr::LocalGet(source)],
+                    stmt.span.lo.0,
                 )),
                 right: Box::new(Expr::Bool(true)),
             }
         } else {
             Expr::Compare {
+                byte_offset: stmt.span.lo.0,
                 op: CompareOp::Eq,
-                left: Box::new(runtime("arrayRecordNeedsIterator", entry_args)),
+                left: Box::new(runtime(
+                    "arrayRecordNeedsIterator",
+                    entry_args,
+                    stmt.span.lo.0,
+                )),
                 right: Box::new(Expr::Bool(false)),
             }
         };
@@ -416,6 +437,7 @@ fn source_for_of(
         } else {
             vec![
                 Stmt::Let {
+                    byte_offset: stmt.span.lo.0,
                     id: array,
                     name: array_name,
                     ty: array_ty,
@@ -545,6 +567,7 @@ fn literal_for_of(
             let name = format!("{TEMP_PREFIX}{id}");
             ctx.locals.push((name.clone(), id, Type::Any));
             out.push(Stmt::Let {
+                byte_offset: stmt.span.lo.0,
                 id,
                 name: name.clone(),
                 ty: Type::Any,
@@ -571,7 +594,9 @@ fn literal_for_of(
         let mut select = Expr::LocalGet(temps[n - 1].0);
         for (i, (id, _)) in temps.iter().enumerate().take(n - 1).rev() {
             select = Expr::Conditional {
+                byte_offset: stmt.span.lo.0,
                 condition: Box::new(Expr::Compare {
+                    byte_offset: stmt.span.lo.0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(counter)),
                     right: Box::new(Expr::Integer(i as i64)),
@@ -581,6 +606,7 @@ fn literal_for_of(
             };
         }
         let mut loop_body = vec![Stmt::Let {
+            byte_offset: stmt.span.lo.0,
             id: x,
             name,
             ty: Type::Any,
@@ -590,6 +616,7 @@ fn literal_for_of(
         loop_body.extend(body);
         let counted = Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset: stmt.span.lo.0,
                 id: counter,
                 name: counter_name,
                 ty: Type::Number,
@@ -597,6 +624,7 @@ fn literal_for_of(
                 init: Some(Expr::Integer(0)),
             })),
             condition: Some(Expr::Compare {
+                byte_offset: stmt.span.lo.0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(counter)),
                 right: Box::new(Expr::Integer(n as i64)),

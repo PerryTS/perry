@@ -95,7 +95,9 @@ pub(crate) fn serialize_condition(
     match e {
         Expr::Bool(true) => "true".to_string(),
         Expr::Bool(false) => "false".to_string(),
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             let op_str = match op {
                 CompareOp::Eq => " === ",
                 CompareOp::Ne => " !== ",
@@ -115,7 +117,9 @@ pub(crate) fn serialize_condition(
                 wrap(right, bindings, r)
             )
         }
-        Expr::Logical { op, left, right } => {
+        Expr::Logical {
+            op, left, right, ..
+        } => {
             let op_str = match op {
                 LogicalOp::And => " && ",
                 LogicalOp::Or => " || ",
@@ -250,7 +254,7 @@ pub(crate) fn evaluate_condition(
             // branch. Without this, the heuristic-pick-then-branch
             // fallback selects darkColor and Mango renders translucent
             // light-on-light text.
-            Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
                 Expr::ExternFuncRef { name, .. } if is_harmonyos_zero_fn(name) => {
                     Some(Lit::Num(0.0))
                 }
@@ -264,7 +268,9 @@ pub(crate) fn evaluate_condition(
             {
                 Some(Lit::Num(0.0))
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 let l = to_lit(left, bindings, compile_time_consts)?;
                 let r = to_lit(right, bindings, compile_time_consts)?;
                 let res = match op {
@@ -287,7 +293,9 @@ pub(crate) fn evaluate_condition(
                 };
                 Some(Lit::Bool(res))
             }
-            Expr::Logical { op, left, right } => {
+            Expr::Logical {
+                op, left, right, ..
+            } => {
                 let l = to_lit(left, bindings, compile_time_consts)?;
                 match op {
                     LogicalOp::And => {

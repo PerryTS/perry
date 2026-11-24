@@ -112,7 +112,10 @@ pub(crate) fn static_index_window(e: &perry_hir::Expr) -> Option<(i64, i64)> {
     if let Some(n) = int_constant(e) {
         return Some((n, n));
     }
-    let Expr::Binary { op, left, right } = e else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = e
+    else {
         return None;
     };
     match op {
@@ -261,7 +264,7 @@ fn scan_ta_view_escapes_stmt(stmt: &perry_hir::Stmt, views: &mut HashMap<u32, i6
         scan_ta_view_escapes_expr(e, views);
     }
     match stmt {
-        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
             scan_ta_view_escapes_expr(e, views);
         }
         Stmt::If { condition, .. } => scan_ta_view_escapes_expr(condition, views),
@@ -288,7 +291,7 @@ fn scan_ta_view_escapes_expr(e: &perry_hir::Expr, views: &mut HashMap<u32, i64>)
     use perry_hir::Expr;
     match e {
         // Receiver position of an element access is the one allowed use.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             if !matches!(object.as_ref(), Expr::LocalGet(_)) {
                 scan_ta_view_escapes_expr(object, views);
             }
@@ -351,7 +354,7 @@ fn scan_ta_view_escapes_expr(e: &perry_hir::Expr, views: &mut HashMap<u32, i64>)
 /// static window is inside `[0, length)` — an integer by construction.
 pub(crate) fn is_proven_int_ta_load(views: &HashMap<u32, i64>, e: &perry_hir::Expr) -> bool {
     use perry_hir::Expr;
-    let Expr::IndexGet { object, index, .. } = e else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e else {
         return false;
     };
     let Expr::LocalGet(id) = object.as_ref() else {
@@ -775,7 +778,7 @@ impl ProvenanceJudge<'_> {
                 }
                 Stmt::Let { init: None, .. } => {}
                 Stmt::Expr(e) | Stmt::Throw(e) => self.walk_expr(e),
-                Stmt::Return(opt) => {
+                Stmt::Return(opt, _) => {
                     if let Some(e) = opt {
                         self.walk_expr(e);
                     }
@@ -855,6 +858,7 @@ impl ProvenanceJudge<'_> {
                 Stmt::Switch {
                     discriminant,
                     cases,
+                    ..
                 } => {
                     self.walk_expr(discriminant);
                     for c in cases {
@@ -977,7 +981,7 @@ fn int32_producing_deps(
             op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul,
             ..
         } => exact_range_deps(e, candidates, known, deps, &recurse).is_some_and(|r| r.fits_i32()),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 if !clamp_fn_ids.contains(fid) {
                     return false;
@@ -991,15 +995,12 @@ fn int32_producing_deps(
                 false
             }
         }
-        Expr::Binary { op, left, right }
-            if matches!(
-                op,
-                BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::Shl
-                    | BinaryOp::Shr
-            ) =>
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(
+            op,
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Shl | BinaryOp::Shr
+        ) =>
         {
             if not_bigint.bitwise_result_is_number(e) {
                 return true;
@@ -1030,8 +1031,8 @@ fn int32_producing_deps(
         // Issue #50 bridge: element access on a flat-const 2D int array
         // produces i32. The flat-const facts are immutable within this
         // analysis (never-mutated module consts), so no local deps.
-        Expr::IndexGet { object, .. } => match object.as_ref() {
-            Expr::IndexGet { object: inner, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => match object.as_ref() {
+            Expr::IndexGet { object: inner, .. } | Expr::RegionOut { object: inner, .. } => {
                 matches!(inner.as_ref(), Expr::LocalGet(id) if flat_const_ids.contains(id))
             }
             Expr::LocalGet(id) => flat_row_alias_ids.contains(id),
@@ -1242,7 +1243,7 @@ pub fn collect_flat_row_aliases(
         match s {
             Stmt::Let {
                 id,
-                init: Some(Expr::IndexGet { object, .. }),
+                init: Some(Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }),
                 mutable: false,
                 ..
             } => {
@@ -1354,9 +1355,9 @@ pub fn is_int32_producing_expr(
         {
             true
         }
-        Expr::Binary { op, left, right }
-            if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) =>
-        {
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul) => {
             is_int32_producing_expr(
                 left,
                 known_int_locals,
@@ -1373,7 +1374,7 @@ pub fn is_int32_producing_expr(
                 numeric_locals,
             )
         }
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             if let Expr::FuncRef(fid) = callee.as_ref() {
                 clamp_fn_ids.contains(fid)
             } else {
@@ -1395,8 +1396,8 @@ pub fn is_int32_producing_expr(
         // produces i32. Two shapes:
         //   - inline `X[i][j]`: IndexGet(IndexGet(LocalGet(X), i), j)
         //   - aliased `krow[j]`: IndexGet(LocalGet(alias), j)
-        Expr::IndexGet { object, .. } => match object.as_ref() {
-            Expr::IndexGet { object: inner, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => match object.as_ref() {
+            Expr::IndexGet { object: inner, .. } | Expr::RegionOut { object: inner, .. } => {
                 matches!(inner.as_ref(), Expr::LocalGet(id) if flat_const_ids.contains(id))
             }
             Expr::LocalGet(id) => flat_row_alias_ids.contains(id),

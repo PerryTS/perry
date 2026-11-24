@@ -37,7 +37,7 @@ fn the_native_buffer_gep_detector_fires_on_a_proven_store() {
             buffer_let(1, "src", int(8)),
             buffer_let(2, "dst", int(8)),
             for_loop(3, length(2), vec![buffer_set(2, local(3))]),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ]
     };
 
@@ -67,7 +67,7 @@ fn the_native_buffer_gep_detector_fires_on_a_proven_store() {
                     buffer_set(1, local(3)),
                 ],
             ),
-            Stmt::Return(Some(int(0))),
+            Stmt::Return(Some(int(0)), 0),
         ]
     };
     for (pin_native, name) in [
@@ -110,7 +110,7 @@ fn localset_invalidates_native_i32_alias_facts() {
                 buffer_set(1, local(3)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("native_i32_alias_invalidation.ts", body);
@@ -130,7 +130,7 @@ fn update_invalidates_native_i32_alias_facts() {
                 buffer_set(1, local(3)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("native_i32_alias_update_invalidation.ts", body);
@@ -145,7 +145,7 @@ fn localset_invalidates_min_length_facts() {
         number_let(3, "n", true, Expr::MathMin(vec![length(1), length(2)])),
         Stmt::Expr(Expr::LocalSet(3, Box::new(int(16)))),
         for_loop(4, local(3), vec![buffer_set(2, local(4))]),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("min_length_invalidation.ts", body);
@@ -165,7 +165,7 @@ fn localset_invalidates_active_bounded_buffer_index_facts() {
                 buffer_set(2, local(3)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("bounded_buffer_index_invalidation.ts", body);
@@ -190,7 +190,7 @@ fn inner_loop_bounded_buffer_fact_is_removed_after_outer_fact_invalidation() {
                 buffer_set(3, local(5)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("nested_loop_scope_invalidation.ts", body);
@@ -390,7 +390,7 @@ fn localset_invalidates_buffer_view_local_length_sources() {
         buffer_let(2, "buf", local(1)),
         Stmt::Expr(Expr::LocalSet(1, Box::new(int(16)))),
         for_loop(3, local(1), vec![buffer_set(2, local(3))]),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("buffer_length_source_invalidation.ts", body);
@@ -404,7 +404,7 @@ fn update_invalidates_buffer_view_local_length_sources() {
         buffer_let(2, "buf", local(1)),
         Stmt::Expr(increment(1)),
         for_loop(3, local(1), vec![buffer_set(2, local(3))]),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("buffer_length_source_update_invalidation.ts", body);
@@ -422,7 +422,7 @@ fn negative_loop_counter_does_not_emit_inbounds_buffer_gep() {
             Some(increment(2)),
             vec![buffer_set(1, local(2))],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("negative_loop_counter_buffer_bounds.ts", body);
@@ -440,7 +440,7 @@ fn decrementing_loop_update_does_not_emit_inbounds_buffer_gep() {
             Some(decrement(2)),
             vec![buffer_set(1, local(2))],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("decrementing_loop_update_buffer_bounds.ts", body);
@@ -456,7 +456,7 @@ fn body_counter_mutation_does_not_emit_inbounds_buffer_gep() {
             length(1),
             vec![Stmt::Expr(decrement(2)), buffer_set(1, local(2))],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("body_counter_mutation_buffer_bounds.ts", body);
@@ -475,7 +475,7 @@ fn inclusive_length_loop_does_not_emit_inbounds_buffer_gep() {
             Some(increment(2)),
             vec![buffer_set(1, local(2))],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("inclusive_length_loop_buffer_bounds.ts", body);
@@ -510,7 +510,7 @@ fn inclusive_array_length_write_uses_extension_capable_index_set_path() {
             Some(increment(2)),
             vec![array_set(1, local(2), local(2))],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("inclusive_array_length_write.ts", body);
@@ -530,6 +530,7 @@ fn inclusive_array_length_write_uses_extension_capable_index_set_path() {
 
 fn array_alias_let(id: u32, name: &str, source_id: u32) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Array(Box::new(Type::Number)),
@@ -663,7 +664,7 @@ fn packed_read_sum_loop_body(prefix: Vec<Stmt>) -> Vec<Stmt> {
                 Box::new(add(local(3), index_get(1, local(4)))),
             ))],
         ),
-        Stmt::Return(Some(local(3))),
+        Stmt::Return(Some(local(3)), 0),
     ]);
     body
 }
@@ -698,7 +699,7 @@ fn packed_i32_read_loop_uses_i32_specific_loop_guard_and_no_slow_helper_in_fast_
                 Box::new(add(local(3), index_get(1, local(4)))),
             ))],
         ),
-        Stmt::Return(Some(local(3))),
+        Stmt::Return(Some(local(3)), 0),
     ];
 
     let ir = compile_ir("packed_i32_read_loop_stable_array.ts", body);
@@ -804,7 +805,7 @@ fn guarded_put_value_store_loop_accepts_conservative_preloop_call_hazard() {
                 byte_end: 0,
             })],
         ),
-        Stmt::Return(Some(index_get(1, int(0)))),
+        Stmt::Return(Some(index_get(1, int(0))), 0),
     ];
     let opts = native_library_opts(vec![("native_touch", vec![], "void")]);
 
@@ -824,6 +825,7 @@ fn guarded_put_value_store_loop_accepts_conservative_preloop_call_hazard() {
 fn mixed_layout_numeric_window_loop_uses_transactional_bulk_helper() {
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "arr".to_string(),
             ty: Type::Array(Box::new(Type::Any)),
@@ -844,7 +846,7 @@ fn mixed_layout_numeric_window_loop_uses_transactional_bulk_helper() {
                 byte_end: 0,
             })],
         ),
-        Stmt::Return(Some(index_get(1, int(0)))),
+        Stmt::Return(Some(index_get(1, int(0))), 0),
     ];
 
     let ir = compile_ir("mixed_layout_numeric_window.ts", body);
@@ -862,6 +864,7 @@ fn mixed_layout_numeric_window_loop_uses_transactional_bulk_helper() {
 fn mixed_layout_numeric_window_accepts_runtime_validated_start_expression() {
     let body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "arr".to_string(),
             ty: Type::Array(Box::new(Type::Any)),
@@ -869,6 +872,7 @@ fn mixed_layout_numeric_window_accepts_runtime_validated_start_expression() {
             init: Some(Expr::Array(vec![int(1), int(2), int(3)], None)),
         },
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "offset".to_string(),
             ty: Type::Any,
@@ -891,7 +895,7 @@ fn mixed_layout_numeric_window_accepts_runtime_validated_start_expression() {
                 byte_end: 0,
             })],
         ),
-        Stmt::Return(Some(index_get(1, int(1)))),
+        Stmt::Return(Some(index_get(1, int(1))), 0),
     ];
 
     let ir = compile_ir("mixed_layout_numeric_window_dynamic_start.ts", body);
@@ -932,7 +936,7 @@ fn aliased_array_loop(mutator: Expr) -> Vec<Stmt> {
             length(1),
             vec![Stmt::Expr(mutator), array_set(1, local(3), local(3))],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ]
 }
 
@@ -988,6 +992,7 @@ fn indirect_array_alias_from_container_blocks_length_and_bounds_proofs() {
     let body = vec![
         number_array_let(1, "arr", vec![0, 0, 0]),
         Stmt::Let {
+            byte_offset: 0,
             id: 5,
             name: "box".to_string(),
             ty: Type::Array(Box::new(Type::Array(Box::new(Type::Number)))),
@@ -999,6 +1004,7 @@ fn indirect_array_alias_from_container_blocks_length_and_bounds_proofs() {
             length(1),
             vec![
                 Stmt::Let {
+                    byte_offset: 0,
                     id: 6,
                     name: "alias".to_string(),
                     ty: Type::Array(Box::new(Type::Number)),
@@ -1013,7 +1019,7 @@ fn indirect_array_alias_from_container_blocks_length_and_bounds_proofs() {
                 array_set(1, local(2), local(2)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir_quiet("array_container_alias_blocks_loop_proof.ts", body);
@@ -1038,7 +1044,7 @@ fn direct_array_length_set_blocks_length_and_bounds_proofs() {
                 array_set(1, local(2), local(2)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir_quiet("array_length_set_blocks_loop_proof.ts", body);
@@ -1055,7 +1061,7 @@ fn non_mutating_array_alias_preserves_length_and_bounds_proofs() {
             length(1),
             vec![array_set(1, local(3), local(3)), Stmt::Expr(local(2))],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir_quiet("array_non_mutating_alias_keeps_loop_proof.ts", body);
@@ -1082,7 +1088,7 @@ fn loop_length_effect_artifact_records_consumed_preservation_fact() {
                 array_set(1, local(2), add(local(2), int(1))),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir_quiet("array_loop_length_effect_preserves.ts", body.clone());
@@ -1122,11 +1128,11 @@ fn async_microtask_effect_blocks_length_and_bounds_proofs_with_artifact_reason()
             2,
             length(1),
             vec![
-                Stmt::Expr(Expr::Await(Box::new(Expr::Undefined))),
+                Stmt::Expr(Expr::Await(Box::new(Expr::Undefined), 0)),
                 array_set(1, local(2), local(2)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir_quiet("array_await_blocks_loop_proof.ts", body.clone());
@@ -1177,7 +1183,7 @@ fn generic_call_blocks_length_and_bounds_proofs_even_without_direct_array_arg() 
                 array_set(1, local(2), local(2)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
     let opts = native_library_opts(vec![("native_touch", vec![], "void")]);
 
@@ -1205,7 +1211,7 @@ fn nested_array_escape_to_call_blocks_length_and_bounds_proofs() {
                 array_set(1, local(2), local(2)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
     let opts = native_library_opts(vec![("native_touch", vec!["jsvalue"], "void")]);
 
@@ -1233,7 +1239,7 @@ fn object_nested_array_escape_to_call_blocks_length_and_bounds_proofs() {
                 array_set(1, local(2), local(2)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
     let opts = native_library_opts(vec![("native_touch", vec!["jsvalue"], "void")]);
 
@@ -1257,7 +1263,7 @@ fn native_method_call_blocks_length_and_bounds_proofs() {
                 array_set(1, local(2), local(2)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir_quiet("array_native_call_blocks_loop_proof.ts", body);
@@ -1281,7 +1287,7 @@ fn loop_local_array_alias_blocks_length_and_bounds_proofs() {
                 array_set(1, local(2), local(2)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir_quiet("loop_local_array_alias_blocks_loop_proof.ts", body);
@@ -1309,7 +1315,7 @@ fn loop_local_array_alias_push_blocks_packed_f64_loop_and_artifacts() {
                 )),
             ],
         ),
-        Stmt::Return(Some(local(3))),
+        Stmt::Return(Some(local(3)), 0),
     ];
 
     let ir = compile_ir("packed_f64_loop_local_alias_push.ts", body.clone());
@@ -1340,7 +1346,7 @@ fn loop_local_array_alias_push_blocks_packed_i32_loop_and_artifacts() {
                 )),
             ],
         ),
-        Stmt::Return(Some(local(3))),
+        Stmt::Return(Some(local(3)), 0),
     ];
 
     let ir = compile_ir("packed_i32_loop_local_alias_push.ts", body.clone());
@@ -1372,7 +1378,7 @@ fn loop_local_array_alias_push_blocks_packed_u32_loop_and_artifacts() {
                 )),
             ],
         ),
-        Stmt::Return(Some(local(3))),
+        Stmt::Return(Some(local(3)), 0),
     ];
 
     let ir = compile_ir("packed_u32_loop_local_alias_push.ts", body.clone());
@@ -1397,7 +1403,7 @@ fn inclusive_local_length_bound_does_not_use_local_length_bound_fact() {
             Some(increment(3)),
             vec![buffer_set(2, local(3))],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("inclusive_local_length_bound.ts", body);
@@ -1418,7 +1424,7 @@ fn negative_loop_counter_does_not_use_local_length_bound_fact() {
             Some(increment(3)),
             vec![buffer_set(2, local(3))],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("negative_counter_local_length_bound.ts", body);
@@ -1438,7 +1444,7 @@ fn body_mutation_of_local_bound_does_not_use_local_length_bound_fact() {
                 buffer_set(2, local(3)),
             ],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("body_mutates_local_bound.ts", body);
@@ -1458,7 +1464,7 @@ fn negative_loop_counter_does_not_use_min_length_bound_fact() {
             Some(increment(4)),
             vec![buffer_set(2, local(4))],
         ),
-        Stmt::Return(Some(int(0))),
+        Stmt::Return(Some(int(0)), 0),
     ];
 
     let ir = compile_ir("negative_counter_min_length_bound.ts", body);
@@ -1473,7 +1479,7 @@ fn bitwise_truncated_division_does_not_emit_sdiv_i32() {
     let body = vec![
         number_let(1, "x", false, int(8)),
         number_let(2, "y", false, int(2)),
-        Stmt::Return(Some(add(add(quotient, divide_by_zero), overflow))),
+        Stmt::Return(Some(add(add(quotient, divide_by_zero), overflow)), 0),
     ];
 
     let ir = compile_ir("i32_division_regression.ts", body);

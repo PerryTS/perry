@@ -588,7 +588,9 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             };
             Ok(ctx.block().bitcast_i64_to_double(bits))
         }
-        Expr::Logical { op, left, right } => {
+        Expr::Logical {
+            op, left, right, ..
+        } => {
             // I32 at rest: `a[k] ?? <int32>` is the slot's word or the literal.
             if matches!(op, perry_hir::LogicalOp::Coalesce) {
                 if let Some(v) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
@@ -1382,7 +1384,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         Expr::In { property, object }
             if matches!(
                 (property.as_ref(), object.as_ref()),
-                (Expr::IndexGet { element_offset: 0, byte_offset: 0, byte_end: 0, index, object: keys }, Expr::LocalGet(o))
+                (Expr::IndexGet { element_offset: 0, index, object: keys, .. }, Expr::LocalGet(o))
                     if matches!(index.as_ref(), Expr::LocalGet(_))
                         && matches!(keys.as_ref(), Expr::LocalGet(_))
                         && ctx.for_in_facts.contains_key(o)
@@ -1390,6 +1392,11 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
         {
             let (
                 Expr::IndexGet {
+                    index,
+                    object: keys,
+                    ..
+                }
+                | Expr::RegionOut {
                     index,
                     object: keys,
                     ..

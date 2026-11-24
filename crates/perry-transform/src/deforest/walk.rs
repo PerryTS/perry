@@ -99,7 +99,7 @@ pub fn max_in_stmt(stmt: &Stmt, max_id: &mut LocalId) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => max_in_expr(e, max_id),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 max_in_expr(e, max_id);
             }
@@ -156,6 +156,7 @@ pub fn max_in_stmt(stmt: &Stmt, max_id: &mut LocalId) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             max_in_expr(discriminant, max_id);
             for c in cases {
@@ -223,7 +224,7 @@ impl<'a> StmtRefWalker<'a> {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.visit_expr(e),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     self.visit_expr(e);
                 }
@@ -291,6 +292,7 @@ impl<'a> StmtRefWalker<'a> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.visit_expr(discriminant);
                 for c in cases {

@@ -196,6 +196,7 @@ fn assert_reread_below_operand(
 fn compile_body(name: &str, body: Vec<Stmt>) -> String {
     let mut hir = HirModule::new(name);
     hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
@@ -226,6 +227,7 @@ fn compile_body(name: &str, body: Vec<Stmt>) -> String {
 fn with_object_local(id: u32, tail: Stmt) -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: "o".to_string(),
             ty: Type::Any,

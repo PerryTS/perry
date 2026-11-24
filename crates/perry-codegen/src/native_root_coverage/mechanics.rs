@@ -12,6 +12,7 @@ use perry_hir::{BinaryOp, CompareOp};
 fn counted_loop(body: Vec<Stmt>) -> Stmt {
     Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: 0,
             id: 90,
             name: "i".to_string(),
             ty: Type::Number,
@@ -19,6 +20,7 @@ fn counted_loop(body: Vec<Stmt>) -> Stmt {
             init: Some(Expr::Number(0.0)),
         })),
         condition: Some(Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(90)),
             right: Box::new(Expr::LocalGet(100)),
@@ -26,6 +28,7 @@ fn counted_loop(body: Vec<Stmt>) -> Stmt {
         update: Some(Expr::LocalSet(
             90,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(90)),
                 right: Box::new(Expr::Number(1.0)),
@@ -67,7 +70,7 @@ fn a_live_pointer_local_is_a_root_in_the_emitted_map() {
                 let_stmt(1, "a", Expr::MapNew),
                 // Allocates while `a` is still live.
                 let_stmt(2, "b", Expr::MapNew),
-                Stmt::Return(Some(Expr::LocalGet(1))),
+                Stmt::Return(Some(Expr::LocalGet(1)), 0),
             ],
         );
         let _pin = NativeRootsPin::native();
@@ -156,7 +159,7 @@ fn a_value_that_is_dead_at_a_safepoint_is_not_in_its_live_set() {
             vec![
                 let_stmt(1, "dead", Expr::MapNew),
                 let_stmt(2, "live", Expr::MapNew),
-                Stmt::Return(Some(Expr::LocalGet(2))),
+                Stmt::Return(Some(Expr::LocalGet(2)), 0),
             ],
         );
         let dead_ir = native_ir(&dead, target, false);
@@ -178,7 +181,7 @@ fn a_value_that_is_dead_at_a_safepoint_is_not_in_its_live_set() {
             vec![
                 let_stmt(1, "kept", Expr::MapNew),
                 let_stmt(2, "other", Expr::MapNew),
-                Stmt::Return(Some(Expr::LocalGet(1))),
+                Stmt::Return(Some(Expr::LocalGet(1)), 0),
             ],
         );
         let live_ir = native_ir(&live, target, false);
@@ -241,7 +244,7 @@ fn a_numeric_local_reserves_no_root_and_a_heap_one_does() {
             vec![
                 let_stmt(1, "x", Expr::Number(42.0)),
                 let_stmt(2, "b", Expr::MapNew),
-                Stmt::Return(Some(Expr::LocalGet(1))),
+                Stmt::Return(Some(Expr::LocalGet(1)), 0),
             ],
         );
         let numeric_ir = native_ir(&numeric, target, false);
@@ -254,7 +257,7 @@ fn a_numeric_local_reserves_no_root_and_a_heap_one_does() {
             vec![
                 let_stmt(1, "x", Expr::MapNew),
                 let_stmt(2, "b", Expr::MapNew),
-                Stmt::Return(Some(Expr::LocalGet(1))),
+                Stmt::Return(Some(Expr::LocalGet(1)), 0),
             ],
         );
         let heap_ir = native_ir(&heap, target, false);
@@ -463,7 +466,7 @@ fn a_loop_iterations_dead_root_is_not_live_at_the_next_iteration() {
             vec![
                 let_stmt(1, "acc", Expr::MapNew),
                 counted_loop(vec![let_stmt(2, "tmp", Expr::MapNew)]),
-                Stmt::Return(Some(Expr::LocalGet(1))),
+                Stmt::Return(Some(Expr::LocalGet(1)), 0),
             ],
         );
         let subject_ir = native_ir(&subject, target, false);
@@ -494,7 +497,7 @@ fn a_loop_iterations_dead_root_is_not_live_at_the_next_iteration() {
                 let_stmt(3, "acc2", Expr::MapNew),
                 counted_loop(vec![let_stmt(2, "tmp", Expr::MapNew)]),
                 console_log(vec![Expr::LocalGet(3)]),
-                Stmt::Return(Some(Expr::LocalGet(1))),
+                Stmt::Return(Some(Expr::LocalGet(1)), 0),
             ],
         );
         let control_ir = native_ir(&control, target, false);
@@ -556,10 +559,13 @@ fn a_deduplicated_slot_index_still_reaches_the_native_root_set() {
                 let_stmt(2, "later", Expr::MapNew),
                 // Keeps BOTH live across one allocation, so the map has to
                 // report two roots at a single safepoint.
-                Stmt::Return(Some(Expr::Array(
-                    vec![Expr::LocalGet(1), Expr::LocalGet(2)],
-                    None,
-                ))),
+                Stmt::Return(
+                    Some(Expr::Array(
+                        vec![Expr::LocalGet(1), Expr::LocalGet(2)],
+                        None,
+                    )),
+                    0,
+                ),
             ],
         );
         let ir = native_ir(&module, target, false);

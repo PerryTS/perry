@@ -77,6 +77,9 @@ fn build_dispatch_while_body(
     done_id: LocalId,
     sent_id: LocalId,
     step_id: Option<LocalId>,
+    // The generator function construct: the dispatch scaffolding that
+    // completes the generator stands there.
+    fn_offset: u32,
 ) -> Vec<Stmt> {
     let mut while_body: Vec<Stmt> = Vec::new();
     let mut cases = Vec::new();
@@ -88,6 +91,7 @@ fn build_dispatch_while_body(
                 value,
                 next_state,
                 passthrough,
+                byte_offset,
             } => {
                 if body_contains_return(&case_body) {
                     prepend_done_before_returns(&mut case_body, done_id);
@@ -106,12 +110,19 @@ fn build_dispatch_while_body(
                         step_id,
                         Box::new(Expr::LocalGet(*kind_id)),
                     )));
-                    case_body.push(Stmt::Return(Some(value.clone())));
+                    case_body.push(Stmt::Return(Some(value.clone()), *byte_offset));
                 } else {
-                    case_body.push(Stmt::Return(Some(make_iter_result(value.clone(), false))));
+                    case_body.push(Stmt::Return(
+                        Some(make_iter_result(value.clone(), false)),
+                        *byte_offset,
+                    ));
                 }
             }
-            StateExit::Await { value, next_state } => {
+            StateExit::Await {
+                value,
+                next_state,
+                byte_offset,
+            } => {
                 // A user `return X` can sit in a yield/await-free control-flow
                 // block (e.g. `if (c) return X;`) that the linearizer's catch-all
                 // accumulated into this Await state's body ahead of the `await`.
@@ -131,13 +142,16 @@ fn build_dispatch_while_body(
                 if async_step {
                     // Suspend on the microtask queue; resume delivers the
                     // settled value through `__sent`.
-                    case_body.push(Stmt::Return(Some(async_step_chain(value.clone()))));
+                    case_body.push(Stmt::Return(
+                        Some(async_step_chain(value.clone())),
+                        *byte_offset,
+                    ));
                 } else {
                     // Busy-wait fallback (the `.return()` continuation path):
                     // evaluate the await inline and continue to the next state.
                     case_body.push(Stmt::Expr(Expr::LocalSet(
                         sent_id,
-                        Box::new(Expr::Await(Box::new(value.clone()))),
+                        Box::new(Expr::Await(Box::new(value.clone()), *byte_offset)),
                     )));
                     case_body.push(Stmt::Continue);
                 }
@@ -158,20 +172,26 @@ fn build_dispatch_while_body(
                 if has_return {
                     prepend_done_before_returns(&mut case_body, done_id);
                     rewrite_returns_as_done(&mut case_body);
-                    let last_is_return = matches!(case_body.last(), Some(Stmt::Return(_)));
+                    let last_is_return = matches!(case_body.last(), Some(Stmt::Return(_, _)));
                     if !last_is_return {
                         case_body.push(Stmt::Expr(Expr::LocalSet(
                             done_id,
                             Box::new(Expr::Bool(true)),
                         )));
-                        case_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
+                        case_body.push(Stmt::Return(
+                            Some(make_iter_result(Expr::Undefined, true)),
+                            fn_offset,
+                        ));
                     }
                 } else {
                     case_body.push(Stmt::Expr(Expr::LocalSet(
                         done_id,
                         Box::new(Expr::Bool(true)),
                     )));
-                    case_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
+                    case_body.push(Stmt::Return(
+                        Some(make_iter_result(Expr::Undefined, true)),
+                        fn_offset,
+                    ));
                 }
             }
         }
@@ -185,6 +205,7 @@ fn build_dispatch_while_body(
         }
         while_body.push(Stmt::If {
             condition: Expr::Compare {
+                byte_offset: fn_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(num as f64)),
@@ -199,13 +220,17 @@ fn build_dispatch_while_body(
         done_id,
         Box::new(Expr::Bool(true)),
     )));
-    while_body.push(Stmt::Return(Some(make_iter_result(Expr::Undefined, true))));
+    while_body.push(Stmt::Return(
+        Some(make_iter_result(Expr::Undefined, true)),
+        fn_offset,
+    ));
     if fixed_state {
         cases.push(perry_hir::SwitchCase {
             test: None,
             body: while_body,
         });
         return vec![Stmt::Switch {
+            byte_offset: fn_offset,
             discriminant: Expr::LocalGet(state_id),
             cases,
         }];
@@ -223,7 +248,7 @@ fn build_dispatch_while_body(
 fn wrap_iter_result_returns_in_async_step_done(stmts: &mut Vec<Stmt>) {
     for stmt in stmts.iter_mut() {
         match stmt {
-            Stmt::Return(Some(expr)) => {
+            Stmt::Return(Some(expr), _) => {
                 if is_iter_result(expr) {
                     let inner = std::mem::replace(expr, Expr::Undefined);
                     *expr = async_step_resolve(inner);
@@ -312,6 +337,7 @@ pub fn transform_generator_function_with_extra_captures(
 ) -> (Vec<LocalId>, Vec<LocalId>) {
     // Generator bodies run later inside synthesized step closures, so direct
     // `this` reads need the receiver from the original generator call.
+    let fn_offset = func.byte_offset;
     let captures_this = captures_this || generator_body_uses_call_this(&func.body);
     let private_brand_id =
         private_brand::uses_private_names(&mut func.body).then(|| alloc_local(next_local_id));
@@ -587,6 +613,7 @@ pub fn transform_generator_function_with_extra_captures(
             state_id,
             &finallys,
             &hoisted_ids,
+            fn_offset,
         );
         for route in &finallys {
             if let Some(cc) = route.completion_check_state {
@@ -644,6 +671,7 @@ pub fn transform_generator_function_with_extra_captures(
         done_id,
         sent_id,
         step_id,
+        fn_offset,
     );
 
     // The next() closure parameter — receives the value from next(val) calls
@@ -699,6 +727,7 @@ pub fn transform_generator_function_with_extra_captures(
             pending_value_id,
             disp_err_id,
             &hoisted_ids,
+            fn_offset,
         )
     } else {
         while_body
@@ -715,6 +744,7 @@ pub fn transform_generator_function_with_extra_captures(
             pending_value_id,
             disp_err_id,
             &hoisted_ids,
+            fn_offset,
         )
     } else {
         while_body_for_throw
@@ -734,6 +764,7 @@ pub fn transform_generator_function_with_extra_captures(
             pending_value_id,
             disp_err_id,
             &hoisted_ids,
+            fn_offset,
         )
     } else {
         while_body_for_return
@@ -749,7 +780,10 @@ pub fn transform_generator_function_with_extra_captures(
         // if (__done) return { value: undefined, done: true };
         Stmt::If {
             condition: Expr::LocalGet(done_id),
-            then_branch: vec![Stmt::Return(Some(make_iter_result(Expr::Undefined, true)))],
+            then_branch: vec![Stmt::Return(
+                Some(make_iter_result(Expr::Undefined, true)),
+                fn_offset,
+            )],
             else_branch: None,
         },
         // while (true) { if-chain }
@@ -763,6 +797,7 @@ pub fn transform_generator_function_with_extra_captures(
     let mut new_body: Vec<Stmt> = Vec::new();
     if let Some(id) = private_brand_id {
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id,
             name: "__gen_private_brand".to_string(),
             ty: Type::Any,
@@ -860,6 +895,7 @@ pub fn transform_generator_function_with_extra_captures(
 
     // let __state = 0
     new_body.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: state_id,
         name: "__gen_state".to_string(),
         ty: Type::Number,
@@ -869,6 +905,7 @@ pub fn transform_generator_function_with_extra_captures(
 
     // let __done = false
     new_body.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: done_id,
         name: "__gen_done".to_string(),
         ty: Type::Boolean,
@@ -877,6 +914,7 @@ pub fn transform_generator_function_with_extra_captures(
     });
 
     new_body.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: executing_id,
         name: "__gen_executing".to_string(),
         ty: Type::Boolean,
@@ -885,6 +923,7 @@ pub fn transform_generator_function_with_extra_captures(
     });
     if let Some(step_id) = step_id {
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: step_id,
             name: "__gen_step".to_string(),
             ty: Type::Number,
@@ -894,6 +933,7 @@ pub fn transform_generator_function_with_extra_captures(
     }
     if let Some(proto_ctl_id) = proto_ctl_id {
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: proto_ctl_id,
             name: "__gen_proto".to_string(),
             ty: Type::Any,
@@ -905,6 +945,7 @@ pub fn transform_generator_function_with_extra_captures(
     // #4438 B2-finally: let __pending_type = 0; let __pending_value = undefined
     if has_yielding_finally {
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: pending_type_id,
             name: "__gen_pending_type".to_string(),
             ty: Type::Number,
@@ -912,6 +953,7 @@ pub fn transform_generator_function_with_extra_captures(
             init: Some(Expr::Number(0.0)),
         });
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: pending_value_id,
             name: "__gen_pending_value".to_string(),
             ty: Type::Any,
@@ -938,6 +980,7 @@ pub fn transform_generator_function_with_extra_captures(
             continue;
         }
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *var_id,
             name: var_name.clone(),
             ty: var_ty.clone(),
@@ -948,6 +991,7 @@ pub fn transform_generator_function_with_extra_captures(
     // Also hoist any extra locals allocated during linearization (e.g. yield* delegation)
     for extra_id in &extra_local_ids {
         new_body.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *extra_id,
             name: format!("__gen_tmp_{}", extra_id),
             ty: Type::Any,
@@ -958,6 +1002,7 @@ pub fn transform_generator_function_with_extra_captures(
 
     // __sent variable for two-way yield: stores value from next(val) calls
     new_body.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id: sent_id,
         name: "__gen_sent".to_string(),
         ty: Type::Any,
@@ -1151,6 +1196,7 @@ pub fn transform_generator_function_with_extra_captures(
             enclosing_class.clone(),
             func.is_strict,
             &release_ids,
+            fn_offset,
         );
         for s in wrapper_stmts {
             new_body.push(s);
@@ -1179,10 +1225,10 @@ pub fn transform_generator_function_with_extra_captures(
         // no finally re-run (the finally already ran on normal completion).
         return_resume_body.push(Stmt::If {
             condition: Expr::LocalGet(done_id),
-            then_branch: vec![Stmt::Return(Some(make_iter_result(
-                Expr::LocalGet(return_param_id),
-                true,
-            )))],
+            then_branch: vec![Stmt::Return(
+                Some(make_iter_result(Expr::LocalGet(return_param_id), true)),
+                fn_offset,
+            )],
             else_branch: None,
         });
         // #4445: mark the generator "executing" while the resume runs (the
@@ -1200,6 +1246,7 @@ pub fn transform_generator_function_with_extra_captures(
         {
             let id = alloc_local(next_local_id);
             return_resume_body.push(Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name: "__yield_star_return_threw".to_string(),
                 ty: Type::Boolean,
@@ -1238,10 +1285,10 @@ pub fn transform_generator_function_with_extra_captures(
             true,
             &hoisted_ids,
         ));
-        return_fallback.push(Stmt::Return(Some(make_iter_result(
-            Expr::LocalGet(return_param_id),
-            true,
-        ))));
+        return_fallback.push(Stmt::Return(
+            Some(make_iter_result(Expr::LocalGet(return_param_id), true)),
+            fn_offset,
+        ));
         if has_yielding_finally {
             // #4438 B2-finally: route `.return(v)` into the innermost enclosing
             // yielding finally — record the pending return and jump to
@@ -1318,11 +1365,14 @@ pub fn transform_generator_function_with_extra_captures(
                 done_id,
                 return_catch_id,
                 is_async_generator,
+                fn_offset,
             )
         };
         let return_closure = Expr::Closure {
+            byte_offset: fn_offset,
             func_id: return_func_id_val,
             params: vec![perry_hir::Param {
+                byte_offset: fn_offset,
                 id: return_param_id,
                 name: "__ret_val".to_string(),
                 ty: Type::Any,
@@ -1437,6 +1487,7 @@ pub fn transform_generator_function_with_extra_captures(
             let step_inner = vec![
                 Stmt::If {
                     condition: Expr::Compare {
+                        byte_offset: fn_offset,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(is_error_param_id)),
                         right: Box::new(Expr::Number(2.0)),
@@ -1450,17 +1501,24 @@ pub fn transform_generator_function_with_extra_captures(
                     else_branch: Some(next_resume_body),
                 },
             ];
-            let mut step_body =
-                wrap_async_gen_step_body(step_inner, executing_id, done_id, agstep_catch_id);
+            let mut step_body = wrap_async_gen_step_body(
+                step_inner,
+                executing_id,
+                done_id,
+                agstep_catch_id,
+                fn_offset,
+            );
             // Turn every `{value, done}` return into an `AsyncStepDone` that
             // settles the activation's result Promise; `AsyncStepChain` (await)
             // returns are left as-is.
             wrap_iter_result_returns_in_async_step_done(&mut step_body);
 
             let agstep_closure = Expr::Closure {
+                byte_offset: fn_offset,
                 func_id: agstep_func_id,
                 params: vec![
                     perry_hir::Param {
+                        byte_offset: fn_offset,
                         id: next_param_id,
                         name: "__val".to_string(),
                         ty: Type::Any,
@@ -1470,6 +1528,7 @@ pub fn transform_generator_function_with_extra_captures(
                         arguments_object: None,
                     },
                     perry_hir::Param {
+                        byte_offset: fn_offset,
                         id: is_error_param_id,
                         name: "__gen_op".to_string(),
                         ty: Type::Any,
@@ -1508,11 +1567,14 @@ pub fn transform_generator_function_with_extra_captures(
                     done_id,
                     throw_catch_id,
                     is_async_generator,
+                    fn_offset,
                 )
             };
             let throw_closure = Expr::Closure {
+                byte_offset: fn_offset,
                 func_id: throw_func_id_val,
                 params: vec![perry_hir::Param {
+                    byte_offset: fn_offset,
                     id: throw_param_id,
                     name: "__throw_val".to_string(),
                     ty: Type::Any,
@@ -1551,11 +1613,14 @@ pub fn transform_generator_function_with_extra_captures(
                     done_id,
                     next_catch_id,
                     is_async_generator,
+                    fn_offset,
                 )
             };
             let next_closure = Expr::Closure {
+                byte_offset: fn_offset,
                 func_id: next_func_id_val,
                 params: vec![perry_hir::Param {
+                    byte_offset: fn_offset,
                     id: next_param_id,
                     name: "__val".to_string(),
                     ty: Type::Any,
@@ -1620,6 +1685,7 @@ pub fn transform_generator_function_with_extra_captures(
                 vec![
                     Stmt::If {
                         condition: Expr::Compare {
+                            byte_offset: fn_offset,
                             op: CompareOp::Eq,
                             left: Box::new(Expr::LocalGet(op_id)),
                             right: Box::new(Expr::Number(1.0)),
@@ -1629,6 +1695,7 @@ pub fn transform_generator_function_with_extra_captures(
                     },
                     Stmt::If {
                         condition: Expr::Compare {
+                            byte_offset: fn_offset,
                             op: CompareOp::Eq,
                             left: Box::new(Expr::LocalGet(op_id)),
                             right: Box::new(Expr::Number(2.0)),
@@ -1641,6 +1708,7 @@ pub fn transform_generator_function_with_extra_captures(
             dispatch.append(&mut next_body);
             let mut params = vec![
                 perry_hir::Param {
+                    byte_offset: fn_offset,
                     id: op_id,
                     name: "__gen_op".into(),
                     ty: Type::Number,
@@ -1650,6 +1718,7 @@ pub fn transform_generator_function_with_extra_captures(
                     arguments_object: None,
                 },
                 perry_hir::Param {
+                    byte_offset: fn_offset,
                     id: next_param_id,
                     name: "__gen_arg".into(),
                     ty: Type::Any,
@@ -1681,8 +1750,10 @@ pub fn transform_generator_function_with_extra_captures(
                 executing_id,
                 done_id,
                 completion_catch_id,
+                fn_offset,
             );
             Expr::Closure {
+                byte_offset: fn_offset,
                 func_id: next_func_id_val,
                 params,
                 return_type: Type::Any,
@@ -1743,7 +1814,7 @@ pub fn transform_generator_function_with_extra_captures(
                 Vec::new()
             },
         };
-        new_body.push(Stmt::Return(Some(linked)));
+        new_body.push(Stmt::Return(Some(linked), fn_offset));
     }
 
     if let Some(id) = private_brand_id {

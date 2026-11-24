@@ -230,19 +230,21 @@ pub(super) fn record_step_kinds(stmts: &mut Vec<Stmt>, step_id: LocalId) {
             Some(Stmt::Expr(Expr::LocalSet(id, _))) if *id == step_id
         );
         match stmt {
-            Stmt::Return(Some(expr)) if !already_recorded => match transform_iter_result(&expr) {
-                Some((value, done)) => {
-                    out.push(set_step(step_id, if done { 1.0 } else { 0.0 }));
-                    out.push(Stmt::Return(Some(value)));
+            Stmt::Return(Some(expr), off) if !already_recorded => {
+                match transform_iter_result(&expr) {
+                    Some((value, done)) => {
+                        out.push(set_step(step_id, if done { 1.0 } else { 0.0 }));
+                        out.push(Stmt::Return(Some(value), off));
+                    }
+                    None => {
+                        out.push(set_step(step_id, 2.0));
+                        out.push(Stmt::Return(Some(expr), off));
+                    }
                 }
-                None => {
-                    out.push(set_step(step_id, 2.0));
-                    out.push(Stmt::Return(Some(expr)));
-                }
-            },
-            Stmt::Return(None) if !already_recorded => {
+            }
+            Stmt::Return(None, off) if !already_recorded => {
                 out.push(set_step(step_id, 2.0));
-                out.push(Stmt::Return(None));
+                out.push(Stmt::Return(None, off));
             }
             other => out.push(other),
         }
@@ -266,12 +268,12 @@ mod tests {
         let mut body = vec![
             Stmt::If {
                 condition: Expr::LocalGet(1),
-                then_branch: vec![Stmt::Return(Some(result(Expr::Number(1.0), false)))],
-                else_branch: Some(vec![Stmt::Return(Some(Expr::LocalGet(2)))]),
+                then_branch: vec![Stmt::Return(Some(result(Expr::Number(1.0), false)), 0)],
+                else_branch: Some(vec![Stmt::Return(Some(Expr::LocalGet(2)), 0)]),
             },
             Stmt::Expr(Expr::LocalSet(step, Box::new(Expr::LocalGet(3)))),
-            Stmt::Return(Some(Expr::LocalGet(4))),
-            Stmt::Return(Some(result(Expr::Undefined, true))),
+            Stmt::Return(Some(Expr::LocalGet(4)), 0),
+            Stmt::Return(Some(result(Expr::Undefined, true)), 0),
         ];
         record_step_kinds(&mut body, step);
         let kind = |stmt: &Stmt| match stmt {
@@ -290,18 +292,19 @@ mod tests {
             panic!("if kept")
         };
         assert_eq!(kind(&then_branch[0]), Some(0.0));
-        assert!(matches!(&then_branch[1], Stmt::Return(Some(Expr::Number(n))) if *n == 1.0));
+        assert!(matches!(&then_branch[1], Stmt::Return(Some(Expr::Number(n)), _) if *n == 1.0));
         assert_eq!(kind(&else_branch[0]), Some(2.0));
         assert!(matches!(&body[1], Stmt::Expr(Expr::LocalSet(id, _)) if *id == step));
-        assert!(matches!(&body[2], Stmt::Return(Some(Expr::LocalGet(4)))));
+        assert!(matches!(&body[2], Stmt::Return(Some(Expr::LocalGet(4)), _)));
         assert_eq!(kind(&body[3]), Some(1.0));
-        assert!(matches!(&body[4], Stmt::Return(Some(Expr::Undefined))));
+        assert!(matches!(&body[4], Stmt::Return(Some(Expr::Undefined), _)));
         assert_eq!(body.len(), 5);
     }
 
     #[test]
     fn generator_one_state_locals_do_not_displace_shared_or_cross_state_storage() {
         let declare = |id| Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("local{id}"),
             ty: Type::Number,
@@ -313,6 +316,7 @@ mod tests {
                 num: 0,
                 body: vec![declare(1), declare(2), declare(3)],
                 exit: StateExit::Yield {
+                    byte_offset: 0,
                     value: Expr::LocalGet(1),
                     next_state: 1,
                     passthrough: None,
@@ -320,7 +324,7 @@ mod tests {
             },
             State {
                 num: 1,
-                body: vec![Stmt::Return(Some(Expr::LocalGet(2)))],
+                body: vec![Stmt::Return(Some(Expr::LocalGet(2)), 0)],
                 exit: StateExit::Done,
             },
         ];
@@ -337,6 +341,7 @@ mod tests {
                 num: 0,
                 body: vec![Stmt::PreallocateTdzBoxes(vec![1])],
                 exit: StateExit::Yield {
+                    byte_offset: 0,
                     value: Expr::Number(1.0),
                     next_state: 1,
                     passthrough: None,
@@ -346,13 +351,14 @@ mod tests {
                 num: 1,
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 1,
                         name: "client".into(),
                         ty: Type::Any,
                         mutable: false,
                         init: Some(Expr::Number(7.0)),
                     },
-                    Stmt::Return(Some(Expr::LocalGet(1))),
+                    Stmt::Return(Some(Expr::LocalGet(1)), 0),
                 ],
                 exit: StateExit::Done,
             },

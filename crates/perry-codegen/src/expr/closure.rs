@@ -71,7 +71,7 @@ pub(crate) fn plain_async_step_release_ids(
                 Stmt::Labeled { body, .. } => walk(std::slice::from_ref(body.as_ref()), out),
                 Stmt::Let { .. }
                 | Stmt::Expr(_)
-                | Stmt::Return(_)
+                | Stmt::Return(_, _)
                 | Stmt::Break
                 | Stmt::Continue
                 | Stmt::LabeledBreak(_)

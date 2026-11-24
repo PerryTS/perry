@@ -16,7 +16,7 @@ pub(super) fn guarded_declared_receiver_class_candidate(
     use perry_hir::types::Type;
     let ty = match object {
         Expr::LocalGet(id) => ctx.local_type_hint(id)?,
-        Expr::IndexGet { object, .. }
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
             if args
                 .iter()
                 .all(|arg| crate::rooting::expr_is_inert_primitive(ctx, arg)) =>
@@ -36,7 +36,7 @@ pub(super) fn guarded_declared_receiver_class_candidate(
         _ => return None,
     };
     let Type::Named(name) = ty else { return None };
-    if matches!(object, Expr::IndexGet { .. })
+    if matches!(object, Expr::IndexGet { .. } | Expr::RegionOut { .. })
         && !crate::lower_call::method_shape_proof::can_consume(ctx, name, property, args)
     {
         return None;

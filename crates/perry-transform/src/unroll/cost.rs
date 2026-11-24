@@ -55,7 +55,7 @@ impl Budget {
         }
         // Exhaustive so new statement shapes cannot silently evade the cap.
         match stmt {
-            Stmt::Let { init, .. } | Stmt::Return(init) => {
+            Stmt::Let { init, .. } | Stmt::Return(init, _) => {
                 init.as_ref().is_none_or(|expr| self.expr(expr))
             }
             Stmt::Expr(expr) | Stmt::Throw(expr) => self.expr(expr),
@@ -85,6 +85,7 @@ impl Budget {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant)
                     && cases.iter().all(|case| {

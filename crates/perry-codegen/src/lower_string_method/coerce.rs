@@ -98,7 +98,7 @@ pub(super) fn coercion_may_collect(ctx: &FnCtx<'_>, coercion: ArgCoercion, arg: 
 /// String-method numeric results are scalar when their receiver is proven.
 fn number_argument_is_inert(ctx: &FnCtx<'_>, arg: &Expr) -> bool {
     expr_produces_canonical_raw_f64(ctx, arg)
-        || matches!(arg, Expr::Call { callee, .. }
+        || matches!(arg, Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
             if matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
                 if string_value_is_runtime_guaranteed(ctx, object))
             && is_numeric_expr(ctx, arg))

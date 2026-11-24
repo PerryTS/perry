@@ -206,7 +206,7 @@ fn collect_instantiations_in_stmt(
             }
         }
         Stmt::Expr(expr) => collect_instantiations_in_expr(expr, ctx, module, idx),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(e) = expr {
                 collect_instantiations_in_expr(e, ctx, module, idx);
             }
@@ -268,6 +268,7 @@ fn collect_instantiations_in_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             collect_instantiations_in_expr(discriminant, ctx, module, idx);
             for case in cases {
@@ -398,7 +399,7 @@ fn collect_instantiations_in_expr(
         Expr::PropertyUpdate { object, .. } => {
             collect_instantiations_in_expr(object, ctx, module, idx);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             collect_instantiations_in_expr(object, ctx, module, idx);
             collect_instantiations_in_expr(index, ctx, module, idx);
         }
@@ -456,6 +457,7 @@ fn collect_instantiations_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             collect_instantiations_in_expr(condition, ctx, module, idx);
             collect_instantiations_in_expr(then_expr, ctx, module, idx);
@@ -474,8 +476,8 @@ fn collect_instantiations_in_expr(
                 collect_instantiations_in_expr(t, ctx, module, idx);
             }
         }
-        Expr::Await(inner) => collect_instantiations_in_expr(inner, ctx, module, idx),
-        Expr::SuperCall(args) => {
+        Expr::Await(inner, _) => collect_instantiations_in_expr(inner, ctx, module, idx),
+        Expr::SuperCall(args, _) => {
             for arg in args {
                 collect_instantiations_in_expr(arg, ctx, module, idx);
             }
@@ -514,6 +516,7 @@ fn collect_instantiations_in_expr(
             key,
             receiver,
             args,
+            ..
         } => {
             collect_instantiations_in_expr(home, ctx, module, idx);
             collect_instantiations_in_expr(key, ctx, module, idx);

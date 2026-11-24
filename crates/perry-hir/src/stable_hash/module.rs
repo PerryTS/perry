@@ -36,6 +36,7 @@ impl SH for Module {
             extern_funcs,
             init_was_unrolled,
             has_top_level_await,
+            byte_offset: _,
             async_init_function,
             init_kind,
             async_step_closures,

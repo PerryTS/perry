@@ -213,16 +213,15 @@ pub(crate) fn ptr_array_cached_method(class: &Class, method: &Function) -> Optio
             continue;
         };
         prefix.push(Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *id,
             name: format!("__perry_ptr_array_{}", field.name),
             ty: ty.clone(),
             mutable: false,
-            init: Some(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::This),
-                property: field.name.clone(),
-                byte_offset: 0,
-            }),
+            init: Some(Expr::property_get_unsited(
+                Box::new(Expr::This),
+                field.name.clone(),
+            )),
         });
     }
     prefix.append(&mut cached.body);
@@ -300,7 +299,7 @@ pub(crate) fn ptr_array_cache_fields(class: &Class, method: &Function) -> Vec<(S
             Expr::Delete(inner)
                 if matches!(
                     inner.as_ref(),
-                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                         if matches!(object.as_ref(), Expr::This)
                 ) =>
             {
@@ -310,7 +309,7 @@ pub(crate) fn ptr_array_cache_fields(class: &Class, method: &Function) -> Vec<(S
             // vetted transitively, but its stores could replace a cached
             // array slot. Keep this local transform independent of that
             // transitive analysis and decline the clone.
-            Expr::Call { callee, .. }
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
                 if matches!(
                     callee.as_ref(),
                     Expr::PropertyGet { object, .. }
@@ -383,7 +382,7 @@ fn rewrite_array_field_reads_in_stmts(stmts: &mut [Stmt], aliases: &HashMap<Stri
             Stmt::Expr(expr) | Stmt::Throw(expr) => {
                 rewrite_array_field_reads(expr, aliases);
             }
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     rewrite_array_field_reads(expr, aliases);
                 }
@@ -444,6 +443,7 @@ fn rewrite_array_field_reads_in_stmts(stmts: &mut [Stmt], aliases: &HashMap<Stri
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 rewrite_array_field_reads(discriminant, aliases);
                 for case in cases {

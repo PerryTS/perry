@@ -22,12 +22,16 @@ fn grain(parent: &Expr, argv: &Expr) -> Option<(i32, i64)> {
         Expr::PropertyGet {
             object, property, ..
         } if std::ptr::eq(&**object, argv) && property == "length" => Some((1, 0)),
-        Expr::IndexGet { object, index, .. } if std::ptr::eq(&**object, argv) => match **index {
-            Expr::Number(n) if n >= 0.0 && n.fract() == 0.0 && n < 1e9 => Some((2, n as i64)),
-            // Literal indices that fit an integer lower as Expr::Integer.
-            Expr::Integer(n) if n >= 0 => Some((2, n)),
-            _ => None,
-        },
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
+            if std::ptr::eq(&**object, argv) =>
+        {
+            match **index {
+                Expr::Number(n) if n >= 0.0 && n.fract() == 0.0 && n < 1e9 => Some((2, n as i64)),
+                // Literal indices that fit an integer lower as Expr::Integer.
+                Expr::Integer(n) if n >= 0 => Some((2, n)),
+                _ => None,
+            }
+        }
         _ => None,
     }
 }

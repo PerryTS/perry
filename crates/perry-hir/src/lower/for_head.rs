@@ -124,6 +124,7 @@ pub(crate) fn for_head_binding_stmts(
 ) -> Result<Vec<Stmt>> {
     match binding {
         ForHeadBinding::DeclIdent { name, id } => Ok(vec![Stmt::Let {
+            byte_offset: 0, /*HPOS*/
             id: *id,
             name: name.clone(),
             ty: elem_ty,
@@ -161,7 +162,7 @@ pub(crate) fn for_head_binding_stmts(
                     object,
                     property: prop.sym.to_string(),
                     value: Box::new(source),
-                    byte_offset: 0,
+                    byte_offset: crate::lower::member_token(member),
                     byte_end: 0,
                 },
                 ast::MemberProp::Computed(c) => Expr::IndexSet {
@@ -169,7 +170,7 @@ pub(crate) fn for_head_binding_stmts(
                     index: Box::new(lower_expr(ctx, &c.expr)?),
                     value: Box::new(source),
                     element_offset: 0,
-                    byte_offset: 0,
+                    byte_offset: crate::lower::member_token(member),
                     byte_end: 0,
                 },
                 ast::MemberProp::PrivateName(p) => {
@@ -190,7 +191,7 @@ pub(crate) fn for_head_binding_stmts(
                         object,
                         property,
                         value: Box::new(source),
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         byte_end: 0,
                     }
                 }
@@ -202,6 +203,7 @@ pub(crate) fn for_head_binding_stmts(
             let tmp_name = format!("__forhead_{}", tmp_id);
             ctx.locals.push((tmp_name.clone(), tmp_id, Type::Any));
             let mut out = vec![Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id: tmp_id,
                 name: tmp_name,
                 ty: Type::Any,
@@ -238,23 +240,27 @@ pub(crate) fn guard_for_in_body(
     keys_id: LocalId,
     idx_id: LocalId,
     body: Vec<Stmt>,
+    byte_offset: u32,
 ) -> Vec<Stmt> {
     let key = || {
         Box::new(Expr::IndexGet {
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(keys_id)),
             index: Box::new(Expr::LocalGet(idx_id)),
         })
     };
     let type_is = |name: &str| Expr::Compare {
+        byte_offset,
         op: CompareOp::Eq,
         left: Box::new(Expr::TypeOf(Box::new(Expr::LocalGet(obj_id)))),
         right: Box::new(Expr::String(name.to_string())),
     };
     let guard = Expr::Conditional {
+        byte_offset,
         condition: Box::new(Expr::Logical {
+            byte_offset,
             op: LogicalOp::Or,
             left: Box::new(type_is("object")),
             right: Box::new(type_is("function")),
@@ -574,6 +580,7 @@ pub(crate) fn map_set_delete_safe_for_of(
     arr_id: LocalId,
     idx_id: LocalId,
     is_set: bool,
+    byte_offset: u32,
 ) -> (Vec<Stmt>, Expr, Vec<Stmt>) {
     let ep_id = ctx.fresh_local(); // compaction epoch last synchronised with
     let nx_id = ctx.fresh_local(); // js_*_cursor_next result
@@ -592,7 +599,7 @@ pub(crate) fn map_set_delete_safe_for_of(
             }),
             args,
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset,
         }
     };
     // nx = cursor_next(coll, idx, ep); ep = epoch(coll); idx = nx; nx >= 0
@@ -614,12 +621,14 @@ pub(crate) fn map_set_delete_safe_for_of(
         ),
         Expr::LocalSet(idx_id, Box::new(Expr::LocalGet(nx_id))),
         Expr::Compare {
+            byte_offset,
             op: CompareOp::Ge,
             left: Box::new(Expr::LocalGet(nx_id)),
             right: Box::new(Expr::Number(0.0)),
         },
     ]);
     let mk_let = |id: LocalId, tag: &str, init: Expr| Stmt::Let {
+        byte_offset,
         id,
         name: format!("__miter_{}_{}", tag, id),
         ty: Type::Number,

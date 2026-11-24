@@ -13,6 +13,7 @@ const KEY_TMP: u32 = 103;
 
 fn param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -32,6 +33,7 @@ fn rmw_function(rhs: Expr) -> Function {
         index: Box::new(Expr::LocalGet(KEY_TMP)),
     };
     Function {
+        byte_offset: 0,
         id: 7,
         name: "bump".to_string(),
         type_params: Vec::new(),
@@ -41,6 +43,7 @@ fn rmw_function(rhs: Expr) -> Function {
             // The exact immutable aliases emitted by
             // `hoist_compound_member_assign` for `values[key] += rhs`.
             Stmt::Let {
+                byte_offset: 0,
                 id: BASE_TMP,
                 name: "__cmpd_base_test".to_string(),
                 ty: Type::Any,
@@ -48,6 +51,7 @@ fn rmw_function(rhs: Expr) -> Function {
                 init: Some(Expr::LocalGet(VALUES)),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: KEY_TMP,
                 name: "__cmpd_key_test".to_string(),
                 ty: Type::Any,
@@ -58,6 +62,7 @@ fn rmw_function(rhs: Expr) -> Function {
                 object: Box::new(Expr::LocalGet(BASE_TMP)),
                 index: Box::new(Expr::LocalGet(KEY_TMP)),
                 value: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(read),
                     right: Box::new(rhs),
@@ -66,7 +71,7 @@ fn rmw_function(rhs: Expr) -> Function {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::Integer(0))),
+            Stmt::Return(Some(Expr::Integer(0)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -85,6 +90,7 @@ fn rmw_module(name: &str, rhs: Expr) -> Module {
     module.functions.push(rmw_function(rhs));
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "values".to_string(),
             ty: Type::Named("Uint32Array".to_string()),
@@ -100,6 +106,7 @@ fn rmw_module(name: &str, rhs: Expr) -> Module {
         // (correctly) refuses the `$spec_ta5x4` clone this test exists to inspect.
         // An element of a typed array is always a number, so the clone stays sound.
         Stmt::Let {
+            byte_offset: 0,
             id: 2,
             name: "keys".to_string(),
             ty: Type::Named("Uint32Array".to_string()),

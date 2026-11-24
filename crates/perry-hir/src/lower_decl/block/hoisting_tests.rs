@@ -56,7 +56,7 @@ fn sloppy_block_initialization_precedes_reads_but_outer_copy_stays_at_declaratio
     );
     assert_ne!(inner_id, outer_id, "Annex B must keep two bindings");
     assert!(function.body.iter().any(|s| matches!(s,
-        Stmt::Return(Some(Expr::LocalGet(id))) if *id == outer_id
+        Stmt::Return(Some(Expr::LocalGet(id)), _) if *id == outer_id
     )));
 }
 
@@ -109,7 +109,7 @@ fn block_function_shadows_a_parameter_in_both_strictness_modes() {
             Stmt::Let { name, init: Some(Expr::LocalGet(id)), .. } if name == "before" && *id == inner_id
         )), "the early read must use the shadowing block binding");
         assert!(function.body.iter().any(|s| matches!(s,
-            Stmt::Return(Some(Expr::LocalGet(id))) if *id == parameter
+            Stmt::Return(Some(Expr::LocalGet(id)), _) if *id == parameter
         )));
     }
 }

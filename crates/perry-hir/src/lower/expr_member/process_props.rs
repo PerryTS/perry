@@ -14,7 +14,7 @@ use super::LoweringContext;
 /// member-access path so named/namespace forms agree with `process.<prop>`
 /// instead of resolving to `undefined`. Methods (`cwd`, `exit`, …) return
 /// `None` so the caller keeps lowering them to a callable native-module ref.
-pub(crate) fn lower_process_named_property(prop: &str) -> Option<Expr> {
+pub(crate) fn lower_process_named_property(prop: &str, byte_offset: u32) -> Option<Expr> {
     Some(match prop {
         "platform" => Expr::OsPlatform,
         "arch" => Expr::OsArch,
@@ -26,20 +26,20 @@ pub(crate) fn lower_process_named_property(prop: &str) -> Option<Expr> {
         "stdin" => Expr::ProcessStdin,
         "stdout" => Expr::ProcessStdout,
         "stderr" => Expr::ProcessStderr,
-        _ => return process_metadata_native_property(prop),
+        _ => return process_metadata_native_property(prop, byte_offset),
     })
 }
 
-pub(crate) fn process_native_property(prop: &str) -> Expr {
+pub(crate) fn process_native_property(prop: &str, byte_offset: u32) -> Expr {
     Expr::PropertyGet {
         byte_end: 0,
-        byte_offset: 0,
+        byte_offset,
         object: Box::new(Expr::NativeModuleRef("process".to_string())),
         property: prop.to_string(),
     }
 }
 
-pub(crate) fn process_metadata_native_property(prop: &str) -> Option<Expr> {
+pub(crate) fn process_metadata_native_property(prop: &str, byte_offset: u32) -> Option<Expr> {
     Some(match prop {
         "allowedNodeEnvironmentFlags"
         | "argv0"
@@ -58,7 +58,7 @@ pub(crate) fn process_metadata_native_property(prop: &str) -> Option<Expr> {
         | "report"
         | "send"
         | "sourceMapsEnabled"
-        | "title" => process_native_property(prop),
+        | "title" => process_native_property(prop, byte_offset),
         _ => return None,
     })
 }
@@ -99,9 +99,9 @@ mod tests {
 
     #[test]
     fn named_argv_uses_existing_export_cell_instead_of_live_intrinsic() {
-        assert!(lower_process_named_property("argv").is_none());
+        assert!(lower_process_named_property("argv", 0).is_none());
         assert!(matches!(
-            lower_process_named_property("env"),
+            lower_process_named_property("env", 0),
             Some(Expr::ProcessEnv)
         ));
     }

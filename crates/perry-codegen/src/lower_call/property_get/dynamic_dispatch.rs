@@ -162,11 +162,7 @@ pub(crate) fn try_lower_proven_method_call(
     else {
         return Ok(None);
     };
-    let offset = if *byte_offset != 0 {
-        *byte_offset
-    } else {
-        crate::codegen::signature_entry::direct_call_offset()
-    };
+    let offset = *byte_offset;
     let Some((class, fname, abi, nullable)) =
         crate::expr::wpfacts_access::proven_method_fn(ctx, object, property, offset)
     else {
