@@ -5,8 +5,8 @@
 // NaN-boxing constants (matching perry-runtime/src/value.rs)
 const __hostGlobal = globalThis;
 
-// The runtime's own calls and own-key checks read nothing a program can overwrite
-// (`Function.prototype.call`, `Object.prototype.hasOwnProperty`, `Reflect.apply`).
+// The runtime calls functions and checks own keys through these: a program may overwrite
+// `Function.prototype.call` / `apply`, `Object.prototype.hasOwnProperty` or `Reflect.apply`.
 const __reflectApply = Reflect.apply;
 const __hasOwn = Function.prototype.call.bind(Object.prototype.hasOwnProperty);
 
