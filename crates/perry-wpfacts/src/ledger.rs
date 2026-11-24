@@ -503,6 +503,9 @@ pub(crate) fn hir_kind(e: &Expr) -> Option<&'static str> {
     Some(match e {
         Expr::PropertyGet { .. } => "property",
         Expr::IndexGet { .. } => "element",
+        // A dead-zone check is its own kind of operation (not a call of the
+        // program): it may share its start with the call around it.
+        Expr::Call { .. } if perry_hir::tdz_check::is_dead_zone_op(e) => "tdz-check",
         Expr::Call { .. } | Expr::CallSpread { .. } => "value-call",
         Expr::New { .. } | Expr::NewDynamic { .. } | Expr::NewDynamicSpread { .. } => "new",
         Expr::PropertySet { .. } => "write",
