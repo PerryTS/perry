@@ -789,6 +789,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | IterNext { .. }
             | ProtoOf { .. }
             | ThisFrom { .. }
+            | SuperFrom { .. }
             | BirthField { .. }
             | CreateProto { .. }
             | NewTargetHard { .. }
