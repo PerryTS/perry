@@ -313,6 +313,69 @@ impl<'a> FuncEmitCtx<'a> {
     }
 }
 
+/// The `__memDispatch` bridge that answers a `node:path` module (or its `posix` / `win32`
+/// submodule) used as a value, through a namespace or a default import (`ns.default`);
+/// `None` for every other expression.
+pub(in crate::emit) fn path_module_bridge(expr: &Expr) -> Option<&'static str> {
+    let module = match expr {
+        Expr::NativeModuleRef(module) => module,
+        Expr::PropertyGet {
+            object, property, ..
+        } if property == "default" => match object.as_ref() {
+            Expr::NativeModuleRef(module) => module,
+            _ => return None,
+        },
+        _ => return None,
+    };
+    match module.strip_prefix("node:").unwrap_or(module) {
+        "path" | "path/posix" => Some("path_module"),
+        "path/win32" => Some("path_win32_module"),
+        _ => None,
+    }
+}
+
+/// The operands of a named `node:path` export read as a value (`import { join }` used as a
+/// value, or an export of the driver's namespace module): HIR's call to
+/// `js_native_module_named_esm_export_value(module, name)`. The web target answers it with
+/// the `path_module_export` bridge.
+pub(in crate::emit) fn path_export_operands(expr: &Expr) -> Option<[&Expr; 2]> {
+    let Expr::Call { callee, args, .. } = expr else {
+        return None;
+    };
+    let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
+        return None;
+    };
+    match args.as_slice() {
+        [module @ Expr::String(m), property]
+            if name == "js_native_module_named_esm_export_value"
+                && path_module_bridge(&Expr::NativeModuleRef(m.clone())).is_some() =>
+        {
+            Some([module, property])
+        }
+        _ => None,
+    }
+}
+
+/// The `__memDispatch` bridge that answers the ESM namespace of `node:path` (or a
+/// submodule) when `module_name` is the driver's `native-esm-<hex>.ts` module for it,
+/// `<hex>` spelling the builtin's name byte by byte.
+pub(in crate::emit) fn path_namespace_bridge(module_name: &str) -> Option<&'static str> {
+    let stem = module_name
+        .rsplit('/')
+        .next()?
+        .strip_prefix("native-esm-")?;
+    let hex = stem.strip_suffix(".ts")?;
+    let bytes = (0..hex.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(hex.get(i..i + 2)?, 16).ok())
+        .collect::<Option<Vec<u8>>>()?;
+    match std::str::from_utf8(&bytes).ok()? {
+        "path" | "path/posix" => Some("path_namespace"),
+        "path/win32" => Some("path_win32_namespace"),
+        _ => None,
+    }
+}
+
 /// The `__memDispatch` bridge a `path.win32` method calls, and how many arguments it takes.
 pub(in crate::emit) fn path_win32_bridge(
     method: perry_hir::PathWin32Method,

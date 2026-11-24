@@ -106,6 +106,11 @@ pub(super) struct WasmModuleEmitter {
     /// value to a zero-capture closure (objects.rs) — the same two shapes a
     /// named import gets via ExternFuncRef.
     pub(super) imported_ns_funcs: BTreeMap<(usize, String), u32>,
+    /// `(consumer_module_idx, local)` → the bridge answering a `node:path` ESM namespace
+    /// (`import * as path` whose object is observed: a computed member, `default`, keys).
+    /// The driver routes such an import through a compiled `native-esm-<hex>.ts` module
+    /// whose exports read native bindings the web target does not have.
+    pub(super) path_namespace_imports: BTreeMap<(usize, String), &'static str>,
     /// Named-import FUNCTIONS, per consumer: `(consumer_module_idx, local)`
     /// → wasm function index, resolved through re-export chains. Consulted
     /// BEFORE the whole-program `func_name_map`, whose bare-name keys
@@ -163,6 +168,7 @@ impl WasmModuleEmitter {
             js_preallocated: Default::default(),
             imported_var_globals: BTreeMap::new(),
             imported_ns_funcs: BTreeMap::new(),
+            path_namespace_imports: BTreeMap::new(),
             imported_func_indices: BTreeMap::new(),
         }
     }

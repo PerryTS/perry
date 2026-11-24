@@ -3812,6 +3812,18 @@ function isPathSeparator(code) {
   return posix;
 })();
 
+// An ES module namespace over a CommonJS module object: its keys plus `default`, sorted,
+// on a null prototype, tagged `Module` and not extensible.
+function __esmNamespace(module) {
+  const ns = Object.create(null);
+  for (const key of [...Object.keys(module), 'default'].sort()) {
+    ns[key] = key === 'default' ? module : module[key];
+  }
+  Object.defineProperty(ns, Symbol.toStringTag, { value: 'Module' });
+  return Object.preventExtensions(ns);
+}
+const __nodePathNamespaces = { posix: undefined, win32: undefined };
+
 // The bridge tables have no prototype: mem_call indexes them by a call site's method name,
 // and `o.isPrototypeOf(x)` must fall through to __classDispatch, not find Object.prototype's.
 const __memDispatch = {
@@ -4107,8 +4119,10 @@ const __memDispatch = {
   // The host join owns element conversion (nested arrays, nullish elements) and the
   // separator's: an undefined one is ",", not "undefined".
   array_join: (arr, separator) => {
-    if (!Array.isArray(arr)) return '';
-    return arr.join(separator);
+    if (Array.isArray(arr)) return arr.join(separator);
+    // Another object's one-argument `join` (a path module value): its own method.
+    return arr !== null && typeof arr === 'object' && typeof arr.join === 'function'
+      ? arr.join(separator) : '';
   },
   array_index_of: (arr, value) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value); },
   array_includes: (arr, value) => { if (!Array.isArray(arr)) return 0; return arr.includes(value) ? 1 : 0; },
@@ -4898,6 +4912,16 @@ const __memDispatch = {
   crypto_md5: () => undefined,
 
   // Path — `__nodePath`; the web target's `path` is the posix one.
+  // The module as a value: `const w = path.win32`, `path.join.apply(...)`, a default import.
+  path_module: () => __nodePath,
+  path_win32_module: () => __nodePath.win32,
+  path_module_export: (module, name) => {
+    const exports = module.replace(/^node:/, '') === 'path/win32' ? __nodePath.win32 : __nodePath;
+    return name === 'default' ? exports : exports[name];
+  },
+  // `import * as path` observed as an object: Node's ESM namespace view, created once.
+  path_namespace: () => (__nodePathNamespaces.posix ??= __esmNamespace(__nodePath)),
+  path_win32_namespace: () => (__nodePathNamespaces.win32 ??= __esmNamespace(__nodePath.win32)),
   path_sep: () => __nodePath.sep,
   path_delimiter: () => __nodePath.delimiter,
   path_join: (a, b) => __nodePath.join(a, b),

@@ -180,7 +180,9 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "array_shift", 1);
                 true
             }
-            "join" => {
+            // Array `join` takes one separator; a call with more arguments is some other
+            // object's `join` (`path.win32.join(a, b)` on a namespace value).
+            "join" if args.len() <= 1 => {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, object);
                 if !args.is_empty() {

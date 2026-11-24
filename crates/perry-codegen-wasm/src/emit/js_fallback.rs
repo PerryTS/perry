@@ -287,6 +287,12 @@ impl WasmModuleEmitter {
     }
 
     pub(super) fn emit_js_expr(&self, expr: &Expr, locals: &BTreeMap<u32, String>) -> String {
+        if let Some(bridge) = expr::path_module_bridge(expr) {
+            return self.emit_js_bridge_call(bridge, &[], locals);
+        }
+        if let Some([module, name]) = expr::path_export_operands(expr) {
+            return self.emit_js_bridge_call("path_module_export", &[module, name], locals);
+        }
         match expr {
             // Rust spells an infinity `inf`, which is not a JS literal.
             Expr::Number(n) if n.is_infinite() => {
@@ -1238,7 +1244,9 @@ impl WasmModuleEmitter {
                 // population below). Reading the global returns the i64 NaN-box
                 // bits matching the source module's let slot.
                 let mod_key = (self.current_mod_idx, name.clone());
-                if let Some(&gidx) = self.imported_var_globals.get(&mod_key) {
+                if let Some(&bridge) = self.path_namespace_imports.get(&mod_key) {
+                    self.emit_js_bridge_call(bridge, &[], locals)
+                } else if let Some(&gidx) = self.imported_var_globals.get(&mod_key) {
                     format!(
                         "u64ToF64(wasmInstance.exports.__wasm_global_{}.value)",
                         gidx

@@ -7,6 +7,18 @@ use super::*;
 
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_literals_vars(&mut self, func: &mut Function, expr: &Expr) -> bool {
+        if let Some(bridge) = path_module_bridge(expr) {
+            self.emit_frame_begin(func, 0);
+            self.emit_memcall(func, bridge, 0);
+            return true;
+        }
+        if let Some([module, name]) = path_export_operands(expr) {
+            self.emit_frame_begin(func, 2);
+            self.emit_store_arg(func, 0, module);
+            self.emit_store_arg(func, 1, name);
+            self.emit_memcall(func, "path_module_export", 2);
+            return true;
+        }
         match expr {
             Expr::Number(n) => {
                 func.instruction(&f64_const(*n));

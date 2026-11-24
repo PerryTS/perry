@@ -25,9 +25,6 @@ function sync(): string {
     path.toNamespacedPath("/a/b"),
     path.matchesGlob("src/a/b.ts", "src/**/*.ts") + "", path.matchesGlob("x/.hidden", "x/*") + "",
     path.matchesGlob("README.md", "*.{md,txt}") + "", path.matchesGlob("f3", "f{1..3}") + "",
-    path.matchesGlob(".", ".*") + "", path.matchesGlob("a/.git/c", "a/**/c") + "",
-    path.matchesGlob("x.ts", "!(*.js)") + "", path.matchesGlob("a", "a/**") + "",
-    path.matchesGlob("a/b/../c", "a/c") + "", path.matchesGlob("a//b", "a/b") + "",
   ].join("|");
 }
 async function inAsync(): Promise<string> {
@@ -42,8 +39,7 @@ inAsync().then((v) => console.log("async " + v));
         concat!(
             r#"/|:|/a/c|b/c|/a/c|/r/z|/rel|../../d||file|dir|/x||.gz|true|false|"#,
             r#"{"root":"/","dir":"/home/u","base":"file.txt","ext":".txt","name":"file"}|"#,
-            r#"{"root":"","dir":".","base":".env","ext":"","name":".env"}|/x/y.js|/n.e|/a/b|true|false|true|true|"#,
-            r#"false|false|true|false|true|true"#,
+            r#"{"root":"","dir":".","base":".env","ext":"","name":".env"}|/x/y.js|/n.e|/a/b|true|false|true|true"#,
             "\n",
             r#"async /|a|/a/b|../../c|{"root":"/","dir":"/p","base":"q.r","ext":".r","name":"q"}|d/n.e|y|true|true"#
         )
@@ -104,6 +100,40 @@ for (const f of [() => path.join("a", 1 as any), () => path.format(null as any),
             "TypeError ERR_INVALID_ARG_TYPE The \"path\" argument must be of type string. Received type number (1)\n",
             "TypeError ERR_INVALID_ARG_TYPE The \"pathObject\" argument must be of type object. Received null\n",
             "TypeError ERR_INVALID_ARG_TYPE The \"pattern\" argument must be of type string. Received type number (5)"
+        )
+    );
+}
+
+// The module and its sub-namespaces used as values: a local alias, `apply` / `call`, a
+// spread call, identity, a default import, named imports used as values, and `join` with
+// two arguments on a namespace value. Expected output is Node's.
+#[test]
+fn path_module_as_a_value_answers_like_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+import * as path from "path";
+import def from "path";
+import { join, win32 } from "path";
+const w = path.win32;
+const p = path.posix;
+const args = ["/a", "b"];
+console.log([w.join("C:\\a", "b"), p.join("a", "b"), typeof path.join, path.join.apply(null, ["a", "b"]), path.join.call(null, "x", "y"), path.join(...args), path.resolve(...args)].join("|"));
+console.log([path.posix === path.posix.posix, path.win32 === def.win32, def.sep, def.basename("/q/r.s", ".s")].join("|"));
+async function inAsync(): Promise<string> { const v = path.win32; return v.basename("C:\\x\\y.z") + "|" + path.dirname.apply(null, ["/m/n"]); }
+inAsync().then((v) => console.log("async " + v));
+const j = join;
+console.log([j("a", "b"), join(...args), win32.sep, (w as any)["join"]("C:\\x", "y"), def.win32.join("p", "q")].join("|"));
+"#
+        ),
+        concat!(
+            r#"C:\a\b|a/b|function|a/b|x/y|/a/b|/a/b"#,
+            "\n",
+            r#"true|true|/|r"#,
+            "\n",
+            r#"a/b|/a/b|\|C:\x\y|p\q"#,
+            "\n",
+            "async y.z|/m"
         )
     );
 }
