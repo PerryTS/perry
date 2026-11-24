@@ -173,9 +173,8 @@ fn control_unknown_receiver_does_not_throw() {
     }
 }
 
-/// The chain runs in a function body: its `u == null` guard narrows the
-/// body's own local `u` (`narrow_enter_body`; a module's top-level body
-/// has no narrowing hosts), so the guarded member call sees no value.
+/// The chain's `u == null` guard narrows the body's own local `u`
+/// (`narrow_enter_body`), so the guarded member call sees no value.
 #[test]
 fn control_optional_chain_does_not_throw() {
     let pf = one(&format!(
@@ -187,6 +186,30 @@ fn control_optional_chain_does_not_throw() {
         r.iter().chain(k.iter()).all(|v| v != "Throws"),
         "{r:?} {k:?}"
     );
+}
+
+/// The same chain in a module's top-level body (`narrow_enter_top`): the
+/// top-level `u` no function writes is the body's own.
+#[test]
+fn control_top_level_optional_chain_does_not_throw() {
+    let pf = one(&format!("{C}let u: any = undefined;\nconsole.log(u?.view, u?.go(1));\n"));
+    let r = at(&pf, "view", false);
+    let k = at(&pf, "go", true);
+    assert!(
+        r.iter().chain(k.iter()).all(|v| v != "Throws"),
+        "{r:?} {k:?}"
+    );
+}
+
+/// A top-level `u` a module function writes is not the body's own: its
+/// guard narrows nothing, and the guarded read keeps the TypeError arm.
+#[test]
+fn top_level_local_a_function_writes_is_not_narrowed() {
+    let pf = one(&format!(
+        "{C}let u: any = undefined;\nfunction w() {{ u = undefined; }}\nw();\nconsole.log(u?.view);\n"
+    ));
+    let r = at(&pf, "view", false);
+    assert!(r.iter().all(|v| v == "Throws"), "{r:?}");
 }
 
 /// PRIMRECV2 step 2: an undeclared global reads `undefined` (rule G), also
