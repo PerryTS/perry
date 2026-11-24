@@ -137,7 +137,7 @@ function fromJsValue(v) {
 // in an async loop that reads builtins.
 let __globalThisBoxed;
 function globalThisValue() {
-  if (__globalThisBoxed === undefined) __globalThisBoxed = fromJsValue(globalThis);
+  if (__globalThisBoxed === undefined) __globalThisBoxed = fromJsValue(__hostGlobal);
   return __globalThisBoxed;
 }
 

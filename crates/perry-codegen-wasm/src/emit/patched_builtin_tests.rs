@@ -53,13 +53,15 @@ console.log("host min: " + Math.max(1, 2) + ", " + Math.max(1, 2, 3));
     );
 }
 
-// An async body reads the replaced member through the same global object.
+// An async body reads the replaced member through the same global object, which a
+// store to its `globalThis` property does not change.
 #[test]
 fn an_async_body_calls_the_replacement() {
     assert_eq!(
         run_patching_source(
             r#"
 (Math as any).max = (a: number, b: number) => -1;
+(globalThis as any).globalThis = {};
 async function f(): Promise<number> {
   await null;
   return Math.max(1, 2) + Math.floor(2.5);
