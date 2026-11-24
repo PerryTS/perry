@@ -1,0 +1,1 @@
+A Perry built without update keys no longer suggests `perry target add`, which it cannot verify, when a library package is missing: the error names the `cargo build` command for that archive (UI, extensions, WebAssembly host, or a cross target's runtime) and the `PERRY_RUNTIME_DIR` to set.
