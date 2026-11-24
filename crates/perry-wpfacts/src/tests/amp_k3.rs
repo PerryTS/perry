@@ -198,3 +198,26 @@ fn k3b_t4b_stored_under_another_key_keeps_top() {
     let (v, top, r) = recv_after(&src, "/*A*/", "x");
     assert!(top && !v.starts_with("T0"), "a method stored under another key lost its ⊤ this: {v} {r:?}");
 }
+
+// K3BUILD7: a class constructor's `prototype` is non-writable and
+// non-configurable (ECMA-262 15.7.14 ClassDefinitionEvaluation:
+// MakeConstructor(F, false, proto)): no write by unknown code that holds
+// the class replaces it.
+
+/// T9: unknown code that may write any key of class `X` leaves
+/// `X.prototype` X's prototype object.
+#[test]
+fn k3b_t9_escaped_class_prototype_stays_its_own() {
+    let src = format!("{DECL}class X {{ m() {{ return 1; }} }}\nsink(X);\nconst p = X.prototype;\n/*A*/ p.z;\n");
+    let (v, top, r) = recv_after(&src, "/*A*/", "z");
+    assert!(!top && r.iter().all(|n| n.starts_with("proto:")), "an escaped class's prototype read holds more than its prototype: {v} {r:?}");
+}
+
+/// T9b: a subclass of an escaped class takes its parent prototype from
+/// `X.prototype`: its prototype's chain holds X's prototype, no ⊤.
+#[test]
+fn k3b_t9b_subclass_of_escaped_class_has_no_top_chain() {
+    let src = format!("{DECL}class X {{ m() {{ return 1; }} }}\nsink(X);\nconst ns = {{ X }};\nclass Y extends ns.X {{ r() {{ return 2; }} }}\nconst q = Object.getPrototypeOf(Y.prototype);\n/*A*/ q.z;\n");
+    let (v, top, r) = recv_after(&src, "/*A*/", "z");
+    assert!(!top && r.iter().all(|n| n.starts_with("proto:")), "an escaped class's subclass chain holds more than its prototype: {v} {r:?}");
+}
