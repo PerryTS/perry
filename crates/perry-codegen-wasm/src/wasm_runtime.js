@@ -2357,11 +2357,11 @@ const __memDispatch = {
   // Objects — args are plain JS values (obj is the object itself, key is a string, etc.)
   object_new: () => ({}),
   object_set: (obj, key, value) => {
-    if (obj && typeof obj === 'object') obj[typeof key === 'symbol' ? key : String(key)] = value; return obj;
+    if (obj && typeof obj === 'object') obj[__hostKey(key)] = value; return obj;
   },
   object_get: (obj, key) => {
     if (!obj || typeof obj !== 'object') return undefined;
-    return obj[typeof key === 'symbol' ? key : String(key)];
+    return obj[__hostKey(key)];
   },
   // A literal's property is defined, so a setter on its prototype does not run.
   object_literal_define: (obj, key, value) => {
@@ -2386,15 +2386,15 @@ const __memDispatch = {
   object_super_get: (home, receiver, key) => __superGet(home, key, receiver),
   object_get_dynamic: (obj, key) => {
     if (obj === null || obj === undefined) __throwNullReceiver(obj, key);
-    if (typeof obj === 'symbol') return obj[key];
+    if (typeof obj === 'symbol') return obj[__hostKey(key)];
     if (!__holdsProperties(obj)) return undefined;
-    return obj[key];
+    return obj[__hostKey(key)];
   },
   object_set_dynamic: (obj, key, value) => {
-    if (__holdsProperties(obj)) obj[key] = value;
+    if (__holdsProperties(obj)) obj[__hostKey(key)] = value;
   },
   object_delete: (obj, key) => { if (__holdsProperties(obj)) delete obj[String(key)]; },
-  object_delete_dynamic: (obj, key) => { if (__holdsProperties(obj)) delete obj[key]; },
+  object_delete_dynamic: (obj, key) => { if (__holdsProperties(obj)) delete obj[__hostKey(key)]; },
   // `for (k in o)`: the enumerable string keys of o and its prototype chain, in the
   // order a `for...in` visits them. A primitive is boxed, so a string yields its indices.
   for_in_keys: (obj) => {
@@ -2412,12 +2412,12 @@ const __memDispatch = {
   // The target is checked, then the key converted once, before the descriptor's getters run.
   object_define_property: (obj, key, desc) => {
     if (!__holdsProperties(obj)) return Object.defineProperty(obj, key, desc);
-    const k = __holdsProperties(key) ? Reflect.ownKeys({ [key]: 0 })[0] : key;
+    const k = __memDispatch.to_property_key(key);
     return Object.defineProperty(obj, k, __hostDescriptor(desc));
   },
   object_define_properties: (obj, props) => Object.defineProperties(obj, __hostDescriptors(props)),
   object_get_own_property_descriptor: (obj, key) => {
-    const desc = Object.getOwnPropertyDescriptor(obj, key);
+    const desc = Object.getOwnPropertyDescriptor(obj, __hostKey(key));
     if (desc && desc.set !== undefined && classStaticFieldAccessors.get(desc.get) === desc.set) {
       return { value: desc.get.call(obj), writable: true, enumerable: desc.enumerable, configurable: desc.configurable };
     }
@@ -2446,7 +2446,7 @@ const __memDispatch = {
   },
   object_has_property: (obj, key) => {
     if (!__holdsProperties(obj)) return 0;
-    return (key in obj) ? 1 : 0;
+    return (__hostKey(key) in obj) ? 1 : 0;
   },
   object_coerce: (v) => Object(v),
   // HIR names a well-known symbol `@@__perry_wk_<name>`.
@@ -2458,7 +2458,7 @@ const __memDispatch = {
   symbol_new: (...desc) => Symbol(...desc),
   symbol_key_for: (sym) => Symbol.keyFor(sym),
   // `key in Object(v)` without handing the temporary wrapper back as a handle.
-  object_coerce_has_property: (obj, key) => (key in Object(obj)) ? 1 : 0,
+  object_coerce_has_property: (obj, key) => (__hostKey(key) in Object(obj)) ? 1 : 0,
   object_assign: (target, source) => {
     if (target == null) throw new TypeError('Cannot convert undefined or null to object');
     const t = Object(target);
@@ -2855,7 +2855,7 @@ const __memDispatch = {
     Object.defineProperty(instance, key, { value, writable: true, configurable: true, enumerable: true });
   },
   // ToPropertyKey, object-to-primitive conversion included (`Object(Symbol.iterator)`).
-  to_property_key: (v) => Reflect.ownKeys({ [v]: 0 })[0],
+  to_property_key: (v) => Reflect.ownKeys({ [__hostKey(v)]: 0 })[0],
   // A refresh of a path that never evaluated the class gets `undefined`: a no-op.
   class_env_refresh: (ctor, caps) => {
     const evaluation = __evaluationOf(ctor);
@@ -6116,7 +6116,7 @@ const __uiMethodMap = {
 
 function __callHostFunction(fn, args, receiver = undefined) {
   try {
-    return Reflect.apply(fn, receiver, __classMethodFns.has(fn) ? args : args.map(__hostCallback));
+    return Reflect.apply(fn, receiver, __classMethodFns.has(fn) ? args : __hostArgs(fn, args));
   } catch (error) {
     if (tryDepth === 0) throw error;
     currentException = error;
@@ -6208,6 +6208,30 @@ function __hostDescriptors(props) {
   return descs;
 }
 
+// A property key the host converts itself. Perry closures are not callable by the host,
+// so an object key is handed over as a view whose conversion methods run them.
+function __hostKey(key) {
+  if (!__holdsProperties(key)) return key;
+  const method = (name) => {
+    const fn = __hostAccessor(key[name]);
+    return typeof fn === 'function' ? (...args) => Reflect.apply(fn, key, args) : fn;
+  };
+  return {
+    __proto__: null,
+    get [Symbol.toPrimitive]() { return method(Symbol.toPrimitive); },
+    get toString() { return method('toString'); },
+    get valueOf() { return method('valueOf'); },
+  };
+}
+
+// The arguments of a host function; a property key argument goes through `__hostKey`.
+const __hostKeyFns = new Set([Object.prototype.hasOwnProperty, Object.prototype.propertyIsEnumerable]);
+function __hostArgs(fn, args) {
+  const hostArgs = args.map(__hostCallback);
+  if (__hostKeyFns.has(fn)) hostArgs[0] = __hostKey(args[0]);
+  return hostArgs;
+}
+
 // Host APIs require a stable function identity for Perry closure objects.
 function __hostCallback(value) {
   if (!__isPerryClosure(value)) return value;
@@ -6253,7 +6277,7 @@ function __classMethodValue(cls, mname, evaluation) {
 // The instance side of a class home walks the parent chain's accessors and methods,
 // then the host base's prototype (or Object.prototype).
 function __superGet(home, key, receiver) {
-  const name = typeof key === 'symbol' ? key : String(key);
+  const name = typeof key === 'string' ? key : __memDispatch.to_property_key(key);
   const own = (o, k) => o !== undefined && Object.prototype.hasOwnProperty.call(o, k);
   if (home && home.__classHome__ !== undefined) {
     const cls = home.__classHome__;
@@ -6297,7 +6321,9 @@ function __superGet(home, key, receiver) {
 // `null.x` / `undefined.x()` is a TypeError in JS. Thrown here, mem_call turns it into
 // the pending exception under a WASM `try` and rethrows it outside one.
 function __throwNullReceiver(obj, name) {
-  throw new TypeError(`Cannot read properties of ${obj} (reading '${String(name)}')`);
+  // The host converts no object key here, and leaves it out of the message.
+  const reading = __holdsProperties(name) ? '' : ` (reading '${String(name)}')`;
+  throw new TypeError(`Cannot read properties of ${obj}${reading}`);
 }
 
 // A zero-argument native member in an async (JS) body: a method is called, a member
@@ -6319,6 +6345,10 @@ function __jsNativeMember(obj, name) {
 // only names in `__uiMethodMap`, on an instance or a primitive UI handle, keep the bridge
 // route, which `__classDispatch` ends with.
 function __jsMethodGet(obj, mname) {
+  if (__holdsProperties(mname)) {
+    if (obj === null || obj === undefined) __throwNullReceiver(obj, mname);
+    mname = __memDispatch.to_property_key(mname);
+  }
   const tagged = obj && typeof obj === 'object' && __classOf(obj)
     && !Object.prototype.hasOwnProperty.call(obj, mname);
   if (tagged && __classHasMethod(__classOf(obj), mname)) {
@@ -6348,7 +6378,7 @@ function __jsMethodInvoke(ref, args) {
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
   // A compiled class method takes Perry values, as `reflect_apply` passes them.
   if (__classMethodFns.has(ref.f)) return Reflect.apply(ref.f, ref.r, args);
-  return Reflect.apply(ref.f, ref.r, args.map(__hostCallback));
+  return Reflect.apply(ref.f, ref.r, __hostArgs(ref.f, args));
 }
 
 // Own keys only: `mname in methods` would also find Object.prototype's names.
