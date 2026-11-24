@@ -1230,6 +1230,17 @@ impl Model {
 
     /// The one array index key node `key` holds: a numeric literal
     /// (`Gen::num_literal`) of one integer in index range.
+    /// A key node holding the one integer `i` (`Gen::num_literal`'s node,
+    /// made by a rule): a read under it is the read `a[i]` is.
+    pub(crate) fn index_literal(&mut self, i: u32) -> NodeId {
+        let n = self.node_named("NUMLIT", || format!("NUMLIT{i}"));
+        let nd = &mut self.nodes[n as usize];
+        nd.ruled = true;
+        nd.range = crate::model::Iv::literal(i as f64);
+        self.add_prim(n, prim::NUM);
+        n
+    }
+
     pub(crate) fn num_literal_index(&self, key: NodeId) -> Option<u32> {
         let k = &self.nodes[key as usize];
         let (lo, hi) = (k.range.lo, k.range.hi);

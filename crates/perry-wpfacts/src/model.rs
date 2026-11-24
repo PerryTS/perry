@@ -86,6 +86,10 @@ pub const IDX_INSTANCEOF_WALK: u16 = 68;
 pub const IDX_OWN_PRIM: u16 = 46;
 /// `Cons::Spread` of a String source: the store of its characters (10.4.3).
 pub const IDX_SPREAD_STR: u16 = 47;
+/// `idx_done` tag of `Function.prototype.apply`'s positional arguments
+/// (`builtins::collections::apply_positions`): once per (array node, target,
+/// call).
+pub const IDX_APPLY_POS: u16 = 69;
 
 /// Token 0 is ⊤: a value produced or touched by code the analysis does not
 /// model. Its presence in a node means "any escaped object or anything else".

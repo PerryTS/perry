@@ -137,3 +137,12 @@ fn own_names_loop_runs_its_body_per_key() {
     assert!(v.objs.is_empty() && !v.top, "gl.measure() {v:?}");
     assert!(y.objs.is_empty() && !y.top, "moveTo's y {y:?}");
 }
+
+#[test]
+fn rest_array_is_one_object_per_call_site() {
+    // `f.apply(gl, a)` passes `a[i]` to parameter i (CreateListFromArrayLike):
+    // `gl.bindTexture(3, t)`'s `tex` is the Tex, never a Number.
+    let [_, t, tex, _] = kinds(&wrapped(""));
+    assert!(tex.prims & crate::model::prim::NUM == 0 && !tex.top, "tex {tex:?}");
+    assert!(t.objs.is_empty() && !t.top, "t {t:?}");
+}

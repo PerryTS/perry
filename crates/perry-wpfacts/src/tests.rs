@@ -232,6 +232,7 @@ mod own_guarded_read;
 mod own_helper_guard;
 mod own_key_shadow;
 mod own_keys_loop;
+mod apply_positions;
 mod own_length;
 mod own_prop_trap;
 mod own_store_read;
