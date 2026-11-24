@@ -1,0 +1,1 @@
+fix(compile): `--output-type staticlib` lists `link_args` in `<output>.linkdeps.json`, so a macOS host links with the manifest alone instead of failing on undefined `_perry_runtime_layout_*` and `_js_ext_net_nm_install` (#15259).
