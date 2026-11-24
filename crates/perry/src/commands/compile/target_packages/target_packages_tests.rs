@@ -484,7 +484,7 @@ fn source_build_commands_name_the_crate_and_directory_of_an_archive() {
         (
             "libperry_ext_http.a",
             None,
-            "cargo build --release -p perry-ext-http ",
+            "cargo build-perry --release ",
             "target/release",
         ),
         (
@@ -514,7 +514,7 @@ fn source_build_commands_name_the_crate_and_directory_of_an_archive() {
         );
         assert_eq!(
             commands.contains(&format!("scripts/gc_call_effects/sidecars.sh {dir}\n")),
-            build.contains("perry-runtime-static"),
+            build.contains("perry-runtime-static") || build.contains("build-perry"),
             "{archive}: {commands}"
         );
     }

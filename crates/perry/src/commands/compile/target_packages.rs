@@ -374,16 +374,29 @@ pub(crate) fn source_build_commands(archive: &str, triple: Option<&str>) -> Stri
     };
     let build = if let Some(wasi) = triple.filter(|t| t.starts_with("wasm32-")) {
         format!("scripts/wasi_build_runtime.sh {wasi}   (in a perry checkout)")
-    } else if matches!(stem, "perry_runtime" | "perry_stdlib") {
-        format!(
-            "cargo build --release -p perry-runtime-static -p perry-stdlib-static{target_flag}   (in a perry checkout)\n  \
-             scripts/gc_call_effects/sidecars.sh {dir}"
-        )
     } else {
-        format!(
-            "cargo build --release -p {}{target_flag}   (in a perry checkout)",
-            stem.replace('_', "-")
-        )
+        // An extension shares one Cargo graph with the runtime and stdlib it
+        // links with; that build writes the runtime archive, whose sidecar
+        // must match it.
+        let (cargo, writes_runtime) = if stem.starts_with("perry_ext_") {
+            ("cargo build-perry --release".to_string(), true)
+        } else if matches!(stem, "perry_runtime" | "perry_stdlib") {
+            (
+                "cargo build --release -p perry-runtime-static -p perry-stdlib-static".to_string(),
+                true,
+            )
+        } else {
+            (
+                format!("cargo build --release -p {}", stem.replace('_', "-")),
+                false,
+            )
+        };
+        let sidecars = if writes_runtime {
+            format!("\n  scripts/gc_call_effects/sidecars.sh {dir}")
+        } else {
+            String::new()
+        };
+        format!("{cargo}{target_flag}   (in a perry checkout){sidecars}")
     };
     format!(
         "{build}\nand, unless perry runs from that checkout's root, set PERRY_RUNTIME_DIR to its {dir} directory"
