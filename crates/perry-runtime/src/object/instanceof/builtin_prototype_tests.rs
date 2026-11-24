@@ -218,7 +218,7 @@ fn callable_values_follow_the_live_function_prototype_for_object_instanceof() {
         super::static_dispatch::instanceof_with_constructor(
             ordinary.get_nanbox_f64(),
             0xFFFF0050,
-            Some(custom_constructor.get_nanbox_f64()),
+            custom_constructor.get_nanbox_f64(),
         )
         .to_bits(),
         crate::value::TAG_FALSE,
@@ -239,7 +239,7 @@ fn callable_values_follow_the_live_function_prototype_for_object_instanceof() {
         super::static_dispatch::instanceof_with_constructor(
             ordinary.get_nanbox_f64(),
             0xFFFF0050,
-            Some(custom_constructor.get_nanbox_f64()),
+            custom_constructor.get_nanbox_f64(),
         )
         .to_bits(),
         crate::value::TAG_TRUE,

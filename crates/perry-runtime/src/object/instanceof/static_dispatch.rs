@@ -46,18 +46,34 @@ pub(super) fn heap_builtin_name(class_id: u32) -> Option<&'static str> {
 
 #[no_mangle]
 pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
-    instanceof_with_constructor(value, class_id, None)
+    instanceof_dispatch(
+        value,
+        class_id,
+        None,
+        global_binding_name(class_id),
+        None,
+        false,
+        false,
+    )
 }
 
-/// The same native/class dispatch with the evaluated RHS, when available.
-/// A builtin alias must walk against its own prototype, even after its global
-/// binding has been replaced. Static class-id callers retain their contract.
-pub(super) fn instanceof_with_constructor(
-    value: f64,
-    class_id: u32,
-    constructor: Option<f64>,
-) -> f64 {
-    instanceof_dispatch(value, class_id, constructor, None, false, false)
+/// The global binding a static `x instanceof Name` site names: compiled code
+/// picked `Name` (a bare identifier at the program's site), so reading it is
+/// that site's read, never the runtime's.
+fn global_binding_name(class_id: u32) -> Option<&'static str> {
+    match class_id {
+        CLASS_ID_URL => Some("URL"),
+        CLASS_ID_PROMISE => Some("Promise"),
+        _ => heap_builtin_name(class_id),
+    }
+}
+
+/// The same native/class dispatch with the evaluated RHS: a builtin alias
+/// walks against its own prototype, even after its global binding has been
+/// replaced.
+#[cfg(test)]
+pub(super) fn instanceof_with_constructor(value: f64, class_id: u32, constructor: f64) -> f64 {
+    instanceof_dispatch(value, class_id, Some(constructor), None, None, false, false)
 }
 
 /// Generic entry preparation has already classified the left operand.
@@ -65,10 +81,19 @@ pub(super) fn instanceof_with_constructor(
 pub(super) fn instanceof_classified(
     value: f64,
     class_id: u32,
+    constructor: f64,
     primitive: bool,
     lhs_non_proxy: bool,
 ) -> f64 {
-    instanceof_dispatch(value, class_id, None, Some(primitive), lhs_non_proxy, false)
+    instanceof_dispatch(
+        value,
+        class_id,
+        Some(constructor),
+        None,
+        Some(primitive),
+        lhs_non_proxy,
+        false,
+    )
 }
 
 /// [`instanceof_classified`] for a class constructor RHS whose `@@hasInstance`
@@ -82,10 +107,19 @@ pub(super) fn instanceof_classified(
 pub(super) fn instanceof_class_resolved(
     value: f64,
     class_id: u32,
+    constructor: f64,
     primitive: bool,
     lhs_non_proxy: bool,
 ) -> f64 {
-    instanceof_dispatch(value, class_id, None, Some(primitive), lhs_non_proxy, true)
+    instanceof_dispatch(
+        value,
+        class_id,
+        Some(constructor),
+        None,
+        Some(primitive),
+        lhs_non_proxy,
+        true,
+    )
 }
 
 #[inline(always)]
@@ -93,6 +127,7 @@ fn instanceof_dispatch(
     value: f64,
     class_id: u32,
     constructor: Option<f64>,
+    binding: Option<&'static str>,
     primitive: Option<bool>,
     lhs_non_proxy: bool,
     symbol_hook_resolved: bool,
@@ -215,19 +250,32 @@ fn instanceof_dispatch(
             };
         }
     }
-    native_with_constructor(value, class_id, constructor)
+    native_with_constructor(value, class_id, constructor, binding)
 }
 
 /// Native dispatch after the caller has handled hooks, proxies and primitives.
 /// Dynamic callers have also proved the actual RHS's intrinsic body identity;
 /// repeating the static class-hook dispatch would add no observable work.
-pub(super) fn native_with_constructor(value: f64, class_id: u32, constructor: Option<f64>) -> f64 {
+/// Exactly one of `constructor` (the dynamic entry's actual RHS) and `binding`
+/// (a static site's global name) is present.
+pub(super) fn native_with_constructor(
+    value: f64,
+    class_id: u32,
+    constructor: Option<f64>,
+    binding: Option<&'static str>,
+) -> f64 {
     let true_val = f64::from_bits(crate::value::TAG_TRUE);
     let false_val = f64::from_bits(crate::value::TAG_FALSE);
     let scope = crate::gc::RuntimeHandleScope::new();
     let rooted_value = scope.root_nanbox_f64(value);
     let constructor = constructor.map(|rhs| scope.root_nanbox_f64(rhs));
-    let result = native_instanceof(value, class_id, &rooted_value, constructor.as_ref());
+    let result = native_instanceof(
+        value,
+        class_id,
+        binding,
+        &rooted_value,
+        constructor.as_ref(),
+    );
     if result.to_bits() == crate::value::TAG_TRUE
         || heap_builtin_name(class_id).is_some()
         || constructor.is_none()
@@ -246,6 +294,7 @@ pub(super) fn native_with_constructor(value: f64, class_id: u32, constructor: Op
 fn native_instanceof(
     mut value: f64,
     class_id: u32,
+    binding: Option<&'static str>,
     rooted_value: &crate::gc::RuntimeHandle<'_>,
     constructor: Option<&crate::gc::RuntimeHandle<'_>>,
 ) -> f64 {
@@ -257,13 +306,13 @@ fn native_instanceof(
     // Native cells retain their brand path unless their prototype is recorded.
     // Only a hit is final: a miss falls through to the class-id chain, which
     // still knows builtin subclasses whose prototype chain is not materialized.
-    if let Some(name) = heap_builtin_name(class_id) {
+    if heap_builtin_name(class_id).is_some() {
         let ordinary = unsafe { crate::value::addr_class::try_read_gc_header(value_addr(value)) }
             .is_some_and(|header| crate::gc_type_is_object!(header.obj_type));
         let matches = if ordinary {
-            prototype_instanceof_builtin(rooted_value, name, constructor)
+            prototype_instanceof_builtin(rooted_value, binding, constructor)
         } else {
-            recorded_prototype_instanceof_builtin(rooted_value, name, constructor)
+            recorded_prototype_instanceof_builtin(rooted_value, binding, constructor)
         };
         value = rooted_value.get_nanbox_f64();
         if matches == Some(true) {
@@ -348,7 +397,8 @@ fn native_instanceof(
         let branded =
             addr != 0 && crate::object::url_layout::is_url_object_shape(addr as *mut ObjectHeader);
         return if branded
-            || recorded_prototype_instanceof_builtin(rooted_value, "URL", constructor) == Some(true)
+            || recorded_prototype_instanceof_builtin(rooted_value, binding, constructor)
+                == Some(true)
         {
             true_val
         } else {
@@ -716,7 +766,7 @@ fn native_instanceof(
     }
     if class_id == CLASS_ID_PROMISE {
         if let Some(matches) =
-            recorded_prototype_instanceof_builtin(rooted_value, "Promise", constructor)
+            recorded_prototype_instanceof_builtin(rooted_value, binding, constructor)
         {
             return if matches { true_val } else { false_val };
         }
@@ -855,20 +905,20 @@ fn native_instanceof(
                     false_val
                 };
             }
-            let builtin_name = match class_id {
-                crate::error::CLASS_ID_ERROR => Some("Error"),
-                crate::error::CLASS_ID_TYPE_ERROR => Some("TypeError"),
-                crate::error::CLASS_ID_RANGE_ERROR => Some("RangeError"),
-                crate::error::CLASS_ID_REFERENCE_ERROR => Some("ReferenceError"),
-                crate::error::CLASS_ID_SYNTAX_ERROR => Some("SyntaxError"),
-                crate::error::CLASS_ID_EVAL_ERROR => Some("EvalError"),
-                crate::error::CLASS_ID_URI_ERROR => Some("URIError"),
-                crate::error::CLASS_ID_AGGREGATE_ERROR => Some("AggregateError"),
-                _ => None,
-            };
-            if let Some(name) = builtin_name {
+            let error_family = matches!(
+                class_id,
+                crate::error::CLASS_ID_ERROR
+                    | crate::error::CLASS_ID_TYPE_ERROR
+                    | crate::error::CLASS_ID_RANGE_ERROR
+                    | crate::error::CLASS_ID_REFERENCE_ERROR
+                    | crate::error::CLASS_ID_SYNTAX_ERROR
+                    | crate::error::CLASS_ID_EVAL_ERROR
+                    | crate::error::CLASS_ID_URI_ERROR
+                    | crate::error::CLASS_ID_AGGREGATE_ERROR
+            );
+            if error_family {
                 if let Some(matches) =
-                    recorded_prototype_instanceof_builtin(rooted_value, name, constructor)
+                    recorded_prototype_instanceof_builtin(rooted_value, binding, constructor)
                 {
                     return if matches { true_val } else { false_val };
                 }
@@ -955,7 +1005,7 @@ fn native_instanceof(
             // fail `instanceof Error` even though getPrototypeOf still showed
             // `ZodError -> Error -> Object`.
             if let Some(matches) =
-                recorded_prototype_instanceof_builtin(rooted_value, "Error", constructor)
+                recorded_prototype_instanceof_builtin(rooted_value, binding, constructor)
             {
                 return if matches { true_val } else { false_val };
             }
