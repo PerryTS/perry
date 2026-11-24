@@ -1608,6 +1608,23 @@ impl Model {
     }
 
     /// The one rule that sees a Proxy token: operation `c` on Proxy `p`.
+    /// [[Set]] (10.5.9) of `key` with the Proxy as the Receiver
+    /// (`proxy_set`).
+    pub(crate) fn proxy_store(&mut self, p: u32, key: Key, src: NodeId, site: SiteId, region: NodeId) {
+        let recv = self.tok(TokKind::Proxy(p));
+        self.proxy_set(p, key, src, site, region, recv);
+        // Rule PXDEFINE: the forward's OrdinarySet ends at the
+        // Receiver, this Proxy (10.1.9.2 OrdinarySetWithOwnDescriptor
+        // step 2.c: Receiver.[[GetOwnProperty]](P), 10.5.5; steps
+        // 2.d / 2.e: Receiver.[[DefineOwnProperty]](P, desc), 10.5.6).
+        // A setter on the target's chain ends it there instead: the
+        // model keeps both.
+        if !self.proxy_made(p, ProxyOp::OwnProp(key, NO_NODE)) {
+            self.proxy_own_prop(p, key, NO_NODE);
+        }
+        self.proxy_define(p, key, src, region);
+    }
+
     pub(crate) fn proxy_apply(&mut self, n: NodeId, c: &Cons, p: u32) {
         match *c {
             Cons::Load { key, dst } => self.proxy_get_into(p, key, NO_NODE, dst),
@@ -1764,21 +1781,16 @@ impl Model {
                 src,
                 site,
                 region,
-            } => {
-                let recv = self.tok(TokKind::Proxy(p));
-                self.proxy_set(p, key, src, site, region, recv);
-                // Rule PXDEFINE: the forward's OrdinarySet ends at the
-                // Receiver, this Proxy (10.1.9.2 OrdinarySetWithOwnDescriptor
-                // step 2.c: Receiver.[[GetOwnProperty]](P), 10.5.5; steps
-                // 2.d / 2.e: Receiver.[[DefineOwnProperty]](P, desc), 10.5.6).
-                // A setter on the target's chain ends it there instead: the
-                // model keeps both.
-                if !self.proxy_made(p, ProxyOp::OwnProp(key, NO_NODE)) {
-                    self.proxy_own_prop(p, key, NO_NODE);
-                }
-                self.proxy_define(p, key, src, region);
-            }
+            } => self.proxy_store(p, key, src, site, region),
             Cons::DefineOwn { key, value, region } => self.proxy_define(p, key, value, region),
+            // Rule PXASSIGN: `Object.assign( px, s )`: the copy's Sets of
+            // `s`'s keys on the Proxy (`spread_into`, `store_into`). Other
+            // copies (a literal's spread, a rest object) copy into a fresh
+            // object, never into a Proxy.
+            Cons::SpreadFrom { src, site, from } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.spread_into(src, t, site, from);
+            }
             // Rule PXRECV: the Proxy is the target of a Proxy whose forward
             // passes the original Receiver `recv`.
             Cons::FwdLoad {
@@ -2061,7 +2073,11 @@ impl Model {
             // Proxy is a value that flows to the call's result; only the
             // markers there map families.
             | Cons::ArgInto { .. }
-            | Cons::RetInto { .. } => {
+            | Cons::RetInto { .. }
+            // Rule PXASSIGN: the Proxy as a value of a copied unnamed key
+            // (`fa_s` of a copy source): the Set of it on the target is the
+            // ordinary rule; no internal method of the Proxy runs.
+            | Cons::UnnamedSet { .. } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.apply_inner(n, c, Tokens::Slice(&[t]), 0);
             }
@@ -2426,13 +2442,11 @@ impl Model {
             | Cons::RegExpPattern { .. }
             | Cons::RequireSpec { .. }
             | Cons::ShareBuffer { .. }
-            | Cons::SpreadFrom { .. }
             | Cons::StoreKeyed { .. }
             | Cons::StoreOut { .. }
             | Cons::SuperCtor { .. }
             | Cons::SuperCtorParent { .. }
             | Cons::ThisFrom { .. }
-            | Cons::UnnamedSet { .. }
             | Cons::ViewedBuffer { .. }
             | Cons::VisitHolders { .. }
             | Cons::VisitStop { .. } => {

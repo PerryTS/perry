@@ -603,3 +603,30 @@ fn proxy_array_from_array_like_runs_the_get_trap() {
     site(tg, "", op, true).unwrap();
     site("{ length: 1 }", get, op, true).unwrap();
 }
+
+/// Rule PXASSIGN: `Object.assign( px, s )` (20.1.2.1 step 4.b.iii.2.b)
+/// is Set( px, key, v, true ) per copied key: the `set` trap with the
+/// value, or without a trap the forward to the target; the target itself
+/// does not escape.
+#[test]
+fn proxy_assign_target_runs_the_set_trap() {
+    let set_v = "set(t: any, k: any, v: any, r: any) { external(v); return true; }";
+    site("{}", SET_OUT, "Object.assign(px, { a: 1 });", false).unwrap();
+    site("{}", set_v, "Object.assign(px, { a: payload });", false).unwrap();
+    site("{}", set_v, "Object.assign(px, { a: 1 });", true).unwrap();
+    // No trap: the target gets the value (the forward), nothing escapes.
+    site("{ b: payload }", "", "Object.assign(px, { a: 1 });", true).unwrap();
+    site("{}", "", "Object.assign(px, { a: payload });\nexternal(px.a);", false).unwrap();
+    site("{}", "", "Object.assign(px, { a: payload });", true).unwrap();
+}
+
+/// A copied key the model does not name (a computed store into the
+/// source) is a Set of some key on the Proxy: the trap sees its value.
+#[test]
+fn proxy_assign_target_unnamed_key_runs_the_set_trap() {
+    let set_v = "set(t: any, k: any, v: any, r: any) { external(v); return true; }";
+    let src = |v: &str| format!("const s: any = {{}};\ns[process.argv[2]] = {v};\nObject.assign(px, s);");
+    site("{}", set_v, &src("payload"), false).unwrap();
+    site("{}", set_v, &src("1"), true).unwrap();
+    site("{ b: payload }", "", &src("1"), true).unwrap();
+}

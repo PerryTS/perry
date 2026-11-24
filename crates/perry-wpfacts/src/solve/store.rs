@@ -399,6 +399,12 @@ impl Model {
     }
 
     pub(crate) fn store_into(&mut self, t: Tok, key: Key, src: NodeId, site: SiteId) {
+        // Rule PXASSIGN: [[Set]] of a Proxy is its own internal method
+        // (10.5.9) with the Proxy the Receiver (`proxy_store`).
+        if let TokKind::Proxy(p) = self.toks[t as usize] {
+            let region = self.thrown;
+            return self.proxy_store(p, key, src, site, region);
+        }
         // A host object of strings (`process.env`): the runtime's [[Set]]
         // hook (`process_env_set_field` -> `js_setenv`) runs before any
         // other step and stores ToString(v), never `v` (a program

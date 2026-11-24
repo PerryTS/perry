@@ -1252,7 +1252,17 @@ impl Model {
                     self.has_instance(t, reason, arg);
                 }
             }
-            Cons::UnnamedSet { target } => {
+            // Rule PXASSIGN: on a Proxy target the copy's [[Set]] of some
+            // key is the Proxy's (10.5.9, `store_into`), once a value of an
+            // unnamed key is there.
+            Cons::UnnamedSet { target, site }
+                if matches!(self.toks[target as usize], TokKind::Proxy(_)) =>
+            {
+                if !toks.is_empty() || prim != 0 {
+                    self.store_into(target, Key::any(), n, site);
+                }
+            }
+            Cons::UnnamedSet { target, .. } => {
                 let walked = self
                     .walk_nodes
                     .contains_key(&(target, target, Key::any(), 1));
