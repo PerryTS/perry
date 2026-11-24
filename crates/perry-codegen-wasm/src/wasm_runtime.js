@@ -2530,9 +2530,17 @@ const __memDispatch = {
   array_is_array: (val) => Array.isArray(val) ? 1 : 0,
   array_from: (val) => Array.from(val),
   // `Array.from(value, mapFn, thisArg)`: mapFn receives (element, index), with `this`
-  // bound to thisArg.
-  array_from_mapped: (val, fn, thisArg) =>
-    Array.from(val, (v, i) => __memDispatch.reflect_apply(fn, thisArg, [v, i])),
+  // bound to thisArg. An undefined mapFn maps nothing; any other value that is not
+  // callable is a TypeError before `value` is read.
+  array_from_mapped: (val, fn, thisArg) => {
+    if (fn === undefined) return Array.from(val);
+    if (__typeOf(fn) !== 'function') {
+      const what = fn === null ? 'object null' : typeof fn === 'string' ? `string "${fn}"`
+        : typeof fn === 'object' ? 'object' : `${typeof fn} ${String(fn)}`;
+      throw new TypeError(`${what} is not a function`);
+    }
+    return Array.from(val, (v, i) => __memDispatch.reflect_apply(fn, thisArg, [v, i]));
+  },
   // `[...source]`: any iterable source (a Set, a Map, an iterator) spreads its values.
   // One push per value: `push(...source)` passes each value as an argument and
   // overflows the stack for a large source.
