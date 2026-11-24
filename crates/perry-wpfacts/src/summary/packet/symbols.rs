@@ -46,6 +46,7 @@ impl Model {
             Cons::IndexHoleIn { key } => format!("IndexHoleIn {key}"),
             Cons::IndexKept => format!("IndexKept"),
             Cons::Identity { route } => format!("Identity route={}", route.name()),
+            Cons::Detached => format!("Detached"),
             Cons::HasProp { key, idx } => {
                 format!("HasProp key={:?} idx={idx}", self.packet_key(key))
             }
@@ -336,8 +337,13 @@ impl Model {
                 self.packet_token(origin, packet)
             ),
             Cons::ThisFrom { recv } => format!("ThisFrom recv={:?}", recv),
-            Cons::BirthField { key, src } => {
-                format!("BirthField key={:?} src={:?}", self.packet_key(key), src)
+            Cons::BirthField { key, src, tm } => {
+                format!(
+                    "BirthField key={:?} src={:?} tm={}",
+                    self.packet_key(key),
+                    src,
+                    self.tmpls[tm as usize].display
+                )
             }
             Cons::Accessor {
                 holder,

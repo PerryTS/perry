@@ -43,6 +43,7 @@ pub fn map_cons(
         IndexHoleIn { key } => IndexHoleIn { key: n(key) },
         IndexKept => IndexKept,
         Identity { route } => Identity { route },
+        Detached => Detached,
         HasProp { key, idx } => HasProp {
             key,
             idx: if idx == NO_NODE { NO_NODE } else { n(idx) },
@@ -314,7 +315,11 @@ pub fn map_cons(
             origin,
         },
         ThisFrom { recv } => ThisFrom { recv: n(recv) },
-        BirthField { key, src } => BirthField { key, src: n(src) },
+        BirthField { key, src, tm } => BirthField {
+            key,
+            src: n(src),
+            tm,
+        },
         Accessor {
             holder,
             key,
@@ -792,6 +797,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | IterNext { .. }
             | ProtoOf { .. }
             | ThisFrom { .. }
+            | SuperFrom { .. }
             | BirthField { .. }
             | CreateProto { .. }
             | NewTargetHard { .. }

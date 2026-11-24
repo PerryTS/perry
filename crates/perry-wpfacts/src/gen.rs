@@ -439,6 +439,9 @@ pub struct Gen<'a> {
     /// DECISIONS 225: the bodies never walked (the activation set is final
     /// and does not hold them): `family_reach` reads their text.
     pub(crate) unwalked: Vec<PendingWalk<'a>>,
+    /// D2: the walks of bodies inert when generated; the ones still inert
+    /// at the fixpoint become `unwalked` (their code never runs).
+    pub(crate) inert_walks: Vec<(FnIdx, PendingWalk<'a>)>,
     pub class_envs: FxHashMap<String, NodeId>,
     /// The driver's resolution of each module's `export … from "src"`
     /// sources (module path → source → module path). A re-export declares
@@ -905,6 +908,7 @@ impl<'a> Gen<'a> {
             walked: Default::default(),
             pending_walk: Default::default(),
             unwalked: Vec::new(),
+            inert_walks: Vec::new(),
             shared_closures: Default::default(),
             class_envs: FxHashMap::default(),
             export_sources: Default::default(),

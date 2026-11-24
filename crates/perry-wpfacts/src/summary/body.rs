@@ -51,9 +51,9 @@ pub(crate) struct BodyCons {
 }
 
 impl BodyCons {
-    pub(crate) fn birth_field(key: Key, src: Operand) -> Self {
+    pub(crate) fn birth_field(key: Key, src: Operand, tm: TmplId) -> Self {
         Self::capture(
-            &Cons::BirthField { key, src: 0 },
+            &Cons::BirthField { key, src: 0, tm },
             |_| src,
             |_| unreachable!(),
         )

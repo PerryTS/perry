@@ -423,7 +423,8 @@ impl<'a> Gen<'a> {
                     .and_then(|r| self.path_index.get(r).copied());
                 if let Some(t) = t.filter(|t| self.dynamic_only.contains(t)) {
                     let f = self.init_fn_of[&t];
-                    self.m.activate(f, "import");
+                    self.m
+                        .effect_in(init_fn, crate::model::Effect::Activate(f, "import"));
                 }
             }
             let sources: Vec<u32> = self.modules[mi as usize]
@@ -442,7 +443,8 @@ impl<'a> Gen<'a> {
                 .collect();
             for t in sources {
                 let f = self.init_fn_of[&t];
-                self.m.activate(f, "import");
+                self.m
+                    .effect_in(init_fn, crate::model::Effect::Activate(f, "import"));
             }
         }
         self.m.note_walked(init_fn);
@@ -491,7 +493,8 @@ impl<'a> Gen<'a> {
         // that explicit FuncId edge only after the owning init is activated.
         if let Some(id) = self.modules[mi as usize].1.async_init_function {
             if let Some(&f) = self.mods[mi as usize].funcs.get(&id) {
-                self.m.activate(f, "module-init");
+                self.m
+                    .effect_in(init_fn, crate::model::Effect::Activate(f, "module-init"));
             }
         }
         for f in self.functions_of(mi as usize) {
@@ -1129,6 +1132,23 @@ impl<'a> Gen<'a> {
             self.pending_walk.entry(f).or_default().push(w);
             return true;
         }
+        // D2: every body is generated; one not active is inert until it
+        // activates.
+        if let Some(a) = self.m.act.as_ref().filter(|a| a.inert) {
+            let on = a.on.contains(&self.m.act_key(f));
+            let a = self.m.act.as_mut().unwrap();
+            let i = f as usize;
+            if a.state.len() <= i {
+                a.state.resize(i + 1, crate::model::FN_LIVE);
+            }
+            if !on && a.state[i] == crate::model::FN_LIVE {
+                a.state[i] = crate::model::FN_INERT;
+            }
+            if a.state[i] == crate::model::FN_INERT && self.m.family_reach.on {
+                self.inert_walks.push((f, w));
+            }
+            return false;
+        }
         if self.m.body_active(f) {
             return false;
         }
@@ -1620,7 +1640,9 @@ impl<'a> Gen<'a> {
             // DECISIONS 225: a computed accessor runs on reads through the
             // prototype under any key (its `this` is seeded at
             // registration), never through a call: active with its class.
-            self.m.activate(f, "computed");
+            let at = self.m.cur_fn;
+            self.m
+                .effect_in(at, crate::model::Effect::Activate(f, "computed"));
             self.walk_fn(mi, f, &cm.function, Some(tm), None);
         }
         for d in c.fields.iter().chain(c.static_fields.iter()) {

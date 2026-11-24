@@ -369,7 +369,17 @@ impl Model {
         if t == TOP {
             self.top_calls += 1;
         }
-        let r = if t == TOP && self.diagnostic.is_some() {
+        let foreign = self.foreign_calls.contains(&call) || (t == TOP && self.foreign_fn_value);
+        let r = if foreign {
+            match self.foreign_reason {
+                Some(r) => r,
+                None => {
+                    let r = self.reason("passed to foreign code (a declared extern)");
+                    self.foreign_reason = Some(r);
+                    r
+                }
+            }
+        } else if t == TOP && self.diagnostic.is_some() {
             self.reason(&format!(
                 "passed to a call of an unknown function value [call {call}]"
             ))

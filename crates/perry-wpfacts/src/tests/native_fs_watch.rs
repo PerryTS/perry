@@ -232,19 +232,62 @@ fn a_value_not_on_the_handed_global_object_stays_proven() {
     }
 }
 
-/// RED (owner 11-24 decision 2, the read twin of R-GLOBAL): unknown code
-/// that holds the global object reads only the global names the realm
-/// declares; a value the program stored under another name (`leak`) stays
-/// the program's (was: every stored global escaped with the global object).
+/// RED (STOP10, owner 2026-11-16: only an all-primitive extern reaches no
+/// program object): a body-less `declare function` handed a value is
+/// foreign code, not the runtime. Once it holds ⊤ and the global object is
+/// in ⊤ it reads every global, so owner 11-24 decision 2 (unknown code reads
+/// only the realm-declared names) does not apply: a value the program
+/// stored under `leak` escapes, in each order, through the extern's value,
+/// and when the extern is handed another object while the global object
+/// reaches ⊤ through unknown code.
 #[test]
-fn a_global_no_realm_name_reads_stays_proven() {
+fn a_global_object_foreign_code_may_hold_reads_every_name() {
+    let mut bad = Vec::new();
+    for (pre, post) in [
+        ("(globalThis as any).leak = p;", "hostSink(globalThis);"),
+        ("hostSink(globalThis);", "(globalThis as any).leak = p;"),
+        (
+            "(globalThis as any).leak = p;",
+            "const h: any = hostSink; h(globalThis);",
+        ),
+        (
+            "(globalThis as any).leak = p; hostSink({ k: 1 });",
+            "const f: any = (globalThis as any)[process.argv[2]]; f(globalThis);",
+        ),
+    ] {
+        let pf = facts(&format!(
+            r#"
+        class P {{ x: any; constructor(x: number) {{ this.x = x; }} }}
+        const p = new P(1);
+        declare function hostSink(x: any): void;
+        {pre}
+        {post}
+        console.log(p.x);
+    "#
+        ));
+        if field(tmpl(&pf, "P"), "x").readonly {
+            bad.push(format!(
+                "{pre} {post}: p.x proven although foreign code may read leak"
+            ));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// KEEP (owner 11-24 decision 2): a declared extern handed only a primitive
+/// holds nothing; the global object handed to unknown code (the runtime)
+/// is read under the realm-declared names only, so `leak` stays proven.
+#[test]
+fn a_declared_extern_handed_a_primitive_holds_no_global() {
     let pf = facts(
         r#"
         class P { x: any; constructor(x: number) { this.x = x; } }
         const p = new P(1);
         declare function hostSink(x: any): void;
         (globalThis as any).leak = p;
-        hostSink(globalThis);
+        hostSink(1);
+        const f: any = (globalThis as any)[process.argv[2]];
+        f(globalThis);
         console.log(p.x);
     "#,
     );

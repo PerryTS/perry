@@ -51,7 +51,7 @@ pub use native_protocol::{
     global_user_key, global_user_method, global_value_written, is_builtin_module,
     native_accessor_known, native_accessor_written, native_nonplain_written, native_parent_ctor,
     native_parent_keys, native_parent_summarized, native_parent_value, native_proto,
-    native_writers_why, native_written, native_written_by, note_global_in_top,
+    native_writers_why, native_written, native_written_by, note_foreign_holds, note_global_in_top,
     note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write,
     note_realm_held, program_global_fn, require_parts, settle_native_given, GlobalAnyRead,
     WriteValue,
@@ -4891,7 +4891,7 @@ fn error_tok(m: &mut Model, call: CallId) -> Tok {
 /// per-primitive Mesh holds 10,942 objects instead of 278, work 103M ->
 /// past the 285M bound; BATCHB31): the rule waits for that cost's fix.
 fn promise_all_index() -> bool {
-    std::env::var("PERRY_FACTS_PROMISE_ALL_INDEX").as_deref() == Ok("1")
+    crate::provenance::env("PERRY_FACTS_PROMISE_ALL_INDEX").as_deref() == Some("1")
 }
 
 /// Rule PXINV: O.[[IsExtensible]]() of what `o` holds (`Object.isExtensible`,

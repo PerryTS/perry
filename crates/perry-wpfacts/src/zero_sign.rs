@@ -166,6 +166,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::ConsoleFormat { .. }
         | Cons::Raise { .. } | Cons::HandRaise { .. }
         | Cons::Identity { .. }
+        | Cons::Detached
         | Cons::HasProp { .. }
         | Cons::OwnProp { .. }
         | Cons::DeleteIdx { .. }

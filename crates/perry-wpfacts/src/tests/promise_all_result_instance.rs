@@ -29,10 +29,9 @@ fn src(calls: &str) -> String {
 /// `Promise.all([...])` on (`promise_all_positions`); without it `d[0]` is
 /// every item of the outer literal and the fixture shows nothing.
 fn run(calls: &str) -> ProgramFacts {
-    std::env::set_var("PERRY_FACTS_PROMISE_ALL_INDEX", "1");
-    let pf = facts(&src(calls));
-    std::env::remove_var("PERRY_FACTS_PROMISE_ALL_INDEX");
-    pf
+    crate::provenance::with_env(&[("PERRY_FACTS_PROMISE_ALL_INDEX", "1")], || {
+        facts(&src(calls))
+    })
 }
 
 fn escapes(pf: &ProgramFacts, name: &str) -> bool {

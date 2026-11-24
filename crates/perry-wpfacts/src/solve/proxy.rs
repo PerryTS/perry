@@ -1905,7 +1905,7 @@ impl Model {
             Cons::ProtoMethods { .. } | Cons::AnyAccessors { .. } | Cons::StoreTopProto { .. } => {}
             // An observation; a throw region: the trap calls run in the
             // shared cell every catch reads (`proxy_trap`).
-            Cons::Identity { .. } | Cons::Raise { .. } | Cons::HandRaise { .. } => {}
+            Cons::Identity { .. } | Cons::Detached | Cons::Raise { .. } | Cons::HandRaise { .. } => {}
             // Rule PXCALL: a call or `new` of the Proxy (`proxy_call`).
             Cons::Call { .. }
             | Cons::CallThis { .. }

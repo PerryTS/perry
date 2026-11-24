@@ -102,6 +102,10 @@ pub enum Cons {
     /// derive reads (R4). Generated only under
     /// `PERRY_FACTS_VALUE_RECORDS=1` (`Model::value_records`).
     Identity { route: IdentityRoute },
+    /// D2: a rule an inert body attached to a node it does not own, set
+    /// aside at its index until the body activates (`Act::foreign`): no
+    /// flow, no effect.
+    Detached,
     /// The node is the value a contract function `f` stores under `key`
     /// into its parameter `dst`'s argument (`reach`: into what it reaches)
     /// (DECISIONS 118; `dst` `u32::MAX`: into what its receiver reaches,
@@ -605,10 +609,12 @@ pub enum Cons {
     /// The node holds method closures installed on `recv` (literal methods):
     /// their `this` is `recv`.
     ThisFrom { recv: NodeId },
-    /// A literal's own content: every token here gets `src` in field `key`
-    /// (no store: a birth, as generation's direct field edges are). A
-    /// summary's form of a literal born in its body.
-    BirthField { key: Key, src: NodeId },
+    /// A literal's own content: every token of template `tm` here gets
+    /// `src` in field `key` (no store: a birth, as generation's direct
+    /// field edges are). A summary's form of a literal born in its body;
+    /// the node may also hold other values (a holder slot fed by an
+    /// outer source), which the birth does not write.
+    BirthField { key: Key, src: NodeId, tm: TmplId },
     /// The node holds getter/setter functions installed on the objects of
     /// `holder` under `key`.
     Accessor {
@@ -1177,6 +1183,7 @@ impl Cons {
     pub fn kind_name(&self) -> &'static str {
         match self {
             Cons::Identity { .. } => "identity",
+            Cons::Detached => "detached",
             Cons::Load { .. } => "load",
             Cons::ProtoKey { .. } => "protokey",
             Cons::OwnValues { .. } => "ownvalues",

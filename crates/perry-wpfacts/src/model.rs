@@ -3211,6 +3211,16 @@ pub struct Model {
     /// (`Gen`'s import walk): code the closed world does not cover, which may
     /// call the Function constructor it is handed (`escape_body`).
     pub unseen_module_runs: bool,
+    /// Calls of a body-less `declare function` (an FFI symbol: native code
+    /// outside the program, `Module::extern_funcs`) that no all-primitive
+    /// manifest describes (`Gen::native_extern`): foreign code.
+    pub foreign_calls: crate::pts::FxHashSet<CallId>,
+    /// Such an extern is read as a value: any call of ⊤ may be its call.
+    pub foreign_fn_value: bool,
+    /// The escape reason of a value handed to foreign code.
+    pub foreign_reason: Option<u32>,
+    /// Foreign code was handed a value: it holds ⊤ (`note_foreign_holds`).
+    pub foreign_holds: bool,
     /// Per module: a Worker of the program may run it (`Gen::worker_side`):
     /// it is reachable from a Worker entry module, or some Worker's entry
     /// is not named. A module past the end counts as one (unknown).
@@ -3741,6 +3751,59 @@ pub struct Act {
     /// transfer, such as a call into a summarized callee and its instance,
     /// are left out together).
     pub sabotage: Option<String>,
+    /// D2 (owner 11-24, PROF C1 A): the final solve decides the set. Every
+    /// body is generated (and summarized) whole-program; a body outside
+    /// the set is inert: its nodes deliver nothing and the rules it attached
+    /// to nodes it does not own are kept aside (`Act::foreign`) until it
+    /// activates (`Model::wake_activated`).
+    pub inert: bool,
+    /// By `FnIdx`, inert mode: `FN_LIVE` (not met at a deferral point, or
+    /// met already active), `FN_INERT`, `FN_ACTIVE`.
+    pub state: Vec<u8>,
+    /// By `FnIdx`, inert mode: the nodes a function not yet active owns
+    /// (`Model::set_owner`), re-delivered when it activates.
+    pub fn_nodes: Vec<Vec<NodeId>>,
+    /// What an inert body attached in generation to nodes it does not own,
+    /// unapplied; detached once the summaries are built
+    /// (`Model::detach_foreign`), re-attached when the body activates.
+    pub foreign: FxHashMap<FnIdx, Vec<Foreign>>,
+    /// The foreign edges no live rule made as well (an equal edge a live
+    /// rule adds is that rule's: it stays).
+    pub foreign_edges: crate::pts::FxHashSet<(NodeId, NodeId)>,
+    /// Activated inert functions waiting for re-delivery (the solve's fill
+    /// step).
+    pub woken: Vec<FnIdx>,
+    /// The bodies generation walked (inert mode; `walked` is derived).
+    pub walked_fns: Vec<FnIdx>,
+}
+
+/// `Act::state` values.
+pub const FN_LIVE: u8 = 0;
+pub const FN_INERT: u8 = 1;
+pub const FN_ACTIVE: u8 = 2;
+
+/// A rule an inert body attached to a node it does not own (`Act::foreign`).
+#[derive(Clone, Copy, Debug)]
+pub enum Foreign {
+    /// The edge holder -> dst.
+    Edge(NodeId, NodeId),
+    /// The holder's constraint at its index; `true` once detached (the
+    /// index holds `Cons::Detached`).
+    Cons(NodeId, u32, Cons, bool),
+    /// A generation side effect of the body (`Model::effect_in`).
+    Effect(Effect),
+}
+
+/// D2 (owner 11-24, PROF C1 A): what generating a body does beyond the
+/// rules it attaches. In an inert body it waits for the body's activation
+/// (`Act::foreign`, applied by `Model::wake_activated`): a body that never
+/// runs never does it.
+#[derive(Clone, Copy, Debug)]
+pub enum Effect {
+    /// The body's code activates the function (a module's static import of
+    /// a dynamic-only module, a dynamic import's target, its owned async
+    /// body, a computed accessor with its class).
+    Activate(FnIdx, &'static str),
 }
 
 /// The accessors of one holder under one key (or every key, `Key::Any`),

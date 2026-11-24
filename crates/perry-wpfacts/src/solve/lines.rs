@@ -6,6 +6,7 @@ impl Model {
     pub fn cons_line(&self, n: NodeId, c: &Cons) -> String {
         match c {
             Cons::Identity { route } => format!("identity {n} {}", route.name()),
+            Cons::Detached => format!("detached {n}"),
             Cons::HasProp { key, idx } => format!("hasprop {n} {key:?} {idx}"),
             Cons::OwnProp { key, idx } => format!("ownprop {n} {key:?} {idx}"),
             Cons::DeleteIdx { idx, .. } => format!("deleteidx {n} {idx}"),
@@ -222,8 +223,8 @@ impl Model {
                 )
             }
             Cons::ProtoFrom { src } => format!("protofrom {n} {src}"),
-            Cons::BirthField { key, src } => {
-                format!("birthfield {n} {} {src}", self.key_name(*key))
+            Cons::BirthField { key, src, tm } => {
+                format!("birthfield {n} {} {src} {tm}", self.key_name(*key))
             }
             Cons::ProtoOf { dst } => format!("protoof {n} {dst}"),
             Cons::ProtoValues { dst } => format!("protovalues {n} {dst}"),

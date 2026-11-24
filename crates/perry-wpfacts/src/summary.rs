@@ -2241,7 +2241,7 @@ impl Model {
                     continue;
                 }
                 let b = self.node_l("param-bind");
-                self.node_fn[b as usize] = f;
+                self.set_owner(b, f);
                 self.nodes[b as usize].frame = run;
                 self.nodes[b as usize].rel = true;
                 self.nodes[p as usize].frame = run;
@@ -2401,6 +2401,21 @@ impl Model {
         }
     }
 
+    /// A summarized `f` whose `this` has values from generation: its
+    /// shared instance.
+    pub(crate) fn eager_this(&mut self, f: FnIdx) {
+        let s = self.sum.of[&f].clone();
+        if is_slot(s.this) {
+            let sl = s.this & !SLOT;
+            let ft = self.funcs[f as usize].token;
+            let fed = s.seeds.iter().any(|x| x.0 == sl)
+                || s.edges.iter().any(|e| e.1 == s.this && !is_slot(e.0));
+            if fed && self.instantiable(ft) {
+                self.instance((1, LAY_NONE, ft));
+            }
+        }
+    }
+
     /// After generation: summaries, observation nodes, then every queued
     /// binding.
     pub fn summarize_and_replay(&mut self) {
@@ -2421,6 +2436,7 @@ impl Model {
                 }
             }
         }
+        self.detach_foreign();
         self.sum.ready = true;
         self.run_unsummarized();
         self.mark_params();
@@ -2459,15 +2475,9 @@ impl Model {
         let mut fs: Vec<FnIdx> = self.sum.of.keys().copied().collect();
         fs.sort_unstable();
         for f in fs {
-            let s = self.sum.of[&f].clone();
-            if is_slot(s.this) {
-                let sl = s.this & !SLOT;
-                let ft = self.funcs[f as usize].token;
-                let fed = s.seeds.iter().any(|x| x.0 == sl)
-                    || s.edges.iter().any(|e| e.1 == s.this && !is_slot(e.0));
-                if fed && self.instantiable(ft) {
-                    self.instance((1, LAY_NONE, ft));
-                }
+            // D2: an inert one's when it activates (`wake_activated`).
+            if !self.fn_inert(f) {
+                self.eager_this(f);
             }
         }
         self.fill_instances();
