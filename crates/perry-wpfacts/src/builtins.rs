@@ -1143,6 +1143,25 @@ pub(crate) enum NativeFamily {
     Declared(&'static str),
 }
 
+impl NativeFamily {
+    /// The own prototype a lookup on a value of the family passes before
+    /// `Object.prototype`, by the kind name `native_chain` takes (as
+    /// `chain_holder` names it for a receiver token).
+    pub(crate) fn chain_holder(self) -> &'static str {
+        match self {
+            NativeFamily::Str => "String",
+            NativeFamily::Array => "Array",
+            NativeFamily::Collection(w) | NativeFamily::Declared(w) => w,
+            NativeFamily::RegExp => "RegExp",
+            NativeFamily::Buffer => "Buffer",
+            NativeFamily::Num => "Number",
+            NativeFamily::Promise => "Promise",
+            NativeFamily::Bool => "Boolean",
+            NativeFamily::TypedArray => "TypedArray",
+        }
+    }
+}
+
 /// A realm prototype `what` whose declared fresh objects form a
 /// `NativeFamily::Declared` (whole-program only: a unit does not see the
 /// other units' stores onto it).
@@ -1386,7 +1405,7 @@ pub(crate) fn intrinsic_miss_on(
 /// past it (a Buffer's: `Uint8Array.prototype`, `%TypedArray%.prototype`;
 /// OrdinaryGet, ECMA-262 10.1.8.1, walks them all). A program store onto
 /// any of them is a write this lookup sees, with or without the realm held.
-fn native_chain(holder: &str) -> Vec<String> {
+pub(crate) fn native_chain(holder: &str) -> Vec<String> {
     // Each prototype under its constructor's name (`realm_proto_value`).
     let mut out = vec![holder
         .strip_suffix(".prototype")
