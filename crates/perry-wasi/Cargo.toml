@@ -22,7 +22,7 @@ futures-channel = "0.3"
 url.workspace = true
 http.workspace = true
 wasmtime = { version = "=48.0.8", default-features = false, features = ["anyhow", "std", "runtime", "component-model", "async"] }
-wasmtime-wasi-io = { version = "=48.0.8", default-features = false, features = ["std"] }
+wasmtime-wasi-io = { version = "=49.0.1", default-features = false, features = ["std"] }
 async-trait = "0.1.89"
 bytes = "1"
 futures-util = { workspace = true, features = ["io"] }
