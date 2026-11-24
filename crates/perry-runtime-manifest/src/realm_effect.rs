@@ -107,7 +107,8 @@ pub enum RealmPrim {
 
 /// A value a native passes or returns: primitives of the listed kinds, the
 /// value held in a slot, an object born by the call (its prototype is a
-/// realm node; its elements are the listed slots), the object the species
+/// realm node, or `null`: OrdinaryObjectCreate(null); its elements are the
+/// listed slots), the object the species
 /// constructor of a slot makes, or one of a few such values.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -261,7 +262,7 @@ impl RealmOperand {
                 fields,
                 slots,
             } => {
-                if !names(proto) {
+                if proto != "null" && !names(proto) {
                     return Err(format!(
                         "{at}: fresh object prototype {proto} is not a realm node"
                     ));
@@ -658,5 +659,23 @@ mod operand_tests {
             RealmOperand::Union(vec![RealmOperand::Json, RealmOperand::Unknown].into())
         );
         assert!(serde_json::from_str::<RealmOperand>("\"jsonn\"").is_err());
+    }
+
+    /// `fresh(null)`: OrdinaryObjectCreate(null) (ECMA-262 10.1.12), an
+    /// object with no prototype (node's `_events`); any other prototype
+    /// must be a realm node.
+    #[test]
+    fn a_fresh_object_may_have_a_null_prototype() {
+        let fresh = |proto: &'static str| {
+            RealmEffect::Returns(RealmOperand::Fresh {
+                proto: Cow::Borrowed(proto),
+                elems: Cow::Borrowed(&[]),
+                fields: Cow::Borrowed(&[]),
+                slots: Cow::Borrowed(&[]),
+            })
+        };
+        let names = |_: &str| false;
+        validate_effects("t", &[fresh("null")], &names).unwrap();
+        assert!(validate_effects("t", &[fresh("Nope.prototype")], &names).is_err());
     }
 }

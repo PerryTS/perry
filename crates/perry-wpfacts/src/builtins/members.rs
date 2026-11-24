@@ -704,7 +704,7 @@ pub(super) fn bobj_family(what: &str) -> Family {
             Family::Object
         }
         "primbox" | "arraybox" | "keys" | "json" | "descriptor" | "descriptors" | "groups"
-        | "fromEntries" | "mapGroups" | "hostrecord" | "stringrecord" => Family::Box,
+        | "fromEntries" | "mapGroups" | "hostrecord" | "stringrecord" | "nullrecord" => Family::Box,
         "Object()" | "Object(prim)" | "BoxedNumber" | "BoxedString" | "BoxedBoolean"
         | "BoxedSymbol" | "BoxedBigInt" => Family::Wrapper,
         _ => Family::Opaque,
@@ -726,7 +726,7 @@ pub(crate) fn box_chain(what: &str) -> BoxChain {
             BoxChain::Object
         }
         "keys" | "arraybox" => BoxChain::Array,
-        "groups" => BoxChain::Null,
+        "groups" | "nullrecord" => BoxChain::Null,
         _ => BoxChain::Unknown,
     }
 }

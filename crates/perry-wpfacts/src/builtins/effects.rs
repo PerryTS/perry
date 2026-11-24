@@ -941,6 +941,9 @@ impl Run {
             // An ordinary object, with or without own fields
             // (`navigator.locks`).
             Cow::Borrowed("Object.prototype") => "hostrecord",
+            // OrdinaryObjectCreate(null) (`fresh(null)`): an ordinary object
+            // whose chain ends at itself (node's `_events`).
+            Cow::Borrowed("null") => "nullrecord",
             Cow::Owned(p) if p == "Object.prototype" => "hostrecord",
             Cow::Borrowed("Array.prototype") => "Array",
             // The Date object `new Date(t)` makes (constructors.rs).
