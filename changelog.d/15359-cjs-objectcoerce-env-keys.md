@@ -1,0 +1,1 @@
+Fixed: a CommonJS program whose `for...in` enumerates a required builtin module (TypeScript's `__importStar` helper) is recognised as closed again, and changing `PERRY_FACTS_DEADARM`, `PERRY_FACTS_LEDGER_DROP` or `PERRY_FACTS_STOP_SOLVE` no longer reuses objects cached under another setting.
