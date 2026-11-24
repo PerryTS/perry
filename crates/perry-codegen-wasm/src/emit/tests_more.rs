@@ -1273,6 +1273,9 @@ mod weak_ref;
 #[path = "function_value_tests.rs"]
 mod function_value;
 
+#[path = "random_uuid_v7_tests.rs"]
+mod random_uuid_v7;
+
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;
 
