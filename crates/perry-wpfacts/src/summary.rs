@@ -1559,6 +1559,13 @@ impl Model {
                     self.bind_layout_run(call, ft, x, prim, true);
                     more = true;
                 }
+            } else if val == NO_VAL && self.called_pending(call, self.tok_fn(ft)) {
+                // A waiting call whose argument still holds nothing waits on:
+                // no value reaches that argument, so the call never runs
+                // with one (a loop arm whose source a guard holds back,
+                // `settle_record_entry`). A later settle that fills it
+                // binds it on the next round.
+                keep.push(r);
             } else if val == NO_VAL {
                 // A waiting call: bound now, by what its argument holds
                 // (pushes its run's record when it takes one): the run of

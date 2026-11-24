@@ -271,9 +271,12 @@ fn gen_next_fact_u4_own_symbol_iterator() {
     excluded(&format!("const it: any = gen(); it[Symbol.iterator] = function () {{ return {{ next: {USER_NEXT} }}; }}; for (const s of it) {{ console.log(g(s)); break; }}"));
 }
 
+/// The guarded for-of walks the ordinary Array by index; its iterator arm
+/// runs only when `arrayRecordNeedsIterator(t)` holds (rule RP2), so the
+/// record there is over the generator alone: a generator source.
 #[test]
 fn gen_next_fact_u5_generator_or_array() {
-    excluded("const src: any = process.argv.length > 5 ? gen() : [new Alt()]; for (const s of src) { console.log(g(s)); break; }");
+    holds("const src: any = process.argv.length > 5 ? gen() : [new Alt()]; for (const s of src) { console.log(g(s)); break; }");
 }
 
 #[test]
