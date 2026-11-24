@@ -473,6 +473,24 @@ impl Model {
         }
     }
 
+    /// C3: the functions whose family is live at the fixpoint, with their
+    /// home keys (the runtime's check accepts a `this` holding the function
+    /// under one of them).
+    pub(crate) fn rfam_live(&self) -> Vec<(FnIdx, Vec<String>)> {
+        let mut v: Vec<(FnIdx, Vec<String>)> = self
+            .rfam
+            .fams
+            .iter()
+            .filter(|(_, r)| !r.off && !r.keys.is_empty())
+            .map(|(&f, r)| {
+                let keys = r.keys.iter().filter(|&&k| k != NO_HOME_KEY);
+                (f, keys.map(|&k| self.atoms[k as usize].clone()).collect())
+            })
+            .collect();
+        v.sort_unstable_by_key(|e| e.0);
+        v
+    }
+
     /// A token `escape_this` adds itself beside the family.
     pub(crate) fn rfam_extra(&mut self, f: FnIdx, t: Tok) {
         if let Some(r) = self.rfam.fams.get_mut(&f) {

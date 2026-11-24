@@ -352,6 +352,12 @@ pub struct ProgramFacts {
     pub escaped_inactive: Option<usize>,
     /// Diagnostic-only export of the activation pass's seen body classifications.
     pub verification_bodies: Option<std::collections::BTreeMap<(String, u32, String), bool>>,
+    /// K3 C3: every function whose receiver family is live at the fixpoint
+    /// (its `this` from code outside the program's view is a member), with
+    /// its home keys. The runtime checks `this` where it invokes such a
+    /// function as a handed callback. `None`: the solve aborted (no family
+    /// is known live, nothing is checked and nothing is proven from one).
+    pub recv_family_live: Option<std::collections::BTreeMap<BodyIdentity, Vec<String>>>,
     /// Completed whole-program reach, or an incomplete conservative view
     /// when activation was unavailable or the solve stopped early.
     pub body_reach: BodyReach,
@@ -1457,6 +1463,15 @@ fn compute_act<'a>(
     } else {
         None
     };
+    let recv_family_live = (!stats.aborted).then(|| {
+        g.m.rfam_live()
+            .into_iter()
+            .filter_map(|(f, keys)| {
+                let (mi, id, name) = g.m.act_key(f);
+                Some(((sorted.get(mi as usize)?.0.to_owned(), id, name), keys))
+            })
+            .collect()
+    });
     let family_reach =
         (!cfg.unit && family_reach::enabled()).then(|| family_reach::derive(&g, cfg));
     let native_dispatch = family_reach
@@ -1468,6 +1483,7 @@ fn compute_act<'a>(
     };
     let mut pf = ProgramFacts {
         verification_bodies,
+        recv_family_live,
         family_reach,
         native_dispatch,
         member_ops,

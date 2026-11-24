@@ -375,3 +375,17 @@ fn k3b_t11b_subclass_prototype_is_no_receiver() {
     assert!(!top && !r.is_empty(), "{v} {r:?}");
     assert!(!r.iter().any(|n| n.starts_with("proto:")), "a class prototype is in the escaped run's this: {r:?}");
 }
+
+/// T17 (C3): a live family's function is listed for the runtime check with
+/// its home key; a function whose family a handed call put off is not.
+#[test]
+fn k3c_t17_live_family_is_listed_with_its_home_key() {
+    let src = format!(
+        "{DECL}class P {{ x = 1; m() {{ return this.x; }} }}\nclass Q {{ y = 1; n() {{ return this.y; }} }}\nconst p = new P();\np.m();\nsink(P.prototype.m);\nconst q = new Q();\nq.n();\nsink(Q.prototype.n);\nnew Set<number>([1]).forEach(q.n, {{ z: 1 }});\n"
+    );
+    let pf = one(&src);
+    let live = pf.recv_family_live.expect("the solve completed");
+    eprintln!("AMP-K3 T17 {live:?}");
+    assert!(live.values().any(|k| k == &["m".to_string()]), "P::m is not listed live: {live:?}");
+    assert!(!live.values().any(|k| k.iter().any(|k| k == "n")), "Q::n (family off) is listed: {live:?}");
+}
