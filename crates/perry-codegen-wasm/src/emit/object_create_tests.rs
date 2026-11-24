@@ -116,3 +116,22 @@ console.log([o.x, Object.keys(o).join(""), "y" in o, threw].join(","));
         "1,x,false,TypeError"
     );
 }
+
+// Each present field of a class-instance descriptor is read once. Expected output is Node's.
+#[test]
+fn define_property_reads_each_class_instance_descriptor_field_once() {
+    assert_eq!(
+        run_web_source(
+            r#"
+let reads = 0;
+class D { get enumerable() { return true; } }
+const d: any = new D();
+Object.defineProperty(d, "value", { get() { return ++reads; }, enumerable: true });
+const o: any = {};
+Object.defineProperty(o, "x", d);
+console.log([o.x, reads].join(","));
+"#
+        ),
+        "1,1"
+    );
+}
