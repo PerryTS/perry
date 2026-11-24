@@ -1,0 +1,1 @@
+`http2`: a `session.request()` made while the session is still connecting is cancelled when the connection or its TLS handshake fails: the stream's `'error'` carries `ERR_HTTP2_STREAM_CANCEL` and comes before the session's `'error'`, instead of the request being dropped without an event (#15315).
