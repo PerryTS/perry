@@ -2349,7 +2349,7 @@ const __memDispatch = {
   math_imul: (a, b) => Math.imul(a, b),
   date_now: () => Date.now(),
   js_typeof: (val) => __typeOf(val),
-  parse_int: (val) => parseInt(String(val), 10),
+  parse_int: (val, radix) => parseInt(String(val), radix),
   parse_float: (val) => parseFloat(String(val)),
   js_mod: (a, b) => a % b,
   is_null_or_undefined: (val) => (val === null || val === undefined) ? 1 : 0,
