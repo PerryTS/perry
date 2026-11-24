@@ -71,13 +71,15 @@ fn build_canonical() -> Module {
             decorators: Vec::new(),
             is_rest: false,
             arguments_object: None,
+            byte_offset: 0,
         }],
         return_type: Type::Number,
         body: vec![Stmt::Return(Some(Expr::Binary {
             op: BinaryOp::Mul,
             left: Box::new(Expr::LocalGet(0)),
             right: Box::new(Expr::Number(2.0)),
-        }))],
+            byte_offset: 0,
+        }), 0)],
         is_async: false,
         is_generator: false,
         is_strict: false,
@@ -87,6 +89,7 @@ fn build_canonical() -> Module {
         was_plain_async: false,
         was_unrolled: false,
         construct_only: false,
+        byte_offset: 0,
     });
 
     m

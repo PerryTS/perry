@@ -510,6 +510,28 @@ pub fn server_name(name: &str) -> Result<rustls::pki_types::ServerName<'static>,
         .map_err(|_| format!("ERR_TLS_CERT_ALTNAME_INVALID: invalid servername {name:?}"))
 }
 
+/// A [`TlsSession::failure`] as Node's `err.code` and `err.message`. Node
+/// reports a handshake failure as an `Error` carrying `.code` and OpenSSL's
+/// text; rustls has its own text, so the codes Node users test for get Node's
+/// words and anything else keeps rustls's.
+pub fn node_failure(failure: &str) -> (&str, String) {
+    let (code, rustls_message) = failure
+        .split_once(':')
+        .unwrap_or(("ERR_TLS_HANDSHAKE_FAILED", failure));
+    let rustls_message = rustls_message.trim_start();
+    let message = match code {
+        "UNABLE_TO_VERIFY_LEAF_SIGNATURE" => "unable to verify the first certificate".to_string(),
+        "CERT_HAS_EXPIRED" => "certificate has expired".to_string(),
+        "CERT_NOT_YET_VALID" => "certificate is not yet valid".to_string(),
+        "CERT_REVOKED" => "certificate revoked".to_string(),
+        "ERR_TLS_CERT_ALTNAME_INVALID" => {
+            format!("Hostname/IP does not match certificate's altnames: {rustls_message}")
+        }
+        _ => rustls_message.to_string(),
+    };
+    (code, message)
+}
+
 /// Node's cause code alone, for `err.code`.
 pub fn node_code(error: &rustls::Error) -> &'static str {
     crate::tls::node_cause_code(error).unwrap_or_else(|| turnloop_tls::node_error_code(error))
@@ -527,4 +549,28 @@ pub fn open_client_session(
     let config = crate::tls::TlsClientConfigData::for_alpn(alpn, ca);
     let config = crate::tls::build_client_config(verify, Some(&config))?;
     TlsSession::client(config, server_name(servername)?)
+}
+
+#[cfg(test)]
+mod node_failure_tests {
+    use super::node_failure;
+
+    #[test]
+    fn node_codes_get_node_text() {
+        assert_eq!(
+            node_failure("UNABLE_TO_VERIFY_LEAF_SIGNATURE: x"),
+            (
+                "UNABLE_TO_VERIFY_LEAF_SIGNATURE",
+                "unable to verify the first certificate".to_string()
+            )
+        );
+        assert_eq!(
+            node_failure("ERR_SSL_PROTOCOL_ERROR: rustls text"),
+            ("ERR_SSL_PROTOCOL_ERROR", "rustls text".to_string())
+        );
+        assert_eq!(
+            node_failure("no code"),
+            ("ERR_TLS_HANDSHAKE_FAILED", "no code".to_string())
+        );
+    }
 }

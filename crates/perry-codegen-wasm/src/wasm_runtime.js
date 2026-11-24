@@ -2354,6 +2354,13 @@ const __memDispatch = {
     }
     return obj;
   },
+  // One half of a pair: the other is undefined and keeps what an earlier half defined.
+  object_literal_define_accessor: (obj, key, get, set) => {
+    const desc = { __proto__: null, enumerable: true, configurable: true };
+    if (get !== undefined) desc.get = __hostAccessor(get);
+    if (set !== undefined) desc.set = __hostAccessor(set);
+    return Object.defineProperty(obj, __memDispatch.to_property_key(key), desc);
+  },
   // Only an object or null becomes the prototype; any other value is ignored.
   object_literal_set_prototype: (obj, proto) => {
     if (obj && typeof obj === 'object' && (proto === null || typeof proto === 'object' || typeof proto === 'function')) {
@@ -2549,8 +2556,8 @@ const __memDispatch = {
     if (!Array.isArray(arr)) return '';
     return arr.join(separator);
   },
-  array_index_of: (arr, value) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value); },
-  array_includes: (arr, value) => { if (!Array.isArray(arr)) return 0; return arr.includes(value) ? 1 : 0; },
+  array_index_of: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value, fromIndex); },
+  array_includes: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return 0; return arr.includes(value, fromIndex) ? 1 : 0; },
   array_concat: (a1, a2) => (Array.isArray(a1) ? a1 : []).concat(Array.isArray(a2) ? a2 : []),
   array_reverse: (arr) => { if (Array.isArray(arr)) arr.reverse(); return arr; },
   array_flat: (arr) => Array.isArray(arr) ? arr.flat() : [],
@@ -2589,14 +2596,15 @@ const __memDispatch = {
   // String methods — args are plain JS strings
   string_charAt: (str, idx) => String(str).charAt(idx),
   string_substring: (str, start, end) => String(str).substring(start, end),
-  string_indexOf: (str, search) => String(str).indexOf(String(search)),
-  string_slice: (str, start, end) => String(str).slice(start, end),
+  // Codegen picks these five bridges by method name alone and passes every argument.
+  string_indexOf: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'indexOf'), args),
+  string_slice: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'slice'), args),
   string_toLowerCase: (str) => String(str).toLowerCase(),
   string_toUpperCase: (str) => String(str).toUpperCase(),
   string_trim: (str) => String(str).trim(),
-  string_includes: (str, search) => String(str).includes(String(search)) ? 1 : 0,
-  string_startsWith: (str, search) => String(str).startsWith(String(search)) ? 1 : 0,
-  string_endsWith: (str, search) => String(str).endsWith(String(search)) ? 1 : 0,
+  string_includes: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'includes'), args),
+  string_startsWith: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'startsWith'), args),
+  string_endsWith: (str, ...args) => __jsMethodInvoke(__jsMethodGet(str, 'endsWith'), args),
   string_replace: (str, pattern, replacement) => {
     const s = String(str);
     const p = (pattern instanceof RegExp) ? pattern : String(pattern);
@@ -4105,6 +4113,30 @@ function perry_ui_picker_create(callback) {
     if (el._perryCallback !== undefined) callWasmClosure(el._perryCallback, el.selectedIndex);
   });
   return uiAlloc(el);
+}
+// DatePicker: an `<input type="date">`, whose value is already the ISO `yyyy-MM-dd` string
+// the native backends report. `year`/`month` are 1-based; out of range defaults to 2026-01.
+function __isoDate(year, month, day) {
+  const y = (year >= 1 && year <= 9999) ? (year | 0) : 2026;
+  const m = (month >= 1 && month <= 12) ? (month | 0) : 1;
+  // A date input drops a date that does not exist, so the day stops at the month's last.
+  const d = day >= 1 ? __Math.min(day | 0, new Date(Date.UTC(y, m, 0)).getUTCDate()) : 1;
+  return String(y).padStart(4, "0") + "-" + String(m).padStart(2, "0") + "-" + String(d).padStart(2, "0");
+}
+function perry_ui_date_picker_create(year, month, callback) {
+  const el = document.createElement("input"); el.type = "date";
+  el.value = __isoDate(year, month, 1);
+  el._perryCallback = callback;
+  el.addEventListener("change", () => {
+    if (el._perryCallback !== undefined && el.value) callWasmClosure(el._perryCallback, el.value);
+  });
+  return uiAlloc(el);
+}
+function perry_ui_date_picker_set_date(h, year, month, day) {
+  const el = uiGet(h); if (el) el.value = __isoDate(year, month, day);
+}
+function perry_ui_date_picker_get_selected_date(h) {
+  const el = uiGet(h); return el ? el.value : undefined;
 }
 function perry_ui_wheel_picker_create(callback) {
   const el = document.createElement("select");
@@ -6074,6 +6106,7 @@ const __perryUiDispatch = {
   perry_ui_table_set_column_header, perry_ui_table_set_column_width,
   perry_ui_table_update_row_count, perry_ui_table_set_on_row_select, perry_ui_table_get_selected_row,
   perry_ui_textarea_create, perry_ui_textarea_set_string, perry_ui_textarea_get_string,
+  perry_ui_date_picker_create, perry_ui_date_picker_set_date, perry_ui_date_picker_get_selected_date,
   perry_ui_vstack_create_with_insets, perry_ui_hstack_create_with_insets,
   // Child management
   perry_ui_widget_add_child, perry_ui_widget_remove_all_children,
