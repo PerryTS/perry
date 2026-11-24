@@ -1,46 +1,7 @@
-//! The `#7854` arguments-registry emptiness latch.
-//!
-//! `is_arguments_object` is a PROBE: it runs on paths that have nothing to do
-//! with `arguments` — the by-name property-get tail, `Array.prototype.push`,
-//! the array / `Symbol.iterator` iterator entries, `Array.from` / `concat`,
-//! class construction. Before the latch every one of those paid a thread-local
-//! resolution plus a `RefCell` borrow plus a pointer hash to prove the absence
-//! of a feature most programs never use (2.8% of `gc-handoff/apps/interp.ts`).
-//!
-//! The whole soundness argument is "`ObjectMeta::arguments` has exactly ONE
-//! writer, and it arms the latch before storing". These tests pin both halves,
-//! and they pin THE SUBJECT rather than the answer: `latch_off_is_what_makes
-//! _the_probe_cheap` forces the latch off with a real entry present and requires
-//! the probe to answer `false`, so a deleted or never-taken short-circuit turns
-//! that test red instead of leaving it quietly green. (A test that only asserted
-//! `is_arguments_object(args) == true` would pass with the latch deleted — case
-//! 4 of CLAUDE.md's "four ways a gate can be unable to fail".)
-//!
-//! The latch is process-global on purpose (Darwin has no local-exec TLS, so a
-//! `thread_local!` flag would cost the very `_tlv_get_addr` this removes), which
-//! makes it only ever CONSERVATIVE: one thread arming it sends every thread back
-//! to the real lookup, i.e. to the pre-#7854 behaviour.
+//! An arguments object is born on its final shape.
 
 use super::*;
 
-#[allow(dead_code)]
-fn plain_object() -> *mut ObjectHeader {
-    js_object_alloc(0, 4)
-}
-
-fn args_object() -> *mut ObjectHeader {
-    let arr = crate::array::js_array_alloc(2);
-    let arr = crate::array::js_array_push_f64(arr, 1.0);
-    let arr = crate::array::js_array_push_f64(arr, 2.0);
-    let raw_args = crate::value::js_nanbox_pointer(arr as i64);
-    let callee = f64::from_bits(crate::value::TAG_UNDEFINED);
-    js_arguments_object_alloc(raw_args, callee, 0)
-}
-
-/// The load-bearing claim: creating an arguments object arms the latch. If a
-/// future edit adds a second `ObjectMeta::arguments` writer without arming it,
-/// `is_arguments_object` starts answering `false` for a real arguments object —
-/// a silent wrong answer — and this goes red.
 fn args_object_of(restricted: bool) -> *mut ObjectHeader {
     let arr = crate::array::js_array_alloc(2);
     let arr = crate::array::js_array_push_f64(arr, 1.0);

@@ -328,7 +328,8 @@ fn get_index_polymorphic_rest(obj_handle: i64, idx: f64) -> f64 {
     if !crate::value::addr_class::is_valid_obj_ptr(raw as *const u8) {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     }
-    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) }) else {
+    let Some(header) = (unsafe { crate::value::addr_class::try_read_gc_header(raw as usize) })
+    else {
         return f64::from_bits(crate::value::TAG_UNDEFINED);
     };
     let (gc_type, header_flags) = (header.obj_type, header._reserved);

@@ -521,7 +521,11 @@ pub extern "C" fn js_finreg_new(callback: f64) -> *mut ObjectHeader {
     });
     let entries_arr = js_array_alloc(0);
     obj.with_mut_ptr(|obj| {
-        js_object_set_field(obj, FINREG_ENTRIES_FIELD as u32, JSValue::array_ptr(entries_arr))
+        js_object_set_field(
+            obj,
+            FINREG_ENTRIES_FIELD as u32,
+            JSValue::array_ptr(entries_arr),
+        )
     });
     obj.with_mut_ptr::<ObjectHeader, _>(|obj| unsafe {
         (*obj).class_id = CLASS_ID_FINALIZATION_REGISTRY;
@@ -706,7 +710,11 @@ pub extern "C" fn js_finreg_unregister(registry: f64, token: f64) -> f64 {
     // Replace entries field with the new array.
     let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
     new_arr_handle.with_mut_ptr(|arr| {
-        js_object_set_field(reg_ptr, FINREG_ENTRIES_FIELD as u32, JSValue::array_ptr(arr))
+        js_object_set_field(
+            reg_ptr,
+            FINREG_ENTRIES_FIELD as u32,
+            JSValue::array_ptr(arr),
+        )
     });
     if found {
         f64::from_bits(TAG_TRUE)
@@ -1381,7 +1389,11 @@ fn remove_finalization_record_from_registry(registry: f64, record: f64) -> bool 
     }
     let reg_ptr = js_nanbox_get_pointer(registry_handle.get_nanbox_f64()) as *mut ObjectHeader;
     new_arr_handle.with_mut_ptr(|arr| {
-        js_object_set_field(reg_ptr, FINREG_ENTRIES_FIELD as u32, JSValue::array_ptr(arr))
+        js_object_set_field(
+            reg_ptr,
+            FINREG_ENTRIES_FIELD as u32,
+            JSValue::array_ptr(arr),
+        )
     });
     found
 }

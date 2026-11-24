@@ -1237,14 +1237,26 @@ mod collection_for_of;
 #[path = "static_method_tests.rs"]
 mod static_method;
 
+#[path = "date_setter_tests.rs"]
+mod date_setter;
+
 #[path = "class_value_tests.rs"]
 mod class_value;
+
+#[path = "weak_ref_tests.rs"]
+mod weak_ref;
 
 #[path = "function_value_tests.rs"]
 mod function_value;
 
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;
+
+#[path = "object_is_tests.rs"]
+mod object_is;
+
+#[path = "number_to_string_radix_tests.rs"]
+mod number_to_string_radix;
 
 #[path = "object_create_tests.rs"]
 mod object_create;
@@ -1270,8 +1282,8 @@ mod math_minmax;
 #[path = "async_operator_tests.rs"]
 mod async_operator;
 
-#[path = "number_to_string_radix_tests.rs"]
-mod number_to_string_radix;
+#[path = "patched_builtin_tests.rs"]
+mod patched_builtin;
 
 #[test]
 fn textfield_set_input_type_sets_the_input_type() {

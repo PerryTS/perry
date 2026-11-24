@@ -121,7 +121,7 @@ fn generator_prototype_inherits_from_iterator_prototype() {
 fn function_kind_towers_are_born_on_first_observation() {
     std::thread::Builder::new()
         .stack_size(16 << 20)
-        .spawn(|| unsafe {
+        .spawn(|| {
             use crate::closure::shape::FunctionProtoKind as K;
             crate::gc::ensure_gc_initialized();
             crate::object::layout_desc::seed_static_atoms();
