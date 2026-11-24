@@ -106,7 +106,7 @@ pub(crate) fn declared_kind(ctx: &FnCtx<'_>, object: &Expr) -> Option<u8> {
 fn key_is_element_candidate(ctx: &FnCtx<'_>, index: &Expr) -> bool {
     !matches!(
         index,
-        Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
+        Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_) | Expr::WellKnownSymbol(_)
     ) && !crate::type_analysis::is_string_expr(ctx, index)
         && !super::compare::is_proven_symbol_expr(ctx, index)
 }

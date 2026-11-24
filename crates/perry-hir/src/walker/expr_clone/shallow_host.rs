@@ -166,6 +166,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
         }
         Expr::SymbolNew(a0) => Expr::SymbolNew(Shallow::shallow(a0, n)),
         Expr::SymbolFor(a0) => Expr::SymbolFor(Shallow::shallow(a0, n)),
+        Expr::WellKnownSymbol(a0) => Expr::WellKnownSymbol(a0),
         Expr::SymbolKeyFor(a0) => Expr::SymbolKeyFor(Shallow::shallow(a0, n)),
         Expr::SymbolDescription(a0) => Expr::SymbolDescription(Shallow::shallow(a0, n)),
         Expr::RegExpEscape(a0) => Expr::RegExpEscape(Shallow::shallow(a0, n)),

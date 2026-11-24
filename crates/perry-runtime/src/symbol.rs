@@ -36,7 +36,7 @@ pub use accessors::symbol_accessor_held_for_test;
 
 // Symbol constructor + value FFI (no_mangle entry points re-exported so existing
 // `crate::symbol::js_symbol_*` call paths keep resolving).
-pub(crate) use constructors::symbol_for_text;
+pub(crate) use constructors::declared_symbol;
 pub use constructors::{
     js_symbol_description, js_symbol_equals, js_symbol_for, js_symbol_key_for, js_symbol_new,
     js_symbol_new_empty, js_symbol_to_string, js_symbol_typeof,
@@ -229,9 +229,7 @@ pub(crate) fn record_registered_symbol_description(sym_ptr: usize, description: 
 // for spec compliance, so they live in their own map keyed by the
 // well-known name ("toPrimitive" etc.).
 //
-// HIR lowers `Symbol.toPrimitive` to `Expr::SymbolFor(Expr::String("@@__perry_wk_toPrimitive"))`
-// and the runtime's `js_symbol_for` sniffs the `@@__perry_wk_` prefix and
-// returns the cached pointer.
+// A class member declaration spells its well-known symbol key with this prefix.
 pub(crate) const WK_PREFIX: &str = "@@__perry_wk_";
 static WELL_KNOWN_SYMBOLS: Mutex<Option<HashMap<String, usize>>> = Mutex::new(None);
 

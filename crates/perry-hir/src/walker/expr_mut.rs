@@ -87,6 +87,7 @@ where
         | Expr::ProcessStdoutRows
         | Expr::PathSep
         | Expr::PathDelimiter
+        | Expr::WellKnownSymbol(_)
         | Expr::PerformanceNow
         | Expr::IterResultGetValue
         | Expr::IterResultGetDone

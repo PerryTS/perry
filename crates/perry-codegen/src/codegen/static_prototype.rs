@@ -127,7 +127,7 @@ pub(crate) fn collect(
                     Vec::new();
                 for m in &c.computed_members {
                     let key = m.known_symbol().ok_or("computed-members")?;
-                    let spelling = symbol_key_spelling(key).ok_or("member-content")?;
+                    let spelling = symbol_key_spelling(&key).ok_or("member-content")?;
                     let (method, half) = match m.kind {
                         perry_hir::ClassComputedMemberKind::Method => (true, 0),
                         perry_hir::ClassComputedMemberKind::Getter => (false, 16),
@@ -283,7 +283,10 @@ pub(crate) fn declared_symbol_method<'c>(
     c.computed_members.iter().rev().find(|m| {
         !m.is_static
             && matches!(m.kind, perry_hir::ClassComputedMemberKind::Method)
-            && m.known_symbol().and_then(symbol_key_spelling).as_deref() == Some(spelling)
+            && m.known_symbol()
+                .and_then(|k| symbol_key_spelling(&k))
+                .as_deref()
+                == Some(spelling)
     })
 }
 

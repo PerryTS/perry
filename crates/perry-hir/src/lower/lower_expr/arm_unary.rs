@@ -672,7 +672,10 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
             // Fast path: known Symbol-producing expressions resolve to "symbol"
             // at compile time (avoids needing runtime js_value_typeof to
             // recognize the SymbolHeader magic).
-            if matches!(&*operand, Expr::SymbolNew(_) | Expr::SymbolFor(_)) {
+            if matches!(
+                &*operand,
+                Expr::SymbolNew(_) | Expr::SymbolFor(_) | Expr::WellKnownSymbol(_)
+            ) {
                 return Ok(Expr::String("symbol".to_string()));
             }
             Ok(Expr::TypeOf(operand))

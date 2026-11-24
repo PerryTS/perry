@@ -191,7 +191,7 @@ pub(crate) fn uint8array_get_reads_a_byte(
         // `x++` / `--x` evaluate to `ToNumeric(x) ± 1` — a number unless `x`
         // is a BigInt, which the caller's evidence has to rule out.
         Expr::LocalGet(id) | Expr::Update { id, .. } => is_numeric_local(*id),
-        // Notably NOT here: `SymbolFor` (`u8[Symbol.iterator]`), `String`,
+        // Notably NOT here: `WellKnownSymbol` (`u8[Symbol.iterator]`), `String`,
         // template literals, calls, and property reads.
         _ => false,
     }

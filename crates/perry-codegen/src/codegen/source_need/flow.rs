@@ -1496,6 +1496,7 @@ fn builtin_reason(name: &str, e: &Expr) -> Reason {
         "RegExpDynamic",
         "ArrayJoin",
         "SymbolFor",
+        "WellKnownSymbol",
         "SymbolNew",
         "StringRaw",
         "IsNaN",

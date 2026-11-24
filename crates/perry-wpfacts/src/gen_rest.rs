@@ -605,6 +605,7 @@ impl<'a> Gen<'a> {
             | Expr::ObjectIsExtensible(..)
             | Expr::ReflectIsExtensible(..)
             | Expr::SymbolFor(..)
+            | Expr::WellKnownSymbol(..)
             | Expr::SymbolKeyFor(..)
             | Expr::SymbolDescription(..)
             | Expr::RegExpEscape(..)

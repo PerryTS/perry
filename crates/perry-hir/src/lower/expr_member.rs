@@ -103,37 +103,17 @@ pub(crate) fn static_member_prop_name(prop: &ast::MemberProp) -> Option<String> 
     }
 }
 
-/// The well-known-symbol member names exposed on the `Symbol` constructor
-/// (`Symbol.iterator`, `Symbol.asyncIterator`, `Symbol.toPrimitive`, …). Both the
-/// dot-access fold and the computed-access fold (#6676, `Symbol["iterator"]`)
-/// rewrite these to the `@@__perry_wk_<name>` sentinel that `js_symbol_for`
-/// resolves from the well-known cache, so a single list keeps the two forms in
-/// lockstep. `dispose`/`asyncDispose` are included because Perry surfaces them as
-/// well-known symbols (`using`/`await using`).
-pub(crate) fn is_well_known_symbol_member(name: &str) -> bool {
-    matches!(
-        name,
-        "toPrimitive"
-            | "hasInstance"
-            | "toStringTag"
-            | "species"
-            | "match"
-            | "matchAll"
-            | "replace"
-            | "search"
-            | "split"
-            | "isConcatSpreadable"
-            | "unscopables"
-            | "iterator"
-            | "asyncIterator"
-            | "dispose"
-            | "asyncDispose"
-    )
+/// The well-known symbol `name` is on the `Symbol` constructor. One list for
+/// the dot and the computed (#6676, `Symbol["iterator"]`) access forms.
+fn well_known_symbol_member(name: &str) -> Option<Expr> {
+    let number = perry_abi::well_known_symbol_number(name)?;
+    Some(Expr::WellKnownSymbol(
+        perry_abi::WELL_KNOWN_SYMBOLS[number as usize],
+    ))
 }
 
-/// Fold a well-known-symbol member access on the `Symbol` constructor to the
-/// `@@__perry_wk_<name>` sentinel that `js_symbol_for` resolves from the
-/// well-known cache. This is the ONE resolver shared by every access form that
+/// Fold a well-known-symbol member access on the `Symbol` constructor to
+/// `Expr::WellKnownSymbol`. This is the ONE resolver shared by every access form that
 /// reaches `Symbol.<well-known>`, so they all yield the identity-equal cached
 /// symbol:
 ///   - dot                `Symbol.iterator`
@@ -166,20 +146,18 @@ pub(crate) fn try_fold_symbol_well_known_member(
     if obj_ident.sym.as_ref() != "Symbol" || ctx.shadows_unqualified_global("Symbol") {
         return Ok(None);
     }
-    let fold =
-        |name: &str| Expr::SymbolFor(Box::new(Expr::String(format!("@@__perry_wk_{}", name))));
     match prop {
         ast::MemberProp::Ident(prop_ident) => {
             let prop_name = prop_ident.sym.as_ref();
-            if is_well_known_symbol_member(prop_name) {
-                return Ok(Some(fold(prop_name)));
+            if let Some(symbol) = well_known_symbol_member(prop_name) {
+                return Ok(Some(symbol));
             }
         }
         ast::MemberProp::Computed(computed) => match computed.expr.as_ref() {
             ast::Expr::Lit(ast::Lit::Str(s)) => {
                 if let Some(prop_name) = s.value.as_str() {
-                    if is_well_known_symbol_member(prop_name) {
-                        return Ok(Some(fold(prop_name)));
+                    if let Some(symbol) = well_known_symbol_member(prop_name) {
+                        return Ok(Some(symbol));
                     }
                 }
             }
@@ -742,8 +720,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
 
     // `Symbol.<well-known>` in every form — dot (`Symbol.iterator`), string
     // bracket (`Symbol["iterator"]`, #6676), and the runtime-key computed form
-    // (`Symbol[name]`, esbuild's `__knownSymbol`) — folds to the
-    // `@@__perry_wk_<name>` sentinel (or a `js_symbol_computed_member` call) via
+    // (`Symbol[name]`, esbuild's `__knownSymbol`) — folds to
+    // `Expr::WellKnownSymbol` (or a `js_symbol_computed_member` call) via
     // the shared resolver. See `try_fold_symbol_well_known_member`.
     if let Some(folded) = try_fold_symbol_well_known_member(ctx, member.obj.as_ref(), &member.prop)?
     {

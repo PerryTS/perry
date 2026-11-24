@@ -476,6 +476,7 @@ pub(crate) fn class(e: &Expr) -> Op {
         Expr::StringRaw { .. } => Op::Static("String", "raw"),
         Expr::StructuredClone { .. } => Op::Static("globalThis", "structuredClone"),
         Expr::SymbolFor { .. } => Op::Static("Symbol", "for"),
+        Expr::WellKnownSymbol(name) => Op::Static("Symbol", name),
         Expr::SymbolKeyFor { .. } => Op::Static("Symbol", "keyFor"),
         Expr::TtyIsAtty { .. } => Op::Static("tty", "isatty"),
         Expr::Uint8ArrayFrom { .. } => Op::Static("Uint8Array", "from"),

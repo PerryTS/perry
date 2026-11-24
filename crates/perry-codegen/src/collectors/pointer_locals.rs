@@ -1121,7 +1121,7 @@ mod tests {
     ///
     /// Reachability was established on the emitted HIR, not argued: the snippet
     /// above lowers to
-    /// `Let { ty: Any, init: Uint8ArrayGet { array: LocalGet(0), index: SymbolFor(…) } }`.
+    /// `Let { ty: Any, init: Uint8ArrayGet { array: LocalGet(0), index: WellKnownSymbol(…) } }`.
     #[test]
     fn a_symbol_keyed_uint8array_read_keeps_its_shadow_slot() {
         let stmts = vec![
@@ -1141,9 +1141,7 @@ mod tests {
                 mutable: false,
                 init: Some(Expr::Uint8ArrayGet {
                     array: Box::new(Expr::LocalGet(0)),
-                    index: Box::new(Expr::SymbolFor(Box::new(Expr::String(
-                        "@@__perry_wk_iterator".to_string(),
-                    )))),
+                    index: Box::new(Expr::WellKnownSymbol("iterator")),
                 }),
             },
             Stmt::Return(Some(Expr::LocalGet(1)), 0),

@@ -42,9 +42,7 @@ pub(super) fn async_iterator_method_call(iterable: Expr, byte_offset: u32) -> Ex
             byte_offset,
             byte_end: 0,
             object: Box::new(iterable),
-            index: Box::new(Expr::SymbolFor(Box::new(Expr::String(
-                "@@__perry_wk_asyncIterator".to_string(),
-            )))),
+            index: Box::new(Expr::WellKnownSymbol("asyncIterator")),
         }),
         args: vec![],
         type_args: vec![],

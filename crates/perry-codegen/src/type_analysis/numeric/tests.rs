@@ -957,9 +957,7 @@ mod symbol_keyed_element_reads {
                     name: "sym".to_string(),
                     ty: Type::Any,
                     mutable: false,
-                    init: Some(Expr::SymbolFor(Box::new(Expr::String(
-                        "@@__perry_wk_iterator".to_string(),
-                    )))),
+                    init: Some(Expr::WellKnownSymbol("iterator")),
                 },
                 Stmt::Let {
                     byte_offset: 0,

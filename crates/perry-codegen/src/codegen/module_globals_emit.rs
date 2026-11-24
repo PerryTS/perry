@@ -46,7 +46,7 @@ fn module_global_runtime_type(
         Expr::String(_) | Expr::WtfString(_) | Expr::I18nString { .. } | Expr::TypeOf(_) => {
             Some(Type::String)
         }
-        Expr::SymbolNew(_) | Expr::SymbolFor(_) => Some(Type::Symbol),
+        Expr::SymbolNew(_) | Expr::SymbolFor(_) | Expr::WellKnownSymbol(_) => Some(Type::Symbol),
         // Compiler-owned allocation HIR establishes these runtime classes
         // independently of the erased binding annotation. Keep module-global
         // facts aligned with `proven_type_from_init`; otherwise a value that

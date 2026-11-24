@@ -789,8 +789,8 @@ const _: () = {
 pub const CLASS_MEMBER_NAME_UTF8: u8 = 4;
 /// `ClassMemberDecl.flags`: the member is keyed by a symbol the compiler knows
 /// (a well-known symbol or `Symbol.for("lit")`); the name bytes are that
-/// symbol's `Symbol.for` spelling (`@@__perry_wk_<name>` or the registry key),
-/// never a string key.
+/// symbol's spelling (`@@__perry_wk_<name>` or a registry key without that
+/// prefix), never a string key.
 pub const CLASS_MEMBER_NAME_SYMBOL: u8 = 8;
 
 /// Explicit dynamic mints: all returns and finalizer carriers are LayoutWords.

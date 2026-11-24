@@ -96,7 +96,7 @@ fn is_class_value_expr(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 
 pub(crate) fn is_proven_symbol_expr(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
-        Expr::SymbolNew(_) | Expr::SymbolFor(_) => true,
+        Expr::SymbolNew(_) | Expr::SymbolFor(_) | Expr::WellKnownSymbol(_) => true,
         Expr::LocalGet(id) => {
             matches!(ctx.stable_local_type_proof(id), Some(HirType::Symbol))
                 || (!ctx.reassigned_locals.contains(id)

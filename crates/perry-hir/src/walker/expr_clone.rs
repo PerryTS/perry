@@ -963,6 +963,7 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
         | Expr::ObjectGetOwnPropertySymbols { .. }
         | Expr::SymbolNew { .. }
         | Expr::SymbolFor { .. }
+        | Expr::WellKnownSymbol { .. }
         | Expr::SymbolKeyFor { .. }
         | Expr::SymbolDescription { .. }
         | Expr::RegExpEscape { .. }

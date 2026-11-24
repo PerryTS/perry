@@ -2205,6 +2205,8 @@ function __iterableToArray(v) {
 
 // A tagged template's strings array per call site, keyed by the HIR site id's halves.
 const __taggedTemplates = new Map();
+// Perry's own identity for a well-known symbol the host's `Symbol` lacks.
+const __missingWellKnownSymbols = Object.create(null);
 
 // The bridge tables have no prototype: mem_call indexes them by a call site's method name,
 // and `o.isPrototypeOf(x)` must fall through to __classDispatch, not find Object.prototype's.
@@ -2476,12 +2478,8 @@ const __memDispatch = {
     return (__hostKey(key) in obj) ? 1 : 0;
   },
   object_coerce: (v) => Object(v),
-  // HIR names a well-known symbol `@@__perry_wk_<name>`.
-  symbol_for: (key) => {
-    const k = String(key);
-    const wellKnown = k.startsWith('@@__perry_wk_') ? Symbol[k.slice(13)] : undefined;
-    return typeof wellKnown === 'symbol' ? wellKnown : Symbol.for(k);
-  },
+  symbol_for: (key) => Symbol.for(key),
+  symbol_well_known: (name) => Symbol[name] ?? (__missingWellKnownSymbols[name] ??= Symbol('Symbol.' + name)),
   symbol_new: (...desc) => Symbol(...desc),
   symbol_key_for: (sym) => Symbol.keyFor(sym),
   // `key in Object(v)` without handing the temporary wrapper back as a handle.

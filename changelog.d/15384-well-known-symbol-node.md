@@ -1,0 +1,1 @@
+`Symbol.for(key)` always answers a registered symbol, whatever `key` spells: `Symbol.keyFor(Symbol.for("@@__perry_wk_iterator"))` is the key, on native and wasm. Well-known symbols (`Symbol.iterator`, …) are their own HIR node instead of a reserved registry key.

@@ -88,7 +88,7 @@ pub(crate) fn class(e: &Expr) -> Node {
         | Expr::ObjectIsSealed { .. } | Expr::ObjectIsExtensible { .. }
         | Expr::ObjectGetPrototypeOf { .. } | Expr::ObjectSetPrototypeOf { .. }
         | Expr::ObjectGetOwnPropertySymbols { .. } | Expr::SymbolNew { .. }
-        | Expr::SymbolFor { .. } | Expr::SymbolKeyFor { .. } | Expr::SymbolDescription { .. }
+        | Expr::SymbolFor { .. } | Expr::WellKnownSymbol { .. } | Expr::SymbolKeyFor { .. } | Expr::SymbolDescription { .. }
         | Expr::SymbolToString { .. } | Expr::MathFloor { .. } | Expr::MathCeil { .. }
         | Expr::MathRound { .. } | Expr::MathTrunc { .. } | Expr::MathSign { .. }
         | Expr::MathAbs { .. } | Expr::MathSqrt { .. } | Expr::MathLog { .. }

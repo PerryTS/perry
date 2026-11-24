@@ -241,14 +241,7 @@ fn runtime_key_may_expose_typed_array_backing_buffer(index: &Expr) -> bool {
 }
 
 fn is_async_dispose_symbol_index(index: &Expr) -> bool {
-    let Expr::SymbolFor(symbol_name) = index else {
-        return false;
-    };
-    match symbol_name.as_ref() {
-        Expr::String(name) => name == "@@__perry_wk_asyncDispose",
-        Expr::WtfString(name) => name.as_slice() == b"@@__perry_wk_asyncDispose",
-        _ => false,
-    }
+    matches!(index, Expr::WellKnownSymbol("asyncDispose"))
 }
 
 /// True when `object` evaluates to a constructor function object or flagged
@@ -776,7 +769,7 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     // read — leave it to `lower`'s dedicated routes.
     let index_is_static_string_or_symbol = matches!(
         index.as_ref(),
-        Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
+        Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_) | Expr::WellKnownSymbol(_)
     ) || is_string_expr(ctx, index)
         || super::compare::is_proven_symbol_expr(ctx, index);
     if index_is_static_string_or_symbol {
@@ -1447,7 +1440,10 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // keys keep their dedicated interned-handle / symbol routes below.
             let index_is_static_string_or_symbol = matches!(
                 index.as_ref(),
-                Expr::String(_) | Expr::WtfString(_) | Expr::SymbolFor(_)
+                Expr::String(_)
+                    | Expr::WtfString(_)
+                    | Expr::SymbolFor(_)
+                    | Expr::WellKnownSymbol(_)
             ) || is_string_expr(ctx, index)
                 || super::compare::is_proven_symbol_expr(ctx, index);
             // #7854 recovered a receiver's declared array type for a LOCAL

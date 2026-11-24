@@ -4760,6 +4760,7 @@ js_webcrypto_supports	f64	f64,f64,f64
 js_webcrypto_unwrap_key	ptr	f64,f64,f64,f64,f64,f64,f64
 js_webcrypto_verify	ptr	f64,f64,f64,f64
 js_webcrypto_wrap_key	ptr	f64,f64,f64,f64
+js_well_known_symbol	f64	i32s
 js_with_delete_binding	i32s	f64,ptr
 js_with_get_binding	f64	f64,ptr
 js_with_has_binding	i32s	f64,ptr

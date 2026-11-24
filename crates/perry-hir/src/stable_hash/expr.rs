@@ -243,6 +243,7 @@ impl SH for Expr {
             Expr::ObjectGetOwnPropertySymbols(e) => { tag(h, 119); e.as_ref().hash(h); }
             Expr::SymbolNew(e) => { tag(h, 120); e.hash(h); }
             Expr::SymbolFor(e) => { tag(h, 121); e.as_ref().hash(h); }
+            Expr::WellKnownSymbol(name) => { tag(h, 12603); name.hash(h); }
             Expr::RegExpEscape(e) => { tag(h, 12043); e.as_ref().hash(h); }
             Expr::SymbolKeyFor(e) => { tag(h, 122); e.as_ref().hash(h); }
             Expr::SymbolDescription(e) => { tag(h, 123); e.as_ref().hash(h); }
