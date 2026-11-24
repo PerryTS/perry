@@ -2354,6 +2354,13 @@ const __memDispatch = {
     }
     return obj;
   },
+  // One half of a pair: the other is undefined and keeps what an earlier half defined.
+  object_literal_define_accessor: (obj, key, get, set) => {
+    const desc = { __proto__: null, enumerable: true, configurable: true };
+    if (get !== undefined) desc.get = __hostAccessor(get);
+    if (set !== undefined) desc.set = __hostAccessor(set);
+    return Object.defineProperty(obj, __memDispatch.to_property_key(key), desc);
+  },
   // Only an object or null becomes the prototype; any other value is ignored.
   object_literal_set_prototype: (obj, proto) => {
     if (obj && typeof obj === 'object' && (proto === null || typeof proto === 'object' || typeof proto === 'function')) {
