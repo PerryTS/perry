@@ -1849,23 +1849,25 @@ function __linkClassParent(className, ctor) {
 // does; an enumerable one is already the field's accessor. A computed
 // member's hidden key slot (`__perry_computed_field_key_*`, see `lower_class_prop`)
 // shares the table and stays hidden.
-// The getters `__classExposeStatic` installs, so a descriptor reports the field as data.
-const classStaticFieldGetters = new WeakSet();
+// The getter `__classExposeStatic` installs, to its setter: while both are in place the
+// property is the field, and a descriptor reports it as data.
+const classStaticFieldAccessors = new WeakMap();
 function __classExposeStatic(className, key) {
   const ctor = __classRefs.get(className);
   if (!ctor || (typeof key === 'string' && key.startsWith('__perry_computed_field_key_'))) return;
   const own = Object.getOwnPropertyDescriptor(ctor, key);
   if (own && (own.enumerable || !own.configurable)) return;
   const get = () => classStaticTable[className][key];
-  classStaticFieldGetters.add(get);
+  // Reached through a subclass's [[Prototype]], an assignment gives the subclass
+  // its own field, as with an inherited data property.
+  const set = function (value) {
+    if (this === ctor) classStaticTable[className][key] = value;
+    else Object.defineProperty(this, key, { value, writable: true, enumerable: true, configurable: true });
+  };
+  classStaticFieldAccessors.set(get, set);
   Object.defineProperty(ctor, key, {
     get,
-    // Reached through a subclass's [[Prototype]], an assignment gives the subclass
-    // its own field, as with an inherited data property.
-    set(value) {
-      if (this === ctor) classStaticTable[className][key] = value;
-      else Object.defineProperty(this, key, { value, writable: true, enumerable: true, configurable: true });
-    },
+    set,
     enumerable: true,
     configurable: true,
   });
@@ -2401,7 +2403,7 @@ const __memDispatch = {
   object_define_properties: (obj, props) => Object.defineProperties(obj, __hostDescriptors(props)),
   object_get_own_property_descriptor: (obj, key) => {
     const desc = Object.getOwnPropertyDescriptor(obj, key);
-    if (desc && classStaticFieldGetters.has(desc.get)) {
+    if (desc && desc.set !== undefined && classStaticFieldAccessors.get(desc.get) === desc.set) {
       return { value: desc.get.call(obj), writable: true, enumerable: desc.enumerable, configurable: desc.configurable };
     }
     if (desc && 'get' in desc) {

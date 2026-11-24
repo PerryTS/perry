@@ -108,6 +108,23 @@ console.log([d.value, d.writable, d.enumerable, d.configurable, "get" in d].join
     );
 }
 
+// A static field redefined with a setter reads back as an accessor. Expected output is Node's.
+#[test]
+fn get_own_property_descriptor_of_a_redefined_static_field_is_an_accessor() {
+    assert_eq!(
+        run_web_source(
+            r#"
+class C { static x = 1; }
+const s = (v: number) => {};
+Object.defineProperty(C, "x", { set: s });
+const d: any = Object.getOwnPropertyDescriptor(C, "x");
+console.log(["value" in d, d.set === s].join(","));
+"#
+        ),
+        "false,true"
+    );
+}
+
 // `Object.defineProperty` and `Object.defineProperties` accessors that are Perry
 // closures run with the receiver as `this`. Expected output is Node's.
 #[test]
