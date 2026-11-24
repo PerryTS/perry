@@ -865,12 +865,7 @@ fn emit_field_push_writeback(
     ctx.current_block = field_idx;
     let field_box = lower_expr(
         ctx,
-        &Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(Expr::This),
-            property: field.to_string(),
-            byte_offset: 0,
-        },
+        &Expr::property_get_unsited(Box::new(Expr::This), field.to_string()),
     )?;
     let before_box = group.reread_emitted(ctx, before);
     {

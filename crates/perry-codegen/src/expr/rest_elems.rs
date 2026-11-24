@@ -249,13 +249,9 @@ pub(crate) fn write_floor(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
 }
 
 /// `e` is the `fill` call of an at-rest birth (wpfacts keys it by the
-/// member's offset, else the call's).
+/// `fill` member read).
 pub(crate) fn is_birth(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    let Expr::Call {
-        callee,
-        byte_offset,
-        ..
-    } = e
+    let Expr::Call { callee, .. } = e
     else {
         return false;
     };
@@ -267,8 +263,7 @@ pub(crate) fn is_birth(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     else {
         return false;
     };
-    let offset = if *member != 0 { *member } else { *byte_offset };
-    property == "fill" && offset != 0 && ctx.wpfacts.rest_births.contains(&offset)
+    property == "fill" && ctx.wpfacts.rest_births.contains(member)
 }
 
 /// The capacity the at-rest birth `e` (`is_birth`) reserves, if any.
@@ -328,9 +323,7 @@ pub(crate) fn push_len(ctx: &FnCtx<'_>, recv: &Expr) -> Option<u32> {
     else {
         return None;
     };
-    // offset 0: a `this.k` read codegen builds after facts (array_push.rs:868,
-    // collectors/proven_this.rs:220) names no site.
-    if !matches!(object.as_ref(), Expr::This) || *byte_offset == 0 {
+    if !matches!(object.as_ref(), Expr::This) {
         return None;
     }
     ctx.wpfacts.rest_pushes.get(byte_offset).copied()

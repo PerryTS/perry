@@ -3183,6 +3183,34 @@ impl Expr {
     }
 }
 
+impl Expr {
+    /// A member read codegen builds after facts (plumbing with no source
+    /// construct): it has no site. Its `byte_offset` is 0, the position no
+    /// source member read has (SWC positions start at 1, and every source
+    /// `PropertyGet` is located at its member token), so no fact producer
+    /// ever records a site at 0 and a facts lookup of this read finds none.
+    pub fn property_get_unsited(object: Box<Expr>, property: String) -> Self {
+        Self::PropertyGet {
+            object,
+            property,
+            byte_offset: 0,
+            byte_end: 0,
+        }
+    }
+
+    /// A member write codegen builds after facts; like
+    /// [`Expr::property_get_unsited`], it has no site.
+    pub fn property_set_unsited(object: Box<Expr>, property: String, value: Box<Expr>) -> Self {
+        Self::PropertySet {
+            object,
+            property,
+            value,
+            byte_offset: 0,
+            byte_end: 0,
+        }
+    }
+}
+
 /// One part of an [`Expr::ObjectSpread`], in source order.
 #[derive(Debug, Clone)]
 pub enum ObjectPart {

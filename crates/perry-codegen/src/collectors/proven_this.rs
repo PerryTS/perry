@@ -218,12 +218,10 @@ pub(crate) fn ptr_array_cached_method(class: &Class, method: &Function) -> Optio
             name: format!("__perry_ptr_array_{}", field.name),
             ty: ty.clone(),
             mutable: false,
-            init: Some(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::This),
-                property: field.name.clone(),
-                byte_offset: 0,
-            }),
+            init: Some(Expr::property_get_unsited(
+                Box::new(Expr::This),
+                field.name.clone(),
+            )),
         });
     }
     prefix.append(&mut cached.body);
