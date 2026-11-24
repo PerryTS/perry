@@ -26,6 +26,7 @@ fn comparison_ir(init: Expr) -> String {
                 }),
             },
             Stmt::Expr(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(1)),
                 right: Box::new(Expr::LocalGet(2)),
@@ -141,8 +142,10 @@ fn a_local_hole_fill_checks_capacity_length_and_prototype() {
 #[test]
 fn a_factory_parameter_name_cannot_supply_allocation_provenance() {
     let factory = Expr::Closure {
+        byte_offset: 0,
         func_id: 100,
         params: vec![perry_hir::Param {
+            byte_offset: 0,
             id: 50,
             name: "__perry_obj_iife".into(),
             ty: Type::Any,
@@ -152,7 +155,7 @@ fn a_factory_parameter_name_cannot_supply_allocation_provenance() {
             arguments_object: None,
         }],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::Array(vec![], None)))],
+        body: vec![Stmt::Return(Some(Expr::Array(vec![], None)), 0)],
         captures: vec![],
         mutable_captures: vec![],
         captures_this: false,

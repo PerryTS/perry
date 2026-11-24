@@ -57,6 +57,7 @@ fn dynamic_add_with_element_read(element: Expr, packet_id: u32) -> Stmt {
         ty: perry_hir::types::Type::Number,
         mutable: false,
         init: Some(Expr::Binary {
+            byte_offset: 0,
             op: perry_hir::BinaryOp::Add,
             left: Box::new(element),
             right: Box::new(packet_tag(packet_id)),

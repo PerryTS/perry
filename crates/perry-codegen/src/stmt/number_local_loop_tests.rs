@@ -34,6 +34,7 @@ const I: u32 = 4;
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -46,6 +47,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 
 fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -79,6 +81,7 @@ fn counter_let() -> Stmt {
 
 fn i_lt_n() -> Expr {
     Expr::Compare {
+        byte_offset: 0,
         op: CompareOp::Lt,
         left: Box::new(Expr::LocalGet(I)),
         right: Box::new(Expr::LocalGet(N)),
@@ -112,6 +115,7 @@ fn module_ir_with(
         byte_offset: 0,
     }));
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: Vec::new(),
@@ -131,7 +135,7 @@ fn module_ir_with(
                 update: Some(update),
                 body,
             }),
-            Stmt::Return(Some(Expr::LocalGet(H))),
+            Stmt::Return(Some(Expr::LocalGet(H)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -208,6 +212,7 @@ fn declines_when_the_update_clause_writes_a_non_number() {
 fn declines_when_the_condition_writes_a_non_number() {
     // for (let i = 0; (h = "x") && i < n; i++) { h = ~h ^ i; }
     let condition = Expr::Logical {
+        byte_offset: 0,
         op: LogicalOp::And,
         left: Box::new(Expr::LocalSet(H, Box::new(Expr::String("x".to_string())))),
         right: Box::new(i_lt_n()),
@@ -288,6 +293,7 @@ fn a_targeted_label_keeps_the_generic_loop() {
         mix_write(),
         Stmt::If {
             condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(I)),
                 right: Box::new(Expr::Integer(3)),

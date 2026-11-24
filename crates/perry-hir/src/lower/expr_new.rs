@@ -100,7 +100,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset: new_byte_offset,
                     object: Box::new(Expr::GlobalGet(0)),
                     property: name.to_string(),
                 }),
@@ -120,6 +120,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             Some(("bun", Some("Terminal")))
         ) {
             return Ok(Expr::NativeMethodCall {
+                byte_offset: new_expr.span.lo.0,
                 module: "bun".to_string(),
                 class_name: None,
                 object: None,
@@ -188,6 +189,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 .transpose()?
                 .unwrap_or_default();
             return Ok(Expr::NativeMethodCall {
+                byte_offset: new_expr.span.lo.0,
                 module: "module".to_string(),
                 class_name: None,
                 object: None,
@@ -220,7 +222,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset: new_byte_offset,
                     object: Box::new(Expr::NativeModuleRef("stream".to_string())),
                     property: "Stream".to_string(),
                 }),
@@ -540,6 +542,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 Some(("url", Some("Url")))
             ) {
                 return Ok(Expr::NativeMethodCall {
+                    byte_offset: new_expr.span.lo.0,
                     module: "url".to_string(),
                     class_name: None,
                     object: None,
@@ -565,13 +568,13 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: new_byte_offset,
                         object: Box::new(Expr::NativeModuleRef("crypto".to_string())),
                         property: method_name,
                     }),
                     args,
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: new_byte_offset,
                 });
             }
 
@@ -615,6 +618,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if let Some((module_name, export_name)) = construct_fold {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NativeMethodCall {
+                    byte_offset: new_expr.span.lo.0,
                     module: module_name,
                     class_name: None,
                     object: None,
@@ -637,7 +641,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: new_byte_offset,
                         object: Box::new(Expr::NativeModuleRef(module_name)),
                         property: method_name,
                     }),
@@ -668,7 +672,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: new_byte_offset,
                         object: Box::new(Expr::NativeModuleRef("http".to_string())),
                         property: export,
                     }),
@@ -692,6 +696,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
             if let Some(agent_module) = http_agent_module {
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NativeMethodCall {
+                    byte_offset: new_expr.span.lo.0,
                     module: agent_module,
                     class_name: None,
                     object: None,
@@ -721,7 +726,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     byte_end: 0,
                     callee: Box::new(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: new_byte_offset,
                         object: Box::new(Expr::NativeModuleRef("v8".to_string())),
                         property: export,
                     }),
@@ -750,6 +755,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                             .transpose()?
                             .unwrap_or_default();
                         return Ok(Expr::NativeMethodCall {
+                            byte_offset: new_expr.span.lo.0,
                             module: module_name,
                             class_name: None,
                             object: None,
@@ -766,6 +772,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 // generic `new` manufacture a blank ObjectHeader instance.
                 if module_name == "bun" && method_name == Some("SQL") {
                     return Ok(Expr::NativeMethodCall {
+                        byte_offset: new_expr.span.lo.0,
                         module: "bun".to_string(),
                         class_name: None,
                         object: None,
@@ -784,6 +791,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 {
                     let method = method_name.unwrap_or("JSCallback").to_string();
                     return Ok(Expr::NativeMethodCall {
+                        byte_offset: new_expr.span.lo.0,
                         module: "bun:ffi".to_string(),
                         class_name: None,
                         object: None,
@@ -797,6 +805,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     let method = method_name.unwrap_or("Module").to_string();
                     let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                     return Ok(Expr::NativeMethodCall {
+                        byte_offset: new_expr.span.lo.0,
                         module: "module".to_string(),
                         class_name: None,
                         object: None,
@@ -938,7 +947,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     if args_slice.iter().any(|a| a.spread.is_some()) {
                         let callee = Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: new_byte_offset,
                             object: Box::new(Expr::GlobalGet(0)),
                             property: "Function".to_string(),
                         };
@@ -1152,7 +1161,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     })
                     .transpose()?
                     .unwrap_or_default();
-                return Ok(nonconstructable_builtin_throw_expr(&class_name, args));
+                return Ok(nonconstructable_builtin_throw_expr(
+                    &class_name,
+                    args,
+                    new_byte_offset,
+                ));
             }
             if class_name == "Proxy" && !shadowed_by_user_binding {
                 let args = new_expr
@@ -1342,7 +1355,11 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                                             } else if let Some(local_id) = ctx.lookup_local(&name) {
                                                 Expr::LocalGet(local_id)
                                             } else if ctx.lookup_class(&name).is_some() {
-                                                crate::lower::class_binding_read(ctx, &name)
+                                                crate::lower::class_binding_read(
+                                                    ctx,
+                                                    &name,
+                                                    ident.span.lo.0,
+                                                )
                                             } else {
                                                 continue;
                                             };
@@ -1741,6 +1758,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                     && ctx.lookup_local(&class_name).is_none()
                 {
                     return Ok(Expr::NativeMethodCall {
+                        byte_offset: new_expr.span.lo.0,
                         module: "net".to_string(),
                         class_name: None,
                         object: None,
@@ -1758,7 +1776,7 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                         byte_end: 0,
                         callee: Box::new(Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: new_byte_offset,
                             object: Box::new(Expr::NativeModuleRef(module.to_string())),
                             property: export.to_string(),
                         }),

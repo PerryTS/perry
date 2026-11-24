@@ -268,7 +268,7 @@ pub fn transform_stmt(
             }
         }
         Stmt::Let { init: None, .. } => {}
-        Stmt::Return(Some(expr)) => {
+        Stmt::Return(Some(expr), _) => {
             transform_expr(
                 expr,
                 js_imports,
@@ -277,7 +277,7 @@ pub fn transform_stmt(
                 tracker,
             );
         }
-        Stmt::Return(None) => {}
+        Stmt::Return(None, _) => {}
         Stmt::If {
             condition,
             then_branch,
@@ -392,6 +392,7 @@ pub fn transform_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             transform_expr(
                 discriminant,
@@ -798,7 +799,7 @@ pub fn transform_expr(
         Expr::GlobalSet(_, value) => {
             transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::Conditional { condition, then_expr, else_expr } => {
+        Expr::Conditional { condition, then_expr, else_expr, .. } => {
             transform_expr(condition, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(then_expr, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(else_expr, js_imports, extern_func_to_js, local_name_to_js, tracker);
@@ -830,7 +831,7 @@ pub fn transform_expr(
         Expr::PropertyUpdate { object, .. } => {
             transform_expr(object, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::IndexGet { object, index , .. } => {
+        Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. } => {
             transform_expr(object, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(index, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
@@ -852,7 +853,7 @@ pub fn transform_expr(
                 transform_expr(t, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
         }
-        Expr::Await(inner) => {
+        Expr::Await(inner, _) => {
             transform_expr(inner, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
         Expr::Closure { body, .. } => {
@@ -958,7 +959,7 @@ pub fn transform_expr(
         Expr::StaticFieldSet { value, .. } => {
             transform_expr(value, js_imports, extern_func_to_js, local_name_to_js, tracker);
         }
-        Expr::SuperCall(args) => {
+        Expr::SuperCall(args, _) => {
             for arg in args {
                 transform_expr(arg, js_imports, extern_func_to_js, local_name_to_js, tracker);
             }
@@ -996,7 +997,7 @@ pub fn transform_expr(
             home,
             key,
             receiver,
-            args,
+            args, ..
         } => {
             transform_expr(home, js_imports, extern_func_to_js, local_name_to_js, tracker);
             transform_expr(key, js_imports, extern_func_to_js, local_name_to_js, tracker);

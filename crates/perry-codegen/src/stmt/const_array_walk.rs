@@ -84,6 +84,7 @@ fn entry(cond: &Expr) -> Option<(u32, bool)> {
         op: CompareOp::Eq,
         left,
         right,
+        ..
     } = cond
     else {
         return None;
@@ -97,6 +98,7 @@ fn entry(cond: &Expr) -> Option<(u32, bool)> {
         object: None,
         method,
         args,
+        ..
     } = left.as_ref()
     else {
         return None;
@@ -131,6 +133,7 @@ fn walk<'a>(cond: &Expr, then_branch: &'a [Stmt]) -> Option<Walk<'a>> {
                 op: CompareOp::Lt,
                 left,
                 right,
+                ..
             }),
         update:
             Some(Expr::Update {
@@ -164,7 +167,7 @@ fn walk<'a>(cond: &Expr, then_branch: &'a [Stmt]) -> Option<Walk<'a>> {
     }
     let (binding, body) = loop_body.split_first()?;
     let Stmt::Let {
-        init: Some(Expr::IndexGet { object, index, .. }),
+        init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
         ..
     } = binding
     else {
@@ -199,7 +202,7 @@ fn body_cost(stmts: &[Stmt]) -> usize {
     }
     fn stmt_cost(s: &Stmt) -> usize {
         1 + match s {
-            Stmt::Let { init, .. } | Stmt::Return(init) => opt(init),
+            Stmt::Let { init, .. } | Stmt::Return(init, _) => opt(init),
             Stmt::Expr(e) | Stmt::Throw(e) => expr_cost(e),
             Stmt::If {
                 condition,
@@ -243,6 +246,7 @@ fn body_cost(stmts: &[Stmt]) -> usize {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 expr_cost(discriminant)
                     + cases

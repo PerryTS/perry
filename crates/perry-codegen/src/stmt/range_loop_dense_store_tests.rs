@@ -39,6 +39,7 @@ const KEY: u32 = 6;
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -51,6 +52,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 
 fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -114,6 +116,7 @@ fn module_ir_with_x(body: Vec<Stmt>, x_arg: Expr) -> String {
         byte_offset: 0,
     }));
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: Vec::new(),
@@ -139,6 +142,7 @@ fn module_ir_with_x(body: Vec<Stmt>, x_arg: Expr) -> String {
                     init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(I)),
                     right: Box::new(Expr::Integer(400)),
@@ -150,7 +154,7 @@ fn module_ir_with_x(body: Vec<Stmt>, x_arg: Expr) -> String {
                 }),
                 body,
             },
-            Stmt::Return(Some(Expr::LocalGet(S))),
+            Stmt::Return(Some(Expr::LocalGet(S)), 0),
         ],
         is_async: false,
         is_generator: false,

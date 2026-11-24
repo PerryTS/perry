@@ -115,7 +115,10 @@ pub(crate) fn collect_module_prototype_facts(module: &Module) -> ModulePrototype
             } if property == "prototype" || property == "__proto__" => {
                 note_holder(object, facts);
             }
-            Expr::IndexGet { object, index, .. } | Expr::IndexSet { object, index, .. } if matches!(index.as_ref(), Expr::String(key) if key == "prototype" || key == "__proto__") =>
+            Expr::IndexGet { object, index, .. }
+            | Expr::RegionOut { object, index, .. }
+            | Expr::IndexSet { object, index, .. }
+                if matches!(index.as_ref(), Expr::String(key) if key == "prototype" || key == "__proto__") =>
             {
                 note_holder(object, facts);
             }
@@ -142,7 +145,7 @@ pub(crate) fn collect_module_prototype_facts(module: &Module) -> ModulePrototype
                     visit_expr(init, facts);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
                 visit_expr(expr, facts);
             }
             Stmt::If {
@@ -194,6 +197,7 @@ pub(crate) fn collect_module_prototype_facts(module: &Module) -> ModulePrototype
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 visit_expr(discriminant, facts);
                 for case in cases {
@@ -204,7 +208,7 @@ pub(crate) fn collect_module_prototype_facts(module: &Module) -> ModulePrototype
                 }
             }
             Stmt::Labeled { body, .. } => visit_stmt(body, facts),
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -325,10 +329,10 @@ pub fn apply_exact_receiver_stmt_effect(stmt: &Stmt, facts: &mut ExactReceiverFa
                 }
             }
         }
-        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
             invalidate_exact_receivers_for_expr(expr, facts);
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -376,7 +380,7 @@ pub fn invalidate_exact_receivers_for_expr(expr: &Expr, facts: &mut ExactReceive
         | Expr::CallSpread { .. }
         | Expr::NativeMethodCall { .. }
         | Expr::StaticMethodCall { .. }
-        | Expr::SuperCall(_)
+        | Expr::SuperCall(_, _)
         | Expr::SuperMethodCall { .. }
         | Expr::New { .. }
         | Expr::NewDynamic { .. }
@@ -465,7 +469,7 @@ pub fn collect_exact_receiver_refs_in_stmt(
                 collect_exact_receiver_refs_in_expr(init, facts, out);
             }
         }
-        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+        Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
             collect_exact_receiver_refs_in_expr(expr, facts, out);
         }
         Stmt::If {
@@ -532,6 +536,7 @@ pub fn collect_exact_receiver_refs_in_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             collect_exact_receiver_refs_in_expr(discriminant, facts, out);
             for case in cases {
@@ -543,7 +548,7 @@ pub fn collect_exact_receiver_refs_in_stmt(
                 }
             }
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)

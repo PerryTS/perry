@@ -95,6 +95,7 @@ pub(crate) fn counter_step(update: &Expr, counter_id: u32) -> Option<CounterStep
                 op: BinaryOp::Add,
                 left,
                 right,
+                ..
             } => match (left.as_ref(), right.as_ref()) {
                 (Expr::LocalGet(l), _) if *l == counter_id => Some(CounterStep::Add(right)),
                 (_, Expr::LocalGet(r)) if *r == counter_id => Some(CounterStep::Add(left)),
@@ -127,6 +128,7 @@ fn is_nonnegative_integer_valued<F: CounterRangeFacts + ?Sized>(facts: &F, expr:
             op: BinaryOp::Add | BinaryOp::Mul,
             left,
             right,
+            ..
         } => {
             is_nonnegative_integer_valued(facts, left)
                 && is_nonnegative_integer_valued(facts, right)
@@ -183,7 +185,10 @@ pub(crate) fn classify_for_counter_range<F: CounterRangeFacts + ?Sized>(
         _ => return None,
     };
     let cond = cond?;
-    let Expr::Compare { op, left, right } = cond else {
+    let Expr::Compare {
+        op, left, right, ..
+    } = cond
+    else {
         return None;
     };
     if !matches!(op, CompareOp::Lt | CompareOp::Le) {
@@ -303,6 +308,7 @@ mod tests {
 
     fn add(left: Expr, right: Expr) -> Expr {
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(left),
             right: Box::new(right),
@@ -311,6 +317,7 @@ mod tests {
 
     fn mul(left: Expr, right: Expr) -> Expr {
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Mul,
             left: Box::new(left),
             right: Box::new(right),
@@ -329,6 +336,7 @@ mod tests {
 
     fn lt(left: Expr, right: Expr) -> Expr {
         Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(left),
             right: Box::new(right),
@@ -574,6 +582,7 @@ mod tests {
         let update = Expr::LocalSet(
             COUNTER,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Sub,
                 left: Box::new(Expr::LocalGet(COUNTER)),
                 right: Box::new(Expr::LocalGet(STRIDE)),

@@ -216,6 +216,7 @@ pub fn scalar_aggregate_loop_param(func: &Function) -> Option<LocalId> {
         op: perry_hir::CompareOp::Lt,
         left,
         right,
+        ..
     } = condition
     else {
         return None;
@@ -247,7 +248,7 @@ pub fn scalar_aggregate_loop_param(func: &Function) -> Option<LocalId> {
 
     fn expr_uses_param_safely(expr: &Expr, param_id: LocalId, index_id: LocalId) -> bool {
         match expr {
-            Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) =>
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) =>
             {
                 matches!(index.as_ref(), Expr::LocalGet(id) if *id == index_id)
             }
@@ -397,13 +398,14 @@ pub fn body_calls_func(stmts: &[Stmt], target_id: FuncId) -> bool {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 check_expr(condition, target_id)
                     || check_expr(then_expr, target_id)
                     || check_expr(else_expr, target_id)
             }
             Expr::Array(elements, _) => elements.iter().any(|e| check_expr(e, target_id)),
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 check_expr(object, target_id) || check_expr(index, target_id)
             }
             Expr::IndexSet {
@@ -433,7 +435,7 @@ pub fn body_calls_func(stmts: &[Stmt], target_id: FuncId) -> bool {
             Stmt::Let {
                 init: Some(expr), ..
             } => check_expr(expr, target_id),
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 check_expr(expr, target_id)
             }
             Stmt::If {
@@ -628,8 +630,8 @@ pub fn construction_stmt_can_affect_method_lookup(
             getter_names,
             setter_names,
         ),
-        Stmt::Return(Some(_)) | Stmt::Throw(_) => true,
-        Stmt::Return(None) | Stmt::Break | Stmt::Continue => false,
+        Stmt::Return(Some(_), _) | Stmt::Throw(_) => true,
+        Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => false,
         Stmt::If {
             condition,
             then_branch,
@@ -740,7 +742,7 @@ pub fn construction_expr_can_affect_method_lookup(
             getter_names,
             setter_names,
         ),
-        Expr::SuperCall(args) => args.iter().any(|arg| {
+        Expr::SuperCall(args, _) => args.iter().any(|arg| {
             construction_expr_can_affect_method_lookup(
                 arg,
                 method_name,

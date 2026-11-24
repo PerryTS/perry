@@ -421,6 +421,7 @@ impl<'a> Gen<'a> {
                 key,
                 receiver,
                 args,
+                ..
             } => match self.class_home_of(fx, home) {
                 Some(_) => {
                     let k = self.super_key(fx, key);
@@ -1404,6 +1405,7 @@ impl<'a> Gen<'a> {
             | Expr::BufferIndexGet { .. }
             | Expr::Uint8ArrayGet { .. }
             | Expr::IndexGet { .. }
+            | Expr::RegionOut { .. }
             | Expr::BufferIndexSet { .. }
             | Expr::Uint8ArraySet { .. }
             | Expr::IndexSet { .. }

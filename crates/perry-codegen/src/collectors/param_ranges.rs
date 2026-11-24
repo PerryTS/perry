@@ -138,10 +138,10 @@ fn visit_stmt(stmt: &Stmt, module_constants: &HashMap<u32, f64>, scan: &mut Scan
                 visit_expr(init, module_constants, scan);
             }
         }
-        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
             visit_expr(e, module_constants, scan)
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -202,6 +202,7 @@ fn visit_stmt(stmt: &Stmt, module_constants: &HashMap<u32, f64>, scan: &mut Scan
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             visit_expr(discriminant, module_constants, scan);
             for case in cases {
@@ -360,6 +361,7 @@ mod tests {
 
     fn param(id: u32, name: &str) -> Param {
         Param {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             ty: Type::Number,
@@ -372,6 +374,7 @@ mod tests {
 
     fn matmul_fn(body: Vec<Stmt>) -> Function {
         Function {
+            byte_offset: 0,
             id: MATMUL,
             name: "matmul".to_string(),
             type_params: Vec::new(),

@@ -3,6 +3,7 @@ use super::*;
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -144,7 +145,7 @@ fn boxed_bound_element_loop_keeps_checked_element_loads() {
         panic!("condition")
     };
     *right = Box::new(Expr::LocalGet(20));
-    f.body.push(Stmt::Return(Some(Expr::LocalGet(11))));
+    f.body.push(Stmt::Return(Some(Expr::LocalGet(11)), 0));
     m.functions.push(f);
     let ir = ir(&m);
     // Step 7 deleted the element regions: no receiver tail, and the loop's

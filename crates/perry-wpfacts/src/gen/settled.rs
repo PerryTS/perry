@@ -340,6 +340,7 @@ fn inert_construct(module: &Module, y: &str, at: usize, w: &mut Win) -> bool {
                             op: CompareOp::Eq,
                             left,
                             right,
+                            ..
                         },
                     then_branch,
                     else_branch: None,

@@ -29,6 +29,7 @@ fn ir_opts() -> CompileOptions {
 
 fn probe(body: Vec<Stmt>) -> Function {
     Function {
+        byte_offset: 0,
         id: 1,
         name: "probe".to_string(),
         type_params: Vec::new(),
@@ -52,6 +53,7 @@ fn probe(body: Vec<Stmt>) -> Function {
 /// binding, like a closure capture or a box).
 fn module(init: Expr, body: Vec<Stmt>) -> Module {
     Module {
+        byte_offset: 0,
         name: "string_accumulator.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
@@ -121,6 +123,7 @@ fn self_append(rhs: Expr) -> Stmt {
     Stmt::Expr(Expr::LocalSet(
         ACC,
         Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(ACC)),
             right: Box::new(rhs),
@@ -137,7 +140,7 @@ fn an_untyped_accumulator_given_a_string_selects_the_in_place_append() {
         Expr::String(String::new()),
         vec![
             self_append(Expr::String("tok".to_string())),
-            Stmt::Return(None),
+            Stmt::Return(None, 0),
         ],
     ));
     assert!(
@@ -150,7 +153,7 @@ fn an_untyped_accumulator_given_a_string_selects_the_in_place_append() {
 fn an_untyped_numeric_self_add_is_not_an_accumulator() {
     let ir = probe_ir(module(
         Expr::Number(0.0),
-        vec![self_append(Expr::Number(1.0)), Stmt::Return(None)],
+        vec![self_append(Expr::Number(1.0)), Stmt::Return(None, 0)],
     ));
     assert!(
         !ir.contains(APPEND),
@@ -164,7 +167,7 @@ fn an_ordinary_read_of_the_accumulator_demotes_the_unique_owner() {
         Expr::String(String::new()),
         vec![
             self_append(Expr::String("tok".to_string())),
-            Stmt::Return(Some(Expr::LocalGet(ACC))),
+            Stmt::Return(Some(Expr::LocalGet(ACC)), 0),
         ],
     ));
     assert!(
@@ -180,12 +183,15 @@ fn a_length_read_of_the_accumulator_does_not_demote() {
         Expr::String(String::new()),
         vec![
             self_append(Expr::String("tok".to_string())),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(ACC)),
-                property: "length".to_string(),
-                byte_offset: 0,
-            })),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(ACC)),
+                    property: "length".to_string(),
+                    byte_offset: 0,
+                }),
+                0,
+            ),
         ],
     ));
     assert!(

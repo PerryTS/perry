@@ -102,11 +102,11 @@ impl WasmModuleEmitter {
                 let val = self.emit_js_expr(e, locals);
                 out.push_str(&format!("{pad}    {val};\n"));
             }
-            Stmt::Return(Some(e)) => {
+            Stmt::Return(Some(e), _) => {
                 let val = self.emit_js_expr(e, locals);
                 out.push_str(&format!("{pad}    return {val};\n"));
             }
-            Stmt::Return(None) => {
+            Stmt::Return(None, _) => {
                 out.push_str(&format!("{pad}    return u64ToF64(TAG_UNDEFINED);\n"));
             }
             Stmt::If {
@@ -256,6 +256,7 @@ impl WasmModuleEmitter {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 let disc = self.emit_js_expr(discriminant, locals);
                 out.push_str(&format!("{pad}    switch (toJsValue({disc})) {{\n"));
@@ -370,7 +371,9 @@ impl WasmModuleEmitter {
                 )
             }
             Expr::GlobalSet(_, val) => self.emit_js_expr(val, locals),
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
                 // The operator runs on the decoded JS values, which applies ToNumber (or
@@ -401,7 +404,9 @@ impl WasmModuleEmitter {
                     "((__p, __o) => __memDispatch.object_has_property(toJsValue(__o), toJsValue(__p)) ? u64ToF64(TAG_TRUE) : u64ToF64(TAG_FALSE))({p}, {o})"
                 )
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
                 let js_op = match op {
@@ -419,7 +424,9 @@ impl WasmModuleEmitter {
                     l, js_op, r
                 )
             }
-            Expr::Logical { op, left, right } => {
+            Expr::Logical {
+                op, left, right, ..
+            } => {
                 let l = self.emit_js_expr(left, locals);
                 let r = self.emit_js_expr(right, locals);
                 // The left operand runs once: the arrow yields `[left]` when it is the
@@ -444,7 +451,7 @@ impl WasmModuleEmitter {
                     UnaryOp::Pos => format!("fromJsValue(+toJsValue({}))", o),
                 }
             }
-            Expr::Await(inner) => {
+            Expr::Await(inner, _) => {
                 let v = self.emit_js_expr(inner, locals);
                 // In JS async context, we can truly await
                 format!("fromJsValue(await toJsValue({}))", v)
@@ -547,7 +554,8 @@ impl WasmModuleEmitter {
                             host_args(&args_js)
                         )
                     }
-                    Expr::IndexGet { object, index, .. } => {
+                    Expr::IndexGet { object, index, .. }
+                    | Expr::RegionOut { object, index, .. } => {
                         let obj = self.emit_js_expr(object, locals);
                         let key = self.emit_js_expr(index, locals);
                         format!(
@@ -768,6 +776,7 @@ impl WasmModuleEmitter {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 let c = self.emit_js_expr(condition, locals);
                 let t = self.emit_js_expr(then_expr, locals);
@@ -780,6 +789,7 @@ impl WasmModuleEmitter {
                 object,
                 args,
                 class_name,
+                ..
             } => {
                 let normalized = module.strip_prefix("node:").unwrap_or(module);
                 match normalized {
@@ -1044,7 +1054,7 @@ impl WasmModuleEmitter {
                 )
             }
             Expr::This => "__this".to_string(),
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 let obj = self.emit_js_expr(object, locals);
                 let idx = self.emit_js_expr(index, locals);
                 format!("fromJsValue(toJsValue({})[toJsValue({})])", obj, idx)

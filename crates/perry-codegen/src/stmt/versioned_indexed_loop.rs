@@ -110,6 +110,7 @@ fn match_candidate(
             op: CompareOp::Lt,
             left,
             right,
+            ..
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) => {
             match right.as_ref() {
                 Expr::LocalGet(id) => *id,
@@ -143,7 +144,7 @@ fn match_candidate(
     let (entity_id, entity_array_id) = match entity_stmt {
         Stmt::Let {
             id,
-            init: Some(Expr::IndexGet { object, index, .. }),
+            init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
             ..
         } if matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id) => {
             match object.as_ref() {

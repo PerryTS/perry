@@ -7,8 +7,9 @@
 use super::*;
 use std::collections::{HashMap, HashSet};
 
-fn runtime(method: &str, args: Vec<Expr>) -> Expr {
+fn runtime(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -209,8 +210,10 @@ fn closed_effects(module: &Module) -> bool {
                 enclosing_class: None,
                 ..
             } => true,
-            Expr::IndexGet { index, .. } => matches!(index.as_ref(), Expr::NativeMethodCall {
-                module,class_name:None,object:None,method,.. } if module=="__perry_runtime" && method=="arrayRecordIndex"),
+            Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. } => {
+                matches!(index.as_ref(), Expr::NativeMethodCall {
+                module,class_name:None,object:None,method,.. } if module=="__perry_runtime" && method=="arrayRecordIndex")
+            }
             Expr::PropertyGet {
                 object, property, ..
             } => {
@@ -327,6 +330,7 @@ pub(super) fn protocol_only(stmts: &[Stmt], id: LocalId) -> bool {
                 class_name: None,
                 method,
                 args,
+                ..
             } if module == "__perry_runtime"
                 && matches!(
                     method.as_str(),
@@ -364,7 +368,7 @@ pub(super) fn run(module: &mut Module) {
         !f.is_exported && f.params.iter().all(|p| !p.is_rest && p.default.is_none() && p.arguments_object.is_none())
         && f.body.iter().all(|s| !matches!(s, Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) if !ids.is_empty()))
         && matches!(f.body.last(), Some(Stmt::Return(Some(Expr::LinkGeneratorPrototype {
-            fixed_state: true, is_async: false, obj, .. }))) if matches!(obj.as_ref(), Expr::Closure {
+            fixed_state: true, is_async: false, obj, .. }), _)) if matches!(obj.as_ref(), Expr::Closure {
                 mutable_captures, body, captures_this: false, captures_new_target: false, enclosing_class: None, .. } if mutable_captures.is_empty() && !nested_closure(body)))
     }).map(|f| (f.id, f.clone())).collect();
     let mut next_local = compute_max_local_id(module) + 1;
@@ -482,7 +486,7 @@ fn lower_list(
             continue;
         }
         let mut setup = f.body.clone();
-        let Some(Stmt::Return(Some(link))) = setup.pop() else {
+        let Some(Stmt::Return(Some(link), _)) = setup.pop() else {
             unreachable!()
         };
         let Expr::LinkGeneratorPrototype { obj, .. } = &link else {
@@ -601,11 +605,14 @@ fn lower_list(
             body,
             captures,
             params,
+            byte_offset,
             ..
         } = obj.as_mut()
         else {
             unreachable!()
         };
+        // The step closure stands at the generator function it lowers.
+        let frame_offset = *byte_offset;
         for p in params.iter_mut() {
             if let Some(id) = map.get(&p.id) {
                 p.id = *id;
@@ -658,6 +665,7 @@ fn lower_list(
             params.insert(
                 0,
                 perry_hir::Param {
+                    byte_offset: frame_offset,
                     id: op,
                     name: "__frame_op".into(),
                     ty: Type::Number,
@@ -672,6 +680,7 @@ fn lower_list(
                 0,
                 Stmt::If {
                     condition: Expr::Compare {
+                        byte_offset: frame_offset,
                         op: CompareOp::Eq,
                         left: Box::new(Expr::LocalGet(op)),
                         right: Box::new(Expr::Number(1.0)),
@@ -679,7 +688,7 @@ fn lower_list(
                     then_branch: vec![
                         Stmt::Expr(Expr::LocalSet(done, Box::new(Expr::Bool(true)))),
                         Stmt::Expr(Expr::LocalSet(step, Box::new(Expr::Number(1.0)))),
-                        Stmt::Return(Some(Expr::LocalGet(arg))),
+                        Stmt::Return(Some(Expr::LocalGet(arg)), frame_offset),
                     ],
                     else_branch: None,
                 },
@@ -690,7 +699,7 @@ fn lower_list(
                 condition: Expr::LocalGet(done),
                 then_branch: vec![
                     Stmt::Expr(Expr::LocalSet(step, Box::new(Expr::Number(1.0)))),
-                    Stmt::Return(Some(Expr::Undefined)),
+                    Stmt::Return(Some(Expr::Undefined), frame_offset),
                 ],
                 else_branch: None,
             },
@@ -700,7 +709,14 @@ fn lower_list(
         prefix.append(body);
         let catch_id = *next_local;
         *next_local += 1;
-        *body = super::lower::wrap_generator_resume_body(prefix, executing, done, catch_id, false);
+        *body = super::lower::wrap_generator_resume_body(
+            prefix,
+            executing,
+            done,
+            catch_id,
+            false,
+            frame_offset,
+        );
         // The HIR remapper above also updates the explicit control identities.
         let _ = (i32_controls, i1_controls);
         let mut replacement = Vec::new();
@@ -716,7 +732,7 @@ fn lower_list(
         replacement.extend(setup);
         replacement.push(Stmt::Expr(Expr::LocalSet(
             id,
-            Box::new(runtime("privateResumeFrame", vec![link])),
+            Box::new(runtime("privateResumeFrame", vec![link], frame_offset)),
         )));
         // Keep compiler-owned child slots lexical, including at module init:
         // they must never be promoted to mutable module globals.
@@ -756,6 +772,7 @@ fn rewrite_uses(stmts: &mut [Stmt], id: LocalId, fid: FuncId) {
             module,
             method,
             args,
+            byte_offset,
             ..
         } = e
         {
@@ -775,6 +792,7 @@ fn rewrite_uses(stmts: &mut [Stmt], id: LocalId, fid: FuncId) {
                                 Expr::Integer(i64::from(fid)),
                                 args[2].clone(),
                             ],
+                            *byte_offset,
                         );
                         return;
                     }
@@ -789,6 +807,7 @@ fn rewrite_uses(stmts: &mut [Stmt], id: LocalId, fid: FuncId) {
                                 "privateResumeFrameClose"
                             },
                             a,
+                            *byte_offset,
                         );
                         return;
                     }
@@ -881,7 +900,7 @@ fn lower_owned_resume(
     }
     if f.was_plain_async {
         let step = match f.body.last() {
-            Some(Stmt::Return(Some(Expr::AsyncFirstCall { step_closure }))) => {
+            Some(Stmt::Return(Some(Expr::AsyncFirstCall { step_closure }), _)) => {
                 match step_closure.as_ref() {
                     Expr::LocalGet(id) => Some(*id),
                     _ => None,
@@ -915,12 +934,15 @@ fn lower_owned_resume(
                 }
             }
         }
-    } else if let Some(Stmt::Return(Some(Expr::LinkGeneratorPrototype {
-        obj,
-        fixed_state: true,
-        is_async: false,
-        ..
-    }))) = f.body.last_mut()
+    } else if let Some(Stmt::Return(
+        Some(Expr::LinkGeneratorPrototype {
+            obj,
+            fixed_state: true,
+            is_async: false,
+            ..
+        }),
+        _,
+    )) = f.body.last_mut()
     {
         body(obj, templates, uses, next_local, next_func);
     }

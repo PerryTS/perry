@@ -56,7 +56,10 @@ pub(crate) fn is_known_i32_range(ctx: &FnCtx<'_>, e: &Expr) -> bool {
 /// expression natively, operands included, which an unproven operand must
 /// not be. `>>>` yields a Uint32 and is left to the range walk.
 fn is_int32_bitwise_result(ctx: &FnCtx<'_>, e: &Expr) -> bool {
-    let Expr::Binary { op, left, right } = e else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = e
+    else {
         return false;
     };
     matches!(
@@ -83,6 +86,11 @@ pub(crate) fn flat_const_index_get_target(
     let (info, row_expr, col_expr): (FlatConstInfo, Box<Expr>, Box<Expr>) = match object {
         // Inline: IndexGet(IndexGet(LocalGet(X), i), j)
         Expr::IndexGet {
+            object: outer_obj,
+            index: outer_idx,
+            ..
+        }
+        | Expr::RegionOut {
             object: outer_obj,
             index: outer_idx,
             ..
@@ -448,11 +456,11 @@ fn i32_chain_magnitude_bits(e: &Expr, env: I32ChainEnv<'_>) -> Option<u32> {
         Expr::Binary {
             op: BinaryOp::BitOr,
             left,
-            right,
+            right, ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => {
             i32_chain_magnitude_bits(left, env).map(|l| l.min(I32_CHAIN_LEAF_BITS))
         }
-        Expr::Binary { op, left, right } if is_i32_chain_op(*op) => {
+        Expr::Binary { op, left, right, .. } if is_i32_chain_op(*op) => {
             let l = i32_chain_magnitude_bits(left, env)?;
             let r = i32_chain_magnitude_bits(right, env)?;
             combine_i32_chain_bits(*op, left, right, l, r)
@@ -491,8 +499,8 @@ fn i32_chain_magnitude_bits(e: &Expr, env: I32ChainEnv<'_>) -> Option<u32> {
             temps::selection_bits(e, env, i32_chain_magnitude_bits)
         }
         // Issue #50 bridge: element of a flat-const 2D int table.
-        Expr::IndexGet { object, .. } => match object.as_ref() {
-            Expr::IndexGet { object: inner, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => match object.as_ref() {
+            Expr::IndexGet { object: inner, .. } | Expr::RegionOut { object: inner, .. } => {
                 matches!(inner.as_ref(), Expr::LocalGet(id) if env.flat_const_arrays.contains_key(id))
             }
             Expr::LocalGet(id) => env
@@ -766,7 +774,7 @@ fn lower_checked_typed_array_i32_load(
 }
 
 fn packed_i32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::PackedF64LoopFact> {
-    let Expr::IndexGet { object, index, .. } = e else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e else {
         return None;
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -783,7 +791,7 @@ fn packed_i32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::Pa
 }
 
 fn packed_u32_loop_index_get_fact(ctx: &FnCtx<'_>, e: &Expr) -> Option<super::PackedF64LoopFact> {
-    let Expr::IndexGet { object, index, .. } = e else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e else {
         return None;
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -841,10 +849,13 @@ fn region_i32_chain_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
             op: BinaryOp::BitOr,
             left,
             right,
+            ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => {
             region_i32_chain_magnitude_bits(ctx, left).map(|l| l.min(I32_CHAIN_LEAF_BITS))
         }
-        Expr::Binary { op, left, right } if is_i32_chain_op(*op) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if is_i32_chain_op(*op) => {
             let l = region_i32_chain_magnitude_bits(ctx, left)?;
             let r = region_i32_chain_magnitude_bits(ctx, right)?;
             combine_i32_chain_bits(*op, left, right, l, r)
@@ -865,7 +876,7 @@ fn region_i32_chain_magnitude_bits(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
                     .all(|arg| can_lower_expr_as_i32_in_current_region(ctx, arg)))
             .then_some(I32_CHAIN_LEAF_BITS)
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             (ta_int_elem_load_is_i32_provable(ctx, object, index)
             || super::masked_window::masked_window_i32_load_is_provable(ctx, object, index)
             // The checked-kind fast path lowers `index` through `fptosi`
@@ -1002,7 +1013,7 @@ fn native_expr_kind(e: &Expr) -> &'static str {
         Expr::Call { .. } => "Call",
         Expr::Uint8ArrayGet { .. } => "Uint8ArrayGet",
         Expr::BufferIndexGet { .. } => "BufferIndexGet",
-        Expr::IndexGet { .. } => "IndexGet",
+        Expr::IndexGet { .. } | Expr::RegionOut { .. } => "IndexGet",
         _ => "Expr",
     }
 }
@@ -1036,22 +1047,24 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
             op: BinaryOp::BitOr,
             left,
             right,
+            ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => {
             Some(lower_expr_native_i32(ctx, left)?.value)
         }
-        Expr::Binary { op, left, right }
-            if matches!(
-                op,
-                BinaryOp::Add
-                    | BinaryOp::Sub
-                    | BinaryOp::Mul
-                    | BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::Shl
-                    | BinaryOp::Shr
-                    | BinaryOp::UShr
-            ) =>
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(
+            op,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+                | BinaryOp::UShr
+        ) =>
         {
             let l = lower_expr_native_i32(ctx, left)?.value;
             let mut r = lower_expr_native_i32(ctx, right)?.value;
@@ -1131,7 +1144,7 @@ fn try_lower_expr_native_i32_structural(ctx: &mut FnCtx<'_>, e: &Expr) -> Result
             let lowered = super::arrays_finds::lower_buffer_index_get_i32(ctx, buffer, index)?;
             Some(i32_from_indexed_get_lowered(ctx, lowered))
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             if ta_int_elem_load_is_i32_provable(ctx, object, index) {
                 super::lower_typed_array_load(ctx, object, index)?
                     .map(|lowered| i32_from_indexed_get_lowered(ctx, lowered))
@@ -1176,7 +1189,7 @@ fn i32_from_indexed_get_lowered(ctx: &mut FnCtx<'_>, lowered: LoweredValue) -> S
 }
 
 fn lower_packed_i32_loop_index_get(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<Option<LoweredValue>> {
-    let Expr::IndexGet { object, index, .. } = e else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e else {
         return Ok(None);
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -1239,7 +1252,7 @@ pub(crate) fn lower_packed_u32_loop_index_get(
     ctx: &mut FnCtx<'_>,
     e: &Expr,
 ) -> Result<Option<LoweredValue>> {
-    let Expr::IndexGet { object, index, .. } = e else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e else {
         return Ok(None);
     };
     let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) = (object.as_ref(), index.as_ref()) else {
@@ -1375,6 +1388,7 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         op: perry_hir::LogicalOp::Coalesce,
         left,
         right,
+        ..
     } = e
     {
         if let Some(value) = super::rest_elems::try_lower_default_i32(ctx, left, right)? {
@@ -1483,6 +1497,7 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
             op: BinaryOp::BitOr,
             left,
             right,
+            ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => lower_expr_native_i32(ctx, left)?.value,
         // Last-resort ARITHMETIC, reached when `lower_expr_value` could not
         // produce a value at all. It is a SECOND emitter of the same
@@ -1507,7 +1522,9 @@ fn lower_expr_native_i32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
             let d = lower_expr(ctx, e)?;
             ctx.block().toint32(&d)
         }
-        Expr::Binary { op, left, right } if is_i32_chain_op(*op) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if is_i32_chain_op(*op) => {
             let l = lower_expr_native_i32(ctx, left)?.value;
             let mut r = lower_expr_native_i32(ctx, right)?.value;
             let blk = ctx.block();
@@ -1660,7 +1677,7 @@ fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
     if let Some(lowered) = lower_packed_u32_loop_index_get(ctx, e)? {
         return Ok(lowered);
     }
-    if let Expr::IndexGet { object, index, .. } = e {
+    if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e {
         if let Some(lowered) = super::try_lower_proven_view_checked_u32_load(ctx, object, index)? {
             return Ok(lowered);
         }
@@ -1709,6 +1726,7 @@ fn lower_expr_native_u32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
             op: BinaryOp::UShr,
             left,
             right,
+            ..
         } => {
             let l = lower_expr_native_u32(ctx, left)?.value;
             let r = lower_expr_native_u32(ctx, right)?.value;
@@ -1848,7 +1866,8 @@ fn lower_expr_native_f64(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         || super::rest_elems::number_read(ctx, e);
     let needs_raw_f64_fallback_coercion = !stable_numeric_index
         && (expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
-            || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e));
+            || matches!(e, Expr::IndexGet { .. } | Expr::RegionOut { .. })
+                && is_numeric_expr(ctx, e));
     let raw = lower_expr(ctx, e)?;
     let value = if needs_raw_f64_fallback_coercion {
         ctx.block()
@@ -1877,7 +1896,8 @@ fn lower_expr_native_f32(ctx: &mut FnCtx<'_>, e: &Expr) -> Result<LoweredValue> 
         || super::rest_elems::number_read(ctx, e);
     let needs_raw_f64_fallback_coercion = !stable_numeric_index
         && (expr_may_return_boxed_value_from_raw_f64_fallback(ctx, e)
-            || matches!(e, Expr::IndexGet { .. }) && is_numeric_expr(ctx, e));
+            || matches!(e, Expr::IndexGet { .. } | Expr::RegionOut { .. })
+                && is_numeric_expr(ctx, e));
     let raw = lower_expr(ctx, e)?;
     let d = if needs_raw_f64_fallback_coercion {
         ctx.block()

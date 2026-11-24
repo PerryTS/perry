@@ -80,6 +80,7 @@ use super::slice8_rooting_tests::{call_operand_of, producer_line};
 fn compile_body(name: &str, body: Vec<Stmt>) -> String {
     let mut hir = HirModule::new(name);
     hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
@@ -261,16 +262,19 @@ fn property_update_rereads_the_receiver_below_the_collection_window() {
 fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
     let unproven = compile_body(
         "issue7628_result_root",
-        with_object_local(Stmt::Return(Some(Expr::IndexUpdate {
-            object: Box::new(items_of_o()),
-            index: Box::new(field_of_o("n")),
-            op: BinaryOp::Add,
-            prefix: false,
-            strict: true,
-            element_offset: 0,
-            byte_offset: 0,
-            byte_end: 0,
-        }))),
+        with_object_local(Stmt::Return(
+            Some(Expr::IndexUpdate {
+                object: Box::new(items_of_o()),
+                index: Box::new(field_of_o("n")),
+                op: BinaryOp::Add,
+                prefix: false,
+                strict: true,
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+            }),
+            0,
+        )),
     );
     let write = require_call_line(&unproven, "js_put_value_set_dynamic");
     let produced = producer_line(&unproven, &returned_register(&unproven));
@@ -291,16 +295,19 @@ fn the_result_is_rooted_only_when_the_element_may_be_a_bigint() {
                 mutable: false,
                 init: Some(Expr::Array(vec![Expr::Number(4.0)], None)),
             },
-            Stmt::Return(Some(Expr::IndexUpdate {
-                object: Box::new(Expr::LocalGet(0)),
-                index: Box::new(Expr::Number(0.0)),
-                op: BinaryOp::Add,
-                prefix: false,
-                strict: true,
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-            })),
+            Stmt::Return(
+                Some(Expr::IndexUpdate {
+                    object: Box::new(Expr::LocalGet(0)),
+                    index: Box::new(Expr::Number(0.0)),
+                    op: BinaryOp::Add,
+                    prefix: false,
+                    strict: true,
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                }),
+                0,
+            ),
         ],
     );
     let typed_write = require_call_line(&typed, "js_put_value_set_dynamic");

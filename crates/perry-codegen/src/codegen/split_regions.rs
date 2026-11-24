@@ -246,7 +246,7 @@ fn frame_bound_expr(e: &Expr, facts: &ModuleFacts) -> Option<&'static str> {
     Some(match e {
         Expr::This | Expr::ModuleTopThis => "this",
         Expr::NewTarget => "new.target",
-        Expr::SuperCall(_)
+        Expr::SuperCall(_, _)
         | Expr::SuperCallSpread(_)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }
@@ -255,7 +255,7 @@ fn frame_bound_expr(e: &Expr, facts: &ModuleFacts) -> Option<&'static str> {
         | Expr::ObjectSuperPropertyGet { .. }
         | Expr::ObjectSuperPropertySet { .. }
         | Expr::ObjectSuperMethodCall { .. } => "super",
-        Expr::Await(_) | Expr::Yield { .. } => "await/yield",
+        Expr::Await(_, _) | Expr::Yield { .. } => "await/yield",
         Expr::WithGet { .. } | Expr::WithSet { .. } => "with",
         Expr::ClassMethodHome { .. }
         | Expr::ClassStaticSymbolSet { .. }
@@ -309,7 +309,7 @@ fn pin_reason(s: &Stmt, facts: &ModuleFacts) -> Option<&'static str> {
             l.iter().any(|x| control(x, false, loops, switches, labels))
         };
         match s {
-            Stmt::Return(_) => true,
+            Stmt::Return(_, _) => true,
             Stmt::Break => loops == 0 && switches == 0,
             Stmt::Continue => loops == 0,
             Stmt::LabeledBreak(l) | Stmt::LabeledContinue(l) => !labels.contains(l),
@@ -476,7 +476,9 @@ fn guard_proof(cond: &Expr) -> Option<(u32, Type)> {
             left,
             ..
         } => guard_proof(left),
-        Expr::Compare { op, left, right } if matches!(op, CompareOp::Eq | CompareOp::LooseEq) => {
+        Expr::Compare {
+            op, left, right, ..
+        } if matches!(op, CompareOp::Eq | CompareOp::LooseEq) => {
             let (tested, lit) = match (left.as_ref(), right.as_ref()) {
                 (Expr::TypeOf(x), Expr::String(s)) | (Expr::String(s), Expr::TypeOf(x)) => (x, s),
                 _ => return None,
@@ -800,6 +802,7 @@ fn try_extract(
             .unwrap_or_else(|| format!("v{id}"));
         param_desc.push(format!("{}:{}", name, type_name(&proof)));
         params.push(Param {
+            byte_offset: 0, /* compiler-split region plumbing, not a source site */
             id: fresh,
             name,
             ty: proof,
@@ -886,16 +889,25 @@ fn try_extract(
     let outs: Vec<u32> = out_decl.iter().chain(out_outer.iter()).copied().collect();
     if value {
         if let Some(Stmt::Expr(e)) = body.pop() {
-            body.push(Stmt::Return(Some(e)));
+            body.push(Stmt::Return(
+                Some(e),
+                0, /* compiler-split region plumbing, not a source site */
+            ));
         }
     }
     match outs.len() {
         0 => {}
-        1 => body.push(Stmt::Return(Some(Expr::LocalGet(remap[&outs[0]])))),
-        _ => body.push(Stmt::Return(Some(Expr::Array(
-            outs.iter().map(|id| Expr::LocalGet(remap[id])).collect(),
-            None,
-        )))),
+        1 => body.push(Stmt::Return(
+            Some(Expr::LocalGet(remap[&outs[0]])),
+            0, /* compiler-split region plumbing, not a source site */
+        )),
+        _ => body.push(Stmt::Return(
+            Some(Expr::Array(
+                outs.iter().map(|id| Expr::LocalGet(remap[id])).collect(),
+                None,
+            )),
+            0, /* compiler-split region plumbing, not a source site */
+        )),
     }
     let func_id = sh.next_func + 1;
     sh.next_func = func_id;
@@ -1024,6 +1036,7 @@ fn try_extract(
             .collect();
         sh.closure_names.push((func_id, name));
         Expr::Closure {
+            byte_offset: 0, /* compiler-split region plumbing, not a source site */
             func_id,
             params,
             return_type: Type::Any,
@@ -1041,6 +1054,7 @@ fn try_extract(
         }
     } else {
         sh.out.push(Function {
+            byte_offset: 0, /* compiler-split region plumbing, not a source site */
             id: func_id,
             name,
             type_params: Vec::new(),
@@ -1066,6 +1080,7 @@ fn try_extract(
         callee: Box::new(callee),
         args: live_in.iter().map(|id| Expr::LocalGet(*id)).collect(),
         type_args: Vec::new(),
+        // Compiler-split region plumbing, not a source site.
         byte_offset: 0,
     };
     // A live-out keeps the type the parent's typed locals gave it: the value
@@ -1134,10 +1149,10 @@ fn try_extract(
                 init: Some(call),
             });
             for (k, id) in outs.iter().enumerate() {
-                let get = Expr::IndexGet {
-                    element_offset: 0,
-                    byte_offset: 0,
-                    byte_end: 0,
+                // Compiler-split region plumbing, not a source site: its
+                // own kind, an element read with no site (the split runs
+                // before the facts, collect_module_finish).
+                let get = Expr::RegionOut {
                     object: Box::new(Expr::LocalGet(tmp)),
                     index: Box::new(Expr::Number(k as f64)),
                 };
@@ -1358,7 +1373,7 @@ fn split_list(
                 && matches!(&list[i], Stmt::Expr(Expr::LocalSet(id, _)) if shared_mutable(ctx, *id)));
         if stays {
             let slot: Option<&mut Expr> = match &mut list[i] {
-                Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => Some(e),
+                Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => Some(e),
                 Stmt::Expr(Expr::LocalSet(_, e)) => Some(e.as_mut()),
                 _ => None,
             };
@@ -1744,7 +1759,7 @@ fn split_closures_in(
             Stmt::Let { init: Some(e), .. }
             | Stmt::Expr(e)
             | Stmt::Throw(e)
-            | Stmt::Return(Some(e)) => split_closures_in_expr(e, names, facts, sh),
+            | Stmt::Return(Some(e), _) => split_closures_in_expr(e, names, facts, sh),
             Stmt::If {
                 condition,
                 then_branch,
@@ -1795,6 +1810,7 @@ fn split_closures_in(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 split_closures_in_expr(discriminant, names, facts, sh);
                 for c in cases {

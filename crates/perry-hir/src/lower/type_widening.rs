@@ -146,7 +146,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut WidenSets, env: &HirTypeEnv) {
     match stmt {
         Stmt::Let { init: Some(e), .. }
         | Stmt::Expr(e)
-        | Stmt::Return(Some(e))
+        | Stmt::Return(Some(e), _)
         | Stmt::Throw(e) => visit_expr(e, out, env),
         Stmt::If {
             condition,
@@ -212,6 +212,7 @@ fn visit_stmt(stmt: &Stmt, out: &mut WidenSets, env: &HirTypeEnv) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             visit_expr(discriminant, out, env);
             for c in cases {

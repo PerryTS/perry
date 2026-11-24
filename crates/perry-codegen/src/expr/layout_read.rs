@@ -1068,6 +1068,7 @@ pub(crate) fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => free(condition, keys) && free(then_expr, keys) && free(else_expr, keys),
             Expr::Unary {
                 op: perry_hir::UnaryOp::Not,
@@ -1079,6 +1080,7 @@ pub(crate) fn run_value(e: &Expr, keys: &[&str]) -> RunValue {
                 op: perry_hir::CompareOp::Eq | perry_hir::CompareOp::Ne,
                 left,
                 right,
+                ..
             } => free(left, keys) && free(right, keys),
             _ => false,
         }

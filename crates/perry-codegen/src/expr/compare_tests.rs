@@ -58,6 +58,7 @@ fn cmp_ir(name: &str, op: CompareOp, lhs: Expr, rhs: Expr) -> String {
                 ty: Type::Any,
                 mutable: true,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op,
                     left: Box::new(lhs),
                     right: Box::new(rhs),
@@ -137,6 +138,7 @@ fn strict_eq_against_a_proven_symbol_is_raw_identity() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::LocalGet(Y)),
@@ -179,6 +181,7 @@ fn loose_eq_against_a_proven_symbol_keeps_the_coercing_helper() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::LooseEq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::LocalGet(Y)),
@@ -214,6 +217,7 @@ fn a_symbol_annotation_without_symbol_provenance_keeps_js_eq() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::LocalGet(Y)),
@@ -260,6 +264,7 @@ fn a_reassigned_symbol_constructor_local_keeps_js_eq() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::LocalGet(Y)),
@@ -350,6 +355,7 @@ fn strict_eq_reuses_a_non_pointer_left_operand_across_an_allocating_right_operan
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::Object(vec![("right".to_string(), Expr::Number(2.0))])),
@@ -545,6 +551,7 @@ fn string_vs_generic_key_uses_the_identity_first_dispatch() {
                 ty: Type::Boolean,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::LocalGet(Y)),
@@ -588,6 +595,7 @@ fn string_equality_inlines_short_heap_content_checks_before_the_helper() {
                 ty: Type::Boolean,
                 mutable: false,
                 init: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(X)),
                     right: Box::new(Expr::LocalGet(Y)),

@@ -320,7 +320,7 @@ fn replace_reads(expr: &mut Expr, b: LocalId, f: &str, value: &Expr) {
 /// Processes the lists and closure bodies inside one statement.
 fn forward_nested(stmt: &mut Stmt, avail: &mut Avail, cx: &Cx) {
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 forward_expr(e, cx);
             }
@@ -376,6 +376,7 @@ fn forward_nested(stmt: &mut Stmt, avail: &mut Avail, cx: &Cx) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             forward_expr(discriminant, cx);
             for case in cases {
@@ -414,7 +415,7 @@ fn forward_expr(expr: &mut Expr, cx: &Cx) {
 /// (not inside closure bodies: the walker does not enter them).
 fn each_expr<'a>(stmt: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => init.iter().for_each(|e| f(e)),
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => init.iter().for_each(|e| f(e)),
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
         Stmt::If {
             condition,
@@ -457,6 +458,7 @@ fn each_expr<'a>(stmt: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for case in cases {
@@ -477,7 +479,7 @@ fn each_expr<'a>(stmt: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
 /// [`each_expr`] for rewriting.
 fn each_expr_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Expr)) {
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => init.iter_mut().for_each(|e| f(e)),
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => init.iter_mut().for_each(|e| f(e)),
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
         Stmt::If {
             condition,
@@ -523,6 +525,7 @@ fn each_expr_mut(stmt: &mut Stmt, f: &mut dyn FnMut(&mut Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for case in cases {

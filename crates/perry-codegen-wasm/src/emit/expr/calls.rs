@@ -8,7 +8,12 @@ use super::*;
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_calls(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
-            Expr::Call { callee, args, .. } => {
+            Expr::Call {
+                callee,
+                args,
+                byte_offset,
+                ..
+            } => {
                 // A direct callee's rest parameter receives its arguments as one array.
                 let direct_idx = match callee.as_ref() {
                     Expr::FuncRef(id) => self.emitter.func_map.get(id).copied(),
@@ -93,6 +98,7 @@ impl<'a> FuncEmitCtx<'a> {
                             self.emit_expr(
                                 func,
                                 &Expr::StaticMethodCall {
+                                    byte_offset: *byte_offset,
                                     class_name: class_name.clone(),
                                     method_name: property.clone(),
                                     args: args.to_vec(),

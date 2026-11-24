@@ -115,6 +115,7 @@ fn entry_opts() -> CompileOptions {
 }
 fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
     Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -235,6 +236,7 @@ fn counted_loop_only(body: Vec<Stmt>) -> Vec<Stmt> {
     vec![Stmt::For {
         init: Some(Box::new(let_stmt(I, "i", Type::Number, Expr::Number(0.0)))),
         condition: Some(Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(I)),
             right: Box::new(Expr::LocalGet(N)),
@@ -266,6 +268,7 @@ fn accumulate(rhs: Expr) -> Vec<Stmt> {
     vec![Stmt::Expr(Expr::LocalSet(
         SUM,
         Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(SUM)),
             right: Box::new(rhs),
@@ -355,6 +358,7 @@ fn concatenating_two_string_literals_keeps_the_back_edge_poll() {
             vec![Stmt::Expr(Expr::LocalSet(
                 SUM,
                 Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::String("a".to_string())),
                     right: Box::new(Expr::String("b".to_string())),

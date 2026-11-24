@@ -836,6 +836,7 @@ mod tests {
     #[test]
     fn a_zero_argument_push_is_a_folded_guard_target() {
         let zero = Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "array".to_string(),
             class_name: None,
             object: Some(Box::new(Expr::LocalGet(7))),
@@ -846,6 +847,7 @@ mod tests {
         assert_eq!((call.method, call.args.len()), ("push", 0));
         assert!(matches!(call.receiver, Receiver::Expr(Expr::LocalGet(7))));
         let single = Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "array".to_string(),
             class_name: None,
             object: Some(Box::new(Expr::LocalGet(7))),
@@ -859,6 +861,7 @@ mod tests {
         assert_eq!((call.method, call.args.len()), ("push", 1));
         assert!(matches!(call.receiver, Receiver::Expr(Expr::LocalGet(7))));
         let spread = Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "array".to_string(),
             class_name: None,
             object: Some(Box::new(Expr::LocalGet(7))),

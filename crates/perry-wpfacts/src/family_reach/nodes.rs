@@ -163,7 +163,7 @@ pub(crate) fn class(e: &Expr) -> Node {
         Expr::WithGet { .. } | Expr::WithSet { .. } => Node::All("with"),
         Expr::NativeModuleRef { .. } | Expr::NativeMethodCall { .. }
         | Expr::DynamicImport { .. } => Node::Module,
-        Expr::IndexGet { .. } | Expr::IndexSet { .. } | Expr::IndexUpdate { .. }
+        Expr::IndexGet { .. } | Expr::RegionOut { .. } | Expr::IndexSet { .. } | Expr::IndexUpdate { .. }
         | Expr::ObjectSpread { .. } | Expr::ObjectAssign { .. } | Expr::In { .. }
         | Expr::EnvGetDynamic { .. } | Expr::ObjectDefineProperty { .. }
         | Expr::ObjectGetOwnPropertyDescriptor { .. }

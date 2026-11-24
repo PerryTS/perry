@@ -72,8 +72,8 @@ fn capture_base(
 
 /// One step of an optional chain's lowered short-circuit spine.
 enum SpineFrame {
-    /// A `?.` guard: `condition ? then_expr : <rest of the spine>`.
-    Guard(Box<Expr>, Box<Expr>),
+    /// A `?.` guard: `condition ? then_expr : <rest of the spine>`, at its offset.
+    Guard(Box<Expr>, Box<Expr>, u32),
     /// A temporary the chain bound for the rest of the spine (a link's
     /// receiver, evaluated once inside the upstream guard).
     Temp(LocalId, Box<Expr>),
@@ -97,8 +97,9 @@ fn split_short_circuit_spine(mut value: Expr) -> (Expr, Vec<SpineFrame>) {
                 condition,
                 then_expr,
                 else_expr,
+                byte_offset,
             } if frames.is_empty() || matches!(*then_expr, Expr::Undefined) => {
-                frames.push(SpineFrame::Guard(condition, then_expr));
+                frames.push(SpineFrame::Guard(condition, then_expr, byte_offset));
                 value = *else_expr;
             }
             Expr::ScopedTemp {
@@ -120,7 +121,8 @@ fn rebuild_short_circuit_spine(frames: Vec<SpineFrame>, live: Expr) -> Expr {
         .into_iter()
         .rev()
         .fold(live, |live, frame| match frame {
-            SpineFrame::Guard(condition, then_expr) => Expr::Conditional {
+            SpineFrame::Guard(condition, then_expr, byte_offset) => Expr::Conditional {
+                byte_offset,
                 condition,
                 then_expr,
                 else_expr: Box::new(live),
@@ -223,7 +225,7 @@ pub(crate) fn lower_opt_chain_expr(
                     // on another regex.
                     Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(obj_expr.clone()),
                         property: prop_name,
                     }
@@ -232,7 +234,7 @@ pub(crate) fn lower_opt_chain_expr(
                     let index = lower_expr(ctx, &comp.expr)?;
                     Expr::IndexGet {
                         element_offset: member.span.lo.0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         byte_end: 0,
                         object: Box::new(obj_expr.clone()),
                         index: Box::new(index),
@@ -249,7 +251,7 @@ pub(crate) fn lower_opt_chain_expr(
                     let property = expr_member::private_storage_property(ctx, &private_name);
                     Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object,
                         property,
                     }
@@ -280,7 +282,9 @@ pub(crate) fn lower_opt_chain_expr(
             }
             Ok(bind_bases(
                 Expr::Conditional {
+                    byte_offset: opt_chain.span.lo.0,
                     condition: Box::new(Expr::Compare {
+                        byte_offset: opt_chain.span.lo.0,
                         op: CompareOp::LooseEq,
                         left: Box::new(obj_expr),
                         right: Box::new(Expr::Null),
@@ -344,6 +348,10 @@ pub(crate) fn lower_opt_chain_expr(
             // on string builtins (`type?.split?.(...)`) — see
             // `opt_call_func_nullish_guard`. `None` for non-member callees.
             let mut opt_call_member_receiver: Option<Expr> = None;
+            // True when `check_expr` is the FUNCTION VALUE (`obj.method?.(args)`),
+            // false when it is the receiver (`obj?.method(args)`, `foo?.bar?.(args)`):
+            // only a function-value test needs the string-builtin-safe guard.
+            let mut check_is_func_value = false;
             // True when the RECEIVER is itself an optional chain, so its
             // lowered `Expr::Conditional` really is a short-circuit and may be
             // destructured as one. See `receiver_is_optional_chain`.
@@ -360,7 +368,7 @@ pub(crate) fn lower_opt_chain_expr(
                     let prop = match &member.prop {
                         ast::MemberProp::Ident(id) => Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: crate::lower::member_token(member),
                             object: Box::new(obj.clone()),
                             property: id.sym.to_string(),
                         },
@@ -368,7 +376,7 @@ pub(crate) fn lower_opt_chain_expr(
                             let idx = lower_expr(ctx, &c.expr)?;
                             Expr::IndexGet {
                                 element_offset: member.span.lo.0,
-                                byte_offset: 0,
+                                byte_offset: crate::lower::member_token(member),
                                 byte_end: 0,
                                 object: Box::new(obj.clone()),
                                 index: Box::new(idx),
@@ -386,7 +394,7 @@ pub(crate) fn lower_opt_chain_expr(
                                 expr_member::private_storage_property(ctx, &private_name);
                             Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: crate::lower::member_token(member),
                                 object: guarded,
                                 property,
                             }
@@ -402,6 +410,7 @@ pub(crate) fn lower_opt_chain_expr(
                         receiver_is_chain = receiver_is_optional_chain(&m.obj);
                         let (obj, prop) = lower_member_flat(m)?;
                         opt_call_member_receiver = Some(obj);
+                        check_is_func_value = true;
                         (prop.clone(), prop)
                     }
                     ast::Expr::OptChain(inner) => match &*inner.base {
@@ -487,7 +496,8 @@ pub(crate) fn lower_opt_chain_expr(
                     // whole short-circuit spine (several `?.` links nest
                     // their guards), not just the outer guard's else branch.
                     let (inner_else, mut upstream_frames) = split_short_circuit_spine(check_expr);
-                    let SpineFrame::Guard(inner_cond, inner_then) = upstream_frames.remove(0)
+                    let SpineFrame::Guard(inner_cond, inner_then, inner_offset) =
+                        upstream_frames.remove(0)
                     else {
                         unreachable!("a Conditional spine starts with its guard");
                     };
@@ -518,10 +528,13 @@ pub(crate) fn lower_opt_chain_expr(
                     // Build the callee with inner_else as the object (not the full Conditional)
                     let fixed_callee = match callee_expr {
                         Expr::PropertyGet {
-                            property, byte_end, ..
+                            property,
+                            byte_offset,
+                            byte_end,
+                            ..
                         } => Expr::PropertyGet {
                             byte_end,
-                            byte_offset: 0,
+                            byte_offset,
                             object: inner_else,
                             property,
                         },
@@ -545,7 +558,7 @@ pub(crate) fn lower_opt_chain_expr(
                         callee: Box::new(fixed_callee.clone()),
                         args,
                         type_args: Vec::new(),
-                        byte_offset: 0,
+                        byte_offset: optional_call_at(&fixed_callee, opt_chain.span.lo.0),
                     };
                     // For `foo?.bar?.(args)` the function value (`bar` on the
                     // un-short-circuited receiver) must itself be null-checked
@@ -556,14 +569,18 @@ pub(crate) fn lower_opt_chain_expr(
                         // receiver never short-circuits even though
                         // `string.method` reads as undefined.
                         let guard_cond = match &opt_call_member_receiver {
-                            Some(recv) => opt_call_func_nullish_guard(recv, fixed_callee),
+                            Some(recv) => {
+                                opt_call_func_nullish_guard(recv, fixed_callee, opt_chain.span.lo.0)
+                            }
                             None => Expr::Compare {
+                                byte_offset: opt_chain.span.lo.0,
                                 op: CompareOp::LooseEq,
                                 left: Box::new(fixed_callee),
                                 right: Box::new(Expr::Null),
                             },
                         };
                         let guarded_call = Expr::Conditional {
+                            byte_offset: opt_chain.span.lo.0,
                             condition: Box::new(guard_cond),
                             then_expr: Box::new(Expr::Undefined),
                             else_expr: Box::new(outer_call),
@@ -577,7 +594,9 @@ pub(crate) fn lower_opt_chain_expr(
                         // "Cannot read properties of <nullish> (reading 'method')".
                         match receiver_for_member_guard {
                             Some(recv) => Box::new(Expr::Conditional {
+                                byte_offset: opt_chain.span.lo.0,
                                 condition: Box::new(Expr::Compare {
+                                    byte_offset: opt_chain.span.lo.0,
                                     op: CompareOp::LooseEq,
                                     left: Box::new(recv),
                                     right: Box::new(Expr::Null),
@@ -604,11 +623,13 @@ pub(crate) fn lower_opt_chain_expr(
                         // so this is only reached when it is side-effect-free
                         // (`receiver_for_member_guard` is None otherwise).
                         let guard_cond = Expr::Compare {
+                            byte_offset: opt_chain.span.lo.0,
                             op: CompareOp::LooseEq,
                             left: Box::new(recv),
                             right: Box::new(Expr::Null),
                         };
                         Box::new(Expr::Conditional {
+                            byte_offset: opt_chain.span.lo.0,
                             condition: Box::new(guard_cond),
                             then_expr: Box::new(Expr::Undefined),
                             else_expr: Box::new(outer_call),
@@ -618,6 +639,7 @@ pub(crate) fn lower_opt_chain_expr(
                     };
                     return Ok(bind_bases(
                         Expr::Conditional {
+                            byte_offset: inner_offset,
                             condition: inner_cond,
                             then_expr: inner_then,
                             else_expr: Box::new(rebuild_short_circuit_spine(
@@ -639,6 +661,7 @@ pub(crate) fn lower_opt_chain_expr(
             };
 
             // Build the call expression
+            let call_at = optional_call_at(&callee_expr, opt_chain.span.lo.0);
             let call_expr = if has_spread {
                 let spread_args: Vec<CallArg> = call
                     .args
@@ -653,7 +676,7 @@ pub(crate) fn lower_opt_chain_expr(
                     })
                     .collect();
                 Expr::CallSpread {
-                    byte_offset: 0,
+                    byte_offset: call_at,
                     byte_end: 0,
                     callee: Box::new(callee_expr),
                     args: spread_args,
@@ -670,7 +693,7 @@ pub(crate) fn lower_opt_chain_expr(
                     callee: Box::new(callee_expr),
                     args,
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: call_at,
                 })
             };
 
@@ -684,14 +707,18 @@ pub(crate) fn lower_opt_chain_expr(
                     // receiver is a primitive string whose builtin method
                     // reads back as `undefined` (`type?.split?.(...)`).
                     let guard_cond = match &opt_call_member_receiver {
-                        Some(recv) => opt_call_func_nullish_guard(recv, func_value),
+                        Some(recv) => {
+                            opt_call_func_nullish_guard(recv, func_value, opt_chain.span.lo.0)
+                        }
                         None => Expr::Compare {
+                            byte_offset: opt_chain.span.lo.0,
                             op: CompareOp::LooseEq,
                             left: Box::new(func_value),
                             right: Box::new(Expr::Null),
                         },
                     };
                     Box::new(Expr::Conditional {
+                        byte_offset: opt_chain.span.lo.0,
                         condition: Box::new(guard_cond),
                         then_expr: Box::new(Expr::Undefined),
                         else_expr: Box::new(call_expr),
@@ -715,19 +742,22 @@ pub(crate) fn lower_opt_chain_expr(
             // callable, so use the string-builtin-safe guard to avoid a
             // false short-circuit (`"a/b".split?.(...)`). Otherwise
             // (`check_expr` is a receiver, or callee is not a member) the
-            // plain nullish check is correct.
-            let condition = if !callee_from_chain && opt_call_member_receiver.is_some() {
-                let recv = opt_call_member_receiver.unwrap();
-                opt_call_func_nullish_guard(&recv, check_expr)
-            } else {
-                Expr::Compare {
-                    op: CompareOp::LooseEq,
-                    left: Box::new(check_expr),
-                    right: Box::new(Expr::Null),
-                }
-            };
+            // plain nullish check is the test: `recv?.method(args)` tests
+            // the receiver, and a nullish receiver is never a string.
+            let condition =
+                if let (true, Some(recv)) = (check_is_func_value, opt_call_member_receiver) {
+                    opt_call_func_nullish_guard(&recv, check_expr, opt_chain.span.lo.0)
+                } else {
+                    Expr::Compare {
+                        byte_offset: opt_chain.span.lo.0,
+                        op: CompareOp::LooseEq,
+                        left: Box::new(check_expr),
+                        right: Box::new(Expr::Null),
+                    }
+                };
             Ok(bind_bases(
                 Expr::Conditional {
+                    byte_offset: opt_chain.span.lo.0,
                     condition: Box::new(condition),
                     then_expr: Box::new(Expr::Undefined),
                     else_expr,
@@ -735,5 +765,15 @@ pub(crate) fn lower_opt_chain_expr(
                 bindings,
             ))
         }
+    }
+}
+
+/// Where an optional call stands: a method call (`a?.b()`, `a.b?.()`,
+/// `a?.[k]()`) at its callee member read's token (the call and that read
+/// are two kinds there), any other call at the chain's start.
+fn optional_call_at(callee: &Expr, start: u32) -> u32 {
+    match callee {
+        Expr::PropertyGet { byte_offset, .. } | Expr::IndexGet { byte_offset, .. } => *byte_offset,
+        _ => start,
     }
 }

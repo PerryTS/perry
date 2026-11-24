@@ -1065,7 +1065,8 @@ impl Gen<'_> {
                 "namespace"
             }
         } else if start == 0 {
-            "synthesized"
+            // No source position: a lowering gap, not a kind of site.
+            "unlocated"
         } else if end == 0 {
             "transformed"
         } else {
@@ -1090,10 +1091,13 @@ impl Gen<'_> {
     }
 }
 
-/// The HIR sites this analysis recorded: address, kind, start.
-pub(crate) fn recorded(g: &Gen) -> Vec<(usize, &'static str, u32)> {
+/// The HIR sites this analysis recorded: address, module path, kind, start.
+pub(crate) fn recorded(g: &Gen) -> Vec<(usize, String, &'static str, u32)> {
     g.diagnostic.as_ref().map_or_else(Vec::new, |d| {
-        d.sites.iter().map(|s| (s.addr, s.kind, s.start)).collect()
+        d.sites
+            .iter()
+            .map(|s| (s.addr, g.modules[s.module as usize].0.to_owned(), s.kind, s.start))
+            .collect()
     })
 }
 

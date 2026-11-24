@@ -20,7 +20,7 @@ pub(crate) fn rewrite_state_in_stmt(stmt: &mut Stmt, reg: &HashMap<LocalId, Stat
     match stmt {
         Stmt::Expr(e) => rewrite_state_in_expr(e, reg),
         Stmt::Let { init: Some(e), .. } => rewrite_state_in_expr(e, reg),
-        Stmt::Return(Some(e)) => rewrite_state_in_expr(e, reg),
+        Stmt::Return(Some(e), _) => rewrite_state_in_expr(e, reg),
         Stmt::If {
             condition,
             then_branch,
@@ -66,7 +66,13 @@ pub(crate) fn rewrite_state_in_stmt(stmt: &mut Stmt, reg: &HashMap<LocalId, Stat
 
 pub(crate) fn rewrite_state_in_expr(e: &mut Expr, reg: &HashMap<LocalId, StateBinding>) {
     // Detect `state.set(v)` first (most specific shape).
-    if let Expr::Call { callee, args, .. } = e {
+    if let Expr::Call {
+        callee,
+        args,
+        byte_offset,
+        ..
+    } = e
+    {
         if args.len() == 1 {
             if let Expr::PropertyGet {
                 object, property, ..
@@ -77,6 +83,7 @@ pub(crate) fn rewrite_state_in_expr(e: &mut Expr, reg: &HashMap<LocalId, StateBi
                         if let Some(binding) = reg.get(state_id) {
                             let value_expr = args[0].clone();
                             *e = Expr::NativeMethodCall {
+                                byte_offset: *byte_offset,
                                 module: "perry/ui".to_string(),
                                 class_name: None,
                                 object: None,
@@ -129,7 +136,7 @@ pub(crate) fn rewrite_state_in_expr(e: &mut Expr, reg: &HashMap<LocalId, StateBi
             rewrite_state_in_expr(object, reg);
             rewrite_state_in_expr(value, reg);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             rewrite_state_in_expr(object, reg);
             rewrite_state_in_expr(index, reg);
         }

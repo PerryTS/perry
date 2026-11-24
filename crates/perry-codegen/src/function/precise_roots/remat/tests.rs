@@ -241,6 +241,7 @@ fn a_const_string_local_across_an_allocation_is_reloaded_from_its_handle() {
     let _native = crate::codegen::helpers::NativeRootsPin::native();
     let mut hir = HirModule::new("remat_hir");
     hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "build".to_string(),
         type_params: Vec::new(),
@@ -261,10 +262,13 @@ fn a_const_string_local_across_an_allocation_is_reloaded_from_its_handle() {
                 mutable: false,
                 init: Some(Expr::Object(vec![("a".to_string(), Expr::Number(1.0))])),
             },
-            Stmt::Return(Some(Expr::Array(
-                vec![Expr::LocalGet(1), Expr::LocalGet(2)],
-                None,
-            ))),
+            Stmt::Return(
+                Some(Expr::Array(
+                    vec![Expr::LocalGet(1), Expr::LocalGet(2)],
+                    None,
+                )),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,

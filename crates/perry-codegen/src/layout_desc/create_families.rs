@@ -256,6 +256,7 @@ impl Analysis<'_> {
                 op: BinaryOp::Add,
                 left,
                 right,
+                ..
             } => {
                 let mut s = self.str_const(left)?;
                 s.push_str(&self.str_const(right)?);
@@ -990,7 +991,7 @@ fn literal_iife(a: &Analysis<'_>, callee: &Expr, args: &[Expr], lit: &mut Lit) -
                     _ => return None,
                 }
             }
-            Stmt::Return(Some(Expr::LocalGet(x))) if *x == o && i + 1 == body.len() => {
+            Stmt::Return(Some(Expr::LocalGet(x)), _) if *x == o && i + 1 == body.len() => {
                 return Some(());
             }
             _ => return None,

@@ -242,7 +242,7 @@ fn binding_of(expr: &Expr) -> Option<Binding> {
 /// The array binding an element read `a[i]` / `a.at(i)` reads from.
 fn indexed_array(expr: &Expr) -> Option<Binding> {
     match expr {
-        Expr::IndexGet { object, .. } => binding_of(object),
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => binding_of(object),
         Expr::ArrayAt { array, .. } => binding_of(array),
         _ => None,
     }
@@ -346,7 +346,7 @@ fn visit_stmt<'a>(
 ) {
     stmt(s);
     match s {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 visit_expr(e, home, stmt, expr);
             }
@@ -398,6 +398,7 @@ fn visit_stmt<'a>(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             visit_expr(discriminant, home, stmt, expr);
             for c in cases {

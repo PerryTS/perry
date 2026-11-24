@@ -2,6 +2,7 @@
 
 use super::array_fast::{self, ArraySource};
 use super::*;
+use swc_common::Spanned;
 
 #[derive(Clone)]
 enum PreparedTarget {
@@ -20,8 +21,9 @@ fn fresh_destruct_local(ctx: &mut LoweringContext, prefix: &str, ty: Type) -> (L
     (id, name)
 }
 
-fn runtime_iterator_call(method: &str, args: Vec<Expr>) -> Expr {
+fn runtime_iterator_call(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,
@@ -30,7 +32,7 @@ fn runtime_iterator_call(method: &str, args: Vec<Expr>) -> Expr {
     }
 }
 
-fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
+fn extern_call(name: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -40,7 +42,7 @@ fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
         }),
         args,
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -52,7 +54,9 @@ pub(crate) fn lower_destructuring_assignment_stmt(
     // #10086: `[x, y] = [y, x]` and `[a, b] = <proven array>` do not need the
     // iterator protocol unless `Array.prototype[Symbol.iterator]` is patched.
     if let ast::AssignTargetPat::Array(arr_pat) = pat {
-        if let Some((mut result, plan)) = array_fast::plan_for_source(ctx, &arr_pat.elems, rhs)? {
+        if let Some((mut result, plan)) =
+            array_fast::plan_for_source(ctx, &arr_pat.elems, rhs, arr_pat.span.lo.0)?
+        {
             result.extend(lower_array_assignment_from_expr(
                 ctx,
                 arr_pat,
@@ -119,7 +123,7 @@ fn lower_array_assignment_from_expr(
             name: next_name,
             ty: Type::Any,
             mutable: false,
-            init: Some(source.next_init(iter_id)),
+            init: Some(source.next_init(iter_id, arr_pat.span.lo.0)),
         },
         Stmt::Let {
             id: done_id,
@@ -155,7 +159,15 @@ fn lower_array_assignment_from_expr(
                 done_id,
                 Box::new(Expr::Bool(true)),
             )));
-            body.extend(source.rest(ctx, rest_id, rest_name, iter_id, next_id, rest_done_id));
+            body.extend(source.rest(
+                ctx,
+                rest_id,
+                rest_name,
+                iter_id,
+                next_id,
+                rest_done_id,
+                arr_pat.span.lo.0,
+            ));
             body.push(Stmt::Expr(Expr::LocalSet(
                 done_id,
                 Box::new(Expr::Bool(true)),
@@ -180,12 +192,28 @@ fn lower_array_assignment_from_expr(
         if let Some(elem_pat) = elem {
             let (prepare, target, default_value) = prepare_target_with_default(ctx, elem_pat)?;
             body.extend(prepare);
-            let pull = iterator_next_value_stmts(ctx, iter_id, next_id, done_id, value_id, true);
+            let pull = iterator_next_value_stmts(
+                ctx,
+                iter_id,
+                next_id,
+                done_id,
+                value_id,
+                true,
+                arr_pat.span.lo.0,
+            );
             body.extend(source.pull(idx, value_id, pull));
             let assigned = value_with_default(ctx, Expr::LocalGet(value_id), default_value)?;
             body.extend(assign_prepared_target(ctx, target, assigned)?);
         } else {
-            let pull = iterator_next_value_stmts(ctx, iter_id, next_id, done_id, value_id, false);
+            let pull = iterator_next_value_stmts(
+                ctx,
+                iter_id,
+                next_id,
+                done_id,
+                value_id,
+                false,
+                arr_pat.span.lo.0,
+            );
             body.extend(source.pull(idx, value_id, pull));
         }
     }
@@ -193,9 +221,11 @@ fn lower_array_assignment_from_expr(
     let close_stmt = source.close(Stmt::Expr(runtime_iterator_call(
         "iteratorCloseIfNotDone",
         vec![Expr::LocalGet(iter_id), Expr::LocalGet(done_id)],
+        arr_pat.span.lo.0,
     )));
     let (exc_id, exc_name) = fresh_destruct_local(ctx, "destruct_error", Type::Any);
     result.push(Stmt::Try {
+        byte_offset: arr_pat.span.lo.0,
         body,
         catch: Some(CatchClause {
             param: Some((exc_id, exc_name)),
@@ -207,6 +237,7 @@ fn lower_array_assignment_from_expr(
                         Expr::LocalGet(done_id),
                         Expr::LocalGet(exc_id),
                     ],
+                    arr_pat.span.lo.0,
                 ))),
                 Stmt::Throw(Expr::LocalGet(exc_id)),
             ],
@@ -227,6 +258,7 @@ fn iterator_next_value_stmts(
     done_id: LocalId,
     value_id: LocalId,
     read_value: bool,
+    byte_offset: u32,
 ) -> Vec<Stmt> {
     let (step_id, step_name) = fresh_destruct_local(ctx, "destruct_step", Type::Boolean);
     let mut pull_next = vec![
@@ -243,6 +275,7 @@ fn iterator_next_value_stmts(
                     Expr::LocalSet(
                         value_id,
                         Box::new(Expr::NativeMethodCall {
+                            byte_offset,
                             module: "__perry_runtime".into(),
                             class_name: None,
                             object: None,
@@ -252,10 +285,12 @@ fn iterator_next_value_stmts(
                     ),
                     Expr::Bool(read_value),
                 ],
+                byte_offset,
             )),
         },
         Stmt::If {
             condition: Expr::Compare {
+                byte_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(step_id)),
                 right: Box::new(Expr::Bool(true)),
@@ -288,6 +323,7 @@ fn iterator_next_value_stmts(
 
     vec![Stmt::If {
         condition: Expr::Compare {
+            byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(done_id)),
             right: Box::new(Expr::Bool(true)),
@@ -343,7 +379,7 @@ fn lower_object_assignment_from_expr(
                     mutable: false,
                     init: Some(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: assign.span.lo.0,
                         object: Box::new(source.clone()),
                         property: name.clone(),
                     }),
@@ -356,8 +392,10 @@ fn lower_object_assignment_from_expr(
                     let read = Expr::LocalGet(value_id);
                     let assigned = match &assign.value {
                         Some(init) => Expr::Conditional {
+                            byte_offset: assign.span.lo.0,
                             condition: Box::new(super::pattern_binding::is_strictly_undefined(
                                 read.clone(),
+                                assign.span.lo.0,
                             )),
                             then_expr: Box::new(super::pattern_binding::lower_default_named(
                                 ctx,
@@ -411,7 +449,7 @@ fn lower_object_assignment_from_expr(
                     for key_id in &computed_key_temps {
                         result.push(Stmt::Expr(Expr::Delete(Box::new(Expr::IndexGet {
                             element_offset: 0,
-                            byte_offset: 0,
+                            byte_offset: rest.span.lo.0,
                             byte_end: 0,
                             object: Box::new(Expr::LocalGet(rest_id)),
                             index: Box::new(Expr::LocalGet(*key_id)),
@@ -443,7 +481,7 @@ fn object_property_get_expr(
             Vec::new(),
             Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: key.span().lo.0,
                 object: Box::new(source),
                 property: ident.sym.to_string(),
             },
@@ -452,7 +490,7 @@ fn object_property_get_expr(
             Vec::new(),
             Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: key.span().lo.0,
                 object: Box::new(source),
                 property: s.value.as_str().unwrap_or("").to_string(),
             },
@@ -461,7 +499,7 @@ fn object_property_get_expr(
             Vec::new(),
             Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: key.span().lo.0,
                 object: Box::new(source),
                 property: n.value.to_string(),
             },
@@ -470,6 +508,7 @@ fn object_property_get_expr(
             let key_expr = extern_call(
                 "js_object_literal_to_property_key",
                 vec![lower_expr(ctx, &computed.expr)?],
+                computed.span.lo.0,
             );
             let (key_id, key_name) = fresh_destruct_local(ctx, "destruct_key", Type::Any);
             computed_key_temps.push(key_id);
@@ -483,7 +522,7 @@ fn object_property_get_expr(
                 }],
                 Expr::IndexGet {
                     element_offset: 0,
-                    byte_offset: 0,
+                    byte_offset: computed.span.lo.0,
                     byte_end: 0,
                     object: Box::new(source),
                     index: Box::new(Expr::LocalGet(key_id)),
@@ -497,11 +536,12 @@ fn object_property_get_expr(
 fn prepare_target_with_default(
     ctx: &mut LoweringContext,
     pat: &ast::Pat,
-) -> Result<(Vec<Stmt>, PreparedTarget, Option<Expr>)> {
+) -> Result<(Vec<Stmt>, PreparedTarget, Option<(Expr, u32)>)> {
     if let ast::Pat::Assign(assign_pat) = pat {
         let (prepare, target, _) = prepare_assignment_target(ctx, &assign_pat.left)?;
         let default_value = lower_expr(ctx, &assign_pat.right)?;
-        return Ok((prepare, target, Some(default_value)));
+        // The default stands at its `target = default` element.
+        return Ok((prepare, target, Some((default_value, assign_pat.span.lo.0))));
     }
     let (prepare, target, default_value) = prepare_assignment_target(ctx, pat)?;
     Ok((prepare, target, default_value))
@@ -510,7 +550,7 @@ fn prepare_target_with_default(
 fn prepare_assignment_target(
     ctx: &mut LoweringContext,
     pat: &ast::Pat,
-) -> Result<(Vec<Stmt>, PreparedTarget, Option<Expr>)> {
+) -> Result<(Vec<Stmt>, PreparedTarget, Option<(Expr, u32)>)> {
     match pat {
         ast::Pat::Ident(ident) => {
             let name = ident.id.sym.to_string();
@@ -606,13 +646,14 @@ fn prepare_assignment_target(
 fn value_with_default(
     _ctx: &mut LoweringContext,
     value: Expr,
-    default_value: Option<Expr>,
+    default_value: Option<(Expr, u32)>,
 ) -> Result<Expr> {
-    let Some(default_value) = default_value else {
+    let Some((default_value, byte_offset)) = default_value else {
         return Ok(value);
     };
 
     Ok(Expr::Conditional {
+        byte_offset,
         condition: Box::new(Expr::IsUndefinedOrBareNan(Box::new(value.clone()))),
         then_expr: Box::new(default_value),
         else_expr: Box::new(value),
@@ -648,7 +689,7 @@ fn assign_prepared_target(
         })]),
         PreparedTarget::Array(arr) => {
             let mut setup = Vec::new();
-            let plan = array_fast::FastPlan::new(ctx, value, &mut setup);
+            let plan = array_fast::FastPlan::new(ctx, value, &mut setup, arr.span.lo.0);
             setup.extend(lower_array_assignment_from_expr(
                 ctx,
                 &arr,
@@ -771,7 +812,7 @@ mod iterator_close_tests {
         ) {
             assert!(
                 matches!(&body[rest + 2], Stmt::If {
-                condition: Expr::Compare { op: CompareOp::Eq, left, right }, ..
+                condition: Expr::Compare { op: CompareOp::Eq, left, right, .. }, ..
             } if matches!(left.as_ref(), Expr::LocalGet(id) if *id != done_id)
                 && matches!(right.as_ref(), Expr::Bool(true))),
                 "drain must test the saved pre-drain done bit"
@@ -840,6 +881,7 @@ mod shorthand_default_tests {
             condition,
             then_expr,
             else_expr,
+            ..
         } = stores[0]
         else {
             panic!("`{name}` must be assigned through its default, got a bare read");

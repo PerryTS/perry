@@ -7,7 +7,7 @@ use super::*;
 pub fn body_contains_super_call(stmts: &[Stmt]) -> bool {
     fn check_expr(expr: &Expr) -> bool {
         match expr {
-            Expr::SuperCall(_) | Expr::SuperMethodCall { .. } => true,
+            Expr::SuperCall(_, _) | Expr::SuperMethodCall { .. } => true,
             Expr::Binary { left, right, .. }
             | Expr::Logical { left, right, .. }
             | Expr::Compare { left, right, .. } => check_expr(left) || check_expr(right),
@@ -16,10 +16,13 @@ pub fn body_contains_super_call(stmts: &[Stmt]) -> bool {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => check_expr(condition) || check_expr(then_expr) || check_expr(else_expr),
             Expr::Call { callee, args, .. } => check_expr(callee) || args.iter().any(check_expr),
             Expr::Array(elements, _) => elements.iter().any(check_expr),
-            Expr::IndexGet { object, index, .. } => check_expr(object) || check_expr(index),
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+                check_expr(object) || check_expr(index)
+            }
             Expr::IndexSet {
                 object,
                 index,
@@ -38,7 +41,7 @@ pub fn body_contains_super_call(stmts: &[Stmt]) -> bool {
             Stmt::Let {
                 init: Some(expr), ..
             } => check_expr(expr),
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => check_expr(expr),
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => check_expr(expr),
             Stmt::If {
                 condition,
                 then_branch,
@@ -115,7 +118,7 @@ pub fn body_references_dynamic_this(stmts: &[Stmt]) -> bool {
         match stmt {
             Stmt::Let { init, .. } => init.as_ref().is_some_and(check_expr),
             Stmt::Expr(expr) | Stmt::Throw(expr) => check_expr(expr),
-            Stmt::Return(expr) => expr.as_ref().is_some_and(check_expr),
+            Stmt::Return(expr, _) => expr.as_ref().is_some_and(check_expr),
             Stmt::If {
                 condition,
                 then_branch,
@@ -174,7 +177,7 @@ pub fn method_body_blocks_this_substitution(stmts: &[Stmt]) -> bool {
         match stmt {
             Stmt::Let { init, .. } => init.as_ref().is_some_and(check_expr),
             Stmt::Expr(expr) | Stmt::Throw(expr) => check_expr(expr),
-            Stmt::Return(expr) => expr.as_ref().is_some_and(check_expr),
+            Stmt::Return(expr, _) => expr.as_ref().is_some_and(check_expr),
             Stmt::If {
                 condition,
                 then_branch,
@@ -296,8 +299,8 @@ pub fn collect_closure_captured_local_ids(
     fn visit_stmt(s: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
         match s {
             Stmt::Let { init: Some(e), .. } => visit_expr(e, out),
-            Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => visit_expr(e, out),
-            Stmt::Return(None) => {}
+            Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => visit_expr(e, out),
+            Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,
@@ -341,6 +344,7 @@ pub fn collect_closure_captured_local_ids(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 visit_expr(discriminant, out);
                 for case in cases {
@@ -408,8 +412,8 @@ pub fn collect_mutated_local_ids(stmts: &[Stmt], out: &mut std::collections::Has
     fn visit_stmt(s: &Stmt, out: &mut std::collections::HashSet<LocalId>) {
         match s {
             Stmt::Let { init: Some(e), .. } => visit_expr(e, out),
-            Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => visit_expr(e, out),
-            Stmt::Return(None) => {}
+            Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => visit_expr(e, out),
+            Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,
@@ -453,6 +457,7 @@ pub fn collect_mutated_local_ids(stmts: &[Stmt], out: &mut std::collections::Has
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 visit_expr(discriminant, out);
                 for case in cases {
@@ -526,6 +531,7 @@ pub fn is_pure_function(func: &Function) -> bool {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 expr_is_pure(condition, known)
                     && expr_is_pure(then_expr, known)
@@ -535,7 +541,7 @@ pub fn is_pure_function(func: &Function) -> bool {
                 expr_is_pure(callee, known) && args.iter().all(|a| expr_is_pure(a, known))
             }
             Expr::Array(elems, _) => elems.iter().all(|e| expr_is_pure(e, known)),
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 expr_is_pure(object, known) && expr_is_pure(index, known)
             }
             Expr::IndexSet {
@@ -570,8 +576,8 @@ pub fn is_pure_function(func: &Function) -> bool {
         match s {
             Stmt::Let { init: Some(e), .. } => expr_is_pure(e, known),
             Stmt::Let { init: None, .. } => true,
-            Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => expr_is_pure(e, known),
-            Stmt::Return(None) => true,
+            Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => expr_is_pure(e, known),
+            Stmt::Return(None, _) => true,
             Stmt::If {
                 condition,
                 then_branch,
@@ -616,7 +622,7 @@ pub fn has_simple_control_flow(stmts: &[Stmt]) -> bool {
             // `if (!cond) { throw new Error(...) }` — without inlining,
             // the assertion is an unconditional cross-module dispatch
             // per call.
-            Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Return(_) | Stmt::Throw(_) => {}
+            Stmt::Let { .. } | Stmt::Expr(_) | Stmt::Return(_, _) | Stmt::Throw(_) => {}
             Stmt::If {
                 then_branch,
                 else_branch,
@@ -725,10 +731,10 @@ pub fn find_max_local_id(stmts: &[Stmt]) -> LocalId {
                     check_expr(expr, max_id);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 check_expr(expr, max_id);
             }
-            Stmt::Return(None) => {}
+            Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,
@@ -804,6 +810,7 @@ pub fn find_max_local_id(stmts: &[Stmt]) -> LocalId {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 check_expr(discriminant, max_id);
                 for case in cases {
@@ -842,6 +849,7 @@ mod tests {
 
     fn param(id: LocalId) -> Param {
         Param {
+            byte_offset: 0,
             id,
             name: format!("p{id}"),
             ty: Type::Any,
@@ -854,11 +862,12 @@ mod tests {
 
     fn capturing_closure(func_id: u32, capture: LocalId, body_param: LocalId) -> Expr {
         Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: vec![param(body_param)],
             return_type: Type::Any,
             // Body reads the captured local — what makes it a real capture.
-            body: vec![Stmt::Return(Some(Expr::LocalGet(capture)))],
+            body: vec![Stmt::Return(Some(Expr::LocalGet(capture)), 0)],
             captures: vec![capture],
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -886,10 +895,13 @@ mod tests {
         // function f(allCaps) {
         //   return xs.filter((t) => can({ caps: allCaps }, t));  // captures allCaps
         // }
-        let body = vec![Stmt::Return(Some(Expr::ArrayFilter {
-            array: Box::new(Expr::LocalGet(99)),
-            callback: Box::new(capturing_closure(7, 1, 2)),
-        }))];
+        let body = vec![Stmt::Return(
+            Some(Expr::ArrayFilter {
+                array: Box::new(Expr::LocalGet(99)),
+                callback: Box::new(capturing_closure(7, 1, 2)),
+            }),
+            0,
+        )];
         let param_ids: HashSet<LocalId> = [1].into_iter().collect();
         assert!(
             body_contains_closure_capturing(&body, &param_ids),
@@ -900,10 +912,13 @@ mod tests {
     // Same hazard via the other array-iteration node the old walker missed.
     #[test]
     fn detects_capture_inside_array_map_callback() {
-        let body = vec![Stmt::Return(Some(Expr::ArrayMap {
-            array: Box::new(Expr::LocalGet(99)),
-            callback: Box::new(capturing_closure(7, 1, 2)),
-        }))];
+        let body = vec![Stmt::Return(
+            Some(Expr::ArrayMap {
+                array: Box::new(Expr::LocalGet(99)),
+                callback: Box::new(capturing_closure(7, 1, 2)),
+            }),
+            0,
+        )];
         let param_ids: HashSet<LocalId> = [1].into_iter().collect();
         assert!(body_contains_closure_capturing(&body, &param_ids));
     }
@@ -912,11 +927,14 @@ mod tests {
     // param-capture check (avoids over-rejecting inline candidates).
     #[test]
     fn ignores_closure_not_capturing_any_param() {
-        let body = vec![Stmt::Return(Some(Expr::ArrayFilter {
-            array: Box::new(Expr::LocalGet(99)),
-            // Captures id 5, but we only ask about param id 1.
-            callback: Box::new(capturing_closure(7, 5, 2)),
-        }))];
+        let body = vec![Stmt::Return(
+            Some(Expr::ArrayFilter {
+                array: Box::new(Expr::LocalGet(99)),
+                // Captures id 5, but we only ask about param id 1.
+                callback: Box::new(capturing_closure(7, 5, 2)),
+            }),
+            0,
+        )];
         let param_ids: HashSet<LocalId> = [1].into_iter().collect();
         assert!(!body_contains_closure_capturing(&body, &param_ids));
     }
@@ -924,13 +942,16 @@ mod tests {
     // The pre-existing direct-Call path must keep working.
     #[test]
     fn detects_capture_inside_plain_call_arg() {
-        let body = vec![Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::LocalGet(50)),
-            args: vec![capturing_closure(7, 1, 2)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }))];
+        let body = vec![Stmt::Return(
+            Some(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(Expr::LocalGet(50)),
+                args: vec![capturing_closure(7, 1, 2)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            0,
+        )];
         let param_ids: HashSet<LocalId> = [1].into_iter().collect();
         assert!(body_contains_closure_capturing(&body, &param_ids));
     }
@@ -1000,7 +1021,7 @@ pub fn collect_declared_local_ids(stmts: &[Stmt], out: &mut std::collections::Ha
                 }
             }
             Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Throw(_)
             | Stmt::Break
             | Stmt::Continue

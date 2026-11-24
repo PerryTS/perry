@@ -177,6 +177,7 @@ fn known_string(expr: &Expr, known: &HashMap<LocalId, String>) -> Option<String>
             op: perry_hir::BinaryOp::Add,
             left,
             right,
+            ..
         } => {
             let mut text = known_string(left, known)?;
             text.push_str(&known_string(right, known)?);
@@ -240,7 +241,7 @@ fn walk_stmt_exprs(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         Stmt::Let { init: Some(e), .. }
         | Stmt::Expr(e)
         | Stmt::Throw(e)
-        | Stmt::Return(Some(e)) => f(e),
+        | Stmt::Return(Some(e), _) => f(e),
         Stmt::If {
             condition,
             then_branch,
@@ -284,6 +285,7 @@ fn walk_stmt_exprs(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for case in cases {
@@ -557,7 +559,15 @@ fn rewrite_stmt(stmt: &mut Stmt, consts: &HashMap<LocalId, String>, visible: &Ha
 }
 
 fn rewrite_expr(expr: &mut Expr, consts: &HashMap<LocalId, String>, visible: &HashSet<LocalId>) {
-    if let Expr::IndexGet { object, index, .. } = expr {
+    if let Expr::IndexGet {
+        object,
+        index,
+        byte_offset,
+        byte_end,
+        ..
+    } = expr
+    {
+        let (byte_offset, byte_end) = (*byte_offset, *byte_end);
         let property = match index.as_ref() {
             Expr::String(key) if !is_numeric_index_string(key) => Some(key.clone()),
             Expr::LocalGet(id) if visible.contains(id) => consts
@@ -573,14 +583,11 @@ fn rewrite_expr(expr: &mut Expr, consts: &HashMap<LocalId, String>, visible: &Ha
             // obligation: `o[k]` evaluates `o` then `k`, and `k` is already a
             // value.
             let object = std::mem::replace(object.as_mut(), Expr::Integer(0));
+            // The read is the `IndexGet` it replaces: it stands at that
+            // member's offset.
             *expr = Expr::PropertyGet {
-                byte_end: 0,
-                // Synthesized: the literal was not written at a source span
-                // (phase 1 substituted it), so there is no member offset to
-                // carry. `0` is the established "no debug location" value on
-                // this node, and the `IndexGet` this replaces carried none
-                // either.
-                byte_offset: 0,
+                byte_end,
+                byte_offset,
                 object: Box::new(object),
                 property,
             };
@@ -612,6 +619,7 @@ mod string_initializer_tests {
 
     fn template(binding: u32, tail: &str) -> Expr {
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::TemplateStringCoerce(Box::new(Expr::LocalGet(
                 binding,
@@ -657,6 +665,7 @@ mod string_initializer_tests {
                 7,
                 false,
                 Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::TemplateStringCoerce(Box::new(Expr::Integer(1)))),
                     right: Box::new(Expr::String("x".into())),
@@ -681,10 +690,12 @@ mod tests {
 
     fn func(id: u32, body: Vec<Stmt>) -> Function {
         Function {
+            byte_offset: 0,
             id,
             name: format!("f{id}"),
             type_params: Vec::new(),
             params: vec![Param {
+                byte_offset: 0,
                 id: 8,
                 name: "x".to_string(),
                 ty: Type::Number,
@@ -708,11 +719,15 @@ mod tests {
     }
 
     fn le_const(const_id: u32) -> Stmt {
-        Stmt::Return(Some(Expr::Compare {
-            op: CompareOp::Le,
-            left: Box::new(Expr::LocalGet(8)),
-            right: Box::new(Expr::LocalGet(const_id)),
-        }))
+        Stmt::Return(
+            Some(Expr::Compare {
+                byte_offset: 0,
+                op: CompareOp::Le,
+                left: Box::new(Expr::LocalGet(8)),
+                right: Box::new(Expr::LocalGet(const_id)),
+            }),
+            0,
+        )
     }
 
     /// #11826: the binding operand of a TDZ check tests the binding's slot; a
@@ -722,13 +737,16 @@ mod tests {
         let mut m = module_with_const(false, Expr::Integer(1023));
         m.functions = vec![func(
             1,
-            vec![Stmt::Return(Some(Expr::Sequence(vec![
-                perry_hir::tdz_check::check(3, "COMPONENT_ID_MAX"),
-                Expr::LocalGet(3),
-            ])))],
+            vec![Stmt::Return(
+                Some(Expr::Sequence(vec![
+                    perry_hir::tdz_check::check(3, "COMPONENT_ID_MAX", 0),
+                    Expr::LocalGet(3),
+                ])),
+                0,
+            )],
         )];
         run(&mut m);
-        let Stmt::Return(Some(Expr::Sequence(parts))) = &m.functions[0].body[0] else {
+        let Stmt::Return(Some(Expr::Sequence(parts)), _) = &m.functions[0].body[0] else {
             panic!("{:?}", m.functions[0].body)
         };
         assert_eq!(
@@ -759,7 +777,7 @@ mod tests {
         assert!(
             matches!(
                 &m.functions[0].body[0],
-                Stmt::Return(Some(Expr::Compare { right, .. }))
+                Stmt::Return(Some(Expr::Compare { right, .. }), _)
                     if matches!(right.as_ref(), Expr::Integer(1023))
             ),
             "{:?}",
@@ -773,11 +791,12 @@ mod tests {
         run(&mut m);
         assert!(matches!(
             &m.functions[0].body[0],
-            Stmt::Return(Some(Expr::Compare { right, .. })) if matches!(right.as_ref(), Expr::LocalGet(3))
+            Stmt::Return(Some(Expr::Compare { right, .. }), _) if matches!(right.as_ref(), Expr::LocalGet(3))
         ));
         let mut m = module_with_const(
             false,
             Expr::Binary {
+                byte_offset: 0,
                 op: perry_hir::BinaryOp::Mul,
                 left: Box::new(Expr::Integer(2)),
                 right: Box::new(Expr::Integer(3)),
@@ -786,7 +805,7 @@ mod tests {
         run(&mut m);
         assert!(matches!(
             &m.functions[0].body[0],
-            Stmt::Return(Some(Expr::Compare { right, .. })) if matches!(right.as_ref(), Expr::LocalGet(3))
+            Stmt::Return(Some(Expr::Compare { right, .. }), _) if matches!(right.as_ref(), Expr::LocalGet(3))
         ));
     }
 
@@ -803,31 +822,35 @@ mod tests {
     #[test]
     fn a_closure_reading_the_constant_drops_it_from_its_captures() {
         let mut m = module_with_const(false, Expr::Integer(5));
-        m.functions[0].body = vec![Stmt::Return(Some(Expr::Closure {
-            func_id: 77,
-            params: Vec::new(),
-            return_type: Type::Boolean,
-            body: vec![le_const(3)],
-            captures: vec![3],
-            mutable_captures: Vec::new(),
-            captures_this: false,
-            captures_new_target: false,
-            construct_only: false,
-            enclosing_class: None,
-            is_arrow: true,
-            is_async: false,
-            is_generator: false,
-            is_strict: true,
-        }))];
+        m.functions[0].body = vec![Stmt::Return(
+            Some(Expr::Closure {
+                byte_offset: 0,
+                func_id: 77,
+                params: Vec::new(),
+                return_type: Type::Boolean,
+                body: vec![le_const(3)],
+                captures: vec![3],
+                mutable_captures: Vec::new(),
+                captures_this: false,
+                captures_new_target: false,
+                construct_only: false,
+                enclosing_class: None,
+                is_arrow: true,
+                is_async: false,
+                is_generator: false,
+                is_strict: true,
+            }),
+            0,
+        )];
         run(&mut m);
-        let Stmt::Return(Some(Expr::Closure { body, captures, .. })) = &m.functions[0].body[0]
+        let Stmt::Return(Some(Expr::Closure { body, captures, .. }), _) = &m.functions[0].body[0]
         else {
             panic!("closure expected");
         };
         assert!(captures.is_empty(), "{captures:?}");
         assert!(matches!(
             &body[0],
-            Stmt::Return(Some(Expr::Compare { right, .. })) if matches!(right.as_ref(), Expr::Integer(5))
+            Stmt::Return(Some(Expr::Compare { right, .. }), _) if matches!(right.as_ref(), Expr::Integer(5))
         ));
     }
 
@@ -849,18 +872,24 @@ mod tests {
         });
         m.functions.push(func(
             1,
-            vec![Stmt::Return(Some(Expr::IndexGet {
-                element_offset: 0,
-                byte_offset: 0,
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(8)),
-                index: Box::new(Expr::LocalGet(3)),
-            }))],
+            vec![Stmt::Return(
+                Some(Expr::IndexGet {
+                    element_offset: 0,
+                    byte_offset: 0,
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(8)),
+                    index: Box::new(Expr::LocalGet(3)),
+                }),
+                0,
+            )],
         ));
         run(&mut m);
-        let Stmt::Return(Some(Expr::PropertyGet {
-            object, property, ..
-        })) = &m.functions[0].body[0]
+        let Stmt::Return(
+            Some(Expr::PropertyGet {
+                object, property, ..
+            }),
+            _,
+        ) = &m.functions[0].body[0]
         else {
             panic!("expected a PropertyGet, got {:?}", m.functions[0].body[0]);
         };
@@ -885,19 +914,22 @@ mod tests {
             let mut m = Module::new("k.ts");
             m.functions.push(func(
                 1,
-                vec![Stmt::Return(Some(Expr::IndexGet {
-                    element_offset: 0,
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(8)),
-                    index: Box::new(Expr::String(key.to_string())),
-                }))],
+                vec![Stmt::Return(
+                    Some(Expr::IndexGet {
+                        element_offset: 0,
+                        byte_offset: 0,
+                        byte_end: 0,
+                        object: Box::new(Expr::LocalGet(8)),
+                        index: Box::new(Expr::String(key.to_string())),
+                    }),
+                    0,
+                )],
             ));
             run(&mut m);
             assert!(
                 matches!(
                     &m.functions[0].body[0],
-                    Stmt::Return(Some(Expr::IndexGet { .. }))
+                    Stmt::Return(Some(Expr::IndexGet { .. } | Expr::RegionOut { .. }), _)
                 ),
                 "key {key:?} must stay an IndexGet, got {:?}",
                 m.functions[0].body[0]
@@ -914,19 +946,22 @@ mod tests {
             let mut m = Module::new("k.ts");
             m.functions.push(func(
                 1,
-                vec![Stmt::Return(Some(Expr::IndexGet {
-                    element_offset: 0,
-                    byte_offset: 0,
-                    byte_end: 0,
-                    object: Box::new(Expr::LocalGet(8)),
-                    index: Box::new(Expr::String(key.to_string())),
-                }))],
+                vec![Stmt::Return(
+                    Some(Expr::IndexGet {
+                        element_offset: 0,
+                        byte_offset: 0,
+                        byte_end: 0,
+                        object: Box::new(Expr::LocalGet(8)),
+                        index: Box::new(Expr::String(key.to_string())),
+                    }),
+                    0,
+                )],
             ));
             run(&mut m);
             assert!(
                 matches!(
                     &m.functions[0].body[0],
-                    Stmt::Return(Some(Expr::PropertyGet { property, .. })) if property == key
+                    Stmt::Return(Some(Expr::PropertyGet { property, .. }), _) if property == key
                 ),
                 "key {key:?} must fold, got {:?}",
                 m.functions[0].body[0]
@@ -977,7 +1012,7 @@ mod tests {
     }
 
     fn is_property_get(stmt: &Stmt, name: &str) -> bool {
-        matches!(stmt, Stmt::Return(Some(Expr::PropertyGet { property, .. })) | Stmt::Expr(Expr::PropertyGet { property, .. }) if property == name)
+        matches!(stmt, Stmt::Return(Some(Expr::PropertyGet { property, .. }), _) | Stmt::Expr(Expr::PropertyGet { property, .. }) if property == name)
     }
 
     /// `function f(o) { const K = "c"; return o[K]; }` reads `o.c`.
@@ -986,7 +1021,7 @@ mod tests {
         let mut m = Module::new("k.ts");
         m.functions.push(func(
             1,
-            vec![local_const_k(5, "c"), Stmt::Return(Some(read_k(5)))],
+            vec![local_const_k(5, "c"), Stmt::Return(Some(read_k(5)), 0)],
         ));
         run(&mut m);
         assert!(
@@ -1005,10 +1040,11 @@ mod tests {
     fn a_local_const_key_read_before_its_declaration_keeps_its_tdz() {
         let mut m = Module::new("k.ts");
         let closure = Expr::Closure {
+            byte_offset: 0,
             func_id: 78,
             params: Vec::new(),
             return_type: Type::Number,
-            body: vec![Stmt::Return(Some(read_k(5)))],
+            body: vec![Stmt::Return(Some(read_k(5)), 0)],
             captures: vec![5],
             mutable_captures: Vec::new(),
             captures_this: false,
@@ -1037,7 +1073,10 @@ mod tests {
         run(&mut m);
         let body = &m.functions[0].body;
         assert!(
-            matches!(&body[0], Stmt::Expr(Expr::IndexGet { .. })),
+            matches!(
+                &body[0],
+                Stmt::Expr(Expr::IndexGet { .. } | Expr::RegionOut { .. })
+            ),
             "{:?}",
             body[0]
         );
@@ -1045,7 +1084,10 @@ mod tests {
             panic!("closure expected");
         };
         assert!(
-            matches!(&early[0], Stmt::Return(Some(Expr::IndexGet { .. }))),
+            matches!(
+                &early[0],
+                Stmt::Return(Some(Expr::IndexGet { .. } | Expr::RegionOut { .. }), _)
+            ),
             "{early:?}"
         );
         let Stmt::If { then_branch, .. } = &body[3] else {
@@ -1068,6 +1110,7 @@ mod tests {
     #[test]
     fn a_written_mutable_or_index_local_key_is_left_alone() {
         let write_in_closure = Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 79,
             params: Vec::new(),
             return_type: Type::Void,
@@ -1104,18 +1147,21 @@ mod tests {
             vec![
                 local_const_k(5, "c"),
                 write_in_closure,
-                Stmt::Return(Some(read_k(5))),
+                Stmt::Return(Some(read_k(5)), 0),
             ],
-            vec![mutable, Stmt::Return(Some(read_k(5)))],
-            vec![computed, Stmt::Return(Some(read_k(5)))],
-            vec![local_const_k(5, "0"), Stmt::Return(Some(read_k(5)))],
+            vec![mutable, Stmt::Return(Some(read_k(5)), 0)],
+            vec![computed, Stmt::Return(Some(read_k(5)), 0)],
+            vec![local_const_k(5, "0"), Stmt::Return(Some(read_k(5)), 0)],
         ] {
             let mut m = Module::new("k.ts");
             m.functions.push(func(1, body));
             run(&mut m);
             let last = m.functions[0].body.last().unwrap();
             assert!(
-                matches!(last, Stmt::Return(Some(Expr::IndexGet { .. }))),
+                matches!(
+                    last,
+                    Stmt::Return(Some(Expr::IndexGet { .. } | Expr::RegionOut { .. }), _)
+                ),
                 "{last:?}"
             );
         }

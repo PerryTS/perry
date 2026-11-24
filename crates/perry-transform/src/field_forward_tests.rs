@@ -6,6 +6,7 @@ const V: u32 = 2;
 
 fn function(name: &str, body: Vec<Stmt>) -> Function {
     Function {
+        byte_offset: 0,
         id: 1,
         name: name.into(),
         type_params: vec![],
@@ -26,6 +27,7 @@ fn function(name: &str, body: Vec<Stmt>) -> Function {
 
 fn field(name: &str) -> ClassField {
     ClassField {
+        byte_offset: 0,
         origin: ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -204,10 +206,11 @@ fn a_use_of_the_owner_in_another_body_keeps_everything() {
 #[test]
 fn a_captured_owner_keeps_everything() {
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 9,
         params: vec![],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(get("p")))],
+        body: vec![Stmt::Return(Some(get("p")), 0)],
         captures: vec![B],
         mutable_captures: vec![],
         captures_this: false,

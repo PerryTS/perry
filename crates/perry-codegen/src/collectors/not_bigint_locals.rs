@@ -109,6 +109,7 @@ impl NotBigIntFacts {
                     | BinaryOp::Shr,
                 left,
                 right,
+                ..
             } => self.expr_is_not_bigint(left) || self.expr_is_not_bigint(right),
             Expr::Unary {
                 op: UnaryOp::BitNot,
@@ -217,7 +218,9 @@ fn expr_not_bigint(
             super::uint8array_get_reads_a_byte(index, &mut |id| numeric_locals.contains(&id))
         }
         Expr::BufferIndexGet { .. } => true,
-        Expr::IndexGet { object, .. } => index_receiver_is_numeric(object, types),
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
+            index_receiver_is_numeric(object, types)
+        }
 
         // `!x` → boolean; `+x` → Number-or-throw (never a BigInt VALUE).
         // `-x` / `~x` preserve BigInt.
@@ -312,7 +315,7 @@ pub(super) fn collect_writes<'a>(
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => collect_writes_expr(e, writes, candidates),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     collect_writes_expr(e, writes, candidates);
                 }
@@ -373,6 +376,7 @@ pub(super) fn collect_writes<'a>(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 collect_writes_expr(discriminant, writes, candidates);
                 for case in cases {
@@ -433,6 +437,7 @@ mod tests {
 
     fn xor(l: Expr, r: Expr) -> Expr {
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::BitXor,
             left: Box::new(l),
             right: Box::new(r),

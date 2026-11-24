@@ -36,6 +36,7 @@ pub fn build_async_step_driver_direct(
     // states; runtime closure lifetime tracking defers publication for any
     // cell an escaped closure can still observe.
     release_ids: &[LocalId],
+    fn_offset: u32,
 ) -> Vec<Stmt> {
     // #691 Phase 2: step closure no longer captures itself. Body
     // uses `Expr::CurrentStepClosure` (reads INLINE_TRAP.current_step
@@ -69,25 +70,25 @@ pub fn build_async_step_driver_direct(
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: fn_offset,
             object: Box::new(promise_global()),
             property: "resolve".to_string(),
         }),
         args: vec![arg],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: fn_offset,
     };
     let promise_reject = |arg: Expr| Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: fn_offset,
             object: Box::new(promise_global()),
             property: "reject".to_string(),
         }),
         args: vec![arg],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: fn_offset,
     };
 
     // Rewrite every Return inside next_body to LabeledBreak(__step_done)
@@ -196,9 +197,10 @@ pub fn build_async_step_driver_direct(
     // re-runs these (idempotent) stores.
     let reject_arm: Vec<Stmt> = {
         let mut stmts = build_box_release_stmts(release_ids);
-        stmts.push(Stmt::Return(Some(promise_reject(Expr::LocalGet(
-            catch_e_id,
-        )))));
+        stmts.push(Stmt::Return(
+            Some(promise_reject(Expr::LocalGet(catch_e_id))),
+            fn_offset,
+        ));
         stmts
     };
     let resolve_arm: Vec<Stmt> = {
@@ -209,10 +211,13 @@ pub fn build_async_step_driver_direct(
         // promise_all_chains). The return value already lives in the
         // iter-result TLS slot, and a box release neither allocates nor
         // collects, so ordering the releases first cannot disturb it.
-        stmts.push(Stmt::Return(Some(Expr::AsyncStepDone {
-            value: Box::new(Expr::IterResultGetValue),
-            step_closure: Box::new(Expr::LocalGet(step_self_id)),
-        })));
+        stmts.push(Stmt::Return(
+            Some(Expr::AsyncStepDone {
+                value: Box::new(Expr::IterResultGetValue),
+                step_closure: Box::new(Expr::LocalGet(step_self_id)),
+            }),
+            fn_offset,
+        ));
         stmts
     };
 
@@ -248,10 +253,13 @@ pub fn build_async_step_driver_direct(
         },
         Stmt::If {
             condition: Expr::AsyncStepDeclined(Box::new(Expr::LocalGet(resumed_id))),
-            then_branch: vec![Stmt::Return(Some(Expr::AsyncStepChain {
-                value: Box::new(Expr::LocalGet(awaited_id)),
-                step_closure: Box::new(Expr::LocalGet(step_self_id)),
-            }))],
+            then_branch: vec![Stmt::Return(
+                Some(Expr::AsyncStepChain {
+                    value: Box::new(Expr::LocalGet(awaited_id)),
+                    step_closure: Box::new(Expr::LocalGet(step_self_id)),
+                }),
+                fn_offset,
+            )],
             else_branch: Some(vec![
                 Stmt::Expr(Expr::LocalSet(
                     value_param_id,
@@ -266,6 +274,7 @@ pub fn build_async_step_driver_direct(
     ];
     let mut resume_body = vec![
         Stmt::Try {
+            byte_offset: fn_offset,
             body: vec![labeled_loop],
             catch: Some(CatchClause {
                 param: Some((catch_e_id, "__step_catch_e".to_string())),
@@ -278,13 +287,16 @@ pub fn build_async_step_driver_direct(
                     // Use the step closure captured at entry so nested
                     // calls cannot disturb the TLS self-reference before
                     // the error re-entry path runs.
-                    Stmt::Return(Some(Expr::Call {
-                        byte_end: 0,
-                        callee: Box::new(Expr::LocalGet(step_self_id)),
-                        args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
-                        type_args: vec![],
-                        byte_offset: 0,
-                    })),
+                    Stmt::Return(
+                        Some(Expr::Call {
+                            byte_end: 0,
+                            callee: Box::new(Expr::LocalGet(step_self_id)),
+                            args: vec![Expr::LocalGet(catch_e_id), Expr::Bool(true)],
+                            type_args: vec![],
+                            byte_offset: fn_offset,
+                        }),
+                        fn_offset,
+                    ),
                 ],
             }),
             finally: None,
@@ -322,9 +334,11 @@ pub fn build_async_step_driver_direct(
     let step_mut_captures: Vec<LocalId> = next_mutable_captures;
 
     let step_closure = Expr::Closure {
+        byte_offset: fn_offset,
         func_id: step_func_id,
         params: vec![
             perry_hir::Param {
+                byte_offset: fn_offset,
                 id: value_param_id,
                 name: "__step_value".to_string(),
                 ty: any_ty.clone(),
@@ -334,6 +348,7 @@ pub fn build_async_step_driver_direct(
                 arguments_object: None,
             },
             perry_hir::Param {
+                byte_offset: fn_offset,
                 id: is_error_param_id,
                 name: "__step_is_error".to_string(),
                 ty: bool_ty.clone(),
@@ -371,9 +386,12 @@ pub fn build_async_step_driver_direct(
             mutable: false,
             init: Some(step_closure),
         },
-        Stmt::Return(Some(Expr::AsyncFirstCall {
-            step_closure: Box::new(Expr::LocalGet(step_id)),
-        })),
+        Stmt::Return(
+            Some(Expr::AsyncFirstCall {
+                step_closure: Box::new(Expr::LocalGet(step_id)),
+            }),
+            fn_offset,
+        ),
     ]);
     wrapper
 }

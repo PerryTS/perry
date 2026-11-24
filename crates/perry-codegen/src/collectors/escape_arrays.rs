@@ -83,7 +83,7 @@ fn collect_length_only_indices_in_stmts(
             Stmt::Expr(expr) | Stmt::Throw(expr) => {
                 collect_length_only_indices_in_expr(expr, non_escaping_arrays, uses);
             }
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     collect_length_only_indices_in_expr(expr, non_escaping_arrays, uses);
                 }
@@ -150,6 +150,7 @@ fn collect_length_only_indices_in_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 collect_length_only_indices_in_expr(discriminant, non_escaping_arrays, uses);
                 for case in cases {
@@ -176,7 +177,7 @@ fn collect_length_only_indices_in_expr(
     uses: &mut HashMap<u32, HashMap<u32, (usize, usize)>>,
 ) {
     use perry_hir::Expr;
-    if let Expr::IndexGet { object, index, .. } = expr {
+    if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr {
         if let (Expr::LocalGet(id), Some(index)) = (object.as_ref(), const_index(index)) {
             if non_escaping_arrays
                 .get(id)
@@ -192,7 +193,9 @@ fn collect_length_only_indices_in_expr(
     } = expr
     {
         if property == "length" {
-            if let Expr::IndexGet { object, index, .. } = object.as_ref() {
+            if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) =
+                object.as_ref()
+            {
                 if let (Expr::LocalGet(id), Some(index)) = (object.as_ref(), const_index(index)) {
                     if non_escaping_arrays
                         .get(id)
@@ -229,7 +232,7 @@ fn collect_used_array_indices_in_stmts(
             Stmt::Expr(expr) | Stmt::Throw(expr) => {
                 collect_used_array_indices_in_expr(expr, non_escaping_arrays, used);
             }
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     collect_used_array_indices_in_expr(expr, non_escaping_arrays, used);
                 }
@@ -298,6 +301,7 @@ fn collect_used_array_indices_in_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 collect_used_array_indices_in_expr(discriminant, non_escaping_arrays, used);
                 for case in cases {
@@ -324,7 +328,7 @@ fn collect_used_array_indices_in_expr(
     used: &mut HashMap<u32, HashSet<u32>>,
 ) {
     use perry_hir::Expr;
-    if let Expr::IndexGet { object, index, .. } = expr {
+    if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr {
         if let Expr::LocalGet(id) = object.as_ref() {
             if let Some(&len) = non_escaping_arrays.get(id) {
                 if let Some(k) = const_index(index) {
@@ -430,7 +434,7 @@ pub fn check_array_escapes_in_stmts(
     for s in stmts {
         match s {
             Stmt::Expr(e) | Stmt::Throw(e) => check_array_escapes_in_expr(e, candidates, escaped),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     check_array_escapes_in_expr(e, candidates, escaped);
                 }
@@ -483,6 +487,7 @@ pub fn check_array_escapes_in_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 check_array_escapes_in_expr(discriminant, candidates, escaped);
                 for case in cases {
@@ -542,7 +547,9 @@ fn escape_method_call_receiver(
     candidates: &std::collections::HashMap<u32, u32>,
     escaped: &mut HashSet<u32>,
 ) {
-    if let perry_hir::Expr::IndexGet { object, .. } = callee {
+    if let (perry_hir::Expr::IndexGet { object, .. } | perry_hir::Expr::RegionOut { object, .. }) =
+        callee
+    {
         if let perry_hir::Expr::LocalGet(id) = object.as_ref() {
             if candidates.contains_key(id) {
                 escaped.insert(*id);
@@ -560,7 +567,7 @@ pub fn check_array_escapes_in_expr(
 
     match e {
         // Safe: constant-index read `arr[k]` where 0 <= k < length.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if let Some(&len) = candidates.get(id) {
                     match const_index(index) {
@@ -695,7 +702,9 @@ pub fn check_array_escapes_in_expr(
         // compare answers `undefined`.
         Expr::Delete(operand) => {
             match operand.as_ref() {
-                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+                Expr::PropertyGet { object, .. }
+                | Expr::IndexGet { object, .. }
+                | Expr::RegionOut { object, .. } => {
                     if let Expr::LocalGet(id) = object.as_ref() {
                         if candidates.contains_key(id) {
                             escaped.insert(*id);
@@ -717,7 +726,7 @@ pub fn check_array_escapes_in_expr(
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)
@@ -736,6 +745,7 @@ pub fn check_array_escapes_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             check_array_escapes_in_expr(condition, candidates, escaped);
             check_array_escapes_in_expr(then_expr, candidates, escaped);

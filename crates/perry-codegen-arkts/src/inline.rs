@@ -169,7 +169,7 @@ pub(crate) fn inline_calls_in_stmt(
         Stmt::Expr(e) => {
             inline_calls_in_expr(e, function_map, bindings, next_local, budget, hoists)
         }
-        Stmt::Return(Some(e)) => {
+        Stmt::Return(Some(e), _) => {
             inline_calls_in_expr(e, function_map, bindings, next_local, budget, hoists)
         }
         Stmt::If {
@@ -248,6 +248,7 @@ pub(crate) fn inline_calls_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             inline_calls_in_expr(
                 condition,
@@ -286,7 +287,7 @@ pub(crate) fn inline_calls_in_expr(
     if *budget == 0 {
         return;
     }
-    let (params, body, args, is_strict) = match expr {
+    let (params, body, args, is_strict, fn_offset) = match expr {
         Expr::Call { callee, args, .. } => match callee.as_ref() {
             Expr::FuncRef(id) => match function_map.get(id) {
                 Some(func) if func.params.len() == args.len() => (
@@ -294,6 +295,7 @@ pub(crate) fn inline_calls_in_expr(
                     func.body.clone(),
                     args.clone(),
                     func.is_strict,
+                    func.byte_offset,
                 ),
                 _ => return,
             },
@@ -303,10 +305,15 @@ pub(crate) fn inline_calls_in_expr(
                     body,
                     is_strict,
                     is_async: false,
+                    byte_offset,
                     ..
-                }) if params.len() == args.len() => {
-                    (params.clone(), body.clone(), args.clone(), *is_strict)
-                }
+                }) if params.len() == args.len() => (
+                    params.clone(),
+                    body.clone(),
+                    args.clone(),
+                    *is_strict,
+                    *byte_offset,
+                ),
                 _ => return,
             },
             _ => return,
@@ -316,13 +323,14 @@ pub(crate) fn inline_calls_in_expr(
     // Detect simple-return shape: last `Stmt::Return(Some(LocalGet(id)))`.
     // Anything else (no return, return non-local, multiple returns) is
     // out of scope — leaves the call as-is.
-    if !matches!(body.last(), Some(Stmt::Return(Some(Expr::LocalGet(_))))) {
+    if !matches!(body.last(), Some(Stmt::Return(Some(Expr::LocalGet(_)), _))) {
         return;
     }
     // Build a synthetic Function so `inline_one_call` can do its
     // standard remapping work. Re-uses the existing helper rather
     // than duplicating the local-id offset / param-substitution logic.
     let synth_func = perry_hir::ir::Function {
+        byte_offset: fn_offset,
         id: 0,
         name: String::new(),
         type_params: Vec::new(),
@@ -341,7 +349,7 @@ pub(crate) fn inline_calls_in_expr(
     };
     let mut inlined = inline_one_call(&synth_func, &args, next_local, &remap_local_ids_in_stmts);
     let return_remapped = match inlined.last() {
-        Some(Stmt::Return(Some(Expr::LocalGet(id)))) => *id,
+        Some(Stmt::Return(Some(Expr::LocalGet(id)), _)) => *id,
         _ => return,
     };
     inlined.pop(); // drop the trailing Return
@@ -465,7 +473,7 @@ pub(crate) fn rewrite_early_returns(stmts: Vec<Stmt>) -> Vec<Stmt> {
                 condition,
                 then_branch,
                 else_branch: None,
-            } if matches!(then_branch.last(), Some(Stmt::Return(_))) => {
+            } if matches!(then_branch.last(), Some(Stmt::Return(_, _))) => {
                 // Found the early-return pattern. Pull the trailing
                 // return out of the then-branch (it's redundant once
                 // the rest is in the else), and gather all remaining

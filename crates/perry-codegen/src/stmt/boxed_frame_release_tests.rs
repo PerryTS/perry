@@ -12,6 +12,7 @@ const RELEASE: &str = "call void @js_box_scope_release(i64 ";
 
 fn param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,
@@ -24,6 +25,7 @@ fn param(id: u32, name: &str) -> Param {
 
 fn closure(func_id: u32, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
     Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -53,6 +55,7 @@ fn let_stmt(id: u32, init: Expr) -> Stmt {
 
 fn function(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
     Function {
+        byte_offset: 0,
         id: 1,
         name: name.into(),
         type_params: Vec::new(),
@@ -126,10 +129,10 @@ fn captured_reassigned_let_is_left_to_gc_at_every_return() {
         ),
         Stmt::If {
             condition: Expr::LocalGet(1),
-            then_branch: vec![Stmt::Return(Some(Expr::LocalGet(11)))],
+            then_branch: vec![Stmt::Return(Some(Expr::LocalGet(11)), 0)],
             else_branch: None,
         },
-        Stmt::Return(Some(Expr::LocalGet(10))),
+        Stmt::Return(Some(Expr::LocalGet(10)), 0),
     ];
     let ir = function_ir(function("counter", vec![param(1, "flag")], body));
     assert!(
@@ -172,7 +175,7 @@ fn loop_declaration_allocates_gc_cells_without_manual_release() {
                 ),
             ],
         },
-        Stmt::Return(Some(Expr::Undefined)),
+        Stmt::Return(Some(Expr::Undefined), 0),
     ];
     let ir = function_ir(function("looped", vec![param(1, "flag")], body));
     let lines: Vec<&str> = ir.lines().map(str::trim_start).collect();
@@ -210,7 +213,7 @@ fn mapped_arguments_parameter_is_never_released_by_its_frame() {
                 vec![1, 2],
             ),
         ),
-        Stmt::Return(Some(Expr::LocalGet(3))),
+        Stmt::Return(Some(Expr::LocalGet(3)), 0),
     ];
     let mut f = function(
         "sloppy",
@@ -258,7 +261,7 @@ fn plain_async_step_counts_only_enclosing_cells_and_frame_keeps_its_own() {
             Stmt::Expr(Expr::LocalSet(OUTER, Box::new(Expr::Integer(1)))),
             Stmt::Expr(Expr::LocalSet(OWN, Box::new(Expr::Integer(2)))),
             Stmt::ReleaseBoxes(vec![OWN]),
-            Stmt::Return(Some(Expr::Undefined)),
+            Stmt::Return(Some(Expr::Undefined), 0),
         ],
         vec![OWN, OUTER],
     );
@@ -266,7 +269,7 @@ fn plain_async_step_counts_only_enclosing_cells_and_frame_keeps_its_own() {
         Stmt::PreallocateBoxes(vec![OWN]),
         let_stmt(OUTER, Expr::Integer(0)),
         let_stmt(42, step),
-        Stmt::Return(Some(Expr::LocalGet(42))),
+        Stmt::Return(Some(Expr::LocalGet(42)), 0),
     ];
     let ir = function_ir(function("activation", Vec::new(), body));
     // OWN is preallocated, so it lives in a (one-slot) scope object; OUTER,

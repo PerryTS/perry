@@ -60,7 +60,7 @@ fn scan_stmt_call_sites(
             scan_expr_call_sites(e, candidates, out);
         }
         Stmt::Throw(e) => scan_expr_call_sites(e, candidates, out),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 scan_expr_call_sites(e, candidates, out);
             }
@@ -114,6 +114,7 @@ fn scan_stmt_call_sites(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             scan_expr_call_sites(discriminant, candidates, out);
             for c in cases {
@@ -191,7 +192,7 @@ fn scan_stmt_for_closures(
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_for_closures(e, candidates, out),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 scan_expr_for_closures(e, candidates, out);
             }
@@ -245,6 +246,7 @@ fn scan_stmt_for_closures(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             scan_expr_for_closures(discriminant, candidates, out);
             for c in cases {
@@ -349,7 +351,7 @@ impl StmtRefAllWalker<'_> {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.visit_expr(e),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     self.visit_expr(e);
                 }
@@ -417,6 +419,7 @@ impl StmtRefAllWalker<'_> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.visit_expr(discriminant);
                 for c in cases {
@@ -483,7 +486,7 @@ fn scan_stmt_funcrefs(
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_funcrefs(e, candidates, out),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 scan_expr_funcrefs(e, candidates, out);
             }
@@ -537,6 +540,7 @@ fn scan_stmt_funcrefs(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             scan_expr_funcrefs(discriminant, candidates, out);
             for c in cases {

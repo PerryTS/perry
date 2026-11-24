@@ -409,7 +409,7 @@ fn scalarize_stmts(
             Stmt::Labeled { .. }
             | Stmt::Let { .. }
             | Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Throw(_)
             | Stmt::Break
             | Stmt::Continue
@@ -825,7 +825,7 @@ fn return_record_stmts_are_safe(
             Stmt::Let { init, .. } => init
                 .as_ref()
                 .is_none_or(|expr| expr_is_safe(expr, record_id, field_order, allow_reads)),
-            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
                 expr_is_safe(expr, record_id, field_order, allow_reads)
             }
             Stmt::If { condition, .. }
@@ -1026,7 +1026,7 @@ fn rewrite_return_record_stmts(
                     rewrite_return_record_expr(expr, record_id, field_locals);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr)) => {
+            Stmt::Expr(expr) | Stmt::Throw(expr) | Stmt::Return(Some(expr), _) => {
                 rewrite_return_record_expr(expr, record_id, field_locals)
             }
             Stmt::If {
@@ -1130,6 +1130,7 @@ fn rewrite_return_record_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 rewrite_return_record_expr(discriminant, record_id, field_locals);
                 for case in cases {
@@ -1340,7 +1341,7 @@ fn collect_aliases(
         if let Stmt::Let {
             id,
             mutable: false,
-            init: Some(Expr::IndexGet { object, index, .. }),
+            init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
             ..
         } = stmt
         {
@@ -1397,7 +1398,7 @@ fn candidate_field(
 ) -> Option<usize> {
     let index = match object {
         Expr::LocalGet(alias) => aliases.get(alias).copied(),
-        Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
             const_index(index)
         }
         _ => None,
@@ -1427,7 +1428,7 @@ fn expr_is_safe(
                 return true;
             }
         }
-        Expr::IndexGet { object, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) =>
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) =>
         {
             // Only an alias declaration or a direct property receiver is safe;
             // both parents intercept this expression before recursion reaches it.
@@ -1514,7 +1515,11 @@ fn stmts_are_safe(
             Stmt::Let { id, init, .. } if *id == array_id => true,
             Stmt::Let {
                 id,
-                init: Some(Expr::IndexGet { object, index, .. }),
+                init:
+                    Some(
+                        Expr::IndexGet { object, index, .. }
+                        | Expr::RegionOut { object, index, .. },
+                    ),
                 ..
             } if aliases.contains_key(id)
                 && matches!(object.as_ref(), Expr::LocalGet(candidate) if *candidate == array_id)
@@ -1526,7 +1531,7 @@ fn stmts_are_safe(
                 .as_ref()
                 .is_none_or(|expr| expr_is_safe(expr, array_id, aliases, fields)),
             Stmt::Expr(expr) | Stmt::Throw(expr) => expr_is_safe(expr, array_id, aliases, fields),
-            Stmt::Return(value) => value
+            Stmt::Return(value, _) => value
                 .as_ref()
                 .is_none_or(|expr| expr_is_safe(expr, array_id, aliases, fields)),
             Stmt::If {
@@ -1577,6 +1582,7 @@ fn stmts_are_safe(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 expr_is_safe(discriminant, array_id, aliases, fields)
                     && cases.iter().all(|case| {
@@ -1623,7 +1629,7 @@ fn replacement_for_expr(
     }
     let index = match object.as_ref() {
         Expr::LocalGet(alias) => aliases.get(alias).copied(),
-        Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id) => {
             const_index(index)
         }
         _ => None,
@@ -1669,7 +1675,7 @@ fn rewrite_stmts(
                 }
             }
             Stmt::Expr(expr) | Stmt::Throw(expr) => rewrite_expr(expr, array_id, aliases, fields),
-            Stmt::Return(value) => {
+            Stmt::Return(value, _) => {
                 if let Some(value) = value {
                     rewrite_expr(value, array_id, aliases, fields);
                 }
@@ -1720,6 +1726,7 @@ fn rewrite_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 rewrite_expr(discriminant, array_id, aliases, fields);
                 for case in cases {
@@ -1785,6 +1792,7 @@ mod tests {
             },
             Stmt::Expr(if observe_identity {
                 Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::LocalGet(2)),
@@ -1962,6 +1970,7 @@ mod tests {
             },
             Stmt::Expr(if observe_identity {
                 Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(1)),
                     right: Box::new(Expr::LocalGet(1)),

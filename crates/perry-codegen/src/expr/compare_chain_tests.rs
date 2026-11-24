@@ -4,6 +4,7 @@ use perry_hir::{CompareOp, Expr, Function, LogicalOp, Module, Param, Stmt};
 
 fn comparison(op: CompareOp, n: f64) -> Expr {
     Expr::Compare {
+        byte_offset: 0,
         op,
         left: Box::new(Expr::LocalGet(1)),
         right: Box::new(Expr::Number(n)),
@@ -11,6 +12,7 @@ fn comparison(op: CompareOp, n: f64) -> Expr {
 }
 fn chain(n: usize) -> Expr {
     (1..n).fold(comparison(CompareOp::Ge, 100.0), |left, i| Expr::Logical {
+        byte_offset: 0,
         op: LogicalOp::Or,
         left: Box::new(left),
         right: Box::new(comparison(CompareOp::Ge, 100.0 + i as f64)),
@@ -19,12 +21,14 @@ fn chain(n: usize) -> Expr {
 fn ir(expr: Expr, extra: Vec<Stmt>) -> String {
     let mut module = Module::new("comparison_graph");
     let mut body = extra;
-    body.push(Stmt::Return(Some(expr)));
+    body.push(Stmt::Return(Some(expr), 0));
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "predicate".into(),
         type_params: vec![],
         params: vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "x".into(),
             ty: Type::Any,
@@ -112,9 +116,11 @@ fn reassignment_before_the_graph_still_classifies_once() {
 fn assignment_inside_the_graph_declines_hoisting() {
     let ir = ir(
         Expr::Logical {
+            byte_offset: 0,
             op: LogicalOp::Or,
             left: Box::new(comparison(CompareOp::Ge, 100.0)),
             right: Box::new(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Ge,
                 left: Box::new(Expr::LocalSet(1, Box::new(Expr::Number(200.0)))),
                 right: Box::new(Expr::Number(100.0)),
@@ -129,7 +135,9 @@ fn assignment_inside_the_graph_declines_hoisting() {
 fn test_context_logical_selection_does_not_merge_boxed_operands() {
     let ir = ir(
         Expr::Conditional {
+            byte_offset: 0,
             condition: Box::new(Expr::Logical {
+                byte_offset: 0,
                 op: LogicalOp::And,
                 left: Box::new(Expr::LocalGet(1)),
                 right: Box::new(Expr::Bool(true)),
@@ -147,6 +155,7 @@ fn test_context_logical_selection_does_not_merge_boxed_operands() {
 fn strict_number_literal_equalities_need_no_coercion_or_slow_arm() {
     let ir = ir(
         Expr::Logical {
+            byte_offset: 0,
             op: LogicalOp::Or,
             left: Box::new(comparison(CompareOp::Eq, 10.0)),
             right: Box::new(comparison(CompareOp::Ne, 12.0)),
@@ -163,9 +172,11 @@ fn strict_number_literal_equalities_need_no_coercion_or_slow_arm() {
 #[test]
 fn mixed_graph_does_not_classify_a_constructively_numeric_local() {
     let expr = Expr::Logical {
+        byte_offset: 0,
         op: LogicalOp::And,
         left: Box::new(comparison(CompareOp::Ge, 100.0)),
         right: Box::new(Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(2)),
             right: Box::new(Expr::Number(200.0)),

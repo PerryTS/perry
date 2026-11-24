@@ -65,7 +65,7 @@ pub fn absorb_writes_into_index_used(stmts: &[perry_hir::Stmt], out: &mut HashSe
             }
             Stmt::Let { init: None, .. } => {}
             Stmt::Expr(e) | Stmt::Throw(e) => absorb_writes_in_expr(e, out),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     absorb_writes_in_expr(e, out);
                 }
@@ -123,6 +123,7 @@ pub fn absorb_writes_into_index_used(stmts: &[perry_hir::Stmt], out: &mut HashSe
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 absorb_writes_in_expr(discriminant, out);
                 for c in cases {
@@ -175,6 +176,7 @@ pub fn collect_localsets_in_expr_for_propagate<'a>(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             collect_localsets_in_expr_for_propagate(condition, out);
             collect_localsets_in_expr_for_propagate(then_expr, out);
@@ -183,7 +185,7 @@ pub fn collect_localsets_in_expr_for_propagate<'a>(
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
@@ -198,7 +200,7 @@ pub fn collect_localsets_in_expr_for_propagate<'a>(
                 collect_localsets_in_expr_for_propagate(a, out);
             }
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             collect_localsets_in_expr_for_propagate(object, out);
             collect_localsets_in_expr_for_propagate(index, out);
         }
@@ -225,7 +227,7 @@ pub fn walk_index_uses_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
     for s in stmts {
         match s {
             Stmt::Expr(e) | Stmt::Throw(e) => walk_index_uses_in_expr(e, out),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     walk_index_uses_in_expr(e, out);
                 }
@@ -288,6 +290,7 @@ pub fn walk_index_uses_in_stmts(stmts: &[perry_hir::Stmt], out: &mut HashSet<u32
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 walk_index_uses_in_expr(discriminant, out);
                 for c in cases {
@@ -317,7 +320,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
 
     match e {
         // --- index-using variants: mark locals in `index` subtree ---
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             collect_index_refs(index, out);
             walk_index_uses_in_expr(object, out);
             walk_index_uses_in_expr(index, out);
@@ -434,7 +437,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
@@ -447,6 +450,7 @@ pub fn walk_index_uses_in_expr(e: &perry_hir::Expr, out: &mut HashSet<u32>) {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             walk_index_uses_in_expr(condition, out);
             walk_index_uses_in_expr(then_expr, out);

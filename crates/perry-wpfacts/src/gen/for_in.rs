@@ -106,7 +106,7 @@ fn for_in_shape<'s>(body: &'s [Stmt], keys_of: impl Fn(u32) -> Option<u32>) -> O
     let (bind, rest) = then_branch.split_first()?;
     let Stmt::Let {
         id,
-        init: Some(Expr::IndexGet { object, index, .. }),
+        init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
         ..
     } = bind
     else {
@@ -130,7 +130,7 @@ fn for_in_shape<'s>(body: &'s [Stmt], keys_of: impl Fn(u32) -> Option<u32>) -> O
 fn runs_in_place(body: &[Stmt]) -> bool {
     let mut ok = true;
     for_each_stmt_shallow(body, &mut |s| {
-        if matches!(s, Stmt::Return(_)) {
+        if matches!(s, Stmt::Return(_, _)) {
             ok = false;
         }
     });
@@ -477,7 +477,9 @@ impl<'a> Gen<'a> {
             Expr::PropertySet {
                 object, property, ..
             } => sites.push((object, Some(property.as_str()), 1)),
-            Expr::IndexGet { object, index, .. } => sites.push((object, lit_key(index), 0)),
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+                sites.push((object, lit_key(index), 0))
+            }
             Expr::IndexSet { object, index, .. } => sites.push((object, lit_key(index), 1)),
             Expr::PutValueSet {
                 target,
@@ -494,7 +496,9 @@ impl<'a> Gen<'a> {
                 Expr::PropertyGet {
                     object, property, ..
                 } => sites.push((object, Some(property.as_str()), 2)),
-                Expr::IndexGet { object, index, .. } => sites.push((object, lit_key(index), 2)),
+                Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+                    sites.push((object, lit_key(index), 2))
+                }
                 _ => bad = true,
             },
             _ => {}
@@ -659,7 +663,7 @@ impl<'a> Gen<'a> {
         let Expr::LocalGet(k) = key else { return None };
         self.for_in_key_of(fx.module, key)?;
         let subj = match value {
-            Expr::IndexGet { object, index, .. } if matches!(index.as_ref(), Expr::LocalGet(k2) if k2 == k) => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } if matches!(index.as_ref(), Expr::LocalGet(k2) if k2 == k) => {
                 object.as_ref().clone()
             }
             Expr::LocalGet(l) => {
@@ -926,7 +930,9 @@ fn path_body_pure(body: &[Stmt], key: u32) -> bool {
     let mut ok = true;
     for_each_stmts_expr(body, &mut |e| {
         ok &= match e {
-            Expr::IndexGet { index, .. } | Expr::IndexSet { index, .. } => ok_index(index),
+            Expr::IndexGet { index, .. }
+            | Expr::RegionOut { index, .. }
+            | Expr::IndexSet { index, .. } => ok_index(index),
             Expr::PutValueSet { key: index, .. } => ok_index(index),
             Expr::Undefined
             | Expr::Null

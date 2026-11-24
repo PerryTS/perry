@@ -381,7 +381,7 @@ impl<'h> NumberAtReadFlow<'_, 'h> {
                 self.expr(expr, &mut state.set, true);
                 *state = state.dead_copy();
             }
-            Stmt::Return(value) => {
+            Stmt::Return(value, _) => {
                 if let Some(expr) = value {
                     self.expr(expr, &mut state.set, false);
                 }
@@ -538,6 +538,7 @@ impl<'h> NumberAtReadFlow<'_, 'h> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant, &mut state.set, false);
                 // Tests run in source order until one matches; a case body is
@@ -791,6 +792,7 @@ mod tests {
 
     fn add(left: Expr, right: Expr) -> Expr {
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(left),
             right: Box::new(right),
@@ -799,6 +801,7 @@ mod tests {
 
     fn run(stmts: &[Stmt]) -> HashSet<u32> {
         let params = [Param {
+            byte_offset: 0,
             id: S,
             name: "S".to_string(),
             ty: HirType::Named("Int32Array".to_string()),
@@ -820,6 +823,7 @@ mod tests {
 
     fn masked_s_read() -> Expr {
         s_read(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::UShr,
             left: Box::new(Expr::LocalGet(L)),
             right: Box::new(Expr::Integer(24)),
@@ -832,6 +836,7 @@ mod tests {
             let_n(),
             Stmt::While {
                 condition: Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::Integer(0)),
                     right: Box::new(Expr::Integer(1)),
@@ -840,6 +845,7 @@ mod tests {
                     set_n(masked_s_read()),
                     set_n(add(Expr::LocalGet(N), s_read(Expr::Integer(256)))),
                     Stmt::Expr(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::BitXor,
                         left: Box::new(Expr::LocalGet(N)),
                         right: Box::new(Expr::Integer(7)),
@@ -872,7 +878,7 @@ mod tests {
                 condition: Expr::Bool(false),
                 body: vec![set_n(Expr::Integer(1))],
             },
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
 
         assert!(!run(&stmts).contains(&N));
@@ -898,6 +904,7 @@ mod tests {
 
     fn try_stmt(body: Vec<Stmt>, catch: Option<Vec<Stmt>>, finally: Option<Vec<Stmt>>) -> Stmt {
         Stmt::Try {
+            byte_offset: 0,
             body,
             catch: catch.map(|body| perry_hir::CatchClause { param: None, body }),
             finally,
@@ -920,10 +927,10 @@ mod tests {
                     if_then(vec![Stmt::Throw(Expr::Integer(0))]),
                     set_n(Expr::Integer(2)),
                 ],
-                Some(vec![Stmt::Return(Some(add(
-                    Expr::LocalGet(N),
-                    Expr::Integer(1),
-                )))]),
+                Some(vec![Stmt::Return(
+                    Some(add(Expr::LocalGet(N), Expr::Integer(1))),
+                    0,
+                )]),
                 None,
             ),
         ];
@@ -957,13 +964,13 @@ mod tests {
             set_n(Expr::Integer(1)),
             try_stmt(
                 vec![if_then(vec![Stmt::Throw(Expr::Integer(0))])],
-                Some(vec![Stmt::Return(Some(add(
-                    Expr::LocalGet(N),
-                    Expr::Integer(1),
-                )))]),
+                Some(vec![Stmt::Return(
+                    Some(add(Expr::LocalGet(N), Expr::Integer(1))),
+                    0,
+                )]),
                 None,
             ),
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
         assert!(run(&stmts).contains(&N));
     }
@@ -980,7 +987,7 @@ mod tests {
                 Some(vec![set_n(Expr::Integer(3))]),
                 None,
             ),
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
         assert!(run(&stmts).contains(&N));
     }
@@ -997,7 +1004,7 @@ mod tests {
                 None,
                 Some(vec![Stmt::Expr(Expr::LocalGet(L))]),
             ),
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
         assert!(run(&stmts).contains(&N));
     }
@@ -1015,7 +1022,7 @@ mod tests {
                     set_n(Expr::Integer(1)),
                 ],
             ),
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
         assert!(!run(&stmts).contains(&N));
     }
@@ -1033,7 +1040,7 @@ mod tests {
                     set_n(Expr::Integer(2)),
                 ],
             ),
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
         assert!(run(&stmts).contains(&N));
     }
@@ -1047,7 +1054,7 @@ mod tests {
                 body: vec![if_then(vec![Stmt::Break]), set_n(Expr::Integer(1))],
                 condition: Expr::LocalGet(L),
             },
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
         assert!(!run(&stmts).contains(&N));
     }
@@ -1067,7 +1074,7 @@ mod tests {
                     set_n(Expr::Integer(1)),
                 ],
             },
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
         assert!(!run(&stmts).contains(&N));
     }
@@ -1081,6 +1088,7 @@ mod tests {
             Stmt::Labeled {
                 label: "sw".to_string(),
                 body: Box::new(Stmt::Switch {
+                    byte_offset: 0,
                     discriminant: Expr::LocalGet(L),
                     cases: vec![
                         perry_hir::SwitchCase {
@@ -1104,7 +1112,7 @@ mod tests {
                     ],
                 }),
             },
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
         assert!(!run(&stmts).contains(&N));
     }
@@ -1118,7 +1126,7 @@ mod tests {
                 condition: Expr::Bool(true),
                 body: vec![set_n(Expr::Integer(1)), if_then(vec![Stmt::Break])],
             },
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
         assert!(run(&stmts).contains(&N));
     }
@@ -1132,7 +1140,7 @@ mod tests {
                 then_branch: vec![set_n(Expr::Integer(1))],
                 else_branch: Some(vec![set_n(Expr::Number(2.5))]),
             },
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
 
         assert!(run(&stmts).contains(&N));
@@ -1147,7 +1155,7 @@ mod tests {
                 then_branch: vec![set_n(Expr::Integer(1))],
                 else_branch: None,
             },
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
 
         assert!(!run(&stmts).contains(&N));
@@ -1159,7 +1167,7 @@ mod tests {
             let_n(),
             set_n(Expr::String("temporary".to_string())),
             set_n(Expr::Integer(1)),
-            Stmt::Return(Some(Expr::LocalGet(N))),
+            Stmt::Return(Some(Expr::LocalGet(N)), 0),
         ];
 
         assert!(!run(&stmts).contains(&N));

@@ -458,9 +458,10 @@ mod tests {
             })
         };
         assert_eq!(
-            prefix(&[set("a"), set("b"), Stmt::Return(None), set("c")], &|_| {
-                false
-            }),
+            prefix(
+                &[set("a"), set("b"), Stmt::Return(None, 0), set("c")],
+                &|_| { false }
+            ),
             vec![Key::String("a".into()), Key::String("b".into())]
         );
         assert!(prefix(&[set("__proto__")], &|_| false).is_empty());
@@ -488,6 +489,7 @@ mod tests {
     #[test]
     fn only_a_function_the_module_constructs_arms_a_run() {
         let closure = |func_id: u32| Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: Vec::new(),
             return_type: perry_hir::types::Type::Any,

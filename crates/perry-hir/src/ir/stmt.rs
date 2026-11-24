@@ -17,8 +17,12 @@ pub enum Stmt {
     },
     /// Expression statement
     Expr(Expr),
-    /// Return statement
-    Return(Option<Expr>),
+    /// Return statement. The second field is the source byte offset
+    /// (`span.lo.0`) of the `return` statement; a synthesized return takes
+    /// the offset of the source construct it is made for (a concise arrow
+    /// body, the generator/async function its driver belongs to, a rewritten
+    /// return). Read through [`Stmt::byte_offset`].
+    Return(Option<Expr>, u32),
     /// If statement
     If {
         condition: Expr,
@@ -59,11 +63,16 @@ pub enum Stmt {
         /// leaves the loop from a yield sets it to 1 before running that
         /// `finally` (ECMA-262 14.7.5.7 IteratorClose with a return completion).
         forof_completion: Option<LocalId>,
+        /// Source byte offset (`span.lo.0`) of the `try` statement, or of the
+        /// construct a synthesized try desugars.
+        byte_offset: u32,
     },
     /// Switch statement
     Switch {
         discriminant: Expr,
         cases: Vec<SwitchCase>,
+        /// Source byte offset (`span.lo.0`) of the `switch` statement.
+        byte_offset: u32,
     },
     /// Pre-allocate slot+box for a set of LocalIds at function-body
     /// entry. Emitted by `lower_fn_body_block_stmt` to support hoisted
@@ -111,4 +120,24 @@ pub struct SwitchCase {
 pub struct CatchClause {
     pub param: Option<(LocalId, String)>,
     pub body: Vec<Stmt>,
+}
+
+impl Stmt {
+    /// Source byte offset of the statement, for the variants that carry one
+    /// (`if` and loops: their condition's).
+    pub fn byte_offset(&self) -> Option<u32> {
+        match self {
+            Stmt::Return(_, o) => Some(*o),
+            Stmt::Try { byte_offset, .. } => Some(*byte_offset),
+            Stmt::Switch { byte_offset, .. } => Some(*byte_offset),
+            // A loop or branch stands at its condition.
+            Stmt::If { condition, .. }
+            | Stmt::While { condition, .. }
+            | Stmt::DoWhile { condition, .. } => condition.byte_offset(),
+            Stmt::For {
+                condition: Some(c), ..
+            } => c.byte_offset(),
+            _ => None,
+        }
+    }
 }

@@ -19,6 +19,7 @@ fn opts() -> CompileOptions {
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -31,6 +32,7 @@ fn param(id: u32, name: &str, ty: Type) -> Param {
 
 fn function(id: u32, name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
     Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -62,6 +64,7 @@ fn class(id: u32, name: &str, fields: Vec<&str>, methods: Vec<Function>) -> Clas
         fields: fields
             .into_iter()
             .map(|name| ClassField {
+                byte_offset: 0,
                 origin: perry_hir::ClassFieldOrigin::Definition,
                 name: name.to_string(),
                 key_expr: None,
@@ -389,7 +392,7 @@ fn publishing_clone_gets_no_caller_side_route() {
     let param_id = module.classes[1].methods[0].params[0].id;
     module.classes[1].methods[0]
         .body
-        .push(Stmt::Return(Some(Expr::LocalGet(param_id))));
+        .push(Stmt::Return(Some(Expr::LocalGet(param_id)), 0));
 
     let session = crate::opt_report::test_support::Session::start();
     let ir = String::from_utf8(compile_module(&module, opts()).expect("module compiles"))
@@ -427,7 +430,7 @@ fn published_argument_in_a_barrier_module_never_reaches_an_unguarded_clone() {
     // The callee reads the declared field, then publishes the parameter.
     module.classes[1].methods[0]
         .body
-        .push(Stmt::Return(Some(Expr::LocalGet(param_id))));
+        .push(Stmt::Return(Some(Expr::LocalGet(param_id)), 0));
     // A module-wide §5.2 barrier whose target the containment walk cannot
     // attribute to any tracked local.
     module.init.insert(0, define_property(Expr::Object(vec![])));

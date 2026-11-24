@@ -48,12 +48,13 @@ const TYPED_RECV_LOCAL: u32 = 905;
 
 fn empty_fn(id: u32, name: &str, return_type: Type) -> Function {
     Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type,
-        body: vec![Stmt::Return(Some(Expr::Undefined))],
+        body: vec![Stmt::Return(Some(Expr::Undefined), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -79,6 +80,7 @@ fn tagged_class() -> perry_hir::Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![perry_hir::ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "tag".to_string(),
             key_expr: None,
@@ -110,6 +112,7 @@ fn tagged_class() -> perry_hir::Class {
 fn tagged_class_with_rest_method() -> perry_hir::Class {
     let mut class = tagged_class();
     class.methods[0].params.push(Param {
+        byte_offset: 0,
         id: REST_LOCAL,
         name: "values".to_string(),
         ty: Type::Array(Box::new(Type::Any)),

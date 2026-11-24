@@ -32,11 +32,13 @@ fn expr_ok(e: &Expr, f: &Function, recursive: &mut bool) -> bool {
             op: BinaryOp::Add | BinaryOp::Sub,
             left,
             right,
+            ..
         } => expr_ok(left, f, recursive) && expr_ok(right, f, recursive),
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             matches!(condition.as_ref(), Expr::Compare { .. })
                 && condition_ok(condition, f, recursive)
@@ -65,7 +67,7 @@ fn stmts_ok(body: &[Stmt], f: &Function, recursive: &mut bool) -> Option<bool> {
     let mut returns = false;
     for stmt in body {
         match stmt {
-            Stmt::Return(Some(e)) if expr_ok(e, f, recursive) => {
+            Stmt::Return(Some(e), _) if expr_ok(e, f, recursive) => {
                 // Comparisons are Boolean, not integer return values.
                 if matches!(e, Expr::Compare { .. }) {
                     return None;
@@ -168,7 +170,9 @@ impl Lowerer<'_> {
             Expr::Integer(n) => n.to_string(),
             Expr::Number(n) => (*n as i64).to_string(),
             Expr::LocalGet(id) => self.values[id].clone(),
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let a = self.expr(left);
                 let b = self.expr(right);
                 let v = match op {
@@ -178,7 +182,9 @@ impl Lowerer<'_> {
                 };
                 v
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 let a = self.expr(left);
                 let b = self.expr(right);
                 match op {
@@ -217,6 +223,7 @@ impl Lowerer<'_> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 let c = self.expr(condition);
                 let before = self.checked_stack;
@@ -247,7 +254,7 @@ impl Lowerer<'_> {
                 break;
             }
             match s {
-                Stmt::Return(Some(e)) => {
+                Stmt::Return(Some(e), _) => {
                     let v = self.expr(e);
                     self.block().ret(I32, &v);
                 }

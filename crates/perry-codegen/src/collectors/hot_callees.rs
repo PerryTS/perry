@@ -360,8 +360,8 @@ fn walk_stmt(s: &Stmt, in_loop: bool, scan: &mut HotCalleeScan) {
         Stmt::Let { init: Some(e), .. } => walk_expr(e, in_loop, scan),
         Stmt::Let { init: None, .. } => {}
         Stmt::Expr(e) | Stmt::Throw(e) => walk_expr(e, in_loop, scan),
-        Stmt::Return(Some(e)) => walk_expr(e, in_loop, scan),
-        Stmt::Return(None) => {}
+        Stmt::Return(Some(e), _) => walk_expr(e, in_loop, scan),
+        Stmt::Return(None, _) => {}
         Stmt::If {
             condition,
             then_branch,
@@ -415,6 +415,7 @@ fn walk_stmt(s: &Stmt, in_loop: bool, scan: &mut HotCalleeScan) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             walk_expr(discriminant, in_loop, scan);
             for c in cases {
@@ -479,7 +480,7 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
@@ -491,6 +492,7 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             walk_expr(condition, in_loop, scan);
             walk_expr(then_expr, in_loop, scan);
@@ -505,7 +507,7 @@ fn walk_expr(e: &Expr, in_loop: bool, scan: &mut HotCalleeScan) {
             walk_expr(object, in_loop, scan);
             walk_expr(value, in_loop, scan);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             walk_expr(object, in_loop, scan);
             walk_expr(index, in_loop, scan);
         }
@@ -632,8 +634,8 @@ fn count_alloc_sites_in_stmts(
             }
             | Stmt::Expr(expr)
             | Stmt::Throw(expr)
-            | Stmt::Return(Some(expr)) => count_alloc_sites_in_expr(expr, closure_id, sites),
-            Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+            | Stmt::Return(Some(expr), _) => count_alloc_sites_in_expr(expr, closure_id, sites),
+            Stmt::Let { init: None, .. } | Stmt::Return(None, _) => {}
             Stmt::If {
                 condition,
                 then_branch,
@@ -690,6 +692,7 @@ fn count_alloc_sites_in_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 count_alloc_sites_in_expr(discriminant, closure_id, sites);
                 for case in cases {
@@ -848,10 +851,12 @@ mod recursion_participant_tests {
 
     fn func(id: u32, body: Vec<Stmt>) -> Function {
         Function {
+            byte_offset: 0,
             id,
             name: format!("f{id}"),
             type_params: Vec::new(),
             params: vec![Param {
+                byte_offset: 0,
                 id: id * 10,
                 name: "n".to_string(),
                 ty: Type::Number,
@@ -875,13 +880,16 @@ mod recursion_participant_tests {
     }
 
     fn call_stmt(fid: u32) -> Stmt {
-        Stmt::Return(Some(Expr::Call {
-            byte_end: 0,
-            callee: Box::new(Expr::FuncRef(fid)),
-            args: vec![Expr::Integer(1)],
-            type_args: Vec::new(),
-            byte_offset: 0,
-        }))
+        Stmt::Return(
+            Some(Expr::Call {
+                byte_end: 0,
+                callee: Box::new(Expr::FuncRef(fid)),
+                args: vec![Expr::Integer(1)],
+                type_args: Vec::new(),
+                byte_offset: 0,
+            }),
+            0,
+        )
     }
 
     fn new_expr() -> Expr {
@@ -1024,7 +1032,7 @@ mod recursion_participant_tests {
         module.functions.push(func(5, vec![call_stmt(6)]));
         module
             .functions
-            .push(func(6, vec![Stmt::Return(Some(Expr::Integer(0)))]));
+            .push(func(6, vec![Stmt::Return(Some(Expr::Integer(0)), 0)]));
         module.functions.push(func(7, vec![call_stmt(1)]));
 
         let got = collect_recursion_participants(&module);

@@ -99,7 +99,9 @@ fn decided(cond: &Expr, proofs: &HashMap<u32, HirType>) -> Option<bool> {
             op: UnaryOp::Not,
             operand,
         } => decided(operand, proofs).map(|b| !b),
-        Expr::Logical { op, left, right } => {
+        Expr::Logical {
+            op, left, right, ..
+        } => {
             let (l, r) = (decided(left, proofs), decided(right, proofs));
             match op {
                 LogicalOp::And => match (l, r) {
@@ -115,7 +117,9 @@ fn decided(cond: &Expr, proofs: &HashMap<u32, HirType>) -> Option<bool> {
                 _ => None,
             }
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             let eq = match op {
                 CompareOp::Eq | CompareOp::LooseEq => true,
                 CompareOp::Ne | CompareOp::LooseNe => false,
@@ -383,7 +387,9 @@ impl Env<'_> {
             Expr::LocalGet(id) => self.local(*id),
             Expr::LocalSet(_, v) => rec(v),
             Expr::Sequence(v) => v.last().and_then(rec),
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let (l, r) = (rec(left), rec(right));
                 match op {
                     // `+` concatenates when either side is a String; two
@@ -467,7 +473,7 @@ fn iife_return_kind(
     module_globals: &HashMap<u32, String>,
     depth: usize,
 ) -> Option<Kind> {
-    if depth > 4 || !matches!(body.last(), Some(Stmt::Return(Some(_)))) {
+    if depth > 4 || !matches!(body.last(), Some(Stmt::Return(Some(_), _))) {
         return None;
     }
     let t = collect_typed_locals(body, &HashMap::new(), boxed_vars, module_globals);
@@ -493,7 +499,7 @@ fn iife_return_kind(
     fn returns<'a>(stmts: &'a [Stmt], f: &mut dyn FnMut(Option<&'a Expr>)) {
         for s in stmts {
             match s {
-                Stmt::Return(e) => f(e.as_ref()),
+                Stmt::Return(e, _) => f(e.as_ref()),
                 Stmt::If {
                     then_branch,
                     else_branch,
@@ -579,7 +585,10 @@ pub(crate) fn int32_writer_range(expr: &Expr) -> Option<(i64, i64)> {
         }
         _ => {}
     }
-    let Expr::Binary { op, left, right } = expr else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = expr
+    else {
         return None;
     };
     if *op == BinaryOp::BitAnd {

@@ -13,6 +13,7 @@ const KEY_TMP: u32 = 103;
 
 fn param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Any,
@@ -32,6 +33,7 @@ fn rmw_function(rhs: Expr) -> Function {
         index: Box::new(Expr::LocalGet(KEY_TMP)),
     };
     Function {
+        byte_offset: 0,
         id: 7,
         name: "bump".to_string(),
         type_params: Vec::new(),
@@ -58,6 +60,7 @@ fn rmw_function(rhs: Expr) -> Function {
                 object: Box::new(Expr::LocalGet(BASE_TMP)),
                 index: Box::new(Expr::LocalGet(KEY_TMP)),
                 value: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(read),
                     right: Box::new(rhs),
@@ -66,7 +69,7 @@ fn rmw_function(rhs: Expr) -> Function {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::Integer(0))),
+            Stmt::Return(Some(Expr::Integer(0)), 0),
         ],
         is_async: false,
         is_generator: false,

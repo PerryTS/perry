@@ -115,6 +115,7 @@ fn numeric_layout_oob_array_read_ir() -> String {
                 ty: Type::Number,
                 mutable: false,
                 init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::IndexGet {
                         element_offset: 0,
@@ -481,6 +482,7 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
                     ty: Type::Number,
                     mutable: false,
                     init: Some(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Sub,
                         left: Box::new(Expr::IndexGet {
                             element_offset: 0,
@@ -551,9 +553,10 @@ fn the_number_context_coercion_is_coupled_across_every_arm() {
 }
 
 fn dynamic_symbol_access_ir(symbol_init: Expr, field: Option<&str>) -> String {
-    let symbol_read = Expr::synthetic_index_get(
+    let symbol_read = Expr::index_get_at(
         Box::new(Expr::LocalGet(ITEMS)),
         Box::new(Expr::LocalGet(SYMBOL)),
+        0,
     );
     let result = match field {
         Some(property) => Expr::PropertyGet {
@@ -664,9 +667,10 @@ fn unknown_numeric_read_routes_typed_arrays_through_the_single_exit() {
                 name: "result".to_string(),
                 ty: Type::Any,
                 mutable: false,
-                init: Some(Expr::synthetic_index_get(
+                init: Some(Expr::index_get_at(
                     Box::new(Expr::LocalGet(ITEMS)),
                     Box::new(Expr::Integer(0)),
+                    0,
                 )),
             },
         ],
@@ -926,6 +930,7 @@ fn claimed_array_receiver_brands_before_committing_a_canonical_key_to_the_plain_
 
 fn dynamic_key_read_ir(name: &str, key_type: Type) -> String {
     let param = |id, name: &str, ty| Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -936,6 +941,7 @@ fn dynamic_key_read_ir(name: &str, key_type: Type) -> String {
     };
     let mut module = Module::new(name);
     module.functions.push(Function {
+        byte_offset: 0,
         id: 10,
         name: "read".to_string(),
         type_params: Vec::new(),
@@ -944,13 +950,16 @@ fn dynamic_key_read_ir(name: &str, key_type: Type) -> String {
             param(KEY, "key", key_type),
         ],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::IndexGet {
-            element_offset: 0,
-            byte_offset: 0,
-            byte_end: 0,
-            object: Box::new(Expr::LocalGet(ITEMS)),
-            index: Box::new(Expr::LocalGet(KEY)),
-        }))],
+        body: vec![Stmt::Return(
+            Some(Expr::IndexGet {
+                element_offset: 0,
+                byte_offset: 0,
+                byte_end: 0,
+                object: Box::new(Expr::LocalGet(ITEMS)),
+                index: Box::new(Expr::LocalGet(KEY)),
+            }),
+            0,
+        )],
         is_async: false,
         is_generator: false,
         is_strict: true,

@@ -378,6 +378,7 @@ mod tests {
         assert!(providers_of(vec![]).is_empty());
         // The dispatch-table row lowering picks (prefix-net owner).
         let watcher = Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "@parcel/watcher".into(),
             class_name: None,
             object: None,
@@ -401,6 +402,7 @@ mod tests {
         assert!(providers_of(vec![Expr::CryptoRandomUUID]).contains(&CRYPTO));
         // A method the table does not list for the module adds nothing.
         let unknown = Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "@parcel/watcher".into(),
             class_name: None,
             object: None,

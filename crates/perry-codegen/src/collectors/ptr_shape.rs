@@ -1224,6 +1224,7 @@ impl<'a> UseWalk<'a> {
                         condition,
                         then_expr,
                         else_expr,
+                        ..
                     }) = init.as_ref()
                     {
                         if let (
@@ -1262,7 +1263,9 @@ impl<'a> UseWalk<'a> {
                     if self.element_seeded.contains(id)
                         && matches!(
                             init.as_ref(),
-                            Some(Expr::IndexGet { .. } | Expr::LocalGet(_))
+                            Some(
+                                Expr::IndexGet { .. } | Expr::RegionOut { .. } | Expr::LocalGet(_)
+                            )
                         )
                     {
                         return;
@@ -1313,7 +1316,7 @@ impl<'a> UseWalk<'a> {
             }
             Stmt::Expr(e) => self.walk_expr(e),
             Stmt::Throw(e) => self.with_ctx(report::ESC_THROWN, |w| w.walk_expr(e)),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     // #7034 §4: `return <tracked local>` is exempt — see the
                     // module doc, rule 2. Only the bare form: `return {a: o}`
@@ -1387,6 +1390,7 @@ impl<'a> UseWalk<'a> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.walk_expr(discriminant);
                 for case in cases {
@@ -1634,7 +1638,9 @@ impl<'a> UseWalk<'a> {
             // Barriers / hard escapes on a tracked member itself.
             Expr::Delete(inner) => {
                 match inner.as_ref() {
-                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+                    Expr::PropertyGet { object, .. }
+                    | Expr::IndexGet { object, .. }
+                    | Expr::RegionOut { object, .. } => {
                         if let Expr::LocalGet(id) = object.as_ref() {
                             if self.tracked_root(*id).is_some() {
                                 self.disq(*id, report::ESC_DELETE);

@@ -117,6 +117,7 @@ fn guarded_numeric_add_push_candidate(ctx: &FnCtx<'_>, value: &Expr) -> bool {
             op: perry_hir::BinaryOp::Add,
             left,
             right,
+            ..
         } => {
             guarded_numeric_add_push_candidate(ctx, left)
                 && guarded_numeric_add_push_candidate(ctx, right)
@@ -1807,6 +1808,7 @@ mod receiver_order_tests {
     fn push_ir(value: Expr) -> String {
         let mut hir = HirModule::new("apush_receiver_order_test");
         hir.functions.push(Function {
+            byte_offset: 0,
             id: 0,
             name: "pushes".to_string(),
             type_params: Vec::new(),
@@ -1825,7 +1827,7 @@ mod receiver_order_tests {
                     value: Box::new(value),
                     field_writeback: None,
                 }),
-                Stmt::Return(Some(Expr::LocalGet(0))),
+                Stmt::Return(Some(Expr::LocalGet(0)), 0),
             ],
             is_async: false,
             is_generator: false,
@@ -1921,6 +1923,7 @@ mod receiver_order_tests {
     #[test]
     fn rebinding_predicate_sees_nested_writes_only_for_the_right_local() {
         let nested = Expr::Binary {
+            byte_offset: 0,
             op: perry_hir::BinaryOp::Add,
             left: Box::new(Expr::Number(1.0)),
             right: Box::new(Expr::LocalSet(7, Box::new(Expr::Number(2.0)))),
@@ -1958,6 +1961,7 @@ mod parent_gate_tests {
     fn pushing_ir() -> String {
         let mut hir = HirModule::new("apush_parent_gate_test");
         hir.functions.push(Function {
+            byte_offset: 0,
             id: 0,
             name: "pushes".to_string(),
             type_params: Vec::new(),
@@ -1976,7 +1980,7 @@ mod parent_gate_tests {
                     value: Box::new(Expr::Object(vec![("v".to_string(), Expr::Number(1.0))])),
                     field_writeback: None,
                 }),
-                Stmt::Return(Some(Expr::LocalGet(0))),
+                Stmt::Return(Some(Expr::LocalGet(0)), 0),
             ],
             is_async: false,
             is_generator: false,

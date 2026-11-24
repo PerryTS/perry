@@ -35,6 +35,7 @@ fn assert_valid_ir(case: &str, body: Vec<Stmt>) {
         Expr::Array(vec![], None),
     )];
     module.functions.push(perry_hir::Function {
+        byte_offset: 0,
         id: 2,
         name: "consume".into(),
         type_params: vec![],
@@ -81,7 +82,7 @@ fn unresolved_worker_consumers_emit_valid_ir() {
                     value: Box::new(unresolved_worker()),
                     field_writeback: None,
                 }),
-                Stmt::Return(Some(Expr::LocalGet(3))),
+                Stmt::Return(Some(Expr::LocalGet(3)), 0),
             ],
         ),
         (
@@ -95,7 +96,7 @@ fn unresolved_worker_consumers_emit_valid_ir() {
                     byte_offset: 0,
                     byte_end: 0,
                 }),
-                Stmt::Return(Some(Expr::LocalGet(3))),
+                Stmt::Return(Some(Expr::LocalGet(3)), 0),
             ],
         ),
         (
@@ -107,7 +108,7 @@ fn unresolved_worker_consumers_emit_valid_ir() {
                     key: Box::new(Expr::Integer(1)),
                     value: Box::new(unresolved_worker()),
                 }),
-                Stmt::Return(Some(Expr::LocalGet(3))),
+                Stmt::Return(Some(Expr::LocalGet(3)), 0),
             ],
         ),
         (
@@ -133,7 +134,7 @@ fn unresolved_worker_consumers_emit_valid_ir() {
                     byte_offset: 0,
                     byte_end: 0,
                 }),
-                Stmt::Return(Some(Expr::LocalGet(3))),
+                Stmt::Return(Some(Expr::LocalGet(3)), 0),
             ],
         ),
     ];

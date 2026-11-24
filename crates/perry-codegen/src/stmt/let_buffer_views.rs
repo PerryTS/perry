@@ -418,6 +418,7 @@ fn length_source_from_expr(ctx: &FnCtx<'_>, expr: &perry_hir::Expr) -> Option<Le
             op: perry_hir::BinaryOp::Add,
             left,
             right,
+            ..
         } => match (left.as_ref(), right.as_ref()) {
             (perry_hir::Expr::LocalGet(id), perry_hir::Expr::Integer(addend))
             | (perry_hir::Expr::Integer(addend), perry_hir::Expr::LocalGet(id)) => {

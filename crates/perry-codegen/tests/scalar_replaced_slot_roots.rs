@@ -135,6 +135,7 @@ fn entry_opts() -> CompileOptions {
 
 fn module_with_init(name: &str, init: Vec<Stmt>) -> Module {
     Module {
+        byte_offset: 0,
         name: name.to_string(),
         imports: Vec::new(),
         exports: Vec::new(),
@@ -369,8 +370,8 @@ fn scalar_replaced_array_element_holding_a_heap_value_is_bound() {
                 Expr::Array(vec![heap_value(), Expr::Number(2.0)], None),
             ),
             console_log(vec![
-                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0))),
-                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(1))),
+                Expr::index_get_at(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0)), 0),
+                Expr::index_get_at(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(1)), 0),
             ]),
         ],
     );
@@ -394,9 +395,10 @@ fn numeric_only_scalar_replaced_array_emits_no_rooting() {
                 "a",
                 Expr::Array(vec![Expr::Number(1.0), Expr::Number(2.0)], None),
             ),
-            console_log(vec![Expr::synthetic_index_get(
+            console_log(vec![Expr::index_get_at(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::Integer(0)),
+                0,
             )]),
         ],
     );
@@ -450,8 +452,8 @@ fn scalar_replaced_split_parts_are_bound() {
             source.clone(),
             let_stmt(2, "parts", split),
             console_log(vec![
-                Expr::synthetic_index_get(Box::new(Expr::LocalGet(2)), Box::new(Expr::Integer(0))),
-                Expr::synthetic_index_get(Box::new(Expr::LocalGet(2)), Box::new(Expr::Integer(1))),
+                Expr::index_get_at(Box::new(Expr::LocalGet(2)), Box::new(Expr::Integer(0)), 0),
+                Expr::index_get_at(Box::new(Expr::LocalGet(2)), Box::new(Expr::Integer(1)), 0),
             ]),
         ],
     );
@@ -632,6 +634,7 @@ fn bind_is_hoisted_into_the_entry_block_ahead_of_the_storing_loop() {
             let_stmt(9, "n", Expr::Number(3.0)),
             Stmt::While {
                 condition: Expr::Compare {
+                    byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(9)),
                     right: Box::new(Expr::Number(3.0)),
@@ -716,8 +719,8 @@ fn scalar_replaced_array_element_slots_are_initialized_before_the_bind() {
                 Expr::Array(vec![heap_value(), Expr::Number(2.0)], None),
             ),
             console_log(vec![
-                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0))),
-                Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(1))),
+                Expr::index_get_at(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(0)), 0),
+                Expr::index_get_at(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(1)), 0),
             ]),
         ],
     );

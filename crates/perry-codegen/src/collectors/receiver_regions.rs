@@ -1490,7 +1490,7 @@ fn expr_region_ender_with_trusted_operation(
         // ---- Suspension ----------------------------------------------------
         // Control reaches the microtask pump, whose outermost boundary runs
         // the moving minor collection.
-        Expr::Await(_) | Expr::Yield { .. } | Expr::AsyncFirstCall { .. } => {
+        Expr::Await(_, _) | Expr::Yield { .. } | Expr::AsyncFirstCall { .. } => {
             Some(RegionEnder::Suspension)
         }
 
@@ -1504,7 +1504,7 @@ fn expr_region_ender_with_trusted_operation(
         | Expr::CallSpread { .. }
         | Expr::NativeMethodCall { .. }
         | Expr::StaticMethodCall { .. }
-        | Expr::SuperCall(_)
+        | Expr::SuperCall(_, _)
         | Expr::SuperCallSpread(_)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }
@@ -1535,7 +1535,9 @@ fn expr_region_ender_with_trusted_operation(
         // region model has the opposite obligation: missing one licenses a
         // stale cached address. `loop_purity` excludes them for the same
         // reason, via its `_ => false` arm.
-        Expr::PropertyGet { .. } | Expr::IndexGet { .. } => Some(RegionEnder::CollectingCall),
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. } | Expr::RegionOut { .. } => {
+            Some(RegionEnder::CollectingCall)
+        }
 
         // ---- Everything else -----------------------------------------------
         // Assume it collects. Adding a variant to the allowlist above requires
@@ -1636,10 +1638,10 @@ fn enders_in_stmt(
             enders_in_expr(e, is_inert, is_trusted_operation, out);
             out.push(RegionEnder::UnwindEdge);
         }
-        Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Return(Some(e)) => {
+        Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Return(Some(e), _) => {
             enders_in_expr(e, is_inert, is_trusted_operation, out)
         }
-        Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+        Stmt::Let { init: None, .. } | Stmt::Return(None, _) => {}
         Stmt::If {
             condition,
             then_branch,
@@ -1718,6 +1720,7 @@ fn enders_in_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             enders_in_expr(discriminant, is_inert, is_trusted_operation, out);
             for c in cases {

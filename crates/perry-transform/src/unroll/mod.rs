@@ -454,7 +454,9 @@ fn try_unroll_for(
 
     // 2. Condition must be `LocalGet(iv_id) {<,<=} INTEGER`.
     let (cmp_op, hi) = match condition.as_ref()? {
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             let left_id = match left.as_ref() {
                 Expr::LocalGet(id) if *id == iv_id => *id,
                 _ => return None,
@@ -576,7 +578,7 @@ fn stmt_is_unrollable(stmt: &Stmt, iv_id: LocalId, loop_depth: u32) -> bool {
             init.as_ref().is_none_or(|e| expr_is_unrollable(e, iv_id))
         }
         Stmt::Expr(e) | Stmt::Throw(e) => expr_is_unrollable(e, iv_id),
-        Stmt::Return(opt) => opt.as_ref().is_none_or(|e| expr_is_unrollable(e, iv_id)),
+        Stmt::Return(opt, _) => opt.as_ref().is_none_or(|e| expr_is_unrollable(e, iv_id)),
         Stmt::If {
             condition,
             then_branch,
@@ -616,6 +618,7 @@ fn stmt_is_unrollable(stmt: &Stmt, iv_id: LocalId, loop_depth: u32) -> bool {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             // Switch case bodies have `break` that targets the switch (not
             // the enclosing for). Counted as depth + 1 to allow them.
@@ -664,7 +667,7 @@ fn substitute_localget_with_int_in_stmt(stmt: &mut Stmt, iv_id: LocalId, value: 
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => substitute_localget_with_int(e, iv_id, value),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 substitute_localget_with_int(e, iv_id, value);
             }
@@ -712,6 +715,7 @@ fn substitute_localget_with_int_in_stmt(stmt: &mut Stmt, iv_id: LocalId, value: 
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             substitute_localget_with_int(discriminant, iv_id, value);
             for c in cases {
@@ -843,7 +847,7 @@ fn refresh_in_stmt(
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => refresh_in_expr(e, remap, next_id, next_func_id),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 refresh_in_expr(e, remap, next_id, next_func_id);
             }
@@ -914,6 +918,7 @@ fn refresh_in_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             refresh_in_expr(discriminant, remap, next_id, next_func_id);
             for c in cases {
@@ -1146,6 +1151,7 @@ mod tests {
                 init: Some(integer(lo)),
             })),
             condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op,
                 left: Box::new(ivar(iv_id)),
                 right: Box::new(integer(hi)),
@@ -1167,6 +1173,7 @@ mod tests {
         let body = vec![Stmt::Expr(Expr::LocalSet(
             acc,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(acc)),
                 right: Box::new(ivar(i)),
@@ -1259,6 +1266,7 @@ mod tests {
     fn rejects_loop_with_try() {
         let i = 1u32;
         let body = vec![Stmt::Try {
+            byte_offset: 0,
             body: vec![],
             catch: None,
             finally: None,
@@ -1281,6 +1289,7 @@ mod tests {
                 init: Some(Expr::LocalGet(99)),
             })),
             condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(i)),
                 right: Box::new(integer(3)),
@@ -1307,6 +1316,7 @@ mod tests {
                 init: Some(integer(0)),
             })),
             condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(i)),
                 right: Box::new(Expr::LocalGet(99)),
@@ -1334,8 +1344,10 @@ mod tests {
         let inner_body = vec![Stmt::Expr(Expr::LocalSet(
             acc,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(acc)),
                     right: Box::new(Expr::LocalGet(ky)),
@@ -1367,6 +1379,7 @@ mod tests {
                             op: BinaryOp::Add,
                             left,
                             right,
+                            ..
                         } => {
                             // left = (acc + ky); right = kx
                             match right.as_ref() {
@@ -1437,6 +1450,7 @@ mod tests {
         let i = 1u32;
         let body = vec![Stmt::If {
             condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(i)),
                 right: Box::new(Expr::Integer(1)),
@@ -1459,6 +1473,7 @@ mod tests {
             vec![Stmt::Expr(Expr::LocalSet(
                 acc,
                 Box::new(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(acc)),
                     right: Box::new(Expr::LocalGet(i)),
@@ -1500,7 +1515,7 @@ mod tests {
             init: Some(ivar(i)),
         }];
         let f = make_for(i, 0, 3, body, CompareOp::Lt);
-        let mut stmts = vec![f, Stmt::Return(Some(Expr::LocalGet(t)))];
+        let mut stmts = vec![f, Stmt::Return(Some(Expr::LocalGet(t)), 0)];
         let mut changed = false;
         run_unroll_in_stmts(&mut stmts, &mut changed);
         assert!(changed, "expected unroll to fire");
@@ -1516,7 +1531,7 @@ mod tests {
             }
         }
         match &stmts[3] {
-            Stmt::Return(Some(Expr::LocalGet(id))) => {
+            Stmt::Return(Some(Expr::LocalGet(id)), _) => {
                 assert_eq!(*id, t, "post-loop read must still bind the original id")
             }
             other => panic!("expected Return(LocalGet(t)), got {:?}", other),
@@ -1553,6 +1568,7 @@ mod tests {
             },
             Stmt::If {
                 condition: Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(ivar(i)),
                     right: Box::new(integer(0)),
@@ -1653,10 +1669,11 @@ mod tests {
         let body = vec![Stmt::Expr(Expr::ArrayPush {
             array_id: fns,
             value: Box::new(Expr::Closure {
+                byte_offset: 0,
                 func_id: 0,
                 params: vec![],
                 return_type: Type::Number,
-                body: vec![Stmt::Return(Some(integer(1)))],
+                body: vec![Stmt::Return(Some(integer(1)), 0)],
                 captures: vec![],
                 mutable_captures: vec![],
                 captures_this: false,
@@ -1692,6 +1709,7 @@ mod tests {
         let mut expression = ivar(1);
         for _ in 0..40 {
             expression = Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(expression),
                 right: Box::new(integer(1)),
@@ -1720,6 +1738,7 @@ mod tests {
         let accumulate = Stmt::Expr(Expr::LocalSet(
             100,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(ivar(100)),
                 right: Box::new(ivar(2)),

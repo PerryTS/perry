@@ -175,7 +175,7 @@ fn collect_used_new_fields_in_stmts(
             Stmt::Expr(e) | Stmt::Throw(e) => {
                 collect_used_new_fields_in_expr(e, non_escaping_news, used)
             }
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     collect_used_new_fields_in_expr(e, non_escaping_news, used);
                 }
@@ -242,6 +242,7 @@ fn collect_used_new_fields_in_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 collect_used_new_fields_in_expr(discriminant, non_escaping_news, used);
                 for case in cases {
@@ -356,7 +357,7 @@ fn collect_used_new_fields_in_expr(
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
@@ -426,6 +427,7 @@ fn collect_used_new_fields_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             collect_used_new_fields_in_expr(condition, non_escaping_news, used);
             collect_used_new_fields_in_expr(then_expr, non_escaping_news, used);
@@ -455,7 +457,7 @@ fn collect_used_new_fields_in_expr(
                 collect_used_new_fields_in_expr(arg, non_escaping_news, used);
             }
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             collect_used_new_fields_in_expr(object, non_escaping_news, used);
             collect_used_new_fields_in_expr(index, non_escaping_news, used);
         }
@@ -499,7 +501,7 @@ fn collect_used_new_fields_in_expr(
             }
         }
         Expr::New { args, .. }
-        | Expr::SuperCall(args)
+        | Expr::SuperCall(args, _)
         | Expr::StaticMethodCall { args, .. }
         | Expr::SuperMethodCall { args, .. }
         | Expr::MathMin(args)
@@ -537,6 +539,7 @@ fn collect_used_new_fields_in_expr(
             key,
             receiver,
             args,
+            ..
         } => {
             collect_used_new_fields_in_expr(home, non_escaping_news, used);
             collect_used_new_fields_in_expr(key, non_escaping_news, used);

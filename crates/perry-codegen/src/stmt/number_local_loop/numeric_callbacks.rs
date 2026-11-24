@@ -227,6 +227,7 @@ pub(super) fn scalar_loop(
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => expr(ctx, condition, n) && expr(ctx, then_expr, n) && expr(ctx, else_expr, n),
             Expr::Call { callee, args, .. } => {
                 candidate(ctx, callee, args.len()).is_some() && args.iter().all(|a| expr(ctx, a, n))
@@ -241,7 +242,7 @@ pub(super) fn scalar_loop(
         use perry_hir::Stmt;
         match s {
             Stmt::Expr(e) | Stmt::Throw(e) => expr(ctx, e, n),
-            Stmt::Let { init, .. } | Stmt::Return(init) => {
+            Stmt::Let { init, .. } | Stmt::Return(init, _) => {
                 init.as_ref().is_none_or(|e| expr(ctx, e, n))
             }
             Stmt::If {

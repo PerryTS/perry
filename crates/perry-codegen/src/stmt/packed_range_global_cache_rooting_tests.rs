@@ -41,6 +41,7 @@ fn counted_store_loop(target: u32, value: Expr) -> Stmt {
             init: Some(Expr::Integer(0)),
         })),
         condition: Some(Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(J)),
             right: Box::new(Expr::Integer(80)),
@@ -67,12 +68,13 @@ fn counted_store_loop(target: u32, value: Expr) -> Stmt {
 fn grown_global_module() -> Module {
     let mut m = Module::new("grown_global.ts");
     m.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "read".to_string(),
         type_params: Vec::new(),
         params: Vec::new(),
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::LocalGet(D)))],
+        body: vec![Stmt::Return(Some(Expr::LocalGet(D)), 0)],
         is_async: false,
         is_generator: false,
         is_strict: true,
@@ -94,6 +96,7 @@ fn grown_global_module() -> Module {
         counted_store_loop(
             D,
             Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Mul,
                 left: Box::new(Expr::LocalGet(J)),
                 right: Box::new(Expr::Integer(7)),

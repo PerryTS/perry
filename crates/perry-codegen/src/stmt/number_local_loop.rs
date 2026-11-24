@@ -117,6 +117,7 @@ impl<'a> LoopFacts<'a> {
                 if !mutable {
                     if let Some(
                         init @ (Expr::IndexGet { .. }
+                        | Expr::RegionOut { .. }
                         | Expr::Uint8ArrayGet { .. }
                         | Expr::BufferIndexGet { .. }),
                     ) = init
@@ -128,7 +129,7 @@ impl<'a> LoopFacts<'a> {
                 init.as_ref().is_none_or(|init| self.walk_expr(ctx, init))
             }
             Stmt::Expr(expr) | Stmt::Throw(expr) => self.walk_expr(ctx, expr),
-            Stmt::Return(value) => value
+            Stmt::Return(value, _) => value
                 .as_ref()
                 .is_none_or(|value| self.walk_expr(ctx, value)),
             Stmt::Break | Stmt::Continue => true,
@@ -190,7 +191,7 @@ impl<'a> LoopFacts<'a> {
             // frame's storage protocol, and other receiver accesses belong to the
             // region tier that runs after this one.
             Expr::Closure { .. }
-            | Expr::Await(_)
+            | Expr::Await(_, _)
             | Expr::Yield { .. }
             | Expr::PropertySet { .. }
             | Expr::IndexSet { .. }
@@ -207,6 +208,7 @@ impl<'a> LoopFacts<'a> {
                 }
             }
             Expr::IndexGet { object, index, .. }
+            | Expr::RegionOut { object, index, .. }
             | Expr::Uint8ArrayGet {
                 array: object,
                 index,
@@ -215,7 +217,7 @@ impl<'a> LoopFacts<'a> {
                 buffer: object,
                 index,
             } => {
-                if matches!(expr, Expr::IndexGet { .. })
+                if matches!(expr, Expr::IndexGet { .. } | Expr::RegionOut { .. })
                     && crate::expr::ta_element_read::receiver_kind(ctx, object) != Some(1)
                 {
                     return false;
@@ -233,7 +235,7 @@ impl<'a> LoopFacts<'a> {
                 {
                     // Preserve the general read's existing Number-counter
                     // admission without publishing a byte-result proof.
-                    if !matches!(expr, Expr::IndexGet { .. }) {
+                    if !matches!(expr, Expr::IndexGet { .. } | Expr::RegionOut { .. }) {
                         return false;
                     }
                 } else {
@@ -249,7 +251,9 @@ impl<'a> LoopFacts<'a> {
             Expr::Update { id, .. } => {
                 self.writes.entry(*id).or_default().push(None);
             }
-            Expr::Binary { op, left, right } if is_bitwise(*op) => {
+            Expr::Binary {
+                op, left, right, ..
+            } if is_bitwise(*op) => {
                 for operand in [left.as_ref(), right.as_ref()] {
                     if let Expr::LocalGet(id) = operand {
                         self.numeric_consumers.insert(*id);
@@ -307,7 +311,9 @@ fn produces_number(ctx: &FnCtx<'_>, expr: &Expr, numbers: &BTreeSet<u32>) -> boo
         Expr::Update { id, .. } => {
             numbers.contains(id) || crate::type_analysis::is_numeric_expr(ctx, &Expr::LocalGet(*id))
         }
-        Expr::Binary { op, left, right } => match op {
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
             BinaryOp::Add => {
                 produces_number(ctx, left, numbers) && produces_number(ctx, right, numbers)
             }
@@ -694,7 +700,7 @@ pub(super) fn has_guarded_byte_index(ctx: &FnCtx<'_>, body: &[Stmt], controls: &
     fn guarded(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
         let index = match expr {
             Expr::Uint8ArrayGet { index, .. } | Expr::BufferIndexGet { index, .. } => index,
-            Expr::IndexGet { object, index, .. }
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
                 if crate::expr::ta_element_read::receiver_kind(ctx, object) == Some(1) =>
             {
                 index

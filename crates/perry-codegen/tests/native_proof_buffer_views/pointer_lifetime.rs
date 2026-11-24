@@ -24,7 +24,7 @@ fn backing_buffer_exposure_records_pointer_invalidation_before_fallback() {
             },
         ),
         array_set(1, int(0), int(0x01020304)),
-        Stmt::Return(Some(index_get(2, int(0)))),
+        Stmt::Return(Some(index_get(2, int(0))), 0),
     ];
 
     let mut opts = empty_opts();
@@ -79,7 +79,7 @@ fn computed_backing_buffer_exposure_invalidates_cached_pointer() {
         ),
         Stmt::Expr(index_get(1, Expr::String("buffer".to_string()))),
         array_set(1, int(0), int(0x01020304)),
-        Stmt::Return(Some(index_get(1, int(0)))),
+        Stmt::Return(Some(index_get(1, int(0))), 0),
     ];
 
     let mut opts = empty_opts();
@@ -126,7 +126,7 @@ fn named_typed_array_getter_invalidates_cached_pointer() {
         // invoke an accessor that reads `this.buffer` and rebinds storage.
         Stmt::Expr(index_get(1, Expr::String("probe".to_string()))),
         array_set(1, int(0), int(0x01020304)),
-        Stmt::Return(Some(index_get(1, int(0)))),
+        Stmt::Return(Some(index_get(1, int(0))), 0),
     ];
 
     let mut opts = empty_opts();
@@ -171,7 +171,7 @@ fn canonical_numeric_string_get_preserves_cached_pointer() {
         ),
         Stmt::Expr(index_get(1, Expr::String("0".to_string()))),
         array_set(1, int(0), int(7)),
-        Stmt::Return(Some(index_get(1, int(0)))),
+        Stmt::Return(Some(index_get(1, int(0))), 0),
     ];
 
     let mut opts = empty_opts();
@@ -228,7 +228,7 @@ fn backing_buffer_exposure_invalidates_copied_view_alias_group() {
             property: "buffer".to_string(),
         }),
         array_set(1, int(0), int(0x01020304)),
-        Stmt::Return(Some(index_get(1, int(0)))),
+        Stmt::Return(Some(index_get(1, int(0))), 0),
     ];
 
     let mut opts = empty_opts();
@@ -270,7 +270,7 @@ fn native_memory_bulk_access_rejects_invalidated_cached_pointer() {
             view: Box::new(local(1)),
             value: Box::new(int(0)),
         }),
-        Stmt::Return(Some(index_get(1, int(0)))),
+        Stmt::Return(Some(index_get(1, int(0))), 0),
     ];
 
     let mut opts = empty_opts();

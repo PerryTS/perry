@@ -122,7 +122,7 @@ fn ordinary_counted_array_region_enders(
     let is_trusted_operation = |expr: &perry_hir::Expr| {
         let trusted = matches!(
             expr,
-            perry_hir::Expr::IndexGet { object, index , .. }
+            perry_hir::Expr::IndexGet { object, index , .. } | perry_hir::Expr::RegionOut { object, index, .. }
                 if matches!(object.as_ref(), perry_hir::Expr::LocalGet(id) if *id == hoist.arr_id)
                     && matches!(index.as_ref(), perry_hir::Expr::LocalGet(id) if *id == hoist.counter_id)
         );
@@ -265,6 +265,7 @@ fn match_numeric_bulk_fill_loop(
             op: perry_hir::CompareOp::Lt,
             left,
             right,
+            ..
         } if matches!(left.as_ref(), perry_hir::Expr::LocalGet(id) if *id == counter_id) => {
             right.as_ref().clone()
         }
@@ -448,6 +449,7 @@ fn match_numeric_range_add_loop(
             op: CompareOp::Lt,
             left,
             right,
+            ..
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) => right.as_ref(),
         _ => return None,
     };
@@ -474,12 +476,13 @@ fn match_numeric_range_add_loop(
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } if matches!(
             left.as_ref(),
             Expr::IndexGet {
                 object,
                 index
-            , .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
+            , .. } | Expr::RegionOut { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
                 && matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id)
         ) =>
         {
@@ -662,6 +665,7 @@ fn match_strided_tagged_fill_loop(
         op: CompareOp::Lt,
         left,
         right,
+        ..
     }) = condition
     else {
         return None;
@@ -699,6 +703,7 @@ fn match_strided_tagged_fill_loop(
                 op: BinaryOp::Add,
                 left,
                 right,
+                ..
             } => match (left.as_ref(), right.as_ref()) {
                 (Expr::LocalGet(l), other) if *l == counter_id => invariant_operand(other)?,
                 (other, Expr::LocalGet(r)) if *r == counter_id => invariant_operand(other)?,
@@ -1217,7 +1222,9 @@ fn lower_packed_f64_versioned_for_with_protocol(
                         lower_expr(
                             ctx,
                             &perry_hir::Expr::Conditional {
+                                byte_offset: 0, /*HPOS*/
                                 condition: Box::new(perry_hir::Expr::Compare {
+                                    byte_offset: 0, /*HPOS*/
                                     op: perry_hir::CompareOp::Eq,
                                     left: Box::new(perry_hir::Expr::LocalGet(*state)),
                                     right: Box::new(perry_hir::Expr::Number(0.0)),
@@ -1400,7 +1407,9 @@ fn match_packed_f64_range_loop(
         return range_loop_reject("start_out_of_i32_range");
     }
     let (op, left, right) = match condition? {
-        Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
+        Expr::Compare {
+            op, left, right, ..
+        } => (*op, left.as_ref(), right.as_ref()),
         _ => return range_loop_reject("condition_not_compare"),
     };
     if !matches!(op, CompareOp::Lt) || !matches!(left, Expr::LocalGet(id) if *id == counter_id) {
@@ -1931,7 +1940,9 @@ fn packed_f64_range_loop_alias_init_is_stable(init: &perry_hir::Expr) -> bool {
     use perry_hir::{BinaryOp, Expr};
     match init {
         Expr::LocalGet(_) | Expr::Integer(_) | Expr::Number(_) => true,
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             matches!(op, BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul)
                 && packed_f64_range_loop_alias_init_is_stable(left)
                 && packed_f64_range_loop_alias_init_is_stable(right)
@@ -2056,6 +2067,7 @@ fn packed_f64_range_loop_index_is_affine_with(
             op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul,
             left,
             right,
+            ..
         } => {
             packed_f64_range_loop_index_is_affine_with(left, counter_id, leaf_ok)
                 && packed_f64_range_loop_index_is_affine_with(right, counter_id, leaf_ok)
@@ -2151,23 +2163,23 @@ fn packed_f64_range_loop_index_offset(index: &perry_hir::Expr, counter_id: u32) 
     use perry_hir::{BinaryOp, Expr};
     let offset = match index {
         Expr::LocalGet(id) if *id == counter_id => Some(0i64),
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
-            match (left.as_ref(), right.as_ref()) {
-                (Expr::LocalGet(id), Expr::Integer(c)) if *id == counter_id => {
-                    if matches!(op, BinaryOp::Sub) {
-                        c.checked_neg()
-                    } else {
-                        Some(*c)
-                    }
-                }
-                (Expr::Integer(c), Expr::LocalGet(id))
-                    if *id == counter_id && matches!(op, BinaryOp::Add) =>
-                {
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => match (left.as_ref(), right.as_ref()) {
+            (Expr::LocalGet(id), Expr::Integer(c)) if *id == counter_id => {
+                if matches!(op, BinaryOp::Sub) {
+                    c.checked_neg()
+                } else {
                     Some(*c)
                 }
-                _ => None,
             }
-        }
+            (Expr::Integer(c), Expr::LocalGet(id))
+                if *id == counter_id && matches!(op, BinaryOp::Add) =>
+            {
+                Some(*c)
+            }
+            _ => None,
+        },
         _ => None,
     }?;
     if offset.unsigned_abs() > PACKED_F64_RANGE_LOOP_MAX_OFFSET as u64 {
@@ -2579,7 +2591,7 @@ fn dense_masked_store_rhs_is_admissible(
         // pure walk records its window for the same dense guard, and the
         // lowering serves it from the clone's `PackedF64LoopFact` as a raw
         // load of a slot that guard proved holds a raw-f64 number (#10718).
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(_))
                 && (packed_f64_range_loop_index_offset(index, counter_id).is_some()
                     || crate::collectors::static_index_window(index)
@@ -2588,7 +2600,9 @@ fn dense_masked_store_rhs_is_admissible(
         // Float arithmetic over admitted operands — see the lowering-side
         // twin (`masked_store_rhs_is_genuine_f64`) for the argument. `%`/`**`
         // stay excluded (runtime-helper lowerings).
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             matches!(
                 op,
                 perry_hir::BinaryOp::Add
@@ -2713,7 +2727,7 @@ fn masked_window_expression_proof(
         // read. Under its active fact the access itself is a guarded numeric
         // load, but evaluating the index must still pass this same whole-tree
         // proof before that fact may be installed.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             if !matches!(object.as_ref(), Expr::LocalGet(_)) {
                 return None;
             }
@@ -2750,7 +2764,9 @@ fn masked_window_expression_proof(
         Expr::Update { .. } => {
             crate::rooting::expr_is_inert_primitive(ctx, expr).then(|| proof(true, true))
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let left = masked_window_expression_proof(ctx, left, accumulator)?;
             let right = masked_window_expression_proof(ctx, right, accumulator)?;
             if matches!(op, BinaryOp::Add) {
@@ -2762,7 +2778,9 @@ fn masked_window_expression_proof(
             }
             Some(proof(true, true))
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             let left = masked_window_expression_proof(ctx, left, accumulator)?;
             let right = masked_window_expression_proof(ctx, right, accumulator)?;
             if !matches!(op, CompareOp::Eq | CompareOp::Ne) && (!left.inert || !right.inert) {
@@ -2789,6 +2807,7 @@ fn masked_window_expression_proof(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             masked_window_expression_proof(ctx, condition, accumulator)?;
             let then_expr = masked_window_expression_proof(ctx, then_expr, accumulator)?;
@@ -2854,7 +2873,7 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
 ) -> bool {
     use perry_hir::Expr;
     match expr {
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             let Expr::LocalGet(arr_id) = object.as_ref() else {
                 return false;
             };
@@ -2948,6 +2967,7 @@ pub(super) fn packed_f64_range_loop_pure_expr_collect(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             packed_f64_range_loop_pure_expr_collect(
                 condition,
@@ -4139,11 +4159,12 @@ fn match_object_array_write_number(
             Some(ObjectArrayWriteNumber::Constant(*n as f64))
         }
         Expr::Number(n) if n.is_finite() => Some(ObjectArrayWriteNumber::Constant(*n)),
-        Expr::Binary { op, left, right }
-            if matches!(
-                op,
-                BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Mod
-            ) =>
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(
+            op,
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Mod
+        ) =>
         {
             let left =
                 match_object_array_write_number(left, outer_counter_id, inner_counter_id, temps)?;
@@ -4289,6 +4310,7 @@ fn match_constant_counted_for(
             op: CompareOp::Lt,
             left,
             right,
+            ..
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) => {
             match_nonnegative_constant_i32_with_ctx(ctx, right)?
         }
@@ -4373,6 +4395,7 @@ fn match_object_array_write_loop(
                             op: perry_hir::CompareOp::Lt,
                             left,
                             right,
+                            ..
                         } if matches!(left.as_ref(), Expr::LocalGet(l) if *l == id) => {
                             match right.as_ref() {
                                 Expr::PropertyGet {
@@ -4425,6 +4448,7 @@ fn match_object_array_write_loop(
                         op: CompareOp::Lt,
                         left,
                         right,
+                        ..
                     } if matches!(left.as_ref(), Expr::LocalGet(id) if id == while_counter) => {
                         match_nonnegative_constant_i32_with_ctx(ctx, right)?
                     }
@@ -4483,7 +4507,11 @@ fn match_object_array_write_loop(
         let Some((
             Stmt::Let {
                 id: alias_id,
-                init: Some(Expr::IndexGet { object, index, .. }),
+                init:
+                    Some(
+                        Expr::IndexGet { object, index, .. }
+                        | Expr::RegionOut { object, index, .. },
+                    ),
                 ..
             },
             tail,
@@ -4553,7 +4581,7 @@ fn match_object_array_write_loop(
             t2,
         )) = cursor.split_first()
         {
-            if matches!(temp_init, Expr::IndexGet { .. }) {
+            if matches!(temp_init, Expr::IndexGet { .. } | Expr::RegionOut { .. }) {
                 // Next group's alias — but a group needs >= 1 store first,
                 // enforced below when the store loop parses nothing.
                 break;
@@ -4601,11 +4629,16 @@ fn match_object_array_write_loop(
             // #6812 (w12): `o[K[idx]] = v` — a table-driven lane. Only as
             // the SOLE store of the sole group (v1); recognized before the
             // static key forms and finalized after the loop.
-            if let Expr::IndexGet {
+            if let (Expr::IndexGet {
                 object: table_obj,
                 index: table_idx,
                 ..
-            } = key.as_ref()
+            }
+            | Expr::RegionOut {
+                object: table_obj,
+                index: table_idx,
+                ..
+            }) = key.as_ref()
             {
                 if let Expr::LocalGet(table_id) = table_obj.as_ref() {
                     if properties.is_empty()
@@ -4883,6 +4916,7 @@ fn lower_object_array_write_versioned_for(
             return Ok(false);
         };
         let peel_cond = perry_hir::Expr::Compare {
+            byte_offset: 0, /*HPOS*/
             op: perry_hir::CompareOp::Lt,
             left: Box::new(perry_hir::Expr::LocalGet(*id)),
             right: Box::new(perry_hir::Expr::Integer(i64::from(matched.outer_start) + 1)),
@@ -6009,7 +6043,7 @@ fn stmt_is_packed_f64_loop_safe(
         Stmt::Break | Stmt::Continue => packed_loop_abrupt_enabled(),
         // Same argument, once the returned expression itself is safe — it is
         // evaluated in the loop body like any other operand.
-        Stmt::Return(value) => {
+        Stmt::Return(value, _) => {
             packed_loop_abrupt_enabled()
                 && value
                     .as_ref()
@@ -6102,7 +6136,7 @@ fn expr_is_packed_f64_loop_store_rhs_safe(
     use perry_hir::Expr;
 
     match expr {
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             is_packed_f64_loop_index(object, index, arr_id, counter_id)
         }
         Expr::LocalGet(id) => *id != arr_id && crate::type_analysis::is_numeric_expr(ctx, expr),
@@ -6126,7 +6160,7 @@ fn expr_is_packed_f64_loop_store_abs_rhs_safe(
 ) -> bool {
     matches!(
         expr,
-        perry_hir::Expr::IndexGet { object, index , .. }
+        perry_hir::Expr::IndexGet { object, index , .. } | perry_hir::Expr::RegionOut { object, index, .. }
             if is_packed_f64_loop_index(object, index, arr_id, counter_id)
     )
 }
@@ -6140,7 +6174,7 @@ fn expr_is_packed_i32_loop_store_rhs_safe(
     use perry_hir::{BinaryOp, Expr};
 
     match expr {
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             is_packed_f64_loop_index(object, index, arr_id, counter_id)
         }
         Expr::LocalGet(id) => *id != arr_id && local_is_int32_value(ctx, *id),
@@ -6161,22 +6195,24 @@ fn expr_is_packed_i32_loop_store_rhs_safe(
             op: BinaryOp::BitOr,
             left,
             right,
+            ..
         } if matches!(right.as_ref(), Expr::Integer(0)) => {
             expr_is_packed_i32_loop_store_rhs_safe(ctx, left, arr_id, counter_id)
         }
-        Expr::Binary { op, left, right }
-            if matches!(
-                op,
-                BinaryOp::Add
-                    | BinaryOp::Sub
-                    | BinaryOp::Mul
-                    | BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::Shl
-                    | BinaryOp::Shr
-                    | BinaryOp::UShr
-            ) =>
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(
+            op,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+                | BinaryOp::UShr
+        ) =>
         {
             expr_is_packed_i32_loop_store_rhs_safe(ctx, left, arr_id, counter_id)
                 && expr_is_packed_i32_loop_store_rhs_safe(ctx, right, arr_id, counter_id)
@@ -6271,7 +6307,7 @@ fn expr_is_coercion_free_primitive(
         Expr::LocalGet(id) => *id == counter_id,
         // An element of the packed f64 array is a genuine double: the versioned
         // loop only entered the fast clone after proving that layout.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(id) if *id == arr_id)
                 && expr_is_coercion_free_primitive(ctx, index, arr_id, counter_id)
         }
@@ -6294,7 +6330,7 @@ fn expr_is_packed_f64_loop_safe(
 ) -> bool {
     use perry_hir::{ArrayElement, Expr};
     match expr {
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             is_packed_f64_loop_foreign_read_index(ctx, object, index, arr_id, counter_id)
         }
         // A numeric-store fallback can downgrade/invalidate raw-f64 layout.
@@ -6333,6 +6369,7 @@ fn expr_is_packed_f64_loop_safe(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             expr_is_packed_f64_loop_safe(ctx, condition, arr_id, counter_id)
                 && expr_is_packed_f64_loop_safe(ctx, then_expr, arr_id, counter_id)
@@ -7227,6 +7264,7 @@ fn lower_overflow_exit_for(
             op: op @ (BinaryOp::Add | BinaryOp::Mul),
             left,
             right,
+            ..
         } if !matches!(left.as_ref(), Expr::Binary { .. })
             && !matches!(right.as_ref(), Expr::Binary { .. }) =>
         {
@@ -7587,15 +7625,16 @@ fn collect_counter_indexed_views(
                 op: BinaryOp::BitOr,
                 left,
                 right,
+                ..
             } => matches!(right.as_ref(), Expr::Integer(0)) && is_counter(left, counter_id),
             _ => false,
         }
     }
     fn visit(ctx: &FnCtx<'_>, body: &[Stmt], e: &Expr, counter_id: u32, out: &mut Vec<u32>) {
         let access = match e {
-            Expr::IndexGet { object, index, .. } | Expr::IndexSet { object, index, .. } => {
-                Some((object.as_ref(), index.as_ref()))
-            }
+            Expr::IndexGet { object, index, .. }
+            | Expr::RegionOut { object, index, .. }
+            | Expr::IndexSet { object, index, .. } => Some((object.as_ref(), index.as_ref())),
             Expr::Uint8ArrayGet { array, index } | Expr::Uint8ArraySet { array, index, .. } => {
                 Some((array.as_ref(), index.as_ref()))
             }
@@ -7640,7 +7679,7 @@ fn collect_stmt_exprs<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a perry_hir::Expr>)
             Stmt::Let { init: Some(e), .. }
             | Stmt::Expr(e)
             | Stmt::Throw(e)
-            | Stmt::Return(Some(e)) => out.push(e),
+            | Stmt::Return(Some(e), _) => out.push(e),
             Stmt::If {
                 condition,
                 then_branch,
@@ -7693,6 +7732,7 @@ fn collect_stmt_exprs<'a>(stmts: &'a [Stmt], out: &mut Vec<&'a perry_hir::Expr>)
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 out.push(discriminant);
                 for c in cases {
@@ -7720,6 +7760,7 @@ fn overflow_exit_step_operand(
                 op: BinaryOp::Add,
                 left,
                 right,
+                ..
             } => match (left.as_ref(), right.as_ref()) {
                 (Expr::LocalGet(l), s) if *l == counter_id => Some(s),
                 (s, Expr::LocalGet(r)) if *r == counter_id => Some(s),
@@ -8984,10 +9025,10 @@ fn collect_guarded_array_aliases_in_stmt(
             collect_guarded_array_alias_for_local_write(ctx, arr_id, *id, expr, aliases)
                 | collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
         }),
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+        Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
             collect_guarded_array_aliases_in_expr(ctx, arr_id, expr, aliases)
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -9041,6 +9082,7 @@ fn collect_guarded_array_aliases_in_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             collect_guarded_array_aliases_in_expr(ctx, arr_id, discriminant, aliases)
                 | cases.iter().any(|case| {
@@ -9108,7 +9150,9 @@ fn classify_for_length_hoist_impl(
 ) -> Option<LengthHoist> {
     use perry_hir::{BinaryOp, CompareOp, Expr};
     let (op, left, right) = match cond {
-        Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
+        Expr::Compare {
+            op, left, right, ..
+        } => (*op, left.as_ref(), right.as_ref()),
         _ => return None,
     };
     if !matches!(op, CompareOp::Lt | CompareOp::Le) {
@@ -9152,28 +9196,28 @@ fn classify_for_length_hoist_impl(
     );
     let (bounded_idx_id, lhs_addend) = match left {
         Expr::LocalGet(id) => (*id, 0),
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
-            match (left.as_ref(), right.as_ref()) {
-                (Expr::LocalGet(id), Expr::Integer(addend)) => {
-                    let addend = if matches!(op, BinaryOp::Sub) {
-                        addend.checked_neg()?
-                    } else {
-                        *addend
-                    };
-                    if !(0..=i32::MAX as i64).contains(&addend) {
-                        return None;
-                    }
-                    (*id, addend as i32)
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => match (left.as_ref(), right.as_ref()) {
+            (Expr::LocalGet(id), Expr::Integer(addend)) => {
+                let addend = if matches!(op, BinaryOp::Sub) {
+                    addend.checked_neg()?
+                } else {
+                    *addend
+                };
+                if !(0..=i32::MAX as i64).contains(&addend) {
+                    return None;
                 }
-                (Expr::Integer(addend), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => {
-                    if !(0..=i32::MAX as i64).contains(addend) {
-                        return None;
-                    }
-                    (*id, *addend as i32)
-                }
-                _ => return None,
+                (*id, addend as i32)
             }
-        }
+            (Expr::Integer(addend), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => {
+                if !(0..=i32::MAX as i64).contains(addend) {
+                    return None;
+                }
+                (*id, *addend as i32)
+            }
+            _ => return None,
+        },
         _ => return None,
     };
     let has_strict_bound = matches!(op, CompareOp::Lt) && lhs_addend == 0;
@@ -9241,7 +9285,9 @@ fn classify_for_length_hoist_rejection(
 ) -> Option<LengthHoistRejection> {
     use perry_hir::{BinaryOp, CompareOp, Expr};
     let (op, left, right) = match cond {
-        Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
+        Expr::Compare {
+            op, left, right, ..
+        } => (*op, left.as_ref(), right.as_ref()),
         _ => return None,
     };
     if !matches!(op, CompareOp::Lt | CompareOp::Le) {
@@ -9262,28 +9308,28 @@ fn classify_for_length_hoist_rejection(
     }
     let (bounded_idx_id, lhs_addend) = match left {
         Expr::LocalGet(id) => (*id, 0),
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
-            match (left.as_ref(), right.as_ref()) {
-                (Expr::LocalGet(id), Expr::Integer(addend)) => {
-                    let addend = if matches!(op, BinaryOp::Sub) {
-                        addend.checked_neg()?
-                    } else {
-                        *addend
-                    };
-                    if !(0..=i32::MAX as i64).contains(&addend) {
-                        return None;
-                    }
-                    (*id, addend as i32)
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => match (left.as_ref(), right.as_ref()) {
+            (Expr::LocalGet(id), Expr::Integer(addend)) => {
+                let addend = if matches!(op, BinaryOp::Sub) {
+                    addend.checked_neg()?
+                } else {
+                    *addend
+                };
+                if !(0..=i32::MAX as i64).contains(&addend) {
+                    return None;
                 }
-                (Expr::Integer(addend), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => {
-                    if !(0..=i32::MAX as i64).contains(addend) {
-                        return None;
-                    }
-                    (*id, *addend as i32)
-                }
-                _ => return None,
+                (*id, addend as i32)
             }
-        }
+            (Expr::Integer(addend), Expr::LocalGet(id)) if matches!(op, BinaryOp::Add) => {
+                if !(0..=i32::MAX as i64).contains(addend) {
+                    return None;
+                }
+                (*id, *addend as i32)
+            }
+            _ => return None,
+        },
         _ => return None,
     };
     let has_strict_bound = matches!(op, CompareOp::Lt) && lhs_addend == 0;
@@ -9364,7 +9410,9 @@ pub(crate) fn classify_for_local_bound(
 ) -> Option<(u32, u32, perry_hir::CompareOp)> {
     use perry_hir::{CompareOp, Expr};
     let (op, left, right) = match cond {
-        Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
+        Expr::Compare {
+            op, left, right, ..
+        } => (*op, left.as_ref(), right.as_ref()),
         _ => return None,
     };
     if !matches!(op, CompareOp::Lt | CompareOp::Le) {
@@ -9424,7 +9472,9 @@ pub(crate) fn classify_for_local_bound_dynamic(
 ) -> Option<(u32, u32, perry_hir::CompareOp)> {
     use perry_hir::{CompareOp, Expr};
     let (op, left, right) = match cond {
-        Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
+        Expr::Compare {
+            op, left, right, ..
+        } => (*op, left.as_ref(), right.as_ref()),
         _ => return None,
     };
     if !matches!(op, CompareOp::Lt | CompareOp::Le) {
@@ -9609,10 +9659,10 @@ fn stmt_mutates_local(stmt: &perry_hir::Stmt, local_id: u32) -> bool {
         Stmt::Let { init, .. } => init
             .as_ref()
             .is_some_and(|expr| expr_mutates_local(expr, local_id)),
-        Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+        Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
             expr_mutates_local(expr, local_id)
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -9670,6 +9720,7 @@ fn stmt_mutates_local(stmt: &perry_hir::Stmt, local_id: u32) -> bool {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             expr_mutates_local(discriminant, local_id)
                 || cases.iter().any(|case| {
@@ -9744,7 +9795,7 @@ fn stmt_array_length_effect(
         Stmt::Expr(e) | Stmt::Throw(e) => {
             expr_array_length_effect(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
         }
-        Stmt::Return(opt) => opt.as_ref().map_or(LoopArrayLengthEffect::Preserves, |e| {
+        Stmt::Return(opt, _) => opt.as_ref().map_or(LoopArrayLengthEffect::Preserves, |e| {
             expr_array_length_effect(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
         }),
         Stmt::Let { init, .. } => init.as_ref().map_or(LoopArrayLengthEffect::Preserves, |e| {
@@ -9901,6 +9952,7 @@ fn stmt_array_length_effect(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => first_blocking_loop_effect(
             std::iter::once(expr_array_length_effect(
                 ctx,
@@ -10085,7 +10137,7 @@ fn expr_array_length_effect(
             LoopArrayLengthEffect::UnknownCallEscape
         }
         Expr::Closure { .. } => LoopArrayLengthEffect::UnknownCallEscape,
-        Expr::Await(operand) | Expr::QueueMicrotask(operand) => {
+        Expr::Await(operand, _) | Expr::QueueMicrotask(operand) => {
             let operand_effect = walk(operand);
             if operand_effect != LoopArrayLengthEffect::Preserves {
                 operand_effect
@@ -10111,10 +10163,11 @@ fn expr_array_length_effect(
             condition,
             then_expr,
             else_expr,
+            ..
         } => first_blocking_loop_effect([walk(condition), walk(then_expr), walk(else_expr)]),
         Expr::PropertyGet { object, .. } => walk(object),
         Expr::PropertySet { .. } => LoopArrayLengthEffect::DynamicPropertyWrite,
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             first_blocking_loop_effect([walk(object), walk(index)])
         }
         Expr::Uint8ArrayGet { array, index } => {
@@ -10201,7 +10254,7 @@ pub(crate) fn stmt_preserves_array_length(
         Stmt::Expr(e) | Stmt::Throw(e) => {
             expr_preserves_array_length(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
         }
-        Stmt::Return(opt) => opt.as_ref().is_none_or(|e| {
+        Stmt::Return(opt, _) => opt.as_ref().is_none_or(|e| {
             expr_preserves_array_length(ctx, e, arr_id, bounded_idx_id, has_strict_bound, aliases)
         }),
         Stmt::Let { init, .. } => init.as_ref().is_none_or(|e| {
@@ -10346,6 +10399,7 @@ pub(crate) fn stmt_preserves_array_length(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             expr_preserves_array_length(
                 ctx,
@@ -10575,11 +10629,12 @@ pub(crate) fn expr_preserves_array_length(
         // Await can resume after user code/microtasks have run, so it cannot
         // preserve cached array length or bounded-index facts without a future
         // effect summary for the awaited value.
-        Expr::Await(_) => false,
+        Expr::Await(_, _) => false,
         Expr::Conditional {
             condition,
             then_expr,
             else_expr,
+            ..
         } => walk(condition) && walk(then_expr) && walk(else_expr),
         Expr::PropertyGet { object, .. } => walk(object),
         // A property write can be `arr.length = ...`, can hit a setter, or can
@@ -10587,7 +10642,9 @@ pub(crate) fn expr_preserves_array_length(
         // future effect summary instead of assuming writes preserve the guarded
         // array length.
         Expr::PropertySet { .. } => false,
-        Expr::IndexGet { object, index, .. } => walk(object) && walk(index),
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            walk(object) && walk(index)
+        }
         // Buffer / Uint8Array reads + writes preserve the underlying array
         // length — Buffer.alloc allocates a fixed-capacity blob, and the
         // GEP-based fast path (`Expr::Uint8ArrayGet`/`Set`,

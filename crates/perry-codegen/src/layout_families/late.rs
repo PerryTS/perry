@@ -363,7 +363,7 @@ impl Census {
             visit_stmt(
                 s,
                 &mut |st| {
-                    if let Stmt::Return(Some(e)) = st {
+                    if let Stmt::Return(Some(e), _) = st {
                         if factory_form(e) {
                             self.factories
                                 .borrow_mut()
@@ -373,7 +373,7 @@ impl Census {
                                 .push(e.clone());
                         }
                     }
-                    if let Stmt::Return(Some(Expr::LocalGet(id))) = st {
+                    if let Stmt::Return(Some(Expr::LocalGet(id)), _) = st {
                         self.returns
                             .borrow_mut()
                             .entry(func)

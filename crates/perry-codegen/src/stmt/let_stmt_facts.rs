@@ -85,6 +85,7 @@ pub(super) fn native_i32_alias_source(expr: &perry_hir::Expr) -> Option<u32> {
             op: perry_hir::BinaryOp::BitOr,
             left,
             right,
+            ..
         } if matches!(right.as_ref(), perry_hir::Expr::Integer(0)) => match left.as_ref() {
             perry_hir::Expr::LocalGet(id) => Some(*id),
             _ => native_i32_alias_source(left),

@@ -202,13 +202,17 @@ fn try_consumer_fuse_pattern(
     out_param_ids: &HashMap<FuncId, LocalId>,
 ) -> Option<(usize, Vec<Stmt>)> {
     let (callee_id, outer_id) = match_consumer_fuse_pattern(stmts, producers)?;
-    let (call_args, type_args) = match &stmts[0] {
+    let (call_args, type_args, call_offset) = match &stmts[0] {
         Stmt::Let {
-            init: Some(Expr::Call {
-                args, type_args, ..
-            }),
+            init:
+                Some(Expr::Call {
+                    args,
+                    type_args,
+                    byte_offset,
+                    ..
+                }),
             ..
-        } => (args.clone(), type_args.clone()),
+        } => (args.clone(), type_args.clone(), *byte_offset),
         _ => return None,
     };
 
@@ -228,7 +232,7 @@ fn try_consumer_fuse_pattern(
         args: new_args,
         type_args,
         // #5247: deforestation-fused call; no single source offset.
-        byte_offset: 0,
+        byte_offset: call_offset,
     };
     Some((
         2,
@@ -321,6 +325,7 @@ fn match_consume_loop(
             op: perry_hir::CompareOp::Lt,
             left,
             right,
+            ..
         } => {
             if !matches!(left.as_ref(), Expr::LocalGet(id) if *id == j_id) {
                 return None;
@@ -391,7 +396,7 @@ fn match_consume_loop(
 /// Match `child[j]` (IndexGet { object: LocalGet(child), index: LocalGet(j) }).
 fn is_index_get_of(e: &Expr, child_id: LocalId, j_id: LocalId) -> bool {
     match e {
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(id) if *id == child_id)
                 && matches!(index.as_ref(), Expr::LocalGet(id) if *id == j_id)
         }
@@ -425,6 +430,7 @@ fn try_rewrite_single_stmt(
                     callee,
                     args,
                     type_args,
+                    byte_offset: call_offset,
                     ..
                 }),
         } => match callee.as_ref() {
@@ -445,7 +451,7 @@ fn try_rewrite_single_stmt(
                         callee: callee.clone(),
                         args: new_args,
                         type_args: type_args.clone(),
-                        byte_offset: 0,
+                        byte_offset: *call_offset,
                     }),
                 ));
                 let let_stmt = Stmt::Let {

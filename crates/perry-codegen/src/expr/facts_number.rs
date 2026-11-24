@@ -59,7 +59,7 @@ pub(crate) enum Operand {
 /// conversion of its value is decided here.
 fn element_operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
     use crate::expr::facts_canonical::{of, Num};
-    if !matches!(e, Expr::IndexGet { .. }) {
+    if !matches!(e, Expr::IndexGet { .. } | Expr::RegionOut { .. }) {
         return None;
     }
     let k = match of(ctx, e)? {
@@ -121,6 +121,7 @@ pub(crate) fn operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
         op: BinaryOp::Add,
         left,
         right,
+        ..
     } = e
     {
         return add_is_number(ctx, left, right).then_some(Operand::Number);
@@ -132,6 +133,7 @@ pub(crate) fn operand(ctx: &FnCtx<'_>, e: &Expr) -> Option<Operand> {
         op: BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div,
         left,
         right,
+        ..
     } = e
     {
         if operand(ctx, left).is_some() && operand(ctx, right).is_some() {
@@ -159,6 +161,7 @@ pub(crate) fn kind_number(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             op: BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod | BinaryOp::Pow,
             left,
             right,
+            ..
         } => kind_number(ctx, left) && kind_number(ctx, right),
         _ => operand(ctx, e).is_some(),
     }
@@ -173,6 +176,7 @@ pub(crate) fn add_tree_converts_silently(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } => add_tree_converts_silently(ctx, left) && add_tree_converts_silently(ctx, right),
         _ => kind_number(ctx, e),
     }
@@ -268,7 +272,10 @@ fn ieee(ctx: &mut FnCtx<'_>, op: BinaryOp, l: &str, r: &str) -> String {
 
 /// The `+ - * /` node `e` this module lowers to one IEEE operation.
 fn nan_tree_node<'e>(ctx: &FnCtx<'_>, e: &'e Expr) -> Option<(BinaryOp, &'e Expr, &'e Expr)> {
-    let Expr::Binary { op, left, right } = e else {
+    let Expr::Binary {
+        op, left, right, ..
+    } = e
+    else {
         return None;
     };
     if !matches!(
@@ -361,7 +368,9 @@ pub(crate) fn arith_to_number(
     use crate::expr::facts_canonical::{witness, Num};
     let num_or_undef = match k {
         Operand::Number => {
-            if matches!(e, Expr::IndexGet { .. }) && element_operand(ctx, e).is_some() {
+            if matches!(e, Expr::IndexGet { .. } | Expr::RegionOut { .. })
+                && element_operand(ctx, e).is_some()
+            {
                 witness(ctx, raw, Num::Number, "arith element operand")?;
             }
             return Ok(raw.to_string());
@@ -533,8 +542,8 @@ fn targets_return_number(ctx: &FnCtx<'_>, cids: &[u32], property: &str, depth: u
 fn block_returns_number(ctx: &FnCtx<'_>, stmts: &[Stmt], cids: &[u32], depth: u8) -> (bool, bool) {
     for stmt in stmts {
         match stmt {
-            Stmt::Return(Some(expr)) => return (expr_is_number(ctx, expr, cids, depth), true),
-            Stmt::Return(None) => return (false, true),
+            Stmt::Return(Some(expr), _) => return (expr_is_number(ctx, expr, cids, depth), true),
+            Stmt::Return(None, _) => return (false, true),
             Stmt::Throw(_) => return (true, true),
             Stmt::If {
                 then_branch,
@@ -592,7 +601,9 @@ fn is_this_field(e: &Expr) -> Option<&str> {
 fn expr_is_number(ctx: &FnCtx<'_>, e: &Expr, cids: &[u32], depth: u8) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) | Expr::NumberCoerce(_) | Expr::DateNow => true,
-        Expr::Binary { op, left, right } => match op {
+        Expr::Binary {
+            op, left, right, ..
+        } => match op {
             BinaryOp::Add => {
                 prim_or_number(ctx, left, cids, depth) && prim_or_number(ctx, right, cids, depth)
             }

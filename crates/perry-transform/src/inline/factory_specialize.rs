@@ -49,7 +49,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
     // local (`x` / `o`). Statements that read it (e.g. `PropertySet` on
     // sub-properties for prototype mutation) are allowed.
     fn resolve_factory_return_class<'a>(body: &'a [Stmt], classes: &'a [Class]) -> Option<String> {
-        if let [Stmt::Return(Some(expr))] = body {
+        if let [Stmt::Return(Some(expr), _)] = body {
             if let Some(c) = classref_name(expr) {
                 return Some(c);
             }
@@ -59,7 +59,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         }
         // Look at the first and last stmts to detect shape (b) / (c).
         let last_idx = body.len() - 1;
-        let Stmt::Return(Some(ret_expr)) = &body[last_idx] else {
+        let Stmt::Return(Some(ret_expr), _) = &body[last_idx] else {
             return None;
         };
         let Stmt::Let {
@@ -122,7 +122,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
         body: &'a [Stmt],
         classes: &'a [Class],
     ) -> Option<(String, Vec<LocalId>)> {
-        let [Stmt::Return(Some(Expr::Closure { params, body, .. }))] = body else {
+        let [Stmt::Return(Some(Expr::Closure { params, body, .. }), _)] = body else {
             return None;
         };
         let target = resolve_factory_return_class(body, classes)?;
@@ -280,7 +280,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                         base_class_counter_seed,
                     );
                 }
-                Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => {
+                Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => {
                     rewrite_call_init(
                         e,
                         factory_targets,
@@ -453,6 +453,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                 Stmt::Switch {
                     discriminant,
                     cases,
+                    ..
                 } => {
                     rewrite_call_init(
                         discriminant,
@@ -594,6 +595,7 @@ pub fn specialize_captured_class_factories(module: &mut Module) {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 rewrite_call_init(
                     condition,
@@ -1187,7 +1189,7 @@ pub fn fresh_export_dynamic_heritage_factories(module: &mut Module) {
         if !exported.contains(&f.id) {
             continue;
         }
-        let [Stmt::Return(Some(Expr::Sequence(parts)))] = f.body.as_mut_slice() else {
+        let [Stmt::Return(Some(Expr::Sequence(parts)), _)] = f.body.as_mut_slice() else {
             continue;
         };
         if parts.len() != 2 {

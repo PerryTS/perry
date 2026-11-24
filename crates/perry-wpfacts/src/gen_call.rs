@@ -208,7 +208,7 @@ impl<'a> Gen<'a> {
                         self.m.arr_len_at_site.entry(site).or_default().hole_free = true;
                         // I32 at rest (PR B): a birth an at-rest template
                         // may have, keyed as codegen keys the call.
-                        let offset = if *pb != 0 { *pb } else { byte_offset };
+                        let offset = *pb;
                         let (module, recv) = (fx.module, o);
                         let fill = crate::rest_elems::RestFill {
                             module,
@@ -249,13 +249,9 @@ impl<'a> Gen<'a> {
                 } else {
                     private
                 };
-                let (off, end) = if *pb != 0 {
-                    (*pb, *pe)
-                } else {
-                    (byte_offset, byte_end)
-                };
-                let rec = (off != 0).then(|| self.call_sites_at.len());
-                if off != 0 {
+                // The method site is the callee member read's identity.
+                let (off, end) = (*pb, *pe);
+                let rec = self.call_sites_at.len();
                     self.call_sites_at.push(crate::signatures::CallSiteRec {
                         module: fx.module,
                         offset: off,
@@ -265,8 +261,6 @@ impl<'a> Gen<'a> {
                         callee: None,
                         call: crate::model::NO_CTX,
                     });
-                }
-                if off != 0 {
                     self.read_sites.push(ReadSite {
                         global_get,
                         access: crate::derive::Access::Read,
@@ -278,7 +272,6 @@ impl<'a> Gen<'a> {
                         value_call: callee_v.is_some(),
                         func: fx.f,
                     });
-                }
                 let this = if global_get {
                     ThisArg::Undef
                 } else {
@@ -293,9 +286,7 @@ impl<'a> Gen<'a> {
                 {
                     f.fill_site = self.m.calls[call as usize].site;
                 }
-                if let Some(i) = rec {
-                    self.call_sites_at[i].call = call;
-                }
+                    self.call_sites_at[rec].call = call;
                 if let Some(a) = lit {
                     self.m.call_lit.insert(call, a);
                 }
@@ -303,9 +294,7 @@ impl<'a> Gen<'a> {
                 match callee_v {
                     Some(callee) => self.m.cons(callee, Cons::Call { call }),
                     None => {
-                        if off != 0 {
                             self.m.named_calls.insert(call, (a, o));
-                        }
                         self.m.cons(
                             o,
                             Cons::MCall {
@@ -1493,7 +1482,7 @@ pub(crate) fn stmt_reads_this(stmt: &Stmt) -> bool {
 fn expr_reads_this(e: &Expr) -> bool {
     match e {
         Expr::This
-        | Expr::SuperCall(_)
+        | Expr::SuperCall(_, _)
         | Expr::SuperCallSpread(_)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }

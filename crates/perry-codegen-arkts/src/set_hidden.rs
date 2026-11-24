@@ -27,7 +27,7 @@ pub(crate) fn rewrite_set_hidden_in_stmt(
     match stmt {
         Stmt::Expr(e) => rewrite_set_hidden_in_expr(e, bindings),
         Stmt::Let { init: Some(e), .. } => rewrite_set_hidden_in_expr(e, bindings),
-        Stmt::Return(Some(e)) => rewrite_set_hidden_in_expr(e, bindings),
+        Stmt::Return(Some(e), _) => rewrite_set_hidden_in_expr(e, bindings),
         Stmt::If {
             condition,
             then_branch,
@@ -82,6 +82,7 @@ pub(crate) fn rewrite_set_hidden_in_expr(
         method,
         args,
         object: None,
+        byte_offset,
         ..
     } = e
     {
@@ -99,6 +100,7 @@ pub(crate) fn rewrite_set_hidden_in_expr(
                         other => other.clone(),
                     };
                     *e = Expr::NativeMethodCall {
+                        byte_offset: *byte_offset,
                         module: "perry/arkts".to_string(),
                         class_name: None,
                         object: None,
@@ -137,6 +139,7 @@ pub(crate) fn rewrite_set_hidden_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             rewrite_set_hidden_in_expr(condition, bindings);
             rewrite_set_hidden_in_expr(then_expr, bindings);
@@ -187,7 +190,7 @@ pub(crate) fn rewrite_set_hidden_in_closures_in_stmt(
     bindings: &HashMap<LocalId, VisibilityBinding>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) => {
             rewrite_set_hidden_in_closures_in_expr(e, bindings);
         }
         Stmt::Let { init: Some(e), .. } => {
@@ -269,6 +272,7 @@ pub(crate) fn rewrite_set_hidden_in_closures_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             rewrite_set_hidden_in_closures_in_expr(condition, bindings);
             rewrite_set_hidden_in_closures_in_expr(then_expr, bindings);

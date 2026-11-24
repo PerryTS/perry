@@ -148,7 +148,7 @@ fn is_i32_image_seed_read(
     types: &HashMap<u32, HirType>,
     guarded_number_array_params: &HashSet<u32>,
 ) -> bool {
-    matches!(e, Expr::IndexGet { object, .. }
+    matches!(e, Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
         if receiver_is_int_kind_ta(object, types)
             || receiver_is_guarded_number_array(object, guarded_number_array_params))
 }
@@ -209,7 +209,7 @@ fn write_is_i32_producing_safe(
         Expr::Uint8ArrayGet { index, .. } => uint8array_get_is_byte_read(index, numeric_locals),
         Expr::BufferIndexGet { .. } => true,
         // Int-kind typed-array element read (possibly OOB → `undefined`).
-        Expr::IndexGet { object, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
             receiver_is_int_kind_ta(object, types)
                 || receiver_is_guarded_number_array(object, guarded_number_array_params)
         }
@@ -277,7 +277,7 @@ fn write_establishes_exact_i32(
 ) -> bool {
     match e {
         Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             receiver_is_int_kind_ta(object, types)
                 && matches!(object.as_ref(), Expr::LocalGet(arr)
                 if matches!(
@@ -354,7 +354,7 @@ fn additive_write_admissible(
         Expr::Integer(n) => super::i32_locals::integer_literal_fits_i32(*n),
         Expr::LocalGet(id) => pool.contains(id),
         // In-bounds-proven int-kind typed-array read: never `undefined`.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             receiver_is_int_kind_ta(object, types)
                 && matches!(object.as_ref(), Expr::LocalGet(arr)
                 if matches!(
@@ -364,7 +364,9 @@ fn additive_write_admissible(
         }
         // Exact ToInt32/ToUint32 producers once the result is not a BigInt
         // (#10418): proven by `not_bigint` or by an admissible operand.
-        Expr::Binary { op, left, right } if is_bitwise_binop(*op) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if is_bitwise_binop(*op) => {
             not_bigint.bitwise_result_is_number(e) || admissible(left) || admissible(right)
         }
         Expr::Unary {
@@ -372,9 +374,9 @@ fn additive_write_admissible(
             operand,
         } => not_bigint.bitwise_result_is_number(e) || admissible(operand),
         Expr::MathImul(_, _) => true,
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
-            admissible(left) && admissible(right)
-        }
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => admissible(left) && admissible(right),
         _ => false,
     }
 }
@@ -411,7 +413,7 @@ pub(super) fn write_establishes_number(
         } => true,
         Expr::MathImul(_, _) => true,
         // In-bounds-PROVEN int-kind typed-array read: never `undefined`.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             receiver_is_int_kind_ta(object, types)
                 && matches!(object.as_ref(), Expr::LocalGet(arr)
                 if matches!(
@@ -420,7 +422,9 @@ pub(super) fn write_establishes_number(
                 ))
         }
         Expr::LocalGet(id) => numberish.contains(id),
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
             write_establishes_number(left, types, ta_lens, numberish, numeric_locals)
                 && write_establishes_number(right, types, ta_lens, numberish, numeric_locals)
         }
@@ -435,7 +439,9 @@ pub(super) fn write_establishes_number(
 fn additive_spine_locals_numberish(e: &Expr, numberish: &HashSet<u32>) -> bool {
     match e {
         Expr::LocalGet(id) => numberish.contains(id),
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
             additive_spine_locals_numberish(left, numberish)
                 && additive_spine_locals_numberish(right, numberish)
         }
@@ -505,7 +511,7 @@ fn additive_flow_stmt(
         Stmt::Expr(e) | Stmt::Throw(e) => {
             additive_flow_expr(e, types, ta_lens, numeric_locals, numberish, invalid)
         }
-        Stmt::Return(Some(e)) => {
+        Stmt::Return(Some(e), _) => {
             additive_flow_expr(e, types, ta_lens, numeric_locals, numberish, invalid)
         }
         Stmt::If {
@@ -607,6 +613,7 @@ fn additive_flow_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             additive_flow_expr(
                 discriminant,
@@ -637,7 +644,7 @@ fn additive_flow_stmt(
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
         | Stmt::LabeledContinue(_)
-        | Stmt::Return(None)
+        | Stmt::Return(None, _)
         | Stmt::PreallocateBoxes(_)
         | Stmt::PreallocateTdzBoxes(_)
         | Stmt::ReleaseBoxes(_) => {}
@@ -831,7 +838,7 @@ pub fn collect_int_valued_ta_locals(
                 let Some((seed, _)) = writes.first() else {
                     return false;
                 };
-                let Expr::IndexGet { object, .. } = seed else {
+                let (Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }) = seed else {
                     return false;
                 };
                 receiver_is_guarded_number_array(object, guarded_number_array_params)
@@ -935,7 +942,7 @@ fn collect_facts<'a>(
             Stmt::Expr(e) | Stmt::Throw(e) => {
                 collect_facts_expr(e, types, guarded_number_array_params, in_loop, facts)
             }
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     collect_facts_expr(e, types, guarded_number_array_params, in_loop, facts);
                 }
@@ -1020,6 +1027,7 @@ fn collect_facts<'a>(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 collect_facts_expr(
                     discriminant,
@@ -1251,7 +1259,7 @@ fn collect_closure_refs_stmt(s: &Stmt, out: &mut HashSet<u32>) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => collect_closure_refs(e, out),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 collect_closure_refs(e, out);
             }
@@ -1326,6 +1334,7 @@ fn collect_closure_refs_stmt(s: &Stmt, out: &mut HashSet<u32>) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             collect_closure_refs(discriminant, out);
             for case in cases {
@@ -1401,7 +1410,7 @@ fn observe_stmts(
                 }
             }
             Stmt::Throw(e) => observe(e, false, cands, types, additive, exact_i32, disq),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     observe(e, false, cands, types, additive, exact_i32, disq);
                 }
@@ -1478,6 +1487,7 @@ fn observe_stmts(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 observe(discriminant, false, cands, types, additive, exact_i32, disq);
                 for case in cases {
@@ -1515,7 +1525,9 @@ fn observe(
             }
         }
         // Bitwise binary: both operands are `ToInt32`-coerced.
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let c = is_bitwise_binop(*op);
             observe(left, c, cands, types, additive, exact_i32, disq);
             observe(right, c, cands, types, additive, exact_i32, disq);
@@ -1646,13 +1658,17 @@ fn observe_additive_rhs(
         // Blessed operand read of a candidate (or a plain non-candidate read
         // — no constraint either way).
         Expr::LocalGet(_) | Expr::Integer(_) | Expr::Number(_) => {}
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
             observe_additive_rhs(left, cands, types, additive, exact_i32, disq);
             observe_additive_rhs(right, cands, types, additive, exact_i32, disq);
         }
         // Bitwise/`~`/`imul` operands are ToInt32/ToUint32-coerced — the
         // strict walk already treats those positions as coercing.
-        Expr::Binary { op, left, right } if is_bitwise_binop(*op) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if is_bitwise_binop(*op) => {
             observe(left, true, cands, types, additive, exact_i32, disq);
             observe(right, true, cands, types, additive, exact_i32, disq);
         }
@@ -1669,7 +1685,7 @@ fn observe_additive_rhs(
         // In-bounds-proven typed-array read operand: its INDEX is walked with
         // the strict (non-coercing) rule — a wrapped image used as an index
         // would be disqualifying, exactly as in ordinary code.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             observe(object, false, cands, types, additive, exact_i32, disq);
             observe(index, false, cands, types, additive, exact_i32, disq);
         }

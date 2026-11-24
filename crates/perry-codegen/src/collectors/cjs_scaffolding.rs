@@ -633,7 +633,7 @@ fn for_each_stmt(stmts: &[Stmt], f: &mut dyn FnMut(&Stmt)) {
             Stmt::Labeled { body, .. } => for_each_stmt(std::slice::from_ref(body.as_ref()), f),
             Stmt::Expr(_)
             | Stmt::Throw(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Let { .. }
             | Stmt::Break
             | Stmt::Continue
@@ -693,6 +693,7 @@ mod tests {
 
     fn closure(func_id: u32, body: Vec<Stmt>) -> Expr {
         Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: Vec::new(),
             return_type: Type::Any,
@@ -968,6 +969,7 @@ mod tests {
             fields: ["x", "y"]
                 .iter()
                 .map(|n| ClassField {
+                    byte_offset: 0,
                     origin: perry_hir::ClassFieldOrigin::Definition,
                     name: n.to_string(),
                     key_expr: None,
@@ -1009,17 +1011,21 @@ mod tests {
                 byte_offset: 0,
                 byte_end: 0,
             }),
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(POINT_ID)),
-                property: "x".to_string(),
-            })),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(POINT_ID)),
+                    property: "x".to_string(),
+                }),
+                0,
+            ),
         ]
     }
 
     fn compute_fn() -> Function {
         Function {
+            byte_offset: 0,
             id: 17,
             name: "compute".to_string(),
             type_params: Vec::new(),

@@ -19,6 +19,7 @@ fn hoisted_run(ids: &[u32]) -> Vec<Stmt> {
             ty: Type::Any,
             mutable: true,
             init: Some(Expr::Closure {
+                byte_offset: 0,
                 func_id: 100 + id,
                 params: Vec::new(),
                 return_type: Type::Any,
@@ -36,13 +37,14 @@ fn hoisted_run(ids: &[u32]) -> Vec<Stmt> {
             }),
         });
     }
-    body.push(Stmt::Return(Some(Expr::LocalGet(ids[0]))));
+    body.push(Stmt::Return(Some(Expr::LocalGet(ids[0])), 0));
     body
 }
 
 pub(crate) fn function_ir(ids: &[u32]) -> String {
     let mut module = Module::new("closure_births_probe.ts");
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "probe1".into(),
         type_params: Vec::new(),

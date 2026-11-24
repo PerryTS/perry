@@ -7,6 +7,7 @@ use super::*;
 fn detects_simple_producer() {
     // function f() { const out = []; out.push(1); return out; }
     let func = Function {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: vec![],
@@ -25,7 +26,7 @@ fn detects_simple_producer() {
                 value: Box::new(Expr::Integer(1)),
                 field_writeback: None,
             }),
-            Stmt::Return(Some(Expr::LocalGet(10))),
+            Stmt::Return(Some(Expr::LocalGet(10)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -85,7 +86,7 @@ fn rejects_producer_with_multiple_returns() {
         1,
         Stmt::If {
             condition: Expr::Bool(true),
-            then_branch: vec![Stmt::Return(Some(Expr::Array(vec![], None)))],
+            then_branch: vec![Stmt::Return(Some(Expr::Array(vec![], None)), 0)],
             else_branch: None,
         },
     );
@@ -109,7 +110,7 @@ fn synthetic_out_params_are_assigned_by_function_id() {
         value: Box::new(Expr::Integer(1)),
         field_writeback: None,
     });
-    first.body[2] = Stmt::Return(Some(Expr::LocalGet(20)));
+    first.body[2] = Stmt::Return(Some(Expr::LocalGet(20)), 0);
 
     let mut second = make_simple_producer();
     second.id = 1;
@@ -165,6 +166,7 @@ fn rejects_producer_called_inside_closure() {
     let helper = make_simple_producer(); // id=1, the producer
 
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 2,
         params: vec![],
         return_type: Type::Number,
@@ -184,12 +186,15 @@ fn rejects_producer_called_inside_closure() {
                 }),
             },
             // return v.length;
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(30)),
-                property: "length".to_string(),
-            })),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(30)),
+                    property: "length".to_string(),
+                }),
+                0,
+            ),
         ],
         captures: vec![],
         mutable_captures: vec![],
@@ -204,6 +209,7 @@ fn rejects_producer_called_inside_closure() {
     };
 
     let factory = Function {
+        byte_offset: 0,
         id: 3,
         name: "factory".to_string(),
         type_params: vec![],
@@ -217,7 +223,7 @@ fn rejects_producer_called_inside_closure() {
                 mutable: false,
                 init: Some(closure),
             },
-            Stmt::Return(Some(Expr::LocalGet(31))),
+            Stmt::Return(Some(Expr::LocalGet(31)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -259,6 +265,7 @@ fn still_deforests_when_caller_is_not_a_closure() {
     let helper = make_simple_producer(); // id=1
 
     let caller = Function {
+        byte_offset: 0,
         id: 2,
         name: "caller".to_string(),
         type_params: vec![],
@@ -323,6 +330,7 @@ fn deforests_producer_called_from_class_method() {
     let helper = make_simple_producer(); // id=1, the producer
 
     let method = Function {
+        byte_offset: 0,
         id: 2,
         name: "m".to_string(),
         type_params: vec![],
@@ -342,12 +350,15 @@ fn deforests_producer_called_from_class_method() {
                     byte_offset: 0,
                 }),
             },
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(30)),
-                property: "length".to_string(),
-            })),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(30)),
+                    property: "length".to_string(),
+                }),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -425,7 +436,7 @@ fn deforests_producer_called_from_class_method() {
         let init = match stmt {
             Stmt::Let { init: Some(e), .. } => Some(e),
             Stmt::Expr(e) | Stmt::Throw(e) => Some(e),
-            Stmt::Return(Some(e)) => Some(e),
+            Stmt::Return(Some(e), _) => Some(e),
             _ => None,
         };
         let init = match init {
@@ -466,6 +477,7 @@ fn deforests_producer_called_from_class_method() {
 /// and a caller `function g() { const v = f(); return v; }`.
 fn producer_and_plain_caller() -> Module {
     let caller = Function {
+        byte_offset: 0,
         id: 2,
         name: "g".to_string(),
         type_params: vec![],
@@ -485,7 +497,7 @@ fn producer_and_plain_caller() -> Module {
                     byte_offset: 0,
                 }),
             },
-            Stmt::Return(Some(Expr::LocalGet(30))),
+            Stmt::Return(Some(Expr::LocalGet(30)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -512,7 +524,7 @@ fn producer_returns_the_out_param_not_undefined() {
     let producer = module.functions.iter().find(|f| f.id == 1).unwrap();
     let out_param = producer.params.last().expect("synthetic param").id;
     match producer.body.last() {
-        Some(Stmt::Return(Some(Expr::LocalGet(id)))) => assert_eq!(
+        Some(Stmt::Return(Some(Expr::LocalGet(id)), _)) => assert_eq!(
             *id, out_param,
             "the producer must return its out-param — the head AFTER every \
              realloc write-back — not the caller's pre-growth pointer"
@@ -588,6 +600,7 @@ fn rejects_deforest_when_class_method_uses_super() {
     let helper = make_simple_producer(); // id=1, the producer
 
     let method_with_super = Function {
+        byte_offset: 0,
         id: 2,
         name: "m".to_string(),
         type_params: vec![],
@@ -609,9 +622,12 @@ fn rejects_deforest_when_class_method_uses_super() {
                 }),
             },
             // return super.foo;
-            Stmt::Return(Some(Expr::SuperPropertyGet {
-                property: "foo".to_string(),
-            })),
+            Stmt::Return(
+                Some(Expr::SuperPropertyGet {
+                    property: "foo".to_string(),
+                }),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -683,6 +699,7 @@ fn still_deforests_when_method_has_no_super() {
     let helper = make_simple_producer(); // id=1
 
     let plain_method = Function {
+        byte_offset: 0,
         id: 2,
         name: "m".to_string(),
         type_params: vec![],
@@ -702,12 +719,15 @@ fn still_deforests_when_method_has_no_super() {
                     byte_offset: 0,
                 }),
             },
-            Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                byte_offset: 0,
-                object: Box::new(Expr::LocalGet(30)),
-                property: "length".to_string(),
-            })),
+            Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    byte_offset: 0,
+                    object: Box::new(Expr::LocalGet(30)),
+                    property: "length".to_string(),
+                }),
+                0,
+            ),
         ],
         is_async: false,
         is_generator: false,
@@ -874,6 +894,7 @@ fn the_recursive_fuse_inside_a_producer_body_counts() {
                 init: Some(Expr::Integer(0)),
             })),
             condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: perry_hir::CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(41)),
                 right: Box::new(Expr::PropertyGet {
@@ -890,9 +911,10 @@ fn the_recursive_fuse_inside_a_producer_body_counts() {
             }),
             body: vec![Stmt::Expr(Expr::ArrayPush {
                 array_id: 10,
-                value: Box::new(Expr::synthetic_index_get(
+                value: Box::new(Expr::index_get_at(
                     Box::new(Expr::LocalGet(40)),
                     Box::new(Expr::LocalGet(41)),
+                    0,
                 )),
                 field_writeback: None,
             })],
@@ -929,6 +951,7 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
     let child = base + 1;
     let j = base + 2;
     Function {
+        byte_offset: 0,
         id,
         name: format!("fuse_consumer_{id}"),
         type_params: vec![],
@@ -964,6 +987,7 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
                     init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: perry_hir::CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(j)),
                     right: Box::new(Expr::PropertyGet {
@@ -980,14 +1004,15 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
                 }),
                 body: vec![Stmt::Expr(Expr::ArrayPush {
                     array_id: outer,
-                    value: Box::new(Expr::synthetic_index_get(
+                    value: Box::new(Expr::index_get_at(
                         Box::new(Expr::LocalGet(child)),
                         Box::new(Expr::LocalGet(j)),
+                        0,
                     )),
                     field_writeback: None,
                 })],
             },
-            Stmt::Return(Some(Expr::Integer(0))),
+            Stmt::Return(Some(Expr::Integer(0)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -1003,6 +1028,7 @@ fn fuse_consumer(id: FuncId, producer: FuncId, base: LocalId) -> Function {
 
 fn make_simple_producer() -> Function {
     Function {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: vec![],
@@ -1021,7 +1047,7 @@ fn make_simple_producer() -> Function {
                 value: Box::new(Expr::Integer(1)),
                 field_writeback: None,
             }),
-            Stmt::Return(Some(Expr::LocalGet(10))),
+            Stmt::Return(Some(Expr::LocalGet(10)), 0),
         ],
         is_async: false,
         is_generator: false,

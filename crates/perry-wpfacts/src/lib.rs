@@ -344,7 +344,7 @@ pub struct ProgramFacts {
     pub diag_stream: Option<(std::path::PathBuf, Vec<(u64, u64)>)>,
     /// Dump-only: the addresses of the HIR sites the analyses recorded
     /// (`ledger::census` compares them with the HIR).
-    pub(crate) diagnostic_sites: Vec<(usize, &'static str, u32)>,
+    pub(crate) diagnostic_sites: Vec<(usize, String, &'static str, u32)>,
     /// DECISIONS 225: the activation pass's count (the whole program).
     pub activation: Option<String>,
     /// DECISIONS 225: escaped functions of the final solve whose body was
@@ -743,6 +743,19 @@ fn generate<'a>(
         });
     }
     g.m.prof_mark(crate::model::NO_NODE, "summaries");
+    // Each function stands at its declaration (`this`, the result).
+    if let Some(s) = g.m.stop_top.as_mut() {
+        for (i, fi) in g.m.funcs.iter().enumerate() {
+            let sp = g
+                .modules
+                .get(fi.module as usize)
+                .and_then(|(_, m)| m.closure_source_text.get(&fi.func_id))
+                .and_then(|x| x.source_span);
+            if let Some(sp) = sp {
+                s.fn_pos.insert(i as u32, (fi.module, sp.0));
+            }
+        }
+    }
     if (cfg.profile || cfg.explain) && loud {
         eprintln!("perry: wpfacts {}", g.m.sum.stats);
     }

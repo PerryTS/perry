@@ -587,8 +587,8 @@ fn collect_local_candidate_defs_from_frames<'a>(
                     defs.entry(*id).or_default().push(e);
                     stack.push(LocalCandidateFrame::Expr(e));
                 }
-                Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
-                Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+                Stmt::Let { init: None, .. } | Stmt::Return(None, _) => {}
+                Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
                     stack.push(LocalCandidateFrame::Expr(e));
                 }
                 Stmt::If {
@@ -643,6 +643,7 @@ fn collect_local_candidate_defs_from_frames<'a>(
                 Stmt::Switch {
                     discriminant,
                     cases,
+                    ..
                 } => {
                     for case in cases.iter().rev() {
                         push_local_candidate_stmt_slice(stack, &case.body);
@@ -793,10 +794,10 @@ fn collect_param_literal_sets_from_frames(
                 Stmt::Let { init: Some(e), .. }
                 | Stmt::Expr(e)
                 | Stmt::Throw(e)
-                | Stmt::Return(Some(e)) => {
+                | Stmt::Return(Some(e), _) => {
                     stack.push(ParamFrame::Expr(e));
                 }
-                Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+                Stmt::Let { init: None, .. } | Stmt::Return(None, _) => {}
                 Stmt::If {
                     condition,
                     then_branch,
@@ -849,6 +850,7 @@ fn collect_param_literal_sets_from_frames(
                 Stmt::Switch {
                     discriminant,
                     cases,
+                    ..
                 } => {
                     for case in cases.iter().rev() {
                         push_param_stmt_slice(stack, &case.body);
@@ -939,10 +941,10 @@ fn collect_const_locals_from_frames<'a>(
                         stack.push(ConstFrame::Expr(e));
                     }
                     Stmt::Let { init: None, .. } => {}
-                    Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => {
+                    Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
                         stack.push(ConstFrame::Expr(e));
                     }
-                    Stmt::Return(None) => {}
+                    Stmt::Return(None, _) => {}
                     Stmt::If {
                         condition,
                         then_branch,
@@ -995,6 +997,7 @@ fn collect_const_locals_from_frames<'a>(
                     Stmt::Switch {
                         discriminant,
                         cases,
+                        ..
                     } => {
                         for case in cases.iter().rev() {
                             push_const_stmt_slice(stack, &case.body);
@@ -1060,10 +1063,10 @@ fn scan_mutations_from_frames(
                     Stmt::Let { init: Some(e), .. }
                     | Stmt::Expr(e)
                     | Stmt::Throw(e)
-                    | Stmt::Return(Some(e)) => {
+                    | Stmt::Return(Some(e), _) => {
                         stack.push(MutationFrame::Expr(e as *const Expr));
                     }
-                    Stmt::Let { init: None, .. } | Stmt::Return(None) => {}
+                    Stmt::Let { init: None, .. } | Stmt::Return(None, _) => {}
                     Stmt::If {
                         condition,
                         then_branch,
@@ -1116,6 +1119,7 @@ fn scan_mutations_from_frames(
                     Stmt::Switch {
                         discriminant,
                         cases,
+                        ..
                     } => {
                         for case in cases.iter().rev() {
                             push_mutation_stmt_slice(stack, &case.body);
@@ -1507,7 +1511,9 @@ pub fn resolve_import_path_with_context<V: Borrow<Expr>>(
         // non-module reason (`const cfg = { name: "app", port: "3000" };
         // import(cfg[k])`) has non-relative values, so it stays deferred exactly
         // as before instead of trying to compile `"app"`/`"3000"` as modules.
-        Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
+        Expr::PropertyGet { object, .. }
+        | Expr::IndexGet { object, .. }
+        | Expr::RegionOut { object, .. } => {
             // Record every const-local id on the registry's indirection chain in
             // the *outer* `visiting` set so a value that member-accesses back
             // into this (or an enclosing) registry is caught as a cycle rather
@@ -1750,6 +1756,7 @@ fn flatten_concat<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
         op: BinaryOp::Add,
         left,
         right,
+        ..
     } = expr
     {
         flatten_concat(left, out);

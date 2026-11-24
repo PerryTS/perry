@@ -25,6 +25,7 @@ const CLONE_SYMBOL: &str = "perry_fn_spec_preserve_none_ts__f$spec_i32";
 
 fn number_param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Number,
@@ -47,6 +48,7 @@ fn call(fid: u32, args: Vec<Expr>) -> Expr {
 
 fn sub(id: u32, n: i64) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Sub,
         left: Box::new(Expr::LocalGet(id)),
         right: Box::new(Expr::Integer(n)),
@@ -55,6 +57,7 @@ fn sub(id: u32, n: i64) -> Expr {
 
 fn plain_function(id: u32, name: &str, param: u32, body: Vec<Stmt>) -> Function {
     Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -80,19 +83,25 @@ fn recursive_module() -> Module {
         1,
         "f",
         10,
-        vec![Stmt::Return(Some(Expr::Conditional {
-            condition: Box::new(Expr::Compare {
-                op: CompareOp::Lt,
-                left: Box::new(Expr::LocalGet(10)),
-                right: Box::new(Expr::Integer(2)),
+        vec![Stmt::Return(
+            Some(Expr::Conditional {
+                byte_offset: 0,
+                condition: Box::new(Expr::Compare {
+                    byte_offset: 0,
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(10)),
+                    right: Box::new(Expr::Integer(2)),
+                }),
+                then_expr: Box::new(Expr::LocalGet(10)),
+                else_expr: Box::new(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::Add,
+                    left: Box::new(call(1, vec![sub(10, 1)])),
+                    right: Box::new(call(1, vec![sub(10, 2)])),
+                }),
             }),
-            then_expr: Box::new(Expr::LocalGet(10)),
-            else_expr: Box::new(Expr::Binary {
-                op: BinaryOp::Add,
-                left: Box::new(call(1, vec![sub(10, 1)])),
-                right: Box::new(call(1, vec![sub(10, 2)])),
-            }),
-        }))],
+            0,
+        )],
     );
     let mut module = Module::new("spec_preserve_none.ts");
     module.functions.push(f);
@@ -112,21 +121,27 @@ fn non_recursive_module() -> Module {
         1,
         "f",
         10,
-        vec![Stmt::Return(Some(Expr::Conditional {
-            condition: Box::new(Expr::Compare {
-                op: CompareOp::Lt,
-                left: Box::new(Expr::LocalGet(10)),
-                right: Box::new(Expr::Integer(2)),
+        vec![Stmt::Return(
+            Some(Expr::Conditional {
+                byte_offset: 0,
+                condition: Box::new(Expr::Compare {
+                    byte_offset: 0,
+                    op: CompareOp::Lt,
+                    left: Box::new(Expr::LocalGet(10)),
+                    right: Box::new(Expr::Integer(2)),
+                }),
+                then_expr: Box::new(Expr::LocalGet(10)),
+                else_expr: Box::new(Expr::Binary {
+                    byte_offset: 0,
+                    op: BinaryOp::Add,
+                    left: Box::new(call(2, vec![sub(10, 1)])),
+                    right: Box::new(call(2, vec![sub(10, 2)])),
+                }),
             }),
-            then_expr: Box::new(Expr::LocalGet(10)),
-            else_expr: Box::new(Expr::Binary {
-                op: BinaryOp::Add,
-                left: Box::new(call(2, vec![sub(10, 1)])),
-                right: Box::new(call(2, vec![sub(10, 2)])),
-            }),
-        }))],
+            0,
+        )],
     );
-    let g = plain_function(2, "g", 20, vec![Stmt::Return(Some(Expr::LocalGet(20)))]);
+    let g = plain_function(2, "g", 20, vec![Stmt::Return(Some(Expr::LocalGet(20)), 0)]);
     let mut module = Module::new("spec_preserve_none.ts");
     module.functions.push(f);
     module.functions.push(g);
@@ -243,29 +258,39 @@ fn mutually_recursive_clones_take_the_convention_too() {
         1,
         "f",
         10,
-        vec![Stmt::Return(Some(Expr::Conditional {
-            condition: Box::new(Expr::Compare {
-                op: CompareOp::Eq,
-                left: Box::new(Expr::LocalGet(10)),
-                right: Box::new(Expr::Integer(0)),
+        vec![Stmt::Return(
+            Some(Expr::Conditional {
+                byte_offset: 0,
+                condition: Box::new(Expr::Compare {
+                    byte_offset: 0,
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(10)),
+                    right: Box::new(Expr::Integer(0)),
+                }),
+                then_expr: Box::new(Expr::Integer(1)),
+                else_expr: Box::new(call(2, vec![sub(10, 1)])),
             }),
-            then_expr: Box::new(Expr::Integer(1)),
-            else_expr: Box::new(call(2, vec![sub(10, 1)])),
-        }))],
+            0,
+        )],
     );
     let g = plain_function(
         2,
         "g",
         20,
-        vec![Stmt::Return(Some(Expr::Conditional {
-            condition: Box::new(Expr::Compare {
-                op: CompareOp::Eq,
-                left: Box::new(Expr::LocalGet(20)),
-                right: Box::new(Expr::Integer(0)),
+        vec![Stmt::Return(
+            Some(Expr::Conditional {
+                byte_offset: 0,
+                condition: Box::new(Expr::Compare {
+                    byte_offset: 0,
+                    op: CompareOp::Eq,
+                    left: Box::new(Expr::LocalGet(20)),
+                    right: Box::new(Expr::Integer(0)),
+                }),
+                then_expr: Box::new(Expr::Integer(0)),
+                else_expr: Box::new(call(1, vec![sub(20, 1)])),
             }),
-            then_expr: Box::new(Expr::Integer(0)),
-            else_expr: Box::new(call(1, vec![sub(20, 1)])),
-        }))],
+            0,
+        )],
     );
     let mut module = Module::new("spec_preserve_none.ts");
     module.functions.push(f);
@@ -301,15 +326,16 @@ fn a_call_inside_a_try_region_invokes_with_the_convention() {
         30,
         vec![
             Stmt::Try {
-                body: vec![Stmt::Return(Some(call(1, vec![Expr::Integer(7)])))],
+                byte_offset: 0,
+                body: vec![Stmt::Return(Some(call(1, vec![Expr::Integer(7)])), 0)],
                 catch: Some(perry_hir::CatchClause {
                     param: None,
-                    body: vec![Stmt::Return(Some(Expr::Integer(0)))],
+                    body: vec![Stmt::Return(Some(Expr::Integer(0)), 0)],
                 }),
                 finally: None,
                 forof_completion: None,
             },
-            Stmt::Return(Some(Expr::Integer(0))),
+            Stmt::Return(Some(Expr::Integer(0)), 0),
         ],
     ));
     module

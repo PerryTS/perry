@@ -1395,6 +1395,8 @@ pub(crate) fn try_lower_get(
         emit_witness(ctx, &recv_box, &val, property, &p, 0, site);
         // The receiver of a fill push reads the Array while it is being born
         // (wpfacts `push_fills`): its claim holds once the fill is over.
+        // offset 0: a `this.k` read codegen builds after facts (array_push.rs:868)
+        // names no site.
         let filling = matches!(object, Expr::This)
             && byte_offset != 0
             && ctx.wpfacts.fill_push_recvs.contains(&byte_offset);
@@ -1715,9 +1717,9 @@ impl FieldProof {
 mod tests;
 
 /// ACCBUILD2 P3: the accessor function a named site at `offset` calls, when
-/// the facts prove it (`ElisionFacts::accessor_sets` / `accessor_gets`): the
+/// the facts prove it (`ElisionFacts::accessors`, the site of `kind`): the
 /// receiver's chain ends at one accessor property of the holder class's
-/// prototype with exactly one setter (`set`) or getter, so [[Set]] / [[Get]]
+/// prototype with exactly one setter (`AccessorKind::Set`) or getter, so [[Set]] / [[Get]]
 /// call it with the receiver as `this` (10.1.9.2 step 3, 10.1.8.1). The call
 /// is direct, with no fallback beside it. The flag is `nullable` (COVER3):
 /// the receiver can also be `undefined` / `null`, and the caller keeps the
@@ -1728,10 +1730,13 @@ pub(crate) fn proven_accessor_fn(
     object: &Expr,
     property: &str,
     offset: u32,
-    set: bool,
+    kind: crate::codegen::AccessorKind,
 ) -> Option<(String, bool)> {
+    let set = kind == crate::codegen::AccessorKind::Set;
     // A scalar-replaced receiver is no object (`scalar_receiver`): its
     // accesses are the frame slots' own, never a call with a `this`.
+    // offset 0: an access codegen builds after facts (member_update.rs:296/828)
+    // names no site.
     if ctx.wpfacts_off
         || offset == 0
         || property.starts_with('#')
@@ -1740,12 +1745,11 @@ pub(crate) fn proven_accessor_fn(
     {
         return None;
     }
-    let map = if set {
-        &ctx.wpfacts.accessor_sets
-    } else {
-        &ctx.wpfacts.accessor_gets
-    };
-    let (cid, symbol, nullable) = map.get(&(offset, property.to_string()))?.clone();
+    let (cid, symbol, nullable) = ctx
+        .wpfacts
+        .accessors
+        .get(&(offset, property.to_string(), kind))?
+        .clone();
     let prefix = if set { "__set_" } else { "__get_" };
     let member = format!("{prefix}{property}");
     // The symbol is the holder module's own (`program_facts.rs`
@@ -1907,13 +1911,21 @@ pub(crate) fn proven_method_fn(
 /// COVER3: a receiver that can be `undefined` / `null` keeps the one
 /// receiver test; its nullish edge is the complete [[Get]], whose ToObject
 /// throws the TypeError (6.2.5.5, 7.1.18) before any getter runs.
+/// `read` is the PropertyGet itself: the compound's GetValue
+/// (`FnCtx::compound_get`) is the `UpdateGet` site, any other read the `Get`.
 pub(crate) fn try_lower_proven_getter(
     ctx: &mut FnCtx<'_>,
+    read: &Expr,
     object: &Expr,
     property: &str,
     offset: u32,
 ) -> Result<Option<String>> {
-    let Some((fn_name, nullable)) = proven_accessor_fn(ctx, object, property, offset, false) else {
+    let kind = if ctx.compound_get.is_some_and(|g| std::ptr::eq(g, read)) {
+        crate::codegen::AccessorKind::UpdateGet
+    } else {
+        crate::codegen::AccessorKind::Get
+    };
+    let Some((fn_name, nullable)) = proven_accessor_fn(ctx, object, property, offset, kind) else {
         return Ok(None);
     };
     let recv = lower_expr(ctx, object)?;

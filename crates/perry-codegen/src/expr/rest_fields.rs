@@ -217,6 +217,8 @@ fn gated(ctx: &FnCtx<'_>, property: &str) -> bool {
 /// at a site without an offset (synthesized, which the facts cannot name)?
 fn gated_read(ctx: &FnCtx<'_>, property: &str, byte_offset: u32) -> bool {
     gated(ctx, property)
+        // offset 0: a lane-key read codegen builds after facts (member_update.rs:296,
+        // value_records.rs:940) stays on the lane-aware path.
         && (byte_offset == 0 || ctx.wpfacts.rest_lane_reads.contains_key(&byte_offset))
 }
 
@@ -228,6 +230,7 @@ fn site_slot(ctx: &FnCtx<'_>, property: &str, byte_offset: u32) -> Option<u32> {
         .rest_lane_reads
         .get(&byte_offset)
         .copied()
+        // offset 0: a lane-key read codegen builds after facts names no site.
         .filter(|&s| byte_offset != 0 && s < LANE_SLOTS && lanes_agree(ctx, property))
 }
 

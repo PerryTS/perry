@@ -69,6 +69,9 @@ fn reads(
     match expr {
         Expr::IndexGet {
             object, index: key, ..
+        }
+        | Expr::RegionOut {
+            object, index: key, ..
         } if matches!(object.as_ref(), Expr::LocalGet(l) if *l == id) => {
             if let Some(n) = index(key) {
                 if capture.is_some_and(|previous| previous != n) {
@@ -83,6 +86,7 @@ fn reads(
             op: CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe,
             left,
             right,
+            ..
         } if (matches!(left.as_ref(), Expr::LocalGet(l) if *l == id)
             && matches!(right.as_ref(), Expr::Null))
             || (matches!(right.as_ref(), Expr::LocalGet(l) if *l == id)
@@ -105,7 +109,13 @@ fn block(stmts: &mut [Stmt], counts: &HashMap<LocalId, usize>) {
         let Stmt::Let {
             id,
             mutable: false,
-            init: Some(Expr::Call { callee, args, .. }),
+            init:
+                Some(Expr::Call {
+                    callee,
+                    args,
+                    byte_offset: call_offset,
+                    ..
+                }),
             ..
         } = &stmts[i]
         else {
@@ -147,7 +157,7 @@ fn block(stmts: &mut [Stmt], counts: &HashMap<LocalId, usize>) {
                 Expr::Number(capture as f64),
             ],
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset: *call_offset,
         };
         if let Stmt::Let { init, .. } = &mut stmts[i] {
             *init = Some(projected);

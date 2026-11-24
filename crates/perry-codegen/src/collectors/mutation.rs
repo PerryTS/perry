@@ -46,7 +46,7 @@ fn collect_flat_const_row_aliases(
         match stmt {
             Stmt::Let {
                 id: alias_id,
-                init: Some(Expr::IndexGet { object, .. }),
+                init: Some(Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }),
                 mutable: false,
                 ..
             } if matches!(object.as_ref(), Expr::LocalGet(array_id) if *array_id == id) => {
@@ -121,7 +121,7 @@ fn flat_const_stmts_are_safe(
             Stmt::Expr(expr) | Stmt::Throw(expr) => {
                 flat_const_expr_is_safe(expr, id, row_aliases, FlatConstUse::Value)
             }
-            Stmt::Return(Some(expr)) => {
+            Stmt::Return(Some(expr), _) => {
                 flat_const_expr_is_safe(expr, id, row_aliases, FlatConstUse::Value)
             }
             Stmt::If {
@@ -170,6 +170,7 @@ fn flat_const_stmts_are_safe(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 flat_const_expr_is_safe(discriminant, id, row_aliases, FlatConstUse::Value)
                     && cases.iter().all(|case| {
@@ -201,7 +202,7 @@ fn flat_const_expr_is_safe(
         Expr::LocalGet(local_id) if *local_id == id || row_aliases.contains(local_id) => {
             use_kind == FlatConstUse::IndexObject
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             let produces_row =
                 matches!(object.as_ref(), Expr::LocalGet(array_id) if *array_id == id);
             if produces_row
@@ -296,7 +297,7 @@ fn any_top_level_expr(
             Stmt::Expr(e) | Stmt::Throw(e) if pred(e) => {
                 return true;
             }
-            Stmt::Return(Some(e)) if pred(e) => {
+            Stmt::Return(Some(e), _) if pred(e) => {
                 return true;
             }
             Stmt::Let { init: Some(e), .. } if pred(e) => {
@@ -375,6 +376,7 @@ fn any_top_level_expr(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 if pred(discriminant) {
                     return true;
@@ -454,6 +456,7 @@ fn expr_contains_call(e: &perry_hir::Expr) -> bool {
             | Expr::Unary { .. }
             | Expr::PropertyGet { .. }
             | Expr::IndexGet { .. }
+            | Expr::RegionOut { .. }
             | Expr::PropertySet { .. }
             | Expr::IndexSet { .. }
             | Expr::PropertyUpdate { .. }
@@ -475,7 +478,9 @@ pub fn is_local_get_chain(e: &perry_hir::Expr, id: u32) -> bool {
     use perry_hir::Expr;
     match e {
         Expr::LocalGet(i) => *i == id,
-        Expr::IndexGet { object, .. } => is_local_get_chain(object, id),
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
+            is_local_get_chain(object, id)
+        }
         Expr::PropertyGet { object, .. } => is_local_get_chain(object, id),
         _ => false,
     }
@@ -530,7 +535,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::Delete(operand)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
@@ -555,6 +560,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             expr_has_mutation(condition, id)
                 || expr_has_mutation(then_expr, id)
@@ -583,7 +589,7 @@ pub fn expr_has_mutation(e: &perry_hir::Expr, id: u32) -> bool {
                 || expr_has_mutation(value, id)
                 || expr_has_mutation(receiver, id)
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             expr_has_mutation(object, id) || expr_has_mutation(index, id)
         }
         Expr::Array(elements, _) => elements.iter().any(|e| expr_has_mutation(e, id)),
@@ -644,19 +650,22 @@ mod tests {
         let body = vec![
             row_alias(8, 7),
             perry_hir::Stmt::Expr(index(index(Expr::LocalGet(7), 0), 1)),
-            perry_hir::Stmt::Return(Some(index(Expr::LocalGet(8), 2))),
+            perry_hir::Stmt::Return(Some(index(Expr::LocalGet(8), 2)), 0),
         ];
         assert!(flat_const_array_uses_are_read_only(&body, 7));
     }
 
     #[test]
     fn flat_const_rejects_rows_used_as_javascript_values() {
-        let returned_directly = vec![perry_hir::Stmt::Return(Some(index(Expr::LocalGet(7), 0)))];
+        let returned_directly = vec![perry_hir::Stmt::Return(
+            Some(index(Expr::LocalGet(7), 0)),
+            0,
+        )];
         assert!(!flat_const_array_uses_are_read_only(&returned_directly, 7));
 
         let returned_alias = vec![
             row_alias(8, 7),
-            perry_hir::Stmt::Return(Some(Expr::LocalGet(8))),
+            perry_hir::Stmt::Return(Some(Expr::LocalGet(8)), 0),
         ];
         assert!(!flat_const_array_uses_are_read_only(&returned_alias, 7));
     }
@@ -736,12 +745,15 @@ mod tests {
     fn a_call_that_receives_nothing_still_counts_as_unknown_code() {
         let body = vec![
             perry_hir::Stmt::Expr(call(101, Vec::new())),
-            perry_hir::Stmt::Return(Some(Expr::PropertyGet {
-                byte_end: 0,
-                object: Box::new(Expr::LocalGet(7)),
-                property: "v".to_string(),
-                byte_offset: 0,
-            })),
+            perry_hir::Stmt::Return(
+                Some(Expr::PropertyGet {
+                    byte_end: 0,
+                    object: Box::new(Expr::LocalGet(7)),
+                    property: "v".to_string(),
+                    byte_offset: 0,
+                }),
+                0,
+            ),
         ];
         assert!(body_contains_call(&body));
         // and the escape-shaped predicate is exactly what does NOT see it
@@ -756,11 +768,15 @@ mod tests {
             property: "v".to_string(),
             byte_offset: 0,
         };
-        let body = vec![perry_hir::Stmt::Return(Some(Expr::Binary {
-            op: BinaryOp::Add,
-            left: Box::new(read),
-            right: Box::new(Expr::Integer(1)),
-        }))];
+        let body = vec![perry_hir::Stmt::Return(
+            Some(Expr::Binary {
+                byte_offset: 0,
+                op: BinaryOp::Add,
+                left: Box::new(read),
+                right: Box::new(Expr::Integer(1)),
+            }),
+            0,
+        )];
         assert!(!body_contains_call(&body));
     }
 
@@ -775,6 +791,7 @@ mod tests {
                 ty: perry_hir::types::Type::Number,
                 mutable: false,
                 init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::Integer(1)),
                     right: Box::new(call(102, vec![Expr::Integer(2)])),

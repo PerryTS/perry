@@ -186,14 +186,14 @@ impl Probe<'_> {
                     self.expr(e);
                 }
             }
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => self.expr(e),
+            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => self.expr(e),
             Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) => {
                 if ids.contains(&self.id) {
                     self.found = true;
                 }
             }
             Stmt::ReleaseBoxes(_)
-            | Stmt::Return(None)
+            | Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -248,6 +248,7 @@ impl Probe<'_> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant);
                 for case in cases {
@@ -284,6 +285,7 @@ impl Probe<'_> {
                 }
             }
             Expr::IndexGet { object, index, .. }
+            | Expr::RegionOut { object, index, .. }
             | Expr::IndexUpdate { object, index, .. }
             | Expr::BufferIndexGet {
                 buffer: object,
@@ -504,7 +506,7 @@ impl<'a> Scan<'a> {
                     }
                 }
             }
-            Stmt::Return(Some(e)) => {
+            Stmt::Return(Some(e), _) => {
                 if let Some((f, body)) = self.cur_fn {
                     if body == self.body {
                         self.returns.entry(f).or_default().push(e);
@@ -517,7 +519,7 @@ impl<'a> Scan<'a> {
                 self.boxed.extend(ids.iter().copied());
             }
             Stmt::ReleaseBoxes(_)
-            | Stmt::Return(None)
+            | Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -575,6 +577,7 @@ impl<'a> Scan<'a> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.walk_expr(discriminant);
                 for case in cases {
@@ -627,7 +630,7 @@ impl<'a> Scan<'a> {
                 }
                 self.walk_children(e);
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 if let Expr::LocalGet(recv) = object.as_ref() {
                     self.note_key(*recv, index);
                 } else {
@@ -804,6 +807,7 @@ fn key_never_string_shape(e: &Expr, deps: &mut Vec<KeyDep>) -> bool {
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } => key_never_string_shape(left, deps) && key_never_string_shape(right, deps),
         Expr::Binary { .. } | Expr::Unary { .. } | Expr::Compare { .. } | Expr::Update { .. } => {
             true
@@ -819,6 +823,7 @@ fn key_never_string_shape(e: &Expr, deps: &mut Vec<KeyDep>) -> bool {
         | Expr::MathMin(_)
         | Expr::MathMax(_) => true,
         Expr::IndexGet { object, index, .. }
+        | Expr::RegionOut { object, index, .. }
         | Expr::Uint8ArrayGet {
             array: object,
             index,

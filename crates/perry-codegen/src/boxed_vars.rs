@@ -439,7 +439,7 @@ fn collect_nested_closure_boxed_vars_in_stmt(stmt: &perry_hir::Stmt, out: &mut H
         Stmt::Expr(e) | Stmt::Throw(e) => {
             collect_nested_closure_boxed_vars_in_expr(e, out);
         }
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 collect_nested_closure_boxed_vars_in_expr(e, out);
             }
@@ -498,6 +498,7 @@ fn collect_nested_closure_boxed_vars_in_stmt(stmt: &perry_hir::Stmt, out: &mut H
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             collect_nested_closure_boxed_vars_in_expr(discriminant, out);
             for case in cases {
@@ -585,12 +586,13 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             collect_nested_closure_boxed_vars_in_expr(condition, out);
             collect_nested_closure_boxed_vars_in_expr(then_expr, out);
             collect_nested_closure_boxed_vars_in_expr(else_expr, out);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             collect_nested_closure_boxed_vars_in_expr(object, out);
             collect_nested_closure_boxed_vars_in_expr(index, out);
         }
@@ -611,7 +613,7 @@ fn collect_nested_closure_boxed_vars_in_expr(expr: &perry_hir::Expr, out: &mut H
             collect_nested_closure_boxed_vars_in_expr(object, out);
             collect_nested_closure_boxed_vars_in_expr(value, out);
         }
-        Expr::Await(inner) => {
+        Expr::Await(inner, _) => {
             collect_nested_closure_boxed_vars_in_expr(inner, out);
         }
         Expr::ArrayPush { value, .. } => {
@@ -863,7 +865,7 @@ fn collect_closure_refs_and_writes_in_stmt(
         Stmt::Expr(e) | Stmt::Throw(e) => {
             collect_closure_refs_and_writes_in_expr(e, refs, writes);
         }
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 collect_closure_refs_and_writes_in_expr(e, refs, writes);
             }
@@ -922,6 +924,7 @@ fn collect_closure_refs_and_writes_in_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             collect_closure_refs_and_writes_in_expr(discriminant, refs, writes);
             for case in cases {
@@ -1011,12 +1014,13 @@ fn collect_closure_refs_and_writes_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             collect_closure_refs_and_writes_in_expr(condition, refs, writes);
             collect_closure_refs_and_writes_in_expr(then_expr, refs, writes);
             collect_closure_refs_and_writes_in_expr(else_expr, refs, writes);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             collect_closure_refs_and_writes_in_expr(object, refs, writes);
             collect_closure_refs_and_writes_in_expr(index, refs, writes);
         }
@@ -1104,7 +1108,7 @@ fn collect_outer_writes_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) 
     use perry_hir::Stmt;
     match stmt {
         Stmt::Expr(e) | Stmt::Throw(e) => collect_outer_writes_in_expr(e, out),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 collect_outer_writes_in_expr(e, out);
             }
@@ -1163,6 +1167,7 @@ fn collect_outer_writes_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) 
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             collect_outer_writes_in_expr(discriminant, out);
             for case in cases {
@@ -1266,12 +1271,13 @@ fn collect_outer_writes_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) 
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             collect_outer_writes_in_expr(condition, out);
             collect_outer_writes_in_expr(then_expr, out);
             collect_outer_writes_in_expr(else_expr, out);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             collect_outer_writes_in_expr(object, out);
             collect_outer_writes_in_expr(index, out);
         }
@@ -1319,7 +1325,7 @@ fn collect_write_ids_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) {
     use perry_hir::Stmt;
     match stmt {
         Stmt::Expr(e) | Stmt::Throw(e) => collect_write_ids_in_expr(e, out),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 collect_write_ids_in_expr(e, out);
             }
@@ -1378,6 +1384,7 @@ fn collect_write_ids_in_stmt(stmt: &perry_hir::Stmt, out: &mut HashSet<u32>) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             collect_write_ids_in_expr(discriminant, out);
             for case in cases {
@@ -1479,12 +1486,13 @@ fn collect_write_ids_in_expr(expr: &perry_hir::Expr, out: &mut HashSet<u32>) {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             collect_write_ids_in_expr(condition, out);
             collect_write_ids_in_expr(then_expr, out);
             collect_write_ids_in_expr(else_expr, out);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             collect_write_ids_in_expr(object, out);
             collect_write_ids_in_expr(index, out);
         }
@@ -1587,7 +1595,7 @@ pub(crate) fn collect_let_types_in_stmts(
         }
         // Walk closure bodies nested in the statements so their
         // inner lets are also registered.
-        if let Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Let { init: Some(e), .. } = s {
+        if let Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Let { init: Some(e), .. } = s {
             collect_closure_let_types_in_expr(e, out);
         }
     }
@@ -1726,7 +1734,7 @@ fn collect_compiler_private_async_control_locals_in_stmts_inner(
             }
             _ => {}
         }
-        if let Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Let { init: Some(e), .. } = s {
+        if let Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Let { init: Some(e), .. } = s {
             collect_compiler_private_async_control_locals_in_expr(e, i32_out, i1_out);
         }
     }
@@ -1817,12 +1825,13 @@ fn collect_closure_let_types_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             collect_closure_let_types_in_expr(condition, out);
             collect_closure_let_types_in_expr(then_expr, out);
             collect_closure_let_types_in_expr(else_expr, out);
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             collect_closure_let_types_in_expr(object, out);
             collect_closure_let_types_in_expr(index, out);
         }

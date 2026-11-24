@@ -34,7 +34,7 @@ pub(crate) fn walk_init_for_closure_targets_in_stmt(
     out: &mut std::collections::BTreeSet<LocalId>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => {
             walk_init_for_closure_targets_in_expr(e, out);
         }
         Stmt::If {
@@ -112,6 +112,7 @@ pub(crate) fn walk_init_for_closure_targets_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             walk_init_for_closure_targets_in_expr(condition, out);
             walk_init_for_closure_targets_in_expr(then_expr, out);
@@ -148,7 +149,7 @@ pub(crate) fn walk_for_set_hidden_targets_in_stmt(
     out: &mut std::collections::BTreeSet<LocalId>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => {
             walk_for_set_hidden_targets_in_expr(e, out);
         }
         Stmt::If {
@@ -231,6 +232,7 @@ pub(crate) fn walk_for_set_hidden_targets_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             walk_for_set_hidden_targets_in_expr(condition, out);
             walk_for_set_hidden_targets_in_expr(then_expr, out);
@@ -298,7 +300,7 @@ pub(crate) fn walk_for_funcref_calls_in_closures_in_stmt(
     out: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => {
             walk_for_funcref_calls_in_closures_in_expr(e, out);
         }
         Stmt::If {
@@ -365,7 +367,7 @@ pub(crate) fn walk_for_funcref_calls_in_body_stmt(
     out: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => {
             walk_for_funcref_calls_in_body_expr(e, out);
         }
         Stmt::If {

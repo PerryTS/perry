@@ -195,6 +195,12 @@ pub(crate) fn solve(m: &mut Model) {
                 }
             });
         }
+        // A read of a local that sees a node of its own (`Model::name_of`: a
+        // narrowing's or an `if` arm's version of it) reads the local's
+        // slot: demand on the read is demand on the local.
+        for (&r, &l) in &m.name_of {
+            f(l, r);
+        }
         // PR D (`filters`): an index read reads `num_fields`, the element
         // facts read the aggregate `all_fields` (`bindings::tok_arr_rep`):
         // views of the same slots, so demand on one is demand on each.

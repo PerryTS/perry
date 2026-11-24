@@ -80,6 +80,7 @@ fn for_stmt(destructure: Vec<Stmt>, body: Vec<Stmt>) -> Stmt {
     let mut all = destructure;
     // The real lowering wraps the user body in the iterator-close protocol.
     all.push(Stmt::Try {
+        byte_offset: 0,
         body,
         catch: Some(CatchClause {
             param: Some((12, "__forof_err_12".to_string())),
@@ -199,10 +200,11 @@ fn an_opaque_test_receiver_is_counted_separately() {
 fn a_record_use_inside_a_closure_rejects() {
     let mut body = cc_body();
     body.push(Stmt::Expr(Expr::Closure {
+        byte_offset: 0,
         func_id: 1,
         params: vec![],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::LocalGet(RECORD)))],
+        body: vec![Stmt::Return(Some(Expr::LocalGet(RECORD)), 0)],
         captures: vec![RECORD],
         mutable_captures: vec![],
         captures_this: false,

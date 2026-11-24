@@ -172,7 +172,10 @@ impl<'a> Gen<'a> {
     /// anything else tests its own value's truthiness.
     pub(crate) fn guard_test(&mut self, fx: &Fx, condition: &Expr) -> (NodeId, u8, u8) {
         use crate::model::guard::*;
-        if let Expr::Compare { op, left, right } = condition {
+        if let Expr::Compare {
+            op, left, right, ..
+        } = condition
+        {
             let (operand, nil) = match (left.as_ref(), right.as_ref()) {
                 (x, Expr::Undefined) | (Expr::Undefined, x) => (Some(x), Expr::Undefined),
                 (x, Expr::Null) | (Expr::Null, x) => (Some(x), Expr::Null),
@@ -582,7 +585,6 @@ impl<'a> Gen<'a> {
             None => self.expr(fx, inner),
         };
         let pa = self.member_atom(inner, p);
-        if *byte_offset != 0 {
             self.read_sites.push(ReadSite {
                 global_get: false,
                 access: crate::derive::Access::Read,
@@ -594,7 +596,6 @@ impl<'a> Gen<'a> {
                 value_call: false,
                 func: fx.f,
             });
-        }
         let o = self.load(e, Key::Named(pa));
         if self.diagnostic.is_some() {
             self.diagnostic_expr(fx, object, o);
@@ -839,10 +840,23 @@ impl<'a> Gen<'a> {
         let member_ops = self.member_ops.len();
         let pos0 = match self.m.stop_top.as_mut() {
             Some(s) => {
-                let p0 = s.gen_pos;
+                let p0 = (s.gen_pos, s.gen_kind);
+                s.gen_kind = crate::topstop::variant(e, "");
+                if let Some(k) = crate::topstop::unlocated_kind(e) {
+                    *s.self_gap.entry(k).or_default() += 1;
+                    if std::env::var("PERRY_HIRPOS_SAMPLE").is_ok_and(|v| v == k) {
+                        let d = format!("{e:?}");
+                        let path = s.paths.get(fx.module as usize).map_or("", |p| p.as_str());
+                        eprintln!(
+                            "HPSAMPLE {k} m{} {path} near {} {}",
+                            fx.module,
+                            s.gen_pos.1,
+                            &d[..d.len().min(600)]
+                        );
+                    }
+                }
                 if let Some(o) = crate::topstop::expr_offset(e) {
                     s.gen_pos = (fx.module, o);
-                    s.fn_pos.entry(fx.f as u32).or_insert((fx.module, o));
                 }
                 Some(p0)
             }
@@ -850,7 +864,7 @@ impl<'a> Gen<'a> {
         };
         let n = self.expr_inner(fx, e);
         if let (Some(p0), Some(s)) = (pos0, self.m.stop_top.as_mut()) {
-            s.gen_pos = p0;
+            (s.gen_pos, s.gen_kind) = p0;
         }
         self.member_op_class(fx.module, e, member_ops);
         // A namespace pair's argument (`namespace_pair`): the pair is built
@@ -1068,7 +1082,9 @@ impl<'a> Gen<'a> {
                 self.narrowed_write(mi, *id, out);
                 out
             }
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 let shift = matches!(op, perry_hir::BinaryOp::UShr);
                 let out = self.tmp("binary");
                 let r = self.m.reason("ToPrimitive operand");
@@ -1194,8 +1210,12 @@ impl<'a> Gen<'a> {
                     out
                 }
             },
-            Expr::Compare { op, left, right } => self.compare_expr(fx, op, left, right),
-            Expr::Logical { op, left, right } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => self.compare_expr(fx, op, left, right),
+            Expr::Logical {
+                op, left, right, ..
+            } => {
                 let plan = match op {
                     LogicalOp::And => self.own_guard_plan(left, crate::gen::Region::Expr(right)),
                     LogicalOp::Or => match left.as_ref() {
@@ -1247,6 +1267,7 @@ impl<'a> Gen<'a> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } if self.m.ns_pairs && matches!(condition.as_ref(), Expr::NamespacePatched(_)) => {
                 let Expr::NamespacePatched(ns) = condition.as_ref() else {
                     unreachable!()
@@ -1257,6 +1278,7 @@ impl<'a> Gen<'a> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 let plan = self.own_guard_plan(condition, crate::gen::Region::Expr(then_expr));
                 let (t, then_test, else_test) = self.guard_test(fx, condition);
@@ -1340,7 +1362,7 @@ impl<'a> Gen<'a> {
                 self.raise_on(o);
                 self.prim_node(prim::BOOL)
             }
-            Expr::Await(x) => {
+            Expr::Await(x, _) => {
                 // 27.7.5.3 Await: a rejection resumes the body with a throw
                 // completion at the await, into its region (R-JOBTHROW).
                 let v = self.expr(fx, x);
@@ -1366,11 +1388,14 @@ impl<'a> Gen<'a> {
                 byte_offset,
                 ..
             } => {
+                // A compound's GetValue is its `UpdateGet` site (the
+                // PropertySet arm records it), not a read site of its own.
+                let component = self.compound_get.is_some_and(|g| std::ptr::eq(g, e));
                 // `E.prototype.K`: the read of `K` runs per value of `E`
                 // (`Cons::ProtoKey`), so that a builtin namespace's prototype
                 // member is the native it names.
                 if let Some((e, o, a)) = self.proto_member(fx, object, property) {
-                    if *byte_offset != 0 {
+                    if !component {
                         self.read_sites.push(ReadSite {
                             global_get: false,
                             access: crate::derive::Access::Read,
@@ -1392,7 +1417,7 @@ impl<'a> Gen<'a> {
                     None => self.expr(fx, object),
                 };
                 let a = self.member_atom(object, property);
-                if *byte_offset != 0 {
+                if !component {
                     self.read_sites.push(ReadSite {
                         global_get: false,
                         access: crate::derive::Access::Read,
@@ -1421,7 +1446,7 @@ impl<'a> Gen<'a> {
                     crate::builtins::worker_global_member(&mut self.m, property, dst);
                 }
                 self.field_reads.push(dst);
-                if *byte_offset != 0 {
+                if !component {
                     self.load_sites.push((mi, *byte_offset, a, dst));
                 }
                 dst
@@ -1434,15 +1459,17 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let o = self.expr(fx, object);
-                let v = self.expr_zs(fx, value);
-                let a = self.member_atom(object, property);
                 // ACCSITE1 P4: a compound `o.k op= v` (13.15.3): GetValue
                 // then PutValue of one reference, one base evaluation: two
-                // sites at the member's offset.
-                let compound = *byte_offset != 0
-                    && !matches!(object.as_ref(), Expr::PrivateGuard { .. })
-                    && matches!(value.as_ref(), Expr::Binary { left, .. }
-                        if matches!(left.as_ref(), Expr::PropertyGet { property: p, byte_offset: 0, .. } if p == property));
+                // sites at the member's offset. The GetValue is the value's
+                // read of the same key at the same offset (the HIR pair).
+                let get = e.compound_get();
+                let compound = get.is_some();
+                let outer =
+                    std::mem::replace(&mut self.compound_get, get.map(|g| g as *const Expr));
+                let v = self.expr_zs(fx, value);
+                self.compound_get = outer;
+                let a = self.member_atom(object, property);
                 if compound {
                     for access in [
                         crate::derive::Access::UpdateGet,
@@ -1706,6 +1733,7 @@ impl<'a> Gen<'a> {
                 self.load(o, Key::Named(key))
             }
             Expr::IndexGet { object, index, .. }
+            | Expr::RegionOut { object, index, .. }
             | Expr::Uint8ArrayGet {
                 array: object,
                 index,
@@ -1720,7 +1748,10 @@ impl<'a> Gen<'a> {
                 self.to_property_key(i);
                 let key = self.read_key(fx.module, index);
                 let idx = self.for_in_key_of(fx.module, index).unwrap_or(i);
-                self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Read);
+                // A split region's output read is no site of any kind.
+                if !matches!(e, Expr::RegionOut { .. }) {
+                    self.element_site(fx, e, o, idx, key, crate::derive::ElementOp::Read);
+                }
                 // A for-of walk's element (`Gen::for_of_walks`): the counter
                 // is below the length, so the read is what the iteration of
                 // the array yields (a hole's `undefined` included), as the
@@ -1947,7 +1978,8 @@ impl<'a> Gen<'a> {
                         let key = self.m.atom(property);
                         self.m.cons(o, Cons::DeleteKey { key, reason: r });
                     }
-                    Expr::IndexGet { object, index, .. } => {
+                    Expr::IndexGet { object, index, .. }
+                    | Expr::RegionOut { object, index, .. } => {
                         // ECMA-262 13.5.1.2: `delete o[k]` evaluates the
                         // reference (13.3.3 EvaluatePropertyAccessWithExpressionKey:
                         // ToPropertyKey of the key value), then deletes.
@@ -2377,6 +2409,7 @@ impl<'a> Gen<'a> {
                 class_name,
                 field_name,
                 value,
+                ..
             } => {
                 let c = self.class_value(mi, class_name);
                 let v = self.expr(fx, value);
@@ -2445,6 +2478,7 @@ impl<'a> Gen<'a> {
                 class_value,
                 captures,
                 env_class,
+                ..
             } => {
                 let cv = self.expr(fx, class_value);
                 let name = env_class.clone().unwrap_or_default();
@@ -2747,6 +2781,7 @@ impl<'a> Gen<'a> {
                 class_name,
                 method_name,
                 args,
+                ..
             } => {
                 let c = self.class_value(mi, class_name);
                 let a = self.evaluate_all(fx, args);
@@ -2760,7 +2795,7 @@ impl<'a> Gen<'a> {
                 self.region_read(fx, n)
             }
             Expr::ModuleTopThis => fx.this,
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 let a = self.evaluate_all(fx, args);
                 self.super_ctor(fx, a, vec![])
             }

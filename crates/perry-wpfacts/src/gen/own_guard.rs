@@ -127,10 +127,14 @@ fn first(e: &Expr, o: &Expr, k: &Expr) -> First {
         return First::Pure;
     }
     match e {
-        Expr::IndexGet { object, index, .. } if same(object, o) && same(index, k) => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
+            if same(object, o) && same(index, k) =>
+        {
             First::Read(e as *const Expr as usize)
         }
-        Expr::IndexGet { object, index, .. } => then_stop(seq(&[object, index], o, k)),
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            then_stop(seq(&[object, index], o, k))
+        }
         Expr::PropertyGet { object, .. } => then_stop(first(object, o, k)),
         // `x.m(…)`: `x`, then the member read; `f(…)`: `f` (a binding is a
         // value whose call may run first only after the arguments).
@@ -180,7 +184,7 @@ fn first_stmts(stmts: &[Stmt], o: &Expr, k: &Expr) -> First {
             Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) => First::Pure,
             // A new binding: never `o` or `k`.
             Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } => first(e, o, k),
-            Stmt::Return(Some(e)) => then_stop(first(e, o, k)),
+            Stmt::Return(Some(e), _) => then_stop(first(e, o, k)),
             _ => First::Stop,
         };
         match f {
@@ -240,7 +244,7 @@ impl<'a> Gen<'a> {
         {
             return None;
         }
-        let [Stmt::Return(Some(e))] = body else {
+        let [Stmt::Return(Some(e), _)] = body else {
             return None;
         };
         // Lowering lifts a binding's TDZ check over its member/call. It

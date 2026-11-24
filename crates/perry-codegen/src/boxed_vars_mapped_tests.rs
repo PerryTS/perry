@@ -4,6 +4,7 @@ use perry_hir::{ArgumentsObjectMeta, Expr, Function, Module, Param, Stmt};
 
 fn params(mapped: bool) -> Vec<Param> {
     let param = |id, name: &str| Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,
@@ -24,6 +25,7 @@ fn params(mapped: bool) -> Vec<Param> {
 
 fn closure(id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
     Expr::Closure {
+        byte_offset: 0,
         func_id: id,
         params,
         return_type: Type::Any,
@@ -55,6 +57,7 @@ fn write() -> Stmt {
 fn module(params: Vec<Param>, body: Vec<Stmt>) -> Module {
     let mut m = Module::new("mapped");
     m.functions.push(Function {
+        byte_offset: 0,
         id: 10,
         name: "outer".into(),
         type_params: Vec::new(),
@@ -105,7 +108,7 @@ fn function_expression_mapped_cells_reach_nested_arrows() {
 
 #[test]
 fn escaped_arguments_publish_cells_but_unmapped_arguments_do_not() {
-    let body = vec![Stmt::Return(Some(Expr::LocalGet(3)))];
+    let body = vec![Stmt::Return(Some(Expr::LocalGet(3)), 0)];
     assert_eq!(
         collect_boxed_param_ids(&params(true), &body),
         HashSet::from([1, 2])
@@ -135,7 +138,7 @@ fn elided_length_and_index_reads_keep_ordinary_parameter_slots() {
             index: Box::new(Expr::Integer(0)),
         },
     ] {
-        assert!(collect_boxed_param_ids(&params(true), &[Stmt::Return(Some(read))]).is_empty());
+        assert!(collect_boxed_param_ids(&params(true), &[Stmt::Return(Some(read), 0)]).is_empty());
     }
 }
 
@@ -149,7 +152,7 @@ fn redeclared_parameters_keep_prologue_cells_in_named_and_expression_bodies() {
             mutable: true,
             init: Some(Expr::Integer(5)),
         },
-        Stmt::Return(Some(Expr::LocalGet(3))),
+        Stmt::Return(Some(Expr::LocalGet(3)), 0),
     ];
     let mut named = module(params(true), body.clone());
     crate::scope_env::group_scope_boxes(&mut named);

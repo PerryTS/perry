@@ -5,7 +5,7 @@ use super::*;
 
 /// Spec "If innerResult is not an Object, throw a TypeError" check for
 /// IteratorNext / AsyncIteratorClose results.
-fn iterator_result_validated(call: Expr) -> Expr {
+fn iterator_result_validated(call: Expr, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -15,7 +15,7 @@ fn iterator_result_validated(call: Expr) -> Expr {
         }),
         args: vec![call],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -26,6 +26,8 @@ pub(crate) fn emit_driver(
     result_id: LocalId,
     next_call: Expr,
     mut body: Vec<Stmt>,
+    // Source offset of the `for await` statement the driver lowers.
+    byte_offset: u32,
 ) {
     let active = boolean_local(ctx, output, "__iterator_close_active");
     let throwing = boolean_local(ctx, output, "__iterator_close_throwing");
@@ -47,7 +49,11 @@ pub(crate) fn emit_driver(
             Expr::LocalGet(value_id),
         ])),
     };
-    let mut driver = iter_driver_while_stmt(result_id, iterator_result_validated(next_call), body);
+    let mut driver = iter_driver_while_stmt(
+        result_id,
+        iterator_result_validated(next_call, byte_offset),
+        body,
+    );
     let Stmt::While {
         body: loop_body, ..
     } = &mut driver
@@ -69,33 +75,39 @@ pub(crate) fn emit_driver(
             mutable: false,
             init: Some(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: byte_offset,
                 object: Box::new(Expr::LocalGet(iter_id)),
                 property: "return".to_string(),
             }),
         },
         Stmt::If {
             condition: Expr::Compare {
+                byte_offset,
                 op: CompareOp::LooseNe,
                 left: Box::new(Expr::LocalGet(method)),
                 right: Box::new(Expr::Null),
             },
-            then_branch: vec![Stmt::Expr(iterator_result_validated(Expr::Await(
-                // AsyncIteratorClose uses intrinsic Call, not a lookup of
-                // the return method's overridable `.call` property. This
-                // also rejects non-callable objects with a callable `call`.
-                Box::new(Expr::ReflectApply {
-                    func: Box::new(Expr::LocalGet(method)),
-                    this_arg: Box::new(Expr::LocalGet(iter_id)),
-                    args: Box::new(Expr::Array(vec![], None)),
-                }),
-            )))],
+            then_branch: vec![Stmt::Expr(iterator_result_validated(
+                Expr::Await(
+                    // AsyncIteratorClose uses intrinsic Call, not a lookup of
+                    // the return method's overridable `.call` property. This
+                    // also rejects non-callable objects with a callable `call`.
+                    Box::new(Expr::ReflectApply {
+                        func: Box::new(Expr::LocalGet(method)),
+                        this_arg: Box::new(Expr::LocalGet(iter_id)),
+                        args: Box::new(Expr::Array(vec![], None)),
+                    }),
+                    byte_offset,
+                ),
+                byte_offset,
+            ))],
             else_branch: None,
         },
     ];
     let error = ctx.fresh_local();
     let ignored = ctx.fresh_local();
     output.push(Stmt::Try {
+        byte_offset,
         body: vec![driver],
         catch: Some(CatchClause {
             param: Some((error, format!("__iterator_error_{error}"))),
@@ -107,6 +119,7 @@ pub(crate) fn emit_driver(
                 condition: Expr::LocalGet(throwing),
                 // A throw completion takes precedence over failure of close.
                 then_branch: vec![Stmt::Try {
+                    byte_offset,
                     body: close.clone(),
                     catch: Some(CatchClause {
                         param: Some((ignored, format!("__iterator_ignored_{ignored}"))),

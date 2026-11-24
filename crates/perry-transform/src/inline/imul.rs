@@ -45,7 +45,7 @@ pub fn detect_math_imul_polyfill(f: &Function) -> bool {
     }
 
     // Last stmt: Return(Some(Binary { BitOr, ..., Integer(0) }))
-    matches!(&f.body[4], Stmt::Return(Some(Expr::Binary { op: BinaryOp::BitOr, right, .. })) if matches!(right.as_ref(), Expr::Integer(0)))
+    matches!(&f.body[4], Stmt::Return(Some(Expr::Binary { op: BinaryOp::BitOr, right, .. }), _) if matches!(right.as_ref(), Expr::Integer(0)))
 }
 
 /// Check if an expression extracts the hi or lo 16-bit half of a parameter.
@@ -58,6 +58,7 @@ pub fn is_half_extract(e: &Expr, p0: LocalId, p1: LocalId) -> Option<(LocalId, b
             op: BinaryOp::BitAnd,
             left,
             right,
+            ..
         } => {
             if !matches!(right.as_ref(), Expr::Integer(0xffff)) {
                 return None;
@@ -67,6 +68,7 @@ pub fn is_half_extract(e: &Expr, p0: LocalId, p1: LocalId) -> Option<(LocalId, b
                     op: BinaryOp::UShr | BinaryOp::Shr,
                     left: inner,
                     right: shift_amt,
+                    ..
                 } => {
                     if !matches!(shift_amt.as_ref(), Expr::Integer(16)) {
                         return None;
@@ -131,6 +133,7 @@ pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             rewrite_imul_calls_in_expr(condition, imul_ids);
             rewrite_imul_calls_in_expr(then_expr, imul_ids);
@@ -143,7 +146,7 @@ pub fn rewrite_imul_calls_in_expr(e: &mut Expr, imul_ids: &HashSet<FuncId>) {
             }
         }
         Expr::LocalSet(_, val) => rewrite_imul_calls_in_expr(val, imul_ids),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             rewrite_imul_calls_in_expr(object, imul_ids);
             rewrite_imul_calls_in_expr(index, imul_ids);
         }
@@ -216,6 +219,7 @@ mod tests {
                 body: Box::new(counted_loop(vec![imul_call()])),
             },
             Stmt::Switch {
+                byte_offset: 0,
                 discriminant: Expr::Integer(0),
                 cases: vec![SwitchCase {
                     test: None,

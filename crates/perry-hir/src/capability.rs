@@ -143,8 +143,8 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
                 visit_expr(v, ctx);
             }
         }
-        Stmt::Return(Some(e)) => visit_expr(e, ctx),
-        Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
+        Stmt::Return(Some(e), _) => visit_expr(e, ctx),
+        Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => {}
         Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
         Stmt::Labeled { body, .. } => visit_stmt(body, ctx),
         Stmt::If {
@@ -211,6 +211,7 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             visit_expr(discriminant, ctx);
             for case in cases {
@@ -541,6 +542,7 @@ mod tests {
     fn general_native_call_through_crypto() {
         let mut m = empty_module();
         m.init.push(Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "crypto".into(),
             class_name: None,
             object: None,

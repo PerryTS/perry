@@ -154,6 +154,7 @@ fn visit(e: &Expr, f: &mut impl FnMut(&Expr)) {
         condition,
         then_expr,
         else_expr,
+        ..
     } = e
     {
         if matches!(condition.as_ref(), Expr::NamespacePatched(_)) {
@@ -263,6 +264,7 @@ pub(super) fn certify(pf: &mut ProgramFacts, g: &Gen<'_>, cfg: &crate::FactsConf
                     condition,
                     then_expr,
                     else_expr,
+                    ..
                 } if matches!(condition.as_ref(), Expr::NamespacePatched(_)) => {
                     let Expr::NamespacePatched(ns) = condition.as_ref() else {
                         unreachable!()
@@ -488,6 +490,7 @@ mod tests {
             args: vec![call.clone()],
             is_factory: true,
             is_reflect_metadata: false,
+            byte_offset: 0,
         };
         let c = &mut hir.classes[0];
         c.decorators.push(decorator.clone());

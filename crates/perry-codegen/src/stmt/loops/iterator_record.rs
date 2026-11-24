@@ -15,6 +15,7 @@ pub(super) fn lower(
         op: CompareOp::Lt,
         left,
         right,
+        ..
     }) = condition
     else {
         return Ok(false);
@@ -28,6 +29,7 @@ pub(super) fn lower(
         object: None,
         method,
         args,
+        ..
     } = right.as_ref()
     else {
         return Ok(false);
@@ -103,6 +105,7 @@ pub(super) fn lower(
         init: Some(Expr::Integer(0)),
     };
     let candidate_condition = Expr::Compare {
+        byte_offset: 0, /*HPOS*/
         op: CompareOp::Lt,
         left: Box::new(Expr::LocalGet(*counter)),
         right: Box::new(Expr::PropertyGet {
@@ -305,6 +308,7 @@ fn lower_array_arm(
             arm.condition.clone()
         } else {
             Expr::Compare {
+                byte_offset: 0, /*HPOS*/
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(arm.counter)),
                 right: Box::new(arm.length.clone()),
@@ -405,6 +409,7 @@ fn mode_local(expr: &Expr) -> Option<u32> {
             op: CompareOp::Eq,
             left,
             right,
+            ..
         } if matches!(right.as_ref(), Expr::Bool(true)) => match left.as_ref() {
             Expr::LocalGet(id) => Some(*id),
             _ => None,
@@ -421,7 +426,7 @@ fn substitute_output(stmt: &mut Stmt, output: u32, element: &Expr) -> bool {
         }
     }
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => {
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
             if let Some(e) = init {
                 replace_expr(e, output, element);
             }
@@ -459,6 +464,7 @@ mod tests {
     use perry_hir::{BinaryOp, Module, UpdateOp};
     fn rt(method: &str, args: Vec<Expr>) -> Expr {
         Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,
@@ -504,6 +510,7 @@ mod tests {
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut m = Module::new("record_counted");
         let mode = Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(1)),
             right: Box::new(Expr::Bool(true)),
@@ -542,6 +549,7 @@ mod tests {
                     rt("arrayRecordIndex", vec![Expr::Integer(0)]),
                 ))),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(rt(
@@ -590,6 +598,7 @@ mod tests {
                     Stmt::Expr(Expr::LocalSet(
                         5,
                         Box::new(Expr::Binary {
+                            byte_offset: 0,
                             op: BinaryOp::Add,
                             left: Box::new(Expr::LocalGet(5)),
                             right: Box::new(Expr::LocalGet(3)),
@@ -732,6 +741,7 @@ mod tests {
         let _pin = crate::codegen::helpers::NativeRootsPin::native();
         let mut m = Module::new("record_arm");
         let mode = Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(1)),
             right: Box::new(Expr::Bool(true)),
@@ -770,6 +780,7 @@ mod tests {
                     rt("arrayRecordIndex", vec![Expr::Integer(0)]),
                 ))),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(rt(
@@ -820,6 +831,7 @@ mod tests {
                     Stmt::Expr(Expr::LocalSet(
                         5,
                         Box::new(Expr::Binary {
+                            byte_offset: 0,
                             op: BinaryOp::Add,
                             left: Box::new(Expr::LocalGet(5)),
                             right: Box::new(Expr::PropertyGet {
@@ -874,6 +886,7 @@ mod tests {
         let walk = Stmt::For {
             init: Some(Box::new(local(2, Type::Number, Expr::Integer(0)))),
             condition: Some(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(2)),
                 right: Box::new(Expr::PropertyGet {
@@ -905,6 +918,7 @@ mod tests {
                 Stmt::Expr(Expr::LocalSet(
                     1,
                     Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(1)),
                         right: Box::new(Expr::LocalGet(3)),
@@ -921,6 +935,7 @@ mod tests {
             local(1, Type::Number, Expr::Number(0.0)),
             Stmt::If {
                 condition: Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(rt(
                         "arrayRecordNeedsIterator",

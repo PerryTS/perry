@@ -150,7 +150,7 @@ fn reflect_script_var_initializers(
             }
             Stmt::Let { .. }
             | Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -773,6 +773,7 @@ pub fn lower_module_full_with_platform_globals(
     // to `ctx.module_strict`, rather than at the end of lowering, so a later
     // early return cannot ship a module that claims to be sloppy.
     module.init_is_strict = ctx.module_strict;
+    module.byte_offset = ast_module.span.lo.0;
     if should_enable_react_automatic_jsx(name, ast_module) {
         enable_react_automatic_jsx(&mut module, &mut ctx);
     }
@@ -1599,7 +1600,7 @@ pub fn lower_module_full_with_platform_globals(
         module.init = implicit_globals;
     }
 
-    if let Some(id) = ctx.import_meta_require_local {
+    if let Some((id, require_offset)) = ctx.import_meta_require_local {
         let (url, _, _) = super::expr_misc::import_meta_paths(&ctx);
         // Reuse createRequire's synchronous builtin/compiled-module resolver,
         // rooted in module storage and initialized before source statements.
@@ -1611,6 +1612,7 @@ pub fn lower_module_full_with_platform_globals(
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::NativeMethodCall {
+                    byte_offset: require_offset,
                     module: "module".to_string(),
                     class_name: None,
                     object: None,

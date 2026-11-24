@@ -11,6 +11,7 @@
 
 use crate::types::Type;
 use anyhow::Result;
+use swc_common::Spanned;
 use swc_ecma_ast as ast;
 
 use crate::ir::Expr;
@@ -194,14 +195,14 @@ pub(crate) fn try_fold_symbol_well_known_member(
                     args: vec![
                         Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: obj.span().lo.0,
                             object: Box::new(Expr::GlobalGet(0)),
                             property: "Symbol".to_string(),
                         },
                         key_expr,
                     ],
                     type_args: vec![],
-                    byte_offset: 0,
+                    byte_offset: obj.span().lo.0,
                 }));
             }
         },
@@ -274,8 +275,8 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "main" => Expr::Bool(ctx.is_entry_module),
                     "dirname" => Expr::String(dirname),
                     "filename" => Expr::String(filename),
-                    "require" => super::expr_misc::import_meta_require_value(ctx),
-                    "resolve" => super::expr_misc::import_meta_resolve_value(ctx),
+                    "require" => super::expr_misc::import_meta_require_value(ctx, crate::lower::member_token(member)),
+                    "resolve" => super::expr_misc::import_meta_resolve_value(ctx, crate::lower::member_token(member)),
                     // Unknown property — undefined matches the spec'd
                     // "missing property on a frozen object" behavior of
                     // import.meta in Node / Bun.
@@ -329,7 +330,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 ) {
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(Expr::NativeModuleRef("bun".to_string())),
                         property: prop_ident.sym.as_ref().to_string(),
                     });
@@ -357,10 +358,10 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 if crate::analysis::is_builtin_static_function_member("Promise", static_member) {
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: crate::lower::member_token(member),
                             object: Box::new(Expr::GlobalGet(0)),
                             property: "Promise".to_string(),
                         }),
@@ -422,7 +423,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         Some(("process.namespace", None))
                     )
                 {
-                    if let Some(expr) = process_metadata_native_property(prop) {
+                    if let Some(expr) = process_metadata_native_property(prop, crate::lower::member_token(member)) {
                         return Ok(expr);
                     }
                 }
@@ -479,6 +480,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // native getter that reads the runtime flag.
                     "sourceMapsEnabled" => {
                         return Ok(Expr::NativeMethodCall {
+                            byte_offset: crate::lower::member_token(member),
                             module: "process".to_string(),
                             class_name: None,
                             object: None,
@@ -496,7 +498,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // .includes(name)) now does the right thing instead
                     // of crashing on the 0.0 sentinel.
                     "moduleLoadList" => return Ok(Expr::Array(vec![], None)),
-                    "finalization" => return Ok(process_native_property("finalization")),
+                    "finalization" => return Ok(process_native_property("finalization", crate::lower::member_token(member))),
                     // #1379: process.config — object describing build-time
                     // config (`{ variables, target_defaults }` in Node).
                     // Perry has no `node-gyp`-style build to surface, but
@@ -521,7 +523,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "allowedNodeEnvironmentFlags" => {
                         return Ok(process_allowed_node_flags_literal())
                     }
-                    "report" => return Ok(process_native_property("report")),
+                    "report" => return Ok(process_native_property("report", crate::lower::member_token(member))),
                     // #1346: process.argv0 / execPath / title — Node
                     // documents these as strings (program-invocation
                     // name / resolved-binary path / OS-displayed
@@ -539,7 +541,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
                             element_offset: 0,
-                            byte_offset: 0,
+                            byte_offset: crate::lower::member_token(member),
                             byte_end: 0,
                             object: Box::new(Expr::ProcessArgv),
                             index: Box::new(Expr::Number(0.0)),
@@ -567,7 +569,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             }),
                             args: vec![],
                             type_args: vec![],
-                            byte_offset: 0,
+                            byte_offset: crate::lower::member_token(member),
                         });
                     }
                     _ => {}
@@ -593,7 +595,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                 ) {
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(Expr::NativeModuleRef("process".to_string())),
                         property: prop.to_string(),
                     });
@@ -634,7 +636,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let prop = prop_ident.sym.as_ref();
                 if prop != "sourceMapsEnabled" {
-                    if let Some(expr) = process_metadata_native_property(prop) {
+                    if let Some(expr) = process_metadata_native_property(prop, crate::lower::member_token(member)) {
                         return Ok(expr);
                     }
                 }
@@ -659,6 +661,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // #3108: live boolean toggle — see the matching arm above.
                     "sourceMapsEnabled" => {
                         return Ok(Expr::NativeMethodCall {
+                            byte_offset: crate::lower::member_token(member),
                             module: "process".to_string(),
                             class_name: None,
                             object: None,
@@ -667,7 +670,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         })
                     }
                     "moduleLoadList" => return Ok(Expr::Array(vec![], None)),
-                    "finalization" => return Ok(process_native_property("finalization")),
+                    "finalization" => return Ok(process_native_property("finalization", crate::lower::member_token(member))),
                     "config" => {
                         return Ok(Expr::Object(vec![
                             ("variables".to_string(), Expr::Object(Vec::new())),
@@ -677,11 +680,11 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "allowedNodeEnvironmentFlags" => {
                         return Ok(process_allowed_node_flags_literal())
                     }
-                    "report" => return Ok(process_native_property("report")),
+                    "report" => return Ok(process_native_property("report", crate::lower::member_token(member))),
                     "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
                             element_offset: 0,
-                            byte_offset: 0,
+                            byte_offset: crate::lower::member_token(member),
                             byte_end: 0,
                             object: Box::new(Expr::ProcessArgv),
                             index: Box::new(Expr::Number(0.0)),
@@ -698,7 +701,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                             }),
                             args: vec![],
                             type_args: vec![],
-                            byte_offset: 0,
+                            byte_offset: crate::lower::member_token(member),
                         });
                     }
                     _ => {}
@@ -955,7 +958,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         if let Some(id) = ctx.lookup_local(&obj_name) {
                             return Ok(Expr::IndexGet {
                                 element_offset: 0,
-                                byte_offset: 0,
+                                byte_offset: crate::lower::member_token(member),
                                 byte_end: 0,
                                 object: Box::new(Expr::LocalGet(id)),
                                 index: Box::new(Expr::String(member_name)),
@@ -1016,7 +1019,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     };
                 return Ok(Expr::IndexGet {
                     element_offset: member.span.lo.0,
-                    byte_offset: 0,
+                    byte_offset: crate::lower::member_token(member),
                     byte_end: 0,
                     object: Box::new(object),
                     index: Box::new(index),
@@ -1127,7 +1130,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     ) {
                         return Ok(Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: crate::lower::member_token(member),
                             object: Box::new(Expr::NativeModuleRef("stream".to_string())),
                             property: class_name.to_string(),
                         });
@@ -1172,7 +1175,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1213,7 +1216,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1234,7 +1237,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1248,7 +1251,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1258,7 +1261,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1269,7 +1272,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1277,7 +1280,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1292,7 +1295,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1318,7 +1321,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1333,7 +1336,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1348,7 +1351,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1374,7 +1377,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1396,7 +1399,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1420,7 +1423,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1435,7 +1438,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1450,7 +1453,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1464,7 +1467,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1480,7 +1483,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1494,7 +1497,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1505,7 +1508,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1527,7 +1530,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1543,7 +1546,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1578,7 +1581,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1589,7 +1592,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1600,7 +1603,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1611,7 +1614,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1622,7 +1625,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1633,7 +1636,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });
@@ -1749,6 +1752,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // with no args (property getter)
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::NativeMethodCall {
+                        byte_offset: crate::lower::member_token(member),
                         module: module_name,
                         class_name: class_filter,
                         object: Some(Box::new(object_expr)),
@@ -1771,7 +1775,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     let object_expr = lower_expr(ctx, &member.obj)?;
                     return Ok(Expr::PropertyGet {
                         byte_end: 0,
-                        byte_offset: 0,
+                        byte_offset: crate::lower::member_token(member),
                         object: Box::new(object_expr),
                         property: property_name,
                     });

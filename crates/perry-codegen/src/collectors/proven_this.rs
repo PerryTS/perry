@@ -300,7 +300,7 @@ pub(crate) fn ptr_array_cache_fields(class: &Class, method: &Function) -> Vec<(S
             Expr::Delete(inner)
                 if matches!(
                     inner.as_ref(),
-                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                         if matches!(object.as_ref(), Expr::This)
                 ) =>
             {
@@ -383,7 +383,7 @@ fn rewrite_array_field_reads_in_stmts(stmts: &mut [Stmt], aliases: &HashMap<Stri
             Stmt::Expr(expr) | Stmt::Throw(expr) => {
                 rewrite_array_field_reads(expr, aliases);
             }
-            Stmt::Return(expr) => {
+            Stmt::Return(expr, _) => {
                 if let Some(expr) = expr {
                     rewrite_array_field_reads(expr, aliases);
                 }
@@ -444,6 +444,7 @@ fn rewrite_array_field_reads_in_stmts(stmts: &mut [Stmt], aliases: &HashMap<Stri
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 rewrite_array_field_reads(discriminant, aliases);
                 for case in cases {

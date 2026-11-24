@@ -64,7 +64,7 @@ pub(crate) fn expr_is_numeric_key(e: &Expr, leaves: &KeyLeaves<'_>) -> bool {
     match e {
         Expr::Integer(_) | Expr::Number(_) | Expr::Undefined => true,
         Expr::LocalGet(id) => (leaves.key_local)(*id),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             matches!(object.as_ref(), Expr::LocalGet(id) if (leaves.owned_view)(*id))
                 && expr_is_number_or_bigint(index, leaves)
         }
@@ -94,6 +94,7 @@ fn expr_is_number_or_bigint(e: &Expr, leaves: &KeyLeaves<'_>) -> bool {
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } => expr_is_numeric_key(left, leaves) && expr_is_numeric_key(right, leaves),
         // Every other binary operator applies ToNumeric to both sides.
         Expr::Binary { .. } => true,
@@ -199,6 +200,7 @@ mod tests {
             set(
                 2,
                 Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::LocalGet(2)),
                     right: Box::new(Expr::Integer(1)),
@@ -248,6 +250,7 @@ mod tests {
             set(
                 1,
                 Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Add,
                     left: Box::new(Expr::LocalGet(1)),
                     right: Box::new(Expr::String("x".into())),
@@ -262,6 +265,7 @@ mod tests {
         // `var x` re-declaring parameter 1 reuses its id; the slot holds the
         // caller's argument before that `Let` runs.
         let params = vec![Param {
+            byte_offset: 0,
             id: 1,
             name: "x".into(),
             ty: HirType::Number,

@@ -241,6 +241,7 @@ fn navstack_set_in_closure_rewrites_to_settext() {
         vec![
             Expr::String("Go".into()),
             Expr::Closure {
+                byte_offset: 0,
                 func_id: 0 as perry_hir::types::FuncId,
                 params: vec![],
                 return_type: perry_hir::types::Type::Any,
@@ -336,6 +337,7 @@ fn state_set_in_closure_rewrites_to_settext() {
     });
     // Closure body: Stmt::Expr(count.set(5))
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 0 as perry_hir::types::FuncId,
         params: vec![],
         return_type: perry_hir::types::Type::Any,
@@ -509,6 +511,7 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
     // LazyVStack(items.map(item => Text(item)))
     let mut m = empty_module();
     let item_param = perry_hir::ir::Param {
+        byte_offset: 0,
         id: 99,
         name: "item".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -524,10 +527,11 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
             None,
         )),
         callback: Box::new(Expr::Closure {
+            byte_offset: 0,
             func_id: 0 as perry_hir::types::FuncId,
             params: vec![item_param],
             return_type: perry_hir::types::Type::Any,
-            body: vec![Stmt::Return(Some(inner_text))],
+            body: vec![Stmt::Return(Some(inner_text), 0)],
             captures: vec![],
             mutable_captures: vec![],
             captures_this: false,
@@ -886,6 +890,7 @@ fn media_call_inside_button_closure_also_triggers_glue() {
     // walker must descend into Closure bodies via stmt_uses → Closure.
     let mut m = empty_module();
     let play_closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 0 as perry_hir::types::FuncId,
         params: vec![],
         return_type: perry_hir::types::Type::Any,

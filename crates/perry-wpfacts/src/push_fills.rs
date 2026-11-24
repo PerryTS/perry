@@ -119,7 +119,7 @@ fn this_push(e: &Expr) -> Option<(&str, u32, &Expr)> {
     else {
         return None;
     };
-    (matches!(owner.as_ref(), Expr::This) && *byte_offset != 0)
+    matches!(owner.as_ref(), Expr::This)
         .then(|| (property.as_str(), *byte_offset, &args[0]))
 }
 
@@ -139,7 +139,9 @@ fn int_const(e: &Expr) -> Option<i64> {
     match e {
         Expr::Integer(i) => Some(*i),
         Expr::Number(f) if f.fract() == 0.0 && f.abs() < 9.0e15 => Some(*f as i64),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let (a, b) = (int_const(left)?, int_const(right)?);
             match op {
                 BinaryOp::Add => a.checked_add(b),
@@ -183,7 +185,7 @@ impl Scan<'_> {
         match e {
             Expr::This
             | Expr::ThisProvenClass(_)
-            | Expr::SuperCall(_)
+            | Expr::SuperCall(_, _)
             | Expr::SuperCallSpread(_)
             | Expr::SuperMethodCall { .. }
             | Expr::SuperMethodCallSpread { .. }
@@ -197,7 +199,7 @@ impl Scan<'_> {
             | Expr::CallSpread { callee, .. }
             | Expr::JsCallValue { callee, .. }
                 if matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
-                    | Expr::IndexGet { object, .. }
+                    | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                     if matches!(object.as_ref(), Expr::This)) =>
             {
                 self.uses.leak = true;
@@ -284,7 +286,7 @@ fn any_stmt(ss: &[Stmt], f: &mut dyn FnMut(&Stmt) -> bool) -> bool {
             Stmt::Switch { cases, .. } => cases.iter().any(|c| any_stmt(&c.body, f)),
             Stmt::Let { .. }
             | Stmt::Expr(_)
-            | Stmt::Return(_)
+            | Stmt::Return(_, _)
             | Stmt::Throw(_)
             | Stmt::Break
             | Stmt::Continue
@@ -298,14 +300,14 @@ fn any_stmt(ss: &[Stmt], f: &mut dyn FnMut(&Stmt) -> bool) -> bool {
 }
 
 fn returns(ss: &[Stmt]) -> bool {
-    any_stmt(ss, &mut |s| matches!(s, Stmt::Return(_)))
+    any_stmt(ss, &mut |s| matches!(s, Stmt::Return(_, _)))
 }
 
 fn jumps(ss: &[Stmt]) -> bool {
     any_stmt(ss, &mut |s| {
         matches!(
             s,
-            Stmt::Return(_)
+            Stmt::Return(_, _)
                 | Stmt::Break
                 | Stmt::Continue
                 | Stmt::LabeledBreak(_)
@@ -358,7 +360,10 @@ fn counted(s: &Stmt) -> Option<(i64, &[Stmt])> {
         return None;
     };
     let from = int_const(from)?;
-    let Expr::Compare { op, left, right } = condition else {
+    let Expr::Compare {
+        op, left, right, ..
+    } = condition
+    else {
         return None;
     };
     if !matches!(left.as_ref(), Expr::LocalGet(l) if l == id) {

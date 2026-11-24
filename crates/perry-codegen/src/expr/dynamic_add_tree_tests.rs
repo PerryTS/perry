@@ -38,6 +38,7 @@ fn erased_bigint_local(id: u32, name: &str, value: &str) -> Vec<Stmt> {
 
 fn add(left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(left),
         right: Box::new(right),
@@ -46,6 +47,7 @@ fn add(left: Expr, right: Expr) -> Expr {
 
 fn arithmetic(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -177,6 +179,7 @@ const ARGS: u32 = 17;
 
 fn param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,
@@ -189,6 +192,7 @@ fn param(id: u32, name: &str) -> Param {
 
 fn function(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> Function {
     Function {
+        byte_offset: 0,
         id: 1,
         name: name.into(),
         type_params: Vec::new(),
@@ -253,7 +257,7 @@ fn left_chain_over_parameters_keeps_one_shared_guard() {
     let ir = function_ir(function(
         "params_chain",
         params,
-        vec![Stmt::Return(Some(chain))],
+        vec![Stmt::Return(Some(chain), 0)],
     ));
     assert_eq!(
         ir.matches("\nguarded_add.numeric.").count(),
@@ -280,11 +284,14 @@ fn left_chain_over_an_assigned_uncaptured_let_keeps_the_fold() {
             init: Some(Expr::Integer(1)),
         },
         Stmt::Expr(Expr::LocalSet(Z, Box::new(Expr::Integer(2)))),
-        Stmt::Return(Some(left_chain(vec![
-            Expr::LocalGet(P_A),
-            Expr::LocalGet(P_B),
-            Expr::LocalGet(Z),
-        ]))),
+        Stmt::Return(
+            Some(left_chain(vec![
+                Expr::LocalGet(P_A),
+                Expr::LocalGet(P_B),
+                Expr::LocalGet(Z),
+            ])),
+            0,
+        ),
     ];
     let ir = function_ir(function(
         "uncaptured_let",
@@ -310,7 +317,7 @@ fn left_chain_declines_when_a_late_leaf_is_a_property_read() {
     let ir = function_ir(function(
         "property_late",
         params_abc(),
-        vec![Stmt::Return(Some(chain))],
+        vec![Stmt::Return(Some(chain), 0)],
     ));
     assert_eq!(
         fadds(&ir),
@@ -338,6 +345,7 @@ fn left_chain_declines_when_a_late_leaf_is_captured_and_assigned() {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Closure {
+                byte_offset: 0,
                 func_id: 2,
                 params: Vec::new(),
                 return_type: Type::Any,
@@ -354,11 +362,14 @@ fn left_chain_declines_when_a_late_leaf_is_captured_and_assigned() {
                 is_strict: true,
             }),
         },
-        Stmt::Return(Some(left_chain(vec![
-            Expr::LocalGet(P_A),
-            Expr::LocalGet(P_B),
-            Expr::LocalGet(Z),
-        ]))),
+        Stmt::Return(
+            Some(left_chain(vec![
+                Expr::LocalGet(P_A),
+                Expr::LocalGet(P_B),
+                Expr::LocalGet(Z),
+            ])),
+            0,
+        ),
     ];
     let ir = function_ir(function(
         "captured_late",
@@ -388,11 +399,14 @@ fn left_chain_declines_when_a_late_leaf_is_a_mapped_arguments_parameter() {
     let mut f = function(
         "mapped_late",
         params,
-        vec![Stmt::Return(Some(left_chain(vec![
-            Expr::LocalGet(P_A),
-            Expr::LocalGet(P_B),
-            Expr::LocalGet(P_C),
-        ])))],
+        vec![Stmt::Return(
+            Some(left_chain(vec![
+                Expr::LocalGet(P_A),
+                Expr::LocalGet(P_B),
+                Expr::LocalGet(P_C),
+            ])),
+            0,
+        )],
     );
     f.is_strict = false;
     let ir = function_ir(f);
@@ -436,7 +450,7 @@ fn left_chain_declines_when_a_late_leaf_is_a_module_global() {
         Vec::new(),
         vec![
             Stmt::Expr(Expr::LocalSet(C, Box::new(Expr::Integer(100)))),
-            Stmt::Return(Some(Expr::Undefined)),
+            Stmt::Return(Some(Expr::Undefined), 0),
         ],
     ));
     let ir = String::from_utf8(
@@ -471,11 +485,10 @@ fn declared_number_left_chain_declines_when_a_late_leaf_is_an_element_read() {
     let ir = function_ir(function(
         "declared_elements",
         vec![arr],
-        vec![Stmt::Return(Some(left_chain(vec![
-            elem(0),
-            elem(1),
-            elem(2),
-        ])))],
+        vec![Stmt::Return(
+            Some(left_chain(vec![elem(0), elem(1), elem(2)])),
+            0,
+        )],
     ));
     assert!(
         ir.contains("\nguarded_add.numeric."),

@@ -44,7 +44,7 @@ fn required_numeric_mode(numeric_elements: bool, u32_index_elements: bool) -> &'
 fn exact_target_read(expr: &Expr, array_id: u32, counter_id: u32) -> bool {
     matches!(
         expr,
-        Expr::IndexGet { object, index , .. }
+        Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. }
             if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
                 && matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id)
     )
@@ -95,6 +95,7 @@ fn target_is_index_key(expr: &Expr, array_id: u32, counter_id: u32) -> bool {
     let is_target = |candidate: &Expr| exact_target_read(candidate, array_id, counter_id);
     match expr {
         Expr::IndexGet { object, index, .. }
+        | Expr::RegionOut { object, index, .. }
         | Expr::IndexSet { object, index, .. }
         | Expr::IndexUpdate { object, index, .. } => {
             if is_target(index) {
@@ -144,7 +145,7 @@ fn leading_read_requires_numeric(body: &[Stmt], array_id: u32, counter_id: u32) 
         }
         | Stmt::Expr(expr)
         | Stmt::Throw(expr)
-        | Stmt::Return(Some(expr)) => expr,
+        | Stmt::Return(Some(expr), _) => expr,
         // `if (arr[i] < 0) ...`: the leading read lives in the CONDITION.
         // A read only in the branches keeps the conservative answer.
         Stmt::If { condition, .. } => condition,
@@ -163,7 +164,7 @@ fn leading_read_requires_u32_index(body: &[Stmt], array_id: u32, counter_id: u32
         }
         | Stmt::Expr(expr)
         | Stmt::Throw(expr)
-        | Stmt::Return(Some(expr)) => expr,
+        | Stmt::Return(Some(expr), _) => expr,
         _ => return false,
     };
     target_is_index_key(expr, array_id, counter_id)
@@ -172,7 +173,7 @@ fn leading_read_requires_u32_index(body: &[Stmt], array_id: u32, counter_id: u32
 fn expr_flags(expr: &Expr, array_id: u32, counter_id: u32, target: &mut bool, call: &mut bool) {
     if matches!(
         expr,
-        Expr::IndexGet { object, index , .. }
+        Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. }
             if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
                 && matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id)
     ) {
@@ -197,7 +198,7 @@ fn stmt_flags(stmt: &Stmt, array_id: u32, counter_id: u32) -> (bool, bool) {
         }
         | Stmt::Expr(expr)
         | Stmt::Throw(expr)
-        | Stmt::Return(Some(expr)) => {
+        | Stmt::Return(Some(expr), _) => {
             expr_flags(expr, array_id, counter_id, &mut target, &mut call);
         }
         // A conditional's reads and calls count — in the CONDITION and in
@@ -232,7 +233,7 @@ fn stmt_flags(stmt: &Stmt, array_id: u32, counter_id: u32) -> (bool, bool) {
 fn target_read_count(expr: &Expr, array_id: u32, counter_id: u32) -> usize {
     if matches!(
         expr,
-        Expr::IndexGet { object, index , .. }
+        Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. }
             if matches!(object.as_ref(), Expr::LocalGet(id) if *id == array_id)
                 && matches!(index.as_ref(), Expr::LocalGet(id) if *id == counter_id)
     ) {
@@ -257,7 +258,7 @@ fn body_target_read_count(body: &[Stmt], array_id: u32, counter_id: u32) -> usiz
             }
             | Stmt::Expr(expr)
             | Stmt::Throw(expr)
-            | Stmt::Return(Some(expr)) => target_read_count(expr, array_id, counter_id),
+            | Stmt::Return(Some(expr), _) => target_read_count(expr, array_id, counter_id),
             _ => 0,
         })
         .sum()
@@ -367,7 +368,7 @@ fn body_blocks_repeated_read_cache(ctx: &FnCtx<'_>, body: &[Stmt]) -> bool {
         }
         | Stmt::Expr(expr)
         | Stmt::Throw(expr)
-        | Stmt::Return(Some(expr)) => expr_blocks_repeated_read_cache(ctx, expr),
+        | Stmt::Return(Some(expr), _) => expr_blocks_repeated_read_cache(ctx, expr),
         _ => false,
     })
 }
@@ -507,6 +508,7 @@ fn match_candidate(
             op: CompareOp::Lt,
             left,
             right,
+            ..
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter_id) => right.as_ref(),
         _ => return None,
     };
@@ -631,7 +633,8 @@ pub(super) fn record_derived_local(ctx: &mut FnCtx<'_>, id: u32, init: &Expr, mu
             fact.u32_view_derived_locals.insert(id, native_slot);
         }
     }
-    let Expr::IndexGet { object, index, .. } = init else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = init
+    else {
         return;
     };
     let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) = (object.as_ref(), index.as_ref())
@@ -1376,7 +1379,8 @@ pub(crate) fn has_numeric_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     // A loop region's bare read of a dense raw-f64 array (#10741): the
     // region guard proved the slot a canonical double, with no fallback edge.
 
-    let Expr::IndexGet { object, index, .. } = expr else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr
+    else {
         return false;
     };
     let Expr::LocalGet(array_id) = object.as_ref() else {
@@ -1415,7 +1419,8 @@ pub(crate) fn has_numeric_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 }
 
 pub(crate) fn has_u32_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    let Expr::IndexGet { object, index, .. } = expr else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr
+    else {
         return false;
     };
     let (Expr::LocalGet(array_id), Expr::LocalGet(counter_id)) = (object.as_ref(), index.as_ref())
@@ -1430,7 +1435,8 @@ pub(crate) fn has_u32_index_fact(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
 }
 
 pub(crate) fn has_u32_component_bound(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
-    let Expr::IndexGet { object, index, .. } = expr else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr
+    else {
         return false;
     };
     let (Expr::LocalGet(array_id), Expr::LocalGet(counter_id)) = (object.as_ref(), index.as_ref())
@@ -1451,7 +1457,8 @@ pub(crate) fn try_lower_u32_index(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<St
     if !has_u32_index_fact(ctx, expr) {
         return None;
     }
-    let Expr::IndexGet { object, index, .. } = expr else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr
+    else {
         return None;
     };
     let value = try_lower_index_get(ctx, object, index)?;

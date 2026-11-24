@@ -147,7 +147,7 @@ pub(crate) fn scan_module_level_addchild_in_stmt(
         return;
     }
     match stmt {
-        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => {
             scan_module_level_addchild_in_expr(e, module_locals, found);
         }
         Stmt::If {
@@ -253,7 +253,7 @@ pub(crate) fn rewrite_view_builder_calls_in_stmt(
     lookup: &HashMap<perry_hir::types::FuncId, &ViewBuilder>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) => {
             rewrite_view_builder_calls_in_expr(e, lookup);
         }
         Stmt::Let { init: Some(e), .. } => {
@@ -308,7 +308,10 @@ pub(crate) fn rewrite_view_builder_calls_in_expr(
     // When we hit a closure: prepend a setContentView call for every
     // view-builder funcref called inside the closure's body, then recurse
     // into the body for any nested closures.
-    if let Expr::Closure { body, .. } = e {
+    if let Expr::Closure {
+        body, byte_offset, ..
+    } = e
+    {
         // Collect all view-builder funcrefs called inside this closure.
         let mut called_builders: Vec<&ViewBuilder> = Vec::new();
         let mut seen: std::collections::HashSet<perry_hir::types::FuncId> =
@@ -324,6 +327,7 @@ pub(crate) fn rewrite_view_builder_calls_in_expr(
                 .iter()
                 .map(|b| {
                     Stmt::Expr(Expr::NativeMethodCall {
+                        byte_offset: *byte_offset,
                         module: "perry/arkts".to_string(),
                         class_name: None,
                         object: None,
@@ -365,6 +369,7 @@ pub(crate) fn rewrite_view_builder_calls_in_expr(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             rewrite_view_builder_calls_in_expr(condition, lookup);
             rewrite_view_builder_calls_in_expr(then_expr, lookup);
@@ -414,7 +419,7 @@ pub(crate) fn scan_closure_body_for_view_builder_calls_in_stmt<'a>(
     seen: &mut std::collections::HashSet<perry_hir::types::FuncId>,
 ) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Return(Some(e)) => {
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) => {
             scan_closure_body_for_view_builder_calls_in_expr(e, lookup, out, seen);
         }
         Stmt::Let { init: Some(e), .. } => {

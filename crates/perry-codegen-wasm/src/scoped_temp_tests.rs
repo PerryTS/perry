@@ -131,6 +131,7 @@ fn scoped_binding_shadows_module_global_only_inside_body_and_restores_outer() {
     let inner = Expr::ScopedTemp {
         id: 5,
         value: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(5)),
             right: Box::new(Expr::Number(1.0)),
@@ -140,11 +141,13 @@ fn scoped_binding_shadows_module_global_only_inside_body_and_restores_outer() {
     module.init.push(log(Expr::ScopedTemp {
         id: 5,
         value: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(5)),
             right: Box::new(Expr::Number(1.0)),
         }),
         body: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(inner),
             right: Box::new(Expr::LocalGet(5)),
@@ -833,6 +836,7 @@ fn host_interop_native_for_each_statement_has_balanced_stack() {
         if let Stmt::Expr(expr) = stmt {
             if let Expr::ArrayForEach { array, callback } = expr {
                 *expr = Expr::NativeMethodCall {
+                    byte_offset: 0,
                     module: "array".into(),
                     class_name: None,
                     object: Some(array.clone()),

@@ -888,7 +888,7 @@ enum TopLevelKind {
 fn stmt_contains_return(stmt: &perry_hir::Stmt) -> bool {
     use perry_hir::Stmt;
     match stmt {
-        Stmt::Return(_) => true,
+        Stmt::Return(_, _) => true,
         Stmt::If {
             then_branch,
             else_branch,
@@ -1231,6 +1231,7 @@ fn chunk_statements(
         *next_id = (*next_id).saturating_add(1);
         let ci = chunk_fns.len();
         chunk_fns.push(perry_hir::Function {
+            byte_offset: 0, /*HPOS*/
             id: fn_id,
             name: format!("{ENTRY_CHUNK_PREFIX}{module_name}_{ci}"),
             type_params: Vec::new(),
@@ -1327,6 +1328,7 @@ mod tests {
 
     fn empty_closure_with_id(func_id: u32, body: Vec<Stmt>) -> Expr {
         Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: vec![],
             return_type: Type::Any,
@@ -1547,6 +1549,7 @@ mod tests {
         let mut preallocated = module_with_init(vec![
             Stmt::PreallocateBoxes(vec![20]),
             Stmt::Try {
+                byte_offset: 0,
                 body: vec![let_stmt(20, "captured", Expr::Number(2.0))],
                 catch: None,
                 finally: None,
@@ -1572,6 +1575,7 @@ mod tests {
         ]);
         // an existing function with a high id, and a closure with an even higher id
         m.functions.push(perry_hir::Function {
+            byte_offset: 0,
             id: 500,
             name: "f".into(),
             type_params: vec![],
@@ -1600,6 +1604,7 @@ mod tests {
             fields: vec![],
             constructor: None,
             methods: vec![perry_hir::Function {
+                byte_offset: 0,
                 id: 12_000,
                 name: "method".into(),
                 type_params: vec![],
@@ -1650,7 +1655,7 @@ mod tests {
         // return inline, in order. target=1 maximizes chunking.
         let mut m = module_with_init(vec![
             let_stmt(0, "x", Expr::Number(1.0)), // chunk
-            Stmt::Return(None),                  // must-stay, inline
+            Stmt::Return(None, 0),               // must-stay, inline
             let_stmt(1, "y", Expr::Number(2.0)), // chunk
             Stmt::Expr(Expr::LocalGet(1)),       // chunk
         ]);
@@ -1663,7 +1668,7 @@ mod tests {
         let return_pos = m
             .init
             .iter()
-            .position(|s| matches!(s, Stmt::Return(_)))
+            .position(|s| matches!(s, Stmt::Return(_, _)))
             .expect("the top-level return is kept inline");
         let call_positions: Vec<usize> = m
             .init
@@ -1722,6 +1727,7 @@ mod tests {
     /// anonymous IIFE and (by default) its inner `__perry_cjs_factory`.
     fn factory_closure(func_id: u32, body: Vec<Stmt>) -> Expr {
         Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: vec![],
             return_type: Type::Any,
@@ -1760,7 +1766,7 @@ mod tests {
     fn cjs_wrapped_init_with(leading: Vec<Stmt>, factory: Expr) -> Vec<Stmt> {
         let mut outer_body = leading;
         outer_body.push(let_stmt(101, CJS_FACTORY_NAME, factory));
-        outer_body.push(Stmt::Return(Some(call_no_args(Expr::LocalGet(101)))));
+        outer_body.push(Stmt::Return(Some(call_no_args(Expr::LocalGet(101))), 0));
         let outer_closure = factory_closure(100, outer_body);
         vec![let_stmt(102, "_cjs", call_no_args(outer_closure))]
     }
@@ -1793,6 +1799,7 @@ mod tests {
         let mut with_param = factory_closure(103, vec![]);
         if let Expr::Closure { params, .. } = &mut with_param {
             params.push(perry_hir::Param {
+                byte_offset: 0,
                 id: 200,
                 name: "x".into(),
                 ty: Type::Any,
@@ -1829,7 +1836,7 @@ mod tests {
 
         // A differently-named binding is never mistaken for the factory.
         let mut unrelated_body = vec![let_stmt(101, "helper", factory_closure(103, vec![]))];
-        unrelated_body.push(Stmt::Return(Some(call_no_args(Expr::LocalGet(101)))));
+        unrelated_body.push(Stmt::Return(Some(call_no_args(Expr::LocalGet(101))), 0));
         let unrelated = vec![let_stmt(
             102,
             "_cjs",

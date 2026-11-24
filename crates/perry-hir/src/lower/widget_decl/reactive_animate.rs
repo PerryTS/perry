@@ -166,6 +166,7 @@ pub(crate) fn try_desugar_reactive_animate(
             args.push(lower_expr(ctx, &a.expr)?);
         }
         return Ok(Some(Expr::NativeMethodCall {
+            byte_offset: crate::lower::call_token(call),
             module: "perry/ui".to_string(),
             method: method_name.to_string(),
             object: None,
@@ -198,6 +199,7 @@ pub(crate) fn try_desugar_reactive_animate(
         initial_args.push(lower_expr(ctx, &a.expr)?);
     }
     outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
+        byte_offset: crate::lower::call_token(call),
         module: "perry/ui".to_string(),
         method: method_name.to_string(),
         object: None,
@@ -214,6 +216,7 @@ pub(crate) fn try_desugar_reactive_animate(
         let inner_scope = ctx.enter_scope();
         let v_param_id = ctx.define_local("__v".to_string(), Type::Any);
         let v_param = Param {
+            byte_offset: call.span.lo.0,
             id: v_param_id,
             name: "__v".to_string(),
             ty: Type::Any,
@@ -229,6 +232,7 @@ pub(crate) fn try_desugar_reactive_animate(
             fresh_args.push(lower_expr(ctx, &a.expr)?);
         }
         let animate_call = Expr::NativeMethodCall {
+            byte_offset: crate::lower::call_token(call),
             module: "perry/ui".to_string(),
             method: method_name.to_string(),
             object: None,
@@ -252,6 +256,7 @@ pub(crate) fn try_desugar_reactive_animate(
         inner_captures = ctx.filter_module_level_captures(inner_captures);
 
         let inner_closure = Expr::Closure {
+            byte_offset: call.span.lo.0,
             func_id: inner_func_id,
             params: vec![v_param],
             return_type: Type::Any,
@@ -269,6 +274,7 @@ pub(crate) fn try_desugar_reactive_animate(
         };
 
         outer_body.push(Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: crate::lower::call_token(call),
             module: "perry/ui".to_string(),
             method: "stateOnChange".to_string(),
             object: None,
@@ -277,7 +283,7 @@ pub(crate) fn try_desugar_reactive_animate(
         }));
     }
 
-    outer_body.push(Stmt::Return(Some(Expr::Undefined)));
+    outer_body.push(Stmt::Return(Some(Expr::Undefined), call.span.lo.0));
     ctx.exit_scope(outer_scope);
 
     let mut outer_refs = Vec::new();
@@ -294,6 +300,7 @@ pub(crate) fn try_desugar_reactive_animate(
     outer_captures = ctx.filter_module_level_captures(outer_captures);
 
     let outer_closure = Expr::Closure {
+        byte_offset: call.span.lo.0,
         func_id: outer_func_id,
         params: vec![],
         return_type: Type::Any,
@@ -315,6 +322,6 @@ pub(crate) fn try_desugar_reactive_animate(
         callee: Box::new(outer_closure),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: crate::lower::call_token(call),
     }))
 }

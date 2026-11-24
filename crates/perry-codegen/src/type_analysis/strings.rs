@@ -433,6 +433,7 @@ pub(crate) fn is_definitely_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } => is_definitely_string_expr(ctx, left) || is_definitely_string_expr(ctx, right),
         // Ternary `cond ? a : b` is definitely a string when BOTH
         // branches are definitely strings. Without this, code like
@@ -510,7 +511,10 @@ pub(crate) fn is_declared_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
     }
     matches!(
         e,
-        Expr::PropertyGet { .. } | Expr::Call { .. } | Expr::IndexGet { .. }
+        Expr::PropertyGet { .. }
+            | Expr::Call { .. }
+            | Expr::IndexGet { .. }
+            | Expr::RegionOut { .. }
     ) && matches!(
         static_type_of(ctx, e),
         Some(HirType::String) | Some(HirType::StringLiteral(_))
@@ -639,6 +643,7 @@ pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> b
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } => {
             string_value_is_runtime_guaranteed(ctx, left)
                 || string_value_is_runtime_guaranteed(ctx, right)
@@ -654,7 +659,7 @@ pub(crate) fn string_value_is_runtime_guaranteed(ctx: &FnCtx<'_>, e: &Expr) -> b
         Expr::PropertyGet {
             object, property, ..
         } if is_process_namespace_version_property(object, property) => true,
-        Expr::PropertyGet { .. } | Expr::IndexGet { .. } => matches!(
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. } | Expr::RegionOut { .. } => matches!(
             crate::lower_call::guarded_path_type(ctx, e),
             Some(HirType::String | HirType::StringLiteral(_))
         ),
@@ -711,7 +716,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
         // a string-typed receiver returns a single-character string,
         // so the tokenizer pattern `input[pos] >= "0"` routes through
         // string comparison.
-        Expr::IndexGet { object, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
             match static_type_of(ctx, object) {
                 Some(HirType::Array(elem)) if matches!(*elem, HirType::String) => true,
                 Some(HirType::String) => true,
@@ -727,7 +732,7 @@ pub(crate) fn is_string_expr(ctx: &FnCtx<'_>, e: &Expr) -> bool {
                 Some(perry_hir::EnumValue::String(_))
             )
         }
-        Expr::Binary { op: BinaryOp::Add, left, right } => {
+        Expr::Binary { op: BinaryOp::Add, left, right, .. } => {
             is_string_expr(ctx, left) || is_string_expr(ctx, right)
         }
         Expr::PathToNamespacedPath(path) => is_definitely_string_expr(ctx, path),

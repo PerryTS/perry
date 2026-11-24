@@ -80,6 +80,7 @@ fn entry_opts(output_type: &str) -> CompileOptions {
 
 fn empty_module() -> Module {
     Module {
+        byte_offset: 0,
         name: "gc_exit_teardown.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
@@ -635,6 +636,7 @@ fn dylib_closures_keep_native_roots() {
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::Closure {
+            byte_offset: 0,
             func_id: 1,
             params: Vec::new(),
             return_type: Type::Any,
@@ -646,7 +648,7 @@ fn dylib_closures_keep_native_roots() {
                     mutable: true,
                     init: Some(Expr::Array(Vec::new(), None)),
                 },
-                Stmt::Return(Some(Expr::LocalGet(2))),
+                Stmt::Return(Some(Expr::LocalGet(2)), 0),
             ],
             captures: Vec::new(),
             mutable_captures: Vec::new(),
@@ -684,6 +686,7 @@ fn dylib_closures_keep_native_roots() {
 fn set_bun_platform_marker_lowers_to_the_runtime_flag_setter() {
     let mut module = empty_module();
     module.init = vec![Stmt::Expr(Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,

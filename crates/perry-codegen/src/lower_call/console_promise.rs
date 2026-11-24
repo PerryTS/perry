@@ -1018,15 +1018,15 @@ pub(crate) fn try_lower_optional_method_call(
         _ => false,
     };
     let reads_method = |e: &Expr| {
-        matches!(e, Expr::Compare { op: perry_hir::CompareOp::LooseEq, left, right }
+        matches!(e, Expr::Compare { op: perry_hir::CompareOp::LooseEq, left, right, .. }
             if matches!(right.as_ref(), Expr::Null)
                 && matches!(left.as_ref(), Expr::PropertyGet { object: o, property: p, .. }
                     if p == property && same_base(o)))
     };
     let guard_matches = reads_method(condition)
-        || matches!(condition, Expr::Logical { op: perry_hir::LogicalOp::And, left, right }
+        || matches!(condition, Expr::Logical { op: perry_hir::LogicalOp::And, left, right, .. }
             if reads_method(left)
-                && matches!(right.as_ref(), Expr::Compare { op: perry_hir::CompareOp::Ne, left: t, right: s }
+                && matches!(right.as_ref(), Expr::Compare { op: perry_hir::CompareOp::Ne, left: t, right: s, .. }
                     if matches!(s.as_ref(), Expr::String(k) if k == "string")
                         && matches!(t.as_ref(), Expr::TypeOf(o) if same_base(o))));
     if !guard_matches
@@ -1600,7 +1600,7 @@ fn receiver_must_eval_once(e: &Expr) -> bool {
             | Expr::StaticMethodCall { .. }
             | Expr::New { .. }
             | Expr::NewDynamic { .. }
-            | Expr::Await(_)
+            | Expr::Await(_, _)
     )
 }
 

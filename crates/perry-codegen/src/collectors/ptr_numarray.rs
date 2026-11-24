@@ -525,7 +525,9 @@ impl<'a> UseWalk<'a> {
                 matches!(op, UnaryOp::Neg | UnaryOp::Pos | UnaryOp::BitNot)
                     && self.value_or_element_is_numeric(tracked, operand)
             }
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 matches!(
                     op,
                     BinaryOp::Add
@@ -542,7 +544,9 @@ impl<'a> UseWalk<'a> {
                 ) && self.value_or_element_is_numeric(tracked, left)
                     && self.value_or_element_is_numeric(tracked, right)
             }
-            Expr::Logical { op, left, right } => {
+            Expr::Logical {
+                op, left, right, ..
+            } => {
                 matches!(op, LogicalOp::Or | LogicalOp::Coalesce)
                     && self.value_or_element_is_numeric(tracked, left)
                     && self.value_is_numeric(tracked, right)
@@ -566,7 +570,7 @@ impl<'a> UseWalk<'a> {
     /// tracked array itself" (number|undefined — valid exactly where a
     /// ToNumber/short-circuit context absorbs the undefined).
     fn value_or_element_is_numeric(&self, tracked: u32, e: &Expr) -> bool {
-        if let Expr::IndexGet { object, index, .. } = e {
+        if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e {
             if let Expr::LocalGet(id) = object.as_ref() {
                 if *id == tracked && self.key_is_provably_numeric(index) {
                     return true;
@@ -597,9 +601,9 @@ impl<'a> UseWalk<'a> {
             // A bare `return <local>` hands the alias out only when the
             // function is DONE on that path — no later in-function access can
             // observe an external mutation through it.
-            Stmt::Return(Some(Expr::LocalGet(id))) if self.is_candidate(*id) => {}
+            Stmt::Return(Some(Expr::LocalGet(id)), _) if self.is_candidate(*id) => {}
             Stmt::Expr(e) | Stmt::Throw(e) => self.walk_expr(e),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     self.walk_expr(e);
                 }
@@ -653,6 +657,7 @@ impl<'a> UseWalk<'a> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.walk_expr(discriminant);
                 for case in cases {
@@ -679,7 +684,7 @@ impl<'a> UseWalk<'a> {
             // non-numeric key is an ordinary [[Get]] — harmless for the
             // element invariants, but the KEY expression may itself contain a
             // bare reference; keep it simple and require numeric).
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     if self.is_candidate(*id) {
                         if !self.key_is_provably_numeric(index) {
@@ -981,6 +986,7 @@ mod tests {
 
     fn capturing_closure(captures: Vec<u32>) -> Expr {
         Expr::Closure {
+            byte_offset: 0,
             func_id: 0,
             params: vec![],
             return_type: HirType::Void,
@@ -1083,6 +1089,7 @@ mod tests {
                     ARR,
                     Expr::Integer(1),
                     Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(index_get(ARR, Expr::Integer(1))),
                         right: Box::new(Expr::Integer(1)),
@@ -1094,7 +1101,7 @@ mod tests {
                 Stmt::Expr(property_get(Expr::LocalGet(ARR), "length")),
             ),
             ("numeric push", Stmt::Expr(push(ARR, Expr::Number(1.0)))),
-            ("bare return", Stmt::Return(Some(Expr::LocalGet(ARR)))),
+            ("bare return", Stmt::Return(Some(Expr::LocalGet(ARR)), 0)),
         ];
         for (label, stmt) in uses {
             assert!(

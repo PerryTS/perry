@@ -70,7 +70,7 @@ pub(super) fn literal_classes(hir: &HirModule) -> HashMap<String, LiteralClass> 
 /// initializer, a returned value or an assigned value.
 fn birth_position(s: &mut Stmt) -> Option<&mut Expr> {
     match s {
-        Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => Some(e),
+        Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => Some(e),
         Stmt::Expr(Expr::LocalSet(_, e)) => Some(e.as_mut()),
         _ => None,
     }

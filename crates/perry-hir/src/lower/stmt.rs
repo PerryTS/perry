@@ -316,7 +316,8 @@ fn emit_for_of_pattern_protocol(
     *var_idx += spans.len();
     let bound = match pat {
         ast::Pat::Array(arr_pat) => {
-            let plan = crate::destructuring::plan_for_unproven_source(ctx, source, out);
+            let plan =
+                crate::destructuring::plan_for_unproven_source(ctx, source, out, arr_pat.span.lo.0);
             crate::destructuring::lower_array_pattern_binding_guarded(
                 ctx, arr_pat, plan, false, false, out,
             )
@@ -389,7 +390,7 @@ fn emit_for_of_pattern_binding_indexed(
                 }
                 let elem_src = Expr::IndexGet {
                     element_offset: 0,
-                    byte_offset: 0,
+                    byte_offset: elem_pat.span().lo.0,
                     byte_end: 0,
                     object: Box::new(Expr::LocalGet(tmp_id)),
                     index: Box::new(Expr::Number(idx as f64)),
@@ -415,14 +416,16 @@ fn emit_for_of_pattern_binding_indexed(
                         let key = assign.key.sym.to_string();
                         let prop_access = Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: assign.span.lo.0,
                             object: Box::new(Expr::LocalGet(tmp_id)),
                             property: key,
                         };
                         let init = if let Some(default_expr) = &assign.value {
                             let default_val = lower_expr(ctx, default_expr)?;
                             Expr::Conditional {
+                                byte_offset: assign.span.lo.0,
                                 condition: Box::new(Expr::Compare {
+                                    byte_offset: assign.span.lo.0,
                                     op: CompareOp::Ne,
                                     left: Box::new(prop_access.clone()),
                                     right: Box::new(Expr::Undefined),
@@ -477,6 +480,7 @@ fn emit_for_of_pattern_binding_indexed(
             });
             let default_val = lower_expr(ctx, &assign_pat.right)?;
             let with_default = Expr::Conditional {
+                byte_offset: assign_pat.span.lo.0,
                 condition: Box::new(Expr::IsUndefinedOrBareNan(Box::new(Expr::LocalGet(tmp_id)))),
                 then_expr: Box::new(default_val),
                 else_expr: Box::new(Expr::LocalGet(tmp_id)),
@@ -910,7 +914,7 @@ fn lower_stmt_inner(
                         for s in &stmts {
                             if let Stmt::Let {
                                 name,
-                                init: Some(Expr::Await(inner)),
+                                init: Some(Expr::Await(inner, _)),
                                 ..
                             } = s
                             {
@@ -1754,6 +1758,7 @@ fn lower_stmt_inner(
             };
 
             module.init.push(Stmt::Try {
+                byte_offset: try_stmt.span.lo.0,
                 body,
                 catch,
                 finally,
@@ -1823,6 +1828,7 @@ fn lower_stmt_inner(
                 discriminant = Expr::LocalGet(id);
             }
             module.init.push(Stmt::Switch {
+                byte_offset: switch_stmt.span.lo.0,
                 discriminant,
                 cases,
             });

@@ -7,6 +7,7 @@ use perry_hir::{Expr, Function, Module, Param, Stmt};
 
 fn param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.into(),
         ty: Type::Any,
@@ -30,6 +31,7 @@ fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
 /// `() => { <cap> = 42 }`: captures `cap` and mutates it, so `cap` is a cell.
 fn writer(func_id: u32, cap: u32) -> Expr {
     Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: Type::Any,
@@ -52,6 +54,7 @@ fn resume_ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
     let _shadow = crate::codegen::helpers::NativeRootsPin::shadow();
     let mut module = Module::new("binding_cell.ts");
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "resume".into(),
         type_params: Vec::new(),
@@ -96,7 +99,7 @@ fn a_birth_below_its_declaration_trusts_the_root() {
         vec![
             let_stmt(101, "cell", Expr::Integer(1)),
             let_stmt(102, "w", writer(2, 101)),
-            Stmt::Return(Some(Expr::LocalGet(101))),
+            Stmt::Return(Some(Expr::LocalGet(101)), 0),
         ],
     );
     assert!(
@@ -112,7 +115,7 @@ fn a_birth_capturing_a_boxed_parameter_trusts_the_root() {
         vec![param(100, "state"), param(103, "p")],
         vec![
             let_stmt(102, "w", writer(2, 103)),
-            Stmt::Return(Some(Expr::LocalGet(103))),
+            Stmt::Return(Some(Expr::LocalGet(103)), 0),
         ],
     );
     assert!(
@@ -139,7 +142,7 @@ fn a_birth_its_declaration_may_not_have_reached_mints_the_cell() {
                 else_branch: None,
             },
             let_stmt(102, "w", writer(2, 101)),
-            Stmt::Return(Some(Expr::LocalGet(101))),
+            Stmt::Return(Some(Expr::LocalGet(101)), 0),
         ],
     );
     assert_eq!(mint_blocks(&ir), 1, "one checked capture:\n{ir}");

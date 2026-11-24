@@ -90,6 +90,7 @@ pub(super) fn materialize_native_default_alias(
     ctx: &mut LoweringContext,
     module: &mut Module,
     local: &str,
+    byte_offset: u32,
 ) -> String {
     let native_default = module.imports.iter().any(|import| {
         import.is_native && !import.type_only && import.specifiers.iter().any(|specifier| {
@@ -102,7 +103,7 @@ pub(super) fn materialize_native_default_alias(
     {
         return local.to_string();
     }
-    let value = super::super::lower_expr::native_module_binding_value(ctx, local);
+    let value = super::super::lower_expr::native_module_binding_value(ctx, local, byte_offset);
     let name = format!("__perry_native_default_export_{}", ctx.fresh_local());
     let id = ctx.define_local(name.clone(), crate::types::Type::Any);
     module.init.push(crate::ir::Stmt::Let {

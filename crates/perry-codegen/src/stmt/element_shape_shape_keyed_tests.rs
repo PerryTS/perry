@@ -61,6 +61,7 @@ fn untyped_accumulate(value: Expr) -> Stmt {
     Stmt::Expr(Expr::LocalSet(
         U_SUM_ID,
         Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(U_SUM_ID)),
             right: Box::new(value),
@@ -76,6 +77,7 @@ fn derived_index_stmt(modulus: Expr) -> Stmt {
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Mod,
             left: Box::new(Expr::LocalGet(U_COUNTER_ID)),
             right: Box::new(modulus),
@@ -95,11 +97,13 @@ fn derived_index_stmt(modulus: Expr) -> Stmt {
 fn untyped_param_module(rows_ty: Type, sum_ty: Type, body: Vec<Stmt>) -> Module {
     let mut m = Module::new("element_shape_loop.ts");
     m.functions = vec![perry_hir::Function {
+        byte_offset: 0,
         id: 901,
         name: "run".to_string(),
         type_params: Vec::new(),
         params: vec![
             perry_hir::Param {
+                byte_offset: 0,
                 id: ROWS_ID,
                 name: "rows".to_string(),
                 ty: rows_ty,
@@ -109,6 +113,7 @@ fn untyped_param_module(rows_ty: Type, sum_ty: Type, body: Vec<Stmt>) -> Module 
                 arguments_object: None,
             },
             perry_hir::Param {
+                byte_offset: 0,
                 id: COUNT_ID,
                 name: "count".to_string(),
                 ty: Type::Number,
@@ -118,6 +123,7 @@ fn untyped_param_module(rows_ty: Type, sum_ty: Type, body: Vec<Stmt>) -> Module 
                 arguments_object: None,
             },
             perry_hir::Param {
+                byte_offset: 0,
                 id: MOD_ID,
                 name: "n".to_string(),
                 ty: Type::Number,
@@ -142,6 +148,7 @@ fn untyped_param_module(rows_ty: Type, sum_ty: Type, body: Vec<Stmt>) -> Module 
                 ty: Type::Number,
                 mutable: false,
                 init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::BitOr,
                     left: Box::new(Expr::LocalGet(COUNT_ID)),
                     right: Box::new(Expr::Integer(0)),
@@ -156,6 +163,7 @@ fn untyped_param_module(rows_ty: Type, sum_ty: Type, body: Vec<Stmt>) -> Module 
                     init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(U_COUNTER_ID)),
                     right: Box::new(Expr::LocalGet(U_LIMIT_ID)),
@@ -167,7 +175,7 @@ fn untyped_param_module(rows_ty: Type, sum_ty: Type, body: Vec<Stmt>) -> Module 
                 }),
                 body,
             },
-            Stmt::Return(Some(Expr::LocalGet(U_SUM_ID))),
+            Stmt::Return(Some(Expr::LocalGet(U_SUM_ID)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -412,6 +420,7 @@ fn a_body_mixing_index_forms_declines() {
         Type::Any,
         Type::Number,
         vec![untyped_accumulate(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(untyped_elem_field(Expr::LocalGet(U_COUNTER_ID), "v")),
             right: Box::new(untyped_elem_field(Expr::Integer(7), "w")),
@@ -437,6 +446,7 @@ fn a_modulo_index_with_the_operands_swapped_declines() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Mod,
                     left: Box::new(Expr::LocalGet(MOD_ID)),
                     right: Box::new(Expr::LocalGet(U_COUNTER_ID)),
@@ -525,13 +535,15 @@ fn the_class_keyed_arm_keeps_the_full_property_denylist() {
         vec![Stmt::Expr(Expr::LocalSet(
             SUM_ID,
             Box::new(Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(SUM_ID)),
                 right: Box::new(Expr::PropertyGet {
                     byte_end: 0,
-                    object: Box::new(Expr::synthetic_index_get(
+                    object: Box::new(Expr::index_get_at(
                         Box::new(Expr::LocalGet(ARRAY_ID)),
                         Box::new(Expr::LocalGet(COUNTER_ID)),
+                        0,
                     )),
                     property: "length".to_string(),
                     byte_offset: 0,

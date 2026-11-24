@@ -64,7 +64,7 @@ thread_local! {
 /// calls in the arguments set and restore their own.
 pub(crate) fn with_method_site<R>(callee: &Expr, f: impl FnOnce() -> R) -> R {
     let off = match callee {
-        Expr::PropertyGet { byte_offset, .. } if *byte_offset != 0 => *byte_offset,
+        Expr::PropertyGet { byte_offset, .. } => *byte_offset,
         _ => direct_call_offset(),
     };
     let saved = METHOD_SITE.with(|s| s.replace(off));
@@ -95,6 +95,7 @@ pub(crate) fn is_default_prologue(s: &Stmt, id: u32) -> bool {
                 op: CompareOp::Eq,
                 left,
                 right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -885,11 +886,7 @@ pub(crate) fn try_lower_typed_method_call(
     else {
         return Ok(None);
     };
-    let offset = if *byte_offset != 0 {
-        *byte_offset
-    } else {
-        DIRECT_CALL.with(|s| s.get())
-    };
+    let offset = *byte_offset;
     if offset == 0 || ctx.wpfacts_off || ctx.wpfacts.interp_guard {
         return Ok(None);
     }

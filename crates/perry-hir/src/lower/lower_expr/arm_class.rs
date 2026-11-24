@@ -237,6 +237,13 @@ pub(crate) fn lower_class_expr(
     // these need the same per-evaluation treatment, otherwise a class
     // expression returned from a factory (effect's `make`) shares one
     // template class and `.ast` is undefined/clobbered.
+    // Each named static's declaration offset, in `named_statics` order.
+    let named_static_offsets: Vec<u32> = class
+        .static_fields
+        .iter()
+        .filter(|sf| sf.key_expr.is_none())
+        .map(|sf| sf.byte_offset)
+        .collect();
     let named_statics: Vec<(String, Expr)> = class
         .static_fields
         .iter()
@@ -358,7 +365,7 @@ pub(crate) fn lower_class_expr(
             // returns. Empty entries materialize that local without emitting a
             // capture refresh.
             ctx.body_class_expr_captures
-                .push((owner, ids, env_class.clone()));
+                .push((owner, ids, env_class.clone(), class_expr.class.span.lo.0));
             Some(owner)
         } else if ids.is_empty() {
             None
@@ -368,7 +375,7 @@ pub(crate) fn lower_class_expr(
                 crate::types::Type::Any,
             );
             ctx.body_class_expr_captures
-                .push((owner, ids, env_class.clone()));
+                .push((owner, ids, env_class.clone(), class_expr.class.span.lo.0));
             Some(owner)
         }
     } else {
@@ -493,6 +500,7 @@ pub(crate) fn lower_class_expr(
                     continue;
                 };
                 seq.push(Expr::StaticFieldSet {
+                    byte_offset: named_static_offsets[index as usize],
                     class_name: synthetic_name.clone(),
                     field_name: name,
                     value: Box::new(value),
@@ -517,7 +525,21 @@ pub(crate) fn lower_class_expr(
                 let Some(block_name) = static_block_names.get(index as usize).cloned() else {
                     continue;
                 };
+                // The call stands at the static block it runs.
+                let Some(block_offset) = class_expr
+                    .class
+                    .body
+                    .iter()
+                    .filter_map(|m| match m {
+                        ast::ClassMember::StaticBlock(b) => Some(b.span.lo.0),
+                        _ => None,
+                    })
+                    .nth(index as usize)
+                else {
+                    continue;
+                };
                 seq.push(Expr::StaticMethodCall {
+                    byte_offset: block_offset,
                     class_name: synthetic_name.clone(),
                     method_name: block_name,
                     args: Vec::new(),

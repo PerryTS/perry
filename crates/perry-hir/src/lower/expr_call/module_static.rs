@@ -95,6 +95,7 @@ pub(super) fn try_module_static_methods(
                             | "fileURLToPath"
                     ) {
                         return Ok(Ok(Expr::NativeMethodCall {
+                            byte_offset: crate::lower::call_token(call),
                             module: "bun".to_string(),
                             class_name: None,
                             object: None,
@@ -105,6 +106,7 @@ pub(super) fn try_module_static_methods(
 
                     let mut sequence = args;
                     sequence.push(Expr::NativeMethodCall {
+                        byte_offset: crate::lower::call_token(call),
                         module: "bun".to_string(),
                         class_name: None,
                         object: None,
@@ -532,6 +534,7 @@ pub(super) fn try_module_static_methods(
                             | "addAbortListener"
                     ) {
                         return Ok(Ok(Expr::NativeMethodCall {
+                            byte_offset: crate::lower::call_token(call),
                             module: "events".to_string(),
                             class_name: None,
                             object: None,
@@ -551,6 +554,7 @@ pub(super) fn try_module_static_methods(
                         "json" | "redirect" | "error" => {
                             ctx.uses_fetch = true;
                             return Ok(Ok(Expr::NativeMethodCall {
+                                byte_offset: crate::lower::call_token(call),
                                 module: "fetch".to_string(),
                                 class_name: Some("Response".to_string()),
                                 object: None,
@@ -638,12 +642,13 @@ pub(super) fn try_module_static_methods(
                         {
                             let math = Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: call.span.lo.0,
                                 object: Box::new(Expr::GlobalThisExpr),
                                 property: "Math".to_string(),
                             };
                             return Ok(Ok(super::patched_builtin_call::dynamic_member_call(
                                 call,
+                                member,
                                 math,
                                 method_name.to_string(),
                                 a,
@@ -670,6 +675,7 @@ pub(super) fn try_module_static_methods(
                     if method_name == "isView" {
                         let arg = args.into_iter().next().unwrap_or(Expr::Undefined);
                         return Ok(Ok(Expr::NativeMethodCall {
+                            byte_offset: crate::lower::call_token(call),
                             module: "util/types".to_string(),
                             class_name: None,
                             object: None,
@@ -699,6 +705,7 @@ pub(super) fn try_module_static_methods(
                         let bits = it.next().unwrap_or(Expr::Undefined);
                         let value = it.next().unwrap_or(Expr::Undefined);
                         return Ok(Ok(Expr::NativeMethodCall {
+                            byte_offset: crate::lower::call_token(call),
                             module: "bigint".to_string(),
                             class_name: None,
                             object: None,
@@ -797,6 +804,7 @@ pub(super) fn try_module_static_methods(
                                     Expr::StringFromCharCode(Box::new(iter.next().unwrap()));
                                 for arg in iter {
                                     acc = Expr::Binary {
+                                        byte_offset: call.span.lo.0,
                                         op: crate::ir::BinaryOp::Add,
                                         left: Box::new(acc),
                                         right: Box::new(Expr::StringFromCharCode(Box::new(arg))),
@@ -820,6 +828,7 @@ pub(super) fn try_module_static_methods(
                                     Expr::StringFromCodePoint(Box::new(iter.next().unwrap()));
                                 for arg in iter {
                                     acc = Expr::Binary {
+                                        byte_offset: call.span.lo.0,
                                         op: crate::ir::BinaryOp::Add,
                                         left: Box::new(acc),
                                         right: Box::new(Expr::StringFromCodePoint(Box::new(arg))),
@@ -876,6 +885,7 @@ pub(super) fn try_module_static_methods(
                         if let Some(expr) = super::crypto::lower_crypto_passthrough(
                             method_name,
                             std::mem::take(&mut args),
+                            call.span.lo.0,
                         ) {
                             return Ok(Ok(expr));
                         }
@@ -973,6 +983,7 @@ pub(super) fn try_module_static_methods(
                         }
                         "getPriority" | "setPriority" => {
                             return Ok(Ok(Expr::NativeMethodCall {
+                                byte_offset: crate::lower::call_token(call),
                                 module: "os".to_string(),
                                 class_name: None,
                                 object: None,
@@ -1037,6 +1048,7 @@ pub(super) fn try_module_static_methods(
                         }
                         "allocUnsafeSlow" => {
                             return Ok(Ok(Expr::NativeMethodCall {
+                                byte_offset: crate::lower::call_token(call),
                                 module: "buffer".to_string(),
                                 class_name: None,
                                 object: None,
@@ -1057,6 +1069,7 @@ pub(super) fn try_module_static_methods(
                         }
                         "copyBytesFrom" => {
                             return Ok(Ok(Expr::NativeMethodCall {
+                                byte_offset: crate::lower::call_token(call),
                                 module: "buffer".to_string(),
                                 class_name: None,
                                 object: None,
@@ -1102,13 +1115,13 @@ pub(super) fn try_module_static_methods(
                                 byte_end: 0,
                                 callee: Box::new(Expr::PropertyGet {
                                     byte_end: 0,
-                                    byte_offset: 0,
+                                    byte_offset: crate::lower::call_token(call),
                                     object: Box::new(a),
                                     property: "compare".to_string(),
                                 }),
                                 args: vec![b],
                                 type_args: vec![],
-                                byte_offset: 0,
+                                byte_offset: crate::lower::call_token(call),
                             }));
                         }
                         _ => {} // Fall through to generic handling
@@ -1125,6 +1138,7 @@ pub(super) fn try_module_static_methods(
                     let method_name = method_ident.sym.as_ref();
                     if matches!(method_name, "fromBase64" | "fromHex") {
                         return Ok(Ok(Expr::NativeMethodCall {
+                            byte_offset: crate::lower::call_token(call),
                             module: "buffer".to_string(),
                             class_name: None,
                             object: None,
@@ -1322,6 +1336,7 @@ pub(super) fn try_module_static_methods(
                     let method_name = method_ident.sym.as_ref();
                     if matches!(method_name, "timeout" | "abort" | "any") {
                         return Ok(Ok(Expr::StaticMethodCall {
+                            byte_offset: crate::lower::call_token(call),
                             class_name: "AbortSignal".to_string(),
                             method_name: method_name.to_string(),
                             args,
@@ -1395,6 +1410,7 @@ pub(super) fn try_module_static_methods(
                     // native dispatch table picks them up.
                     if method_name == "createObjectURL" {
                         return Ok(Ok(Expr::NativeMethodCall {
+                            byte_offset: crate::lower::call_token(call),
                             module: "url".to_string(),
                             class_name: None,
                             object: None,
@@ -1404,6 +1420,7 @@ pub(super) fn try_module_static_methods(
                     }
                     if method_name == "revokeObjectURL" {
                         return Ok(Ok(Expr::NativeMethodCall {
+                            byte_offset: crate::lower::call_token(call),
                             module: "url".to_string(),
                             class_name: None,
                             object: None,

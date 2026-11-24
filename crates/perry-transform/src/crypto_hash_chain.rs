@@ -204,7 +204,7 @@ fn is_literal_fast_path(expr: &Expr) -> bool {
 
 fn contains_suspension(expr: &Expr) -> bool {
     match expr {
-        Expr::Await(_) | Expr::Yield { .. } => return true,
+        Expr::Await(_, _) | Expr::Yield { .. } => return true,
         // A closure body runs in its own frame, later.
         Expr::Closure { .. } => return false,
         _ => {}
@@ -238,7 +238,7 @@ fn for_each_stmt_expr(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e);
             }
@@ -293,6 +293,7 @@ fn for_each_stmt_expr(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for case in cases {
@@ -441,7 +442,7 @@ fn for_each_let(module: &Module, f: &mut dyn FnMut(&Stmt, &[Stmt])) {
 fn for_each_stmt_expr_shallow(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
     match stmt {
         Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(Some(e)) => f(e),
+        Stmt::Return(Some(e), _) => f(e),
         Stmt::If { condition, .. }
         | Stmt::While { condition, .. }
         | Stmt::DoWhile { condition, .. } => f(condition),
@@ -458,6 +459,7 @@ fn for_each_stmt_expr_shallow(stmt: &Stmt, f: &mut dyn FnMut(&Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {
@@ -678,6 +680,7 @@ fn allowed_refs_stmt(stmt: &Stmt, id: LocalId) -> usize {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             allowed_refs(discriminant, id, false)
                 + cases
@@ -693,7 +696,7 @@ fn allowed_refs_stmt(stmt: &Stmt, id: LocalId) -> usize {
                     .sum::<usize>()
         }
         Stmt::Let { init, .. } => init.as_ref().map_or(0, |e| allowed_refs(e, id, false)),
-        Stmt::Return(e) => e.as_ref().map_or(0, |e| allowed_refs(e, id, false)),
+        Stmt::Return(e, _) => e.as_ref().map_or(0, |e| allowed_refs(e, id, false)),
         Stmt::Throw(e) => allowed_refs(e, id, false),
         Stmt::Break
         | Stmt::Continue
@@ -842,7 +845,7 @@ impl Rewriter<'_> {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.expr(e);
                 }
@@ -897,6 +900,7 @@ impl Rewriter<'_> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant);
                 for case in cases {
@@ -1040,7 +1044,7 @@ fn rewrite_refs_stmt(stmt: &mut Stmt, id: LocalId) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => rewrite_refs_expr(e, id),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 rewrite_refs_expr(e, id);
             }
@@ -1097,6 +1101,7 @@ fn rewrite_refs_stmt(stmt: &mut Stmt, id: LocalId) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             rewrite_refs_expr(discriminant, id);
             for case in cases {

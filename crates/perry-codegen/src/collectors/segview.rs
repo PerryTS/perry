@@ -714,7 +714,7 @@ fn for_each_expr_in_stmt_shallow(stmt: &Stmt, f: &mut impl FnMut(&Expr)) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e);
             }
@@ -989,6 +989,7 @@ fn let_any(id: u32, name: &str, init: Expr) -> Stmt {
 /// `cur != 0` — the accept test. `open` returns `0.0` when it declines.
 fn cursor_live(cur: u32) -> Expr {
     Expr::Compare {
+        byte_offset: 0, /*HPOS*/
         op: perry_hir::CompareOp::Ne,
         left: Box::new(Expr::LocalGet(cur)),
         right: Box::new(Expr::Number(0.0)),
@@ -997,6 +998,7 @@ fn cursor_live(cur: u32) -> Expr {
 
 fn pick(cur: u32, accept: Expr, decline: Expr) -> Expr {
     Expr::Conditional {
+        byte_offset: 0, /*HPOS*/
         condition: Box::new(cursor_live(cur)),
         then_expr: Box::new(accept),
         else_expr: Box::new(decline),
@@ -1070,6 +1072,7 @@ fn rewrite_site(list: &mut Vec<Stmt>, i: usize, site: &SegmentForOfSite, fresh: 
         *condition = Some(pick(
             cur,
             Expr::Compare {
+                byte_offset: 0, /*HPOS*/
                 op: perry_hir::CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(result_id)),
                 right: Box::new(Expr::Number(1.0)),
@@ -1342,7 +1345,7 @@ fn for_each_expr_in_stmt_shallow_mut(stmt: &mut Stmt, f: &mut impl FnMut(&mut Ex
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => f(e),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 f(e);
             }
@@ -1509,6 +1512,7 @@ struct V2Emission {
 
 fn is_undefined_cmp(id: u32) -> Expr {
     Expr::Compare {
+        byte_offset: 0, /*HPOS*/
         op: perry_hir::CompareOp::Eq,
         left: Box::new(Expr::LocalGet(id)),
         right: Box::new(Expr::Undefined),
@@ -1565,6 +1569,7 @@ fn rewrite_uses_in_expr(e: &mut Expr, seg: u32, cur: u32, fresh: &mut u32, out: 
                         )),
                     ),
                     Expr::Conditional {
+                        byte_offset: 0, /*HPOS*/
                         condition: Box::new(is_undefined_cmp(t_res)),
                         then_expr: Box::new(Expr::Call {
                             byte_end: 0,

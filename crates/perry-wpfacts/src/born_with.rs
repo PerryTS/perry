@@ -104,8 +104,7 @@ pub(crate) fn runs(ss: &[Stmt]) -> Vec<Run> {
                     let Expr::LocalGet(x) = object.as_ref() else {
                         break;
                     };
-                    let quiet = *byte_offset != 0
-                        && args.iter().all(|a| match a {
+                    let quiet = args.iter().all(|a| match a {
                             Expr::LocalGet(l) => *l != e,
                             Expr::Closure { .. } => true,
                             a => literal(a),
@@ -168,8 +167,8 @@ pub(crate) fn store_only_keys(f: &Function) -> Option<Vec<String>> {
                 };
                 keys.push(k.clone())
             }
-            Stmt::Return(None) if i + 1 == n => {}
-            Stmt::Return(Some(Expr::This)) if i + 1 == n => {}
+            Stmt::Return(None, _) if i + 1 == n => {}
+            Stmt::Return(Some(Expr::This), _) if i + 1 == n => {}
             _ => return None,
         }
     }

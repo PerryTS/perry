@@ -188,6 +188,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             class_name,
             method_name,
             args,
+            ..
         } => {
             downgrade_unknown_call_args(ctx, args);
             // HIR may classify an uppercase object import as a static call.

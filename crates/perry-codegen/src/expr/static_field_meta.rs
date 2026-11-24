@@ -217,6 +217,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             class_name,
             field_name,
             value,
+            ..
         } => {
             let v = lower_expr(ctx, value)?;
             let key = (class_name.clone(), field_name.clone());
@@ -380,6 +381,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             class_value,
             captures,
             env_class,
+            ..
         } => {
             let cap_len = captures.len().to_string();
             // The capture array is live across every capture's lowering, and a

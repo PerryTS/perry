@@ -222,6 +222,7 @@ pub(crate) fn sig_body(
     g.body.drain(at..at + len);
     let mut out = super::signature_entry::sig_function(&g, &plan.defaults)?;
     let lane = |p: &Param, id: u32, what: &str| Param {
+        byte_offset: p.byte_offset,
         id,
         name: format!("{}${what}", p.name),
         ty: Type::Any,
@@ -258,6 +259,7 @@ pub(crate) fn copy_lanes(facts: &ElisionFacts, tmpl: u32, e: &Expr) -> Option<Fa
             condition,
             then_expr,
             else_expr,
+            ..
         } if matches!(else_expr.as_ref(), Expr::Undefined) => match condition.as_ref() {
             Expr::LocalGet(p) => (Some(*p), then_expr.as_ref()),
             _ => return None,
@@ -420,11 +422,7 @@ fn site(ctx: &mut FnCtx<'_>, callee: &Expr) -> Result<Option<Site>> {
             byte_offset,
             ..
         } => {
-            let offset = if *byte_offset != 0 {
-                *byte_offset
-            } else {
-                direct_offset
-            };
+            let offset = *byte_offset;
             if offset == 0 {
                 return Ok(None);
             }
@@ -752,6 +750,7 @@ pub(crate) fn try_fold_bound_agg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<Str
                 op: perry_hir::CompareOp::Eq,
                 left,
                 right,
+                ..
             } = condition.as_ref()
             else {
                 return None;

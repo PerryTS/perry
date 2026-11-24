@@ -470,7 +470,7 @@ fn class_construction_is_exact(classes: &HashMap<&str, &perry_hir::Class>, name:
 /// Any `return <expr>` outside nested closures.
 fn stmts_return_value(stmts: &[Stmt]) -> bool {
     stmts.iter().any(|s| match s {
-        Stmt::Return(Some(_)) => true,
+        Stmt::Return(Some(_), _) => true,
         Stmt::If {
             then_branch,
             else_branch,
@@ -660,7 +660,7 @@ fn record_expr_use(e: &Expr, depth: u32, scan: &mut ModuleScan) {
         }
         // Element-access receiver position is length-safe; everything nested
         // below it (index/value) is scanned normally.
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             record_receiver_use(object, depth, scan);
             record_expr_use(index, depth, scan);
         }
@@ -826,11 +826,11 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => record_expr_use(e, depth, scan),
-        Stmt::Return(Some(e)) => record_expr_use(e, depth, scan),
+        Stmt::Return(Some(e), _) => record_expr_use(e, depth, scan),
         Stmt::PreallocateBoxes(ids) | Stmt::PreallocateTdzBoxes(ids) | Stmt::ReleaseBoxes(ids) => {
             scan.boxed_prealloc.extend(ids.iter().copied());
         }
-        Stmt::Return(None)
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -890,6 +890,7 @@ fn walk_stmt(s: &Stmt, depth: u32, scan: &mut ModuleScan) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             record_expr_use(discriminant, depth, scan);
             for case in cases {
@@ -1130,7 +1131,7 @@ fn judge_stmt(
         Stmt::Expr(e) | Stmt::Throw(e) => {
             judge_expr(e, env, number_arrays, integer_locals, ready, out)
         }
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 judge_expr(e, env, number_arrays, integer_locals, ready, out);
             }
@@ -1201,6 +1202,7 @@ fn judge_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             judge_expr(discriminant, env, number_arrays, integer_locals, ready, out);
             for case in cases {
@@ -1504,7 +1506,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
                     scan_expr(child, param_id, uses)
                 });
             }
-            Expr::IndexGet { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) =>
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } if matches!(object.as_ref(), Expr::LocalGet(id) if *id == param_id) =>
             {
                 uses.read = true;
                 scan_expr(index, param_id, uses);
@@ -1540,7 +1542,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
             }
             | Stmt::Expr(expr)
             | Stmt::Throw(expr) => scan_expr(expr, param_id, uses),
-            Stmt::Return(Some(expr)) => scan_expr(expr, param_id, uses),
+            Stmt::Return(Some(expr), _) => scan_expr(expr, param_id, uses),
             Stmt::If {
                 condition,
                 then_branch,
@@ -1590,6 +1592,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 scan_expr(discriminant, param_id, uses);
                 for case in cases {
@@ -1601,7 +1604,7 @@ pub(crate) fn guarded_number_array_param_eligible(stmts: &[Stmt], param_id: u32)
             }
             Stmt::Labeled { body, .. } => scan_stmt(body, param_id, uses),
             Stmt::Let { init: None, .. }
-            | Stmt::Return(None)
+            | Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)

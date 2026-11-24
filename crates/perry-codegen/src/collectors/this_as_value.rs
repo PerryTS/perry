@@ -247,7 +247,7 @@ pub fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<Strin
     for s in stmts {
         let bad = match s {
             Stmt::Expr(e) | Stmt::Throw(e) => expr_uses_this_as_value(e, fields),
-            Stmt::Return(opt) => opt
+            Stmt::Return(opt, _) => opt
                 .as_ref()
                 .is_some_and(|e| expr_uses_this_as_value(e, fields)),
             Stmt::Let { init, .. } => init
@@ -300,6 +300,7 @@ pub fn stmts_use_this_as_value(stmts: &[perry_hir::Stmt], fields: &HashSet<Strin
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 expr_uses_this_as_value(discriminant, fields)
                     || cases.iter().any(|c| {
@@ -334,7 +335,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             captures_this: true,
             ..
         } => true,
-        Expr::SuperCall(_)
+        Expr::SuperCall(_, _)
         | Expr::SuperMethodCall { .. }
         | Expr::SuperMethodCallSpread { .. }
         | Expr::SuperPropertySet { .. }
@@ -433,7 +434,9 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         // A removal needs a real heap `this`, so say so here -- the same rule
         // the `LocalGet` receivers get in `escape_check.rs`.
         Expr::Delete(operand) => match operand.as_ref() {
-            Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+            Expr::PropertyGet { object, .. }
+            | Expr::IndexGet { object, .. }
+            | Expr::RegionOut { object, .. }
                 if matches!(object.as_ref(), Expr::This) =>
             {
                 true
@@ -443,7 +446,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
         Expr::Unary { operand, .. }
         | Expr::Void(operand)
         | Expr::TypeOf(operand)
-        | Expr::Await(operand)
+        | Expr::Await(operand, _)
         | Expr::StringCoerce(operand)
         | Expr::TemplateStringCoerce(operand)
         | Expr::ObjectCoerce(operand)
@@ -453,6 +456,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             expr_uses_this_as_value(condition, fields)
                 || expr_uses_this_as_value(then_expr, fields)
@@ -474,7 +478,7 @@ pub fn expr_uses_this_as_value(e: &perry_hir::Expr, fields: &HashSet<String>) ->
                 .is_some_and(|o| expr_uses_this_as_value(o, fields))
                 || args.iter().any(|a| expr_uses_this_as_value(a, fields))
         }
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             expr_uses_this_as_value(object, fields) || expr_uses_this_as_value(index, fields)
         }
         Expr::IndexSet {
@@ -554,6 +558,7 @@ mod tests {
 
     fn function(name: &str, body: Vec<Stmt>) -> Function {
         Function {
+            byte_offset: 0,
             id: 0,
             name: name.to_string(),
             type_params: Vec::new(),
@@ -574,6 +579,7 @@ mod tests {
 
     fn field(name: &str) -> ClassField {
         ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: name.to_string(),
             key_expr: None,

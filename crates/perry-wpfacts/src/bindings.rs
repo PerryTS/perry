@@ -1512,9 +1512,9 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
                 Expr::Integer(_) => true,
                 Expr::Number(n) => n.is_finite(),
                 Expr::LocalGet(id) => params.contains(id),
-                Expr::Binary { op, left, right } if !matches!(op, BinaryOp::Pow) => {
-                    pure(left, params) && pure(right, params)
-                }
+                Expr::Binary {
+                    op, left, right, ..
+                } if !matches!(op, BinaryOp::Pow) => pure(left, params) && pure(right, params),
                 Expr::Unary {
                     op: UnaryOp::Pos | UnaryOp::Neg | UnaryOp::BitNot,
                     operand,
@@ -1531,7 +1531,7 @@ pub(crate) fn collect(g: &Gen) -> Vec<ModuleBindings> {
                 continue;
             }
             let params: Vec<_> = f.params.iter().map(|p| p.id).collect();
-            if let [perry_hir::Stmt::Return(Some(e))] = f.body.as_slice() {
+            if let [perry_hir::Stmt::Return(Some(e), _)] = f.body.as_slice() {
                 if pure(e, &params) {
                     out[mi].numeric_functions.push((f.id, params, e.clone()));
                 }

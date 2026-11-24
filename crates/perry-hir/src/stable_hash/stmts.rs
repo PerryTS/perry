@@ -28,7 +28,7 @@ impl SH for Stmt {
                 tag(h, 1);
                 e.hash(h);
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 tag(h, 2);
                 e.hash(h);
             }
@@ -97,6 +97,7 @@ impl SH for Stmt {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 tag(h, 14);
                 discriminant.hash(h);

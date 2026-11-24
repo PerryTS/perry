@@ -33,6 +33,7 @@ fn call(fid: u32, args: Vec<Expr>) -> Expr {
 
 fn func(id: u32, body: Vec<Stmt>) -> Function {
     Function {
+        byte_offset: 0,
         id,
         name: format!("f{id}"),
         type_params: vec![],
@@ -76,7 +77,7 @@ fn add_callee_stubs(m: &mut Module) {
             match s {
                 Stmt::Let { init: Some(e), .. }
                 | Stmt::Expr(e)
-                | Stmt::Return(Some(e))
+                | Stmt::Return(Some(e), _)
                 | Stmt::Throw(e) => visit_expr(e, out),
                 Stmt::If {
                     condition,
@@ -120,6 +121,7 @@ fn add_callee_stubs(m: &mut Module) {
         let mut stub = func(id, vec![]);
         stub.params = (0..arity as u32)
             .map(|i| perry_hir::Param {
+                byte_offset: 0,
                 id: 100_000 + id * 100 + i,
                 name: format!("s{id}_{i}"),
                 ty: Type::Any,
@@ -334,10 +336,11 @@ fn reassignment_in_another_function_rejects_binding() {
 #[test]
 fn closure_reference_rejects_binding() {
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 99,
         params: vec![],
         return_type: Type::Any,
-        body: vec![Stmt::Return(Some(Expr::LocalGet(3)))],
+        body: vec![Stmt::Return(Some(Expr::LocalGet(3)), 0)],
         captures: vec![3],
         mutable_captures: vec![],
         captures_this: false,
@@ -409,6 +412,7 @@ fn sites_inside_closures_are_judged_as_their_own_body() {
     // its literals are judged, and no binding of the enclosing body is ready
     // there unless `definite_init` proves it for the closure at entry.
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 99,
         params: vec![],
         return_type: Type::Any,
@@ -528,6 +532,7 @@ fn boxed_prealloc_binding_is_rejected() {
 #[test]
 fn local_is_reassigned_sees_closure_writes() {
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 99,
         params: vec![],
         return_type: Type::Any,
@@ -577,7 +582,7 @@ fn guarded_number_array_rejects_stale_or_aliasable_reads() {
         5,
     ));
     assert!(!guarded_number_array_param_eligible(
-        &[write(), loop_stmt(), Stmt::Return(Some(read()))],
+        &[write(), loop_stmt(), Stmt::Return(Some(read()), 0)],
         5,
     ));
     assert!(!guarded_number_array_param_eligible(
@@ -596,6 +601,7 @@ fn a_var_redeclared_parameter_is_demoted_like_a_reassigned_one() {
     // a `Stmt::Let`, not a `LocalSet`; the specialized entry's proofs about
     // the Number `n` arrived as must not survive either form.
     let param = |id: u32| perry_hir::Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Number,
@@ -642,6 +648,7 @@ fn rows_length() -> Expr {
 
 fn times_seven(e: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: perry_hir::BinaryOp::Mul,
         left: Box::new(e),
         right: Box::new(Expr::Integer(7)),
@@ -793,6 +800,7 @@ fn element_store_that_may_be_length_demotes_the_constant_length() {
         store_key_const_len(
             vec![],
             Expr::Binary {
+                byte_offset: 0,
                 op: perry_hir::BinaryOp::Add,
                 left: Box::new(Expr::String("len".into())),
                 right: Box::new(Expr::String("gth".into())),
@@ -824,6 +832,7 @@ fn buffer_alloc_binding_is_a_uint8_pointer_argument() {
             false,
             buffer_alloc(
                 Expr::Binary {
+                    byte_offset: 0,
                     op: perry_hir::BinaryOp::Mul,
                     left: Box::new(Expr::LocalGet(9)),
                     right: Box::new(Expr::Integer(2)),
@@ -883,6 +892,7 @@ fn uint8array_constructor_proves_typed_array_binding() {
     // allocates the same non-view byte store: `js_uint8array_alloc` and
     // `typed_array_alloc(UINT8, n)` both brand it `GC_TYPE_BUFFER_UINT8ARRAY`.
     let shift = Expr::Binary {
+        byte_offset: 0,
         op: perry_hir::BinaryOp::Shl,
         left: Box::new(Expr::Integer(1)),
         right: Box::new(Expr::Integer(20)),

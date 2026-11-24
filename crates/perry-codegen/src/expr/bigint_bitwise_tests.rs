@@ -14,6 +14,7 @@ const X: u32 = 3;
 
 fn param(id: u32, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -26,6 +27,7 @@ fn param(id: u32, ty: Type) -> Param {
 
 fn bin(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -43,6 +45,7 @@ fn function_ir(name: &str, params: Vec<Param>, body: Vec<Stmt>) -> String {
         byte_offset: 0,
     }));
     module.functions.push(Function {
+        byte_offset: 0,
         id: 1,
         name: "f".to_string(),
         type_params: Vec::new(),
@@ -89,7 +92,7 @@ fn const_then_return(init: Expr, ty: Type) -> Vec<Stmt> {
             mutable: false,
             init: Some(init),
         },
-        Stmt::Return(Some(Expr::LocalGet(X))),
+        Stmt::Return(Some(Expr::LocalGet(X)), 0),
     ]
 }
 
@@ -140,11 +143,14 @@ fn number_of_possibly_bigint_bitwise_result_keeps_its_coercion() {
         function_ir(
             "number_of_bitwise",
             vec![param(A, Type::Any), param(B, Type::Any)],
-            vec![Stmt::Return(Some(Expr::NumberCoerce(Box::new(bin(
-                BinaryOp::BitAnd,
-                Expr::LocalGet(A),
-                right,
-            )))))],
+            vec![Stmt::Return(
+                Some(Expr::NumberCoerce(Box::new(bin(
+                    BinaryOp::BitAnd,
+                    Expr::LocalGet(A),
+                    right,
+                )))),
+                0,
+            )],
         )
     };
     let unknown = number_of(Expr::LocalGet(B));
@@ -174,11 +180,10 @@ fn unproven_bitwise_operands_take_a_guarded_int32_arm() {
         let ir = function_ir(
             "guarded_bitwise",
             vec![param(A, Type::Any), param(B, Type::Any)],
-            vec![Stmt::Return(Some(bin(
-                op,
-                Expr::LocalGet(A),
-                Expr::LocalGet(B),
-            )))],
+            vec![Stmt::Return(
+                Some(bin(op, Expr::LocalGet(A), Expr::LocalGet(B))),
+                0,
+            )],
         );
         assert!(
             ir.contains("guarded_arith.numeric"),
@@ -242,11 +247,10 @@ fn guarded_bitwise_arm_is_range_tested_and_converts_with_fptosi() {
         let ir = function_ir(
             "range_guarded_bitwise",
             vec![param(A, Type::Any), param(B, Type::Any)],
-            vec![Stmt::Return(Some(bin(
-                op,
-                Expr::LocalGet(A),
-                Expr::LocalGet(B),
-            )))],
+            vec![Stmt::Return(
+                Some(bin(op, Expr::LocalGet(A), Expr::LocalGet(B))),
+                0,
+            )],
         );
         assert!(
             ir.contains("call double @llvm.fabs.f64(") && ir.contains(", 0x43E0000000000000"),
@@ -273,11 +277,10 @@ fn bitwise_result_with_a_number_operand_is_an_int32_operand() {
     let int32_operands = function_ir(
         "int32_bitwise_operands",
         vec![param(A, Type::Any), param(B, Type::Any)],
-        vec![Stmt::Return(Some(bin(
-            BinaryOp::BitOr,
-            masked(A, 3),
-            masked(B, 5),
-        )))],
+        vec![Stmt::Return(
+            Some(bin(BinaryOp::BitOr, masked(A, 3), masked(B, 5))),
+            0,
+        )],
     );
     assert!(
         !has_toint32_wrap(&int32_operands),
@@ -287,11 +290,14 @@ fn bitwise_result_with_a_number_operand_is_an_int32_operand() {
     let number_operands = function_ir(
         "number_bitwise_operands",
         vec![param(A, Type::Any), param(B, Type::Any)],
-        vec![Stmt::Return(Some(bin(
-            BinaryOp::BitOr,
-            Expr::NumberCoerce(Box::new(Expr::LocalGet(A))),
-            Expr::NumberCoerce(Box::new(Expr::LocalGet(B))),
-        )))],
+        vec![Stmt::Return(
+            Some(bin(
+                BinaryOp::BitOr,
+                Expr::NumberCoerce(Box::new(Expr::LocalGet(A))),
+                Expr::NumberCoerce(Box::new(Expr::LocalGet(B))),
+            )),
+            0,
+        )],
     );
     assert!(
         has_toint32_wrap(&number_operands),

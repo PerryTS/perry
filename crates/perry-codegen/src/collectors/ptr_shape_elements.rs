@@ -734,6 +734,7 @@ fn record_payload_source(id: u32, init: &Expr) -> Option<(u32, &Expr)> {
         condition,
         then_expr,
         else_expr,
+        ..
     } = value.as_ref()
     else {
         return None;
@@ -789,7 +790,7 @@ impl<'a> ArrayWalk<'a> {
             && matches!(e, Expr::Compare {
                 op: perry_hir::CompareOp::Eq,
                 left,
-                right,
+                right, ..
             } if matches!(right.as_ref(), Expr::Bool(true))
                 && matches!(left.as_ref(), Expr::LocalGet(m) if self.record_modes.contains(m)))
     }
@@ -813,6 +814,9 @@ impl<'a> ArrayWalk<'a> {
             return None;
         };
         let [mode, Expr::LocalGet(previous), Expr::IndexGet {
+            object, index: key, ..
+        }
+        | Expr::RegionOut {
             object, index: key, ..
         }] = runtime_call(read, "arrayRecordForValue")?
         else {
@@ -965,6 +969,7 @@ impl<'a> ArrayWalk<'a> {
             op: perry_hir::CompareOp::Eq,
             left,
             right,
+            ..
         } = condition
         else {
             return false;
@@ -1029,7 +1034,9 @@ impl<'a> ArrayWalk<'a> {
                     // ONLY position an element read is admitted in — see the
                     // `Expr::IndexGet` arm for why every other one is an
                     // escape of the ELEMENT (as opposed to the array).
-                    if let Expr::IndexGet { object, index, .. } = e {
+                    if let (Expr::IndexGet { object, index, .. }
+                    | Expr::RegionOut { object, index, .. }) = e
+                    {
                         if let (Expr::LocalGet(a), Expr::LocalGet(i)) =
                             (object.as_ref(), index.as_ref())
                         {
@@ -1051,7 +1058,7 @@ impl<'a> ArrayWalk<'a> {
                     self.walk_expr(e);
                 }
             }
-            Stmt::Return(Some(e)) => {
+            Stmt::Return(Some(e), _) => {
                 // #7034 §4's terminator exemption, applied to the array.
                 if !self.in_closure {
                     if let Expr::LocalGet(id) = e {
@@ -1062,7 +1069,7 @@ impl<'a> ArrayWalk<'a> {
                 }
                 self.walk_expr(e);
             }
-            Stmt::Return(None) => {}
+            Stmt::Return(None, _) => {}
             Stmt::Expr(e) => self.walk_expr(e),
             Stmt::Throw(e) => self.walk_expr(e),
             Stmt::If {
@@ -1127,6 +1134,7 @@ impl<'a> ArrayWalk<'a> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.walk_expr(discriminant);
                 for case in cases {
@@ -1177,6 +1185,7 @@ impl<'a> ArrayWalk<'a> {
             op: perry_hir::CompareOp::Lt,
             left,
             right,
+            ..
         }) = condition
         else {
             return None;
@@ -1265,11 +1274,16 @@ impl<'a> ArrayWalk<'a> {
             Expr::PropertyGet {
                 object, property, ..
             } => {
-                if let Expr::IndexGet {
+                if let (Expr::IndexGet {
                     object: array,
                     index,
                     ..
-                } = object.as_ref()
+                }
+                | Expr::RegionOut {
+                    object: array,
+                    index,
+                    ..
+                }) = object.as_ref()
                 {
                     if let (Expr::LocalGet(array_id), Expr::LocalGet(index_id)) =
                         (array.as_ref(), index.as_ref())
@@ -1405,7 +1419,7 @@ impl<'a> ArrayWalk<'a> {
             // So every unlicensed element read disqualifies the array. The
             // direct bounded declared-field form was consumed by the
             // `PropertyGet` arm above; every other form still reaches here.
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 if let Expr::LocalGet(id) = object.as_ref() {
                     self.disq(*id);
                 }
@@ -1663,7 +1677,7 @@ pub(super) fn element_read_seeds(
     walk_stmts(stmts, &mut |s| {
         if let Stmt::Let {
             id,
-            init: Some(Expr::IndexGet { .. } | Expr::LocalGet(_)),
+            init: Some(Expr::IndexGet { .. } | Expr::RegionOut { .. } | Expr::LocalGet(_)),
             ..
         } = s
         {

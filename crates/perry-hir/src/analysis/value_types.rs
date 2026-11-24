@@ -471,10 +471,10 @@ impl HirTypeEnv {
                     self.collect_expr_declarations(init);
                 }
             }
-            Stmt::Expr(expr) | Stmt::Return(Some(expr)) | Stmt::Throw(expr) => {
+            Stmt::Expr(expr) | Stmt::Return(Some(expr), _) | Stmt::Throw(expr) => {
                 self.collect_expr_declarations(expr);
             }
-            Stmt::Return(None)
+            Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)
@@ -536,6 +536,7 @@ impl HirTypeEnv {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.collect_expr_declarations(discriminant);
                 for case in cases {
@@ -641,7 +642,9 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
                 }
             }
         },
-        Expr::Binary { op, left, right } => infer_binary_type(*op, left, right, env),
+        Expr::Binary {
+            op, left, right, ..
+        } => infer_binary_type(*op, left, right, env),
         Expr::Compare { .. }
         | Expr::InstanceOf { .. }
         | Expr::In { .. }
@@ -650,7 +653,9 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         | Expr::PrivateLexicalBrandPush(_)
         | Expr::PrivateLexicalBrandPop => Type::Any,
         Expr::PrivateGuard { object, .. } => infer_expr_type(object, env),
-        Expr::Logical { op, left, right } => infer_logical_type(*op, left, right, env),
+        Expr::Logical {
+            op, left, right, ..
+        } => infer_logical_type(*op, left, right, env),
         Expr::Conditional {
             then_expr,
             else_expr,
@@ -660,7 +665,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
             infer_expr_type(else_expr, env),
         ),
         Expr::TypeOf(_) => Type::String,
-        Expr::Await(value) => match infer_expr_type(value, env) {
+        Expr::Await(value, _) => match infer_expr_type(value, env) {
             Type::Promise(inner) => *inner,
             other => other,
         },
@@ -726,7 +731,7 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
             .static_method_return_type(class_name, method_name)
             .cloned()
             .unwrap_or(Type::Any),
-        Expr::SuperCall(_) | Expr::SuperCallSpread(_) => Type::Void,
+        Expr::SuperCall(_, _) | Expr::SuperCallSpread(_) => Type::Void,
         Expr::SuperMethodCall { method, .. } => {
             env.super_method_return_type(method).unwrap_or(Type::Any)
         }
@@ -739,32 +744,34 @@ pub fn infer_expr_type<F: HirTypeFacts + ?Sized>(expr: &Expr, env: &F) -> Type {
         } => infer_property_get_type(object, property, env),
         Expr::PropertySet { value, .. } => infer_expr_type(value, env),
         Expr::PropertyUpdate { .. } => Type::Number,
-        Expr::IndexGet { object, index, .. } => match infer_expr_type(object, env) {
-            Type::Array(elem) => *elem,
-            Type::Tuple(elems) => {
-                if elems.len() == 1 {
-                    elems.into_iter().next().unwrap_or(Type::Any)
-                } else {
-                    Type::Any
-                }
-            }
-            Type::Object(object) => {
-                if let Expr::String(name) = index.as_ref() {
-                    if let Some(property) = object.properties.get(name) {
-                        return property.ty.clone();
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            match infer_expr_type(object, env) {
+                Type::Array(elem) => *elem,
+                Type::Tuple(elems) => {
+                    if elems.len() == 1 {
+                        elems.into_iter().next().unwrap_or(Type::Any)
+                    } else {
+                        Type::Any
                     }
                 }
-                member_types(
-                    object
-                        .properties
-                        .into_values()
-                        .map(|property| property.ty)
-                        .chain(object.index_signature.map(|ty| *ty)),
-                )
+                Type::Object(object) => {
+                    if let Expr::String(name) = index.as_ref() {
+                        if let Some(property) = object.properties.get(name) {
+                            return property.ty.clone();
+                        }
+                    }
+                    member_types(
+                        object
+                            .properties
+                            .into_values()
+                            .map(|property| property.ty)
+                            .chain(object.index_signature.map(|ty| *ty)),
+                    )
+                }
+                Type::String => Type::String,
+                _ => Type::Any,
             }
-            Type::String => Type::String,
-            _ => Type::Any,
-        },
+        }
         Expr::IndexSet { value, .. } => infer_expr_type(value, env),
         Expr::IndexUpdate { .. } => Type::Number,
 

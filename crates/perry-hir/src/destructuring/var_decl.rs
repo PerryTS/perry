@@ -458,9 +458,12 @@ pub(crate) fn lower_var_decl_with_destructuring(
             // arrays use one shape proof; known nonarrays keep GetIterator.
             if use_state_tuple.is_none() {
                 if let (ast::Pat::Array(arr_pat), Some(init)) = (pattern, decl.init.as_ref()) {
-                    if let Some((mut stmts, plan)) =
-                        super::array_fast::plan_for_source(ctx, &arr_pat.elems, init)?
-                    {
+                    if let Some((mut stmts, plan)) = super::array_fast::plan_for_source(
+                        ctx,
+                        &arr_pat.elems,
+                        init,
+                        arr_pat.span.lo.0,
+                    )? {
                         lower_array_pattern_binding_guarded(
                             ctx,
                             arr_pat,

@@ -13,6 +13,7 @@ fn rt<'a>(e: &'a Expr, method: &str) -> Option<&'a [Expr]> {
             object: None,
             method: m,
             args,
+            ..
         } if module == "__perry_runtime" && m == method => Some(args),
         _ => None,
     }
@@ -21,7 +22,7 @@ fn get(e: &Expr, id: u32) -> bool {
     matches!(e,Expr::LocalGet(other) if *other==id)
 }
 fn mode(e: &Expr, id: u32) -> bool {
-    matches!(e,Expr::Compare {op:CompareOp::Eq,left,right} if get(left,id) && matches!(right.as_ref(),Expr::Bool(true)))
+    matches!(e,Expr::Compare {op:CompareOp::Eq,left,right, ..} if get(left,id) && matches!(right.as_ref(),Expr::Bool(true)))
 }
 fn payload_shape(e: &Expr, record: u32, flag: u32) -> Option<u32> {
     let a = rt(e, "arrayRecordPayload")?;
@@ -35,6 +36,7 @@ fn payload_shape(e: &Expr, record: u32, flag: u32) -> Option<u32> {
         condition,
         then_expr,
         else_expr,
+        ..
     } = value.as_ref()
     else {
         return None;
@@ -108,7 +110,7 @@ pub(super) fn normalize(stmts: &[Stmt], child: u32) -> Vec<Stmt> {
                 if *id == payload
                     && !matches!(value.as_ref(), Expr::Undefined)
                     && payload_shape(value, record, flag) != Some(payload)
-                    && !matches!(value.as_ref(),Expr::Conditional {condition,then_expr,else_expr}
+                    && !matches!(value.as_ref(),Expr::Conditional {condition,then_expr,else_expr, ..}
                         if mode(condition,flag) && matches!(then_expr.as_ref(),Expr::GetIterator(input) if get(input,record)) && get(else_expr,record))
                 {
                     bad = true
@@ -168,6 +170,7 @@ pub(super) fn normalize(stmts: &[Stmt], child: u32) -> Vec<Stmt> {
                 op: CompareOp::Eq,
                 left,
                 right,
+                ..
             } = e
             {
                 if let (Expr::Bool(a), Expr::Bool(b)) = (left.as_ref(), right.as_ref()) {
@@ -179,6 +182,7 @@ pub(super) fn normalize(stmts: &[Stmt], child: u32) -> Vec<Stmt> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } = e
             {
                 if let Expr::Bool(yes) = condition.as_ref() {
@@ -215,6 +219,7 @@ mod tests {
     use super::*;
     fn intrinsic(method: &str, args: Vec<Expr>) -> Expr {
         Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,
@@ -224,6 +229,7 @@ mod tests {
     }
     fn fixture() -> Vec<Stmt> {
         let mode = Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(21)),
             right: Box::new(Expr::Bool(true)),
@@ -252,6 +258,7 @@ mod tests {
                         Expr::LocalSet(
                             22,
                             Box::new(Expr::Conditional {
+                                byte_offset: 0,
                                 condition: Box::new(mode),
                                 then_expr: Box::new(Expr::GetIterator(Box::new(Expr::LocalGet(
                                     20,
@@ -278,7 +285,7 @@ mod tests {
         for mode in 0..4 {
             let mut body = fixture();
             match mode {
-                1 => body.push(Stmt::Return(Some(Expr::LocalGet(20)))),
+                1 => body.push(Stmt::Return(Some(Expr::LocalGet(20)), 0)),
                 2 => body.push(Stmt::Expr(Expr::LocalSet(21, Box::new(Expr::Bool(false))))),
                 3 => body.push(Stmt::Expr(Expr::LocalSet(22, Box::new(Expr::LocalGet(90))))),
                 _ => {}

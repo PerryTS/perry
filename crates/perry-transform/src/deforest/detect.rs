@@ -214,7 +214,7 @@ pub fn analyze_producer(func: &Function) -> Option<ProducerInfo> {
                 }
                 out_local = Some(*id);
             }
-            Stmt::Return(Some(Expr::LocalGet(id))) => {
+            Stmt::Return(Some(Expr::LocalGet(id)), _) => {
                 if return_idx.is_some() {
                     // Multiple top-level returns — for safety, bail.
                     // (A fancier implementation could verify each
@@ -300,7 +300,7 @@ fn stmt_has_closure(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_has_closure),
         Stmt::Expr(e) | Stmt::Throw(e) => expr_has_closure(e),
-        Stmt::Return(opt) => opt.as_ref().is_some_and(expr_has_closure),
+        Stmt::Return(opt, _) => opt.as_ref().is_some_and(expr_has_closure),
         Stmt::If {
             condition,
             then_branch,
@@ -337,6 +337,7 @@ fn stmt_has_closure(stmt: &Stmt) -> bool {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             expr_has_closure(discriminant)
                 || cases.iter().any(|c| {
@@ -377,7 +378,7 @@ fn stmt_has_super(stmt: &Stmt) -> bool {
     match stmt {
         Stmt::Let { init, .. } => init.as_ref().is_some_and(expr_has_super),
         Stmt::Expr(e) | Stmt::Throw(e) => expr_has_super(e),
-        Stmt::Return(opt) => opt.as_ref().is_some_and(expr_has_super),
+        Stmt::Return(opt, _) => opt.as_ref().is_some_and(expr_has_super),
         Stmt::If {
             condition,
             then_branch,
@@ -414,6 +415,7 @@ fn stmt_has_super(stmt: &Stmt) -> bool {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             expr_has_super(discriminant)
                 || cases
@@ -428,7 +430,7 @@ fn stmt_has_super(stmt: &Stmt) -> bool {
 fn expr_has_super(e: &Expr) -> bool {
     if matches!(
         e,
-        Expr::SuperCall(_)
+        Expr::SuperCall(_, _)
             | Expr::SuperCallSpread(_)
             | Expr::SuperMethodCall { .. }
             | Expr::SuperMethodCallSpread { .. }
@@ -475,7 +477,7 @@ fn flag_producer_calls_in_stmt(
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => flag_producer_calls_in_expr(e, candidates, out),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 flag_producer_calls_in_expr(e, candidates, out);
             }
@@ -529,6 +531,7 @@ fn flag_producer_calls_in_stmt(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             flag_producer_calls_in_expr(discriminant, candidates, out);
             for c in cases {
@@ -570,7 +573,7 @@ fn flag_producer_calls_in_expr(
 /// unsafe.
 pub fn stmt_contains_return(stmt: &Stmt) -> bool {
     match stmt {
-        Stmt::Return(_) => true,
+        Stmt::Return(_, _) => true,
         Stmt::If {
             then_branch,
             else_branch,

@@ -46,7 +46,9 @@ pub(crate) fn packed_f64_loop_index_parts(index: &Expr) -> Option<(u32, i32)> {
     use perry_hir::BinaryOp;
     match index {
         Expr::LocalGet(id) => Some((*id, 0)),
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::Add | BinaryOp::Sub) => {
             let (id, offset) = match (left.as_ref(), right.as_ref()) {
                 (Expr::LocalGet(id), Expr::Integer(c)) => {
                     let offset = if matches!(op, BinaryOp::Sub) {
@@ -142,7 +144,9 @@ pub(crate) fn affine_index_magnitude_bound(index: &Expr) -> Option<i128> {
             Some(n.abs() as i128)
         }
         Expr::LocalGet(_) => Some(1_i128 << 31),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let l = affine_index_magnitude_bound(left)?;
             let r = affine_index_magnitude_bound(right)?;
             match op {
@@ -195,6 +199,7 @@ fn affine_index_leaves_materializable(ctx: &FnCtx<'_>, index: &Expr, counter_id:
             op: perry_hir::BinaryOp::Add | perry_hir::BinaryOp::Sub | perry_hir::BinaryOp::Mul,
             left,
             right,
+            ..
         } => {
             affine_index_leaves_materializable(ctx, left, counter_id)
                 && affine_index_leaves_materializable(ctx, right, counter_id)
@@ -242,7 +247,9 @@ pub(crate) fn emit_affine_index_i64_with(
             let narrow = ctx.block().load(I32, &slot);
             Some(ctx.block().sext(I32, &narrow, I64))
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let l = emit_affine_index_i64_with(ctx, left, counter_id, counter_override)?;
             let r = emit_affine_index_i64_with(ctx, right, counter_id, counter_override)?;
             Some(match op {

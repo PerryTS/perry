@@ -76,7 +76,9 @@ impl Plan {
 
     fn read<'a>(&mut self, ctx: &FnCtx<'_>, e: &'a Expr) -> Option<(u32, &'a Expr)> {
         let (object, index) = match e {
-            Expr::IndexGet { object, index, .. } => (object.as_ref(), index.as_ref()),
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+                (object.as_ref(), index.as_ref())
+            }
             Expr::Uint8ArrayGet { array, index } => (array.as_ref(), index.as_ref()),
             Expr::BufferIndexGet { buffer, index } => (buffer.as_ref(), index.as_ref()),
             _ => return None,
@@ -162,7 +164,9 @@ impl Plan {
                 self.inputs.insert(*id);
                 true
             }
-            Expr::Binary { op, left, right } if !matches!(op, BinaryOp::Pow) => {
+            Expr::Binary {
+                op, left, right, ..
+            } if !matches!(op, BinaryOp::Pow) => {
                 self.numeric(ctx, left) && self.numeric(ctx, right)
             }
             Expr::Unary {
@@ -180,6 +184,7 @@ impl Plan {
                 &Expr::LocalSet(
                     *id,
                     Box::new(Expr::Binary {
+                        byte_offset: 0, /*HPOS*/
                         op: if matches!(op, UpdateOp::Increment) {
                             BinaryOp::Add
                         } else {
@@ -365,6 +370,7 @@ impl Plan {
                             op: CompareOp::Lt,
                             left,
                             right,
+                            ..
                         }),
                     update:
                         Some(Expr::Update {
@@ -415,7 +421,13 @@ impl Plan {
     fn expand(&self, e: &Expr) -> Expr {
         match e {
             Expr::LocalGet(id) if self.defs.contains_key(id) => self.expand(&self.defs[id]),
-            Expr::Binary { op, left, right } => Expr::Binary {
+            Expr::Binary {
+                op,
+                left,
+                right,
+                byte_offset,
+            } => Expr::Binary {
+                byte_offset: *byte_offset,
                 op: *op,
                 left: Box::new(self.expand(left)),
                 right: Box::new(self.expand(right)),
@@ -437,6 +449,7 @@ impl Plan {
                 op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul,
                 left,
                 right,
+                ..
             } => self.invariant(left) && self.invariant(right),
             _ => false,
         }
@@ -455,6 +468,7 @@ impl Plan {
                 op: BinaryOp::Add | BinaryOp::Sub,
                 left,
                 right,
+                ..
             } => self.window(left) && self.window(right),
             _ => false,
         }
@@ -548,7 +562,10 @@ fn static_interval(ctx: &FnCtx<'_>, p: &Plan, e: &Expr, bound: i64) -> Option<(i
             }
         }
     }
-    if let Expr::Binary { op, left, right } = e {
+    if let Expr::Binary {
+        op, left, right, ..
+    } = e
+    {
         let (a, b) = static_interval(ctx, p, left, bound)?;
         let (c, d) = static_interval(ctx, p, right, bound)?;
         let r = match op {
@@ -836,7 +853,9 @@ fn invariant_value(ctx: &mut FnCtx<'_>, e: &Expr, values: &BTreeMap<u32, Number>
         Expr::Integer(n) => crate::nanbox::double_literal(*n as f64),
         Expr::Number(n) => crate::nanbox::double_literal(*n),
         Expr::LocalGet(id) => values[id].f64(ctx),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let l = invariant_value(ctx, left, values);
             let r = invariant_value(ctx, right, values);
             match op {
@@ -880,7 +899,9 @@ fn interval(
             let max = ctx.block().fsub(bound, "1.0");
             ("0.0".into(), max)
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let (ll, lh) = interval(ctx, p, left, bound, values, slow);
             let (rl, rh) = interval(ctx, p, right, bound, values, slow);
             let (lo, hi) = match op {
@@ -923,6 +944,7 @@ fn index_value(
             op: BinaryOp::Add | BinaryOp::Sub,
             left,
             right,
+            ..
         } => {
             let l = index_value(ctx, p, left, values, storage);
             let r = index_value(ctx, p, right, values, storage);
@@ -972,6 +994,7 @@ fn index_locals(e: &Expr, ids: &mut BTreeSet<u32>) {
             op: BinaryOp::Add | BinaryOp::Sub,
             left,
             right,
+            ..
         } => {
             index_locals(left, ids);
             index_locals(right, ids);
@@ -1000,7 +1023,9 @@ fn numeric(
         return Number::U(ctx.block().zext(I8, &byte, I32));
     }
     let read = match e {
-        Expr::IndexGet { object, index, .. } => Some((object.as_ref(), index.as_ref())),
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
+            Some((object.as_ref(), index.as_ref()))
+        }
         Expr::Uint8ArrayGet { array, index } => Some((array.as_ref(), index.as_ref())),
         Expr::BufferIndexGet { buffer, index } => Some((buffer.as_ref(), index.as_ref())),
         _ => None,
@@ -1085,7 +1110,9 @@ fn numeric(
         ),
         Expr::Number(n) => Number::bounded(crate::nanbox::double_literal(*n), Some((*n, *n))),
         Expr::LocalGet(id) => values[id].clone(),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let l = numeric(ctx, p, left, values, storage);
             let r = numeric(ctx, p, right, values, storage);
             if matches!(
@@ -1181,6 +1208,7 @@ fn expression(
                 &Expr::LocalSet(
                     *id,
                     Box::new(Expr::Binary {
+                        byte_offset: 0, /*HPOS*/
                         op: if matches!(op, UpdateOp::Increment) {
                             BinaryOp::Add
                         } else {
@@ -1352,7 +1380,9 @@ fn emit_body(
             } => {
                 let condition = match condition {
                     Expr::Bool(b) => b.to_string(),
-                    Expr::Compare { op, left, right } => {
+                    Expr::Compare {
+                        op, left, right, ..
+                    } => {
                         let l = numeric(ctx, p, left, values, storage).f64(ctx);
                         let r = numeric(ctx, p, right, values, storage).f64(ctx);
                         let predicate = match op {
@@ -1484,6 +1514,7 @@ pub(super) fn lower(
             op: CompareOp::Lt,
             left,
             right,
+            ..
         }) if matches!(left.as_ref(), Expr::LocalGet(id) if *id == counter) => right.as_ref(),
         _ => return Ok(false),
     };

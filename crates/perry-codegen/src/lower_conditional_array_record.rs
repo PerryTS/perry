@@ -14,11 +14,13 @@ fn pure(expr: &Expr) -> bool {
             op: CompareOp::Eq,
             left,
             right,
+            ..
         } => pure(left) && matches!(right.as_ref(), Expr::Bool(_)),
         Expr::Binary {
             op: perry_hir::BinaryOp::Add,
             left,
             right,
+            ..
         } => pure(left) && pure(right),
         _ => false,
     }
@@ -33,11 +35,13 @@ fn same(a: &Expr, b: &Expr) -> bool {
                 op: CompareOp::Eq,
                 left: al,
                 right: ar,
+                ..
             },
             Expr::Compare {
                 op: CompareOp::Eq,
                 left: bl,
                 right: br,
+                ..
             },
         ) => same(al, bl) && same(ar, br),
         _ => false,
@@ -51,12 +55,13 @@ fn runtime<'a>(expr: &'a Expr, name: &str) -> Option<&'a [Expr]> {
             object: None,
             method,
             args,
+            ..
         } if module == "__perry_runtime" && method == name => Some(args),
         _ => None,
     }
 }
 fn mode(expr: &Expr) -> bool {
-    matches!(expr, Expr::Compare { op: CompareOp::Eq, left, right }
+    matches!(expr, Expr::Compare { op: CompareOp::Eq, left, right, .. }
         if matches!(left.as_ref(), Expr::LocalGet(_)) && matches!(right.as_ref(), Expr::Bool(true)))
 }
 pub(crate) fn finish_args(
@@ -114,6 +119,7 @@ fn finish(expr: &Expr) -> Option<Vec<Expr>> {
         condition,
         then_expr,
         else_expr,
+        ..
     } = expr
     else {
         return None;
@@ -125,6 +131,7 @@ fn state_test(expr: &Expr, op: CompareOp, value: f64) -> Option<u32> {
         op: actual,
         left,
         right,
+        ..
     } = expr
     else {
         return None;
@@ -148,6 +155,7 @@ fn exit_flag(expr: &Expr) -> Option<u32> {
             op: CompareOp::Eq,
             left,
             right,
+            ..
         } if matches!(right.as_ref(), Expr::Bool(true)) => {
             if let Expr::LocalGet(id) = left.as_ref() {
                 Some(*id)
@@ -201,6 +209,7 @@ pub(crate) fn abrupt_args(catch: &perry_hir::CatchClause, finally: &[Stmt]) -> O
         };
         let mut args = abrupt_args(&plain, cleanup)?;
         args[4] = Expr::Conditional {
+            byte_offset: 0, /*HPOS*/
             condition: Box::new(flag_test.clone()),
             then_expr: Box::new(Expr::Number(2.0)),
             else_expr: Box::new(args[4].clone()),
@@ -280,6 +289,7 @@ mod tests {
 
     fn rt(name: &str, args: Vec<Expr>) -> Expr {
         Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "__perry_runtime".into(),
             class_name: None,
             object: None,
@@ -289,6 +299,7 @@ mod tests {
     }
     fn test_state(op: CompareOp, n: f64) -> Expr {
         Expr::Compare {
+            byte_offset: 0,
             op,
             left: Box::new(Expr::LocalGet(4)),
             right: Box::new(Expr::Number(n)),
@@ -300,7 +311,9 @@ mod tests {
             protocol.push(Expr::LocalGet(8));
         }
         Expr::Conditional {
+            byte_offset: 0,
             condition: Box::new(Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(2)),
                 right: Box::new(Expr::Bool(true)),
@@ -414,6 +427,7 @@ mod tests {
                 });
             }
             body.push(Stmt::Try {
+                byte_offset: 0,
                 body: vec![crate::temp_root_coverage::console_log(vec![Expr::String(
                     "body once".into(),
                 )])],
@@ -459,6 +473,7 @@ mod tests {
             condition,
             then_expr,
             mut else_expr,
+            ..
         } = close(false)
         else {
             unreachable!()

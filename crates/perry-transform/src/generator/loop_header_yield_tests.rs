@@ -6,6 +6,7 @@ use super::*;
 
 fn yield_num(v: f64) -> Expr {
     Expr::Yield {
+        byte_offset: 0,
         value: Some(Box::new(Expr::Number(v))),
         delegate: false,
     }
@@ -18,6 +19,7 @@ fn comma_yield(v: f64) -> Expr {
 
 fn generator(body: Vec<Stmt>, is_async: bool) -> Function {
     Function {
+        byte_offset: 0,
         id: 1,
         name: "header_yield".to_string(),
         type_params: Vec::new(),
@@ -71,6 +73,7 @@ fn nested_header_yield_bodies() -> Vec<(&'static str, Vec<Stmt>)> {
         (
             "try/finally > do-while condition",
             vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![Stmt::DoWhile {
                     body: vec![],
                     condition: comma_yield(1.0),
@@ -83,6 +86,7 @@ fn nested_header_yield_bodies() -> Vec<(&'static str, Vec<Stmt>)> {
         (
             "catch > for condition",
             vec![Stmt::Try {
+                byte_offset: 0,
                 body: vec![],
                 catch: Some(CatchClause {
                     param: None,
@@ -100,6 +104,7 @@ fn nested_header_yield_bodies() -> Vec<(&'static str, Vec<Stmt>)> {
         (
             "switch case > for update",
             vec![Stmt::Switch {
+                byte_offset: 0,
                 discriminant: Expr::GlobalGet(0),
                 cases: vec![SwitchCase {
                     test: Some(Expr::Number(1.0)),
@@ -144,6 +149,7 @@ fn nested_header_yield_bodies() -> Vec<(&'static str, Vec<Stmt>)> {
                 condition: Some(Expr::GlobalGet(0)),
                 update: Some(comma_yield(1.0)),
                 body: vec![Stmt::Try {
+                    byte_offset: 0,
                     body: vec![Stmt::Continue],
                     catch: None,
                     finally: Some(vec![]),
@@ -173,6 +179,7 @@ fn body_contains_yield_sees_nested_loop_headers() {
 fn body_contains_yield_ignores_header_yield_in_nested_closure() {
     // A `yield` inside a closure in the loop condition belongs to that closure.
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 9,
         params: Vec::new(),
         return_type: Type::Any,
@@ -298,6 +305,7 @@ fn async_generator_header_yield_awaits_its_operand() {
 fn async_generator_yield_star_pulls_are_await_states() {
     super::linearize::set_linearize_async_generator(true);
     let body = vec![Stmt::Expr(Expr::Yield {
+        byte_offset: 0,
         value: Some(Box::new(Expr::GlobalGet(0))),
         delegate: true,
     })];

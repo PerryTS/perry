@@ -210,7 +210,7 @@ fn infer_expr(
             property,
             0,
         ),
-        Expr::IndexGet { object, index, .. } => {
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
             let owner = normalize(ctx.aliases, &infer_expr(ctx, locals, object, depth + 1)?);
             match owner {
                 Type::Array(element) => Some(*element),
@@ -296,7 +296,9 @@ fn infer_expr(
             }
             Some(ctx.functions.get(function_id)?.return_type.clone())
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             use perry_hir::BinaryOp;
             let left = infer_expr(ctx, locals, left, depth + 1)?;
             let right = infer_expr(ctx, locals, right, depth + 1)?;
@@ -453,7 +455,7 @@ fn verify_single_pass_sequence(
                     }
                 }
                 Stmt::Break | Stmt::Continue => exits.push(locals),
-                Stmt::Return(Some(value)) => {
+                Stmt::Return(Some(value), _) => {
                     *found_return = true;
                     observe_expr_effects(ctx, &mut locals, value);
                     if !expr_proves(ctx, &locals, value, expected_return, 0) {
@@ -504,7 +506,9 @@ fn update_local_from_expr(
 fn root_local(expr: &Expr) -> Option<u32> {
     match expr {
         Expr::LocalGet(id) => Some(*id),
-        Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => root_local(object),
+        Expr::PropertyGet { object, .. }
+        | Expr::IndexGet { object, .. }
+        | Expr::RegionOut { object, .. } => root_local(object),
         _ => None,
     }
 }
@@ -725,14 +729,14 @@ fn verify_block(
             Stmt::Expr(expr) => {
                 observe_expr_effects(ctx, locals, expr);
             }
-            Stmt::Return(Some(value)) => {
+            Stmt::Return(Some(value), _) => {
                 *found_return = true;
                 observe_expr_effects(ctx, locals, value);
                 if !expr_proves(ctx, locals, value, expected_return, 0) {
                     return false;
                 }
             }
-            Stmt::Return(None) => return false,
+            Stmt::Return(None, _) => return false,
             Stmt::If {
                 condition,
                 then_branch,
@@ -857,7 +861,7 @@ fn verify_function(ctx: &ProofCtx<'_>, function: &Function) -> bool {
         return false;
     }
     match function.body.last() {
-        Some(Stmt::Return(Some(_))) | Some(Stmt::Throw(_)) => {}
+        Some(Stmt::Return(Some(_), _)) | Some(Stmt::Throw(_)) => {}
         _ => return false,
     }
     let Some(plan) = ctx.plans.get(&function.id) else {
@@ -922,10 +926,12 @@ mod tests {
 
     fn function(id: u32, name: &str, body: Vec<Stmt>, payload: &Type) -> Function {
         Function {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             type_params: Vec::new(),
             params: vec![Param {
+                byte_offset: 0,
                 id: id * 10,
                 name: "value".to_string(),
                 ty: payload.clone(),
@@ -992,7 +998,7 @@ mod tests {
         let identity = function(
             1,
             "identity",
-            vec![Stmt::Return(Some(Expr::LocalGet(10)))],
+            vec![Stmt::Return(Some(Expr::LocalGet(10)), 0)],
             &payload,
         );
         let forward = function(
@@ -1012,14 +1018,14 @@ mod tests {
                         byte_offset: 0,
                     }),
                 },
-                Stmt::Return(Some(Expr::LocalGet(99))),
+                Stmt::Return(Some(Expr::LocalGet(99)), 0),
             ],
             &payload,
         );
         let liar = function(
             3,
             "liar",
-            vec![Stmt::Return(Some(Expr::Undefined))],
+            vec![Stmt::Return(Some(Expr::Undefined), 0)],
             &payload,
         );
         let escaping = function(
@@ -1037,15 +1043,17 @@ mod tests {
                     type_args: Vec::new(),
                     byte_offset: 0,
                 }),
-                Stmt::Return(Some(Expr::LocalGet(40))),
+                Stmt::Return(Some(Expr::LocalGet(40)), 0),
             ],
             &payload,
         );
         let one_pass_number = Function {
+            byte_offset: 0,
             id: 5,
             name: "onePassNumber".to_string(),
             type_params: Vec::new(),
             params: vec![Param {
+                byte_offset: 0,
                 id: 50,
                 name: "value".to_string(),
                 ty: payload.clone(),
@@ -1086,7 +1094,7 @@ mod tests {
                     ],
                     condition: Expr::Bool(false),
                 },
-                Stmt::Return(Some(Expr::LocalGet(51))),
+                Stmt::Return(Some(Expr::LocalGet(51)), 0),
             ],
             is_async: false,
             is_generator: false,
