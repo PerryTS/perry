@@ -451,6 +451,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                             property,
                             args,
                             *byte_offset,
+                            callee,
                         )?
                     {
                         return Ok(result);

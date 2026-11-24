@@ -1,11 +1,13 @@
 //! Derived facts F1–F6 read off the solved graph (design section 2), and
 //! the per-site verdicts the precision report uses.
 
+mod closed_methods;
 pub(crate) mod dispatch;
 mod element;
 mod member_ops;
 pub(crate) mod native_calls;
 mod native_member;
+use closed_methods::closed_methods;
 pub(crate) use element::element_facts;
 pub(crate) use element::receiver_set;
 pub use element::{ElementFacts, ElementKey, ElementOp, ReceiverValue};
@@ -379,6 +381,11 @@ pub struct SiteFacts {
     /// Empty when a body in `targets` is a method, a body without a HIR id
     /// or the set is no set of bodies.
     pub target_bodies: Vec<crate::bindings::BodyRef>,
+    /// A `T0Mono` / `T0Set` call whose every receiver resolves the key to the
+    /// one method its class (or an ancestor) declares under it: no own value,
+    /// no write to a prototype on the way. The receiver's class alone then
+    /// names the body (`closed_methods`).
+    pub closed_methods: bool,
     /// `AccessorGet` / `AccessorSet`: the program class id whose prototype
     /// holds the one accessor function in `targets` (the class template its
     /// `this` belongs to). Codegen calls that class's accessor directly.
@@ -1948,6 +1955,15 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
         } else {
             Vec::new()
         };
+        let closed_methods = s.is_call
+            && matches!(verdict, Verdict::T0Mono | Verdict::T0Set)
+            && closed_methods(
+                g,
+                &by_id,
+                &receiver_set(m, &element::with_copies(&copies, recvs)).toks,
+                &key,
+                s.key,
+            );
         let mut t: Vec<String> = targets.into_values().collect();
         t.sort();
         t.dedup();
@@ -1984,6 +2000,7 @@ fn site_facts(g: &mut Gen, tfs: &[TemplateFacts]) -> Vec<SiteFacts> {
             targets: t,
             target_fns,
             target_bodies,
+            closed_methods,
             holder_class,
         });
     }

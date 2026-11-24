@@ -703,6 +703,10 @@ pub struct ElisionFacts {
     /// receiver an object. Codegen calls the loaded value's body directly
     /// (`proven_call::emit_proven_call`) where it has loaded the value.
     pub late_call_bodies: std::collections::BTreeMap<(u32, String), Vec<FactsBody>>,
+    /// This module's named method calls whose every receiver resolves the key
+    /// to the method its class declares (`SiteFacts::closed_methods`): a
+    /// dispatch on the receiver's class alone needs no shadow test.
+    pub closed_methods: std::collections::BTreeSet<(u32, String)>,
 }
 
 impl ElisionFacts {
@@ -739,6 +743,7 @@ impl ElisionFacts {
             && self.accessors.is_empty()
             && self.method_calls.is_empty()
             && self.late_call_bodies.is_empty()
+            && self.closed_methods.is_empty()
             && self.record_locals.is_empty()
             && !self.has_record_arrays()
     }

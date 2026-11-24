@@ -486,6 +486,7 @@ fn lower_method_call_chain(
         property,
         args,
         call_byte_offset,
+        callee,
     )? {
         return Ok(Some(value));
     }

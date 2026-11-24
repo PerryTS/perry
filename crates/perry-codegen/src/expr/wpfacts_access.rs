@@ -332,6 +332,20 @@ pub(crate) fn proven_receiver_classes(ctx: &FnCtx<'_>, object: &Expr) -> Option<
         .then(|| (r.class_ids, r.nullable && !tested_in_block(ctx, object)))
 }
 
+/// The facts resolve `property` at every receiver of the call of `member` to the
+/// method the receiver's class declares (`ElisionFacts::closed_methods`).
+pub(crate) fn closed_methods(ctx: &FnCtx<'_>, member: &Expr, property: &str) -> bool {
+    let Expr::PropertyGet { byte_offset, .. } = member else {
+        return false;
+    };
+    !ctx.wpfacts_off
+        && !ctx.wpfacts.interp_guard
+        && ctx
+            .wpfacts
+            .closed_methods
+            .contains(&(*byte_offset, property.to_string()))
+}
+
 pub(crate) fn receiver_checked(ctx: &FnCtx<'_>, object: &Expr) {
     if crate::verify_facts::enabled() {
         if let Some((r, _)) = receiver(ctx, object) {
