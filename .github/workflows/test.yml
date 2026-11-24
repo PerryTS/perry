@@ -2271,6 +2271,25 @@ jobs:
       - name: Build compiler + runtime + Windows UI crates (dev)
         shell: bash
         run: |
+          set -euo pipefail
+          # Match the release build: Git Bash's stripped Perl lacks modules
+          # required by vendored OpenSSL. Use an installed complete Perl.
+          OPENSSL_SRC_PERL=
+          while IFS= read -r perl_exe; do
+            perl_exe=${perl_exe%$'\r'}
+            [ -n "$perl_exe" ] || continue
+            if "$(cygpath -u "$perl_exe")" -MIPC::Cmd -MPod::Usage -MLocale::Maketext::Simple -e1 2>/dev/null; then
+              OPENSSL_SRC_PERL=$perl_exe
+              break
+            fi
+          done < <(where.exe perl 2>/dev/null; echo 'C:\Strawberry\perl\bin\perl.exe')
+          if [ -z "$OPENSSL_SRC_PERL" ]; then
+            echo "::error::no complete Windows Perl for vendored OpenSSL Configure"
+            exit 1
+          fi
+          export OPENSSL_SRC_PERL
+          echo "OPENSSL_SRC_PERL=$OPENSSL_SRC_PERL"
+          printf 'OPENSSL_SRC_PERL=%s\n' "$OPENSSL_SRC_PERL" >> "$GITHUB_ENV"
           cargo build-perry --profile dev -p perry-ui-windows -p perry-ui-windows-winui
           scripts/gc_call_effects/sidecars.sh target/debug
 

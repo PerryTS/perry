@@ -1,0 +1,1 @@
+`--target web`: the local-time `Date` setters, `setTime()` and `toUTCString()` work instead of returning `undefined`, every setter (UTC ones included) takes all of its arguments, and `new Date(y, m, d, ...)` uses every component (#15304).
