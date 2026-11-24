@@ -119,7 +119,7 @@ fn this_push(e: &Expr) -> Option<(&str, u32, &Expr)> {
     else {
         return None;
     };
-    (matches!(owner.as_ref(), Expr::This) && *byte_offset != 0)
+    matches!(owner.as_ref(), Expr::This)
         .then(|| (property.as_str(), *byte_offset, &args[0]))
 }
 

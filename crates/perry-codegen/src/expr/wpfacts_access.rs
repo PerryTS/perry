@@ -1395,6 +1395,8 @@ pub(crate) fn try_lower_get(
         emit_witness(ctx, &recv_box, &val, property, &p, 0, site);
         // The receiver of a fill push reads the Array while it is being born
         // (wpfacts `push_fills`): its claim holds once the fill is over.
+        // offset 0: a `this.k` read codegen builds after facts (array_push.rs:868)
+        // names no site.
         let filling = matches!(object, Expr::This)
             && byte_offset != 0
             && ctx.wpfacts.fill_push_recvs.contains(&byte_offset);
@@ -1725,6 +1727,8 @@ pub(crate) fn proven_accessor_fn(
     let set = kind == crate::codegen::AccessorKind::Set;
     // A scalar-replaced receiver is no object (`scalar_receiver`): its
     // accesses are the frame slots' own, never a call with a `this`.
+    // offset 0: an access codegen builds after facts (member_update.rs:296/828)
+    // names no site.
     if ctx.wpfacts_off
         || offset == 0
         || property.starts_with('#')

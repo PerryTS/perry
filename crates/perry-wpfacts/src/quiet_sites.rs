@@ -183,7 +183,7 @@ pub(crate) fn collect(
     let mut reads: Sites<String> = BTreeMap::new();
     for s in sites
         .iter()
-        .filter(|s| !s.is_call && !s.access.is_store() && s.byte_offset != 0)
+        .filter(|s| !s.is_call && !s.access.is_store())
     {
         let why = match s.verdict {
             Verdict::OwnLength
