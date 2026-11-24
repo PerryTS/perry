@@ -95,7 +95,8 @@ pub(crate) fn servable<'e>(ctx: &FnCtx<'_>, read: &'e Expr) -> Option<Servable<'
         } => (left.as_ref(), true),
         e => (e, false),
     };
-    let Expr::IndexGet { object, index, .. } = element else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = element
+    else {
         return None;
     };
     let Expr::PropertyGet {

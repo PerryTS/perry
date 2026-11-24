@@ -166,7 +166,7 @@ fn proto_binding(proto: &Expr) -> Option<u32> {
     match proto {
         Expr::LocalGet(p) => Some(*p),
         Expr::Sequence(parts) => match parts.as_slice() {
-            [Expr::Call { callee, args, .. }, Expr::LocalGet(p)]
+            [Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }, Expr::LocalGet(p)]
                 if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
                     if name == "js_tdz_check_binding")
                     && matches!(args.first(), Some(Expr::LocalGet(x)) if x == p) =>
@@ -246,6 +246,7 @@ impl Analysis<'_> {
                 op: BinaryOp::Add,
                 left,
                 right,
+                ..
             } => {
                 let mut s = self.str_const(left)?;
                 s.push_str(&self.str_const(right)?);
@@ -846,7 +847,7 @@ fn literal(a: &Analysis<'_>, e: &Expr) -> Option<Lit> {
                 }
             }
         }
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             literal_iife(a, callee, args, &mut lit)?;
         }
         _ => return None,
@@ -872,7 +873,7 @@ fn literal_iife(a: &Analysis<'_>, callee: &Expr, args: &[Expr], lit: &mut Lit) -
     // module-singleton literal (`js_object_literal_prototype_birth`).
     let empty = |e: &Expr| match e {
         Expr::Object(p) => p.is_empty(),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             args.is_empty()
                 && matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
                     if name == "js_object_literal_prototype_birth")
@@ -917,7 +918,7 @@ fn literal_iife(a: &Analysis<'_>, callee: &Expr, args: &[Expr], lit: &mut Lit) -
                 ..
             } if !mentions(init, o) => {
                 let key = match init {
-                    Expr::Call { callee, args, .. }
+                    Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                         if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
                             if name == "js_object_literal_to_property_key")
                             && args.len() == 1 =>
@@ -928,7 +929,7 @@ fn literal_iife(a: &Analysis<'_>, callee: &Expr, args: &[Expr], lit: &mut Lit) -
                 };
                 keys.insert(*id, key);
             }
-            Stmt::Expr(Expr::Call { callee, args, .. }) => {
+            Stmt::Expr(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) => {
                 let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
                     return None;
                 };
@@ -983,7 +984,7 @@ fn literal_iife(a: &Analysis<'_>, callee: &Expr, args: &[Expr], lit: &mut Lit) -
                     _ => return None,
                 }
             }
-            Stmt::Return(Some(Expr::LocalGet(x))) if *x == o && i + 1 == body.len() => {
+            Stmt::Return(Some(Expr::LocalGet(x)), _) if *x == o && i + 1 == body.len() => {
                 return Some(());
             }
             _ => return None,

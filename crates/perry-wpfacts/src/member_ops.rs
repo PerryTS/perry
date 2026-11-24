@@ -599,7 +599,7 @@ pub(crate) fn class(e: &Expr) -> Op {
         | Expr::BufferIndexGet { .. }
         | Expr::BufferIndexSet { .. }
         | Expr::BufferLength { .. }
-        | Expr::Call { .. }
+        | Expr::Call { .. } | Expr::RegionCall { .. }
         | Expr::CallSpread { .. }
         | Expr::ClassCaptureValue { .. }
         | Expr::ClassEnvCurrent { .. }
@@ -640,7 +640,7 @@ pub(crate) fn class(e: &Expr) -> Op {
         | Expr::I18nString { .. }
         | Expr::ImportMetaUrl { .. }
         | Expr::In { .. }
-        | Expr::IndexGet { .. }
+        | Expr::IndexGet { .. } | Expr::RegionOut { .. }
         | Expr::IndexSet { .. }
         | Expr::IndexUpdate { .. }
         | Expr::InstanceOf { .. }

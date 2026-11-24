@@ -49,6 +49,7 @@ pub(super) fn fact_tree_leaves<'e>(
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } = e
         {
             leaves(left, out);
@@ -119,9 +120,12 @@ fn number_operand_reads(e: &Expr, out: &mut Vec<(usize, Recv, String)>) {
             }
             return;
         }
-        Expr::IndexGet { .. } | Expr::Call { .. } | Expr::CallSpread { .. } | Expr::New { .. } => {
-            return
-        }
+        Expr::IndexGet { .. }
+        | Expr::RegionOut { .. }
+        | Expr::Call { .. }
+        | Expr::RegionCall { .. }
+        | Expr::CallSpread { .. }
+        | Expr::New { .. } => return,
         Expr::Conditional {
             then_expr,
             else_expr,
@@ -149,7 +153,7 @@ fn number_operand_locals(e: &Expr, out: &mut HashSet<u32>) {
             out.insert(*id);
             return;
         }
-        Expr::PropertyGet { .. } | Expr::IndexGet { .. } => return,
+        Expr::PropertyGet { .. } | Expr::IndexGet { .. } | Expr::RegionOut { .. } => return,
         _ => {}
     }
     perry_hir::walker::walk_expr_children(e, &mut |child| number_operand_locals(child, out));
@@ -163,6 +167,7 @@ fn condition_number_locals(e: &Expr, out: &mut HashSet<u32>) {
             op: CompareOp::Lt | CompareOp::Le | CompareOp::Gt | CompareOp::Ge,
             left,
             right,
+            ..
         } => {
             number_operand_locals(left, out);
             number_operand_locals(right, out);
@@ -192,9 +197,9 @@ pub(super) fn prim(e: &Expr) -> bool {
         | Expr::Undefined
         | Expr::Null
         | Expr::TypeOf(_) => true,
-        Expr::Binary { op, left, right } => {
-            !matches!(op, BinaryOp::Add) || (prim(left) && prim(right))
-        }
+        Expr::Binary {
+            op, left, right, ..
+        } => !matches!(op, BinaryOp::Add) || (prim(left) && prim(right)),
         Expr::Compare { .. } => true,
         Expr::Unary { op, operand } => matches!(op, UnaryOp::Not) || prim(operand),
         _ => false,
@@ -433,7 +438,7 @@ impl Planner<'_, '_> {
                 }
                 st
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if let Expr::PropertyGet { object, .. } = callee.as_ref() {
                     st = self.expr(object, st);
                 } else {
@@ -447,7 +452,7 @@ impl Planner<'_, '_> {
             // An element read of a region array with a static index range is
             // bare while the facts are fresh: it runs no JS, so it stales
             // nothing. Any other element read is today's tower.
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 st = self.expr(object, st);
                 st = self.expr(index, st);
                 self.stale(e, &mut st);
@@ -535,7 +540,9 @@ impl Planner<'_, '_> {
                 }
                 st
             }
-            Expr::Compare { op, left, right } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 if self.record
                     && matches!(
                         op,
@@ -565,6 +572,7 @@ impl Planner<'_, '_> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 let c = self.expr(condition, st);
                 let t = self.expr(then_expr, c.clone());
@@ -641,7 +649,7 @@ impl Planner<'_, '_> {
                 let _ = self.expr(e, st);
                 None
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     let _ = self.expr(e, st);
                 }
@@ -684,6 +692,7 @@ impl Planner<'_, '_> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 // `break` inside a switch leaves the switch; conservatively
                 // everything after a switch is stale.
@@ -801,7 +810,7 @@ pub(super) fn body_refused(ss: &[Stmt]) -> bool {
     fn e_bad(e: &Expr) -> bool {
         if matches!(
             e,
-            Expr::Closure { .. } | Expr::Yield { .. } | Expr::Await(_)
+            Expr::Closure { .. } | Expr::Yield { .. } | Expr::Await(_, _)
         ) {
             return true;
         }
@@ -812,8 +821,8 @@ pub(super) fn body_refused(ss: &[Stmt]) -> bool {
     fn s_bad(s: &Stmt) -> bool {
         match s {
             Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Throw(e) => e_bad(e),
-            Stmt::Return(Some(e)) => e_bad(e),
-            Stmt::Let { .. } | Stmt::Return(None) | Stmt::Break | Stmt::Continue => false,
+            Stmt::Return(Some(e), _) => e_bad(e),
+            Stmt::Let { .. } | Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => false,
             Stmt::If {
                 condition,
                 then_branch,
@@ -840,6 +849,7 @@ pub(super) fn body_refused(ss: &[Stmt]) -> bool {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 e_bad(discriminant)
                     || cases
@@ -863,7 +873,7 @@ pub(super) fn body_nodes(ss: &[Stmt]) -> usize {
     fn s_n(s: &Stmt) -> usize {
         1 + match s {
             Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Throw(e) => e_n(e),
-            Stmt::Return(Some(e)) => e_n(e),
+            Stmt::Return(Some(e), _) => e_n(e),
             Stmt::If {
                 condition,
                 then_branch,
@@ -892,6 +902,7 @@ pub(super) fn body_nodes(ss: &[Stmt]) -> usize {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 e_n(discriminant)
                     + cases
@@ -927,7 +938,7 @@ pub(super) fn assigned(ss: &[Stmt], extra: &[&Expr]) -> HashSet<u32> {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => e_walk(e, out),
-            Stmt::Return(Some(e)) => e_walk(e, out),
+            Stmt::Return(Some(e), _) => e_walk(e, out),
             Stmt::If {
                 condition,
                 then_branch,
@@ -963,6 +974,7 @@ pub(super) fn assigned(ss: &[Stmt], extra: &[&Expr]) -> HashSet<u32> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 e_walk(discriminant, out);
                 for c in cases {
@@ -1025,7 +1037,7 @@ pub(super) fn accesses(ss: &[Stmt]) -> Vec<(Recv, String, bool, usize, Option<&E
             _ => {}
         }
         // A method callee `o.m(...)` is not an own-slot read.
-        if let Expr::Call { callee, args, .. } = e {
+        if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = e {
             if let Expr::PropertyGet { object, .. } = callee.as_ref() {
                 e_walk(object, out);
             } else {
@@ -1041,7 +1053,7 @@ pub(super) fn accesses(ss: &[Stmt]) -> Vec<(Recv, String, bool, usize, Option<&E
     fn s_walk<'e>(s: &'e Stmt, out: &mut Vec<(Recv, String, bool, usize, Option<&'e Expr>)>) {
         match s {
             Stmt::Let { init: Some(e), .. } | Stmt::Expr(e) | Stmt::Throw(e) => e_walk(e, out),
-            Stmt::Return(Some(e)) => e_walk(e, out),
+            Stmt::Return(Some(e), _) => e_walk(e, out),
             Stmt::If {
                 condition,
                 then_branch,
@@ -1077,6 +1089,7 @@ pub(super) fn accesses(ss: &[Stmt]) -> Vec<(Recv, String, bool, usize, Option<&E
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 e_walk(discriminant, out);
                 for c in cases {

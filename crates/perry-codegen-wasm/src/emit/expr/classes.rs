@@ -441,7 +441,7 @@ impl<'a> FuncEmitCtx<'a> {
             Expr::This => {
                 func.instruction(&Instruction::LocalGet(self.this_local.unwrap_or(0)));
             }
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 // Call parent constructor: super(args)
                 // this is local 0 in the current constructor
                 let mut called = false;
@@ -709,6 +709,7 @@ impl<'a> FuncEmitCtx<'a> {
                 class_name,
                 field_name,
                 value,
+                ..
             } => {
                 let class_id = self
                     .emitter
@@ -735,6 +736,7 @@ impl<'a> FuncEmitCtx<'a> {
                 class_name,
                 method_name,
                 args,
+                ..
             } => {
                 // Try to call compiled static method directly
                 if let Some(statics) = self.emitter.class_static_map.get(class_name.as_str()) {

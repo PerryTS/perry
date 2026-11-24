@@ -176,7 +176,7 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                     }),
                     args: vec![Expr::String(n.to_string())],
                     type_args: Vec::new(),
-                    byte_offset: 0,
+                    byte_offset: unary.span.lo.0,
                 };
                 let with_envs = ctx.active_with_envs_for_ident(n);
                 return Ok(Expr::TypeOf(Box::new(super::helpers::wrap_with_gets(
@@ -548,7 +548,7 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                         byte_end: 0,
                         object: Box::new(object),
                         property: "length".to_string(),
-                        byte_offset: member.span.lo.0,
+                        byte_offset: crate::lower::member_token(member),
                     })));
                 }
                 if is_global
@@ -750,6 +750,7 @@ fn namespace_typeof_fold(ns: &str, member: &str, then: Option<&str>) -> Option<E
         };
     }
     Some(Expr::Conditional {
+        byte_offset: 0, /*HPOS*/
         condition: Box::new(Expr::NamespacePatched(ns.to_string())),
         then_expr: Box::new(Expr::TypeOf(Box::new(live))),
         else_expr: Box::new(Expr::String("function".to_string())),

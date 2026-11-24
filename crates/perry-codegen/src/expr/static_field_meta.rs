@@ -217,6 +217,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             class_name,
             field_name,
             value,
+            ..
         } => {
             let v = lower_expr(ctx, value)?;
             let key = (class_name.clone(), field_name.clone());
@@ -380,6 +381,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             class_value,
             captures,
             env_class,
+            ..
         } => {
             let cap_len = captures.len().to_string();
             // The capture array is live across every capture's lowering, and a
@@ -1317,7 +1319,7 @@ pub(crate) fn lower_class_evaluation_object(ctx: &mut FnCtx<'_>, expr: &Expr) ->
 /// a symbol the compiler knows (`Expr::known_symbol`).
 fn known_symbol_key(key: &Expr) -> bool {
     let key = match key {
-        Expr::Call { callee, args, .. }
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
             if args.len() == 1
                 && matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == "js_to_property_key") =>
         {

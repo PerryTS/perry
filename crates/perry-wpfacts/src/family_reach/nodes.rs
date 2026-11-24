@@ -36,7 +36,7 @@ pub(crate) fn class(e: &Expr) -> Node {
         | Expr::I18nString { .. } | Expr::LocalGet { .. } | Expr::LocalSet { .. }
         | Expr::ScopedTemp { .. } | Expr::GlobalGet { .. } | Expr::GlobalSet { .. }
         | Expr::Update { .. } | Expr::Binary { .. } | Expr::Unary { .. } | Expr::Compare { .. }
-        | Expr::Logical { .. } | Expr::Call { .. } | Expr::CallSpread { .. }
+        | Expr::Logical { .. } | Expr::Call { .. } | Expr::RegionCall { .. } | Expr::CallSpread { .. }
         | Expr::SuperCallSpread { .. } | Expr::FuncRef { .. } | Expr::ExternFuncRef { .. }
         | Expr::PropertyGet { .. } | Expr::PropertySet { .. } | Expr::PropertyUpdate { .. }
         | Expr::Object { .. } | Expr::LiteralChunks { .. } | Expr::LiteralChunkObject { .. }
@@ -163,7 +163,7 @@ pub(crate) fn class(e: &Expr) -> Node {
         Expr::WithGet { .. } | Expr::WithSet { .. } => Node::All("with"),
         Expr::NativeModuleRef { .. } | Expr::NativeMethodCall { .. }
         | Expr::DynamicImport { .. } => Node::Module,
-        Expr::IndexGet { .. } | Expr::IndexSet { .. } | Expr::IndexUpdate { .. }
+        Expr::IndexGet { .. } | Expr::RegionOut { .. } | Expr::IndexSet { .. } | Expr::IndexUpdate { .. }
         | Expr::ObjectSpread { .. } | Expr::ObjectAssign { .. } | Expr::In { .. }
         | Expr::EnvGetDynamic { .. } | Expr::ObjectDefineProperty { .. }
         | Expr::ObjectGetOwnPropertyDescriptor { .. }

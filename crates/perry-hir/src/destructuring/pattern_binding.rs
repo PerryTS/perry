@@ -2,6 +2,7 @@
 
 use super::array_fast::{self, ArraySource};
 use super::*;
+use swc_common::Spanned;
 
 fn is_global_this_value(ctx: &LoweringContext, expr: &Expr) -> bool {
     matches!(expr, Expr::GlobalGet(_))
@@ -79,8 +80,9 @@ fn single_name_target(pat: &ast::Pat) -> Option<String> {
 
 /// Build a call into the runtime iterator-protocol helpers (same dispatch the
 /// assignment-destructuring path uses).
-fn runtime_iterator_call(method: &str, args: Vec<Expr>) -> Expr {
+fn runtime_iterator_call(method: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,
@@ -92,8 +94,9 @@ fn runtime_iterator_call(method: &str, args: Vec<Expr>) -> Expr {
 /// `value === undefined` — the spec check that gates a destructuring default
 /// (`[a = d]`, `{a = d}`). Distinct from `IsUndefinedOrBareNan`: a genuine NaN
 /// element/property must NOT trigger the default (`let [a = 1] = [NaN]` → NaN).
-pub(super) fn is_strictly_undefined(value: Expr) -> Expr {
+pub(super) fn is_strictly_undefined(value: Expr, byte_offset: u32) -> Expr {
     Expr::Compare {
+        byte_offset,
         op: CompareOp::Eq,
         left: Box::new(value),
         right: Box::new(Expr::Undefined),
@@ -112,10 +115,12 @@ fn iterator_next_value_stmts(
     value_id: LocalId,
     track_step_failure: bool,
     read_value: bool,
+    byte_offset: u32,
 ) -> Vec<Stmt> {
     let (step_id, step_name) = fresh_destruct_local(ctx, Type::Boolean);
     let mut pull_next = vec![
         Stmt::Let {
+            byte_offset,
             id: step_id,
             name: step_name,
             ty: Type::Boolean,
@@ -128,6 +133,7 @@ fn iterator_next_value_stmts(
                     Expr::LocalSet(
                         value_id,
                         Box::new(Expr::NativeMethodCall {
+                            byte_offset,
                             module: "__perry_runtime".into(),
                             class_name: None,
                             object: None,
@@ -137,10 +143,12 @@ fn iterator_next_value_stmts(
                     ),
                     Expr::Bool(read_value),
                 ],
+                byte_offset,
             )),
         },
         Stmt::If {
             condition: Expr::Compare {
+                byte_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(step_id)),
                 right: Box::new(Expr::Bool(true)),
@@ -175,6 +183,7 @@ fn iterator_next_value_stmts(
 
     vec![Stmt::If {
         condition: Expr::Compare {
+            byte_offset,
             op: CompareOp::Eq,
             left: Box::new(Expr::LocalGet(done_id)),
             right: Box::new(Expr::Bool(true)),
@@ -205,6 +214,7 @@ pub(crate) fn lower_array_pattern_binding(
 ) -> Result<()> {
     let (iter_id, iter_name) = fresh_destruct_local(ctx, Type::Any);
     result.push(Stmt::Let {
+        byte_offset: arr_pat.span.lo.0,
         id: iter_id,
         name: iter_name,
         ty: Type::Any,
@@ -213,14 +223,16 @@ pub(crate) fn lower_array_pattern_binding(
     });
     let (next_id, next_name) = fresh_destruct_local(ctx, Type::Any);
     result.push(Stmt::Let {
+        byte_offset: arr_pat.span.lo.0,
         id: next_id,
         name: next_name,
         ty: Type::Any,
         mutable: false,
-        init: Some(source.next_init(iter_id)),
+        init: Some(source.next_init(iter_id, arr_pat.span.lo.0)),
     });
     let (done_id, done_name) = fresh_destruct_local(ctx, Type::Boolean);
     result.push(Stmt::Let {
+        byte_offset: arr_pat.span.lo.0,
         id: done_id,
         name: done_name,
         ty: Type::Boolean,
@@ -236,6 +248,7 @@ pub(crate) fn lower_array_pattern_binding(
             None => {
                 let (value_id, value_name) = fresh_destruct_local(ctx, Type::Any);
                 body.push(Stmt::Let {
+                    byte_offset: arr_pat.span.lo.0,
                     id: value_id,
                     name: value_name,
                     ty: Type::Any,
@@ -250,6 +263,7 @@ pub(crate) fn lower_array_pattern_binding(
                     value_id,
                     track_step_failure,
                     false,
+                    arr_pat.span.lo.0,
                 );
                 body.extend(source.pull(idx, value_id, pull));
             }
@@ -260,6 +274,7 @@ pub(crate) fn lower_array_pattern_binding(
                 if track_step_failure {
                     let (saved_done_id, rest_done_name) = fresh_destruct_local(ctx, Type::Boolean);
                     body.push(Stmt::Let {
+                        byte_offset: arr_pat.span.lo.0,
                         id: saved_done_id,
                         name: rest_done_name,
                         ty: Type::Boolean,
@@ -272,7 +287,15 @@ pub(crate) fn lower_array_pattern_binding(
                     )));
                     rest_done_id = saved_done_id;
                 }
-                body.extend(source.rest(ctx, rest_id, rest_name, iter_id, next_id, rest_done_id));
+                body.extend(source.rest(
+                    ctx,
+                    rest_id,
+                    rest_name,
+                    iter_id,
+                    next_id,
+                    rest_done_id,
+                    arr_pat.span.lo.0,
+                ));
                 // Draining exhausts the iterator, so it is now done.
                 body.push(Stmt::Expr(Expr::LocalSet(
                     done_id,
@@ -291,6 +314,7 @@ pub(crate) fn lower_array_pattern_binding(
             Some(elem_pat) => {
                 let (value_id, value_name) = fresh_destruct_local(ctx, Type::Any);
                 body.push(Stmt::Let {
+                    byte_offset: arr_pat.span.lo.0,
                     id: value_id,
                     name: value_name,
                     ty: Type::Any,
@@ -305,6 +329,7 @@ pub(crate) fn lower_array_pattern_binding(
                     value_id,
                     track_step_failure,
                     true,
+                    arr_pat.span.lo.0,
                 );
                 body.extend(source.pull(idx, value_id, pull));
 
@@ -317,7 +342,11 @@ pub(crate) fn lower_array_pattern_binding(
                         single_name_target(&assign_pat.left).as_deref(),
                     )?;
                     let with_default = Expr::Conditional {
-                        condition: Box::new(is_strictly_undefined(Expr::LocalGet(value_id))),
+                        byte_offset: assign_pat.span.lo.0,
+                        condition: Box::new(is_strictly_undefined(
+                            Expr::LocalGet(value_id),
+                            assign_pat.span.lo.0,
+                        )),
                         then_expr: Box::new(default_val),
                         else_expr: Box::new(Expr::LocalGet(value_id)),
                     };
@@ -350,6 +379,7 @@ pub(crate) fn lower_array_pattern_binding(
     // predicate at the completion boundary, rather than asking codegen to
     // infer a stable initializer type for a deliberately mutable local.
     let completion_done = Expr::Compare {
+        byte_offset: arr_pat.span.lo.0,
         op: CompareOp::Eq,
         left: Box::new(Expr::LocalGet(done_id)),
         right: Box::new(Expr::Bool(true)),
@@ -357,6 +387,7 @@ pub(crate) fn lower_array_pattern_binding(
     let close_stmt = source.close(Stmt::Expr(runtime_iterator_call(
         "iteratorCloseIfNotDone",
         vec![Expr::LocalGet(iter_id), completion_done.clone()],
+        arr_pat.span.lo.0,
     )));
     if !track_step_failure {
         // Every element is a hole or a plain binding identifier (possibly as
@@ -374,6 +405,7 @@ pub(crate) fn lower_array_pattern_binding(
     }
     let (exc_id, exc_name) = fresh_destruct_local(ctx, Type::Any);
     result.push(Stmt::Try {
+        byte_offset: arr_pat.span.lo.0,
         body,
         catch: Some(CatchClause {
             param: Some((exc_id, exc_name)),
@@ -385,6 +417,7 @@ pub(crate) fn lower_array_pattern_binding(
                         completion_done,
                         Expr::LocalGet(exc_id),
                     ],
+                    arr_pat.span.lo.0,
                 ))),
                 Stmt::Throw(Expr::LocalGet(exc_id)),
             ],
@@ -571,6 +604,7 @@ pub(crate) fn lower_pattern_binding_into(
                 ctx.mark_local_immutable(id);
             }
             result.push(Stmt::Let {
+                byte_offset: pat.span().lo.0,
                 id,
                 name,
                 ty,
@@ -588,6 +622,7 @@ pub(crate) fn lower_pattern_binding_into(
             let tmp_name = format!("__destruct_{}", tmp_id);
             ctx.locals.push((tmp_name.clone(), tmp_id, Type::Any));
             result.push(Stmt::Let {
+                byte_offset: pat.span().lo.0,
                 id: tmp_id,
                 name: tmp_name,
                 ty: Type::Any,
@@ -602,7 +637,11 @@ pub(crate) fn lower_pattern_binding_into(
             // A destructuring default applies only when the source is strictly
             // `undefined` (not a genuine NaN value — `let [a = 1] = [NaN]` → NaN).
             let with_default = Expr::Conditional {
-                condition: Box::new(is_strictly_undefined(Expr::LocalGet(tmp_id))),
+                byte_offset: assign_pat.span.lo.0,
+                condition: Box::new(is_strictly_undefined(
+                    Expr::LocalGet(tmp_id),
+                    assign_pat.span.lo.0,
+                )),
                 then_expr: Box::new(default_val),
                 else_expr: Box::new(Expr::LocalGet(tmp_id)),
             };
@@ -619,7 +658,7 @@ pub(crate) fn lower_pattern_binding_into(
             // Array binding patterns use the iterator protocol (GetIterator /
             // IteratorStep / IteratorValue / IteratorClose), per spec — not raw
             // index reads. See `lower_array_pattern_binding`.
-            let plan = array_fast::FastPlan::new(ctx, source, result);
+            let plan = array_fast::FastPlan::new(ctx, source, result, arr_pat.span.lo.0);
             lower_array_pattern_binding(
                 ctx,
                 arr_pat,
@@ -653,6 +692,7 @@ pub(crate) fn lower_pattern_binding_into(
             // arm ignores (it reads `args.first()` only), so emitted output is
             // unchanged when the flag is off.
             result.push(Stmt::Let {
+                byte_offset: pat.span().lo.0,
                 id: tmp_id,
                 name: tmp_name,
                 ty: obj_ty,
@@ -660,6 +700,7 @@ pub(crate) fn lower_pattern_binding_into(
                 init: Some(runtime_iterator_call(
                     "requireObjectCoercible",
                     vec![source, Expr::Number(f64::from(obj_pat.span.lo.0))],
+                    obj_pat.span.lo.0,
                 )),
             });
 
@@ -694,7 +735,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 }
                                 Expr::PropertyGet {
                                     byte_end: 0,
-                                    byte_offset: 0,
+                                    byte_offset: kv.key.span().lo.0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
                                 }
@@ -719,7 +760,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 }
                                 Expr::PropertyGet {
                                     byte_end: 0,
-                                    byte_offset: 0,
+                                    byte_offset: kv.key.span().lo.0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
                                 }
@@ -729,7 +770,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 static_keys.push(key.clone());
                                 Expr::PropertyGet {
                                     byte_end: 0,
-                                    byte_offset: 0,
+                                    byte_offset: kv.key.span().lo.0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: key,
                                 }
@@ -743,6 +784,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 let index_expr = lower_expr(ctx, &computed.expr)?;
                                 let (key_id, key_name) = fresh_destruct_local(ctx, Type::Any);
                                 result.push(Stmt::Let {
+                                    byte_offset: pat.span().lo.0,
                                     id: key_id,
                                     name: key_name,
                                     ty: Type::Any,
@@ -752,7 +794,7 @@ pub(crate) fn lower_pattern_binding_into(
                                 computed_key_temps.push(key_id);
                                 Expr::IndexGet {
                                     element_offset: 0,
-                                    byte_offset: 0,
+                                    byte_offset: computed.span.lo.0,
                                     byte_end: 0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     index: Box::new(Expr::LocalGet(key_id)),
@@ -848,13 +890,14 @@ pub(crate) fn lower_pattern_binding_into(
                             ctx.locals
                                 .push((val_tmp_name.clone(), val_tmp_id, Type::Any));
                             result.push(Stmt::Let {
+                                byte_offset: pat.span().lo.0,
                                 id: val_tmp_id,
                                 name: val_tmp_name,
                                 ty: Type::Any,
                                 mutable: false,
                                 init: Some(Expr::PropertyGet {
                                     byte_end: 0,
-                                    byte_offset: 0,
+                                    byte_offset: assign.span.lo.0,
                                     object: Box::new(Expr::LocalGet(tmp_id)),
                                     property: name.clone(),
                                 }),
@@ -862,21 +905,24 @@ pub(crate) fn lower_pattern_binding_into(
                             let default_val =
                                 lower_default_named(ctx, default_expr, Some(name.as_str()))?;
                             Expr::Conditional {
-                                condition: Box::new(is_strictly_undefined(Expr::LocalGet(
-                                    val_tmp_id,
-                                ))),
+                                byte_offset: assign.span.lo.0,
+                                condition: Box::new(is_strictly_undefined(
+                                    Expr::LocalGet(val_tmp_id),
+                                    assign.span.lo.0,
+                                )),
                                 then_expr: Box::new(default_val),
                                 else_expr: Box::new(Expr::LocalGet(val_tmp_id)),
                             }
                         } else {
                             Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: assign.span.lo.0,
                                 object: Box::new(Expr::LocalGet(tmp_id)),
                                 property: name.clone(),
                             }
                         };
                         result.push(Stmt::Let {
+                            byte_offset: pat.span().lo.0,
                             id,
                             name,
                             ty,
@@ -908,6 +954,7 @@ pub(crate) fn lower_pattern_binding_into(
                             // source.
                             let (rest_id, rest_name) = fresh_destruct_local(ctx, Type::Any);
                             result.push(Stmt::Let {
+                                byte_offset: pat.span().lo.0,
                                 id: rest_id,
                                 name: rest_name,
                                 ty: Type::Any,
@@ -917,7 +964,7 @@ pub(crate) fn lower_pattern_binding_into(
                             for key_id in &computed_key_temps {
                                 result.push(Stmt::Expr(Expr::Delete(Box::new(Expr::IndexGet {
                                     element_offset: 0,
-                                    byte_offset: 0,
+                                    byte_offset: rest.span.lo.0,
                                     byte_end: 0,
                                     object: Box::new(Expr::LocalGet(rest_id)),
                                     index: Box::new(Expr::LocalGet(*key_id)),
@@ -1061,7 +1108,7 @@ mod iterator_close_tests {
         ) {
             assert!(
                 matches!(&body[rest + 2], Stmt::If {
-                condition: Expr::Compare { op: CompareOp::Eq, left, right }, ..
+                condition: Expr::Compare { op: CompareOp::Eq, left, right, .. }, ..
             } if matches!(left.as_ref(), Expr::LocalGet(id) if *id != done_id)
                 && matches!(right.as_ref(), Expr::Bool(true))),
                 "drain must test the saved pre-drain done bit"
@@ -1086,7 +1133,7 @@ mod record_control_tests {
     #[test]
     fn iterator_step_control_uses_its_constructed_boolean_and_single_publication() {
         let mut ctx = LoweringContext::new("record_control");
-        let stmts = iterator_next_value_stmts(&mut ctx, 1, 2, 3, 4, false, true);
+        let stmts = iterator_next_value_stmts(&mut ctx, 1, 2, 3, 4, false, true, 0);
         let Stmt::If {
             condition,
             else_branch: Some(pull),

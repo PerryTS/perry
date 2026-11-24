@@ -148,7 +148,7 @@ pub fn try_lower_native_chain_method_call(
 pub(crate) fn native_receiver_module(expr: &Expr) -> Option<&str> {
     match expr {
         Expr::NativeMethodCall { module, .. } => Some(module.as_str()),
-        Expr::Call { callee, .. } => {
+        Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => {
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()
@@ -219,7 +219,7 @@ pub fn try_lower_index_get_call(
     // call undefined. Route through `js_native_call_method_str_key` which
     // walks the class vtable chain (parent inheritance included). Refs
     // #420 / #618 followup.
-    if let Expr::IndexGet { object, index, .. } = callee {
+    if let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = callee {
         // A numeric key is a method call too, also on an array: `fns[0]()`
         // binds `this = fns` (ECMA-262 EvaluateCall: the callee is a property
         // reference, so its base is the this value). The keyed site's probe

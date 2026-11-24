@@ -27,6 +27,7 @@ pub(crate) fn lower_tpl_to_concat(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> 
     for (i, expr) in tpl.exprs.iter().enumerate() {
         let lowered = lower_expr(ctx, expr)?;
         result = Expr::Binary {
+            byte_offset: tpl.span.lo.0,
             op: BinaryOp::Add,
             left: Box::new(result),
             right: Box::new(lowered),
@@ -35,6 +36,7 @@ pub(crate) fn lower_tpl_to_concat(ctx: &mut LoweringContext, tpl: &ast::Tpl) -> 
             let quasi_str: &str = quasi.raw.as_ref();
             if !quasi_str.is_empty() {
                 result = Expr::Binary {
+                    byte_offset: tpl.span.lo.0,
                     op: BinaryOp::Add,
                     left: Box::new(result),
                     right: Box::new(Expr::String(unescape_template(quasi_str))),

@@ -236,7 +236,7 @@ fn own_callees(c: &Class) -> BTreeMap<String, &perry_hir::Function> {
 /// expressions).
 pub(crate) fn has_return(ss: &[Stmt]) -> bool {
     ss.iter().any(|s| match s {
-        Stmt::Return(_) => true,
+        Stmt::Return(_, _) => true,
         Stmt::If {
             then_branch,
             else_branch,
@@ -774,7 +774,7 @@ impl<'a> W<'a> {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr(st, e),
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     self.expr(st, e);
                 }
@@ -871,6 +871,7 @@ impl<'a> W<'a> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(st, discriminant);
                 // R9BIRTH1 rule B (ECMA-262 14.12.4 CaseBlockEvaluation): a
@@ -1006,7 +1007,7 @@ impl<'a> W<'a> {
             // method's body with this `this` (ECMA-262 13.3.6.1 / 10.2.1):
             // the walk follows that body at the call's place, its stores in
             // their order, its uses of `this` judged as the constructor's.
-            Expr::Call { callee, args, .. }
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                 if matches!(callee.as_ref(), Expr::PropertyGet { object, property, .. }
                     if matches!(object.as_ref(), Expr::This) && self.followable(st, property)) =>
             {
@@ -1035,7 +1036,9 @@ impl<'a> W<'a> {
                 self.visiting.pop();
             }
             // `this.m(...)`: the callee runs with `this` as its receiver.
-            Expr::Call { callee, .. } | Expr::CallSpread { callee, .. }
+            Expr::Call { callee, .. }
+            | Expr::RegionCall { callee, .. }
+            | Expr::CallSpread { callee, .. }
                 if matches!(callee.as_ref(), Expr::PropertyGet { object, .. }
                     if matches!(object.as_ref(), Expr::This)) =>
             {
@@ -1225,7 +1228,7 @@ impl<'a> W<'a> {
             {
                 self.expr(st, ds);
             }
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 for a in args {
                     self.expr(st, a);
                 }
@@ -1337,7 +1340,7 @@ pub(crate) fn literal_defines<'e>(
 /// then bind `this` to another object (ECMA-262 10.2.2 step 10-12).
 pub(crate) fn returns_value(ss: &[Stmt]) -> bool {
     ss.iter().any(|s| match s {
-        Stmt::Return(e) => e.is_some(),
+        Stmt::Return(e, _) => e.is_some(),
         Stmt::If {
             then_branch,
             else_branch,
@@ -1386,7 +1389,7 @@ fn case_exit(ss: &[Stmt]) -> Option<CaseEnd> {
     }
     Some(match last {
         Stmt::Break | Stmt::LabeledBreak(_) => CaseEnd::Exits,
-        Stmt::Return(_) | Stmt::Throw(_) | Stmt::Continue | Stmt::LabeledContinue(_) => {
+        Stmt::Return(_, _) | Stmt::Throw(_) | Stmt::Continue | Stmt::LabeledContinue(_) => {
             CaseEnd::Leaves
         }
         s if jumps(std::slice::from_ref(s)) => return None,
@@ -1493,7 +1496,7 @@ fn inert_constant(v: &Expr) -> bool {
 /// ending in `return o`. `None`: any other statement (a computed key, a
 /// spread, a prototype set).
 fn literal_builder_parts(e: &Expr) -> Option<Vec<&Expr>> {
-    let Expr::Call { callee, args, .. } = e else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = e else {
         return None;
     };
     let Expr::Closure { params, body, .. } = callee.as_ref() else {
@@ -1505,7 +1508,7 @@ fn literal_builder_parts(e: &Expr) -> Option<Vec<&Expr>> {
     let o = params[0].id;
     let is_o = |x: &Expr| matches!(x, Expr::LocalGet(id) if *id == o);
     let (last, init) = body.split_last()?;
-    if !matches!(last, Stmt::Return(Some(x)) if is_o(x)) {
+    if !matches!(last, Stmt::Return(Some(x), _) if is_o(x)) {
         return None;
     }
     let mut values = Vec::new();
@@ -1521,7 +1524,7 @@ fn literal_builder_parts(e: &Expr) -> Option<Vec<&Expr>> {
                 lets.push(*id);
                 values.push(v);
             }
-            Stmt::Expr(Expr::Call { callee, args, .. }) => {
+            Stmt::Expr(Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) => {
                 let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
                     return None;
                 };

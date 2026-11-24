@@ -100,7 +100,9 @@ impl<'r, 'a> Walk<'r, 'a> {
     fn stmt(&mut self, s: &'a Stmt, in_loop: bool, reload: bool) {
         match s {
             Stmt::Let { init: Some(e), .. } => self.expr(e, in_loop, reload),
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => self.expr(e, in_loop, reload),
+            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => {
+                self.expr(e, in_loop, reload)
+            }
             Stmt::If {
                 condition,
                 then_branch,
@@ -151,6 +153,7 @@ impl<'r, 'a> Walk<'r, 'a> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant, in_loop, reload);
                 for c in cases {
@@ -167,7 +170,7 @@ impl<'r, 'a> Walk<'r, 'a> {
     }
 
     fn expr(&mut self, e: &'a Expr, in_loop: bool, reload: bool) {
-        if let (Expr::Call { callee, .. }, false) = (e, in_loop) {
+        if let (Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }, false) = (e, in_loop) {
             match callee.as_ref() {
                 Expr::Closure { .. } => self.once(callee, reload),
                 Expr::LocalGet(id) => {

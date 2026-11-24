@@ -41,7 +41,7 @@ fn walk_stmt(stmt: &Stmt, visit: &mut impl FnMut(&Expr)) {
             }
         }
         Stmt::Expr(expr) | Stmt::Throw(expr) => walk_expr(expr, visit),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(expr) = expr {
                 walk_expr(expr, visit);
             }
@@ -100,6 +100,7 @@ fn walk_stmt(stmt: &Stmt, visit: &mut impl FnMut(&Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             walk_expr(discriminant, visit);
             for case in cases {
@@ -227,7 +228,8 @@ pub(crate) fn collect_hoisted_callback_calls(method: &Function) -> Vec<HoistedCa
         let aliases = immutable_aliases(param.id, &alias_edges);
         let mut calls_by_arity: BTreeMap<usize, BTreeSet<u32>> = BTreeMap::new();
         walk_stmts(&method.body, &mut |expr| {
-            let Expr::Call { callee, args, .. } = expr else {
+            let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr
+            else {
                 return;
             };
             let Expr::LocalGet(callee_local) = callee.as_ref() else {
@@ -292,7 +294,7 @@ pub(crate) fn collect_loop_called_callee_bindings(
         if matches!(expr, Expr::Closure { .. }) {
             return;
         }
-        if let Expr::Call { callee, args, .. } = expr {
+        if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = expr {
             if let Expr::LocalGet(id) = callee.as_ref() {
                 if loop_depth > 0 && args.len() <= 16 {
                     out.insert((*id, args.len()));
@@ -340,7 +342,7 @@ pub(crate) fn collect_loop_called_callee_bindings(
                 init: Some(expr), ..
             } => scan_expr(expr, loop_depth, out),
             Stmt::Expr(expr) | Stmt::Throw(expr) => scan_expr(expr, loop_depth, out),
-            Stmt::Return(Some(expr)) => scan_expr(expr, loop_depth, out),
+            Stmt::Return(Some(expr), _) => scan_expr(expr, loop_depth, out),
             Stmt::If {
                 condition,
                 then_branch,
@@ -379,6 +381,7 @@ pub(crate) fn collect_loop_called_callee_bindings(
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 scan_expr(discriminant, loop_depth, out);
                 for case in cases {
@@ -392,7 +395,7 @@ pub(crate) fn collect_loop_called_callee_bindings(
             }
             Stmt::Labeled { body, .. } => scan_stmt(body, loop_depth, out),
             Stmt::Let { init: None, .. }
-            | Stmt::Return(None)
+            | Stmt::Return(None, _)
             | Stmt::Break
             | Stmt::Continue
             | Stmt::LabeledBreak(_)

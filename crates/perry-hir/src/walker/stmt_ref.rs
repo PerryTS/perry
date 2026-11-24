@@ -8,7 +8,9 @@ use crate::ir::Stmt;
 /// New statement variants must explicitly declare their children here.
 pub fn stmt_any_expr<'a>(stmt: &'a Stmt, predicate: &mut impl FnMut(&'a Expr) -> bool) -> bool {
     match stmt {
-        Stmt::Let { init, .. } | Stmt::Return(init) => init.as_ref().is_some_and(&mut *predicate),
+        Stmt::Let { init, .. } | Stmt::Return(init, _) => {
+            init.as_ref().is_some_and(&mut *predicate)
+        }
         Stmt::Expr(expr) | Stmt::Throw(expr) => predicate(expr),
         Stmt::If {
             condition,
@@ -53,6 +55,7 @@ pub fn stmt_any_expr<'a>(stmt: &'a Stmt, predicate: &mut impl FnMut(&'a Expr) ->
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             predicate(discriminant)
                 || cases.iter().any(|c| {

@@ -134,11 +134,12 @@ impl Pruner {
             Expr::RefreshClassExprCaptures {
                 class_value,
                 captures,
+                byte_offset,
                 ..
             } => {
                 for (index, capture) in captures.iter_mut().enumerate() {
                     if self.expired(capture) {
-                        *capture = current_capture_slot(class_value, index);
+                        *capture = current_capture_slot(class_value, index, *byte_offset);
                     } else if let (Expr::LocalGet(head), Expr::LocalGet(owner)) =
                         (&*capture, class_value.as_ref())
                     {
@@ -169,7 +170,7 @@ impl Pruner {
                 init: Some(expr), ..
             }
             | Stmt::Expr(expr)
-            | Stmt::Return(Some(expr))
+            | Stmt::Return(Some(expr), _)
             | Stmt::Throw(expr) => self.expr(expr),
             Stmt::If {
                 condition,
@@ -240,6 +241,7 @@ impl Pruner {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant);
                 for case in cases {
@@ -268,16 +270,17 @@ impl Pruner {
 /// `class_value.__perry_ctor_caps[index]` — the value the class object already
 /// holds for that capture — or `undefined` when the class was never evaluated
 /// (the refresh is then a no-op, but its captures are still evaluated).
-fn current_capture_slot(class_value: &Expr, index: usize) -> Expr {
+fn current_capture_slot(class_value: &Expr, index: usize, byte_offset: u32) -> Expr {
     Expr::Conditional {
+        byte_offset,
         condition: Box::new(class_value.clone()),
         then_expr: Box::new(Expr::IndexGet {
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
             object: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset,
                 object: Box::new(class_value.clone()),
                 property: "__perry_ctor_caps".to_string(),
             }),

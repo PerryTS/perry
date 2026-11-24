@@ -56,15 +56,16 @@ impl SH for Expr {
             Expr::GlobalGet(id) => { tag(h, 11); id.hash(h); }
             Expr::GlobalSet(id, e) => { tag(h, 12); id.hash(h); e.as_ref().hash(h); }
             Expr::Update { id, op, prefix } => { tag(h, 13); id.hash(h); op.hash(h); prefix.hash(h); }
-            Expr::Binary { op, left, right } => { tag(h, 14); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
+            Expr::Binary { op, left, right, .. } => { tag(h, 14); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
             Expr::Unary { op, operand } => { tag(h, 15); op.hash(h); operand.as_ref().hash(h); }
-            Expr::Compare { op, left, right } => { tag(h, 16); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
-            Expr::Logical { op, left, right } => { tag(h, 17); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
+            Expr::Compare { op, left, right, .. } => { tag(h, 16); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
+            Expr::Logical { op, left, right, .. } => { tag(h, 17); op.hash(h); left.as_ref().hash(h); right.as_ref().hash(h); }
             // #5247: `byte_offset` is diagnostic-only (source-location metadata
             // for runtime TypeErrors); deliberately excluded from the stable hash
             // so source whitespace edits that shift offsets don't bust the object
             // cache.
             Expr::Call { callee, args, type_args, .. } => { tag(h, 18); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
+            Expr::RegionCall { callee, args } => { tag(h, 12602); callee.as_ref().hash(h); args.hash(h); }
             Expr::CallSpread { callee, args, type_args,  .. } => { tag(h, 19); callee.as_ref().hash(h); args.hash(h); type_args.hash(h); }
             Expr::SuperCallSpread(args) => { tag(h, 12240); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::PodLayoutSizeOf { ty } => { tag(h, 12001); ty.hash(h); }
@@ -73,11 +74,11 @@ impl SH for Expr {
             Expr::FuncRef(id) => { tag(h, 20); id.hash(h); }
             Expr::ExternFuncRef { name, param_types, return_type, } => { tag(h, 21); name.hash(h); param_types.hash(h); return_type.hash(h); }
             Expr::NativeModuleRef(s) => { tag(h, 22); s.hash(h); }
-            Expr::NativeMethodCall { module, class_name, object, method, args, } => { tag(h, 23); module.hash(h); class_name.hash(h); object.hash(h); method.hash(h); args.hash(h); }
+            Expr::NativeMethodCall { module, class_name, object, method, args, .. } => { tag(h, 23); module.hash(h); class_name.hash(h); object.hash(h); method.hash(h); args.hash(h); }
             Expr::PropertyGet { object, property, .. } => { tag(h, 24); object.as_ref().hash(h); property.hash(h); }
             Expr::PropertySet { object, property, value, .. } => { tag(h, 25); object.as_ref().hash(h); property.hash(h); value.as_ref().hash(h); }
             Expr::PropertyUpdate { object, property, op, prefix, strict, .. } => { tag(h, 26); object.as_ref().hash(h); property.hash(h); op.hash(h); prefix.hash(h); strict.hash(h); }
-            Expr::IndexGet { object, index , .. } => { tag(h, 27); object.as_ref().hash(h); index.as_ref().hash(h); }
+            Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. } => { tag(h, 27); object.as_ref().hash(h); index.as_ref().hash(h); }
             Expr::IndexSet { object, index, value, .. } => { tag(h, 28); object.as_ref().hash(h); index.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::IndexUpdate { object, index, op, prefix, strict, .. } => { tag(h, 29); object.as_ref().hash(h); index.as_ref().hash(h); op.hash(h); prefix.hash(h); strict.hash(h); }
             Expr::Object(fields) => { tag(h, 30); fields.hash(h); }
@@ -85,15 +86,15 @@ impl SH for Expr {
             Expr::ObjectAssign { target, sources } => { tag(h, 32); target.as_ref().hash(h); sources.hash(h); }
             Expr::Array(items, _) => { tag(h, 33); items.hash(h); }
             Expr::ArraySpread(items) => { tag(h, 34); items.hash(h); }
-            Expr::Conditional { condition, then_expr, else_expr, } => { tag(h, 35); condition.as_ref().hash(h); then_expr.as_ref().hash(h); else_expr.as_ref().hash(h); }
+            Expr::Conditional { condition, then_expr, else_expr, .. } => { tag(h, 35); condition.as_ref().hash(h); then_expr.as_ref().hash(h); else_expr.as_ref().hash(h); }
             Expr::TypeOf(e) => { tag(h, 36); e.as_ref().hash(h); }
             Expr::Void(e) => { tag(h, 37); e.as_ref().hash(h); }
             Expr::InstanceOf { expr, ty, ty_expr } => { tag(h, 38); expr.as_ref().hash(h); ty.hash(h); ty_expr.hash(h); }
             Expr::In { property, object } => { tag(h, 39); property.as_ref().hash(h); object.as_ref().hash(h); }
             Expr::PrivateBrandCheck { class_name, class_id, field_name, kind, is_static, receiver_is_brand_owner, object } => { tag(h, 12401); class_name.hash(h); class_id.hash(h); field_name.hash(h); kind.hash(h); is_static.hash(h); receiver_is_brand_owner.hash(h); object.as_ref().hash(h); }
             Expr::PrivateGuard { class_name, class_id, field_name, kind, op, receiver_is_brand_owner, object } => { tag(h, 12402); class_name.hash(h); class_id.hash(h); field_name.hash(h); kind.hash(h); op.hash(h); receiver_is_brand_owner.hash(h); object.as_ref().hash(h); }
-            Expr::Await(e) => { tag(h, 40); e.as_ref().hash(h); }
-            Expr::Yield { value, delegate } => { tag(h, 41); value.hash(h); delegate.hash(h); }
+            Expr::Await(e, _) => { tag(h, 40); e.as_ref().hash(h); }
+            Expr::Yield { value, delegate, .. } => { tag(h, 41); value.hash(h); delegate.hash(h); }
             // #5253: `byte_offset` is diagnostic-only — excluded from the hash
             // for the same reason as `Call.byte_offset` (see #5247 above).
             Expr::New { class_name, args, type_args, .. } => { tag(h, 42); class_name.hash(h); args.hash(h); type_args.hash(h); }
@@ -125,18 +126,18 @@ impl SH for Expr {
                 }
             }
             Expr::StaticFieldGet { class_name, field_name, } => { tag(h, 46); class_name.hash(h); field_name.hash(h); }
-            Expr::StaticFieldSet { class_name, field_name, value, } => { tag(h, 47); class_name.hash(h); field_name.hash(h); value.as_ref().hash(h); }
+            Expr::StaticFieldSet { class_name, field_name, value, .. } => { tag(h, 47); class_name.hash(h); field_name.hash(h); value.as_ref().hash(h); }
             Expr::ClassStaticSymbolSet { class_name, key, value, } => { tag(h, 48); class_name.hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
-            Expr::StaticMethodCall { class_name, method_name, args, } => { tag(h, 49); class_name.hash(h); method_name.hash(h); args.hash(h); }
+            Expr::StaticMethodCall { class_name, method_name, args, .. } => { tag(h, 49); class_name.hash(h); method_name.hash(h); args.hash(h); }
             Expr::This => tag(h, 50),
-            Expr::SuperCall(args) => { tag(h, 51); args.hash(h); }
+            Expr::SuperCall(args, _) => { tag(h, 51); args.hash(h); }
             Expr::SuperMethodCall { method, args } => { tag(h, 52); method.hash(h); args.hash(h); }
             Expr::SuperMethodCallSpread { method, args } => { tag(h, 12509); method.hash(h); for a in args { match a { CallArg::Expr(e) | CallArg::Spread(e) => e.hash(h), } } }
             Expr::SuperPropertyGet { property } => { tag(h, 461); property.hash(h); }
             Expr::SuperPropertySet { parent_class_id, parent_class_name, key, value } => { tag(h, 12238); parent_class_id.hash(h); parent_class_name.hash(h); key.as_ref().hash(h); value.as_ref().hash(h); }
             Expr::ObjectSuperPropertyGet { home, key, receiver } => { tag(h, 12231); home.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); }
             Expr::ObjectSuperPropertySet { home, key, value, receiver } => { tag(h, 12239); home.as_ref().hash(h); key.as_ref().hash(h); value.as_ref().hash(h); receiver.as_ref().hash(h); }
-            Expr::ObjectSuperMethodCall { home, key, receiver, args } => { tag(h, 12232); home.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); args.hash(h); }
+            Expr::ObjectSuperMethodCall { home, key, receiver, args, .. } => { tag(h, 12232); home.as_ref().hash(h); key.as_ref().hash(h); receiver.as_ref().hash(h); args.hash(h); }
             Expr::EnvGet(s) => { tag(h, 53); s.hash(h); }
             Expr::EnvGetDynamic(e) => { tag(h, 54); e.as_ref().hash(h); }
             Expr::ProcessEnv => tag(h, 55),
@@ -582,7 +583,7 @@ impl SH for Expr {
             Expr::UrlSearchParamsSort(e) => { tag(h, 703); e.as_ref().hash(h); }
             Expr::UrlSearchParamsForEach { params, callback, this_arg } => { tag(h, 704); params.as_ref().hash(h); callback.as_ref().hash(h); match this_arg { Some(v) => { tag(h, 1); v.as_ref().hash(h); } None => tag(h, 0), } }
             Expr::Delete(e) => { tag(h, 381); e.as_ref().hash(h); }
-            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, captures_new_target, enclosing_class, is_arrow, is_async, is_generator, is_strict, construct_only, } => { tag(h, 382); construct_only.hash(h); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); captures_new_target.hash(h); enclosing_class.hash(h); is_arrow.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
+            Expr::Closure { func_id, params, return_type, body, captures, mutable_captures, captures_this, captures_new_target, enclosing_class, is_arrow, is_async, is_generator, is_strict, construct_only, .. } => { tag(h, 382); construct_only.hash(h); func_id.hash(h); params.hash(h); return_type.hash(h); body.hash(h); captures.hash(h); mutable_captures.hash(h); captures_this.hash(h); captures_new_target.hash(h); enclosing_class.hash(h); is_arrow.hash(h); is_async.hash(h); is_generator.hash(h); is_strict.hash(h); }
             Expr::RegExp { pattern, flags } => { tag(h, 383); pattern.hash(h); flags.hash(h); }
             Expr::RegExpDynamic { pattern, flags, is_call } => { tag(h, 475); pattern.as_ref().hash(h); if let Some(f_box) = flags { tag(h, 476); f_box.as_ref().hash(h); } else { tag(h, 477); } tag(h, if *is_call { 478 } else { 479 }); }
             Expr::StringMatch { string, regex } => { tag(h, 385); string.as_ref().hash(h); regex.as_ref().hash(h); }
@@ -676,7 +677,7 @@ impl SH for Expr {
             Expr::TemplateRaw(e) => { tag(h, 446); e.as_ref().hash(h); }
             Expr::RegisterClassParentDynamic { class_name, parent_expr, } => { tag(h, 447); class_name.hash(h); parent_expr.as_ref().hash(h); }
             Expr::RegisterClassCaptures { class_name, captures } => { tag(h, 12241); class_name.hash(h); for c in captures { c.hash(h); } }
-            Expr::RefreshClassExprCaptures { class_value, captures, env_class } => { tag(h, 12243); class_value.as_ref().hash(h); for c in captures { c.hash(h); } env_class.hash(h); }
+            Expr::RefreshClassExprCaptures { class_value, captures, env_class, .. } => { tag(h, 12243); class_value.as_ref().hash(h); for c in captures { c.hash(h); } env_class.hash(h); }
             Expr::ClassEnvGet { class_name, index, guarded } => { tag(h, 12244); class_name.hash(h); index.hash(h); guarded.hash(h); }
             Expr::ClassEnvSet { class_name, index, value, guarded, publish } => { tag(h, 12245); class_name.hash(h); index.hash(h); value.as_ref().hash(h); guarded.hash(h); publish.hash(h); }
             Expr::ClassEnvStamp { class_name, instance, evaluation } => { tag(h, 12246); class_name.hash(h); instance.as_ref().hash(h); evaluation.as_ref().hash(h); }

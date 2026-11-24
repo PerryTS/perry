@@ -527,7 +527,7 @@ fn emit_store(
 /// value, so a wrong hint costs speed, never an answer.
 pub(crate) fn yields_element(ctx: &FnCtx<'_>, expr: &Expr) -> bool {
     match expr {
-        Expr::IndexGet { object, .. } => {
+        Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } => {
             declared_kind(ctx, object).is_some_and(|kind| !is_bigint(kind))
         }
         Expr::LocalGet(id) => ctx.typed_element_locals.contains(id),

@@ -172,7 +172,7 @@ impl Walk {
                     }
                 }
                 Stmt::Expr(e) | Stmt::Throw(e) => self.seed_expr(e),
-                Stmt::Return(opt) => {
+                Stmt::Return(opt, _) => {
                     if let Some(e) = opt {
                         self.seed_expr(e);
                     }
@@ -230,6 +230,7 @@ impl Walk {
                 Stmt::Switch {
                     discriminant,
                     cases,
+                    ..
                 } => {
                     self.seed_expr(discriminant);
                     for c in cases {
@@ -266,7 +267,7 @@ impl Walk {
                     }
                 }
                 Stmt::Expr(e) | Stmt::Throw(e) => self.judge_expr(e),
-                Stmt::Return(opt) => {
+                Stmt::Return(opt, _) => {
                     if let Some(e) = opt {
                         self.judge_expr(e);
                     }
@@ -320,6 +321,7 @@ impl Walk {
                 Stmt::Switch {
                     discriminant,
                     cases,
+                    ..
                 } => {
                     self.judge_expr(discriminant);
                     for c in cases {
@@ -386,7 +388,9 @@ fn write_delta(id: u32, rhs: &Expr) -> Option<i64> {
     match rhs {
         // Literal reset.
         Expr::Integer(v) if v.unsigned_abs() <= MAX_LITERAL as u64 => Some(0),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             let d = match (op, left.as_ref(), right.as_ref()) {
                 // L = L + d   /   L = L - d
                 (BinaryOp::Add | BinaryOp::Sub, Expr::LocalGet(l), Expr::Integer(d))
@@ -425,7 +429,7 @@ fn collect_written_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
                         }
                     }
                     Stmt::Expr(e) | Stmt::Throw(e) => self.expr(e),
-                    Stmt::Return(opt) => {
+                    Stmt::Return(opt, _) => {
                         if let Some(e) = opt {
                             self.expr(e);
                         }
@@ -479,6 +483,7 @@ fn collect_written_ids(stmts: &[Stmt], out: &mut HashSet<u32>) {
                     Stmt::Switch {
                         discriminant,
                         cases,
+                        ..
                     } => {
                         self.expr(discriminant);
                         for c in cases {
@@ -514,6 +519,7 @@ mod tests {
 
     fn let_int(id: u32, v: i64) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: format!("v{id}"),
             ty: Type::Number,
@@ -528,6 +534,7 @@ mod tests {
 
     fn add(id: u32, d: i64) -> Expr {
         Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::Add,
             left: Box::new(Expr::LocalGet(id)),
             right: Box::new(Expr::Integer(d)),
@@ -589,6 +596,7 @@ mod tests {
             set(
                 1,
                 Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Mul,
                     left: Box::new(Expr::LocalGet(1)),
                     right: Box::new(Expr::Integer(3)),
@@ -609,6 +617,7 @@ mod tests {
             set(
                 1,
                 Expr::Binary {
+                    byte_offset: 0,
                     op: BinaryOp::Sub,
                     left: Box::new(Expr::Integer(5)),
                     right: Box::new(Expr::LocalGet(1)),
@@ -628,6 +637,7 @@ mod tests {
     fn rejects_non_literal_init() {
         let stmts = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "a".into(),
                 ty: Type::Number,
@@ -650,6 +660,7 @@ mod tests {
         let stmts = vec![
             let_int(1, 0),
             Stmt::Expr(Expr::Closure {
+                byte_offset: 0,
                 func_id: 0,
                 params: vec![],
                 return_type: Type::Void,
@@ -677,6 +688,7 @@ mod tests {
         let stmts = vec![
             let_int(1, 0),
             Stmt::Expr(Expr::Closure {
+                byte_offset: 0,
                 func_id: 0,
                 params: vec![],
                 return_type: Type::Void,
@@ -723,6 +735,7 @@ mod tests {
                     then_branch: vec![set(
                         1,
                         Expr::Binary {
+                            byte_offset: 0,
                             op: BinaryOp::Mul,
                             left: Box::new(Expr::LocalGet(1)),
                             right: Box::new(Expr::Integer(3)),

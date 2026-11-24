@@ -48,7 +48,7 @@ fn import_meta_require_values_share_one_module_scoped_loader() {
     assert!(get
         .body
         .iter()
-        .any(|stmt| matches!(stmt, Stmt::Return(Some(Expr::LocalGet(id))) if *id == loader)));
+        .any(|stmt| matches!(stmt, Stmt::Return(Some(Expr::LocalGet(id)), _) if *id == loader)));
 }
 
 #[test]

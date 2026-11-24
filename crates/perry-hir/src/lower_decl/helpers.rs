@@ -34,19 +34,19 @@ pub(super) fn is_filehandle_readlines_for_await_target(
     )
 }
 
-pub(super) fn async_iterator_method_call(iterable: Expr) -> Expr {
+pub(super) fn async_iterator_method_call(iterable: Expr, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::IndexGet {
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
             object: Box::new(iterable),
             index: Box::new(Expr::WellKnownSymbol("asyncIterator")),
         }),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -146,7 +146,7 @@ pub fn build_default_param_stmts(params: &[Param]) -> Vec<Stmt> {
             .collect();
         let default_is_throw_helper = matches!(
             default_expr,
-            Expr::Call { callee, .. }
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
                 if matches!(
                     callee.as_ref(),
                     Expr::ExternFuncRef { name, .. } if name.starts_with("js_throw_")
@@ -163,6 +163,7 @@ pub fn build_default_param_stmts(params: &[Param]) -> Vec<Stmt> {
         );
         out.push(Stmt::If {
             condition: Expr::Compare {
+                byte_offset: param.byte_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(param.id)),
                 right: Box::new(Expr::Undefined),
@@ -636,6 +637,8 @@ pub fn append_synthetic_arguments_param(
     simple_parameters: bool,
     restricted_callee: bool,
     mapped_parameter_ids: Vec<(u32, LocalId)>,
+    // Source offset of the function whose `arguments` object this binds.
+    byte_offset: u32,
 ) {
     let arguments_id = ctx.define_local(
         "arguments".to_string(),
@@ -643,6 +646,7 @@ pub fn append_synthetic_arguments_param(
     );
     let has_user_rest = params.iter().any(|p| p.is_rest);
     params.push(Param {
+        byte_offset: byte_offset,
         id: arguments_id,
         name: "arguments".to_string(),
         ty: Type::Named("__perry_arguments_object".into()),

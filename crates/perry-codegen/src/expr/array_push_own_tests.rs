@@ -35,6 +35,7 @@ fn push_ir_with(ty: Type, value: Expr, escape: bool) -> String {
     let mut hir = HirModule::new("apush_own_test");
     let mention = escape.then_some(Stmt::Expr(Expr::LocalGet(0)));
     hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "pushes".to_string(),
         type_params: Vec::new(),
@@ -42,6 +43,7 @@ fn push_ir_with(ty: Type, value: Expr, escape: bool) -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 0,
                 name: "a".to_string(),
                 ty,
@@ -56,7 +58,7 @@ fn push_ir_with(ty: Type, value: Expr, escape: bool) -> String {
         ]
         .into_iter()
         .chain(mention)
-        .chain([Stmt::Return(Some(Expr::LocalGet(0)))])
+        .chain([Stmt::Return(Some(Expr::LocalGet(0)), 0)])
         .collect(),
         is_async: false,
         is_generator: false,

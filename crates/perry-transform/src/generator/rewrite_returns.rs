@@ -11,14 +11,14 @@ use super::*;
 pub fn rewrite_returns_as_done(stmts: &mut Vec<Stmt>) {
     for stmt in stmts.iter_mut() {
         match stmt {
-            Stmt::Return(Some(expr))
+            Stmt::Return(Some(expr), _)
                 // Don't double-wrap if already an iter result
                 if !is_iter_result(expr) => {
                     let val = expr.clone();
                     *expr = make_iter_result(val, true);
                 }
-            Stmt::Return(None) => {
-                *stmt = Stmt::Return(Some(make_iter_result(Expr::Undefined, true)));
+            Stmt::Return(None, off) => {
+                *stmt = Stmt::Return(Some(make_iter_result(Expr::Undefined, true)), *off);
             }
             Stmt::If {
                 then_branch,
@@ -116,7 +116,7 @@ pub fn prepend_done_before_returns(stmts: &mut Vec<Stmt>, done_id: u32) {
             }
             _ => {}
         }
-        if matches!(s, Stmt::Return(_)) {
+        if matches!(s, Stmt::Return(_, _)) {
             new_body.push(Stmt::Expr(Expr::LocalSet(
                 done_id,
                 Box::new(Expr::Bool(true)),
@@ -134,7 +134,7 @@ pub fn prepend_done_before_returns(stmts: &mut Vec<Stmt>, done_id: u32) {
 pub fn body_contains_return(stmts: &[Stmt]) -> bool {
     for s in stmts {
         match s {
-            Stmt::Return(_) => return true,
+            Stmt::Return(_, _) => return true,
             Stmt::If {
                 then_branch,
                 else_branch,
@@ -220,7 +220,7 @@ pub fn rewrite_catch_returns_to_iter_result(stmts: &mut Vec<Stmt>) {
 
 pub fn rewrite_catch_returns_to_iter_result_in_stmt(stmt: &mut Stmt) {
     match stmt {
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             let value = opt.take().unwrap_or(Expr::Undefined);
             *opt = Some(make_iter_result(value, true));
         }
@@ -294,12 +294,12 @@ pub fn rewrite_returns_to_labeled_break(stmts: &mut Vec<Stmt>, label: &str) {
     while i < stmts.len() {
         let stmt = std::mem::replace(&mut stmts[i], Stmt::Continue);
         match stmt {
-            Stmt::Return(Some(e)) => {
+            Stmt::Return(Some(e), _) => {
                 stmts[i] = Stmt::Expr(e);
                 stmts.insert(i + 1, Stmt::LabeledBreak(label.to_string()));
                 i += 2;
             }
-            Stmt::Return(None) => {
+            Stmt::Return(None, _) => {
                 stmts[i] = Stmt::LabeledBreak(label.to_string());
                 i += 1;
             }
@@ -314,7 +314,7 @@ pub fn rewrite_returns_to_labeled_break(stmts: &mut Vec<Stmt>, label: &str) {
 
 pub fn rewrite_returns_to_labeled_break_in_stmt(stmt: &mut Stmt, label: &str) {
     match stmt {
-        Stmt::Return(_) => {
+        Stmt::Return(_, _) => {
             unreachable!("rewrite_returns_to_labeled_break_in_stmt should not see a bare Return");
         }
         Stmt::If {

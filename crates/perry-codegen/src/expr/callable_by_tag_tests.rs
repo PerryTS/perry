@@ -53,6 +53,7 @@ fn assert_decoded_by_tag(ir: &str, callee: &str) {
 fn module_with(name: &str, value: Expr) -> Module {
     let mut m = Module::new(name);
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 0,
         name: "callable_arg".into(),
         ty: Type::Any,
@@ -60,6 +61,7 @@ fn module_with(name: &str, value: Expr) -> Module {
         init: Some(Expr::Number(1.1)),
     });
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "callable_result".into(),
         ty: Type::Any,

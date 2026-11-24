@@ -174,7 +174,7 @@ fn store_target(module: &Module, t: &Expr, k: &str) -> Option<(String, bool)> {
 fn known_symbol_key(e: &Expr) -> bool {
     match e {
         Expr::SymbolFor(_) | Expr::WellKnownSymbol(_) => e.known_symbol().is_some(),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == "js_to_property_key")
                 && matches!(args.as_slice(), [a] if known_symbol_key(a))
         }
@@ -340,6 +340,7 @@ fn inert_construct(module: &Module, y: &str, at: usize, w: &mut Win) -> bool {
                             op: CompareOp::Eq,
                             left,
                             right,
+                            ..
                         },
                     then_branch,
                     else_branch: None,

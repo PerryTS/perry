@@ -114,7 +114,7 @@ fn excluded(f: &perry_hir::Function) -> bool {
     let lowered_generator = f.body.iter().any(|s| {
         matches!(
             s,
-            perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype { .. }))
+            perry_hir::Stmt::Return(Some(perry_hir::Expr::LinkGeneratorPrototype { .. }), _)
         )
     });
     f.is_async
@@ -447,9 +447,6 @@ fn target_of(
     recs: &[&CallSiteRec],
 ) -> Result<(u32, u32), &'static str> {
     let live = |n: NodeId| (n as usize) < g.m.nodes.len();
-    if offset == 0 {
-        return Err("offset-0");
-    }
     if recs.iter().any(|r| r.spread) {
         return Err("spread");
     }

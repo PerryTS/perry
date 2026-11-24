@@ -125,6 +125,7 @@ fn can_use_string_u32_map_value(ctx: &FnCtx<'_>, value: &Expr) -> bool {
             op: BinaryOp::UShr,
             left,
             right,
+            ..
         } => {
             can_lower_i32_for_collection_value(ctx, left)
                 && can_lower_i32_for_collection_value(ctx, right)

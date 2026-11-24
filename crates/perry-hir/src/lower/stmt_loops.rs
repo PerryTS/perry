@@ -28,19 +28,19 @@ use for_await_targets::{
     web_readable_stream_values_receiver,
 };
 
-fn async_iterator_method_call(iterable: Expr) -> Expr {
+fn async_iterator_method_call(iterable: Expr, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::IndexGet {
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset,
             byte_end: 0,
             object: Box::new(iterable),
             index: Box::new(Expr::WellKnownSymbol("asyncIterator")),
         }),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -51,13 +51,14 @@ pub(crate) fn lazy_or_index_elem(
     arr_id: LocalId,
     idx_id: LocalId,
     result_id: LocalId,
+    byte_offset: u32,
 ) -> Expr {
     if use_lazy_iter {
         Expr::LocalGet(result_id)
     } else {
         Expr::IndexGet {
             element_offset: 0,
-            byte_offset: 0,
+            byte_offset: byte_offset,
             byte_end: 0,
             object: Box::new(Expr::LocalGet(arr_id)),
             index: Box::new(Expr::LocalGet(idx_id)),
@@ -100,8 +101,14 @@ fn iter_driver_while_stmt(result_id: LocalId, next_call: Expr, rest: Vec<Stmt>) 
 
 /// Native step writes the compiler-owned value binding and returns done.
 /// The LocalSet operand records the output write for every HIR visitor.
-pub(crate) fn iterator_step_call(iter_id: LocalId, next_id: LocalId, value_id: LocalId) -> Expr {
+pub(crate) fn iterator_step_call(
+    iter_id: LocalId,
+    next_id: LocalId,
+    value_id: LocalId,
+    byte_offset: u32,
+) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,
@@ -112,6 +119,7 @@ pub(crate) fn iterator_step_call(iter_id: LocalId, next_id: LocalId, value_id: L
             Expr::LocalSet(
                 value_id,
                 Box::new(Expr::NativeMethodCall {
+                    byte_offset,
                     module: "__perry_runtime".into(),
                     class_name: None,
                     object: None,
@@ -123,8 +131,9 @@ pub(crate) fn iterator_step_call(iter_id: LocalId, next_id: LocalId, value_id: L
     }
 }
 
-pub(crate) fn iterator_next_method_call(iter_id: LocalId) -> Expr {
+pub(crate) fn iterator_next_method_call(iter_id: LocalId, byte_offset: u32) -> Expr {
     Expr::NativeMethodCall {
+        byte_offset,
         module: "__perry_runtime".into(),
         class_name: None,
         object: None,
@@ -139,20 +148,23 @@ pub(crate) fn lazy_iter_for_stmts(
     iter_id: LocalId,
     result_id: LocalId,
     loop_body: Vec<Stmt>,
+    byte_offset: u32,
 ) -> Vec<Stmt> {
     let next_id = ctx.fresh_local();
     ctx.locals
         .push((format!("__iter_next_{next_id}"), next_id, Type::Any));
     vec![
         Stmt::Let {
+            byte_offset,
             id: next_id,
             name: format!("__iter_next_{next_id}"),
             ty: Type::Any,
             mutable: false,
-            init: Some(iterator_next_method_call(iter_id)),
+            init: Some(iterator_next_method_call(iter_id, byte_offset)),
         },
         Stmt::For {
             init: Some(Box::new(Stmt::Let {
+                byte_offset,
                 id: result_id,
                 name: format!("__result_{}", result_id),
                 ty: Type::Any,
@@ -161,7 +173,7 @@ pub(crate) fn lazy_iter_for_stmts(
             })),
             condition: Some(Expr::Unary {
                 op: UnaryOp::Not,
-                operand: Box::new(iterator_step_call(iter_id, next_id, result_id)),
+                operand: Box::new(iterator_step_call(iter_id, next_id, result_id, byte_offset)),
             }),
             update: None,
             body: loop_body,
@@ -171,8 +183,9 @@ pub(crate) fn lazy_iter_for_stmts(
 
 /// Use the runtime GetMethod/Call entry: read `return` once and preserve
 /// the iterator as the receiver without consulting a user-visible `.call`.
-fn iterator_close_stmt(iter_id: LocalId) -> Stmt {
+fn iterator_close_stmt(iter_id: LocalId, byte_offset: u32) -> Stmt {
     Stmt::Expr(Expr::NativeMethodCall {
+        byte_offset,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,
@@ -224,6 +237,7 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
     body.insert(
         0,
         Stmt::Let {
+            byte_offset: loop_byte_offset,
             id: state_id,
             name: state_name,
             ty: Type::Number,
@@ -237,6 +251,7 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
 
     let close_on_throw = Stmt::If {
         condition: Expr::Compare {
+            byte_offset: loop_byte_offset,
             op: CompareOp::Ne,
             left: Box::new(Expr::LocalGet(state_id)),
             right: Box::new(Expr::Number(2.0)),
@@ -244,6 +259,7 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
         then_branch: vec![
             iterator_completion_stmt(state_id, 2.0),
             Stmt::Throw(Expr::NativeMethodCall {
+                byte_offset: loop_byte_offset,
                 module: "__perry_runtime".to_string(),
                 class_name: None,
                 object: None,
@@ -258,6 +274,7 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
         else_branch: None,
     };
     Stmt::Try {
+        byte_offset: loop_byte_offset,
         body,
         catch: Some(CatchClause {
             param: Some((err_id, err_name)),
@@ -265,13 +282,14 @@ pub(crate) fn wrap_lazy_for_of_body_close_on_throw(
         }),
         finally: Some(vec![Stmt::If {
             condition: Expr::Compare {
+                byte_offset: loop_byte_offset,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::LocalGet(state_id)),
                 right: Box::new(Expr::Number(1.0)),
             },
             then_branch: vec![
                 iterator_completion_stmt(state_id, 2.0),
-                iterator_close_stmt(iter_id),
+                iterator_close_stmt(iter_id, loop_byte_offset),
             ],
             else_branch: None,
         }]),
@@ -288,6 +306,7 @@ fn iterator_completion_snapshot(
     let name = format!("__forof_incoming_{}", id);
     ctx.locals.push((name.clone(), id, Type::Number));
     stmts.push(Stmt::Let {
+        byte_offset: 0, /*HPOS*/
         id,
         name,
         ty: Type::Number,
@@ -362,7 +381,7 @@ fn mark_iterator_completion_on_abrupt(
                 });
                 rewritten.push(Stmt::LabeledContinue(label));
             }
-            Stmt::Return(value) => {
+            Stmt::Return(value, off) => {
                 // Operand failure remains a throw, not an outgoing return.
                 // Register the value as Any so cleanup can allocate/collect
                 // while the pending return remains rooted.
@@ -371,6 +390,7 @@ fn mark_iterator_completion_on_abrupt(
                     let name = format!("__forof_return_{}", id);
                     ctx.locals.push((name.clone(), id, Type::Any));
                     rewritten.push(Stmt::Let {
+                        byte_offset: 0, /*HPOS*/
                         id,
                         name,
                         ty: Type::Any,
@@ -380,7 +400,7 @@ fn mark_iterator_completion_on_abrupt(
                     Expr::LocalGet(id)
                 });
                 rewritten.push(iterator_completion_stmt(state_id, 1.0));
-                rewritten.push(Stmt::Return(value));
+                rewritten.push(Stmt::Return(value, off));
             }
             Stmt::If {
                 condition,
@@ -418,6 +438,7 @@ fn mark_iterator_completion_on_abrupt(
                 mut catch,
                 mut finally,
                 forof_completion,
+                byte_offset,
             } => {
                 mark_iterator_completion_on_abrupt(
                     ctx,
@@ -459,6 +480,7 @@ fn mark_iterator_completion_on_abrupt(
                     );
                 }
                 rewritten.push(Stmt::Try {
+                    byte_offset,
                     body,
                     catch,
                     finally,
@@ -523,6 +545,7 @@ fn mark_iterator_completion_on_abrupt(
             Stmt::Switch {
                 discriminant,
                 mut cases,
+                byte_offset,
             } => {
                 let saved_id = iterator_completion_snapshot(ctx, &mut rewritten, state_id);
                 for case in cases.iter_mut() {
@@ -537,6 +560,7 @@ fn mark_iterator_completion_on_abrupt(
                     );
                 }
                 rewritten.push(Stmt::Switch {
+                    byte_offset,
                     discriminant,
                     cases,
                 });
@@ -578,6 +602,7 @@ fn lower_runtime_for_await_iterator(
     ctx.locals
         .push((format!("__iter_{}", iter_id), iter_id, Type::Any));
     module.init.push(Stmt::Let {
+        byte_offset: for_of_stmt.span.lo.0,
         id: iter_id,
         name: format!("__iter_{}", iter_id),
         ty: Type::Any,
@@ -592,16 +617,17 @@ fn lower_runtime_for_await_iterator(
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: for_of_stmt.span.lo.0,
             object: Box::new(Expr::LocalGet(iter_id)),
             property: "next".to_string(),
         }),
         args: vec![],
         type_args: vec![],
-        byte_offset: 0,
+        byte_offset: for_of_stmt.span.lo.0,
     };
-    let next_call = Expr::Await(Box::new(raw_next_call));
+    let next_call = Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0);
     module.init.push(Stmt::Let {
+        byte_offset: for_of_stmt.span.lo.0,
         id: result_id,
         name: format!("__result_{}", result_id),
         ty: Type::Any,
@@ -631,7 +657,7 @@ fn lower_runtime_for_await_iterator(
         binding_pat,
         Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: for_of_stmt.span.lo.0,
             object: Box::new(Expr::LocalGet(result_id)),
             property: "value".to_string(),
         },
@@ -656,6 +682,7 @@ fn lower_runtime_for_await_iterator(
         result_id,
         next_call,
         body_stmts,
+        for_of_stmt.span.lo.0,
     );
 
     ctx.pop_block_scope(for_scope_mark);
@@ -796,24 +823,25 @@ pub(super) fn lower_stmt_for_of_inner(
             // prototype replacements, once at loop entry (#9788).
             Expr::GetIterator(Box::new(iter_expr))
         } else if is_filehandle_readlines_for_await || is_fs_dir_for_await {
-            async_iterator_method_call(iter_expr)
+            async_iterator_method_call(iter_expr, for_of_stmt.span.lo.0)
         } else if is_node_readable_for_await {
             Expr::Call {
                 byte_end: 0,
                 callee: Box::new(Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset: for_of_stmt.span.lo.0,
                     object: Box::new(iter_expr),
                     property: "iterator".to_string(),
                 }),
                 args: vec![],
                 type_args: vec![],
-                byte_offset: 0,
+                byte_offset: for_of_stmt.span.lo.0,
             }
         } else if is_readline_interface_for_await {
             // rl.iterator() -> readline async-iterator object; .next() then
             // awaits each line. Dispatched explicitly to js_readline_iterator.
             Expr::NativeMethodCall {
+                byte_offset: for_of_stmt.span.lo.0,
                 module: "readline".to_string(),
                 class_name: Some("Interface".to_string()),
                 object: Some(Box::new(iter_expr)),
@@ -833,6 +861,7 @@ pub(super) fn lower_stmt_for_of_inner(
         ctx.locals
             .push((format!("__iter_{}", iter_id), iter_id, Type::Any));
         module.init.push(Stmt::Let {
+            byte_offset: for_of_stmt.span.lo.0,
             id: iter_id,
             name: format!("__iter_{}", iter_id),
             ty: Type::Any,
@@ -851,21 +880,22 @@ pub(super) fn lower_stmt_for_of_inner(
             byte_end: 0,
             callee: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: for_of_stmt.span.lo.0,
                 object: Box::new(Expr::LocalGet(iter_id)),
                 property: "next".to_string(),
             }),
             args: vec![],
             type_args: vec![],
-            byte_offset: 0,
+            byte_offset: for_of_stmt.span.lo.0,
         };
         let next_call = if needs_await {
-            Expr::Await(Box::new(raw_next_call))
+            Expr::Await(Box::new(raw_next_call), for_of_stmt.span.lo.0)
         } else {
             raw_next_call
         };
         if needs_await {
             module.init.push(Stmt::Let {
+                byte_offset: for_of_stmt.span.lo.0,
                 id: result_id,
                 name: format!("__result_{}", result_id),
                 ty: Type::Any,
@@ -888,7 +918,7 @@ pub(super) fn lower_stmt_for_of_inner(
         let value_expr = if needs_await {
             Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: for_of_stmt.span.lo.0,
                 object: Box::new(Expr::LocalGet(result_id)),
                 property: "value".into(),
             }
@@ -900,6 +930,7 @@ pub(super) fn lower_stmt_for_of_inner(
         ctx.locals
             .push((format!("__gen_value_{value_id}"), value_id, Type::Any));
         let value_stmt = Stmt::Let {
+            byte_offset: for_of_stmt.span.lo.0,
             id: value_id,
             name: format!("__gen_value_{value_id}"),
             ty: Type::Any,
@@ -919,6 +950,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 let name = ident.id.sym.to_string();
                 let id = ctx.define_local(name.clone(), Type::Any);
                 body_stmts.push(Stmt::Let {
+                    byte_offset: for_of_stmt.span.lo.0,
                     id,
                     name,
                     ty: Type::Any,
@@ -944,6 +976,7 @@ pub(super) fn lower_stmt_for_of_inner(
             None => {
                 let id = ctx.define_local("__gen_item".to_string(), Type::Any);
                 body_stmts.push(Stmt::Let {
+                    byte_offset: for_of_stmt.span.lo.0,
                     id,
                     name: "__gen_item".to_string(),
                     ty: Type::Any,
@@ -975,6 +1008,7 @@ pub(super) fn lower_stmt_for_of_inner(
                 result_id,
                 next_call,
                 body_stmts,
+                for_of_stmt.span.lo.0,
             );
         } else {
             let loop_body = if guard_binding {
@@ -1000,9 +1034,13 @@ pub(super) fn lower_stmt_for_of_inner(
                 ));
                 body_stmts
             };
-            module
-                .init
-                .extend(lazy_iter_for_stmts(ctx, iter_id, result_id, loop_body));
+            module.init.extend(lazy_iter_for_stmts(
+                ctx,
+                iter_id,
+                result_id,
+                loop_body,
+                for_of_stmt.span.lo.0,
+            ));
         }
 
         ctx.pop_block_scope(for_scope_mark);
@@ -1079,11 +1117,13 @@ pub(super) fn lower_stmt_for_of_inner(
                 "ReadableStreamDefaultReader".to_string(),
             );
             module.init.push(Stmt::Let {
+                byte_offset: for_of_stmt.span.lo.0,
                 id: reader_id,
                 name: format!("__reader_{}", reader_id),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::NativeMethodCall {
+                    byte_offset: for_of_stmt.span.lo.0,
                     module: "readable_stream".to_string(),
                     class_name: Some("ReadableStream".to_string()),
                     object: Some(Box::new(stream_expr)),
@@ -1094,18 +1134,23 @@ pub(super) fn lower_stmt_for_of_inner(
 
             // let __res = await __reader.read();
             let read_call = |reader_id: u32| {
-                Expr::Await(Box::new(Expr::NativeMethodCall {
-                    module: "readable_stream_reader".to_string(),
-                    class_name: Some("ReadableStreamDefaultReader".to_string()),
-                    object: Some(Box::new(Expr::LocalGet(reader_id))),
-                    method: "read".to_string(),
-                    args: vec![],
-                }))
+                Expr::Await(
+                    Box::new(Expr::NativeMethodCall {
+                        byte_offset: for_of_stmt.span.lo.0,
+                        module: "readable_stream_reader".to_string(),
+                        class_name: Some("ReadableStreamDefaultReader".to_string()),
+                        object: Some(Box::new(Expr::LocalGet(reader_id))),
+                        method: "read".to_string(),
+                        args: vec![],
+                    }),
+                    for_of_stmt.span.lo.0,
+                )
             };
             let res_id = ctx.fresh_local();
             ctx.locals
                 .push((format!("__res_{}", res_id), res_id, Type::Any));
             module.init.push(Stmt::Let {
+                byte_offset: for_of_stmt.span.lo.0,
                 id: res_id,
                 name: format!("__res_{}", res_id),
                 ty: Type::Any,
@@ -1130,13 +1175,14 @@ pub(super) fn lower_stmt_for_of_inner(
 
             let mut body_stmts: Vec<Stmt> = Vec::new();
             body_stmts.push(Stmt::Let {
+                byte_offset: for_of_stmt.span.lo.0,
                 id: item_id,
                 name: item_name,
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::PropertyGet {
                     byte_end: 0,
-                    byte_offset: 0,
+                    byte_offset: for_of_stmt.span.lo.0,
                     object: Box::new(Expr::LocalGet(res_id)),
                     property: "value".to_string(),
                 }),
@@ -1161,6 +1207,7 @@ pub(super) fn lower_stmt_for_of_inner(
 
             // reader.releaseLock(); — best-effort cleanup.
             module.init.push(Stmt::Expr(Expr::NativeMethodCall {
+                byte_offset: for_of_stmt.span.lo.0,
                 module: "readable_stream_reader".to_string(),
                 class_name: Some("ReadableStreamDefaultReader".to_string()),
                 object: Some(Box::new(Expr::LocalGet(reader_id))),
@@ -1218,6 +1265,7 @@ pub(super) fn lower_stmt_for_of_inner(
     let arr_expr = lower_expr(ctx, &for_of_stmt.right)?;
     let arr_expr = if is_headers_iter {
         Expr::NativeMethodCall {
+            byte_offset: for_of_stmt.span.lo.0,
             module: "Headers".to_string(),
             class_name: Some("Headers".to_string()),
             object: Some(Box::new(arr_expr)),
@@ -1379,7 +1427,12 @@ pub(super) fn lower_stmt_for_of_inner(
         // Iterate a real typed array LIVE, so element writes made by the
         // loop body are observed (test262 *-mutate.js); any other value is
         // drained by its iterator (`for_of_guard::admitted_typed_array_holder`).
-        crate::lower::for_of_guard::admitted_typed_array_holder(ctx, arr_expr, &mut module.init)
+        crate::lower::for_of_guard::admitted_typed_array_holder(
+            ctx,
+            arr_expr,
+            &mut module.init,
+            for_of_stmt.span.lo.0,
+        )
     } else if use_lazy_iter {
         // GetIterator(obj): obj[Symbol.iterator](). Drives the lazy loop below.
         arr_expr
@@ -1472,6 +1525,7 @@ pub(super) fn lower_stmt_for_of_inner(
                     ctx,
                     values.clone(),
                     &mut module.init,
+                    for_of_stmt.span.lo.0,
                 );
             }
         }
@@ -1484,12 +1538,14 @@ pub(super) fn lower_stmt_for_of_inner(
                 Type::Any
             },
             &mut module.init,
+            for_of_stmt.span.lo.0,
         )
     });
     let arr_expr = record
         .as_mut()
         .map_or(arr_expr, |r| r.guarded_get_iterator(arr_id));
     module.init.push(Stmt::Let {
+        byte_offset: for_of_stmt.span.lo.0,
         id: arr_id,
         name: format!("__arr_{}", arr_id),
         ty: arr_type,
@@ -1629,13 +1685,13 @@ pub(super) fn lower_stmt_for_of_inner(
                 } else {
                     let raw_item_expr = Expr::IndexGet {
                         element_offset: 0,
-                        byte_offset: 0,
+                        byte_offset: for_of_stmt.span.lo.0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(arr_id)),
                         index: Box::new(Expr::LocalGet(idx_id)),
                     };
                     if for_of_stmt.is_await {
-                        Expr::Await(Box::new(raw_item_expr))
+                        Expr::Await(Box::new(raw_item_expr), for_of_stmt.span.lo.0)
                     } else {
                         raw_item_expr
                     }
@@ -1656,6 +1712,7 @@ pub(super) fn lower_stmt_for_of_inner(
                             item_expr
                         };
                         vec![Stmt::Let {
+                            byte_offset: for_of_stmt.span.lo.0,
                             id,
                             name,
                             ty: elem_type.clone(),
@@ -1698,6 +1755,7 @@ pub(super) fn lower_stmt_for_of_inner(
                                     )
                                 };
                                 stmts.push(Stmt::Let {
+                                    byte_offset: for_of_stmt.span.lo.0,
                                     id,
                                     name,
                                     ty,
@@ -1745,6 +1803,7 @@ pub(super) fn lower_stmt_for_of_inner(
                     _ => {
                         let (name, id) = var_ids[0].clone();
                         vec![Stmt::Let {
+                            byte_offset: for_of_stmt.span.lo.0,
                             id,
                             name,
                             ty: Type::Any,
@@ -1754,6 +1813,7 @@ pub(super) fn lower_stmt_for_of_inner(
                                 arr_id,
                                 idx_id,
                                 result_id,
+                                for_of_stmt.span.lo.0,
                             )),
                         }]
                     }
@@ -1769,10 +1829,16 @@ pub(super) fn lower_stmt_for_of_inner(
             let mut source = if let Some(id) = binding_value {
                 Expr::LocalGet(id)
             } else {
-                lazy_or_index_elem(use_lazy_iter, arr_id, idx_id, result_id)
+                lazy_or_index_elem(
+                    use_lazy_iter,
+                    arr_id,
+                    idx_id,
+                    result_id,
+                    for_of_stmt.span.lo.0,
+                )
             };
             if for_of_stmt.is_await && !use_lazy_iter {
-                source = Expr::Await(Box::new(source));
+                source = Expr::Await(Box::new(source), for_of_stmt.span.lo.0);
             }
             for_head_binding_stmts(ctx, binding, source, elem_type.clone())?
         }
@@ -1784,6 +1850,7 @@ pub(super) fn lower_stmt_for_of_inner(
         let mut guarded_stmts = Vec::new();
         if let Some(id) = binding_value {
             full_body.push(Stmt::Let {
+                byte_offset: for_of_stmt.span.lo.0,
                 id,
                 name: format!("__forof_value_{id}"),
                 ty: Type::Any,
@@ -1824,7 +1891,7 @@ pub(super) fn lower_stmt_for_of_inner(
     // Array/String/iterator paths keep the plain `idx < length` bound.
     let condition = if map_kv_fastpath || set_fastpath {
         let (init_lets, cond, prefix) =
-            map_set_delete_safe_for_of(ctx, arr_id, idx_id, set_fastpath);
+            map_set_delete_safe_for_of(ctx, arr_id, idx_id, set_fastpath, for_of_stmt.span.lo.0);
         for s in init_lets {
             module.init.push(s);
         }
@@ -1834,11 +1901,12 @@ pub(super) fn lower_stmt_for_of_inner(
         cond
     } else {
         Expr::Compare {
+            byte_offset: for_of_stmt.span.lo.0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx_id)),
             right: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: for_of_stmt.span.lo.0,
                 object: Box::new(Expr::LocalGet(arr_id)),
                 property: "length".to_string(),
             }),
@@ -1857,6 +1925,7 @@ pub(super) fn lower_stmt_for_of_inner(
     // declined the `for…of` spelling of a loop it served in indexed form.
     module.init.push(Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: for_of_stmt.span.lo.0,
             id: idx_id,
             name: format!("__idx_{}", idx_id),
             ty: Type::Number,
@@ -1897,6 +1966,7 @@ pub(crate) fn lower_stmt_for_in(
     let obj_expr = lower_expr(ctx, &for_in_stmt.right)?;
     let obj_id = ctx.fresh_local();
     module.init.push(Stmt::Let {
+        byte_offset: for_in_stmt.span.lo.0,
         id: obj_id,
         name: format!("__forin_obj_{}", obj_id),
         ty: Type::Any,
@@ -1917,6 +1987,7 @@ pub(crate) fn lower_stmt_for_in(
 
     // Store keys array reference: let __keys = Object.keys(obj)
     module.init.push(Stmt::Let {
+        byte_offset: for_in_stmt.span.lo.0,
         id: keys_id,
         name: format!("__keys_{}", keys_id),
         ty: Type::Array(Box::new(Type::String)),
@@ -1931,15 +2002,17 @@ pub(crate) fn lower_stmt_for_in(
     // in [0, i32::MAX], the shape the integer-local, range and `i < n`
     // loop rules read, like the counter's integer literal (DYNP E18/E19).
     module.init.push(Stmt::Let {
+        byte_offset: for_in_stmt.span.lo.0,
         id: len_id,
         name: format!("__n_{}", len_id),
         ty: Type::Number,
         mutable: false,
         init: Some(Expr::Binary {
+            byte_offset: for_in_stmt.span.lo.0,
             op: crate::ir::BinaryOp::BitAnd,
             left: Box::new(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: for_in_stmt.span.lo.0,
                 object: Box::new(Expr::LocalGet(keys_id)),
                 property: "length".to_string(),
             }),
@@ -1953,7 +2026,7 @@ pub(crate) fn lower_stmt_for_in(
     // Prepend the key binding/assignment: <head> = __keys[__i]
     let key_source = Expr::IndexGet {
         element_offset: 0,
-        byte_offset: 0,
+        byte_offset: for_in_stmt.span.lo.0,
         byte_end: 0,
         object: Box::new(Expr::LocalGet(keys_id)),
         index: Box::new(Expr::LocalGet(idx_id)),
@@ -1964,12 +2037,13 @@ pub(crate) fn lower_stmt_for_in(
     }
 
     // Skip keys deleted from the receiver before they are visited.
-    let loop_body = guard_for_in_body(obj_id, keys_id, idx_id, loop_body);
+    let loop_body = guard_for_in_body(obj_id, keys_id, idx_id, loop_body, for_in_stmt.span.lo.0);
 
     // Create the for loop:
     // for (let __i = 0; __i < __keys.length; __i++) { ... }
     module.init.push(Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: for_in_stmt.span.lo.0,
             id: idx_id,
             name: format!("__idx_{}", idx_id),
             ty: Type::Number,
@@ -1977,6 +2051,7 @@ pub(crate) fn lower_stmt_for_in(
             init: Some(Expr::Integer(0)),
         })),
         condition: Some(Expr::Compare {
+            byte_offset: for_in_stmt.span.lo.0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx_id)),
             right: Box::new(Expr::LocalGet(len_id)),

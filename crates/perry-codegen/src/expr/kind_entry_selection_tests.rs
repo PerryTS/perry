@@ -13,6 +13,7 @@ const R: u32 = 2;
 
 fn local(id: u32, mutable: bool, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Any,
@@ -106,6 +107,7 @@ fn an_unconstructed_map_clear_tests_its_brand_and_calls_on_a_miss() {
         "kind_entry_unconstructed_size",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: M,
                 name: format!("v{M}"),
                 ty: map_type,

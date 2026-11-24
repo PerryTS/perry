@@ -16,6 +16,7 @@ impl<'a> FuncEmitCtx<'a> {
                 key,
                 receiver,
                 args,
+                ..
             } if self.current_class.is_none() => {
                 // Call frame: 0 the callee read below, 1 receiver, 2 key, 3 args.
                 self.emit_frame_begin(func, 4);
@@ -348,7 +349,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_member_update(func, "class_get_field", "class_set_field", op, *prefix);
             }
 
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 self.emit_frame_begin(func, 2);
                 self.emit_store_arg(func, 0, object);
                 self.emit_store_arg(func, 1, index);
@@ -510,7 +511,7 @@ impl<'a> FuncEmitCtx<'a> {
                     self.emit_memcall_void(func, "object_delete", 2);
                     func.instruction(&Instruction::I64Const(TAG_TRUE as i64));
                 }
-                Expr::IndexGet { object, index, .. } => {
+                Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                     self.emit_frame_begin(func, 2);
                     self.emit_store_arg(func, 0, object);
                     self.emit_store_arg(func, 1, index);

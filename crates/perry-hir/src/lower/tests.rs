@@ -666,7 +666,7 @@ fn test_native_module_binding_value_named_import() {
         "path".to_string(),
         Some("relative".to_string()),
     );
-    let value = super::lower_expr::native_module_binding_value(&ctx, "relative");
+    let value = super::lower_expr::native_module_binding_value(&ctx, "relative", 0);
     assert!(matches!(
         value,
         crate::ir::Expr::Call { callee, args, .. }
@@ -716,7 +716,7 @@ fn test_native_module_binding_value_os_eol() {
     // used directly or as a shorthand property.
     let mut ctx = make_ctx();
     ctx.register_native_module("EOL".to_string(), "os".to_string(), Some("EOL".to_string()));
-    let value = super::lower_expr::native_module_binding_value(&ctx, "EOL");
+    let value = super::lower_expr::native_module_binding_value(&ctx, "EOL", 0);
     assert!(matches!(value, crate::ir::Expr::OsEOL));
 }
 
@@ -727,7 +727,7 @@ fn test_native_module_binding_value_namespace() {
     // property must match what the bare identifier reference produces.
     let mut ctx = make_ctx();
     ctx.register_native_module("crypto".to_string(), "crypto".to_string(), None);
-    let value = super::lower_expr::native_module_binding_value(&ctx, "crypto");
+    let value = super::lower_expr::native_module_binding_value(&ctx, "crypto", 0);
     assert!(matches!(value, crate::ir::Expr::NativeModuleRef(ref m) if m == "crypto"));
 }
 
@@ -755,7 +755,7 @@ export function perfHooksDefault() {
             object,
             property,
             ..
-        }))] if property == "default"
+        }), _)] if property == "default"
             && matches!(object.as_ref(), crate::ir::Expr::NativeModuleRef(module) if module == "perf_hooks")
     ));
 }
@@ -788,7 +788,7 @@ export function perfHooksDefaultImport() {
             object,
             property,
             ..
-        }))] if property == "default"
+        }), _)] if property == "default"
             && matches!(object.as_ref(), crate::ir::Expr::NativeModuleRef(module) if module == "perf_hooks")
     ));
 }
@@ -1070,7 +1070,7 @@ fn test_perry_ui_state_value_uses_native_getter() {
         .find(|function| function.name == "main")
         .expect("main function");
     let value = main.body.iter().find_map(|stmt| match stmt {
-        Stmt::Return(Some(expr)) => Some(expr),
+        Stmt::Return(Some(expr), _) => Some(expr),
         _ => None,
     });
 
@@ -1082,7 +1082,7 @@ fn test_perry_ui_state_value_uses_native_getter() {
                 class_name: None,
                 object: Some(_),
                 method,
-                args,
+                args, ..
             }) if module == "perry/ui" && method == "value" && args.is_empty()
         ),
         "State.value must lower through perry_ui_state_get, got: {value:#?}"

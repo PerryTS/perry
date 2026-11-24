@@ -118,7 +118,11 @@ pub(crate) fn peel_new_callee(mut expr: &ast::Expr) -> &ast::Expr {
     }
 }
 
-pub(crate) fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr>) -> Expr {
+pub(crate) fn nonconstructable_builtin_throw_expr(
+    name: &str,
+    mut args: Vec<Expr>,
+    byte_offset: u32,
+) -> Expr {
     let helper = match name {
         "Symbol" => "js_throw_symbol_constructor_type_error",
         "BigInt" => "js_throw_bigint_constructor_type_error",
@@ -135,7 +139,7 @@ pub(crate) fn nonconstructable_builtin_throw_expr(name: &str, mut args: Vec<Expr
         }),
         args: Vec::new(),
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     };
 
     if args.is_empty() {
@@ -269,7 +273,8 @@ pub(crate) fn lower_imported_worker_threads_new(
     match export.as_deref() {
         Some("Worker") => lower_worker_new(ctx, new_expr).map(Some),
         Some(name) if is_worker_messaging_constructor_name(name) => {
-            lower_worker_messaging_new(ctx, name, new_expr.args.as_deref()).map(Some)
+            lower_worker_messaging_new(ctx, name, new_expr.args.as_deref(), new_expr.span.lo.0)
+                .map(Some)
         }
         _ => Ok(None),
     }
@@ -279,11 +284,12 @@ pub(crate) fn lower_worker_messaging_new(
     ctx: &mut LoweringContext,
     class_name: &str,
     args: Option<&[ast::ExprOrSpread]>,
+    byte_offset: u32,
 ) -> Result<Expr> {
     if class_name == "BroadcastChannel" {
         let callee = Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: byte_offset,
             object: Box::new(Expr::NativeModuleRef("worker_threads".to_string())),
             property: class_name.to_string(),
         });
@@ -303,6 +309,7 @@ pub(crate) fn lower_worker_messaging_new(
         });
     }
     Ok(Expr::NativeMethodCall {
+        byte_offset: byte_offset,
         module: "worker_threads".to_string(),
         class_name: None,
         object: None,
@@ -432,7 +439,7 @@ pub(crate) fn global_property_new_dynamic(name: &str, args: Vec<Expr>, byte_offs
         byte_end: 0,
         callee: Box::new(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: byte_offset,
             object: Box::new(Expr::GlobalGet(0)),
             property: name.to_string(),
         }),

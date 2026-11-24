@@ -2497,6 +2497,13 @@ const __memDispatch = {
     }
     return [value];
   },
+  // `[a, , b]`: a hole adds to the length without creating an element.
+  array_push_hole: (arr) => { if (Array.isArray(arr)) arr.length += 1; return arr; },
+  // `a.keys()` / `a.entries()` / `a.values()`: the method the receiver holds, which a
+  // program may have replaced with a Perry closure.
+  array_keys: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'keys'), []),
+  array_entries: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'entries'), []),
+  array_values: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'values'), []),
   // Every argument in one `push` call, so `a.push(x, y)` is the single call JS makes.
   array_push: (arr, ...values) => { if (Array.isArray(arr)) arr.push(...values); return arr; },
   array_pop: (arr) => { if (!Array.isArray(arr) || arr.length === 0) return undefined; return arr.pop(); },
@@ -2535,6 +2542,17 @@ const __memDispatch = {
   array_flat: (arr) => Array.isArray(arr) ? arr.flat() : [],
   array_is_array: (val) => Array.isArray(val) ? 1 : 0,
   array_from: (val) => Array.from(val),
+  // `Array.from(value, mapFn, thisArg)`: mapFn receives (element, index), with `this`
+  // bound to thisArg. An undefined mapFn maps nothing. An exception mapFn left pending
+  // is thrown here, so the host stops and closes the iterator.
+  array_from_mapped: (val, fn, thisArg) => {
+    if (fn === undefined) return Array.from(val);
+    return Array.from(val, (v, i) => {
+      const mapped = __memDispatch.reflect_apply(fn, thisArg, [v, i]);
+      __memDispatch.propagate_exception(true);
+      return mapped;
+    });
+  },
   // `[...source]`: any iterable source (a Set, a Map, an iterator) spreads its values.
   // One push per value: `push(...source)` passes each value as an argument and
   // overflows the stack for a large source.
@@ -2739,6 +2757,24 @@ const __memDispatch = {
     arr.sort((a, b) => { const r = call(__jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
     return arr;
   },
+  // `reduceRight`, the change-by-copy methods and `copyWithin` run the host's own, so
+  // hole handling, argument coercions and errors are the host's. `initial` is empty when
+  // the call passes none: an explicit undefined is an initial value.
+  array_reduce_right: (arr, cb, ...initial) => {
+    const call = __arrayCallback(cb);
+    const fn = call ? (...args) => __bitsToJsValue(call(...args.map(__jsValueToBits))) : cb;
+    return Array.prototype.reduceRight.call(arr, fn, ...initial);
+  },
+  array_to_reversed: (arr) => Array.prototype.toReversed.call(arr),
+  array_to_sorted: (arr) => Array.prototype.toSorted.call(arr),
+  array_to_sorted_cmp: (arr, cb) => {
+    const call = __arrayCallback(cb);
+    const cmp = call ? (a, b) => __bitsToJsValue(call(__jsValueToBits(a), __jsValueToBits(b))) : cb;
+    return Array.prototype.toSorted.call(arr, cmp);
+  },
+  array_to_spliced: (arr, start, deleteCount, ...items) => Array.prototype.toSpliced.call(arr, start, deleteCount, ...items),
+  array_with: (arr, index, value) => Array.prototype.with.call(arr, index, value),
+  array_copy_within: (arr, target, start, end) => Array.prototype.copyWithin.call(arr, target, start, end),
   array_some: (arr, cb) => {
     const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
     if (!call) return 0;

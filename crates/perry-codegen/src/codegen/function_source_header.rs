@@ -254,6 +254,7 @@ mod tests {
 
     fn param(name: &str, rest: bool) -> Param {
         Param {
+            byte_offset: 0,
             id: 1,
             name: name.to_string(),
             ty: Type::Any,
@@ -284,6 +285,7 @@ mod tests {
         (
             func_id,
             Expr::Closure {
+                byte_offset: 0,
                 func_id,
                 params,
                 return_type: Type::Any,

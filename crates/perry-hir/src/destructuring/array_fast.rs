@@ -21,9 +21,9 @@ impl ArraySource {
         }
     }
 
-    pub(crate) fn next_init(&self, iter_id: LocalId) -> Expr {
+    pub(crate) fn next_init(&self, iter_id: LocalId, byte_offset: u32) -> Expr {
         match self {
-            Self::Iterator(_) => crate::lower::iterator_next_method_call(iter_id),
+            Self::Iterator(_) => crate::lower::iterator_next_method_call(iter_id, byte_offset),
             Self::Guarded(plan) => plan.next_init(iter_id),
         }
     }
@@ -57,14 +57,17 @@ impl ArraySource {
         iter: LocalId,
         next: LocalId,
         done: LocalId,
+        byte_offset: u32,
     ) -> Vec<Stmt> {
         if let Self::Iterator(_) = self {
             return vec![Stmt::Let {
+                byte_offset,
                 id,
                 name,
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::NativeMethodCall {
+                    byte_offset,
                     module: "__perry_runtime".into(),
                     class_name: None,
                     object: None,
@@ -91,6 +94,7 @@ impl ArraySource {
         ctx.locals.push((value_name.clone(), value, Type::Any));
         vec![
             Stmt::Let {
+                byte_offset,
                 id,
                 name,
                 ty,
@@ -98,6 +102,7 @@ impl ArraySource {
                 init: Some(Expr::Array(vec![], None)),
             },
             Stmt::Let {
+                byte_offset,
                 id: value,
                 name: value_name,
                 ty: Type::Any,
@@ -106,6 +111,7 @@ impl ArraySource {
             },
             Stmt::If {
                 condition: Expr::Compare {
+                    byte_offset,
                     op: CompareOp::Eq,
                     left: Box::new(Expr::LocalGet(done)),
                     right: Box::new(Expr::Bool(true)),
@@ -114,11 +120,17 @@ impl ArraySource {
                 else_branch: Some(vec![Stmt::While {
                     condition: Expr::Bool(true),
                     body: vec![Stmt::If {
-                        condition: plan.step(crate::lower::iterator_step_call(iter, next, value)),
+                        condition: plan.step(crate::lower::iterator_step_call(
+                            iter,
+                            next,
+                            value,
+                            byte_offset,
+                        )),
                         then_branch: vec![Stmt::Break],
                         else_branch: Some(vec![Stmt::Expr(Expr::LocalSet(
                             id,
                             Box::new(Expr::NativeMethodCall {
+                                byte_offset,
                                 module: "__perry_runtime".into(),
                                 class_name: None,
                                 object: None,
@@ -157,28 +169,31 @@ pub(crate) fn plan_for_literal(
     ctx: &mut LoweringContext,
     elems: &[&ast::Expr],
     out: &mut Vec<Stmt>,
+    byte_offset: u32,
 ) -> Result<FastPlan> {
     let values = elems
         .iter()
         .map(|e| lower_expr(ctx, e))
         .collect::<Result<Vec<_>>>()?;
-    Ok(FastPlan::literal(ctx, values, out))
+    Ok(FastPlan::literal(ctx, values, out, byte_offset))
 }
 
 pub(crate) fn plan_for_proven_array(
     ctx: &mut LoweringContext,
     source: Expr,
     out: &mut Vec<Stmt>,
+    byte_offset: u32,
 ) -> FastPlan {
-    FastPlan::new(ctx, source, out)
+    FastPlan::new(ctx, source, out, byte_offset)
 }
 
 pub(crate) fn plan_for_unproven_source(
     ctx: &mut LoweringContext,
     source: Expr,
     out: &mut Vec<Stmt>,
+    byte_offset: u32,
 ) -> FastPlan {
-    FastPlan::new(ctx, source, out)
+    FastPlan::new(ctx, source, out, byte_offset)
 }
 
 /// A spread-free array literal's element expressions, or `None` for anything
@@ -262,20 +277,21 @@ pub(crate) fn plan_for_source(
     ctx: &mut LoweringContext,
     _elems: &[Option<ast::Pat>],
     source: &ast::Expr,
+    byte_offset: u32,
 ) -> Result<Option<(Vec<Stmt>, FastPlan)>> {
     let mut setup = Vec::new();
     if let Some(literal) = spread_free_array_literal(source) {
-        let plan = plan_for_literal(ctx, &literal, &mut setup)?;
+        let plan = plan_for_literal(ctx, &literal, &mut setup, byte_offset)?;
         return Ok(Some((setup, plan)));
     }
     if proven_array(ctx, source) {
         let lowered = lower_expr(ctx, source)?;
-        let plan = plan_for_proven_array(ctx, lowered, &mut setup);
+        let plan = plan_for_proven_array(ctx, lowered, &mut setup, byte_offset);
         return Ok(Some((setup, plan)));
     }
     if may_be_array_at_runtime(ctx, source) {
         let lowered = lower_expr(ctx, source)?;
-        let plan = plan_for_unproven_source(ctx, lowered, &mut setup);
+        let plan = plan_for_unproven_source(ctx, lowered, &mut setup, byte_offset);
         return Ok(Some((setup, plan)));
     }
     Ok(None)
