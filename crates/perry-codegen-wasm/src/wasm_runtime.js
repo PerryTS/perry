@@ -2462,10 +2462,11 @@ const __memDispatch = {
   },
   // `[a, , b]`: a hole adds to the length without creating an element.
   array_push_hole: (arr) => { if (Array.isArray(arr)) arr.length += 1; return arr; },
-  // `a.keys()` / `a.entries()` / `a.values()`: the receiver's own iterator methods.
-  array_keys: (arr) => arr.keys(),
-  array_entries: (arr) => arr.entries(),
-  array_values: (arr) => arr.values(),
+  // `a.keys()` / `a.entries()` / `a.values()`: the method the receiver holds, which a
+  // program may have replaced with a Perry closure.
+  array_keys: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'keys'), []),
+  array_entries: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'entries'), []),
+  array_values: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'values'), []),
   // Every argument in one `push` call, so `a.push(x, y)` is the single call JS makes.
   array_push: (arr, ...values) => { if (Array.isArray(arr)) arr.push(...values); return arr; },
   array_pop: (arr) => { if (!Array.isArray(arr) || arr.length === 0) return undefined; return arr.pop(); },
