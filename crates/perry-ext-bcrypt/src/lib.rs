@@ -105,14 +105,15 @@ pub unsafe extern "C" fn js_bcrypt_compare(
 }
 
 /// The cost a `rounds` argument names, as node's `genSaltSync` normalizes it:
-/// a missing (`undefined`, NaN) or zero argument means the default of 10, and
-/// any other value is clamped to bcrypt's 4..=31.
+/// a missing (`undefined`, NaN) or zero argument means the default of 10. Any
+/// other value wraps to a `u8` (node's addon narrows it there, `±Infinity` to
+/// 0) and is then clamped to bcrypt's 4..=31.
 fn rounds_or_default(rounds: f64) -> u32 {
-    if rounds.is_finite() && rounds != 0.0 {
-        rounds.clamp(4.0, 31.0) as u32
-    } else {
-        10
+    if rounds.is_nan() || rounds == 0.0 {
+        return 10;
     }
+    // `rem_euclid` of an infinity is NaN, which casts to 0.
+    (rounds.trunc().rem_euclid(256.0) as u32).clamp(4, 31)
 }
 
 /// A `$2b$<cost>$<22-char-salt>` salt. The `bcrypt` crate exposes no salt
