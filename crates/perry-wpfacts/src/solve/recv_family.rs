@@ -5,9 +5,13 @@
 //! class prototype or class object, the literal, the object an accessor
 //! literal is defined on), the objects it is stored onto under that key
 //! (copy targets), every object whose prototypes hold a member, and the
-//! Proxies whose target holds a member. A modelled call or store that
-//! puts it outside that shape (a receiver outside the family, a store
-//! under another key) leaves it ⊤ `this` as before: one way, monotone.
+//! Proxies whose target holds a member. An object that holds it under
+//! another key, known or computed, is a copy target too (CWN ruling under
+//! the 11-23 premise "objects it was copied onto": whoever holds `h` can
+//! call `h[k]()` on it), a property descriptor record included. A modelled
+//! call outside the family, or a store into an object from unmodelled code
+//! (⊤, no token: that object may be `this`), leaves it ⊤ `this` as before:
+//! one way, monotone.
 //! The runtime checks the family where it invokes a handed method or
 //! accessor (the next K3 step); this solve assumes that check.
 //!
@@ -64,6 +68,8 @@ pub struct RecvFam {
     fam_of: FxHashMap<Tok, Vec<FnIdx>>,
     /// Objects whose prototypes hold ⊤.
     top_proto: Vec<Tok>,
+    /// Nodes stored into ⊤ (`rfam_top_holder`).
+    pub(crate) top_held: FxHashSet<NodeId>,
     /// `settle_family` has looked at the summary instances and tokens
     /// before these.
     inst_cursor: usize,
@@ -97,15 +103,6 @@ impl Model {
     pub(crate) fn rfam_watch(&mut self, n: NodeId, t: Tok, a: Atom, kind: u8) {
         self.nodes[n as usize].fam_watch = kind;
         self.rfam.owner.insert(n, (t, a));
-    }
-
-    /// `n` is an accessor slot of a property descriptor record (6.2.6.4
-    /// FromPropertyDescriptor `get` / `set`): it holds the property's
-    /// accessor as that, no member of the record; the key it gets is the
-    /// one a define installs it under (`Cons::Accessor`).
-    pub(crate) fn rfam_unwatch(&mut self, n: NodeId) {
-        self.nodes[n as usize].fam_watch = 0;
-        self.rfam.owner.remove(&n);
     }
 
     /// The tokens of `ts` arriving at node `n` the family reads.
@@ -159,8 +156,8 @@ impl Model {
         }
     }
 
-    /// `h` holds function token `ft` under key `a` (a field or accessor).
-    pub(crate) fn rfam_holding(&mut self, ft: Tok, h: Tok, a: Atom) {
+    /// `h` holds function token `ft` under key `_key` (a field or accessor).
+    pub(crate) fn rfam_holding(&mut self, ft: Tok, h: Tok, _key: Atom) {
         let TokKind::Func(f, _) = self.toks[ft as usize] else {
             return;
         };
@@ -170,21 +167,27 @@ impl Model {
         if r.off {
             return;
         }
-        if r.keys.contains(&a) {
-            self.rfam_member(f, h);
-        } else {
-            let why = if self.rfam.explain_off {
-                let homes: Vec<&str> = r.keys.iter().map(|&k| self.key_str(k)).collect();
-                format!(
-                    "held by {h} under another key {a}\t{}\t{}\t{}",
-                    self.tok_name(h),
-                    self.key_str(a),
-                    homes.join("|")
-                )
-            } else {
-                String::new()
-            };
-            self.rfam_off(f, || why);
+        // Under its home key or another one (`_key`): a copy target.
+        self.rfam_member(f, h);
+    }
+
+    /// Store `src` into an object from unmodelled code (⊤): a method or
+    /// accessor that reaches it, now or later (`Cons::TopSink` on `src`),
+    /// may run on that object, so it leaves its family.
+    pub(crate) fn rfam_top_holder(&mut self, src: NodeId) {
+        if !self.rfam.top_held.insert(src) {
+            return;
+        }
+        let ts = self.nodes[src as usize].pts.to_sorted();
+        self.rfam_top_held(&ts);
+    }
+
+    /// Tokens arrived at a node stored into ⊤ (`rfam_top_holder`).
+    pub(crate) fn rfam_top_held(&mut self, ts: &[Tok]) {
+        for &t in ts {
+            if let TokKind::Func(f, _) = self.toks[t as usize] {
+                self.rfam_off(f, || "stored into an object from unmodelled code".into());
+            }
         }
     }
 
@@ -297,14 +300,6 @@ impl Model {
     /// never its receiver there.
     fn fam_this(&self, t: Tok) -> bool {
         !matches!(self.toks[t as usize], TokKind::Proto(_)) && self.escaped.contains_key(&t)
-    }
-
-    /// `PERRY_K3_FAMOFF` (report only): a key's spelling.
-    fn key_str(&self, a: Atom) -> &str {
-        if a == NO_HOME_KEY {
-            return "<any key>";
-        }
-        self.atoms.get(a as usize).map_or("<?>", |s| s.as_str())
     }
 
     /// `PERRY_K3_FAMOFF` (report only): where the chain of `h` comes from.

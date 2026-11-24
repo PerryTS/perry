@@ -126,7 +126,6 @@ pub(crate) fn own_descriptor(m: &mut Model, o: NodeId, vals: NodeId, t: Tok) {
     for (setter, name) in [(false, "get"), (true, "set")] {
         let a = m.atom(name);
         let f = m.field(t, a);
-        m.rfam_unwatch(f);
         m.cons(o, Cons::OwnDescAcc { setter, dst: f });
     }
     for name in ["writable", "enumerable", "configurable"] {

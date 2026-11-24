@@ -124,7 +124,10 @@ fn k3b_t2_escaped_literal_method_this_is_its_family() {
     let (v, top, r) = recv_after(&src, "/*A*/", "w");
     assert!(!top && r.len() == 1, "an escaped literal method's this is ⊤: {v} {r:?}");
     let (v, top, r) = recv_after(&src, "/*B*/", "w");
-    assert!(!top && r.iter().all(|n| n.contains("lit")), "an escaped literal getter's this is ⊤: {v} {r:?}");
+    assert!(!top && r.iter().all(|n| n.contains("lit") || n.contains("descriptor")), "an escaped literal getter's this is ⊤: {v} {r:?}");
+    // The escaped descriptor record holds the getter under `get`: whoever
+    // holds the record can call `d.get()` on it (a copy target).
+    assert!(r.iter().any(|n| n.contains("descriptor")), "the escaped descriptor record is missing from the getter's this: {r:?}");
 }
 
 /// T3: a method copied onto another class's prototype under its key runs
@@ -149,11 +152,24 @@ fn k3b_t3_copy_target_joins_the_family() {
 #[test]
 fn k3b_t7_new_function_instance_chain_joins_the_family() {
     let src = format!(
-        "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nfunction F(this: any) {{ this.x = 5; }}\n(F.prototype as any).m = P.prototype.m;\nnew P().m(); sink(new (F as any)());\nsink(P.prototype.m);\n"
+        "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nfunction F(this: any) {{ this.x = 5; }}\n(F.prototype as any).m = P.prototype.m;\nnew P().m(); const i = new (F as any)(); i.m();\nsink(P.prototype.m);\n"
     );
     let (v, top, r) = recv_after(&src, "/*A*/", "x");
     assert!(!top, "a copied method's this is ⊤: {v} {r:?}");
     assert!(r.iter().any(|n| n.contains("F")), "the new F() instances are missing from this: {r:?}");
+}
+
+/// T7b control: an escaped `new F()` instance hands unknown code `F`
+/// (`i.constructor`), which may replace the writable `F.prototype`
+/// (10.2.6 MakeConstructor writablePrototype true): the copy's holder may
+/// be an object from unmodelled code, so `this` is ⊤.
+#[test]
+fn k3b_t7b_copy_onto_writable_prototype_of_escaped_fn_keeps_top() {
+    let src = format!(
+        "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nfunction F(this: any) {{ this.x = 5; }}\n(F.prototype as any).m = P.prototype.m;\nnew P().m(); sink(new (F as any)());\nsink(P.prototype.m);\n"
+    );
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(top && !v.starts_with("T0"), "a copy onto an unknown holder lost its ⊤ this: {v} {r:?}");
 }
 
 /// T2c (CWN ruling 1): a literal property whose value is a function
@@ -189,14 +205,16 @@ fn k3b_t4_this_outside_the_family_keeps_top() {
     assert!(top && !v.starts_with("T0"), "a method called on a non-member lost its ⊤ this: {v} {r:?}");
 }
 
-/// T4b control: stored under another key, the method keeps ⊤ `this`.
+/// T4b (CWN ruling, family premise 11-23 "objects it was copied onto"):
+/// an object holding the method under another key is a copy target: its
+/// program call runs on it, the family stays on.
 #[test]
-fn k3b_t4b_stored_under_another_key_keeps_top() {
+fn k3b_t4b_holder_under_another_key_joins_the_family() {
     let src = format!(
         "{DECL}class P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nconst p = new P();\np.m();\nsink(P.prototype.m);\nconst h = {{ h: p.m }};\nh.h();\n"
     );
     let (v, top, r) = recv_after(&src, "/*A*/", "x");
-    assert!(top && !v.starts_with("T0"), "a method stored under another key lost its ⊤ this: {v} {r:?}");
+    assert!(!top && r.len() == 2, "a holder under another key switched the family off: {v} {r:?}");
 }
 
 // K3BUILD7: a class constructor's `prototype` is non-writable and
@@ -222,6 +240,22 @@ fn k3b_t9b_subclass_of_escaped_class_has_no_top_chain() {
     assert!(!top && r.iter().all(|n| n.starts_with("proto:")), "an escaped class's subclass chain holds more than its prototype: {v} {r:?}");
 }
 
+/// T10: an escaped property descriptor record (6.2.6.4
+/// FromPropertyDescriptor) holds the method under `value`: whoever holds
+/// the record can call `d.value()` on it, so it joins the family; the
+/// program's own `d.value()` runs on it too.
+#[test]
+fn k3b_t10_descriptor_record_joins_the_family() {
+    for tail in ["sink(o.m); sink(d); sink(o);", "sink(d); sink(o);"] {
+        let src = format!(
+            "\"use strict\";\n{DECL}const o = {{ w: 2, m() {{ return /*A*/ this.w; }} }};\no.m();\nconst d: any = Object.getOwnPropertyDescriptor(o, \"m\");\nd.value();\n{tail}\n"
+        );
+        let (v, top, r) = recv_after(&src, "/*A*/", "w");
+        assert!(!top && r.len() == 2, "{tail}: the descriptor record is no family member: {v} {r:?}");
+        assert!(r.iter().any(|n| n.contains("descriptor")), "{tail}: the record is missing from this: {r:?}");
+    }
+}
+
 /// T11 (owner 11-24): the bare class prototype is no object of its class
 /// family for `this`: an escaped `P.prototype` is no receiver there.
 #[test]
@@ -231,4 +265,26 @@ fn k3b_t11_bare_prototype_is_no_receiver() {
     );
     let (v, top, r) = recv_after(&src, "/*A*/", "x");
     assert!(!top && !r.is_empty() && !r.iter().any(|n| n.starts_with("proto:")), "the bare prototype is in the escaped run's this: {v} {r:?}");
+}
+
+/// T12 (CWN ruling): a method stored under a computed key into an object
+/// that escapes: `this` = its family and that object, no ⊤.
+#[test]
+fn k3b_t12_computed_key_holder_joins_the_family() {
+    let src = format!(
+        "{DECL}declare const k: string;\nclass P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nconst p = new P();\np.m();\nconst h: any = {{}};\nh[k] = p.m;\nsink(h);\n"
+    );
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(!top && r.len() == 2, "a computed-key holder switched the family off: {v} {r:?}");
+}
+
+/// T12 control: a method stored into an object from unmodelled code (⊤,
+/// no token): that object may be `this`, so `this` is ⊤.
+#[test]
+fn k3b_t12b_stored_into_top_keeps_top() {
+    let src = format!(
+        "{DECL}declare const k: string;\ndeclare function get(): any;\nclass P {{ x = 1; m() {{ return /*A*/ this.x; }} }}\nconst p = new P();\np.m();\nget()[k] = p.m;\n"
+    );
+    let (v, top, r) = recv_after(&src, "/*A*/", "x");
+    assert!(top && !v.starts_with("T0"), "a method stored into ⊤ lost its ⊤ this: {v} {r:?}");
 }
