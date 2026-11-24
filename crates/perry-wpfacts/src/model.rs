@@ -1720,8 +1720,9 @@ pub struct Model {
     /// `FactsConfig::native_externs` (ASSUMED, owner 2026-11-16).
     pub native_externs: std::collections::BTreeMap<String, crate::NativeResult>,
     /// The extern calls the native-extern assumption modeled: (module,
-    /// byte offset), reported as `ProgramFacts::native_extern_sites`.
-    pub native_extern_fired: Vec<(u32, u32)>,
+    /// the call's site; `None`: a spread call, which has none), reported as
+    /// `ProgramFacts::native_extern_sites`.
+    pub native_extern_fired: Vec<(u32, Option<u32>)>,
     /// −0 tolerance (RFC §10.3 as amended, PR D; `zero_sign`): the interval
     /// rules give `0 * negative`, `-x` and `%` their integer hull with the
     /// `-0` bit, and a node may keep an integer interval while it may hold

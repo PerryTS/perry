@@ -34,21 +34,23 @@ use crate::types::{LlvmType, DOUBLE, I1, I32, I64};
 use crate::verify_facts::Fact;
 
 thread_local! {
-    /// The byte offset of the direct call being lowered (`with_direct_call`).
-    static DIRECT_CALL: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    /// The site of the direct call being lowered (`with_direct_call`).
+    static DIRECT_CALL: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
 }
 
-/// Lower direct call `f` with its own byte offset visible to
-/// `try_emit_typed_call` (the `typed_calls` key is the call's HIR offset).
-pub(crate) fn with_direct_call<R>(byte_offset: u32, f: impl FnOnce() -> R) -> R {
-    let saved = DIRECT_CALL.with(|s| s.replace(byte_offset));
+/// Lower direct call `f` with its own site visible to `try_emit_typed_call`
+/// (the `typed_calls` key is the call's HIR offset; a split region's call
+/// has no site).
+pub(crate) fn with_direct_call<R>(site: Option<u32>, f: impl FnOnce() -> R) -> R {
+    let saved = DIRECT_CALL.with(|s| s.replace(site));
     let out = f();
     DIRECT_CALL.with(|s| s.set(saved));
     out
 }
 
-/// The byte offset of the direct call being lowered (0: none).
-pub(crate) fn direct_call_offset() -> u32 {
+/// The site of the direct call being lowered (`None`: no call, or one with
+/// no site).
+pub(crate) fn direct_call_offset() -> Option<u32> {
     DIRECT_CALL.with(|s| s.get())
 }
 
@@ -65,7 +67,7 @@ thread_local! {
 pub(crate) fn with_method_site<R>(callee: &Expr, f: impl FnOnce() -> R) -> R {
     let off = match callee {
         Expr::PropertyGet { byte_offset, .. } => *byte_offset,
-        _ => direct_call_offset(),
+        _ => direct_call_offset().unwrap_or(0),
     };
     let saved = METHOD_SITE.with(|s| s.replace(off));
     let out = f();
@@ -816,9 +818,8 @@ pub(crate) fn try_emit_typed_call(
     args: &[Expr],
     lowered: &[String],
 ) -> Option<String> {
-    let offset = DIRECT_CALL.with(|s| s.get());
-    if offset == 0
-        || ctx.wpfacts_off
+    let offset = DIRECT_CALL.with(|s| s.get())?;
+    if ctx.wpfacts_off
         || ctx.wpfacts.interp_guard
         || ctx.wpfacts.typed_calls.get(&offset) != Some(&fid)
     {

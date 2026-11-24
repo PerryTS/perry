@@ -209,7 +209,10 @@ fn demand_on_a_read_after_an_assignment_is_demand_on_the_local() {
                let acc = 0.5;\n\
                for (let i = 0; i < 4; i++) { const k = i + 1; acc = acc * 1.5 + a[k & 3]; }\n\
                console.log(acc);";
-    for s in [src.to_string(), format!("function main() {{ {src} }}\nmain();")] {
+    for s in [
+        src.to_string(),
+        format!("function main() {{ {src} }}\nmain();"),
+    ] {
         let r = reps(&s);
         assert_eq!(r["k"], Rep::I32, "{s}: {r:?}");
     }

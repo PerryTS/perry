@@ -192,7 +192,9 @@ fn control_optional_chain_does_not_throw() {
 /// top-level `u` no function writes is the body's own.
 #[test]
 fn control_top_level_optional_chain_does_not_throw() {
-    let pf = one(&format!("{C}let u: any = undefined;\nconsole.log(u?.view, u?.go(1));\n"));
+    let pf = one(&format!(
+        "{C}let u: any = undefined;\nconsole.log(u?.view, u?.go(1));\n"
+    ));
     let r = at(&pf, "view", false);
     let k = at(&pf, "go", true);
     assert!(

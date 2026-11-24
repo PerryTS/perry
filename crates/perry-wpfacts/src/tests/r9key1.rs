@@ -94,10 +94,7 @@ fn r9key1_f1b_three_tracks_read_named_members() {
     let pf = facts(&tracks(&R9));
     let y = recv(&pf, "y");
     eprintln!("R9KEY1 F1b y={y:?}");
-    assert_eq!(
-        y,
-        v(&["U", "V", "W", "null (TypeError)"])
-    );
+    assert_eq!(y, v(&["U", "V", "W", "null (TypeError)"]));
 }
 
 fn is_const(want: &str, e: &str) -> Vec<String> {

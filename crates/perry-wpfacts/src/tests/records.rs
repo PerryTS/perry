@@ -578,6 +578,10 @@ fn a_record_array_in_a_function_body_is_admitted() {
         "const x = xs[0];\nconsole.log(x === undefined ? 0 : x.a);",
     ] {
         let src = format!("function main() {{ {U}{XS}{body} }}\nmain();\n");
-        assert_eq!(verdict(&src, &["a", "b"], on()).as_deref(), Ok("a:f64,b:imm"), "{src}");
+        assert_eq!(
+            verdict(&src, &["a", "b"], on()).as_deref(),
+            Ok("a:f64,b:imm"),
+            "{src}"
+        );
     }
 }

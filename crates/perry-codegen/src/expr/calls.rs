@@ -849,14 +849,14 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 
         // -------- Calls --------
         // A split region's call lowers as the direct call it is, no site.
-        Expr::RegionCall { callee, args } => lower_plain_call(ctx, callee, args, 0, 0),
+        Expr::RegionCall { callee, args } => lower_plain_call(ctx, callee, args, None),
         Expr::Call {
             callee,
             args,
             byte_offset,
             byte_end,
             ..
-        } => lower_plain_call(ctx, callee, args, *byte_offset, *byte_end),
+        } => lower_plain_call(ctx, callee, args, Some((*byte_offset, *byte_end))),
 
         // -------- Proxy / Reflect (metaprogramming) --------
         _ => unreachable!("expr/mod.rs dispatched a variant not handled by this submodule"),
@@ -864,13 +864,12 @@ fn lower_call_expr(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
 }
 
 /// A call with no special lowering: its callee and arguments, at its site
-/// (`byte_offset`/`byte_end`; 0 for a split region's call).
+/// (`byte_offset`/`byte_end`; `None` for a split region's call).
 fn lower_plain_call(
     ctx: &mut FnCtx<'_>,
     callee: &Expr,
     args: &[Expr],
-    byte_offset: u32,
-    byte_end: u32,
+    site: Option<(u32, u32)>,
 ) -> Result<String> {
     super::downgrade_buffer_aliases_in_expr(
         ctx,
@@ -892,10 +891,14 @@ fn lower_plain_call(
     // `at <file>:<line>` in the "X is not a function" TypeError's
     // `.stack`. No-op in the default build.
     if ctx.strings.debug_locations_enabled() {
-        ctx.strings.set_pending_call_offset(byte_offset);
+        ctx.strings
+            .set_pending_call_offset(site.map_or(0, |(offset, _)| offset));
     }
-    let watched = crate::verify_facts::life::watch_call(ctx, byte_offset, byte_end, args);
-    let value = crate::codegen::signature_entry::with_direct_call(byte_offset, || {
+    let watched = match site {
+        Some((start, end)) => crate::verify_facts::life::watch_call(ctx, start, end, args),
+        None => Vec::new(),
+    };
+    let value = crate::codegen::signature_entry::with_direct_call(site.map(|(o, _)| o), || {
         lower_call(ctx, callee, args)
     });
     crate::verify_facts::life::end_call(ctx, watched, value?)

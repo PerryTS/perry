@@ -402,9 +402,11 @@ fn site(ctx: &mut FnCtx<'_>, callee: &Expr) -> Result<Option<Site>> {
             // A call the facts do not name a typed call passes no record
             // (wpfacts `signatures`: every source call of a Record slot's
             // body is typed): it enters the boxed entry.
-            if direct_offset == 0 || ctx.wpfacts.typed_calls.get(&direct_offset) != Some(fid) {
+            let Some(direct_offset) =
+                direct_offset.filter(|o| ctx.wpfacts.typed_calls.get(o) == Some(fid))
+            else {
                 return Ok(None);
-            }
+            };
             let Some(fname) = ctx.func_names.get(fid).cloned() else {
                 bail!("ICE: a value record typed call names an unknown function");
             };
@@ -652,20 +654,18 @@ pub(crate) fn try_lower_agg_set(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Opti
     let called = match super::record_array::try_lower_source(ctx, value)? {
         Some(c) => Some(c),
         None => {
-            let (callee, args, byte_offset) = match value.as_ref() {
+            let (callee, args, site) = match value.as_ref() {
                 Expr::Call {
                     callee,
                     args,
                     byte_offset,
                     ..
-                } => (callee, args, *byte_offset),
+                } => (callee, args, Some(*byte_offset)),
                 // A split region's call: the direct call it is, no site.
-                Expr::RegionCall { callee, args } => (callee, args, 0),
+                Expr::RegionCall { callee, args } => (callee, args, None),
                 _ => return Ok(None),
             };
-            super::signature_entry::with_direct_call(byte_offset, || {
-                try_lower_call(ctx, callee, args)
-            })?
+            super::signature_entry::with_direct_call(site, || try_lower_call(ctx, callee, args))?
         }
     };
     let (present, result_words, r) = match called {
