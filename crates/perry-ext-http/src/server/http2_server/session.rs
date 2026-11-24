@@ -247,6 +247,7 @@ pub(crate) fn decline_client_session(session_handle: i64) {
     push_h2_event(Http2PendingEvent::ClientError {
         handle: session_handle,
         message: NO_LOOP_MESSAGE.to_string(),
+        code: None,
     });
 }
 
@@ -471,6 +472,7 @@ pub(crate) fn start_client_request(stream_handle: i64, body: Vec<u8>) {
     push_h2_event(Http2PendingEvent::ClientError {
         handle: stream_handle,
         message: "HTTP/2 session is not connected".to_string(),
+        code: None,
     });
 }
 
@@ -513,9 +515,9 @@ mod tests {
         events
             .iter()
             .filter_map(|event| match event {
-                Http2PendingEvent::ClientError { handle: h, message } if *h == handle => {
-                    Some(message.clone())
-                }
+                Http2PendingEvent::ClientError {
+                    handle: h, message, ..
+                } if *h == handle => Some(message.clone()),
                 _ => None,
             })
             .collect()
@@ -628,6 +630,38 @@ mod tests {
         );
         assert!(session.closed && session.destroyed);
         assert_eq!(errors_for(handle), vec![NO_LOOP_MESSAGE.to_string()]);
+    }
+
+    /// A failed TLS handshake reaches the session's `'error'` as Node's
+    /// `Error`: the cause code becomes `.code`, not part of a bare string.
+    #[test]
+    fn a_tls_failure_errors_the_session_with_its_code() {
+        let handle = register_handle(client_session(0));
+        crate::server::http2_server::queue_turnloop_session_tls_error(
+            handle,
+            "DEPTH_ZERO_SELF_SIGNED_CERT: invalid peer certificate: UnknownIssuer",
+        );
+        let events = H2_PENDING_EVENTS
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let queued: Vec<(String, Option<String>)> = events
+            .iter()
+            .filter_map(|event| match event {
+                Http2PendingEvent::ClientError {
+                    handle: h,
+                    message,
+                    code,
+                } if *h == handle => Some((message.clone(), code.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            queued,
+            vec![(
+                "invalid peer certificate: UnknownIssuer".to_string(),
+                Some("DEPTH_ZERO_SELF_SIGNED_CERT".to_string())
+            )]
+        );
     }
 
     /// The per-request half of the deleted `h2` fallback: `session.request()` on
