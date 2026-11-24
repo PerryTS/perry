@@ -1171,11 +1171,9 @@ pub(crate) fn wrapper_prototype(ctor_name: &[u8]) -> f64 {
             js_object_get_field_by_name_f64(holder, key)
         })
     };
-    // The runtime's by-name global read (realm table `RUNTIME_GLOBAL_READS`).
-    let namespace = scope.root_nanbox_f64(crate::object::js_get_global_this_builtin_value(
-        b"WebAssembly".as_ptr(),
-        11,
-    ));
+    // %WebAssembly% (the realm's original namespace), never the writable
+    // global binding: node's `WebAssembly.X.prototype` here is the birth one.
+    let namespace = scope.root_nanbox_f64(crate::array::realm_namespace_value("WebAssembly"));
     let ctor = scope.root_nanbox_f64(read(&namespace, ctor_name));
     let ctor = crate::value::JSValue::from_bits(ctor.get_nanbox_f64().to_bits());
     if !ctor.is_pointer() {

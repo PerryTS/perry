@@ -62,10 +62,30 @@ pub extern "C" fn js_instanceof(value: f64, class_id: u32) -> f64 {
 /// that site's read, never the runtime's.
 fn global_binding_name(class_id: u32) -> Option<&'static str> {
     match class_id {
+        CLASS_ID_FUNCTION => Some("Function"),
+        CLASS_ID_OBJECT => Some("Object"),
         CLASS_ID_URL => Some("URL"),
         CLASS_ID_PROMISE => Some("Promise"),
         _ => heap_builtin_name(class_id),
     }
+}
+
+/// The codegen's reserved class id of `x instanceof Object`.
+const CLASS_ID_OBJECT: u32 = 0xFFFF0050;
+
+/// The value of the global binding a static site names (`binding`, from
+/// [`global_binding_name`]): that program site's read, which sees the
+/// program's store under the name. `undefined` when the site names none.
+fn global_binding_value(binding: Option<&'static str>) -> f64 {
+    global_binding_read(binding).unwrap_or_else(|| f64::from_bits(crate::value::TAG_UNDEFINED))
+}
+
+fn global_binding_read(binding: Option<&'static str>) -> Option<f64> {
+    let name = binding?;
+    Some(crate::object::js_get_global_this_builtin_value(
+        name.as_ptr(),
+        name.len(),
+    ))
 }
 
 /// The same native/class dispatch with the evaluated RHS: a builtin alias
@@ -385,7 +405,7 @@ fn native_instanceof(
             let function = constructor
                 .as_ref()
                 .map(|rhs| rhs.get_nanbox_f64())
-                .unwrap_or_else(|| crate::object::builtin_value_core("Function"));
+                .unwrap_or_else(|| global_binding_value(binding));
             if ordinary_has_instance_prototype_walk(rooted_value.get_nanbox_f64(), function) {
                 return true_val;
             }
@@ -783,7 +803,6 @@ fn native_instanceof(
     // reserved id (#585 follow-up: pre-#585 fix this case worked by
     // accident because the codegen produced `class_id = 0` and the
     // runtime returned true via `0 == 0` on the obj_class_id check).
-    const CLASS_ID_OBJECT: u32 = 0xFFFF0050;
     if class_id == CLASS_ID_OBJECT {
         if jsval.is_pointer() {
             // A Symbol is a POINTER_TAG heap allocation but a PRIMITIVE, not an
@@ -802,7 +821,7 @@ fn native_instanceof(
                     ordinary_has_instance_prototype_walk_rooted(rooted_value, constructor)
                 } else {
                     let scope = crate::gc::RuntimeHandleScope::new();
-                    let object = scope.root_nanbox_f64(crate::object::builtin_value_core("Object"));
+                    let object = scope.root_nanbox_f64(global_binding_value(binding));
                     ordinary_has_instance_prototype_walk_rooted(rooted_value, &object)
                 };
                 return if matches { true_val } else { false_val };
