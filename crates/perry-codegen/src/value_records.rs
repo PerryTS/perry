@@ -612,12 +612,11 @@ fn record_array_locals(
     loop {
         let of = |e: &Expr, out: &HashMap<LocalId, u32>| match e {
             Expr::LocalGet(id) => out.get(id).copied(),
-            // offset 0: a read this pass builds after facts (940/1100/1471) names no site.
             Expr::PropertyGet {
                 property,
                 byte_offset,
                 ..
-            } if *byte_offset != 0 => facts
+            } => facts
                 .record_array_reads
                 .get(&(*byte_offset, property.clone()))
                 .copied()
@@ -1542,12 +1541,11 @@ impl Rewriter<'_> {
     fn ra_of(&self, e: &Expr) -> Option<u32> {
         match e {
             Expr::LocalGet(id) => self.ra_locals.get(id).copied(),
-            // offset 0: a read this pass builds after facts (940/1100/1471) names no site.
             Expr::PropertyGet {
                 property,
                 byte_offset,
                 ..
-            } if *byte_offset != 0 => self
+            } => self
                 .facts
                 .record_array_reads
                 .get(&(*byte_offset, property.clone()))
