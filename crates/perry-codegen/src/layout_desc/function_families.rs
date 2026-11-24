@@ -489,6 +489,7 @@ mod tests {
     #[test]
     fn only_a_function_the_module_constructs_arms_a_run() {
         let closure = |func_id: u32| Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: Vec::new(),
             return_type: perry_hir::types::Type::Any,
@@ -516,6 +517,7 @@ mod tests {
         m.init = vec![
             // var B = function () {}; var C; C = function () {};
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "B".into(),
                 ty: perry_hir::types::Type::Any,
@@ -525,6 +527,7 @@ mod tests {
             Stmt::Expr(Expr::LocalSet(2, Box::new(closure(22)))),
             // var M = function () {}: only ever called, never constructed.
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "M".into(),
                 ty: perry_hir::types::Type::Any,

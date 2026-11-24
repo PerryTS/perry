@@ -315,6 +315,8 @@ impl<'a> FuncEmitCtx<'a> {
                         self.cursor_loop_wrapped = true;
                         // The step local is dead once the loop ends, so it holds the error.
                         let wrapped = Stmt::Try {
+                            // Built by codegen after facts: no fact keys this wrapper.
+                            byte_offset: 0,
                             body: vec![stmt.clone()],
                             catch: Some(perry_hir::CatchClause {
                                 param: Some((step, String::new())),
