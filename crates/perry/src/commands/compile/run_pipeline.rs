@@ -2349,16 +2349,7 @@ pub fn run_with_parse_cache(
                 // when a binding aliases one (`export const addRef = add`), so
                 // importers see `add`'s one function object under both names.
                 // Variable/closure exports remain on the public getter ABI.
-                let is_renamed_class = hir_module
-                    .classes
-                    .iter()
-                    .any(|c| c.name == *local && c.is_exported);
-                let origin = hir_module.function_alias_origin(exported).unwrap_or(local);
-                let is_renamed_declared_function = hir_module
-                    .functions
-                    .iter()
-                    .any(|f| f.name == *origin && f.is_exported);
-                if origin != exported && (is_renamed_class || is_renamed_declared_function) {
+                if let Some(origin) = hir_module.declared_export_origin(local, exported) {
                     all_module_export_origin_names
                         .entry(path_str.clone())
                         .or_default()
@@ -8258,24 +8249,28 @@ pub fn run_with_parse_cache(
                 continue;
             };
             for export in &hir.exports {
-                if let perry_hir::Export::Named { exported, .. } = export {
-                    // Closure-wrapper form: consumer reads the import
-                    // as a function value (`js_closure_alloc_singleton(
-                    // @__perry_wrap_perry_fn_<src>__<name>)`).
-                    let wrap_sym = perry_codegen::symbol_names::function_wrapper(&prefix, exported);
-                    stub_wrapper_names.push(wrap_sym);
-                    // Direct-call form: consumer invokes the import
-                    // by name (`perry_fn_<src>__<name>(args…)`). For
-                    // a failed module the function never received a
-                    // body, so emit a nullary stub returning undefined.
-                    // The link only cares about the symbol existing;
-                    // an arity mismatch at the call site lowers to an
-                    // LLVM `call` with whatever args the consumer
-                    // pushed — the body just discards them and
-                    // returns undefined. Same fallback shape the
-                    // empty `<prefix>__init` stub uses.
-                    let direct_sym = perry_codegen::symbol_names::function(&prefix, exported);
-                    stub_func_names.push(direct_sym);
+                if let perry_hir::Export::Named { local, exported } = export {
+                    // An importer may name the export's origin instead.
+                    let origin = hir.declared_export_origin(local, exported);
+                    for name in [Some(exported), origin].into_iter().flatten() {
+                        // Closure-wrapper form: consumer reads the import
+                        // as a function value (`js_closure_alloc_singleton(
+                        // @__perry_wrap_perry_fn_<src>__<name>)`).
+                        let wrap_sym = perry_codegen::symbol_names::function_wrapper(&prefix, name);
+                        stub_wrapper_names.push(wrap_sym);
+                        // Direct-call form: consumer invokes the import
+                        // by name (`perry_fn_<src>__<name>(args…)`). For
+                        // a failed module the function never received a
+                        // body, so emit a nullary stub returning undefined.
+                        // The link only cares about the symbol existing;
+                        // an arity mismatch at the call site lowers to an
+                        // LLVM `call` with whatever args the consumer
+                        // pushed — the body just discards them and
+                        // returns undefined. Same fallback shape the
+                        // empty `<prefix>__init` stub uses.
+                        let direct_sym = perry_codegen::symbol_names::function(&prefix, name);
+                        stub_func_names.push(direct_sym);
+                    }
                 }
             }
         }

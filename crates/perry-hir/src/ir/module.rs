@@ -336,6 +336,25 @@ impl Module {
             .map(|f| &f.name)
     }
 
+    /// The exported declaration an importer of `exported` reads under another
+    /// name: a renamed class or an aliased declared function.
+    pub fn declared_export_origin<'a>(
+        &'a self,
+        local: &'a String,
+        exported: &str,
+    ) -> Option<&'a String> {
+        let origin = self.function_alias_origin(exported).unwrap_or(local);
+        let declared = self
+            .classes
+            .iter()
+            .any(|c| c.name == *local && c.is_exported)
+            || self
+                .functions
+                .iter()
+                .any(|f| f.name == *origin && f.is_exported);
+        (origin != exported && declared).then_some(origin)
+    }
+
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
