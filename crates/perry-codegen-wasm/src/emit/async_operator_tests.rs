@@ -2,6 +2,32 @@
 
 use super::run_web_source;
 
+// An async body calls a function with no return value, and another async function
+// with and without its optional argument. Expected output is Node's.
+#[test]
+fn async_body_calls_a_void_function_and_an_async_function() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function note(label: string, value: unknown) {
+  console.log(label, JSON.stringify(value));
+}
+async function inner(x: number, y?: number): Promise<number> {
+  return x + (y ?? 10);
+}
+async function outer(): Promise<string> {
+  note("note", [1, 2]);
+  const a = await inner(1);
+  const b = await inner(1, 2);
+  return a + " " + b;
+}
+outer().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "note [1,2]\n11 3"
+    );
+}
+
 // An async body computes `**`, the bitwise and shift operators (compound assignments
 // included), unary `~` / `+`, and `in` as a synchronous one does, and runs `for...in`,
 // whose lowering uses `&` and `in`; `in` evaluates its property before its object in

@@ -460,17 +460,35 @@ impl WasmModuleEmitter {
                     .iter()
                     .map(|a| self.emit_js_expr(a, locals))
                     .collect();
+                let call_direct = |func_idx: u32| -> String {
+                    // An async function is its JS implementation here: WASM reaches it
+                    // through an import, which is not exported.
+                    if let Some((name, _, param_count)) = self
+                        .async_func_imports
+                        .iter()
+                        .find(|(_, idx, _)| *idx == func_idx)
+                    {
+                        let mut args = args_js.clone();
+                        args.resize(
+                            args.len().max(*param_count),
+                            "u64ToF64(TAG_UNDEFINED)".to_string(),
+                        );
+                        return format!("__asyncFuncImpls.__async_{name}({})", args.join(", "));
+                    }
+                    // Call exported WASM function. WASM funcs use i64 params/result; one
+                    // with no result returns `undefined`.
+                    let args_i64: Vec<String> =
+                        args_js.iter().map(|a| format!("f64ToU64({})", a)).collect();
+                    format!(
+                        "u64ToF64(wasmInstance.exports.__wasm_func_{}({}) ?? TAG_UNDEFINED)",
+                        func_idx,
+                        args_i64.join(", ")
+                    )
+                };
                 match callee.as_ref() {
                     Expr::FuncRef(id) => {
                         if let Some(&func_idx) = self.func_map.get(id) {
-                            // Call exported WASM function. WASM funcs use i64 params/result.
-                            let args_i64: Vec<String> =
-                                args_js.iter().map(|a| format!("f64ToU64({})", a)).collect();
-                            format!(
-                                "u64ToF64(wasmInstance.exports.__wasm_func_{}({}))",
-                                func_idx,
-                                args_i64.join(", ")
-                            )
+                            call_direct(func_idx)
                         } else {
                             "u64ToF64(TAG_UNDEFINED)".to_string()
                         }
@@ -510,13 +528,7 @@ impl WasmModuleEmitter {
                     }
                     Expr::ExternFuncRef { name, .. } => {
                         if let Some(&func_idx) = self.func_name_map.get(name) {
-                            let args_i64: Vec<String> =
-                                args_js.iter().map(|a| format!("f64ToU64({})", a)).collect();
-                            format!(
-                                "u64ToF64(wasmInstance.exports.__wasm_func_{}({}))",
-                                func_idx,
-                                args_i64.join(", ")
-                            )
+                            call_direct(func_idx)
                         } else {
                             "u64ToF64(TAG_UNDEFINED)".to_string()
                         }
