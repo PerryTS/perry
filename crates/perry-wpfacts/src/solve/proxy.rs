@@ -395,7 +395,7 @@ impl Model {
     /// trap call returning into it and one forward read of the target into
     /// it. The class is entered before the forward runs: a target holding
     /// `p` reads into the same node.
-    fn proxy_get(&mut self, p: u32, key: Key, idx: NodeId) -> NodeId {
+    pub(crate) fn proxy_get(&mut self, p: u32, key: Key, idx: NodeId) -> NodeId {
         let recv = self.tok(TokKind::Proxy(p));
         self.proxy_get_r(p, key, idx, recv)
     }
@@ -2086,6 +2086,71 @@ impl Model {
             // its own birth of the target's layout (`proxy_nt_inst`),
             // its prototype Get( newTarget, "prototype" ) (10.1.14).
             Cons::NewTargetHard { .. } => {}
+            // Rule PXPROTO2: GetIterator (7.4.3), IteratorNext / Close /
+            // Complete / Value (7.4.x) and their async twins, Node's
+            // `Buffer.from(object)`, InstanceofOperator's `@@hasInstance`
+            // (13.10.2) and the error message's inspection of the Proxy:
+            // each key the protocol looks up or reads is a [[Get]] of the
+            // Proxy (10.5.8: the get trap and the forward), a method found
+            // called with `this` = the Proxy (`implicit`). A formatter
+            // showing a Proxy target that is itself a Proxy enumerates it
+            // (`proxy_own_keys`: the ownKeys and getOwnPropertyDescriptor
+            // traps) and reads its values ([[Get]] under any key).
+            Cons::Implicit {
+                reason,
+                proto:
+                    pr @ (Protocol::Iterate
+                    | Protocol::IterNext
+                    | Protocol::IterResult
+                    | Protocol::AsyncIterate
+                    | Protocol::AsyncIterNext
+                    | Protocol::AsyncIterResult
+                    | Protocol::BufferFrom
+                    | Protocol::HasInstance
+                    | Protocol::ShallowInspect
+                    | Protocol::InspectTarget(_)),
+                region,
+            } => {
+                if matches!(pr, Protocol::InspectTarget(_)) {
+                    self.proxy_own_keys(p, reason);
+                }
+                let t = self.tok(TokKind::Proxy(p));
+                self.implicit(t, reason, pr, region);
+            }
+            // The `next` of an iterated value read as its own iterator (the
+            // ordinary object's rule, `Cons::IterNext`): p.[[Get]]("next")
+            // (10.5.8, the get trap and the forward).
+            Cons::IterNext { dst } => {
+                let a = self.atom("next");
+                let f = self.proxy_get(p, Key::Named(a), NO_NODE);
+                self.edge(f, dst);
+            }
+            // StructuredSerialize (HTML 2.7.3) of a Proxy: an exotic object
+            // with internal slots of its own throws a DataCloneError before
+            // any internal method of it runs: no trap.
+            Cons::Implicit {
+                proto: Protocol::Clone,
+                ..
+            } => {}
+            // InstanceofOperator( V, p ) (13.10.2): `@@hasInstance` and, for
+            // OrdinaryHasInstance, `prototype` are [[Get]]s of the Proxy
+            // (`implicit`); the method is called with `V`.
+            Cons::HasInstance { reason, arg } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.has_instance(t, reason, arg);
+            }
+            // The hard kinds that reach a Proxy as an operand: as the target
+            // of `Proxy.revocable` / a Proxy made by name (E9: its own
+            // TopSink beside, the unknown code's), a `with` object (E15:
+            // HasBinding's HasProperty and `@@unscopables` [[Get]] and the
+            // binding's [[Get]] / [[Set]] are rules of their own on the
+            // object, `Gen` WithGet / WithSet) and a transfer-list item (B3:
+            // no transferable platform object, a DataCloneError before any
+            // internal method runs). A Proxy has no layout to mark.
+            Cons::Hard {
+                kind: Hard::E9Proxy | Hard::E15With | Hard::B3Transfer,
+                ..
+            } => {}
             // Another protocol touch: its hold names the protocol and the
             // touch's own reason.
             Cons::Implicit { reason, proto, .. } => {

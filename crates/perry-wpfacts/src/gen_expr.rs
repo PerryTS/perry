@@ -521,6 +521,24 @@ impl<'a> Gen<'a> {
     }
 
     /// The key of a computed READ or method call. `Symbol.iterator` & co.:
+    /// HasBinding of a `with` object environment (9.1.1.2.1; perry-runtime
+    /// object/with_env.rs `js_with_has_binding`): HasProperty( o, name ),
+    /// then Get( o, @@unscopables ) and, on an object, Get( it, name ),
+    /// ToBoolean'd. On a Proxy each runs its trap (`has`, `get`).
+    fn with_has_binding(&mut self, o: NodeId, property: &str) {
+        let a = self.m.atom(property);
+        self.m.cons(
+            o,
+            Cons::HasProp {
+                key: Key::Named(a),
+                idx: NO_NODE,
+            },
+        );
+        let us = self.m.atom("@@__perry_wk_unscopables");
+        let u = self.load(o, Key::Named(us));
+        self.load(u, Key::Named(a));
+    }
+
     /// HIR folds a well-known symbol to the runtime's `@@__perry_wk_<name>`
     /// sentinel, one symbol per name, so the read names it. Stores keep
     /// `Key::Any`, which every named read sees; as an atom it can only
@@ -972,6 +990,7 @@ impl<'a> Gen<'a> {
                         reason: r,
                     },
                 );
+                self.with_has_binding(o, property);
                 let a = self.m.atom(property);
                 let out = self.load(o, Key::Named(a));
                 let fb = self.expr(fx, fallback);
@@ -994,6 +1013,7 @@ impl<'a> Gen<'a> {
                         reason: r,
                     },
                 );
+                self.with_has_binding(o, property);
                 let v = self.expr(fx, value);
                 let a = self.m.atom(property);
                 self.store(

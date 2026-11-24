@@ -414,3 +414,40 @@ fn proxy_super_home_prototype_runs_its_get() {
     site(t, "", &format!("{cls}const b: any = new B(); b.q = payload; b.n();"), false).unwrap();
     site(t, "", &format!("{cls}const b: any = new B(); b.q = 1; b.n();"), true).unwrap();
 }
+
+/// Rule PXPROTO2: GetIterator( px ) (7.4.3) reads `@@iterator` with
+/// px.[[Get]] (the get trap) and calls it with `this` = the Proxy.
+#[test]
+fn proxy_iterate_runs_its_get_and_calls_with_the_proxy() {
+    let op = "for (const x of px) { console.log(x); }";
+    let h = "get(t: any, k: any) { external(payload); return t[k]; }";
+    let it = "{ q: 1, [Symbol.iterator](this: any) { external(this.q); return [1][Symbol.iterator](); } }";
+    site(it, h, op, false).unwrap();
+    site(it, "", op, true).unwrap();
+    let h = "get(t: any, k: any) { return k === \"q\" ? payload : t[k]; }";
+    site(it, h, op, false).unwrap();
+}
+
+/// InstanceofOperator( V, px ) (13.10.2): `@@hasInstance` and
+/// OrdinaryHasInstance's `prototype` are px.[[Get]]s (the get trap).
+#[test]
+fn proxy_instanceof_runs_its_get() {
+    let op = "console.log(({}) instanceof px);";
+    let h = "get(t: any, k: any) { external(payload); return (v: any) => false; }";
+    site("class {}", h, op, false).unwrap();
+    let h = "get(t: any, k: any) { return (v: any) => { external(v); return false; }; }";
+    site("class {}", h, "console.log(payload instanceof px);", false).unwrap();
+    site("class {}", "get(t: any, k: any) { return (v: any) => false; }", op, true).unwrap();
+    // `@@hasInstance` undefined: OrdinaryHasInstance reads `prototype`.
+    let h = "get(t: any, k: any) { if (k === \"prototype\") { external(payload); } return undefined; }";
+    site("class {}", h, op, false).unwrap();
+    site("class {}", "get(t: any, k: any) { return undefined; }", op, true).unwrap();
+}
+
+/// StructuredSerialize of a Proxy throws a DataCloneError before any
+/// internal method runs: no trap.
+#[test]
+fn proxy_structured_clone_runs_no_trap() {
+    let h = "get(t: any, k: any) { external(payload); return t[k]; }";
+    site("{ a: 1 }", h, "try { structuredClone(px); } catch (e) {}", true).unwrap();
+}

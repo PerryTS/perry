@@ -2431,11 +2431,29 @@ impl Model {
                 self.reasons[reason as usize]
             );
         }
-        match keys {
-            None => self.method_on(t, Key::any(), call),
-            Some(ks) => {
-                for a in ks {
-                    self.method_on(t, Key::Named(a), call);
+        // A Proxy's protocol keys are its [[Get]]s (10.5.8, `proxy_get`),
+        // each value called with `this` = the Proxy; OrdinaryHasInstance
+        // (7.3.21 step 4) also reads Get( p, "prototype" ), a value compared
+        // only.
+        if let TokKind::Proxy(p) = self.toks[t as usize] {
+            let mut ks: Vec<Key> = match &keys {
+                None => vec![Key::any()],
+                Some(ks) => ks.iter().map(|&a| Key::Named(a)).collect(),
+            };
+            if proto == Protocol::HasInstance {
+                ks.push(Key::Named(self.atom("prototype")));
+            }
+            for key in ks {
+                let f = self.proxy_get(p, key, NO_NODE);
+                self.cons(f, Cons::Call { call });
+            }
+        } else {
+            match keys {
+                None => self.method_on(t, Key::any(), call),
+                Some(ks) => {
+                    for a in ks {
+                        self.method_on(t, Key::Named(a), call);
+                    }
                 }
             }
         }
