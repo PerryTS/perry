@@ -4,9 +4,9 @@ import * as net from "node:net";
 // A `session.request()` made while the session is still connecting is
 // cancelled when the connection then fails: the stream's `'error'` carries
 // `ERR_HTTP2_STREAM_CANCEL` and comes before the session's own `'error'`
-// (PerryTS/perry#15315). Two failures: a refused connection, and a TLS
-// handshake whose self-signed certificate the client does not trust. The
-// certificate and key are
+// (PerryTS/perry#15315). Three failures: a refused connection, a TLS handshake
+// whose self-signed certificate the client does not trust, and a peer that
+// closes before the handshake completes. The certificate and key are
 // `tests/parity/node-suite/tls/fixtures/localhost-{cert,key}.pem`, inlined so
 // the case is self-contained (CN=localhost, SAN DNS:localhost, valid to 2036).
 const cert = `-----BEGIN CERTIFICATE-----
@@ -88,3 +88,12 @@ await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const port = (server.address() as any).port;
 console.log("untrusted certificate:\n  " + (await attempt(`https://localhost:${port}`)).join("\n  "));
 server.close();
+
+const closer = net.createServer((socket) => {
+  socket.on("error", () => {});
+  socket.once("data", () => socket.end());
+});
+await new Promise<void>((resolve) => closer.listen(0, "127.0.0.1", resolve));
+const closerPort = (closer.address() as any).port;
+console.log("closed during the handshake:\n  " + (await attempt(`https://127.0.0.1:${closerPort}`)).join("\n  "));
+closer.close();
