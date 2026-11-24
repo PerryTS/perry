@@ -6149,7 +6149,8 @@ const hostCallbacks = new WeakMap();
 // descriptor stays as it is. A class instance's compiled accessors live in the class
 // table, not on the host object, so its fields are read as Perry reads them.
 function __hostDescriptor(desc) {
-  if (!__holdsProperties(desc)) return desc;
+  // A primitive descriptor throws the host's TypeError before a later descriptor is read.
+  if (!__holdsProperties(desc)) return Object.defineProperty({}, 'x', desc);
   const hasAccessor = (cls, field) => {
     for (let c = cls; c; c = classParentTable[c] || null) {
       const methods = classMethodTable[c];
