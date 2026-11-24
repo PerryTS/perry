@@ -3,6 +3,7 @@ use perry_hir::types::Type as HirType;
 
 fn let_(id: u32, init: Option<Expr>) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: HirType::Any,
@@ -36,6 +37,7 @@ fn method(recv: Expr, name: &str, args: Vec<Expr>) -> Expr {
 
 fn typeof_is(id: u32, lit: &str, eq: bool) -> Expr {
     Expr::Compare {
+        byte_offset: 0,
         op: if eq { CompareOp::Eq } else { CompareOp::Ne },
         left: Box::new(Expr::TypeOf(Box::new(get(id)))),
         right: Box::new(Expr::String(lit.into())),
@@ -44,6 +46,7 @@ fn typeof_is(id: u32, lit: &str, eq: bool) -> Expr {
 
 fn bin(op: BinaryOp, l: Expr, r: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(l),
         right: Box::new(r),
@@ -96,7 +99,7 @@ fn encode_body() -> Vec<Stmt> {
                 bin(BinaryOp::BitAnd, get(4), Expr::Integer(0x3FF)),
             ),
         ),
-        Stmt::Return(Some(get(4))),
+        Stmt::Return(Some(get(4)), 0),
     ]
 }
 
@@ -150,7 +153,7 @@ fn a_loop_write_does_not_dominate_a_read_after_the_loop() {
             condition: get(7),
             body: vec![let_(5, Some(Expr::String("x".into())))],
         },
-        Stmt::Return(Some(get(5))),
+        Stmt::Return(Some(get(5)), 0),
     ];
     assert!(run(&body, &[]).strings.is_empty());
     // ... but a read later in the same iteration is dominated.
@@ -173,7 +176,7 @@ fn an_increment_turns_a_string_into_a_number() {
             op: perry_hir::UpdateOp::Increment,
             prefix: false,
         }),
-        Stmt::Return(Some(get(5))),
+        Stmt::Return(Some(get(5)), 0),
     ];
     let t = run(&body, &[]);
     assert!(t.strings.is_empty() && t.numbers.is_empty(), "{t:?}");
@@ -186,7 +189,7 @@ fn concat_with_a_string_is_a_string_and_unknown_operands_stay_unknown() {
         set(5, bin(BinaryOp::Add, get(5), opaque_call())),
         let_(6, Some(opaque_call())),
         set(6, bin(BinaryOp::Add, get(6), Expr::Integer(1))),
-        Stmt::Return(Some(bin(BinaryOp::Add, get(5), get(6)))),
+        Stmt::Return(Some(bin(BinaryOp::Add, get(5), get(6))), 0),
     ];
     let t = run(&body, &[]);
     assert_eq!(t.strings, HashSet::from([5]));
@@ -196,10 +199,11 @@ fn concat_with_a_string_is_a_string_and_unknown_operands_stay_unknown() {
 #[test]
 fn a_closure_capturing_before_the_write_disqualifies_the_local() {
     let clo = Expr::Closure {
+        byte_offset: 0,
         func_id: 50,
         params: Vec::new(),
         return_type: HirType::Any,
-        body: vec![Stmt::Return(Some(get(5)))],
+        body: vec![Stmt::Return(Some(get(5)), 0)],
         captures: vec![5],
         mutable_captures: Vec::new(),
         captures_this: false,
@@ -214,7 +218,7 @@ fn a_closure_capturing_before_the_write_disqualifies_the_local() {
     let body = vec![
         let_(6, Some(clo)),
         let_(5, Some(Expr::String("x".into()))),
-        Stmt::Return(Some(get(5))),
+        Stmt::Return(Some(get(5)), 0),
     ];
     assert!(run(&body, &[]).strings.is_empty());
 }
@@ -228,7 +232,7 @@ fn hoisted_var_seeds_are_not_writes_but_reads_must_follow_a_real_write() {
         let_(6, None),
         set(5, method(get(1), "slice", vec![Expr::Integer(1)])),
         set(6, method(get(5), "charCodeAt", vec![Expr::Integer(0)])),
-        Stmt::Return(Some(get(6))),
+        Stmt::Return(Some(get(6)), 0),
     ];
     let t = run(&body, &[(1, HirType::String)]);
     assert_eq!(t.strings, HashSet::from([5]));
@@ -251,12 +255,15 @@ fn a_literal_array_local_stays_an_array_through_in_place_pushes() {
             value: Box::new(Expr::String("x".into())),
             field_writeback: None,
         }),
-        Stmt::Return(Some(Expr::PropertyGet {
-            byte_end: 0,
-            object: Box::new(get(5)),
-            property: "length".into(),
-            byte_offset: 0,
-        })),
+        Stmt::Return(
+            Some(Expr::PropertyGet {
+                byte_end: 0,
+                object: Box::new(get(5)),
+                property: "length".into(),
+                byte_offset: 0,
+            }),
+            0,
+        ),
     ];
     let t = run(&body, &[]);
     assert_eq!(t.arrays, HashSet::from([5]));
@@ -268,6 +275,7 @@ fn a_literal_array_local_stays_an_array_through_in_place_pushes() {
 
 fn closure(func_id: u32, body: Vec<Stmt>) -> Expr {
     Expr::Closure {
+        byte_offset: 0,
         func_id,
         params: Vec::new(),
         return_type: HirType::Any,
@@ -303,13 +311,13 @@ fn an_iife_that_always_returns_its_array_local_types_the_binding() {
         vec![
             let_(61, Some(Expr::Undefined)),
             set(61, Expr::Array(Vec::new(), None)),
-            Stmt::Return(Some(get(61))),
+            Stmt::Return(Some(get(61)), 0),
         ],
     );
     let body = vec![
         let_(5, Some(Expr::Undefined)),
         set(5, table),
-        Stmt::Return(Some(get(5))),
+        Stmt::Return(Some(get(5)), 0),
     ];
     assert_eq!(run(&body, &[]).arrays, HashSet::from([5]));
     // A body that can fall off its end may return `undefined`.
@@ -317,11 +325,11 @@ fn an_iife_that_always_returns_its_array_local_types_the_binding() {
         62,
         vec![Stmt::If {
             condition: get(7),
-            then_branch: vec![Stmt::Return(Some(Expr::Array(Vec::new(), None)))],
+            then_branch: vec![Stmt::Return(Some(Expr::Array(Vec::new(), None)), 0)],
             else_branch: None,
         }],
     );
-    let body = vec![let_(5, Some(maybe)), Stmt::Return(Some(get(5)))];
+    let body = vec![let_(5, Some(maybe)), Stmt::Return(Some(get(5)), 0)];
     assert!(run(&body, &[]).arrays.is_empty());
 }
 
@@ -331,7 +339,10 @@ fn arr_any() -> HirType {
 
 #[test]
 fn cloned_iife_proofs_keep_their_own_depth_budget_across_hash_seeds() {
-    let shallow = iife(60, vec![Stmt::Return(Some(Expr::Array(Vec::new(), None)))]);
+    let shallow = iife(
+        60,
+        vec![Stmt::Return(Some(Expr::Array(Vec::new(), None)), 0)],
+    );
     let mut deep = shallow.clone();
     for _ in 0..5 {
         deep = Expr::Sequence(vec![deep]);
@@ -415,7 +426,7 @@ fn a_write_that_can_leave_int32_is_not_a_code_unit() {
             Some(method(get(5), "charCodeAt", vec![Expr::Integer(0)])),
         ),
         set(6, bin(BinaryOp::Div, get(6), Expr::Integer(2))),
-        Stmt::Return(Some(get(6))),
+        Stmt::Return(Some(get(6)), 0),
     ];
     let t = run(&body, &[]);
     assert!(t.numbers.contains(&6) && t.code_units.is_empty(), "{t:?}");
@@ -431,7 +442,7 @@ fn a_write_that_can_leave_int32_is_not_a_code_unit() {
             op: perry_hir::UpdateOp::Increment,
             prefix: false,
         }),
-        Stmt::Return(Some(get(6))),
+        Stmt::Return(Some(get(6)), 0),
     ];
     let t = run(&body, &[]);
     assert!(t.numbers.contains(&6) && t.code_units.is_empty(), "{t:?}");
@@ -447,7 +458,7 @@ fn a_copy_of_a_code_unit_is_a_code_unit_and_an_unknown_receiver_is_not() {
             9,
             Some(method(get(7), "charCodeAt", vec![Expr::Integer(0)])),
         ),
-        Stmt::Return(Some(bin(BinaryOp::Add, get(8), get(9)))),
+        Stmt::Return(Some(bin(BinaryOp::Add, get(8), get(9))), 0),
     ];
     let t = run(&body, &[]);
     assert_eq!(t.code_units, HashSet::from([6, 8]), "{t:?}");

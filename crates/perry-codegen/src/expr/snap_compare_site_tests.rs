@@ -26,6 +26,7 @@ fn ir_of(m: &Module) -> String {
 
 fn local(id: u32, ty: Type, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("k2c_{id}"),
         ty,
@@ -36,6 +37,7 @@ fn local(id: u32, ty: Type, init: Expr) -> Stmt {
 
 fn cmp(op: CompareOp, left: Expr, right: Expr) -> Expr {
     Expr::Compare {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -74,6 +76,7 @@ fn compare_literal_hook_never_crosses_compares() {
         b.init.push(local(1, Type::Any, Expr::Undefined));
         for i in 0..96u32 {
             let sum = Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::LocalGet(0)),
                 right: Box::new(Expr::LocalGet(1)),

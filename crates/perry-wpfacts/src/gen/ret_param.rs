@@ -29,7 +29,7 @@ pub(crate) fn ret_param(params: &[Param], body: &[Stmt], suspends: bool) -> Opti
     if suspends || params.iter().any(|p| p.arguments_object.is_some()) {
         return None;
     }
-    let Some(Stmt::Return(Some(Expr::LocalGet(id)))) = body.last() else {
+    let Some(Stmt::Return(Some(Expr::LocalGet(id)), _)) = body.last() else {
         return None;
     };
     let id = *id;
@@ -40,7 +40,7 @@ pub(crate) fn ret_param(params: &[Param], body: &[Stmt], suspends: bool) -> Opti
     }
     let mut ok = true;
     for_each_stmt_shallow(body, &mut |s| {
-        if let Stmt::Return(r) = s {
+        if let Stmt::Return(r, _) = s {
             if !matches!(r, Some(Expr::LocalGet(x)) if *x == id) {
                 ok = false;
             }

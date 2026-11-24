@@ -784,6 +784,7 @@ pub(crate) fn flatten_string_add_chain<'a>(
                 op: BinaryOp::Add,
                 left: l,
                 right: r,
+                ..
             } => {
                 let l_str = crate::type_analysis::string_value_is_runtime_guaranteed(ctx, l);
                 let r_str = crate::type_analysis::string_value_is_runtime_guaranteed(ctx, r);

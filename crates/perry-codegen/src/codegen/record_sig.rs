@@ -222,6 +222,7 @@ pub(crate) fn sig_body(
     g.body.drain(at..at + len);
     let mut out = super::signature_entry::sig_function(&g, &plan.defaults)?;
     let lane = |p: &Param, id: u32, what: &str| Param {
+        byte_offset: p.byte_offset,
         id,
         name: format!("{}${what}", p.name),
         ty: Type::Any,
@@ -258,6 +259,7 @@ pub(crate) fn copy_lanes(facts: &ElisionFacts, tmpl: u32, e: &Expr) -> Option<Fa
             condition,
             then_expr,
             else_expr,
+            ..
         } if matches!(else_expr.as_ref(), Expr::Undefined) => match condition.as_ref() {
             Expr::LocalGet(p) => (Some(*p), then_expr.as_ref()),
             _ => return None,
@@ -400,9 +402,11 @@ fn site(ctx: &mut FnCtx<'_>, callee: &Expr) -> Result<Option<Site>> {
             // A call the facts do not name a typed call passes no record
             // (wpfacts `signatures`: every source call of a Record slot's
             // body is typed): it enters the boxed entry.
-            if direct_offset == 0 || ctx.wpfacts.typed_calls.get(&direct_offset) != Some(fid) {
+            let Some(direct_offset) =
+                direct_offset.filter(|o| ctx.wpfacts.typed_calls.get(o) == Some(fid))
+            else {
                 return Ok(None);
-            }
+            };
             let Some(fname) = ctx.func_names.get(fid).cloned() else {
                 bail!("ICE: a value record typed call names an unknown function");
             };
@@ -420,14 +424,7 @@ fn site(ctx: &mut FnCtx<'_>, callee: &Expr) -> Result<Option<Site>> {
             byte_offset,
             ..
         } => {
-            let offset = if *byte_offset != 0 {
-                *byte_offset
-            } else {
-                direct_offset
-            };
-            if offset == 0 {
-                return Ok(None);
-            }
+            let offset = *byte_offset;
             let Some(&mid) = ctx.wpfacts.typed_calls.get(&offset) else {
                 return Ok(None);
             };
@@ -654,18 +651,18 @@ pub(crate) fn try_lower_agg_set(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Opti
     let called = match super::record_array::try_lower_source(ctx, value)? {
         Some(c) => Some(c),
         None => {
-            let Expr::Call {
-                callee,
-                args,
-                byte_offset,
-                ..
-            } = value.as_ref()
-            else {
-                return Ok(None);
+            let (callee, args, site) = match value.as_ref() {
+                Expr::Call {
+                    callee,
+                    args,
+                    byte_offset,
+                    ..
+                } => (callee, args, Some(*byte_offset)),
+                // A split region's call: the direct call it is, no site.
+                Expr::RegionCall { callee, args } => (callee, args, None),
+                _ => return Ok(None),
             };
-            super::signature_entry::with_direct_call(*byte_offset, || {
-                try_lower_call(ctx, callee, args)
-            })?
+            super::signature_entry::with_direct_call(site, || try_lower_call(ctx, callee, args))?
         }
     };
     let (present, result_words, r) = match called {
@@ -752,6 +749,7 @@ pub(crate) fn try_fold_bound_agg(ctx: &mut FnCtx<'_>, expr: &Expr) -> Option<Str
                 op: perry_hir::CompareOp::Eq,
                 left,
                 right,
+                ..
             } = condition.as_ref()
             else {
                 return None;

@@ -169,7 +169,7 @@ fn namespace_class_value_resolves_inside_a_sibling_arrow() {
     }
     .expect("sibling arrow");
     assert!(body.iter().any(|stmt| matches!(stmt,
-        Stmt::Return(Some(Expr::ClassRef(name))) if name == "N.C"
+        Stmt::Return(Some(Expr::ClassRef(name)), _) if name == "N.C"
     )));
 }
 
@@ -193,7 +193,7 @@ fn exported_variables_are_properties_of_the_namespace_object() {
         .find(|f| f.name == "N.read")
         .expect("N.read");
     assert!(matches!(read.body.as_slice(),
-        [Stmt::Return(Some(Expr::PropertyGet { object, property, .. }))]
+        [Stmt::Return(Some(Expr::PropertyGet { object, property, .. }), _)]
         if property == "x" && matches!(object.as_ref(), Expr::LocalGet(id) if *id == n)));
     let shadow = module
         .functions
@@ -201,5 +201,5 @@ fn exported_variables_are_properties_of_the_namespace_object() {
         .find(|f| f.name == "N.shadow")
         .expect("N.shadow");
     assert!(matches!(shadow.body.as_slice(),
-        [Stmt::Return(Some(Expr::LocalGet(id)))] if *id == shadow.params[0].id));
+        [Stmt::Return(Some(Expr::LocalGet(id)), _)] if *id == shadow.params[0].id));
 }

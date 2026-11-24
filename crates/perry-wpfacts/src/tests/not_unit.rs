@@ -311,19 +311,25 @@ fn control_relink_to_a_program_object() {
 /// array's `length` is its own data, a number; OwnDataOrAbsent states own
 /// data or `undefined`, no value set), but `t` may be a JSON string, whose
 /// `length` is the String wrapper's own key (10.4.3), which the primitive
-/// rule does not describe: refused, by the primitive.
+/// rule does not describe: refused, by the primitive. The site is the
+/// source read `t.length`; the for-in loop's bound read of its key list
+/// (`__keys.length`, at the loop statement) is a site of its own.
 #[test]
 fn control_relink_to_an_array_reads_its_length() {
-    let pf = one(&format!("{C}{RL}console.log(t.length);\n"));
+    let src = format!("{C}{RL}console.log(t.length);\n");
+    let at_read = src.find("t.length").unwrap() as u32 + 3;
+    let pf = one(&src);
     assert!(refused(&pf, "length"));
-    assert!(pf
+    let read: Vec<_> = pf
         .sites
         .iter()
-        .filter(|s| s.key == "length" && !s.is_call)
-        .all(|s| matches!(
-            &s.verdict,
-            Verdict::No(r) if r.contains("primitive beside an object")
-        )));
+        .filter(|s| s.key == "length" && !s.is_call && s.byte_offset == at_read)
+        .collect();
+    assert!(!read.is_empty());
+    assert!(read.iter().all(|s| matches!(
+        &s.verdict,
+        Verdict::No(r) if r.contains("primitive beside an object")
+    )));
 }
 
 /// A call on the relinked object: the JSON call claim refuses (a call).

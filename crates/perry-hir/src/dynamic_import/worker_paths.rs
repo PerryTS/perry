@@ -160,7 +160,7 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
         self.tick(depth)?;
         let expr = crate::tdz_check::without_checks(expr);
         match expr {
-            Expr::Await(value) => self.resolve(value, depth + 1),
+            Expr::Await(value, _) => self.resolve(value, depth + 1),
             Expr::String(value) => bounded(vec![value.clone()], &mut self.work, self.string_limit),
             Expr::StringCoerce(value) | Expr::TemplateStringCoerce(value) => {
                 self.strings(value, depth + 1).map(PathValues::strings)
@@ -218,6 +218,7 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
                 op: BinaryOp::Add,
                 left,
                 right,
+                ..
             } => {
                 let left = self.strings(left, depth + 1)?;
                 let right = self.strings(right, depth + 1)?;
@@ -249,6 +250,7 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 self.pure_selector(condition, depth + 1)?;
                 let mut then_values = self.resolve(then_expr, depth + 1)?;
@@ -261,7 +263,7 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
                 values.is_url = then_values.is_url;
                 Ok(values)
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 if let Some(string) = static_string_replace_target(callee, args) {
                     return self.replace(string, &args[0], &args[1], depth + 1);
                 }
@@ -286,8 +288,10 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
                 }
                 self.call(callee, args, depth + 1)
             }
-            Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } => {
-                if let Expr::IndexGet { index, .. } = expr {
+            Expr::PropertyGet { object, .. }
+            | Expr::IndexGet { object, .. }
+            | Expr::RegionOut { object, .. } => {
+                if let (Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. }) = expr {
                     self.pure_selector(index, depth + 1)?;
                 }
                 self.registry(object, depth + 1)
@@ -471,7 +475,7 @@ impl<'a, V: Borrow<Expr>> WorkerPaths<'a, V> {
         for stmt in body {
             self.tick(depth)?;
             match stmt {
-                Stmt::Return(Some(value)) => {
+                Stmt::Return(Some(value), _) => {
                     match self.resolve(value, depth + 1) {
                         Ok(returned) => {
                             values.is_url |= returned.is_url;

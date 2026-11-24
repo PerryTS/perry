@@ -304,10 +304,10 @@ impl<'a> Gen<'a> {
                 object: Some(object),
                 ..
             } => match object.as_ref() {
-                Expr::PropertyGet { byte_offset, .. } => *byte_offset,
-                _ => 0,
+                Expr::PropertyGet { byte_offset, .. } => Some(*byte_offset),
+                _ => None,
             },
-            _ => 0,
+            _ => None,
         };
         self.m.push_fill_pushes.push(crate::push_fills::FillPush {
             module: fx.module,

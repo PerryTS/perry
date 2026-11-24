@@ -301,7 +301,7 @@ fn count_stmt(stmt: &Stmt, c: &mut Counter) {
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => count_expr(e, c),
-        Stmt::Return(e) => {
+        Stmt::Return(e, _) => {
             if let Some(e) = e {
                 count_expr(e, c);
             }
@@ -359,6 +359,7 @@ fn count_stmt(stmt: &Stmt, c: &mut Counter) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             count_expr(discriminant, c);
             for case in cases {

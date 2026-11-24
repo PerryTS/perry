@@ -135,8 +135,8 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
                 visit_expr(v, ctx);
             }
         }
-        Stmt::Return(Some(e)) => visit_expr(e, ctx),
-        Stmt::Return(None) | Stmt::Break | Stmt::Continue => {}
+        Stmt::Return(Some(e), _) => visit_expr(e, ctx),
+        Stmt::Return(None, _) | Stmt::Break | Stmt::Continue => {}
         Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
         Stmt::Labeled { body, .. } => visit_stmt(body, ctx),
         Stmt::If {
@@ -203,6 +203,7 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             visit_expr(discriminant, ctx);
             for case in cases {
@@ -220,7 +221,9 @@ fn visit_stmt(stmt: &Stmt, ctx: &mut WalkCtx) {
 
 fn visit_expr(expr: &Expr, ctx: &mut WalkCtx) {
     match expr {
-        Expr::Call { callee, args, .. } if callee.is_global_fetch_callee() => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
+            if callee.is_global_fetch_callee() =>
+        {
             if let Some(url) = args.first() {
                 check_url(ctx, "fetch", url);
             }

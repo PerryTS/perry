@@ -310,7 +310,7 @@ fn element_shape_loop_pure_expr_collect(
         Expr::PropertyGet {
             object, property, ..
         } => match object.as_ref() {
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 let Expr::LocalGet(arr_id) = object.as_ref() else {
                     return false;
                 };
@@ -367,6 +367,7 @@ fn element_shape_loop_pure_expr_collect(
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             matches!(condition.as_ref(), Expr::PropertyGet { .. })
                 && crate::expr::element_shape_reads::integer_arm(then_expr).is_some()
@@ -885,7 +886,9 @@ fn match_element_shape_versioned_loop(
     }
 
     let (op, left, right) = match condition? {
-        Expr::Compare { op, left, right } => (*op, left.as_ref(), right.as_ref()),
+        Expr::Compare {
+            op, left, right, ..
+        } => (*op, left.as_ref(), right.as_ref()),
         _ => return None,
     };
     if !matches!(op, CompareOp::Lt) || !matches!(left, Expr::LocalGet(id) if *id == counter_id) {
@@ -1009,7 +1012,9 @@ fn match_element_shape_versioned_loop(
             return None;
         }
         match binding_init {
-            Expr::IndexGet { object, index, .. } if carried.is_none() => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
+                if carried.is_none() =>
+            {
                 let (Expr::LocalGet(arr_id), Expr::LocalGet(idx_id)) =
                     (object.as_ref(), index.as_ref())
                 else {
@@ -1033,6 +1038,7 @@ fn match_element_shape_versioned_loop(
                 op: BinaryOp::Mod,
                 left,
                 right,
+                ..
             } if carried.is_none() => {
                 let (Expr::LocalGet(num_id), Expr::LocalGet(modulus_id)) =
                     (left.as_ref(), right.as_ref())
@@ -1303,10 +1309,17 @@ fn match_element_shape_versioned_loop(
         // is what keeps the folded float arithmetic bit-identical.
         let mut folded = values[0].clone();
         for value in &values[1..] {
-            let Expr::Binary { op, right, .. } = value else {
+            let Expr::Binary {
+                op,
+                right,
+                byte_offset,
+                ..
+            } = value
+            else {
                 unreachable!("the accumulator fold validated every statement's shape");
             };
             folded = Expr::Binary {
+                byte_offset: *byte_offset,
                 op: *op,
                 left: Box::new(folded),
                 right: right.clone(),

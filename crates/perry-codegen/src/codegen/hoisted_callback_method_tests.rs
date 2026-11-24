@@ -9,6 +9,7 @@ const CALLBACK_ALIAS: u32 = 21;
 
 fn param(id: u32, name: &str, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -34,6 +35,7 @@ fn callback_type() -> Type {
 
 fn method(body: Vec<Stmt>) -> Function {
     Function {
+        byte_offset: 0,
         id: 90,
         name: "visit".to_string(),
         type_params: Vec::new(),
@@ -97,6 +99,7 @@ fn call(local: u32, arity: usize) -> Stmt {
 fn alias_then_call() -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id: CALLBACK_ALIAS,
             name: "cb".to_string(),
             ty: callback_type(),
@@ -230,6 +233,7 @@ fn nested_closure_calls_are_not_assigned_the_outer_methods_ssa_target() {
         ..param(701, "value", Type::Any)
     };
     let nested = Expr::Closure {
+        byte_offset: 0,
         func_id: 700,
         params: vec![nested_param],
         return_type: Type::Void,

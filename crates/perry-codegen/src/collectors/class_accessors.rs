@@ -108,6 +108,7 @@ mod tests {
 
     fn function(name: &str) -> Function {
         Function {
+            byte_offset: 0,
             id: 0,
             name: name.to_string(),
             type_params: Vec::new(),

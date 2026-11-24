@@ -26,7 +26,7 @@ fn instanceof_rhs_value(source: &str, function: &str) -> Option<Expr> {
         .body
         .clone();
     match body.first() {
-        Some(Stmt::Return(Some(Expr::InstanceOf { ty_expr, .. }))) => {
+        Some(Stmt::Return(Some(Expr::InstanceOf { ty_expr, .. }), _)) => {
             ty_expr.as_ref().map(|value| (**value).clone())
         }
         other => panic!("`{function}` must lower to a returned instanceof: {other:?}"),

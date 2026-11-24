@@ -191,6 +191,7 @@ fn arg_is_order_free(ctx: &FnCtx<'_>, e: &perry_hir::Expr) -> bool {
             op: CompareOp::Eq | CompareOp::Ne,
             left,
             right,
+            ..
         }
         | Expr::Logical { left, right, .. } => {
             arg_is_order_free(ctx, left) && arg_is_order_free(ctx, right)
@@ -199,6 +200,7 @@ fn arg_is_order_free(ctx: &FnCtx<'_>, e: &perry_hir::Expr) -> bool {
             condition,
             then_expr,
             else_expr,
+            ..
         } => {
             arg_is_order_free(ctx, condition)
                 && arg_is_order_free(ctx, then_expr)

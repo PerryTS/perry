@@ -163,7 +163,7 @@ pub(crate) fn infer_dynamic_extends_names(module: &mut Module) {
         let Some(expr) = class.extends_expr.as_deref() else {
             continue;
         };
-        let Expr::Call { callee, .. } = expr else {
+        let (Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) = expr else {
             continue;
         };
         let Expr::FuncRef(func_id) = callee.as_ref() else {
@@ -222,7 +222,7 @@ fn expr_reads_local(expr: &Expr) -> bool {
 /// `Expr::ClassRef` (directly or as the last element of an `Expr::Sequence`).
 fn trailing_return_classref(body: &[Stmt]) -> Option<String> {
     for stmt in body.iter().rev() {
-        if let Stmt::Return(Some(expr)) = stmt {
+        if let Stmt::Return(Some(expr), _) = stmt {
             return classref_name(expr);
         }
     }
@@ -312,7 +312,7 @@ pub(crate) fn number_to_js_key(m: f64) -> String {
 /// than array-element access.
 /// Check if a lowered HIR expression is a call to a generator function.
 pub(super) fn is_generator_call_expr(ctx: &LoweringContext, expr: &Expr) -> bool {
-    if let Expr::Call { callee, .. } = expr {
+    if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = expr {
         if let Expr::FuncRef(func_id) = callee.as_ref() {
             // Look up the function name by its ID
             for (name, id) in &ctx.functions {
@@ -401,5 +401,95 @@ pub(crate) fn is_ast_string_expr(ctx: &LoweringContext, expr: &ast::Expr) -> boo
             is_ast_string_expr(ctx, &bin.left) || is_ast_string_expr(ctx, &bin.right)
         }
         _ => false,
+    }
+}
+
+/// Where a member operation stands: its own member token, the start of the
+/// property name (`#name` for a private name, `[` for a computed key), not
+/// the start of the whole expression. In `a.b.b` the two reads are then two
+/// sites (module, start, kind), as they are two operations.
+pub(crate) fn member_token(member: &ast::MemberExpr) -> u32 {
+    match &member.prop {
+        ast::MemberProp::Ident(name) => name.span.lo.0,
+        ast::MemberProp::PrivateName(name) => name.span.lo.0,
+        ast::MemberProp::Computed(key) => key.span.lo.0,
+    }
+}
+
+/// Where a call stands: a method call (`a.b()`, `a[k]()`, `super.m()`, also
+/// parenthesized or behind a TS wrapper) at its callee's member token, so in
+/// `a.b().c()` the calls stand at `b` and `c` (the member reads there are
+/// another kind); any other call at its start.
+pub(crate) fn call_token(call: &ast::CallExpr) -> u32 {
+    let ast::Callee::Expr(callee) = &call.callee else {
+        return call.span.lo.0;
+    };
+    let mut cur = callee.as_ref();
+    loop {
+        cur = match cur {
+            ast::Expr::TsAs(x) => &x.expr,
+            ast::Expr::TsNonNull(x) => &x.expr,
+            ast::Expr::TsSatisfies(x) => &x.expr,
+            ast::Expr::TsTypeAssertion(x) => &x.expr,
+            ast::Expr::TsConstAssertion(x) => &x.expr,
+            ast::Expr::Paren(x) => &x.expr,
+            ast::Expr::Member(m) => return member_token(m),
+            ast::Expr::SuperProp(m) => return super_member_token(m),
+            _ => return call.span.lo.0,
+        };
+    }
+}
+
+/// Where an assignment's store stands: a member target (also parenthesized
+/// or behind a TS wrapper) at its member token, the token its compound read
+/// stands at, so `o.k op= v` is one read/store pair; any other target at the
+/// assignment's start.
+pub(crate) fn assign_token(assign: &ast::AssignExpr) -> u32 {
+    let ast::AssignTarget::Simple(target) = &assign.left else {
+        return assign.span.lo.0;
+    };
+    let cur: &ast::Expr = match target {
+        ast::SimpleAssignTarget::Member(m) => return member_token(m),
+        ast::SimpleAssignTarget::SuperProp(m) => return super_member_token(m),
+        ast::SimpleAssignTarget::Paren(x) => &x.expr,
+        ast::SimpleAssignTarget::TsAs(x) => &x.expr,
+        ast::SimpleAssignTarget::TsSatisfies(x) => &x.expr,
+        ast::SimpleAssignTarget::TsNonNull(x) => &x.expr,
+        ast::SimpleAssignTarget::TsTypeAssertion(x) => &x.expr,
+        _ => return assign.span.lo.0,
+    };
+    target_member_token(cur).unwrap_or(assign.span.lo.0)
+}
+
+/// Where an update `o.k++` / `a[k]++` stands: its member operand (also
+/// parenthesized or behind a TS wrapper) at the member token, as the read
+/// and the store it pairs; any other operand at the update's start.
+pub(crate) fn update_token(update: &ast::UpdateExpr) -> u32 {
+    target_member_token(&update.arg).unwrap_or(update.span.lo.0)
+}
+
+/// The member token of a reference operand seen through parentheses and TS
+/// wrappers; `None` when the operand is no member.
+fn target_member_token(mut cur: &ast::Expr) -> Option<u32> {
+    loop {
+        cur = match cur {
+            ast::Expr::TsAs(x) => &x.expr,
+            ast::Expr::TsNonNull(x) => &x.expr,
+            ast::Expr::TsSatisfies(x) => &x.expr,
+            ast::Expr::TsTypeAssertion(x) => &x.expr,
+            ast::Expr::TsConstAssertion(x) => &x.expr,
+            ast::Expr::Paren(x) => &x.expr,
+            ast::Expr::Member(m) => return Some(member_token(m)),
+            ast::Expr::SuperProp(m) => return Some(super_member_token(m)),
+            _ => return None,
+        };
+    }
+}
+
+/// `super.name` / `super[key]` stands at its member token, as `member_token`.
+pub(crate) fn super_member_token(member: &ast::SuperPropExpr) -> u32 {
+    match &member.prop {
+        ast::SuperProp::Ident(name) => name.span.lo.0,
+        ast::SuperProp::Computed(key) => key.span.lo.0,
     }
 }

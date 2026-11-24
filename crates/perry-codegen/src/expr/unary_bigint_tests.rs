@@ -14,6 +14,7 @@ fn bigint_array_element_negation_uses_dynamic_numeric_dispatch() {
         "bigint_array_element_negation",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: VALUES,
                 name: "values".to_string(),
                 ty: Type::Array(Box::new(Type::BigInt)),
@@ -24,6 +25,7 @@ fn bigint_array_element_negation_uses_dynamic_numeric_dispatch() {
                 )),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: RESULT,
                 name: "result".to_string(),
                 ty: Type::BigInt,

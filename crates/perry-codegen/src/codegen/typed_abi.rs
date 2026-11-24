@@ -340,7 +340,7 @@ pub(crate) fn typed_arg_is_guard_candidate(
         // separately proven outer Array kind intentionally erases its element
         // details to `Any`. The consumer still validates/coerces the live
         // result before using a raw representation.
-        Expr::IndexGet { object, index, .. }
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
             if crate::type_analysis::is_numeric_expr(ctx, index) =>
         {
             let Expr::LocalGet(array_id) = object.as_ref() else {
@@ -617,7 +617,7 @@ pub(crate) fn nonnegative_index_fast_array_params(
         },
         Stmt::Let {
             id: value_id,
-            init: Some(Expr::IndexGet { object, index, .. }),
+            init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
             ..
         },
         Stmt::If {
@@ -625,7 +625,7 @@ pub(crate) fn nonnegative_index_fast_array_params(
             then_branch: sentinel_branch,
             else_branch: None,
         },
-        Stmt::Return(Some(Expr::LocalGet(return_id))),
+        Stmt::Return(Some(Expr::LocalGet(return_id)), _),
     ) = (
         &method.body[0],
         &method.body[1],
@@ -654,7 +654,7 @@ pub(crate) fn nonnegative_index_fast_array_params(
         Expr::Compare {
             op: CompareOp::Eq | CompareOp::LooseEq,
             left,
-            right,
+            right, ..
         } if matches!(
             (left.as_ref(), right.as_ref()),
             (Expr::LocalGet(id), Expr::Undefined) | (Expr::Undefined, Expr::LocalGet(id))
@@ -666,7 +666,7 @@ pub(crate) fn nonnegative_index_fast_array_params(
         Expr::Compare {
             op: CompareOp::Eq | CompareOp::LooseEq,
             left,
-            right,
+            right, ..
         } if matches!(left.as_ref(), Expr::LocalGet(id) if *id == *value_id)
             || matches!(right.as_ref(), Expr::LocalGet(id) if *id == *value_id)
     );
@@ -1445,7 +1445,7 @@ fn typed_f64_receiver_body_rejection_reason(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) => receiver_expr_is_typed_f64_safe(
+        Stmt::Return(Some(expr), _) => receiver_expr_is_typed_f64_safe(
             chain_fields,
             expr,
             &locals,
@@ -1495,7 +1495,9 @@ fn receiver_expr_is_typed_f64_safe(
                 Err(TypedCloneRejectionReason::ReturnExprNotTypedF64Safe)
             }
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             if !matches!(
                 op,
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
@@ -1552,8 +1554,8 @@ fn typed_f64_body_rejection_reason(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) if expr_is_typed_f64_safe(expr, &locals) => None,
-        Stmt::Return(Some(_)) => Some(TypedCloneRejectionReason::ReturnExprNotTypedF64Safe),
+        Stmt::Return(Some(expr), _) if expr_is_typed_f64_safe(expr, &locals) => None,
+        Stmt::Return(Some(_), _) => Some(TypedCloneRejectionReason::ReturnExprNotTypedF64Safe),
         _ => Some(TypedCloneRejectionReason::BodyNotSingleReturn),
     }
 }
@@ -1580,8 +1582,8 @@ fn typed_i32_body_rejection_reason(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) if expr_is_typed_i32_safe(expr, &locals) => None,
-        Stmt::Return(Some(_)) => Some(TypedCloneRejectionReason::ReturnExprNotTypedI32Safe),
+        Stmt::Return(Some(expr), _) if expr_is_typed_i32_safe(expr, &locals) => None,
+        Stmt::Return(Some(_), _) => Some(TypedCloneRejectionReason::ReturnExprNotTypedI32Safe),
         _ => Some(TypedCloneRejectionReason::BodyNotSingleReturn),
     }
 }
@@ -1617,8 +1619,8 @@ fn typed_i1_body_rejection_reason(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) if expr_is_typed_i1_safe(expr, &locals) => None,
-        Stmt::Return(Some(_)) => Some(TypedCloneRejectionReason::ReturnExprNotTypedI1Safe),
+        Stmt::Return(Some(expr), _) if expr_is_typed_i1_safe(expr, &locals) => None,
+        Stmt::Return(Some(_), _) => Some(TypedCloneRejectionReason::ReturnExprNotTypedI1Safe),
         _ => Some(TypedCloneRejectionReason::BodyNotSingleReturn),
     }
 }
@@ -1645,8 +1647,8 @@ fn typed_string_body_rejection_reason(
         }
     }
     match last {
-        Stmt::Return(Some(expr)) if expr_is_typed_string_safe(expr, &locals) => None,
-        Stmt::Return(Some(_)) => Some(TypedCloneRejectionReason::ReturnExprNotTypedStringSafe),
+        Stmt::Return(Some(expr), _) if expr_is_typed_string_safe(expr, &locals) => None,
+        Stmt::Return(Some(_), _) => Some(TypedCloneRejectionReason::ReturnExprNotTypedStringSafe),
         _ => Some(TypedCloneRejectionReason::BodyNotSingleReturn),
     }
 }
@@ -1661,7 +1663,9 @@ fn expr_is_typed_f64_safe(expr: &Expr, locals: &HashMap<u32, TypedParamRep>) -> 
         Expr::Unary { op, operand } => {
             matches!(op, UnaryOp::Pos | UnaryOp::Neg) && expr_is_typed_f64_safe(operand, locals)
         }
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             matches!(
                 op,
                 BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div | BinaryOp::Mod
@@ -1680,7 +1684,9 @@ fn expr_is_typed_i32_safe(expr: &Expr, locals: &HashMap<u32, TypedParamRep>) -> 
             op: UnaryOp::BitNot,
             operand,
         } => expr_is_typed_i32_safe(operand, locals),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary {
+            op, left, right, ..
+        } => {
             matches!(
                 op,
                 BinaryOp::BitAnd
@@ -1703,12 +1709,16 @@ fn expr_is_typed_i1_safe(expr: &Expr, locals: &HashMap<u32, TypedParamRep>) -> b
             op: UnaryOp::Not,
             operand,
         } => expr_is_typed_i1_safe(operand, locals),
-        Expr::Logical { op, left, right } => {
+        Expr::Logical {
+            op, left, right, ..
+        } => {
             matches!(op, LogicalOp::And | LogicalOp::Or)
                 && expr_is_typed_i1_safe(left, locals)
                 && expr_is_typed_i1_safe(right, locals)
         }
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             let bool_compare = matches!(
                 op,
                 CompareOp::Eq | CompareOp::Ne | CompareOp::LooseEq | CompareOp::LooseNe
