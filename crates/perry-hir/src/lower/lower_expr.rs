@@ -163,7 +163,7 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                 }
             }
             (
-                ast::Expr::Assign(_),
+                ast::Expr::Assign(assign),
                 Expr::PropertySet {
                     byte_offset,
                     byte_end,
@@ -179,8 +179,13 @@ pub(crate) fn lower_expr(ctx: &mut LoweringContext, expr: &ast::Expr) -> Result<
                     byte_end,
                     ..
                 },
-            )
-            | (
+            ) => {
+                *byte_offset = assign_token(assign);
+                if dump {
+                    *byte_end = span.hi.0;
+                }
+            }
+            (
                 ast::Expr::Update(_),
                 Expr::PropertyUpdate {
                     byte_offset,
