@@ -35,7 +35,10 @@ pub fn map_cons(
         OwnValues { dst } => OwnValues { dst: n(dst) },
         OwnKeys { dst } => OwnKeys { dst: n(dst) },
         OwnNames { dst } => OwnNames { dst: n(dst) },
-        OwnDescValues { dst } => OwnDescValues { dst: n(dst) },
+        OwnDescValues { dst, key } => OwnDescValues {
+            dst: n(dst),
+            key: if key == NO_NODE { NO_NODE } else { n(key) },
+        },
         IndexHole => IndexHole,
         IndexHoleIn { key } => IndexHoleIn { key: n(key) },
         IndexKept => IndexKept,
@@ -821,7 +824,7 @@ pub(super) fn read_dst(c: &Cons) -> Option<NodeId> {
         | OwnValues { dst }
         | OwnKeys { dst }
         | OwnNames { dst }
-        | OwnDescValues { dst }
+        | OwnDescValues { dst, .. }
         | CjsPublish { dst }
         | IdxLoad { dst, .. }
         | EnumChain { dst, .. }

@@ -203,14 +203,16 @@ impl<'a> Gen<'a> {
                 let on = self.expr(fx, o);
                 let kn = self.expr(fx, k);
                 self.to_property_key(kn);
-                let d = self.descriptor_of(mi, on);
+                // A for-in run's key is the one property described.
+                let key = self.for_in_key_of(mi, k).unwrap_or(NO_NODE);
+                let d = self.descriptor_of(mi, on, key);
                 // 20.1.2.8 / 28.1.7: an absent property gives `undefined`.
                 self.m.add_prim(d, prim::UNDEF);
                 d
             }
             Expr::ObjectGetOwnPropertyDescriptors(o) => {
                 let on = self.expr(fx, o);
-                let d = self.descriptor_of(mi, on);
+                let d = self.descriptor_of(mi, on, NO_NODE);
                 let (t, n) = self.bobj(mi, "descriptors");
                 let fa = self.m.field_any(t);
                 self.m.edge(d, fa);

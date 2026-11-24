@@ -154,7 +154,11 @@ pub enum Cons {
     /// members (`Math.PI`, 21.3.1.6), the methods of `Object.prototype`, a
     /// String's `length` (10.4.3). Those values are read by an any-key [[Get]]
     /// on the intrinsic-bearing object (a superset of its own data values).
-    OwnDescValues { dst: NodeId },
+    /// `key`: the key node of the call (`NO_NODE`: not decided by it). A
+    /// for-in run's one key (`Model::key_nodes`) is the one property the
+    /// descriptor describes (20.1.2.8): its `value` is that own property
+    /// only (`Model::idx_own_load_tok`), never every own value.
+    OwnDescValues { dst: NodeId, key: NodeId },
     /// A store under an index of each Array in the node: it may leave a
     /// hole (`Model::mark_hole`); an append never does.
     IndexHole,

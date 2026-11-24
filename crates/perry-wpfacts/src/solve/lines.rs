@@ -17,7 +17,7 @@ impl Model {
             Cons::OwnValues { dst } => format!("ownvalues {n} {dst}"),
             Cons::OwnKeys { dst } => format!("ownkeys {n} {dst}"),
             Cons::OwnNames { dst } => format!("ownnames {n} {dst}"),
-            Cons::OwnDescValues { dst } => format!("owndescvalues {n} {dst}"),
+            Cons::OwnDescValues { dst, key } => format!("owndescvalues {n} {dst} {key}"),
             Cons::IndexHole => format!("indexhole {n}"),
             Cons::IndexHoleIn { key } => format!("indexholein {n} {key}"),
             Cons::IndexKept => format!("indexkept {n}"),

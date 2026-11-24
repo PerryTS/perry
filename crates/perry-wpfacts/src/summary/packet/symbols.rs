@@ -41,7 +41,7 @@ impl Model {
             Cons::OwnValues { dst } => format!("OwnValues dst={:?}", dst),
             Cons::OwnKeys { dst } => format!("OwnKeys dst={:?}", dst),
             Cons::OwnNames { dst } => format!("OwnNames dst={:?}", dst),
-            Cons::OwnDescValues { dst } => format!("OwnDescValues dst={:?}", dst),
+            Cons::OwnDescValues { dst, key } => format!("OwnDescValues dst={dst:?} key={key:?}"),
             Cons::IndexHole => format!("IndexHole"),
             Cons::IndexHoleIn { key } => format!("IndexHoleIn {key}"),
             Cons::IndexKept => format!("IndexKept"),

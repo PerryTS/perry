@@ -2274,7 +2274,7 @@ impl Model {
             // `Cons::OwnDescAcc`'s); without the trap the target's own
             // descriptor (the forward). getOwnPropertyDescriptor runs one
             // key's trap: the [[OwnPropertyKeys]] here is a superset.
-            Cons::OwnDescValues { dst } => {
+            Cons::OwnDescValues { dst, key } => {
                 let r = self.reason("getOwnPropertyDescriptor(s) of a Proxy");
                 self.proxy_own_props(p, r);
                 if !self.proxy_made(p, ProxyOp::DescValues(dst)) {
@@ -2288,7 +2288,7 @@ impl Model {
                         },
                     );
                     let t = self.proxies[p as usize].target;
-                    self.cons(t, Cons::OwnDescValues { dst });
+                    self.cons(t, Cons::OwnDescValues { dst, key });
                 }
             }
             // Rule PXOWN: the `get` (or `set`) of those descriptors: the

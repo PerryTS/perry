@@ -127,3 +127,13 @@ fn own_keys_loop_rest_wrapper_applies_its_own_method() {
         "arrow",
     );
 }
+
+#[test]
+fn own_names_loop_runs_its_body_per_key() {
+    // The run's key is the one property `getOwnPropertyDescriptor` describes:
+    // `measure`'s wrapper calls `measure` only, so `gl.measure("ab")` is a
+    // Number, never what `createTexture` returns.
+    let [y, _, _, v] = kinds(&wrapped(""));
+    assert!(v.objs.is_empty() && !v.top, "gl.measure() {v:?}");
+    assert!(y.objs.is_empty() && !y.top, "moveTo's y {y:?}");
+}
