@@ -1246,6 +1246,9 @@ mod function_value;
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;
 
+#[path = "object_is_tests.rs"]
+mod object_is;
+
 #[path = "object_create_tests.rs"]
 mod object_create;
 

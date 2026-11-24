@@ -54,6 +54,7 @@ impl WasmModuleEmitter {
             "object_set_prototype_of",
             "object_get_prototype_of",
             "reflect_get_prototype_of",
+            "object_is",
             "object_super_get",
             "object_get_dynamic",
             "object_set_dynamic",
