@@ -117,3 +117,27 @@ f(10).then((v) => console.log(v), (e) => console.log("threw " + e.message));
         "function,4,14,15"
     );
 }
+
+// A local an async body's closure assigns is one binding shared with the body: each
+// sees the other's writes, a parameter included. Expected output is Node's.
+#[test]
+fn async_body_closure_shares_assigned_captures() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(p: number): Promise<string> {
+  let count = 0;
+  const bump = () => { count += 10; p++; return count; };
+  count++;
+  const seen = bump();
+  count++;
+  let caught = "";
+  try { throw "e"; } catch (err) { const tag = () => { err += "!"; }; tag(); caught = err; }
+  return [seen, count, bump(), count, p, caught].join(",");
+}
+f(1).then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "11,12,22,22,3,e!"
+    );
+}
