@@ -182,6 +182,18 @@ Group controls into labelled sections. Perry has no `Form()` widget — use a
 {{#include ../../examples/ui/widgets/sections.ts}}
 ```
 
+`Disclosure(title)` is a section the reader can collapse: the title is always
+shown, and the children attached with `widgetAddChild` show when it is
+expanded. The web target renders `<details>`/`<summary>`; native backends show
+a `Section`, always expanded.
+
+```typescript,no-test
+import { Disclosure, Text, widgetAddChild } from "perry/ui";
+
+const more = Disclosure("More details");
+widgetAddChild(more, Text("Bring gloves and a raincoat."));
+```
+
 ## Mobile widgets (issue #553)
 
 ### BottomNavigation

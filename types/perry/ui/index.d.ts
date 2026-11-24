@@ -577,6 +577,13 @@ export function Section(title: string): Widget;
 export function Section(title: string, children: Widget[]): Widget;
 
 /**
+ * A collapsible section: `title` is always shown, and the children attached with
+ * `widgetAddChild` show when the reader expands it. Web: `<details>`/`<summary>`.
+ * Native backends show a `Section`, always expanded.
+ */
+export function Disclosure(title: string): Widget;
+
+/**
  * Navigation stack for multi-page apps.
  *
  * **HarmonyOS Phase 2 v11**: state-driven shape — pass a `state<string>(...)`

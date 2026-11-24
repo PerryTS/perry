@@ -404,6 +404,13 @@ pub extern "C" fn perry_ui_section_create(title_ptr: i64) -> i64 {
     widgets::form::section_create(title_ptr as *const u8)
 }
 
+/// The collapsible `<details>` exists on the web target only; here a Disclosure is a
+/// Section, always expanded.
+#[no_mangle]
+pub extern "C" fn perry_ui_disclosure_create(title_ptr: i64) -> i64 {
+    perry_ui_section_create(title_ptr)
+}
+
 /// Create a NavigationStack. Returns widget handle.
 #[no_mangle]
 pub extern "C" fn perry_ui_navstack_create() -> i64 {

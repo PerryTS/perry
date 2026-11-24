@@ -1008,6 +1008,25 @@ console.log(fieldset.children.map(c => c.tagName + ":" + c.textContent).join(" "
 }
 
 #[test]
+fn disclosure_is_details_with_the_title_as_summary() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Disclosure, Text, widgetAddChild } from "perry/ui";
+const more = Disclosure("More details");
+widgetAddChild(more, Text("gloves"));
+widgetAddChild(more, Text("raincoat"));
+"#,
+            r#"
+const details = [...uiHandles.values()].find(e => e.tagName === "DETAILS");
+console.log(details.children.map(c => c.tagName + ":" + c.textContent).join(" "));
+"#
+        ),
+        "SUMMARY:More details SPAN:gloves SPAN:raincoat"
+    );
+}
+
+#[test]
 fn for_of_and_destructuring_drive_the_iterator_protocol() {
     assert_eq!(
         run_web_source(

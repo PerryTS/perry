@@ -4067,6 +4067,15 @@ function perry_ui_section_create(title, children) {
   if (Array.isArray(children)) { for (var i = 0; i < children.length; i++) { var c = uiGet(children[i]); if (c) el.appendChild(c); } }
   return h;
 }
+// Disclosure: a `<details>` whose `<summary>` is the title; children added with
+// widgetAddChild show when the reader expands it.
+function perry_ui_disclosure_create(title) {
+  const el = document.createElement("details");
+  const summary = document.createElement("summary");
+  summary.textContent = title === undefined ? "" : String(title);
+  el.appendChild(summary);
+  return uiAlloc(el);
+}
 function perry_ui_navigationstack_create() {
   const el = document.createElement("div");
   el.style.display = "flex"; el.style.flexDirection = "column"; el.style.flex = "1 1 0%";
@@ -5966,6 +5975,7 @@ const __perryUiDispatch = {
   perry_ui_divider_create, perry_ui_progressview_create, perry_ui_image_create, perry_ui_picker_create,
   perry_ui_wheel_picker_create,
   perry_ui_form_create, perry_ui_section_create, perry_ui_navigationstack_create, perry_ui_canvas_create,
+  perry_ui_disclosure_create,
   perry_ui_bloomview_create, perry_ui_bloomview_get_hwnd,
   perry_ui_lazyvstack_create, perry_ui_lazyvstack_update, perry_ui_table_create,
   perry_ui_table_set_column_header, perry_ui_table_set_column_width,

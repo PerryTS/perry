@@ -351,6 +351,12 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         args: &[ArgKind::Str],
         ret: ReturnKind::Widget,
     },
+    MethodRow {
+        method: "Disclosure",
+        runtime: "perry_ui_disclosure_create",
+        args: &[ArgKind::Str],
+        ret: ReturnKind::Widget,
+    },
     // ---- ProgressView ----
     MethodRow {
         method: "progressviewSetValue",
