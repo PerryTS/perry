@@ -6148,6 +6148,9 @@ function __hostDescriptor(desc) {
       copy[field] = __hostAccessor(v);
     } else copy[field] = v;
   }
+  // A mixed data and accessor descriptor throws the host's TypeError before a later
+  // descriptor is read.
+  if (('get' in copy || 'set' in copy) && ('value' in copy || 'writable' in copy)) Object.defineProperty({}, 'x', copy);
   return copy;
 }
 
