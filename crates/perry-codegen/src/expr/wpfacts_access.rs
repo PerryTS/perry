@@ -1395,11 +1395,8 @@ pub(crate) fn try_lower_get(
         emit_witness(ctx, &recv_box, &val, property, &p, 0, site);
         // The receiver of a fill push reads the Array while it is being born
         // (wpfacts `push_fills`): its claim holds once the fill is over.
-        // offset 0: a `this.k` read codegen builds after facts (array_push.rs:868)
-        // names no site.
-        let filling = matches!(object, Expr::This)
-            && byte_offset != 0
-            && ctx.wpfacts.fill_push_recvs.contains(&byte_offset);
+        let filling =
+            matches!(object, Expr::This) && ctx.wpfacts.fill_push_recvs.contains(&byte_offset);
         if let Some(r) = p
             .array
             .filter(|_| crate::verify_facts::enabled() && !filling)
