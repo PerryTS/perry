@@ -89,7 +89,9 @@ pub struct Fill {
 #[derive(Clone, Copy, Debug)]
 pub struct FillPush {
     pub module: u32,
-    pub offset: u32,
+    /// The receiver member read `this.k` (its start); `None` when the
+    /// receiver is no member read: no codegen site names it.
+    pub offset: Option<u32>,
     pub recv: NodeId,
     pub fill: u32,
 }
@@ -591,8 +593,8 @@ pub fn analyze(c: &Class, sabotage: bool) -> Vec<Fill> {
 /// Fill `ModuleBindings::fill_push_recvs` (module docs).
 pub(crate) fn export(m: &Model, bindings: &mut [crate::bindings::ModuleBindings]) {
     for p in &m.push_fill_pushes {
-        if let (true, Some(mb)) = (p.offset != 0, bindings.get_mut(p.module as usize)) {
-            mb.fill_push_recvs.push(p.offset);
+        if let (Some(offset), Some(mb)) = (p.offset, bindings.get_mut(p.module as usize)) {
+            mb.fill_push_recvs.push(offset);
         }
     }
     for mb in bindings.iter_mut() {
