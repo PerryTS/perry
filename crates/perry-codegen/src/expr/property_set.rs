@@ -557,25 +557,23 @@ fn lower_store(ctx: &mut FnCtx<'_>, expr: &Expr, assignment_strict: bool) -> Res
             // evaluated once; GetValue is the value's read of the same key on
             // it, at the site's offset (a proven getter is called directly,
             // else the read is the ordinary one); then the setter, once.
-            if *byte_offset != 0 {
-                if let Expr::Binary { left, .. } = value.as_ref() {
-                    if let Expr::PropertyGet {
-                        object: read_object,
-                        property: read_property,
-                        byte_offset: read_offset,
-                        ..
-                    } = left.as_ref()
+            if let Expr::Binary { left, .. } = value.as_ref() {
+                if let Expr::PropertyGet {
+                    object: read_object,
+                    property: read_property,
+                    byte_offset: read_offset,
+                    ..
+                } = left.as_ref()
+                {
+                    if read_property == property
+                        && read_offset == byte_offset
+                        && matches!((object.as_ref(), read_object.as_ref()),
+                            (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b)
                     {
-                        if read_property == property
-                            && read_offset == byte_offset
-                            && matches!((object.as_ref(), read_object.as_ref()),
-                                (Expr::LocalGet(a), Expr::LocalGet(b)) if a == b)
+                        if let Some(v) =
+                            try_lower_proven_setter(ctx, object, property, value, *byte_offset)?
                         {
-                            if let Some(v) =
-                                try_lower_proven_setter(ctx, object, property, value, *byte_offset)?
-                            {
-                                return Ok(v);
-                            }
+                            return Ok(v);
                         }
                     }
                 }
