@@ -113,7 +113,7 @@ fn process_stmts(stmts: &mut Vec<Stmt>, fields: &[(String, Type)], next_local_id
     }
     let mut i = 0;
     while i < stmts.len() {
-        let Some((field, ty)) = field_push_candidate(&stmts[i], fields) else {
+        let Some((field, ty, read_offset)) = field_push_candidate(&stmts[i], fields) else {
             i += 1;
             continue;
         };
@@ -131,11 +131,12 @@ fn process_stmts(stmts: &mut Vec<Stmt>, fields: &[(String, Type)], next_local_id
                 name: FIELD_PUSH_RECEIVER_NAME.to_string(),
                 ty: ty.clone(),
                 mutable: true,
+                // The receiver read is the push's own `this.f` read.
                 init: Some(Expr::PropertyGet {
                     byte_end: 0,
                     object: Box::new(Expr::This),
                     property: field.clone(),
-                    byte_offset: 0,
+                    byte_offset: read_offset,
                 }),
             },
             Stmt::Expr(Expr::ArrayPush {
@@ -157,7 +158,7 @@ fn alloc_local(next_id: &mut LocalId) -> LocalId {
 }
 
 /// `this.f.push(v)` as a statement, for an admissible field `f`.
-fn field_push_candidate(stmt: &Stmt, fields: &[(String, Type)]) -> Option<(String, Type)> {
+fn field_push_candidate(stmt: &Stmt, fields: &[(String, Type)]) -> Option<(String, Type, u32)> {
     let Stmt::Expr(Expr::NativeMethodCall {
         module,
         class_name: None,
@@ -175,6 +176,7 @@ fn field_push_candidate(stmt: &Stmt, fields: &[(String, Type)]) -> Option<(Strin
     let Expr::PropertyGet {
         object: recv,
         property,
+        byte_offset,
         ..
     } = object.as_ref()
     else {
@@ -186,7 +188,7 @@ fn field_push_candidate(stmt: &Stmt, fields: &[(String, Type)]) -> Option<(Strin
     fields
         .iter()
         .find(|(name, _)| name == property)
-        .map(|(name, ty)| (name.clone(), ty.clone()))
+        .map(|(name, ty)| (name.clone(), ty.clone(), *byte_offset))
 }
 
 #[cfg(test)]
