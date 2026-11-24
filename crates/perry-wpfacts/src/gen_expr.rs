@@ -567,17 +567,17 @@ impl<'a> Gen<'a> {
             None => self.expr(fx, inner),
         };
         let pa = self.member_atom(inner, p);
-            self.read_sites.push(ReadSite {
-                global_get: false,
-                access: crate::derive::Access::Read,
-                module: mi,
-                byte_offset: *byte_offset,
-                key: pa,
-                recv: e,
-                is_call: false,
-                value_call: false,
-                func: fx.f,
-            });
+        self.read_sites.push(ReadSite {
+            global_get: false,
+            access: crate::derive::Access::Read,
+            module: mi,
+            byte_offset: *byte_offset,
+            key: pa,
+            recv: e,
+            is_call: false,
+            value_call: false,
+            func: fx.f,
+        });
         let o = self.load(e, Key::Named(pa));
         if self.diagnostic.is_some() {
             self.diagnostic_expr(fx, object, o);
@@ -823,7 +823,7 @@ impl<'a> Gen<'a> {
         let pos0 = match self.m.stop_top.as_mut() {
             Some(s) => {
                 let p0 = (s.gen_pos, s.gen_kind);
-                s.gen_kind = crate::topstop::variant(e, "");
+                s.gen_kind = crate::topstop::expr_kind(e);
                 if let Some(k) = crate::topstop::unlocated_kind(e) {
                     *s.self_gap.entry(k).or_default() += 1;
                     if std::env::var("PERRY_HIRPOS_SAMPLE").is_ok_and(|v| v == k) {

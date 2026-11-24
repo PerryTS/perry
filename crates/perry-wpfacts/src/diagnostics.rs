@@ -917,7 +917,11 @@ impl Gen<'_> {
                 (
                     *byte_offset,
                     *byte_end,
-                    "value-call",
+                    if perry_hir::tdz_check::is_dead_zone_op(e) {
+                        "tdz-check"
+                    } else {
+                        "value-call"
+                    },
                     key,
                     recv,
                     idx,
@@ -1096,7 +1100,14 @@ pub(crate) fn recorded(g: &Gen) -> Vec<(usize, String, &'static str, u32)> {
     g.diagnostic.as_ref().map_or_else(Vec::new, |d| {
         d.sites
             .iter()
-            .map(|s| (s.addr, g.modules[s.module as usize].0.to_owned(), s.kind, s.start))
+            .map(|s| {
+                (
+                    s.addr,
+                    g.modules[s.module as usize].0.to_owned(),
+                    s.kind,
+                    s.start,
+                )
+            })
             .collect()
     })
 }
