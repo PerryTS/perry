@@ -971,6 +971,81 @@ a.listeners.click[0]({ button: 0, defaultPrevented: false, preventDefault() {} }
     );
 }
 
+// A notification reaches the listeners registered when it starts.
+#[test]
+fn a_route_listener_that_registers_itself_is_called_once_per_navigation() {
+    let dom = format!(
+        "{WIDGET_DOM}{}",
+        r#"
+globalThis.location = { pathname: "/a", search: "", hash: "", href: "http://h.test/a", origin: "http://h.test" };
+globalThis.history = { pushState(_state, _title, path) {
+  const u = new URL(path, location.href);
+  Object.assign(location, { pathname: u.pathname, search: u.search, hash: u.hash, href: u.href });
+} };
+"#
+    );
+    assert_eq!(
+        run_web_source_with_dom(
+            r#"
+import { routerNavigate, routerOnChange } from "perry/ui";
+let calls = 0;
+const self = (path: string) => {
+  console.log("self " + path);
+  calls = calls + 1;
+  if (calls < 5) routerOnChange(self);
+};
+routerOnChange(self);
+routerNavigate("/b");
+routerNavigate("/c");
+"#,
+            &dom,
+            ""
+        ),
+        "self /b\nself /c\nself /c"
+    );
+}
+
+// A `javascript:` href, however it is spelled, leaves the Link as its text.
+#[test]
+fn a_javascript_link_has_no_href_and_does_not_navigate() {
+    let dom = format!(
+        "{WIDGET_DOM}{}",
+        r#"
+globalThis.location = { pathname: "/a", search: "", hash: "", href: "http://h.test/a", origin: "http://h.test" };
+globalThis.history = { pushState() { console.log("push"); } };
+"#
+    );
+    assert_eq!(
+        run_web_source_with_dom(
+            r#"
+import { Link, routerOnChange } from "perry/ui";
+routerOnChange((path: string) => { console.log("route " + path); });
+Link("plain", "javascript:alert(1)");
+Link("spaced", " \t JaVaScRiPt:alert(1)");
+Link("split", "java\nscr\tipt:alert(1)");
+Link("control", String.fromCharCode(1) + "javascript:alert(1)");
+Link("path", "/javascript:alert(1)");
+Link("data", "data:text/plain,x");
+Link("bad", "http://[");
+"#,
+            &dom,
+            r#"
+for (const a of [...uiHandles.values()].filter(e => e.tagName === "A")) {
+  const e = { button: 0, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  if (!a.hasAttribute("href")) for (const fn of a.listeners.click ?? []) fn(e);
+  console.log(a.textContent + " " + a.href + " prevented=" + e.defaultPrevented);
+}
+"#
+        ),
+        concat!(
+            "plain undefined prevented=false\nspaced undefined prevented=false\n",
+            "split undefined prevented=false\ncontrol undefined prevented=false\n",
+            "path /javascript:alert(1) prevented=false\ndata data:text/plain,x prevented=false\n",
+            "bad http://[ prevented=false"
+        )
+    );
+}
+
 // Where the router cannot take a click, the browser must: another scheme, a file://
 // page (whose origin is "null"), a fragment of the current page, a modified or middle
 // click, a target, a download, and a pushState that throws.

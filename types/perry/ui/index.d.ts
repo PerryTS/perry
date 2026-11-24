@@ -1521,7 +1521,9 @@ export function navstackPop(navStack: Widget): void;
  *
  * On macOS, iOS, visionOS, Android, GTK4 and Windows, a Text whose click opens an `http`,
  * `https`, `mailto` or `tel` URL in its default app; any other `href` does nothing. It
- * takes no keyboard focus. On tvOS and watchOS the text cannot be activated.
+ * takes no keyboard focus. On tvOS, watchOS and HarmonyOS the text cannot be activated.
+ *
+ * A `javascript:` `href` is ignored on every target: the Link is only its text.
  */
 export function Link(text: string, href: string): Widget;
 /**
@@ -1532,8 +1534,8 @@ export function Link(text: string, href: string): Widget;
 export function routerNavigate(path: string): void;
 /**
  * Call `onChange` with the new path after `routerNavigate`, a `Link` click, or
- * back/forward. A listener stays for the page's life, so register one per app. Never
- * called on native.
+ * back/forward. A listener stays for the page's life, so register one per app; one
+ * registered during a notification waits for the next. Never called on native.
  */
 export function routerOnChange(onChange: (path: string) => void): void;
 /** The current route, `location.pathname + search + hash`; `""` on native. */

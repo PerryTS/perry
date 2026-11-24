@@ -70,7 +70,7 @@ pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     tree::register_node(node)
 }
 
-/// A Link is its text: watchOS has no `perry_system_open_url`.
+/// A Link is its text: `perry_system_open_url` does nothing on watchOS.
 #[no_mangle]
 pub extern "C" fn perry_ui_link_create(text_ptr: i64, _href_ptr: i64) -> i64 {
     perry_ui_text_create(text_ptr)

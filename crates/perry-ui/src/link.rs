@@ -8,11 +8,17 @@ use url::Url;
 /// A backend's `perry_system_open_url`.
 pub type OpenUrl = extern "C" fn(i64);
 
+/// The URL that was checked, not the text it was parsed from: the parser drops tabs and
+/// newlines and reads `\` as `/`, and a platform may read them another way.
+fn web_url(href: &str) -> Option<String> {
+    let url = Url::parse(href).ok()?;
+    matches!(url.scheme(), "http" | "https" | "mailto" | "tel").then(|| url.into())
+}
+
 /// Pass `href` to `open` when it is an http, https, mailto or tel URL.
 pub fn open_link(href: &str, open: OpenUrl) {
-    let Ok(url) = Url::parse(href) else { return };
-    if matches!(url.scheme(), "http" | "https" | "mailto" | "tel") {
-        open(perry_ffi::alloc_string(href).as_raw() as i64);
+    if let Some(url) = web_url(href) {
+        open(perry_ffi::alloc_string(&url).as_raw() as i64);
     }
 }
 
@@ -30,4 +36,32 @@ unsafe extern "C" fn open_link_body(closure: *const RawClosureHeader, _: JsThis)
     let (href, open) = unsafe { &*target };
     open_link(href, *open);
     f64::from_bits(JsValue::UNDEFINED.bits())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::web_url;
+
+    #[test]
+    fn opens_the_parsed_url_of_a_web_scheme_only() {
+        for (href, opened) in [
+            ("https://a.test/x?y#z", Some("https://a.test/x?y#z")),
+            ("mailto:a@b.test", Some("mailto:a@b.test")),
+            ("tel:+34600000000", Some("tel:+34600000000")),
+            ("  HtTpS://a.test/\n", Some("https://a.test/")),
+            ("ht\ttps://a.te\nst/b\rc", Some("https://a.test/bc")),
+            ("https:\\\\a.test\\b", Some("https://a.test/b")),
+            ("https://a.test/b\0c", Some("https://a.test/b%00c")),
+            ("mailto:a\0b", Some("mailto:a%00b")),
+            ("java\tscript:alert(1)", None),
+            ("\x01javascript:alert(1)", None),
+            ("file:///etc/hosts", None),
+            ("C:\\Windows\\notepad.exe", None),
+            ("\\\\host\\share\\x.exe", None),
+            ("/about", None),
+            ("", None),
+        ] {
+            assert_eq!(web_url(href).as_deref(), opened, "{href:?}");
+        }
+    }
 }

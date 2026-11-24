@@ -49,6 +49,11 @@ pub fn open_url(url_ptr: *const u8) {
         );
 
         unsafe {
+            // No app may handle the URL; a pending exception aborts the next JNI call.
+            if env.exception_check() {
+                let _ = env.exception_describe();
+                let _ = env.exception_clear();
+            }
             let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
         }
     })

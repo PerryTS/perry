@@ -4722,8 +4722,9 @@ function perry_ui_router_current_path() {
   return location.pathname + location.search + location.hash;
 }
 function notifyRouteListeners() {
-  // Read per call: a listener that navigates moves the route under the rest.
-  for (const cb of routeListeners) callWasmClosure(cb, perry_ui_router_current_path());
+  // Read per call: a listener that navigates moves the route under the rest. A copy: a
+  // listener registered meanwhile waits for the next change.
+  for (const cb of [...routeListeners]) callWasmClosure(cb, perry_ui_router_current_path());
 }
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("popstate", notifyRouteListeners);
@@ -4741,6 +4742,10 @@ function perry_ui_router_on_change(callback) {
 function perry_ui_link_create(text, href) {
   const a = document.createElement("a");
   a.textContent = text === undefined ? "" : String(text);
+  // A `javascript:` href would run script on a click; native ignores it too.
+  let scheme;
+  try { scheme = new URL(String(href), location.href).protocol; } catch (_) {}
+  if (scheme === "javascript:") return uiAlloc(a);
   a.setAttribute("href", href === undefined ? "" : String(href));
   a.addEventListener("click", (e) => {
     if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;

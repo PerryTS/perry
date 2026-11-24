@@ -194,6 +194,7 @@ pub(crate) fn is_widget_factory(name: &str) -> bool {
         name,
         "App"
             | "Text"
+            | "Link"
             | "Button"
             | "VStack"
             | "HStack"
