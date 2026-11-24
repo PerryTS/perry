@@ -1873,13 +1873,11 @@ mod receiver_tests {
         // dereferenced: reclassifying it would read unmapped memory.
         let object =
             crate::value::js_nanbox_pointer(crate::value::addr_class::HANDLE_BAND_MAX as i64);
-        assert_eq!(
-            array_receiver(object, Some(crate::gc::GC_TYPE_OBJECT)).to_bits(),
-            object.to_bits()
-        );
-        assert_eq!(
-            array_receiver(object, Some(crate::gc::GC_TYPE_ARRAY)).to_bits(),
-            object.to_bits()
-        );
+        for kind in [crate::gc::GC_TYPE_OBJECT, crate::gc::GC_TYPE_ARRAY] {
+            assert_eq!(
+                array_receiver(object, Some(kind)).to_bits(),
+                object.to_bits()
+            );
+        }
     }
 }

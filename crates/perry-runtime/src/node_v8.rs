@@ -211,7 +211,10 @@ fn snapshot_readable_stream(json: &str) -> f64 {
     });
     let chunks = chunks.with_mut_ptr::<u8, _>(|p| JSValue::pointer(p as *mut u8).bits());
     let opts = opts.with_mut_ptr::<u8, _>(|p| JSValue::pointer(p as *mut u8).bits());
-    crate::node_stream::js_node_stream_readable_from_options(f64::from_bits(chunks), f64::from_bits(opts))
+    crate::node_stream::js_node_stream_readable_from_options(
+        f64::from_bits(chunks),
+        f64::from_bits(opts),
+    )
 }
 
 /// `v8.serialize(value)` → Node `Buffer` holding the structured-clone payload.

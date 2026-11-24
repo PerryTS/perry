@@ -1196,7 +1196,10 @@ fn registry_record(w: &Where, stops: &mut Vec<Stop>) -> Vec<format::RegRec> {
 /// The executable's own TLS block: variant II places it at
 /// `[fs - roundup(memsz, align), + memsz)`; the gap above it up to `fs` holds
 /// the C library's blocks (errno among them), so it is not part of the window.
-#[cfg(any(test, all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")))]
+#[cfg(any(
+    test,
+    all(target_os = "linux", target_arch = "x86_64", target_env = "gnu")
+))]
 fn tls_window(fs: usize, memsz: usize, align: usize) -> (usize, usize) {
     let lo = fs.saturating_sub(memsz.div_ceil(align.max(1)) * align.max(1));
     (lo, memsz.min(fs - lo))

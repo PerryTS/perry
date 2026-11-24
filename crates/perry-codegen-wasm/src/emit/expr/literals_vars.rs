@@ -69,6 +69,12 @@ impl<'a> FuncEmitCtx<'a> {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
             }
+            // The real global object: a call of a builtin member the program
+            // replaces reads the member off `globalThis.<ns>` (#15104).
+            Expr::GlobalThisExpr => {
+                self.emit_frame_begin(func, 0);
+                self.emit_memcall(func, "global_receiver", 0);
+            }
             Expr::GlobalSet(id, val) => {
                 self.emit_expr(func, val);
                 if let Some(&idx) = self.emitter.global_map.get(id) {

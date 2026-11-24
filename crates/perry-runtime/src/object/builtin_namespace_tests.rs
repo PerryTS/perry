@@ -97,10 +97,7 @@ fn overwriting_a_global_that_names_no_namespace_withdraws_nothing() {
     for name in crate::codegen_abi::BUILTIN_NAMESPACES {
         assert!(pristine(ns(name)), "{name} stays pristine");
     }
-    // SAFETY: the realm global.
-    unsafe {
-        crate::object::js_object_set_field_by_name(global(), key("Math"), 4.0);
-    }
+    crate::object::js_object_set_field_by_name(global(), key("Math"), 4.0);
     assert!(
         !pristine(ns("Math")),
         "the Math slot's store still withdraws it"
