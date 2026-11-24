@@ -119,6 +119,22 @@ pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     widgets::button::create(label_ptr as *const u8, on_press)
 }
 
+/// Links and the router follow the browser's location and history, which exist on the
+/// web target only: here a Link is its text, navigation does nothing, no change is ever
+/// reported, and the current path is `undefined`.
+#[no_mangle]
+pub extern "C" fn perry_ui_link_create(text_ptr: i64, _href_ptr: i64) -> i64 {
+    perry_ui_text_create(text_ptr)
+}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_navigate(_path_ptr: i64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_on_change(_callback: f64) {}
+#[no_mangle]
+pub extern "C" fn perry_ui_router_current_path() -> f64 {
+    f64::from_bits(0x7FFC_0000_0000_0001)
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_vstack_create(spacing: f64) -> i64 {
     widgets::vstack::create(spacing)

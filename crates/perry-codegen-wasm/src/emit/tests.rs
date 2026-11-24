@@ -882,6 +882,53 @@ console.log(table.querySelector("thead tr").textContent + " " + rows.length + " 
     );
 }
 
+// The router reads the current route from `location`, pushes navigations onto
+// `history`, and notifies its listeners on navigate, a same-origin Link click and
+// popstate; a Link to another origin keeps the browser's default.
+#[test]
+fn link_and_router_follow_the_location_and_history() {
+    let dom = format!(
+        "{WIDGET_DOM}{}",
+        r#"
+globalThis.location = { pathname: "/directory/42", search: "?x=1", hash: "", href: "http://h.test/directory/42?x=1", origin: "http://h.test" };
+globalThis.history = { pushState(_state, _title, path) {
+  const u = new URL(path, location.href);
+  Object.assign(location, { pathname: u.pathname, search: u.search, hash: u.hash, href: u.href });
+  console.log("push " + path);
+} };
+const winListeners = {};
+globalThis.addEventListener = (type, fn) => { (winListeners[type] ??= []).push(fn); };
+"#
+    );
+    assert_eq!(
+        run_web_source_with_dom(
+            r#"
+import { Link, routerCurrentPath, routerNavigate, routerOnChange } from "perry/ui";
+console.log("start " + routerCurrentPath());
+routerOnChange((path: string) => { console.log("route " + path); });
+Link("Helpers", "/helpers");
+Link("Elsewhere", "https://other.example/x");
+routerNavigate("/requests");
+"#,
+            &dom,
+            r#"
+for (const a of [...uiHandles.values()].filter(e => e.tagName === "A")) {
+  const e = { button: 0, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; } };
+  a.listeners.click[0](e);
+  console.log(a.textContent + " " + a.href + " prevented=" + e.defaultPrevented);
+}
+Object.assign(location, { pathname: "/requests", search: "", hash: "" });
+winListeners.popstate.forEach(fn => fn({}));
+"#
+        ),
+        concat!(
+            "start /directory/42?x=1\npush /requests\nroute /requests\n",
+            "push /helpers\nroute /helpers\nHelpers /helpers prevented=true\n",
+            "Elsewhere https://other.example/x prevented=false\nroute /requests"
+        )
+    );
+}
+
 #[test]
 fn closures_share_the_variables_they_mutate() {
     assert_eq!(

@@ -4681,6 +4681,43 @@ function perry_ui_navstack_pop(h) {
   const nav = uiGet(h); if (!nav || !nav._navStack?.length) return;
   const prev = nav._navStack.pop(); nav.innerHTML = ""; prev.forEach(c => nav.appendChild(c));
 }
+// Links and the router. A route is `location.pathname + search + hash`. routerNavigate
+// pushes it onto the session history; it, a Link click and back/forward (popstate) all
+// notify every routerOnChange listener. A plain click on a same-origin Link navigates
+// client-side; another origin, a modified click or a `target` keeps the browser default.
+const routeListeners = [];
+function perry_ui_router_current_path() {
+  return location.pathname + location.search + location.hash;
+}
+function notifyRouteListeners() {
+  const path = perry_ui_router_current_path();
+  for (const cb of routeListeners) callWasmClosure(cb, path);
+}
+if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+  window.addEventListener("popstate", notifyRouteListeners);
+}
+function perry_ui_router_navigate(path) {
+  const p = String(path);
+  if (p !== perry_ui_router_current_path()) history.pushState(null, "", p);
+  notifyRouteListeners();
+}
+function perry_ui_router_on_change(callback) {
+  if (callback !== undefined) routeListeners.push(callback);
+}
+function perry_ui_link_create(text, href) {
+  const a = document.createElement("a");
+  a.textContent = text === undefined ? "" : String(text);
+  a.setAttribute("href", href === undefined ? "" : String(href));
+  a.addEventListener("click", (e) => {
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.target) return;
+    let url;
+    try { url = new URL(a.href, location.href); } catch (_) { return; }
+    if (url.origin !== location.origin) return;
+    e.preventDefault();
+    perry_ui_router_navigate(url.pathname + url.search + url.hash);
+  });
+  return uiAlloc(a);
+}
 
 // ---------- Picker ----------
 function perry_ui_picker_add_item(h, title) {
@@ -6094,6 +6131,7 @@ const __perryUiDispatch = {
   perry_ui_canvas_fill_gradient,
   // Navigation
   perry_ui_navstack_push, perry_ui_navstack_pop,
+  perry_ui_link_create, perry_ui_router_navigate, perry_ui_router_on_change, perry_ui_router_current_path,
   // Picker
   perry_ui_picker_add_item, perry_ui_picker_set_selected, perry_ui_picker_get_selected,
   perry_ui_wheel_picker_add_item, perry_ui_wheel_picker_set_selected, perry_ui_wheel_picker_get_selected,

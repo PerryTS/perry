@@ -1508,6 +1508,21 @@ export function navstackPush(navStack: Widget, view: Widget, title: string): voi
 export function navstackPop(navStack: Widget): void;
 
 // ---------------------------------------------------------------------------
+// Link and router. They follow the browser's location and history, so they act
+// on the web target only: native backends show a Link as its text, ignore
+// routerNavigate and routerOnChange, and return undefined from routerCurrentPath.
+// ---------------------------------------------------------------------------
+
+/** An `<a href>`. A plain click on a same-origin `href` navigates through the router. */
+export function Link(text: string, href: string): Widget;
+/** Push `path` onto the session history and notify every `routerOnChange` listener. */
+export function routerNavigate(path: string): void;
+/** Called with the new path after `routerNavigate`, a `Link` click, or back/forward. */
+export function routerOnChange(onChange: (path: string) => void): void;
+/** The current route: `location.pathname + search + hash`. */
+export function routerCurrentPath(): string;
+
+// ---------------------------------------------------------------------------
 // Picker
 // ---------------------------------------------------------------------------
 
