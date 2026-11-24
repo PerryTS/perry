@@ -1246,6 +1246,9 @@ mod function_value;
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;
 
+#[path = "overwritten_call_tests.rs"]
+mod overwritten_call;
+
 #[path = "object_create_tests.rs"]
 mod object_create;
 
