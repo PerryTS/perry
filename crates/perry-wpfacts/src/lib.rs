@@ -20,6 +20,7 @@ pub mod bindings;
 pub mod topstop;
 mod booleans;
 mod born_with;
+mod k3_census;
 mod builtins;
 pub mod call_kinds;
 pub mod canonical_numbers;
@@ -1100,6 +1101,7 @@ fn compute_act<'a>(
     } else {
         derive::derive(&mut g)
     };
+    k3_census::write(&g);
     // Value records (DESIGN-p4l4 §2): a verdict per literal template, after
     // the templates and sites, before any representation reads them.
     g.m.record_array_join_sabotage = cfg.sabotage.as_deref() == Some("vrarrjoin");
