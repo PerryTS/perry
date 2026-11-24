@@ -1201,6 +1201,14 @@ impl WasmModuleEmitter {
                 let v = self.emit_js_expr(src, locals);
                 format!("Math.max(...toJsValue({}))", v)
             }
+            // `parseInt` / `parseFloat` call the bridges their WASM arms call
+            // (`emit/expr/regex_globals.rs`); an omitted radix is `undefined`.
+            Expr::ParseInt { string, radix } => self.emit_js_bridge_call(
+                "parse_int",
+                &[string, radix.as_deref().unwrap_or(&Expr::Undefined)],
+                locals,
+            ),
+            Expr::ParseFloat(val) => self.emit_js_bridge_call("parse_float", &[val], locals),
             Expr::MathRandom => "Math.random()".to_string(),
             Expr::DateNow => "Date.now()".to_string(),
             Expr::DateNew(args) => {
