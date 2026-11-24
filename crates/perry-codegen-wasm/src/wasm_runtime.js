@@ -2041,8 +2041,8 @@ function __classStaticRun(template, value, funcIdx) {
   }
 }
 // The table entry of a class's accessor, made on first use.
-function __classAccessorPair(table, className, key) {
-  return ((table[className] ||= Object.create(null))[key] ||= { get: -1, set: -1, computed: false });
+function __classAccessorPair(table, className, key, computed) {
+  return ((table[className] ||= Object.create(null))[key] ||= { get: -1, set: -1, computed });
 }
 // A computed member (`RegisterClassComputedMethod` / `...Accessor`). An instance
 // member goes in the template's method table, so every evaluation's instances
@@ -2073,10 +2073,9 @@ function __classDefineComputed(className, ctorIdx, key, kind, isStatic, a, b, pr
   if (evaluation) __defineAccessor(evaluation.prototype, key, a, b, evaluation);
   __defineAccessor(__classProto(className), key, a, b, undefined);
   if (typeof key === 'string') {
-    const pair = __classAccessorPair(classAccessorTable, className, key);
+    const pair = __classAccessorPair(classAccessorTable, className, key, true);
     if (a >= 0) pair.get = a;
     if (b >= 0) pair.set = b;
-    pair.computed = true;
   }
 }
 
@@ -2862,7 +2861,7 @@ const __memDispatch = {
   class_set_accessor: (classId, name, funcIdx, code) => {
     const key = String(name);
     if (key.startsWith('#')) return;
-    const pair = __classAccessorPair(code & 2 ? classStaticAccessorTable : classAccessorTable, String(classId), key);
+    const pair = __classAccessorPair(code & 2 ? classStaticAccessorTable : classAccessorTable, String(classId), key, false);
     pair[code & 1 ? 'set' : 'get'] = funcIdx | 0;
   },
   class_call_method: (obj, methodNameId, argsArr) => {
