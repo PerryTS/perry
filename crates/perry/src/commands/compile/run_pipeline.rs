@@ -2345,21 +2345,24 @@ pub fn run_with_parse_cache(
                 // inherited statics (effect's `S.Number.ast` → undefined →
                 // Schema decode crash). Declared functions need the same origin
                 // mapping when a public alias collides with another local body
-                // (`Record3 as Record` beside an unrelated local `Record`).
+                // (`Record3 as Record` beside an unrelated local `Record`), and
+                // when a binding aliases one (`export const addRef = add`), so
+                // importers see `add`'s one function object under both names.
                 // Variable/closure exports remain on the public getter ABI.
                 let is_renamed_class = hir_module
                     .classes
                     .iter()
                     .any(|c| c.name == *local && c.is_exported);
+                let origin = hir_module.function_alias_origin(exported).unwrap_or(local);
                 let is_renamed_declared_function = hir_module
                     .functions
                     .iter()
-                    .any(|f| f.name == *local && f.is_exported);
-                if local != exported && (is_renamed_class || is_renamed_declared_function) {
+                    .any(|f| f.name == *origin && f.is_exported);
+                if origin != exported && (is_renamed_class || is_renamed_declared_function) {
                     all_module_export_origin_names
                         .entry(path_str.clone())
                         .or_default()
-                        .insert(exported.clone(), local.clone());
+                        .insert(exported.clone(), origin.clone());
                 }
             }
             // A namespace re-export is itself a runtime value export. Record

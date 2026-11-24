@@ -322,6 +322,20 @@ impl Module {
                 || self.globals.iter().any(|g| g.name == name))
     }
 
+    /// The declared function an export publishes under another name
+    /// (`export const addRef = add`, `export { add as a2 }`): `exported_functions`
+    /// records the alias with the function's id.
+    pub fn function_alias_origin(&self, exported: &str) -> Option<&String> {
+        let (_, id) = self
+            .exported_functions
+            .iter()
+            .find(|(name, _)| name == exported)?;
+        self.functions
+            .iter()
+            .find(|f| f.id == *id && f.name != exported)
+            .map(|f| &f.name)
+    }
+
     pub fn new(name: impl Into<String>) -> Self {
         Self {
             name: name.into(),
@@ -394,3 +408,7 @@ impl Module {
         })
     }
 }
+
+#[cfg(test)]
+#[path = "function_alias_origin_tests.rs"]
+mod function_alias_origin_tests;
