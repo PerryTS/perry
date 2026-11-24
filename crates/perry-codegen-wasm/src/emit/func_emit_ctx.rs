@@ -56,6 +56,8 @@ pub(super) struct FuncEmitCtx<'a> {
     /// Catch targets: absolute block depth and outstanding bridge-frame bytes.
     pub(super) exception_handlers: Vec<(u32, u32, Option<FinallyTarget>)>,
     pub(super) returns_value: bool,
+    /// Set while emitting the compiler's own capture reads, which a dead zone does not stop.
+    pub(super) tdz_suppressed: bool,
     pub(super) finalizer_jumps: Vec<Vec<u32>>,
 }
 
@@ -89,6 +91,7 @@ impl<'a> FuncEmitCtx<'a> {
             frame_stack: Vec::new(),
             exception_handlers: Vec::new(),
             returns_value: true,
+            tdz_suppressed: false,
             finalizer_jumps: Vec::new(),
         }
     }

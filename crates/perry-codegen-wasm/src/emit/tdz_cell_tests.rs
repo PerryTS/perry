@@ -50,3 +50,68 @@ console.log(noInit());
          ReferenceError: Cannot access 'z' before initialization | ok undefined"
     );
 }
+
+// A class evaluated, first-evaluation-checked or constructed while a binding its methods
+// capture is in its dead zone reads that binding for its environment, not for the
+// program: nothing throws. Expected output is Node's.
+#[test]
+fn class_captures_in_the_dead_zone_do_not_throw() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function declared(): number {
+  class A { m() { return 5; } n() { return x; } }
+  const read = () => x;
+  const early = new A().m();
+  const x = 1;
+  return early + read();
+}
+function fresh(): number {
+  const C = class { static s = 1; m() { return x; } };
+  const read = () => x;
+  const x = 4;
+  return C.s + new C().m() + read();
+}
+function refreshed(): number {
+  const read = () => [x, new A().n()];
+  let x = 1;
+  x = 2;
+  class A { n() { return x; } }
+  return read()[1] as number;
+}
+function unreached(): string {
+  class A { n() { return x; } }
+  const read = () => x;
+  return typeof A + typeof read;
+  const x = 4;
+}
+console.log(declared(), fresh(), refreshed(), unreached());
+"#
+        ),
+        "6 9 2 functionfunction"
+    );
+}
+
+// Reading or assigning a captured binding never inspects the value it holds, so a Proxy's
+// traps stay silent.
+#[test]
+fn captured_proxy_is_not_inspected() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const HostProxy: any = (globalThis as any).Proxy;
+let traps = 0;
+function held(): unknown {
+  let p: any = new HostProxy({}, { getPrototypeOf() { traps++; return null; } });
+  const read = () => p;
+  const write = (v: any) => { p = v; };
+  read();
+  write(1);
+  return read();
+}
+console.log(held(), traps);
+"#
+        ),
+        "1 0"
+    );
+}

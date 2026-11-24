@@ -231,6 +231,7 @@ impl WasmModuleEmitter {
             "generator_new",
             "box_new",
             "box_get",
+            "box_peek",
             "box_set",
             "box_init",
             "box_new_tdz",

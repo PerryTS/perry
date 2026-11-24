@@ -526,11 +526,24 @@ impl<'a> FuncEmitCtx<'a> {
         } else if let Some(&idx) = self.local_map.get(id) {
             func.instruction(&Instruction::LocalGet(idx));
             if self.is_boxed(id) {
-                self.emit_box_call(func, "box_get");
+                let bridge = if self.tdz_suppressed {
+                    "box_peek"
+                } else {
+                    "box_get"
+                };
+                self.emit_box_call(func, bridge);
             }
         } else {
             func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
         }
+    }
+
+    /// Runs `emit` for reads of the compiler's own, not the program's: a class environment
+    /// snapshots the bindings it captures while one may still be in its dead zone.
+    pub(super) fn with_tdz_suppressed(&mut self, emit: impl FnOnce(&mut Self)) {
+        let outer = std::mem::replace(&mut self.tdz_suppressed, true);
+        emit(self);
+        self.tdz_suppressed = outer;
     }
 
     pub(super) fn is_boxed(&self, id: &LocalId) -> bool {

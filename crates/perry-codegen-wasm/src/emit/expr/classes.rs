@@ -369,8 +369,14 @@ impl<'a> FuncEmitCtx<'a> {
                         ctor_args,
                         *cap_args_appended,
                     );
-                    for arg in ctor_args.iter() {
-                        self.emit_expr(func, arg);
+                    // The trailing capture args are the compiler's own reads.
+                    let first_cap = ctor_args.len().saturating_sub(*cap_args_appended as usize);
+                    for (i, arg) in ctor_args.iter().enumerate() {
+                        if i < first_cap {
+                            self.emit_expr(func, arg);
+                        } else {
+                            self.with_tdz_suppressed(|ctx| ctx.emit_expr(func, arg));
+                        }
                     }
                     // Keep the operand stack aligned with the ctor's arity: pad
                     // missing optional args with `undefined`, and drop excess
@@ -622,6 +628,7 @@ impl<'a> FuncEmitCtx<'a> {
             {
                 // The surrounding HIR assigns the self-binding (`evaluation_owner`), and
                 // the capture refresh after it republishes captures read before then.
+                let outer = std::mem::replace(&mut self.tdz_suppressed, true);
                 let ctor_slot = self.class_ctor_slot(template);
                 let caps = Expr::Array(captured_args.clone(), None);
                 self.emit_class_bridge(
@@ -630,6 +637,7 @@ impl<'a> FuncEmitCtx<'a> {
                     template,
                     &[&Expr::Number(ctor_slot), &caps],
                 );
+                self.tdz_suppressed = outer;
             }
             Expr::RefreshClassExprCaptures {
                 class_value,
@@ -637,8 +645,10 @@ impl<'a> FuncEmitCtx<'a> {
                 ..
             } => {
                 self.emit_frame_begin(func, 2);
-                self.emit_store_arg(func, 0, class_value);
-                self.emit_store_arg(func, 1, &Expr::Array(captures.clone(), None));
+                self.with_tdz_suppressed(|ctx| {
+                    ctx.emit_store_arg(func, 0, class_value);
+                    ctx.emit_store_arg(func, 1, &Expr::Array(captures.clone(), None));
+                });
                 self.emit_memcall(func, "class_env_refresh", 2);
             }
             Expr::ClassEnvGet {
@@ -696,7 +706,9 @@ impl<'a> FuncEmitCtx<'a> {
                 captures,
             } => {
                 let caps = Expr::Array(captures.clone(), None);
-                self.emit_class_bridge(func, "class_register_captures", class_name, &[&caps]);
+                self.with_tdz_suppressed(|ctx| {
+                    ctx.emit_class_bridge(func, "class_register_captures", class_name, &[&caps])
+                });
             }
             Expr::ClassCaptureValue {
                 class_name,
