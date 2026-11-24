@@ -559,7 +559,15 @@ fn rewrite_stmt(stmt: &mut Stmt, consts: &HashMap<LocalId, String>, visible: &Ha
 }
 
 fn rewrite_expr(expr: &mut Expr, consts: &HashMap<LocalId, String>, visible: &HashSet<LocalId>) {
-    if let Expr::IndexGet { object, index, .. } = expr {
+    if let Expr::IndexGet {
+        object,
+        index,
+        byte_offset,
+        byte_end,
+        ..
+    } = expr
+    {
+        let (byte_offset, byte_end) = (*byte_offset, *byte_end);
         let property = match index.as_ref() {
             Expr::String(key) if !is_numeric_index_string(key) => Some(key.clone()),
             Expr::LocalGet(id) if visible.contains(id) => consts
@@ -575,14 +583,11 @@ fn rewrite_expr(expr: &mut Expr, consts: &HashMap<LocalId, String>, visible: &Ha
             // obligation: `o[k]` evaluates `o` then `k`, and `k` is already a
             // value.
             let object = std::mem::replace(object.as_mut(), Expr::Integer(0));
+            // The read is the `IndexGet` it replaces: it stands at that
+            // member's offset.
             *expr = Expr::PropertyGet {
-                byte_end: 0,
-                // Synthesized: the literal was not written at a source span
-                // (phase 1 substituted it), so there is no member offset to
-                // carry. `0` is the established "no debug location" value on
-                // this node, and the `IndexGet` this replaces carried none
-                // either.
-                byte_offset: 0,
+                byte_end,
+                byte_offset,
                 object: Box::new(object),
                 property,
             };
