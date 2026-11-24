@@ -1204,6 +1204,7 @@ impl Model {
                     && !self.settle_val_runs()
                     && !self.settle_define()
                     && !self.settle_proto_first()
+                    && !self.settle_realm_set()
                     && !self.settle_record_entry()
                     && !self.settle_not_error()
                     && !self.settle_ta_len()

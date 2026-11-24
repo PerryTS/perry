@@ -710,6 +710,111 @@ impl Model {
         }
     }
 
+    /// OrdinarySet (ECMA-262 10.1.9.2) of `a` on `t` finds a realm accessor:
+    /// `t` is an instance of program classes whose static chain (each link
+    /// the class's prototype only: no `setPrototypeOf`, `delete`,
+    /// `defineProperty` (`hard`), no unknown code (`escaped`,
+    /// `inst_escaped`)) holds no `a` of its own (no own definition of `t`,
+    /// `realm_set_open`; no method, accessor or stored field on a link) and
+    /// ends at realm prototypes that each own an accessor under `a`, which
+    /// no native write replaced. The store's own data definition then never
+    /// runs; the setter (or, getter-only, nothing) does.
+    pub(crate) fn realm_accessor_sure(&self, t: Tok, a: Atom) -> bool {
+        if self.unit_mode
+            || t == TOP
+            || self.is_marker(t)
+            || self.is_proto_key(Key::Named(a))
+            || self.is_private_atom(a)
+            || self.reshaped_any
+            || self.reshaped_keys.contains(&a)
+            || self.realm_set_open.contains(&(t, a))
+        {
+            return false;
+        }
+        let TokKind::Obj(tm0, _) = self.toks[t as usize] else {
+            return false;
+        };
+        let clean = |m: &Self, o: Tok| {
+            !m.hard.contains_key(&o)
+                && !m.escaped.contains_key(&o)
+                && !m.accessor_keys.get(&o).is_some_and(|ks| ks.contains(&a))
+        };
+        // A link's field node exists once a lookup asked for it; it holds a
+        // stored value only after a store (which a later check sees).
+        let held = |n: Option<&NodeId>| {
+            n.is_some_and(|&n| {
+                let n = &self.nodes[n as usize];
+                n.prim != 0 || !n.pts.is_empty()
+            })
+        };
+        if !clean(self, t) {
+            return false;
+        }
+        let (mut c, mut below) = (tm0, t);
+        loop {
+            let tp = &self.tmpls[c as usize];
+            if tp.per_evaluation
+                || !matches!(
+                    tp.kind,
+                    TmplKind::Class {
+                        literal_shape: false,
+                        ..
+                    }
+                )
+                || self.inst_escaped.contains(&c)
+                || tp.accessor_keys.contains(&a)
+                || tp.proto_members.contains(&a)
+            {
+                return false;
+            }
+            let Some(&p) = self.tok_index.get(&TokKind::Proto(c)) else {
+                return false;
+            };
+            let only = self.proto_node.get(&below).is_none_or(|&n| {
+                self.nodes[n as usize]
+                    .pts
+                    .to_sorted()
+                    .iter()
+                    .all(|&q| q == p)
+            });
+            if !only
+                || !clean(self, p)
+                || held(self.fields.get(&(p, a)))
+                || held(self.field_any.get(&p))
+            {
+                return false;
+            }
+            match (tp.parent, &tp.native_parent) {
+                (Some(q), None) => (c, below) = (q, p),
+                // The linked realm parent (`Model::realm_parent`): the
+                // evaluated `extends` is that constructor (else E11 marks
+                // the instances hard), so the link's prototype is its
+                // declared prototype; what the solve gave the link so far
+                // agrees (a later value re-checks: `settle_realm_set`).
+                (None, _) if self.realm_parent.contains_key(&c) => {
+                    let name = &self.atoms[a as usize];
+                    if builtins::realm_ctor_prototype(self.realm_parent[&c])
+                        .and_then(|born| builtins::realm_born_setter(born, name))
+                        .is_none()
+                    {
+                        return false;
+                    }
+                    let rs = self
+                        .proto_node
+                        .get(&p)
+                        .map(|&n| self.nodes[n as usize].pts.to_sorted())
+                        .unwrap_or_default();
+                    return rs.iter().all(|&r| {
+                        r != TOP
+                            && builtins::realm_proto_setter(self, r, a).is_some()
+                            && !builtins::native_written(self, r, a)
+                    });
+                }
+                _ => return false,
+            }
+        }
+    }
+
     /// A read that rule 3 answers: filed, so that a later writer, escape or
     /// re-link gives it `undefined` after all (`settle_proto_first`).
     fn proto_first_read(&mut self, t: Tok, a: Atom, dst: NodeId) -> bool {
@@ -2009,13 +2114,14 @@ impl Model {
 
     /// A store from `origin` under `a` finds a realm accessor on the chain
     /// of realm prototype `holder`: its declared setter runs with `origin`
-    /// as `this` (ECMA-262 10.1.9.2 step 7). A setter the realm declares no
-    /// effects for, or none (a getter-only accessor), is an explicit stop:
-    /// the seed names the accessor, the stored value escapes and what the
-    /// setter does to the receiver is unknown.
+    /// as `this` (ECMA-262 10.1.9.2 step 7). A getter-only accessor runs
+    /// nothing and keeps nothing (`RealmSetter::GetterOnly`). A setter the
+    /// realm declares no effects for is an explicit stop: the seed names the
+    /// accessor, the stored value escapes and what the setter does to the
+    /// receiver is unknown.
     fn realm_setter_hit(&mut self, origin: Tok, holder: Tok, a: Atom, src: NodeId, region: NodeId) {
         match builtins::realm_proto_setter(self, holder, a) {
-            None => {}
+            None | Some(builtins::RealmSetter::GetterOnly) => {}
             Some(builtins::RealmSetter::Declared(e)) => {
                 self.with_b(|m| builtins::realm_setter_store(m, e, origin, a, src))
             }

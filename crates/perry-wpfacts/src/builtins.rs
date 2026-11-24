@@ -2987,9 +2987,11 @@ fn realm_chain_setter(
     if !std::ptr::eq(p, o) || owner.name == "Object.prototype" {
         return None;
     }
+    let Some(set) = set else {
+        return Some(RealmSetter::GetterOnly);
+    };
     Some(
-        match set
-            .and_then(members::realm_entry)
+        match members::realm_entry(set)
             .filter(|e| !e.effects.is_empty() && effects::interpretable(e.effects))
         {
             Some(e) => RealmSetter::Declared(e),
@@ -3003,7 +3005,13 @@ pub(crate) enum RealmSetter {
     /// Declared effects: they run with the receiver as `this` and the
     /// stored value as the argument (`realm_setter_store`).
     Declared(&'static perry_hir::realm_manifest::RealmEntry),
-    /// No setter, or one without declared effects: the accessor's name.
+    /// No setter (a getter-only accessor): OrdinarySetWithOwnDescriptor
+    /// (10.1.9.2 step 7.b) returns false; strict code's PutValue throws a
+    /// TypeError (13.15.2 step 5.d), the runtime error every `catch` already
+    /// receives (`Model::thrown`), sloppy code does nothing. Either way
+    /// nothing is written and the stored value goes nowhere.
+    GetterOnly,
+    /// A setter without declared effects: the accessor's name.
     Undeclared(String),
 }
 
@@ -3012,6 +3020,18 @@ pub(crate) fn realm_proto_setter(m: &Model, holder: Tok, a: Atom) -> Option<Real
     let born = realm_proto_of(m, holder)?;
     let members::RealmFind::Own(p, _) = members::realm_chain_find(born, &m.atoms[a as usize])
     else {
+        return None;
+    };
+    realm_chain_setter(born, p)
+}
+
+/// The setter a store of key `name` finds on the chain of realm prototype
+/// `born` (`realm_chain_setter`).
+pub(crate) fn realm_born_setter(
+    born: &'static perry_hir::realm_manifest::RealmEntry,
+    name: &str,
+) -> Option<RealmSetter> {
+    let members::RealmFind::Own(p, _) = members::realm_chain_find(born, name) else {
         return None;
     };
     realm_chain_setter(born, p)

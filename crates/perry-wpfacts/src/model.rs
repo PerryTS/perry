@@ -2465,6 +2465,14 @@ pub struct Model {
     /// (`proto_first_holds`); checked again whenever the worklist empties.
     pub proto_first_reads: Vec<(Tok, Atom, NodeId)>,
     pub proto_first_seen: crate::pts::FxHashSet<(Tok, Atom, NodeId)>,
+    /// Named stores that wrote no own property: the lookup of the key on
+    /// the receiver finds a realm accessor (`realm_accessor_sure`), whose
+    /// setter runs instead (10.1.9.2 step 7). Checked again whenever the
+    /// worklist empties (`settle_realm_set`).
+    pub realm_set_skips: Vec<(Tok, Atom, NodeId, SiteId)>,
+    /// (receiver, key) pairs whose lookup no longer surely finds the realm
+    /// accessor: their stores write the own property.
+    pub realm_set_open: crate::pts::FxHashSet<(Tok, Atom)>,
     /// Gen: the statements (by address) of rule 3 stores, and the class
     /// whose store statement is being walked.
     pub proto_first_stmts: FxHashMap<usize, TmplId>,

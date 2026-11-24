@@ -147,12 +147,26 @@ fn a_store_through_an_undeclared_realm_setter_is_an_explicit_stop() {
     assert!(k.top, "{k:?}");
 }
 
-/// A getter-only realm accessor (`Event.prototype.type`) has no setter to
-/// run: the store is an explicit stop too.
+/// A getter-only realm accessor (`Event.prototype.type`): [[Set]] returns
+/// false (10.1.9.2 step 7.b), a TypeError in this strict module code; no own
+/// property is defined, the stored value goes nowhere, the read is the
+/// getter's.
 #[test]
-fn a_store_through_a_getter_only_realm_accessor_is_an_explicit_stop() {
+fn a_store_through_a_getter_only_realm_accessor_writes_nothing() {
     let k = h_v("e.type = new D();\nh.v = e.type;");
-    assert!(k.top, "{k:?}");
+    assert!(!k.top && k.objs.is_empty(), "{k:?}");
+}
+
+/// A class field defines an own data property over the realm accessor
+/// (DefineField, no [[Set]]): the lookup no longer finds the accessor, the
+/// later store writes that own property.
+#[test]
+fn a_class_field_over_a_realm_accessor_is_an_own_property() {
+    let pf = facts(
+        "class E3 extends Event { type: any = 0; }\nclass D { }\nclass H { v: any = 0; }\nconst e: any = new E3(\"x\");\nconst h = new H();\ne.type = new D();\nh.v = e.type;\nconsole.log(h.v);\n",
+    );
+    let k = field(tmpl(&pf, "H"), "v").kind.clone();
+    assert!(!k.top && k.objs.iter().any(|o| o.ends_with(":D")), "{k:?}");
 }
 
 /// A computed key may name any setter of the realm chain.
