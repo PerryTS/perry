@@ -6212,8 +6212,10 @@ function __hostDescriptors(props) {
 function __hostCallback(value) {
   if (!__isPerryClosure(value)) return value;
   if (!hostCallbacks.has(value)) {
-    hostCallbacks.set(value, __withKindProto((...args) => {
-      const result = callWasmClosure(value, ...args);
+    // Strict, so a host call without a receiver has an undefined `this`.
+    hostCallbacks.set(value, __withKindProto(function () {
+      'use strict';
+      const result = __callClosureMethod(value, this, [...arguments]);
       __memDispatch.propagate_exception(true);
       return result;
     }, __PerryClosure.protoKindOf(value)));
@@ -6332,11 +6334,13 @@ function __jsMethodGet(obj, mname) {
   return { r: obj, m: mname, f };
 }
 
-// The host array methods that call their first argument. Every other argument of a host
-// array method is data and keeps its identity.
-const __arrayCallbackMethods = new Set(['map', 'filter', 'forEach', 'find', 'findIndex', 'findLast',
-  'findLastIndex', 'some', 'every', 'flatMap', 'reduce', 'reduceRight', 'sort', 'toSorted']
-  .map((name) => Array.prototype[name]));
+// The host array methods, each with how many leading arguments it calls; the rest are data
+// and keep their identity. Read at load, before the program can replace one.
+const __arrayCallbackMethods = ['map', 'filter', 'forEach', 'find', 'findIndex', 'findLast',
+  'findLastIndex', 'some', 'every', 'flatMap', 'reduce', 'reduceRight', 'sort', 'toSorted'];
+const __arrayMethodCallbacks = new Map(Object.getOwnPropertyNames(Array.prototype)
+  .filter((name) => name !== 'constructor' && typeof Array.prototype[name] === 'function')
+  .map((name) => [Array.prototype[name], __arrayCallbackMethods.includes(name) ? 1 : 0]));
 
 function __jsMethodInvoke(ref, args) {
   if (ref.user) {
@@ -6354,7 +6358,7 @@ function __jsMethodInvoke(ref, args) {
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
   // A compiled class method takes Perry values, as `reflect_apply` passes them.
   if (__classMethodFns.has(ref.f)) return Reflect.apply(ref.f, ref.r, args);
-  const callbacks = ref.f !== Array.prototype[ref.m] ? args.length : +__arrayCallbackMethods.has(ref.f);
+  const callbacks = __arrayMethodCallbacks.get(ref.f) ?? args.length;
   return Reflect.apply(ref.f, ref.r, args.map((a, i) => i < callbacks ? __hostCallback(a) : a));
 }
 

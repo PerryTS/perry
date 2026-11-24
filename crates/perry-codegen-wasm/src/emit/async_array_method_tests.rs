@@ -1,6 +1,6 @@
 //! Array methods inside an async body on the web target, which is emitted as JavaScript.
 
-use super::run_web_source;
+use super::{run_web_source, run_web_source_then};
 
 // The callback methods of an array literal and of a local call their closures with the
 // element, index and array, capture the body's locals, and reject when one throws.
@@ -116,5 +116,47 @@ f().then((v) => console.log(v), (e) => console.log("threw " + e.message));
 "#
         ),
         "true 0 0 true true true true true true true 1"
+    );
+}
+
+// A `thisArg` reaches a callback that reads `this`, which is undefined without one.
+// Expected output is Node's.
+#[test]
+fn async_body_array_callbacks_take_this_arg() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function f(): Promise<string> {
+  const o = { by: 10 };
+  const add = function (this: any, x: number) { return this === undefined ? "none" : x + this.by; };
+  return [[1, 2].map(add, o).join(), [1, 2].map(add).join(), [1, 2].map(x => x, o).join()].join(" ");
+}
+f().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+        ),
+        "11,12 none,none 1,2"
+    );
+}
+
+// A program that replaces an array method still gets a callable callback, and a host
+// method's call reads no same-named Array.prototype property.
+#[test]
+fn async_body_dispatch_uses_the_native_array_methods() {
+    assert_eq!(
+        run_web_source_then(
+            r#"
+async function f(xs: any, s: any): Promise<string> {
+  return [xs.map((x: number) => x + 1).join(), s.union(s).size].join(" ");
+}
+const start = () => f([1, 2], new Set([7])).then((v) => console.log(v), (e) => console.log("threw " + e.message));
+setTimeout(start, 20);
+"#,
+            r#"
+const native = Array.prototype.map;
+Array.prototype.map = function (cb) { return Reflect.apply(native, this, [(...a) => cb(...a)]); };
+Object.defineProperty(Array.prototype, "union", { get() { throw new Error("read"); } });
+"#
+        ),
+        "2,3 1"
     );
 }
