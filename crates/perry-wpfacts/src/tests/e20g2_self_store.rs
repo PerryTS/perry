@@ -228,14 +228,16 @@ fn stop8_entries_store_is_under_the_known_keys() {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
-/// KEEP: the literal written under a key no name lists: `k` is any string,
-/// the store reaches the self-reference and the E20 store holds the realm.
+/// The literal written under a key no name lists: `k` is any string, the
+/// store reaches the self-reference and escapes there under E20; owner
+/// 11-24: that no longer holds the realm.
 #[test]
 fn stop8_entries_unknown_key_keeps_the_hold() {
     let mut bad = Vec::new();
     for s in ENTRIES {
-        if !held(&entries_src(s, "classes[String(Date.now())] = A;")) {
-            bad.push(format!("{s}: realm not held"));
+        // owner 11-24: E20 carve-out dropped; the stored value escapes to the runtime per its contract, the realm is not held.
+        if held(&entries_src(s, "classes[String(Date.now())] = A;")) {
+            bad.push(format!("{s}: realm held"));
         }
     }
     assert!(bad.is_empty(), "{}", bad.join("\n"));

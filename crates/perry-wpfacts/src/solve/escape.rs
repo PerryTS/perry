@@ -115,18 +115,15 @@ impl Model {
         // that value and its chain. So the escape hands over the value, never
         // the realm. Per unit, or beside an unseen module or interpreted code,
         // other code may name the realm: it is held (`hold_realm`). A value
-        // the program stored onto a built-in object (E20) is a write into the
-        // realm the runtime reads by name: it is held then too.
+        // the program stored onto a built-in object under a name the runtime
+        // reads at run time (E20) escapes too, and only it: the runtime acts
+        // on it per its builtin contract and does not write intrinsics (owner
+        // 2026-11-24: the E20 realm hold is dropped).
         // PREMISE (owner-approved 2026-11-19): unknown code handed a value
         // never writes or replaces a member of an intrinsic it reaches along
         // that value's chain (`Array.from.k = v` through
         // `a.constructor.__proto__`).
-        let holds = !self.realm_held
-            && (self.realm_nameable()
-                || self
-                    .reasons
-                    .get(reason as usize)
-                    .is_some_and(|r| r.starts_with("E20")));
+        let holds = !self.realm_held && self.realm_nameable();
         if crate::unksrc::on() {
             let why = format!(
                 "{} [tok {t} {:?}]",
