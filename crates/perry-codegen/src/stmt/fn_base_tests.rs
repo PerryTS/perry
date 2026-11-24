@@ -91,13 +91,14 @@ fn ir(rep: FactsRep) -> String {
         index_arg: 0,
         default: Some(0f64.to_bits()),
         element_offset: at("this.board[sq]"),
-        field_offset: at("this.board[sq]"),
+        field_offset: at("board[sq]"),
         in_floor: Some(128),
         rest: None,
     };
     let mut offset = 0;
+    // A method call's site is its member token.
     while let Some(k) = SRC[offset..].find("this.at(") {
-        let site = (offset + k) as u32 + 1;
+        let site = (offset + k + "this.".len()) as u32 + 1;
         elision.field_read_calls.insert(site, read.clone());
         elision.call_arg_ranges.insert(site, vec![Some((0, 127))]);
         offset += k + 1;

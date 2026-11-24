@@ -32,6 +32,8 @@ fn lower(src: &str) -> Module {
 
 fn ir(module: &Module, elision: ElisionFacts) -> String {
     let opts = CompileOptions {
+        // Apple aarch64's inline stack guard leaves `unreachable` blocks behind.
+        target: Some("x86_64-unknown-linux-gnu".into()),
         emit_ir_only: true,
         program_facts: ProgramFactsView {
             elision: Arc::new(elision),
