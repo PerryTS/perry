@@ -1286,7 +1286,14 @@ pub(crate) fn lower_module_decl(
                             if let ast::Expr::Ident(ident) = init.as_ref() {
                                 let ref_name = ident.sym.to_string();
                                 if let Some(func_id) = ctx.lookup_func(&ref_name) {
-                                    // Function alias - add to exported_functions
+                                    // Function alias - add to exported_functions.
+                                    // Importers read the alias as the function
+                                    // itself, so its body is link-visible.
+                                    if let Some(func) =
+                                        module.functions.iter_mut().find(|f| f.id == func_id)
+                                    {
+                                        func.is_exported = true;
+                                    }
                                     module.exported_functions.push((name, func_id));
                                 } else {
                                     // Non-function alias (e.g., export const alias = someObject)

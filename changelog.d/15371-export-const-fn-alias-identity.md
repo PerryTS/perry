@@ -1,0 +1,1 @@
+Native: a function exported again through a binding (`export const addRef = add`) is the same function object in every importer as `add` itself, so `add === addRef` holds and the alias carries `add`'s `name` and `length` (#15324).
