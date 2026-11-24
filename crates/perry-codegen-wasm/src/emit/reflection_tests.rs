@@ -100,11 +100,14 @@ function q() {}
 const look: any = { __perry_computed_field_key_user: 1 };
 const o: any = { x: 1 };
 const K: any = Object("x");
+const C: any = class {};
+Reflect.defineProperty(C, "__perry_computed_field_key_user", { value: 1, enumerable: true });
 const d: any = Object.getOwnPropertyDescriptor(o, K);
-console.log([Object.getOwnPropertyDescriptor(q, Object("captures") as any) === undefined, Object.hasOwn(q, Object("captures") as any), d.value, Object.hasOwn(o, K), Reflect.ownKeys(look).length, Object.hasOwn(look, "__perry_computed_field_key_user")].join(","));
+console.log([Object.getOwnPropertyDescriptor(q, Object("captures") as any) === undefined, Object.hasOwn(q, Object("captures") as any), d.value, Object.hasOwn(o, K), Reflect.ownKeys(look).length, Object.hasOwn(look, "__perry_computed_field_key_user"), Object.hasOwn(C, "__perry_computed_field_key_user")].join(","));
+console.log([Reflect.has(q, "captures"), Reflect.has(q, "name"), Reflect.has(q, "toString"), Reflect.has({ captures: 1 }, "captures")].join(","));
 "#
         ),
-        "true,false,1,true,1,true"
+        "true,false,1,true,1,true,true\nfalse,true,true,true"
     );
 }
 
@@ -129,7 +132,11 @@ fn json_stringify_omits_closures() {
         run_web_source(
             r#"
 const f = () => 1;
-class R { static r(k: string, v: any): any { return k === "n" ? f : v; } }
+class R { static r(k: string, v: any): any { return k === "n" ? f : v; } m(k: string, v: any): any { return k === "n" ? 5 : v; } }
+const holder = function (this: any, k: string, v: any): any { return k === "n" ? this.m + 1 : v; };
+let threw = "no";
+try { JSON.stringify({ n: 1 }, () => { throw new RangeError("boom"); }); } catch (e: any) { threw = e.message; }
+console.log(JSON.stringify({ n: 1, m: 2 }, new R().m) + JSON.stringify({ n: 1, m: 2 }, holder) + threw);
 const acc: any = {};
 Object.defineProperty(acc, "x", { set: (v: any) => {}, configurable: true });
 console.log(JSON.stringify({ n: 1, m: 2 }, R.r) + JSON.stringify(Object.getOwnPropertyDescriptor(acc, "x")));
@@ -138,7 +145,7 @@ console.log(JSON.stringify({ f, n: 1 }, (k, v) => (typeof v === "function" ? "fn
 console.log(JSON.stringify({ f }, (k, v) => (JSON.stringify({ f }) === "{}" && typeof v === "function" ? "fn" : v)) + ("toJSON" in f));
 "#
         ),
-        "{\"m\":2}{\"enumerable\":false,\"configurable\":true}\n{\"a\":[null],\"n\":1}undefined{\"n\":1}{}\n{\"f\":\"fn\",\"n\":1}{}\n{\"f\":\"fn\"}false"
+        "{\"n\":5,\"m\":2}{\"n\":3,\"m\":2}boom\n{\"m\":2}{\"enumerable\":false,\"configurable\":true}\n{\"a\":[null],\"n\":1}undefined{\"n\":1}{}\n{\"f\":\"fn\",\"n\":1}{}\n{\"f\":\"fn\"}false"
     );
 }
 
