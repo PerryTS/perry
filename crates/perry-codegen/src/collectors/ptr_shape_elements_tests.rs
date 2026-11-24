@@ -16,6 +16,7 @@ use perry_hir::{ClassField, CompareOp, Function, Module, Param, UpdateOp};
 
 fn field(name: &str) -> ClassField {
     ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: name.to_string(),
         key_expr: None,
@@ -82,6 +83,7 @@ fn new_c() -> Expr {
 /// `const <name> = new C();`
 fn let_c(id: u32, name: &str) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::Named("C".to_string()),
@@ -101,6 +103,7 @@ fn let_arr(id: u32, name: &str) -> Stmt {
 
 fn let_arr_ty(id: u32, name: &str, ty: Type) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -141,6 +144,7 @@ fn bounded_loop(idx: u32, arr: u32, body: Vec<Stmt>) -> Stmt {
     bounded_loop_cond(
         idx,
         Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(Expr::LocalGet(idx)),
             right: Box::new(Expr::PropertyGet {
@@ -157,6 +161,7 @@ fn bounded_loop(idx: u32, arr: u32, body: Vec<Stmt>) -> Stmt {
 fn bounded_loop_cond(idx: u32, condition: Expr, body: Vec<Stmt>) -> Stmt {
     Stmt::For {
         init: Some(Box::new(Stmt::Let {
+            byte_offset: 0,
             id: idx,
             name: format!("i{idx}"),
             ty: Type::Number,
@@ -185,6 +190,7 @@ fn guarded_for_of(
     fast_body: Vec<Stmt>,
 ) -> Stmt {
     let mut lazy = vec![Stmt::Let {
+        byte_offset: 0,
         id: iterator,
         name: format!("__iterator_{iterator}"),
         ty: Type::Any,
@@ -197,6 +203,7 @@ fn guarded_for_of(
         then_branch: lazy,
         else_branch: Some(vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: fast_alias,
                 name: format!("__arr_{fast_alias}"),
                 ty: Type::Array(Box::new(Type::Named("C".to_string()))),
@@ -215,6 +222,7 @@ fn let_elem(id: u32, name: &str, arr: u32, idx: u32) -> Stmt {
 
 fn let_elem_ty(id: u32, name: &str, arr: u32, idx: u32, ty: Type) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty,
@@ -281,6 +289,7 @@ fn promote(stmts: &[Stmt], classes: &HashMap<String, &Class>) -> HashMap<u32, Pt
 
 fn callback_param(id: u32, ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty,
@@ -295,6 +304,7 @@ fn inline_for_each(func_id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Stmt {
     Stmt::Expr(Expr::ArrayForEach {
         array: Box::new(Expr::LocalGet(1)),
         callback: Box::new(Expr::Closure {
+            byte_offset: 0,
             func_id,
             params,
             return_type: Type::Any,
@@ -637,7 +647,7 @@ fn returned_array_is_still_proven() {
         let_arr(1, "rows"),
         let_c(2, "row"),
         push(1, Expr::LocalGet(2)),
-        Stmt::Return(Some(Expr::LocalGet(1))),
+        Stmt::Return(Some(Expr::LocalGet(1)), 0),
     ];
     assert!(promote(&stmts, &classes).contains_key(&2));
 }
@@ -683,6 +693,7 @@ fn array_captured_by_a_closure_denies_the_push() {
         let_c(2, "row"),
         push(1, Expr::LocalGet(2)),
         Stmt::Expr(Expr::Closure {
+            byte_offset: 0,
             func_id: 99,
             params: Vec::new(),
             return_type: Type::Any,
@@ -806,6 +817,7 @@ fn a_non_empty_array_literal_is_not_a_seed() {
     let classes = classes_of(&cs);
     let stmts = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "rows".to_string(),
             ty: Type::Array(Box::new(Type::Named("C".to_string()))),
@@ -829,6 +841,7 @@ fn a_reassignable_array_binding_is_not_a_seed() {
     let classes = classes_of(&cs);
     let stmts = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "rows".to_string(),
             ty: Type::Array(Box::new(Type::Named("C".to_string()))),
@@ -893,6 +906,7 @@ fn unbounded_element_read_is_not_provenance() {
         // the read is identical to the licensed one and the ONLY thing
         // denying it is the absence of a bounding loop.
         Stmt::Let {
+            byte_offset: 0,
             id: 5,
             name: "j".to_string(),
             ty: Type::Number,
@@ -957,6 +971,7 @@ fn a_loop_bounded_by_a_non_array_length_does_not_license_the_read() {
         let_arr(1, "rows"),
         push(1, new_c()),
         Stmt::Let {
+            byte_offset: 0,
             id: 8,
             name: "other".to_string(),
             ty: Type::Any,
@@ -966,6 +981,7 @@ fn a_loop_bounded_by_a_non_array_length_does_not_license_the_read() {
         bounded_loop_cond(
             5,
             Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(5)),
                 right: Box::new(Expr::PropertyGet {
@@ -996,6 +1012,7 @@ fn a_constant_bound_does_not_license_the_read() {
         bounded_loop_cond(
             5,
             Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Lt,
                 left: Box::new(Expr::LocalGet(5)),
                 right: Box::new(Expr::Number(10.0)),
@@ -1159,6 +1176,7 @@ fn an_unlicensed_element_binding_denies_the_array() {
         push(1, Expr::LocalGet(2)),
         // `const stray = rows[0];` — literal index, no bounding loop.
         Stmt::Let {
+            byte_offset: 0,
             id: 7,
             name: "stray".to_string(),
             ty: Type::Named("C".to_string()),
@@ -1207,6 +1225,7 @@ fn reads_through_an_array_alias_are_licensed() {
         push(1, Expr::LocalGet(2)),
         // `const __arr = rows;` — the for-of desugar's alias binding.
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "__arr_3".to_string(),
             ty: Type::Array(Box::new(Type::Named("C".to_string()))),
@@ -1253,7 +1272,7 @@ fn terminal_guarded_for_of_retains_the_index_arm_facts() {
             Vec::new(),
             vec![let_elem(32, "iterated", 30, 31), read_x(32)],
         ),
-        Stmt::Return(Some(Expr::Number(0.0))),
+        Stmt::Return(Some(Expr::Number(0.0)), 0),
     ];
     let promoted = promote(&stmts, &classes);
     assert!(promoted.contains_key(&2), "the pushed producer");
@@ -1462,6 +1481,7 @@ fn group_integrity_drops_the_aliases_of_a_dropped_member() {
         // `const a = row;` — an alias, which the ptr_shape alias pre-pass
         // tracks and hands the same fact to.
         Stmt::Let {
+            byte_offset: 0,
             id: 3,
             name: "a".to_string(),
             ty: Type::Named("C".to_string()),
@@ -1648,6 +1668,7 @@ fn the_module_barrier_still_denies_element_facts() {
     let cs = [c];
     let classes = classes_of(&cs);
     let barrier = Function {
+        byte_offset: 0,
         id: 3,
         name: "b".to_string(),
         type_params: Vec::new(),
@@ -1691,6 +1712,7 @@ fn an_inadmissible_element_class_denies_the_array() {
     c.getters = vec![(
         "derived".to_string(),
         perry_hir::Function {
+            byte_offset: 0,
             id: 50,
             name: "derived".to_string(),
             type_params: Vec::new(),
@@ -1748,6 +1770,7 @@ fn the_env_gate_disables_element_facts() {
 fn source_walk(src: u32, root: u32, k: u32, condition_holds: bool, body: Vec<Stmt>) -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id: src,
             name: format!("__perry_src_{src}"),
             ty: Type::Array(Box::new(Type::Named("C".to_string()))),
@@ -1756,8 +1779,10 @@ fn source_walk(src: u32, root: u32, k: u32, condition_holds: bool, body: Vec<Stm
         },
         Stmt::If {
             condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::NativeMethodCall {
+                    byte_offset: 0,
                     module: "__perry_runtime".into(),
                     class_name: None,
                     object: None,

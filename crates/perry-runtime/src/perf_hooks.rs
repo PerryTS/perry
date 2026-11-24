@@ -1377,7 +1377,8 @@ pub extern "C" fn js_perf_observer_observe(obs_val: f64, opts: f64) -> f64 {
             };
             Some(opts_obj)
         };
-        let entry_types_v = opts_obj.map_or(JSValue::undefined(), |o| option_value(o, "entryTypes"));
+        let entry_types_v =
+            opts_obj.map_or(JSValue::undefined(), |o| option_value(o, "entryTypes"));
         let type_v = opts_obj.map_or(JSValue::undefined(), |o| option_value(o, "type"));
         let has_entry_types = !entry_types_v.is_undefined();
         let has_type = !type_v.is_undefined();

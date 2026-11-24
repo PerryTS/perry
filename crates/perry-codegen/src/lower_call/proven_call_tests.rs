@@ -319,7 +319,7 @@ fn a_proven_call_of_a_captured_closure_with_fewer_arguments_is_direct() {
         .body
         .iter()
         .find_map(|s| match s {
-            Stmt::Return(Some(Expr::Closure { func_id, .. })) => Some(*func_id),
+            Stmt::Return(Some(Expr::Closure { func_id, .. }), _) => Some(*func_id),
             _ => None,
         })
         .expect("returned closure");

@@ -3,6 +3,7 @@ use super::*;
 
 fn binary(op: BinaryOp, left: Expr, right: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op,
         left: Box::new(left),
         right: Box::new(right),
@@ -16,6 +17,7 @@ fn fixture(mask: i64) -> Module {
     m.classes[0].fields.push(y);
     m.classes[0].constructor = Some(assigning_ctor(&m.classes[0].fields));
     m.init[0] = Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "rows".into(),
         ty: Type::Array(Box::new(Type::Named("Counter".into()))),
@@ -45,6 +47,7 @@ fn fixture(mask: i64) -> Module {
     };
     *body = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 10,
             name: "row".into(),
             ty: Type::Named("Counter".into()),
@@ -73,6 +76,7 @@ fn fixture(mask: i64) -> Module {
     m.init.insert(
         1,
         Stmt::Let {
+            byte_offset: 0,
             id: 11,
             name: "sum".into(),
             ty: Type::Number,
@@ -144,7 +148,7 @@ fn boxed_bound_element_loop_keeps_checked_element_loads() {
         panic!("condition")
     };
     *right = Box::new(Expr::LocalGet(20));
-    f.body.push(Stmt::Return(Some(Expr::LocalGet(11))));
+    f.body.push(Stmt::Return(Some(Expr::LocalGet(11)), 0));
     m.functions.push(f);
     let ir = ir(&m);
     // Step 7 deleted the element regions: no receiver tail, and the loop's

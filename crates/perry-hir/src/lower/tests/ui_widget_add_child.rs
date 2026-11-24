@@ -34,6 +34,7 @@ fn test_perry_ui_widget_add_child_uses_native_dispatch() {
             object,
             method,
             args,
+            ..
         }) if method == "addChild" => Some((module, class_name, object, args)),
         _ => None,
     });
@@ -56,7 +57,7 @@ fn test_perry_ui_widget_add_child_uses_native_dispatch() {
                 class_name: Some(class_name),
                 object: Some(_),
                 method,
-                args,
+                args, ..
             }) if module == "perry/ui"
                 && class_name == "VStack"
                 && method == "removeAllChildren"
@@ -79,7 +80,7 @@ fn test_perry_ui_widget_add_child_uses_native_dispatch() {
                 class_name: Some(class_name),
                 object: Some(_),
                 method,
-                args,
+                args, ..
             }) if module == "perry/ui"
                 && class_name == "Widget"
                 && method == "addChild"

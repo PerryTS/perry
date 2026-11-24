@@ -6,7 +6,7 @@ use swc_ecma_ast as ast;
 
 use crate::ir::*;
 
-fn to_property_key(key: Expr) -> Expr {
+fn to_property_key(key: Expr, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -16,7 +16,7 @@ fn to_property_key(key: Expr) -> Expr {
         }),
         args: vec![key],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -26,10 +26,10 @@ pub(crate) fn computed_field_key_initializers(
     class_body: &[ast::ClassMember],
     fields: &[ClassField],
     static_fields: &[ClassField],
-) -> Vec<(String, Expr)> {
+) -> Vec<(String, Expr, u32)> {
     computed_field_key_initializers_with_order(class_body, fields, static_fields)
         .into_iter()
-        .map(|(_, name, value)| (name, value))
+        .map(|(_, name, value, byte_offset)| (name, value, byte_offset))
         .collect()
 }
 
@@ -39,7 +39,7 @@ pub(crate) fn computed_field_key_initializers_with_order(
     class_body: &[ast::ClassMember],
     fields: &[ClassField],
     static_fields: &[ClassField],
-) -> Vec<(usize, String, Expr)> {
+) -> Vec<(usize, String, Expr, u32)> {
     let mut result = Vec::new();
     let mut field_idx = 0usize;
     let mut static_field_idx = 0usize;
@@ -60,7 +60,8 @@ pub(crate) fn computed_field_key_initializers_with_order(
                         result.push((
                             source_order,
                             field.name.clone(),
-                            to_property_key(key.clone()),
+                            to_property_key(key.clone(), field.byte_offset),
+                            field.byte_offset,
                         ));
                     }
                 }
@@ -174,6 +175,7 @@ fn build_interleaved_static_init_stmts_impl(
             })
         } else {
             Stmt::Expr(Expr::StaticFieldSet {
+                byte_offset: sf.byte_offset,
                 class_name: class_name.to_string(),
                 field_name: sf.name.clone(),
                 value: Box::new(init_value),
@@ -186,10 +188,11 @@ fn build_interleaved_static_init_stmts_impl(
     // initialization and each later instance construction reuse the same key.
     let mut out = Vec::new();
     if emit_computed_names {
-        for (field_name, value) in
+        for (field_name, value, byte_offset) in
             computed_field_key_initializers(class_body, fields, static_fields)
         {
             out.push(Stmt::Expr(Expr::StaticFieldSet {
+                byte_offset,
                 class_name: class_name.to_string(),
                 field_name,
                 value: Box::new(value),
@@ -217,11 +220,12 @@ fn build_interleaved_static_init_stmts_impl(
                 }
                 field_idx += 1;
             }
-            ast::ClassMember::StaticBlock(_) => {
+            ast::ClassMember::StaticBlock(block) => {
                 let method_name = format!("__perry_static_init_{}", block_idx);
                 block_idx += 1;
                 if static_methods.iter().any(|m| m.name == method_name) {
                     out.push(Stmt::Expr(Expr::StaticMethodCall {
+                        byte_offset: block.span.lo.0,
                         class_name: class_name.to_string(),
                         method_name,
                         args: Vec::new(),

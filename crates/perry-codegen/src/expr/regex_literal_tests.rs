@@ -11,6 +11,7 @@ fn function(
     return_type: Type,
 ) -> Function {
     Function {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         type_params: Vec::new(),
@@ -31,6 +32,7 @@ fn function(
 
 fn param(id: u32, name: &str) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: name.to_string(),
         ty: Type::String,
@@ -83,16 +85,19 @@ fn direct_literal_test_constructs_data_site_and_uses_generic_method_call() {
         1,
         "direct",
         vec![param(10, "s")],
-        vec![Stmt::Return(Some(call(
-            property(
-                Expr::RegExp {
-                    pattern: "x".into(),
-                    flags: "g".into(),
-                },
-                "test",
-            ),
-            vec![Expr::LocalGet(10)],
-        )))],
+        vec![Stmt::Return(
+            Some(call(
+                property(
+                    Expr::RegExp {
+                        pattern: "x".into(),
+                        flags: "g".into(),
+                    },
+                    "test",
+                ),
+                vec![Expr::LocalGet(10)],
+            )),
+            0,
+        )],
         Type::Boolean,
     )]);
     assert!(ir.contains("call i64 @js_regexp_literal("), "{ir}");
@@ -110,10 +115,13 @@ fn literal_site_is_one_call_to_the_shared_birth_entry() {
         1,
         "fresh",
         Vec::new(),
-        vec![Stmt::Return(Some(Expr::RegExp {
-            pattern: "x".into(),
-            flags: "".into(),
-        }))],
+        vec![Stmt::Return(
+            Some(Expr::RegExp {
+                pattern: "x".into(),
+                flags: "".into(),
+            }),
+            0,
+        )],
         Type::Any,
     )]);
     // The function's own body: the module's init and entry may allocate.
@@ -154,20 +162,26 @@ fn factory_test_uses_generic_method_call() {
         1,
         "factory",
         Vec::new(),
-        vec![Stmt::Return(Some(Expr::RegExp {
-            pattern: "x".into(),
-            flags: "g".into(),
-        }))],
+        vec![Stmt::Return(
+            Some(Expr::RegExp {
+                pattern: "x".into(),
+                flags: "g".into(),
+            }),
+            0,
+        )],
         Type::Named("RegExp".into()),
     );
     let caller = function(
         2,
         "caller",
         vec![param(30, "s")],
-        vec![Stmt::Return(Some(call(
-            property(call(Expr::FuncRef(1), Vec::new()), "test"),
-            vec![Expr::LocalGet(30)],
-        )))],
+        vec![Stmt::Return(
+            Some(call(
+                property(call(Expr::FuncRef(1), Vec::new()), "test"),
+                vec![Expr::LocalGet(30)],
+            )),
+            0,
+        )],
         Type::Boolean,
     );
     let ir = compile(vec![factory, caller]);
@@ -181,13 +195,16 @@ fn ordinary_factory_test_uses_generic_method_call() {
         1,
         "member",
         Vec::new(),
-        vec![Stmt::Return(Some(call(
-            property(
-                call(property(Expr::Undefined, "default"), Vec::new()),
-                "test",
-            ),
-            vec![Expr::String("x".into())],
-        )))],
+        vec![Stmt::Return(
+            Some(call(
+                property(
+                    call(property(Expr::Undefined, "default"), Vec::new()),
+                    "test",
+                ),
+                vec![Expr::String("x".into())],
+            )),
+            0,
+        )],
         Type::Any,
     )]);
     assert_generic(&ir);
@@ -201,10 +218,13 @@ fn typed_local_test_uses_generic_method_call() {
         1,
         "typed",
         vec![receiver, param(11, "s")],
-        vec![Stmt::Return(Some(call(
-            property(Expr::LocalGet(10), "test"),
-            vec![Expr::LocalGet(11)],
-        )))],
+        vec![Stmt::Return(
+            Some(call(
+                property(Expr::LocalGet(10), "test"),
+                vec![Expr::LocalGet(11)],
+            )),
+            0,
+        )],
         Type::Boolean,
     )]);
     assert_generic(&ir);

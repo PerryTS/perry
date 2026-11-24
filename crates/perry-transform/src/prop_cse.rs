@@ -171,7 +171,7 @@ fn diverging_guard(stmt: &Stmt) -> Option<&Expr> {
 /// Every path through `stmts` leaves the enclosing statement list.
 fn always_diverges(stmts: &[Stmt]) -> bool {
     match stmts.last() {
-        Some(Stmt::Return(_))
+        Some(Stmt::Return(_, _))
         | Some(Stmt::Throw(_))
         | Some(Stmt::Break)
         | Some(Stmt::Continue)
@@ -210,7 +210,9 @@ fn guard_expr_is_analyzable(e: &Expr) -> bool {
         Expr::PropertyGet { object, .. } => matches!(object.as_ref(), Expr::LocalGet(_)),
         // STRICT compares only. `==`/`!=`/`<`/`<=`/`>`/`>=` all coerce, and
         // coercion calls `valueOf`/`toString`.
-        Expr::Compare { op, left, right } => {
+        Expr::Compare {
+            op, left, right, ..
+        } => {
             matches!(op, CompareOp::Eq | CompareOp::Ne)
                 && guard_expr_is_analyzable(left)
                 && guard_expr_is_analyzable(right)
@@ -244,8 +246,10 @@ fn guard_expr_is_analyzable(e: &Expr) -> bool {
 /// which the original may skip. The `Let` goes immediately before that guard,
 /// and every occurrence from there to the end of the run is replaced.
 fn rewrite_run(run: &mut [Stmt], next_local_id: &mut LocalId) -> Vec<(usize, Stmt)> {
-    // Candidate key per guard: its first unconditional read, if any.
-    let candidates: Vec<Option<ReadKey>> = run
+    // Candidate key per guard: its first unconditional read, if any, with
+    // that read's source span (the hoisted read is that read: it is
+    // evaluated first, and the later ones become the temp).
+    let candidates: Vec<Option<(ReadKey, (u32, u32))>> = run
         .iter()
         .map(|s| diverging_guard(s).and_then(first_unconditional_read))
         .collect();
@@ -253,7 +257,9 @@ fn rewrite_run(run: &mut [Stmt], next_local_id: &mut LocalId) -> Vec<(usize, Stm
     let mut hoists: Vec<(usize, Stmt)> = Vec::new();
     let mut claimed: Vec<ReadKey> = Vec::new();
     for (at, cand) in candidates.iter().enumerate() {
-        let Some(key) = cand else { continue };
+        let Some((key, (byte_offset, byte_end))) = cand else {
+            continue;
+        };
         if claimed.contains(key) {
             continue;
         }
@@ -273,6 +279,7 @@ fn rewrite_run(run: &mut [Stmt], next_local_id: &mut LocalId) -> Vec<(usize, Stm
         hoists.push((
             at,
             Stmt::Let {
+                byte_offset: 0, /*HPOS*/
                 id,
                 name: format!("__perry_cse_{}_{}", key.1, id),
                 // `Any` — the hoist must not claim knowledge the read did not
@@ -281,10 +288,10 @@ fn rewrite_run(run: &mut [Stmt], next_local_id: &mut LocalId) -> Vec<(usize, Stm
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::PropertyGet {
-                    byte_end: 0,
+                    byte_end: *byte_end,
                     object: Box::new(Expr::LocalGet(key.0)),
                     property: key.1.clone(),
-                    byte_offset: 0,
+                    byte_offset: *byte_offset,
                 }),
             },
         ));
@@ -302,12 +309,15 @@ fn rewrite_run(run: &mut [Stmt], next_local_id: &mut LocalId) -> Vec<(usize, Stm
 /// The first `local.prop` read this expression evaluates on every path,
 /// walking left to right and never entering the right-hand side of a
 /// short-circuiting operator.
-fn first_unconditional_read(e: &Expr) -> Option<ReadKey> {
+fn first_unconditional_read(e: &Expr) -> Option<(ReadKey, (u32, u32))> {
     match e {
         Expr::PropertyGet {
-            object, property, ..
+            object,
+            property,
+            byte_offset,
+            byte_end,
         } => match object.as_ref() {
-            Expr::LocalGet(id) => Some((*id, property.clone())),
+            Expr::LocalGet(id) => Some(((*id, property.clone()), (*byte_offset, *byte_end))),
             _ => None,
         },
         Expr::Compare { left, right, .. } => {
@@ -522,7 +532,7 @@ fn stmt_exprs(s: &Stmt) -> Vec<&Expr> {
     match s {
         Stmt::Let { init, .. } => init.iter().collect(),
         Stmt::Expr(e) | Stmt::Throw(e) => vec![e],
-        Stmt::Return(e) => e.iter().collect(),
+        Stmt::Return(e, _) => e.iter().collect(),
         Stmt::If { condition, .. }
         | Stmt::While { condition, .. }
         | Stmt::DoWhile { condition, .. } => vec![condition],
@@ -532,6 +542,7 @@ fn stmt_exprs(s: &Stmt) -> Vec<&Expr> {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => std::iter::once(discriminant)
             .chain(cases.iter().filter_map(|c| c.test.as_ref()))
             .collect(),
@@ -585,6 +596,7 @@ mod tests {
     fn guard(prop: &str, lit: &str, body: Vec<Stmt>) -> Stmt {
         Stmt::If {
             condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(read(N, prop)),
                 right: Box::new(Expr::String(lit.to_string())),
@@ -595,7 +607,7 @@ mod tests {
     }
 
     fn diverging(prop: &str, lit: &str) -> Stmt {
-        guard(prop, lit, vec![Stmt::Return(Some(Expr::Integer(0)))])
+        guard(prop, lit, vec![Stmt::Return(Some(Expr::Integer(0)), 0)])
     }
 
     /// Every `local.prop` read still present anywhere in `stmts`.
@@ -705,11 +717,12 @@ mod tests {
     fn loose_equality_is_not_analyzable() {
         let mk = |lit: &str| Stmt::If {
             condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::LooseEq,
                 left: Box::new(read(N, "kind")),
                 right: Box::new(Expr::String(lit.to_string())),
             },
-            then_branch: vec![Stmt::Return(None)],
+            then_branch: vec![Stmt::Return(None, 0)],
             else_branch: None,
         };
         let mut body = vec![mk("num"), mk("str"), mk("var")];
@@ -723,6 +736,7 @@ mod tests {
     #[test]
     fn relational_compare_is_not_analyzable() {
         assert!(!guard_expr_is_analyzable(&Expr::Compare {
+            byte_offset: 0,
             op: CompareOp::Lt,
             left: Box::new(read(N, "kind")),
             right: Box::new(Expr::Integer(1)),
@@ -779,11 +793,12 @@ mod tests {
         let other: LocalId = 2;
         let later = |lit: &str| Stmt::If {
             condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(read(other, "y")),
                 right: Box::new(Expr::String(lit.to_string())),
             },
-            then_branch: vec![Stmt::Return(None)],
+            then_branch: vec![Stmt::Return(None, 0)],
             else_branch: None,
         };
         let mut body = vec![diverging("kind", "num"), later("a"), later("b")];
@@ -805,19 +820,22 @@ mod tests {
         let other: LocalId = 2;
         let g = |lit: &str| Stmt::If {
             condition: Expr::Logical {
+                byte_offset: 0,
                 op: perry_hir::LogicalOp::And,
                 left: Box::new(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(read(N, "kind")),
                     right: Box::new(Expr::String("bin".to_string())),
                 }),
                 right: Box::new(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Eq,
                     left: Box::new(read(other, "y")),
                     right: Box::new(Expr::String(lit.to_string())),
                 }),
             },
-            then_branch: vec![Stmt::Return(None)],
+            then_branch: vec![Stmt::Return(None, 0)],
             else_branch: None,
         };
         let mut body = vec![g("a"), g("b")];
@@ -839,7 +857,7 @@ mod tests {
             diverging("op", "+"),
             diverging("op", "-"),
             diverging("op", "*"),
-            Stmt::Return(None),
+            Stmt::Return(None, 0),
         ];
         let mut body = vec![guard("kind", "bin", inner)];
         let mut next = 100;
@@ -856,6 +874,7 @@ mod tests {
 
     fn fn_with(body: Vec<Stmt>) -> Function {
         Function {
+            byte_offset: 0,
             id: 1,
             name: "f".to_string(),
             type_params: vec![],

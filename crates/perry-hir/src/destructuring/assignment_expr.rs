@@ -1,6 +1,7 @@
 //! Lowering of destructuring assignment expressions (`[a, b] = expr` as a value).
 
 use super::*;
+use swc_common::Spanned;
 
 /// Lower a destructuring assignment expression.
 /// For [a, b] = expr or { a, b } = expr, we generate a Sequence expression:
@@ -35,7 +36,7 @@ pub(crate) fn lower_destructuring_assignment(
                 if let Some(elem_pat) = elem {
                     let index_expr = Expr::IndexGet {
                         element_offset: 0,
-                        byte_offset: 0,
+                        byte_offset: elem_pat.span().lo.0,
                         byte_end: 0,
                         object: value.clone(),
                         index: Box::new(Expr::Number(idx as f64)),
@@ -65,7 +66,7 @@ pub(crate) fn lower_destructuring_assignment(
                                                 object,
                                                 property,
                                                 value: Box::new(index_expr),
-                                                byte_offset: 0,
+                                                byte_offset: crate::lower::member_token(member),
                                                 byte_end: 0,
                                             });
                                         }
@@ -76,7 +77,7 @@ pub(crate) fn lower_destructuring_assignment(
                                                 index,
                                                 value: Box::new(index_expr),
                                                 element_offset: 0,
-                                                byte_offset: 0,
+                                                byte_offset: crate::lower::member_token(member),
                                                 byte_end: 0,
                                             });
                                         }
@@ -98,7 +99,7 @@ pub(crate) fn lower_destructuring_assignment(
                                                 object,
                                                 property,
                                                 value: Box::new(index_expr),
-                                                byte_offset: 0,
+                                                byte_offset: crate::lower::member_token(member),
                                                 byte_end: 0,
                                             });
                                         }
@@ -173,19 +174,19 @@ pub(crate) fn lower_destructuring_assignment(
                         let prop_expr = match &kv.key {
                             ast::PropName::Ident(ident) => Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: kv.key.span().lo.0,
                                 object: value.clone(),
                                 property: ident.sym.to_string(),
                             },
                             ast::PropName::Str(s) => Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: kv.key.span().lo.0,
                                 object: value.clone(),
                                 property: s.value.as_str().unwrap_or("").to_string(),
                             },
                             ast::PropName::Num(n) => Expr::PropertyGet {
                                 byte_end: 0,
-                                byte_offset: 0,
+                                byte_offset: kv.key.span().lo.0,
                                 object: value.clone(),
                                 property: n.value.to_string(),
                             },
@@ -195,7 +196,7 @@ pub(crate) fn lower_destructuring_assignment(
                                 computed_excl_keys.push(lower_expr(ctx, &computed.expr)?);
                                 Expr::IndexGet {
                                     element_offset: 0,
-                                    byte_offset: 0,
+                                    byte_offset: computed.span.lo.0,
                                     byte_end: 0,
                                     object: value.clone(),
                                     index: Box::new(lower_expr(ctx, &computed.expr)?),
@@ -245,7 +246,7 @@ pub(crate) fn lower_destructuring_assignment(
                         let name = assign.key.sym.to_string();
                         let prop_expr = Expr::PropertyGet {
                             byte_end: 0,
-                            byte_offset: 0,
+                            byte_offset: assign.span.lo.0,
                             object: value.clone(),
                             property: name.clone(),
                         };
@@ -285,7 +286,7 @@ pub(crate) fn lower_destructuring_assignment(
                                     for key in computed_excl_keys.drain(..) {
                                         exprs.push(Expr::Delete(Box::new(Expr::IndexGet {
                                             element_offset: 0,
-                                            byte_offset: 0,
+                                            byte_offset: rest.span.lo.0,
                                             byte_end: 0,
                                             object: Box::new(Expr::LocalGet(id)),
                                             index: Box::new(key),

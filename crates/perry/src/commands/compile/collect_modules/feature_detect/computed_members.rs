@@ -80,6 +80,7 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
     let mut caps = Capabilities::default();
     for_each_expr(module, &mut |expr| {
         if let Expr::IndexGet { index, .. }
+        | Expr::RegionOut { index, .. }
         | Expr::ReflectGet { key: index, .. }
         | Expr::ReflectGetOwnPropertyDescriptor { key: index, .. }
         | Expr::ObjectGetOwnPropertyDescriptor(_, index) = expr
@@ -126,7 +127,7 @@ pub(super) fn scan(module: &Module, native_modules: &BTreeMap<PathBuf, Module>) 
             Expr::PropertyGet { property, .. } if property == "Bun" => caps.bun_files = true,
             // Numeric and literal keys do not hide a new API name. Literal
             // readableWebStream is already selected by the ordinary detector.
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 caps.opaque_members |= opaque_key(index, &types)
                     && api_receiver(object, &types, module, native_modules);
                 caps.date_members |= opaque_key(index, &types)
@@ -265,7 +266,7 @@ fn date_receiver(
     }
     fn returns_value(body: &[Stmt]) -> bool {
         body.iter().any(|stmt| match stmt {
-            Stmt::Return(Some(_)) => true,
+            Stmt::Return(Some(_), _) => true,
             Stmt::If {
                 then_branch,
                 else_branch,
@@ -388,6 +389,7 @@ fn opaque_key(key: &Expr, types: &HirTypeEnv) -> bool {
             object: None,
             method,
             args,
+            ..
         } if module == "__perry_runtime" && method == "arrayRecordIndex" && args.len() == 1 => {
             &args[0]
         }
@@ -430,13 +432,17 @@ fn only_member_reads(module: &Module, id: u32) -> bool {
     for_each_expr(module, &mut |expr| {
         reads += usize::from(matches!(expr, Expr::LocalGet(local) if *local == id));
         // A method call can mutate its receiver; it is not a passive read.
-        if let Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } = expr {
+        if let Expr::Call { callee, .. }
+        | Expr::RegionCall { callee, .. }
+        | Expr::CallSpread { callee, .. } = expr
+        {
             reads += usize::from(matches!(callee.as_ref(),
-                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                 if matches!(object.as_ref(), Expr::LocalGet(local) if *local == id)));
         }
         let object = match expr {
             Expr::IndexGet { object, .. }
+            | Expr::RegionOut { object, .. }
             | Expr::PropertyGet { object, .. }
             | Expr::ReflectGet { target: object, .. }
             | Expr::ReflectGetOwnPropertyDescriptor { target: object, .. }
@@ -576,7 +582,10 @@ pub(super) fn for_each_expr(module: &Module, visit: &mut impl FnMut(&Expr)) {
         // A statically named namespace call does not pass the namespace as
         // a value. Keep the member itself (notably fs/promises.open), and
         // recurse into arguments: fs.readFileSync(helper(fs), "utf8") escapes.
-        if let Expr::Call { callee, .. } | Expr::CallSpread { callee, .. } = expr {
+        if let Expr::Call { callee, .. }
+        | Expr::RegionCall { callee, .. }
+        | Expr::CallSpread { callee, .. } = expr
+        {
             perry_hir::walker::walk_expr_children(expr, &mut |child| {
                 if std::ptr::eq(child, callee.as_ref()) {
                     callee_visit(child, visit);

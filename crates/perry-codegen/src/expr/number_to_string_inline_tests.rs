@@ -23,6 +23,7 @@ fn ir_opts() -> CompileOptions {
 
 fn param(ty: Type) -> Param {
     Param {
+        byte_offset: 0,
         id: NUM_ID,
         name: "n".to_string(),
         ty,
@@ -35,6 +36,7 @@ fn param(ty: Type) -> Param {
 
 fn module_with(params: Vec<Param>, body: Vec<Stmt>) -> Module {
     Module {
+        byte_offset: 0,
         name: "num2str_inline.ts".to_string(),
         imports: Vec::new(),
         requested_modules: Vec::new(),
@@ -46,6 +48,7 @@ fn module_with(params: Vec<Param>, body: Vec<Stmt>) -> Module {
         enums: Vec::new(),
         globals: Vec::new(),
         functions: vec![Function {
+            byte_offset: 0,
             id: 1,
             name: "probe".to_string(),
             type_params: Vec::new(),
@@ -103,6 +106,7 @@ fn ir(params: Vec<Param>, body: Vec<Stmt>) -> String {
 fn number_n() -> Expr {
     // `n * 1` — numeric by construction, whatever the parameter's proof.
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Mul,
         left: Box::new(Expr::LocalGet(NUM_ID)),
         right: Box::new(Expr::Integer(1)),
@@ -125,7 +129,7 @@ fn method(object: Expr, property: &str, args: Vec<Expr>) -> Expr {
 }
 
 fn returns(e: Expr) -> Vec<Stmt> {
-    vec![Stmt::Return(Some(e))]
+    vec![Stmt::Return(Some(e), 0)]
 }
 
 /// Every spelling of a number's conversion gets the inline arm.
@@ -141,6 +145,7 @@ fn each_spelling_of_a_number_conversion_is_inlined() {
         (
             "\"\" + n",
             Expr::Binary {
+                byte_offset: 0,
                 op: BinaryOp::Add,
                 left: Box::new(Expr::String(String::new())),
                 right: Box::new(number_n()),
@@ -182,6 +187,7 @@ fn an_unproven_operand_keeps_the_runtime_call() {
 #[test]
 fn a_string_coerced_local_reads_char_codes_inline() {
     let concat = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::String(String::new())),
         right: Box::new(number_n()),
@@ -194,17 +200,21 @@ fn a_string_coerced_local_reads_char_codes_inline() {
     for (label, init) in inits {
         let body = vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: STR_ID,
                 name: "s".to_string(),
                 ty: Type::String,
                 mutable: false,
                 init: Some(init),
             },
-            Stmt::Return(Some(method(
-                Expr::LocalGet(STR_ID),
-                "charCodeAt",
-                vec![Expr::Integer(0)],
-            ))),
+            Stmt::Return(
+                Some(method(
+                    Expr::LocalGet(STR_ID),
+                    "charCodeAt",
+                    vec![Expr::Integer(0)],
+                )),
+                0,
+            ),
         ];
         let ir = ir(vec![param(Type::Number)], body);
         assert!(

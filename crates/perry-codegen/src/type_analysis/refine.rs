@@ -194,12 +194,15 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
     }
     match init {
         // The flat-const element lowering yields a raw Number (issue #50).
-        Expr::IndexGet { object, index, .. }
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
             if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() =>
         {
             Some(HirType::Number)
         }
-        Expr::IndexGet { .. } | Expr::Uint8ArrayGet { .. } | Expr::BufferIndexGet { .. }
+        Expr::IndexGet { .. }
+        | Expr::RegionOut { .. }
+        | Expr::Uint8ArrayGet { .. }
+        | Expr::BufferIndexGet { .. }
             if crate::expr::ta_element_read::byte_read_is_numeric(ctx, init) =>
         {
             Some(HirType::Union(vec![HirType::Number, HirType::Void]))
@@ -230,25 +233,23 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             }
             _ => None,
         },
-        Expr::Binary { op, left, right }
-            if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) =>
-        {
-            matches!(
-                op,
-                BinaryOp::Add
-                    | BinaryOp::Sub
-                    | BinaryOp::Mul
-                    | BinaryOp::Div
-                    | BinaryOp::Mod
-                    | BinaryOp::Pow
-                    | BinaryOp::BitAnd
-                    | BinaryOp::BitOr
-                    | BinaryOp::BitXor
-                    | BinaryOp::Shl
-                    | BinaryOp::Shr
-            )
-            .then_some(HirType::BigInt)
-        }
+        Expr::Binary {
+            op, left, right, ..
+        } if is_bigint_expr(ctx, left) && is_bigint_expr(ctx, right) => matches!(
+            op,
+            BinaryOp::Add
+                | BinaryOp::Sub
+                | BinaryOp::Mul
+                | BinaryOp::Div
+                | BinaryOp::Mod
+                | BinaryOp::Pow
+                | BinaryOp::BitAnd
+                | BinaryOp::BitOr
+                | BinaryOp::BitXor
+                | BinaryOp::Shl
+                | BinaryOp::Shr
+        )
+        .then_some(HirType::BigInt),
         Expr::Binary { left, right, .. }
             if is_numeric_expr(ctx, left)
                 && is_numeric_expr(ctx, right)
@@ -277,6 +278,7 @@ pub(crate) fn proven_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } if [left, right]
             .iter()
             .any(|side| matches!(side.as_ref(), Expr::String(_) | Expr::WtfString(_))) =>
@@ -446,7 +448,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         | Expr::PodLayoutSizeOf { .. }
         | Expr::PodLayoutAlignOf { .. }
         | Expr::PodLayoutOffsetOf { .. } => Some(HirType::Number),
-        Expr::Binary { op, left, right } => {
+        Expr::Binary { op, left, right, .. } => {
             if is_bigint_expr(ctx, init)
                 && matches!(
                     op,
@@ -732,12 +734,12 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
             }
         }
         // The flat-const element lowering yields a raw Number (issue #50).
-        Expr::IndexGet { object, index, .. }
+        Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }
             if crate::expr::flat_const_index_get_target(ctx, object, index).is_some() =>
         {
             Some(HirType::Number)
         }
-        Expr::IndexGet { object, index , .. } => {
+        Expr::IndexGet { object, index , .. } | Expr::RegionOut { object, index, .. } => {
             // arr[i] where arr is Array<T> → element type T.
             // Handles both LocalGet(arr) and PropertyGet(this, "field")
             // — the latter lets `this.parts[i]` get the right type
@@ -810,7 +812,7 @@ pub(crate) fn refine_type_from_init(ctx: &FnCtx<'_>, init: &Expr) -> Option<HirT
         // `p.then(cb)`, `p.catch(cb)`, etc. Refine the local to
         // `Promise(Any)` so `is_promise_expr` can detect subsequent
         // `.then()` / `.catch()` chains.
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             if is_promise_expr(ctx, init) {
                 return Some(HirType::Promise(Box::new(HirType::Any)));
             }
@@ -981,11 +983,16 @@ fn crypto_digest_chain_has_string_encoding(callee: &Expr) -> Option<bool> {
     if p1 != "digest" {
         return None;
     }
-    let Expr::Call {
+    let (Expr::Call {
         callee: c2,
         args: digest_args,
         ..
-    } = o1.as_ref()
+    }
+    | Expr::RegionCall {
+        callee: c2,
+        args: digest_args,
+        ..
+    }) = o1.as_ref()
     else {
         return None;
     };
@@ -1000,7 +1007,7 @@ fn crypto_digest_chain_has_string_encoding(callee: &Expr) -> Option<bool> {
     if p2 != "update" {
         return None;
     }
-    let Expr::Call { callee: c3, .. } = o2.as_ref() else {
+    let (Expr::Call { callee: c3, .. } | Expr::RegionCall { callee: c3, .. }) = o2.as_ref() else {
         return None;
     };
     let Expr::PropertyGet {

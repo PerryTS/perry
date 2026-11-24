@@ -8,6 +8,7 @@ use super::compute_auto_captures_with_globals;
 
 fn param(id: u32) -> Param {
     Param {
+        byte_offset: 0,
         id,
         name: format!("p{id}"),
         ty: Type::Any,
@@ -20,6 +21,7 @@ fn param(id: u32) -> Param {
 
 fn closure(func_id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
     Expr::Closure {
+        byte_offset: 0,
         func_id,
         params,
         return_type: Type::Any,
@@ -39,6 +41,7 @@ fn closure(func_id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>
 
 fn let_(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("v{id}"),
         ty: Type::Any,
@@ -49,6 +52,7 @@ fn let_(id: u32, init: Expr) -> Stmt {
 
 fn add(a: u32, b: u32) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(a)),
         right: Box::new(Expr::LocalGet(b)),
@@ -73,18 +77,18 @@ fn nested_closure_bindings_are_not_captured_by_an_enclosing_closure() {
     let g = closure(
         12,
         Vec::new(),
-        vec![Stmt::Return(Some(add(3, 1)))],
+        vec![Stmt::Return(Some(add(3, 1)), 0)],
         vec![3, 1],
     );
     let f_body = vec![
         let_(3, Expr::LocalGet(2)),
         let_(4, g),
-        Stmt::Return(Some(Expr::LocalGet(4))),
+        Stmt::Return(Some(Expr::LocalGet(4)), 0),
     ];
     // The inner closure's explicit list is empty here (the shape HIR leaves
     // for some argument closures): its free references must still surface.
     let f = closure(11, vec![param(2)], f_body, Vec::new());
-    let outer_body = vec![let_(5, f), Stmt::Return(Some(Expr::LocalGet(5)))];
+    let outer_body = vec![let_(5, f), Stmt::Return(Some(Expr::LocalGet(5)), 0)];
     assert_eq!(captures_of(&[], &outer_body, &[]), vec![1]);
 }
 
@@ -99,13 +103,13 @@ fn a_preallocated_binding_is_the_bodys_own_and_not_captured() {
     let step = closure(
         31,
         Vec::new(),
-        vec![let_(2, Expr::LocalGet(1)), Stmt::Return(Some(add(2, 1)))],
+        vec![let_(2, Expr::LocalGet(1)), Stmt::Return(Some(add(2, 1)), 0)],
         vec![1, 2],
     );
     let body = vec![
         Stmt::PreallocateBoxes(vec![2]),
         let_(12, step),
-        Stmt::Return(Some(Expr::LocalGet(12))),
+        Stmt::Return(Some(Expr::LocalGet(12)), 0),
     ];
     assert_eq!(captures_of(&[param(1)], &body, &[]), Vec::<u32>::new());
     // The same body from outside a function: id 1 is free, id 2 is not.
@@ -120,9 +124,9 @@ fn own_level_references_and_explicit_nested_captures_are_kept() {
     let g = closure(
         21,
         vec![param(7)],
-        vec![Stmt::Return(Some(add(7, 8)))],
+        vec![Stmt::Return(Some(add(7, 8)), 0)],
         vec![9],
     );
-    let body = vec![let_(10, g), Stmt::Return(Some(add(10, 7)))];
+    let body = vec![let_(10, g), Stmt::Return(Some(add(10, 7)), 0)];
     assert_eq!(captures_of(&[], &body, &[]), vec![7, 8, 9]);
 }

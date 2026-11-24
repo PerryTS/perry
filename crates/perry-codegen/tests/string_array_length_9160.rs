@@ -8,6 +8,7 @@ const COUNTER: u32 = 12;
 
 fn string_array_param() -> Param {
     Param {
+        byte_offset: 0,
         id: STRINGS,
         name: "strings".to_string(),
         ty: Type::Array(Box::new(Type::String)),
@@ -25,12 +26,14 @@ fn sum_lengths() -> Function {
         byte_end: 0,
         object: Box::new(Expr::LocalGet(STRINGS)),
         index: Box::new(Expr::Binary {
+            byte_offset: 0,
             op: BinaryOp::BitAnd,
             left: Box::new(Expr::LocalGet(COUNTER)),
             right: Box::new(Expr::Integer(3)),
         }),
     };
     Function {
+        byte_offset: 0,
         id: 1,
         name: "sumLengths".to_string(),
         type_params: Vec::new(),
@@ -38,6 +41,7 @@ fn sum_lengths() -> Function {
         return_type: Type::Number,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: TOTAL,
                 name: "total".to_string(),
                 ty: Type::Number,
@@ -46,6 +50,7 @@ fn sum_lengths() -> Function {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: COUNTER,
                     name: "i".to_string(),
                     ty: Type::Number,
@@ -53,6 +58,7 @@ fn sum_lengths() -> Function {
                     init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(COUNTER)),
                     right: Box::new(Expr::Integer(1000)),
@@ -65,6 +71,7 @@ fn sum_lengths() -> Function {
                 body: vec![Stmt::Expr(Expr::LocalSet(
                     TOTAL,
                     Box::new(Expr::Binary {
+                        byte_offset: 0,
                         op: BinaryOp::Add,
                         left: Box::new(Expr::LocalGet(TOTAL)),
                         right: Box::new(Expr::PropertyGet {
@@ -76,7 +83,7 @@ fn sum_lengths() -> Function {
                     }),
                 ))],
             },
-            Stmt::Return(Some(Expr::LocalGet(TOTAL))),
+            Stmt::Return(Some(Expr::LocalGet(TOTAL)), 0),
         ],
         is_async: false,
         is_generator: false,

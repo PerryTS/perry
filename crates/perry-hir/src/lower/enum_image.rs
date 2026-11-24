@@ -581,7 +581,7 @@ pub(crate) fn lower_enum_image(
             }
         }
     }
-    let class_name = ctx.synthesize_anon_shape_class(&keys);
+    let class_name = ctx.synthesize_anon_shape_class(&keys, call.span.lo.0);
     let mut image = Some(Expr::EnumImage {
         class_name,
         stores: plan.stores,

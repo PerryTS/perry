@@ -395,6 +395,7 @@ impl<'a> Proof<'a> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 self.expr(condition, function);
                 let mut v = self.expr(then_expr, function);
@@ -434,7 +435,7 @@ impl<'a> Proof<'a> {
                 }
                 self.read(&o, Some(property), false)
             }
-            Expr::IndexGet { object, index, .. } => {
+            Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. } => {
                 let o = self.expr(object, function);
                 self.changed |= join(self.property_receivers.entry(site).or_default(), o.clone());
                 self.expr(index, function);
@@ -487,11 +488,12 @@ impl<'a> Proof<'a> {
                 }
                 v
             }
-            Expr::Call { callee, args, .. } => {
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                 let c = self.expr(callee, function);
                 let a: Vec<_> = args.iter().map(|a| self.expr(a, function)).collect();
                 let receiver = if let Expr::PropertyGet { object, .. }
-                | Expr::IndexGet { object, .. } = callee.as_ref()
+                | Expr::IndexGet { object, .. }
+                | Expr::RegionOut { object, .. } = callee.as_ref()
                 {
                     self.expr(object, function)
                 } else {
@@ -539,8 +541,9 @@ impl<'a> Proof<'a> {
                 one(Origin::Object(site))
             }
             Expr::Delete(operand) => {
-                if let Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } =
-                    operand.as_ref()
+                if let Expr::PropertyGet { object, .. }
+                | Expr::IndexGet { object, .. }
+                | Expr::RegionOut { object, .. } = operand.as_ref()
                 {
                     let o = self.expr(object, function);
                     self.escape(&o);
@@ -587,6 +590,15 @@ impl<'a> Proof<'a> {
                 }
                 o
             }
+            // ToObject keeps an object's identity; a primitive becomes a wrapper.
+            Expr::ObjectCoerce(value) => self
+                .expr(value, function)
+                .into_iter()
+                .map(|origin| match origin {
+                    Origin::Undefined | Origin::Primitive | Origin::Numeric => Origin::Unknown,
+                    origin => origin,
+                })
+                .collect(),
             // These operations inspect data but do not let a callback escape.
             Expr::Binary { .. }
             | Expr::Compare { .. }
@@ -642,7 +654,7 @@ impl<'a> Proof<'a> {
             Stmt::Expr(e) => {
                 self.expr(e, f);
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 let v = e
                     .as_ref()
                     .map_or_else(|| one(Origin::Undefined), |e| self.expr(e, f));
@@ -721,6 +733,7 @@ impl<'a> Proof<'a> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr(discriminant, f);
                 for c in cases {
@@ -830,7 +843,7 @@ impl PropertyOrigins<'_> {
         // cursor. Every reaching value still proves its property spelling:
         // numbers and undefined cannot name a native instance API. Unknown
         // assignments or escaped function parameters prevent this proof.
-        if let Expr::IndexGet { index, .. } = expr {
+        if let (Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. }) = expr {
             if let Expr::LocalGet(id) = index.as_ref() {
                 if self.0.locals.get(id).is_some_and(|value| {
                     !value.is_empty()
@@ -932,6 +945,20 @@ mod tests {
             "function f(o) { return Object.getOwnPropertyDescriptor(o, 'constructor'); } f(require('fs')); f.call(null, Object);",
             "function f(o) { return Object.getOwnPropertyDescriptor(o, 'constructor'); } f(require('fs')); const x = {}; Object.defineProperty(x, 'p', {set: f}); x.p = Object;",
         ] { assert!(uses(source) > 0, "{source}"); }
+    }
+    #[test]
+    fn object_coercion_keeps_namespace_identity_and_refuses_wrappers() {
+        assert_eq!(
+            uses("const fs = require('fs'); Object.getOwnPropertyDescriptor(Object(fs), 'readFileSync');"),
+            0
+        );
+        for source in [
+            "Object.getOwnPropertyDescriptor(Object('x'), 'constructor');",
+            "Object.getOwnPropertyDescriptor(Object(Object), 'getPrototypeOf');",
+            "const fs = require('fs'); globalThis.f(Object(fs)); Object.getOwnPropertyDescriptor(fs, 'readFileSync');",
+        ] {
+            assert!(uses(source) > 0, "{source}");
+        }
     }
     #[test]
     fn exported_descriptor_helpers_keep_unknown_call_arguments() {

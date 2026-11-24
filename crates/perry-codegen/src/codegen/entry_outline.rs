@@ -193,12 +193,13 @@ fn as_chunk_call<'a>(
     chunks: &std::collections::HashMap<u32, &'a perry_hir::Function>,
 ) -> Option<&'a perry_hir::Function> {
     match stmt {
-        perry_hir::Stmt::Expr(perry_hir::Expr::Call { callee, args, .. }) if args.is_empty() => {
-            match callee.as_ref() {
-                perry_hir::Expr::FuncRef(id) => chunks.get(id).copied(),
-                _ => None,
-            }
-        }
+        perry_hir::Stmt::Expr(
+            perry_hir::Expr::Call { callee, args, .. }
+            | perry_hir::Expr::RegionCall { callee, args, .. },
+        ) if args.is_empty() => match callee.as_ref() {
+            perry_hir::Expr::FuncRef(id) => chunks.get(id).copied(),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -268,7 +269,7 @@ pub fn logical_entry_module(hir: &HirModule) -> std::borrow::Cow<'_, HirModule> 
 const CJS_FACTORY_NAME: &str = "__perry_cjs_factory";
 
 /// If `expr` is itself an `Expr::Closure`, or a same-expression invocation of
-/// one (`Expr::Call { callee: Box<Expr::Closure>, .. }` — the
+/// one (`Expr::Call { callee: Box<Expr::Closure>, .. } | Expr::RegionCall { callee: Box<Expr::Closure>, .. }` — the
 /// `(function(){...})()` IIFE shape `wrap_commonjs_for_target` always uses to
 /// wrap a CJS body), return that closure. `None` for anything else — this is
 /// intentionally narrow rather than a fully general expression search; the
@@ -276,7 +277,9 @@ const CJS_FACTORY_NAME: &str = "__perry_cjs_factory";
 fn as_inline_closure(expr: &perry_hir::Expr) -> Option<&perry_hir::Expr> {
     match expr {
         perry_hir::Expr::Closure { .. } => Some(expr),
-        perry_hir::Expr::Call { callee, .. } => as_inline_closure(callee.as_ref()),
+        perry_hir::Expr::Call { callee, .. } | perry_hir::Expr::RegionCall { callee, .. } => {
+            as_inline_closure(callee.as_ref())
+        }
         _ => None,
     }
 }
@@ -285,7 +288,9 @@ fn as_inline_closure(expr: &perry_hir::Expr) -> Option<&perry_hir::Expr> {
 fn as_inline_closure_mut(expr: &mut perry_hir::Expr) -> Option<&mut perry_hir::Expr> {
     match expr {
         perry_hir::Expr::Closure { .. } => Some(expr),
-        perry_hir::Expr::Call { callee, .. } => as_inline_closure_mut(callee.as_mut()),
+        perry_hir::Expr::Call { callee, .. } | perry_hir::Expr::RegionCall { callee, .. } => {
+            as_inline_closure_mut(callee.as_mut())
+        }
         _ => None,
     }
 }
@@ -552,9 +557,11 @@ pub(crate) fn outlined_entry_global_let_ids(hir: &HirModule) -> HashSet<u32> {
                 perry_hir::Stmt::PreallocateBoxes(ids) => {
                     globals.extend(ids.iter().filter(|id| definer.contains_key(id)).copied());
                 }
-                perry_hir::Stmt::Expr(perry_hir::Expr::Call { callee, args, .. })
-                    if args.is_empty()
-                        && matches!(callee.as_ref(), perry_hir::Expr::FuncRef(id) if chunk_ids.contains(id)) =>
+                perry_hir::Stmt::Expr(
+                    perry_hir::Expr::Call { callee, args, .. }
+                    | perry_hir::Expr::RegionCall { callee, args, .. },
+                ) if args.is_empty()
+                    && matches!(callee.as_ref(), perry_hir::Expr::FuncRef(id) if chunk_ids.contains(id)) =>
                 {
                     // The compiler-owned call itself carries no module-local use.
                 }
@@ -888,7 +895,7 @@ enum TopLevelKind {
 fn stmt_contains_return(stmt: &perry_hir::Stmt) -> bool {
     use perry_hir::Stmt;
     match stmt {
-        Stmt::Return(_) => true,
+        Stmt::Return(_, _) => true,
         Stmt::If {
             then_branch,
             else_branch,
@@ -1231,6 +1238,7 @@ fn chunk_statements(
         *next_id = (*next_id).saturating_add(1);
         let ci = chunk_fns.len();
         chunk_fns.push(perry_hir::Function {
+            byte_offset: 0, /*HPOS*/
             id: fn_id,
             name: format!("{ENTRY_CHUNK_PREFIX}{module_name}_{ci}"),
             type_params: Vec::new(),
@@ -1317,6 +1325,7 @@ mod tests {
 
     fn let_stmt(id: u32, name: &str, init: Expr) -> Stmt {
         Stmt::Let {
+            byte_offset: 0,
             id,
             name: name.to_string(),
             ty: Type::Any,
@@ -1327,6 +1336,7 @@ mod tests {
 
     fn empty_closure_with_id(func_id: u32, body: Vec<Stmt>) -> Expr {
         Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: vec![],
             return_type: Type::Any,
@@ -1489,10 +1499,12 @@ mod tests {
             .init
             .iter()
             .filter_map(|s| match s {
-                Stmt::Expr(Expr::Call { callee, .. }) => match callee.as_ref() {
-                    Expr::FuncRef(id) => Some(*id),
-                    _ => None,
-                },
+                Stmt::Expr(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }) => {
+                    match callee.as_ref() {
+                        Expr::FuncRef(id) => Some(*id),
+                        _ => None,
+                    }
+                }
                 _ => None,
             })
             .collect();
@@ -1547,6 +1559,7 @@ mod tests {
         let mut preallocated = module_with_init(vec![
             Stmt::PreallocateBoxes(vec![20]),
             Stmt::Try {
+                byte_offset: 0,
                 body: vec![let_stmt(20, "captured", Expr::Number(2.0))],
                 catch: None,
                 finally: None,
@@ -1572,6 +1585,7 @@ mod tests {
         ]);
         // an existing function with a high id, and a closure with an even higher id
         m.functions.push(perry_hir::Function {
+            byte_offset: 0,
             id: 500,
             name: "f".into(),
             type_params: vec![],
@@ -1600,6 +1614,7 @@ mod tests {
             fields: vec![],
             constructor: None,
             methods: vec![perry_hir::Function {
+                byte_offset: 0,
                 id: 12_000,
                 name: "method".into(),
                 type_params: vec![],
@@ -1650,7 +1665,7 @@ mod tests {
         // return inline, in order. target=1 maximizes chunking.
         let mut m = module_with_init(vec![
             let_stmt(0, "x", Expr::Number(1.0)), // chunk
-            Stmt::Return(None),                  // must-stay, inline
+            Stmt::Return(None, 0),               // must-stay, inline
             let_stmt(1, "y", Expr::Number(2.0)), // chunk
             Stmt::Expr(Expr::LocalGet(1)),       // chunk
         ]);
@@ -1663,14 +1678,14 @@ mod tests {
         let return_pos = m
             .init
             .iter()
-            .position(|s| matches!(s, Stmt::Return(_)))
+            .position(|s| matches!(s, Stmt::Return(_, _)))
             .expect("the top-level return is kept inline");
         let call_positions: Vec<usize> = m
             .init
             .iter()
             .enumerate()
             .filter_map(|(i, s)| match s {
-                Stmt::Expr(Expr::Call { callee, .. })
+                Stmt::Expr(Expr::Call { callee, .. } | Expr::RegionCall { callee, .. })
                     if matches!(callee.as_ref(), Expr::FuncRef(_)) =>
                 {
                     Some(i)
@@ -1722,6 +1737,7 @@ mod tests {
     /// anonymous IIFE and (by default) its inner `__perry_cjs_factory`.
     fn factory_closure(func_id: u32, body: Vec<Stmt>) -> Expr {
         Expr::Closure {
+            byte_offset: 0,
             func_id,
             params: vec![],
             return_type: Type::Any,
@@ -1760,7 +1776,7 @@ mod tests {
     fn cjs_wrapped_init_with(leading: Vec<Stmt>, factory: Expr) -> Vec<Stmt> {
         let mut outer_body = leading;
         outer_body.push(let_stmt(101, CJS_FACTORY_NAME, factory));
-        outer_body.push(Stmt::Return(Some(call_no_args(Expr::LocalGet(101)))));
+        outer_body.push(Stmt::Return(Some(call_no_args(Expr::LocalGet(101))), 0));
         let outer_closure = factory_closure(100, outer_body);
         vec![let_stmt(102, "_cjs", call_no_args(outer_closure))]
     }
@@ -1793,6 +1809,7 @@ mod tests {
         let mut with_param = factory_closure(103, vec![]);
         if let Expr::Closure { params, .. } = &mut with_param {
             params.push(perry_hir::Param {
+                byte_offset: 0,
                 id: 200,
                 name: "x".into(),
                 ty: Type::Any,
@@ -1829,7 +1846,7 @@ mod tests {
 
         // A differently-named binding is never mistaken for the factory.
         let mut unrelated_body = vec![let_stmt(101, "helper", factory_closure(103, vec![]))];
-        unrelated_body.push(Stmt::Return(Some(call_no_args(Expr::LocalGet(101)))));
+        unrelated_body.push(Stmt::Return(Some(call_no_args(Expr::LocalGet(101))), 0));
         let unrelated = vec![let_stmt(
             102,
             "_cjs",
@@ -1873,7 +1890,7 @@ mod tests {
         assert_eq!(body.len(), 3, "three ordered chunk calls");
         assert!(
             body.iter()
-                .all(|s| matches!(s, Stmt::Expr(Expr::Call { .. }))),
+                .all(|s| matches!(s, Stmt::Expr(Expr::Call { .. } | Expr::RegionCall { .. }))),
             "every residual statement in the factory is a chunk call: {body:?}"
         );
         assert_eq!(
@@ -1939,7 +1956,7 @@ mod tests {
         assert!(
             body[1..]
                 .iter()
-                .all(|s| matches!(s, Stmt::Expr(Expr::Call { .. }))),
+                .all(|s| matches!(s, Stmt::Expr(Expr::Call { .. } | Expr::RegionCall { .. }))),
             "everything else still outlined into ordered chunk calls: {body:?}"
         );
     }

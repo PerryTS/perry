@@ -472,9 +472,18 @@ impl<'a> Gen<'a> {
         let saved = (self.order_ok, self.loop_depth);
         (self.order_ok, self.loop_depth) = (true, 0);
         let list_saved = self.list_enter_body();
+        // The whole top-level body is one narrowing body; a unit's slice of
+        // it is not (its locals are the whole body's).
+        let top = self
+            .unit_view(mi as usize)
+            .is_none()
+            .then(|| self.narrow_enter_top(mi, init_fn));
         for s in self.init_of(mi as usize) {
             self.stmt(&fx, s);
             self.name_enum_object(mi, s);
+        }
+        if let Some(top) = top {
+            self.narrow_exit_body(top);
         }
         (self.order_ok, self.loop_depth) = saved;
         self.list_body = list_saved;
@@ -1726,7 +1735,38 @@ impl<'a> Gen<'a> {
             .get(&(s as *const Stmt as usize))
             .copied();
         let prev_first = std::mem::replace(&mut self.m.proto_first_cur, first);
+        // A declaration's own operations stand at the declaration.
+        let kind0 =
+            self.m.stop_top.as_mut().map(|st| {
+                std::mem::replace(&mut st.gen_kind, crate::topstop::variant(s, "Stmt::"))
+            });
+        let pos0 = match s {
+            Stmt::Let { id, .. } if self.m.stop_top.is_some() => self.modules[fx.module as usize]
+                .1
+                .local_source_spans
+                .get(id)
+                .map(|sp| {
+                    std::mem::replace(
+                        &mut self.m.stop_top.as_mut().unwrap().gen_pos,
+                        (fx.module, sp.start),
+                    )
+                }),
+            Stmt::Let { .. } => None,
+            _ => match (
+                self.m.stop_top.as_mut(),
+                s.byte_offset().filter(|&o| o != 0),
+            ) {
+                (Some(st), Some(o)) => Some(std::mem::replace(&mut st.gen_pos, (fx.module, o))),
+                _ => None,
+            },
+        };
         self.stmt_inner(fx, s);
+        if let Some(p0) = pos0 {
+            self.m.stop_top.as_mut().unwrap().gen_pos = p0;
+        }
+        if let (Some(k0), Some(st)) = (kind0, self.m.stop_top.as_mut()) {
+            st.gen_kind = k0;
+        }
         self.m.proto_first_cur = prev_first;
         self.m.cur_fn = prev;
     }
@@ -1775,8 +1815,13 @@ impl<'a> Gen<'a> {
                 ..
             } => {
                 let n = self.local(fx.module, *id);
-                if let (false, Some(perry_hir::Expr::IndexGet { object, index, .. })) =
-                    (*mutable, init)
+                if let (
+                    false,
+                    Some(
+                        perry_hir::Expr::IndexGet { object, index, .. }
+                        | perry_hir::Expr::RegionOut { object, index, .. },
+                    ),
+                ) = (*mutable, init)
                 {
                     if let perry_hir::Expr::LocalGet(k) = index.as_ref() {
                         self.same_key_reads
@@ -1847,7 +1892,7 @@ impl<'a> Gen<'a> {
             Stmt::Expr(e) => {
                 let _ = self.expr_zs(fx, e);
             }
-            Stmt::Return(e) => {
+            Stmt::Return(e, _) => {
                 if let Some(e) = e {
                     let v = self.expr_zs(fx, e);
                     let v = self.live_gate(fx, v);
@@ -2051,6 +2096,7 @@ impl<'a> Gen<'a> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                byte_offset,
             } => {
                 let d = self.expr_zs(fx, discriminant);
                 // `===` against case values: no coercion, identity.
@@ -2112,7 +2158,7 @@ impl<'a> Gen<'a> {
                                         | Stmt::Continue
                                         | Stmt::LabeledBreak(_)
                                         | Stmt::LabeledContinue(_)
-                                        | Stmt::Return(_)
+                                        | Stmt::Return(_, _)
                                         | Stmt::Throw(_)
                                 )
                             )
@@ -2145,7 +2191,7 @@ impl<'a> Gen<'a> {
                     }
                     // Rule G3: a clause only literal tests select narrows
                     // the host of the discriminant (`Gen::case_narrow`).
-                    let g3 = self.case_narrow(fx, discriminant, cases, i);
+                    let g3 = self.case_narrow(fx, discriminant, cases, i, *byte_offset);
                     self.stmts(fx, &c.body);
                     self.narrow_pop(g3);
                     self.m.clause = clause;
@@ -2219,7 +2265,7 @@ fn for_of_walk(s: &Stmt) -> Option<(u32, u32)> {
         return None;
     }
     let Some(Stmt::Let {
-        init: Some(Expr::IndexGet { object, index, .. }),
+        init: Some(Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }),
         ..
     }) = body.first()
     else {
@@ -2235,7 +2281,7 @@ fn for_of_walk(s: &Stmt) -> Option<(u32, u32)> {
     let bounded = matches!(condition, Expr::Compare {
         op: perry_hir::CompareOp::Lt,
         left,
-        right,
+        right, ..
     } if matches!(left.as_ref(), Expr::LocalGet(l) if *l == k)
         && matches!(right.as_ref(), Expr::PropertyGet { object, property, .. }
             if property == "length" && matches!(object.as_ref(), Expr::LocalGet(o) if *o == a)));
@@ -2264,6 +2310,7 @@ fn guarded_for_of_walk(s: &Stmt) -> Option<(u32, u32)> {
                 op: perry_hir::CompareOp::Eq,
                 left,
                 right,
+                ..
             },
         then_branch,
         ..

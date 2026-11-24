@@ -149,7 +149,7 @@ fn a_return_stays_in_the_parent() {
         let mut ret = false;
         for s in &f.body[..f.body.len().saturating_sub(1)] {
             if let Stmt::If { then_branch, .. } = s {
-                ret |= then_branch.iter().any(|t| matches!(t, Stmt::Return(_)));
+                ret |= then_branch.iter().any(|t| matches!(t, Stmt::Return(_, _)));
             }
         }
         assert!(!ret, "a region must not hold the parent's return");

@@ -11,6 +11,7 @@ use perry_hir::{Expr, Function, Module as HirModule, Stmt, UpdateOp};
 /// the read and the write.
 fn one_capture_closure_ir() -> String {
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 1,
         params: Vec::new(),
         return_type: Type::Any,
@@ -21,7 +22,7 @@ fn one_capture_closure_ir() -> String {
                 op: UpdateOp::Increment,
                 prefix: false,
             }),
-            Stmt::Return(Some(Expr::LocalGet(0))),
+            Stmt::Return(Some(Expr::LocalGet(0)), 0),
         ],
         captures: vec![0],
         mutable_captures: vec![0],
@@ -36,6 +37,7 @@ fn one_capture_closure_ir() -> String {
     };
     let mut hir = HirModule::new("closure_self_root_test");
     hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "outer".to_string(),
         type_params: Vec::new(),
@@ -43,6 +45,7 @@ fn one_capture_closure_ir() -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 0,
                 name: "x".to_string(),
                 ty: Type::Any,
@@ -50,13 +53,14 @@ fn one_capture_closure_ir() -> String {
                 init: None,
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "f".to_string(),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(closure),
             },
-            Stmt::Return(Some(Expr::LocalGet(2))),
+            Stmt::Return(Some(Expr::LocalGet(2)), 0),
         ],
         is_async: false,
         is_generator: false,
@@ -82,6 +86,7 @@ fn one_capture_closure_ir() -> String {
 /// writer (`js_closure_set_capture_bits`) does no bounds check at all.
 fn unboxed_capture_update_ir() -> String {
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 1,
         params: Vec::new(),
         return_type: Type::Any,
@@ -91,7 +96,7 @@ fn unboxed_capture_update_ir() -> String {
                 op: UpdateOp::Increment,
                 prefix: false,
             }),
-            Stmt::Return(Some(Expr::LocalGet(0))),
+            Stmt::Return(Some(Expr::LocalGet(0)), 0),
         ],
         captures: vec![0],
         mutable_captures: Vec::new(),
@@ -106,6 +111,7 @@ fn unboxed_capture_update_ir() -> String {
     };
     let mut hir = HirModule::new("closure_unboxed_update_test");
     hir.functions.push(Function {
+        byte_offset: 0,
         id: 0,
         name: "outer".to_string(),
         type_params: Vec::new(),
@@ -113,13 +119,14 @@ fn unboxed_capture_update_ir() -> String {
         return_type: Type::Any,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "f".to_string(),
                 ty: Type::Any,
                 mutable: false,
                 init: Some(closure),
             },
-            Stmt::Return(Some(Expr::LocalGet(2))),
+            Stmt::Return(Some(Expr::LocalGet(2)), 0),
         ],
         is_async: false,
         is_generator: false,

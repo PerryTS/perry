@@ -110,6 +110,7 @@ fn navstack_emits_state_driven_branches() {
     // ])});
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "route".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -172,6 +173,7 @@ fn navstack_no_state_falls_back_to_first_route() {
     // the first route only with a developer-facing hint comment.
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 7,
         name: "x".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -208,6 +210,7 @@ fn navstack_no_state_falls_back_to_first_route() {
 fn navstack_empty_routes_emits_empty_column_with_comment() {
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "route".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -230,6 +233,7 @@ fn navstack_set_in_closure_rewrites_to_settext() {
     // path so navigation actually triggers a re-render.
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "route".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -241,6 +245,7 @@ fn navstack_set_in_closure_rewrites_to_settext() {
         vec![
             Expr::String("Go".into()),
             Expr::Closure {
+                byte_offset: 0,
                 func_id: 0 as perry_hir::types::FuncId,
                 params: vec![],
                 return_type: perry_hir::types::Type::Any,
@@ -307,6 +312,7 @@ fn state_text_emits_reactive_text_with_synth_id() {
     // const count = state(0); App({body: count.text()});
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "count".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -328,6 +334,7 @@ fn state_set_in_closure_rewrites_to_settext() {
     // App({body: Button("+", () => count.set(5))});
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 5,
         name: "count".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -336,6 +343,7 @@ fn state_set_in_closure_rewrites_to_settext() {
     });
     // Closure body: Stmt::Expr(count.set(5))
     let closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 0 as perry_hir::types::FuncId,
         params: vec![],
         return_type: perry_hir::types::Type::Any,
@@ -383,6 +391,7 @@ fn state_set_in_closure_rewrites_to_settext() {
 fn multiple_state_decls_get_unique_ids() {
     let mut m = empty_module();
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 1,
         name: "count".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -390,6 +399,7 @@ fn multiple_state_decls_get_unique_ids() {
         init: Some(state_call(Expr::Number(0.0))),
     });
     m.init.push(Stmt::Let {
+        byte_offset: 0,
         id: 2,
         name: "name".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -509,6 +519,7 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
     // LazyVStack(items.map(item => Text(item)))
     let mut m = empty_module();
     let item_param = perry_hir::ir::Param {
+        byte_offset: 0,
         id: 99,
         name: "item".to_string(),
         ty: perry_hir::types::Type::Any,
@@ -524,10 +535,11 @@ fn lazyvstack_with_array_map_emits_lazy_for_each() {
             None,
         )),
         callback: Box::new(Expr::Closure {
+            byte_offset: 0,
             func_id: 0 as perry_hir::types::FuncId,
             params: vec![item_param],
             return_type: perry_hir::types::Type::Any,
-            body: vec![Stmt::Return(Some(inner_text))],
+            body: vec![Stmt::Return(Some(inner_text), 0)],
             captures: vec![],
             mutable_captures: vec![],
             captures_this: false,
@@ -886,6 +898,7 @@ fn media_call_inside_button_closure_also_triggers_glue() {
     // walker must descend into Closure bodies via stmt_uses → Closure.
     let mut m = empty_module();
     let play_closure = Expr::Closure {
+        byte_offset: 0,
         func_id: 0 as perry_hir::types::FuncId,
         params: vec![],
         return_type: perry_hir::types::Type::Any,

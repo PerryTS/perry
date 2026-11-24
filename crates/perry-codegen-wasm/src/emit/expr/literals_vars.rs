@@ -81,6 +81,12 @@ impl<'a> FuncEmitCtx<'a> {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
             }
+            // The real global object: a call of a builtin member the program
+            // replaces reads the member off `globalThis.<ns>` (#15104).
+            Expr::GlobalThisExpr => {
+                self.emit_frame_begin(func, 0);
+                self.emit_memcall(func, "global_receiver", 0);
+            }
             Expr::GlobalSet(id, val) => {
                 self.emit_expr(func, val);
                 if let Some(&idx) = self.emitter.global_map.get(id) {
@@ -195,7 +201,9 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
-            Expr::Binary { op, left, right } => {
+            Expr::Binary {
+                op, left, right, ..
+            } => {
                 match op {
                     BinaryOp::Add => {
                         // Use js_add for dynamic dispatch (handles string+number etc.)
@@ -263,7 +271,9 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
-            Expr::Compare { op, left, right } => {
+            Expr::Compare {
+                op, left, right, ..
+            } => {
                 self.emit_expr(func, left);
                 self.emit_expr(func, right);
                 // For strict equality on mixed types, use JS bridge
@@ -331,7 +341,9 @@ impl<'a> FuncEmitCtx<'a> {
                 }
             }
 
-            Expr::Logical { op, left, right } => {
+            Expr::Logical {
+                op, left, right, ..
+            } => {
                 match op {
                     LogicalOp::And => {
                         // Short-circuit: if left is falsy, return left; else return right
@@ -427,6 +439,7 @@ impl<'a> FuncEmitCtx<'a> {
                 condition,
                 then_expr,
                 else_expr,
+                ..
             } => {
                 self.emit_frame_begin(func, 1);
                 self.emit_store_arg(func, 0, condition);
@@ -448,7 +461,7 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "js_typeof", 1);
             }
 
-            Expr::Await(e) => {
+            Expr::Await(e, _) => {
                 // Evaluate inner expression, then call await_promise bridge
                 // If the value is a promise handle, tries to get resolved value
                 // If not a promise, returns the value as-is

@@ -11,6 +11,7 @@ pub fn is_clamp3(f: &Function) -> bool {
                 op: perry_hir::CompareOp::Lt,
                 left,
                 right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -25,7 +26,7 @@ pub fn is_clamp3(f: &Function) -> bool {
         return false;
     }
     if then_branch.len() != 1
-        || !matches!(&then_branch[0], Stmt::Return(Some(Expr::LocalGet(id))) if *id == lo_id)
+        || !matches!(&then_branch[0], Stmt::Return(Some(Expr::LocalGet(id)), _) if *id == lo_id)
     {
         return false;
     }
@@ -35,6 +36,7 @@ pub fn is_clamp3(f: &Function) -> bool {
                 op: perry_hir::CompareOp::Gt,
                 left,
                 right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -49,11 +51,11 @@ pub fn is_clamp3(f: &Function) -> bool {
         return false;
     }
     if then_branch.len() != 1
-        || !matches!(&then_branch[0], Stmt::Return(Some(Expr::LocalGet(id))) if *id == hi_id)
+        || !matches!(&then_branch[0], Stmt::Return(Some(Expr::LocalGet(id)), _) if *id == hi_id)
     {
         return false;
     }
-    matches!(&f.body[2], Stmt::Return(Some(Expr::LocalGet(id))) if *id == v_id)
+    matches!(&f.body[2], Stmt::Return(Some(Expr::LocalGet(id)), _) if *id == v_id)
 }
 
 /// `function clampU8(v) { if (v < 0) return 0; if (v > 255) return 255; return v|0; }`
@@ -68,6 +70,7 @@ pub fn is_clamp_u8(f: &Function) -> bool {
                 op: perry_hir::CompareOp::Lt,
                 left,
                 right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -83,7 +86,7 @@ pub fn is_clamp_u8(f: &Function) -> bool {
     }
     if !matches!(
         then_branch.as_slice(),
-        [Stmt::Return(Some(Expr::Integer(0)))]
+        [Stmt::Return(Some(Expr::Integer(0)), _)]
     ) {
         return false;
     }
@@ -93,6 +96,7 @@ pub fn is_clamp_u8(f: &Function) -> bool {
                 op: perry_hir::CompareOp::Gt,
                 left,
                 right,
+                ..
             },
         then_branch,
         else_branch: None,
@@ -108,7 +112,7 @@ pub fn is_clamp_u8(f: &Function) -> bool {
     }
     matches!(
         then_branch.as_slice(),
-        [Stmt::Return(Some(Expr::Integer(255)))]
+        [Stmt::Return(Some(Expr::Integer(255)), _)]
     )
 }
 

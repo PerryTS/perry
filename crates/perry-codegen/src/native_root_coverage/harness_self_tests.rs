@@ -101,7 +101,7 @@ fn a_function_missing_from_the_map_is_a_failure() {
         "selftest_missing.ts",
         vec![
             let_stmt(1, "a", Expr::MapNew),
-            Stmt::Return(Some(Expr::LocalGet(1))),
+            Stmt::Return(Some(Expr::LocalGet(1)), 0),
         ],
     );
     let _pin = NativeRootsPin::native();
@@ -122,7 +122,7 @@ fn the_pipeline_produces_safepoints_and_a_map_on_every_shipped_target() {
             vec![
                 let_stmt(1, "a", Expr::MapNew),
                 let_stmt(2, "b", Expr::MapNew),
-                Stmt::Return(Some(Expr::LocalGet(1))),
+                Stmt::Return(Some(Expr::LocalGet(1)), 0),
             ],
         );
         let _pin = NativeRootsPin::native();
@@ -182,7 +182,7 @@ fn no_root_alloca_survives_the_statepoint_rewrite() {
                 let_stmt(1, "a", Expr::MapNew),
                 let_stmt(2, "b", Expr::MapNew),
                 console_log(vec![Expr::LocalGet(1), Expr::LocalGet(2)]),
-                Stmt::Return(Some(Expr::LocalGet(1))),
+                Stmt::Return(Some(Expr::LocalGet(1)), 0),
             ],
         );
         let _pin = NativeRootsPin::native();

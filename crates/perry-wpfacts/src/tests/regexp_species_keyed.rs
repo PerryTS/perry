@@ -4,7 +4,6 @@
 //! `%RegExp%` itself, which builds the realm's own regexp. When the model
 //! touched `C` with any protocol, every member of `Function.prototype` was
 //! read and called as an unknown callee, and the realm was held.
-use super::*;
 
 fn held(src: &str) -> bool {
     let ast = Box::leak(Box::new(

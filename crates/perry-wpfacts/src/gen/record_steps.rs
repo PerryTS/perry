@@ -146,6 +146,7 @@ fn step_of(c: Local, e: &Expr) -> Option<usize> {
         condition,
         then_expr,
         else_expr,
+        ..
     } = else_expr.as_ref()
     else {
         return None;
@@ -154,6 +155,7 @@ fn step_of(c: Local, e: &Expr) -> Option<usize> {
         op: CompareOp::Lt,
         left,
         right,
+        ..
     } = condition.as_ref()
     else {
         return None;
@@ -177,7 +179,8 @@ fn step_of(c: Local, e: &Expr) -> Option<usize> {
         Expr::LocalSet(_, v) => v.as_ref(),
         x => x,
     };
-    let Expr::IndexGet { object, index, .. } = read else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = read
+    else {
         return None;
     };
     let Expr::NativeMethodCall {
@@ -203,6 +206,7 @@ fn is_true_test(e: &Expr) -> Option<Local> {
             op: CompareOp::Eq,
             left,
             right,
+            ..
         } => match (left.as_ref(), right.as_ref()) {
             (Expr::LocalGet(x), Expr::Bool(true)) => Some(*x),
             _ => None,

@@ -119,7 +119,7 @@ pub(super) fn resolve(
                 .map(|b| ("field-bodies", b.iter().map(|b| b.func_id).collect()))
                 .ok_or("field-not-only-bodies")
         }
-        Expr::IndexGet { .. } => Err("computed-callee"),
+        Expr::IndexGet { .. } | Expr::RegionOut { .. } => Err("computed-callee"),
         _ => Err("callee-expression"),
     }
 }
@@ -216,6 +216,7 @@ pub(super) fn node_side(m: &ModuleCensus, parent: &Expr, child: &Expr) -> String
             class_name,
             method_name,
             args,
+            ..
         } => {
             let i = args
                 .iter()
@@ -305,6 +306,7 @@ impl Callers {
                 captures_new_target,
                 is_async,
                 is_generator,
+                byte_offset,
                 ..
             } if captures.is_empty() && !captures_this && !captures_new_target => {
                 c.closure_bodies.push((
@@ -313,6 +315,7 @@ impl Callers {
                     *is_async || *is_generator,
                 ));
                 c.closures.push(perry_hir::Function {
+                    byte_offset: *byte_offset,
                     id: *func_id,
                     name: format!("closure#{func_id}"),
                     type_params: Vec::new(),

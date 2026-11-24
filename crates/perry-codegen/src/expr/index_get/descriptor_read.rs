@@ -60,7 +60,7 @@ fn sabotage(step: &str) -> bool {
 /// lowering: `e` is an element read of `receiver` whose index is inert and
 /// reaches no ender (so the base it reads is the one the descriptor holds).
 pub(crate) fn read_shape(ctx: &FnCtx<'_>, e: &Expr, receiver: u32) -> bool {
-    let Expr::IndexGet { object, index, .. } = e else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = e else {
         return false;
     };
     if !matches!(object.as_ref(), Expr::LocalGet(id) if *id == receiver)
@@ -75,7 +75,7 @@ pub(crate) fn read_shape(ctx: &FnCtx<'_>, e: &Expr, receiver: u32) -> bool {
 /// The descriptor read route for `e`, when its receiver's cold-arm
 /// descriptor is active.
 fn route(ctx: &FnCtx<'_>, e: &Expr) -> Option<u32> {
-    let Expr::IndexGet { object, .. } = e else {
+    let (Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }) = e else {
         return None;
     };
     let Expr::LocalGet(id) = object.as_ref() else {
@@ -107,7 +107,7 @@ pub(crate) fn try_lower(ctx: &mut FnCtx<'_>, e: &Expr, numeric: bool) -> Result<
 }
 
 fn lower_read(ctx: &mut FnCtx<'_>, e: &Expr, receiver: u32, numeric: bool) -> Result<String> {
-    let Expr::IndexGet { index, .. } = e else {
+    let (Expr::IndexGet { index, .. } | Expr::RegionOut { index, .. }) = e else {
         unreachable!("route admits element reads only")
     };
     let access = ctx
@@ -353,7 +353,7 @@ fn loop_writes(stmts: &[Stmt], controls: &[&Expr], out: &mut std::collections::H
 /// Every element read in the loop, with its receiver binding.
 fn candidate_reads<'a>(stmts: &'a [Stmt], controls: &[&'a Expr]) -> Vec<(u32, &'a Expr)> {
     fn walk<'a>(e: &'a Expr, out: &mut Vec<(u32, &'a Expr)>) {
-        if let Expr::IndexGet { object, .. } = e {
+        if let (Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }) = e {
             if let Expr::LocalGet(id) = object.as_ref() {
                 out.push((*id, e));
             }
