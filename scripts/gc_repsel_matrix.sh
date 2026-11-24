@@ -26,7 +26,8 @@
 # (`moved_objects=` / `[gc-copy-minor] ran` -- evacuation evidence), and each
 # cell is reported as one of:
 #
-#   PASS   output byte-exact vs the pinned Node oracle AND the arm's liveness
+#   PASS   output byte-exact vs the oracle (the pinned Node, or the case's
+#          committed tests/parity/expected/ output) AND the arm's liveness
 #          requirement was met on this test
 #   UNVER  output byte-exact but the arm was INERT here (no collection, or
 #          nothing moved for an evacuating arm) -- NOT green, by design
@@ -551,6 +552,12 @@ for b in "${CORPUS[@]}"; do
         oracle_fail=1
         progress "oracle-result test=$b result=FAIL"
     else
+        # A deliberate divergence from Node has committed output, which is the
+        # oracle here as in parity.py (expected_for).
+        expected="${source_path#"$ROOT/"}"
+        expected="$ROOT/tests/parity/expected/${expected#tests/parity/}"
+        expected="${expected%.*}.txt"
+        [ -f "$expected" ] && cp "$expected" "$WORK/oracle/$b.out"
         progress "oracle-result test=$b result=PASS"
     fi
 done
