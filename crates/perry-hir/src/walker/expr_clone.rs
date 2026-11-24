@@ -638,10 +638,12 @@ fn shallow(e: &Expr, n: &mut usize) -> Expr {
             class_value,
             captures,
             env_class,
+            byte_offset,
         } => Expr::RefreshClassExprCaptures {
             class_value: Shallow::shallow(class_value, n),
             captures: Shallow::shallow(captures, n),
             env_class: env_class.clone(),
+            byte_offset: *byte_offset,
         },
         Expr::ClassEnvGet {
             class_name,

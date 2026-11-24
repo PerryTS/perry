@@ -1347,9 +1347,10 @@ fn specialized_typed_parameter_keeps_its_own_owner_root() {
                     byte_offset: 0,
                 }),
                 Stmt::Return(
-                    Some(Expr::synthetic_index_get(
+                    Some(Expr::index_get_at(
                         Box::new(Expr::LocalGet(1)),
                         Box::new(Expr::LocalGet(2)),
+                        0,
                     )),
                     0,
                 ),

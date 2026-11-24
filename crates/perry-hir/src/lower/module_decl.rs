@@ -1650,6 +1650,7 @@ pub(crate) fn lower_module_decl(
 
                         let local = default_export_binding::materialize_native_default_alias(
                             ctx, module, &local,
+                            named.span.lo.0,
                         );
                         module.exports.push(Export::Named {
                             local: local.clone(),

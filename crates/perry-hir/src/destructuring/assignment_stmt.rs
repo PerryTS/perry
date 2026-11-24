@@ -449,7 +449,7 @@ fn lower_object_assignment_from_expr(
                     for key_id in &computed_key_temps {
                         result.push(Stmt::Expr(Expr::Delete(Box::new(Expr::IndexGet {
                             element_offset: 0,
-                            byte_offset: 0,
+                            byte_offset: rest.span.lo.0,
                             byte_end: 0,
                             object: Box::new(Expr::LocalGet(rest_id)),
                             index: Box::new(Expr::LocalGet(*key_id)),
@@ -522,7 +522,7 @@ fn object_property_get_expr(
                 }],
                 Expr::IndexGet {
                     element_offset: 0,
-                    byte_offset: 0,
+                    byte_offset: computed.span.lo.0,
                     byte_end: 0,
                     object: Box::new(source),
                     index: Box::new(Expr::LocalGet(key_id)),

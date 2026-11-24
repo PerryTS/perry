@@ -885,17 +885,19 @@ fn battery() -> Vec<(&'static str, Vec<Stmt>)> {
         ),
         (
             "generic index read",
-            vec![Stmt::Expr(Expr::synthetic_index_get(
+            vec![Stmt::Expr(Expr::index_get_at(
                 Box::new(num(OBJ)),
                 Box::new(num(NUM)),
+                0,
             ))],
         ),
         (
             "generic index write",
-            vec![Stmt::Expr(Expr::synthetic_index_set(
+            vec![Stmt::Expr(Expr::index_set_at(
                 Box::new(num(OBJ)),
                 Box::new(num(NUM)),
                 Box::new(Expr::Number(1.0)),
+                0,
             ))],
         ),
         (

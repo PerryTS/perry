@@ -31,7 +31,7 @@ fn first_expanded_arg(call: &ast::CallExpr, args: Vec<Expr>) -> Expr {
         .collect();
     Expr::IndexGet {
         element_offset: 0,
-        byte_offset: 0,
+        byte_offset: call.span.lo.0,
         byte_end: 0,
         object: Box::new(Expr::ArraySpread(elements)),
         index: Box::new(Expr::Integer(0)),

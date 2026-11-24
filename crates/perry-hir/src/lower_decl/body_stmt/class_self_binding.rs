@@ -37,6 +37,7 @@ pub(super) fn decl_self_binding_owner(
     named_statics: &[(String, Expr)],
     computed_keys: &[(String, Expr)],
     computed_statics: &[(String, Expr)],
+    byte_offset: u32,
 ) -> Option<LocalId> {
     let self_id = self_binding?;
     let uses_self = |expr: &Expr| {
@@ -57,7 +58,8 @@ pub(super) fn decl_self_binding_owner(
         .map(<[_]>::to_vec)
         .unwrap_or_default();
     let env_class = ctx.is_class_env(class_name).then(|| class_name.to_string());
-    ctx.body_class_expr_captures.push((self_id, ids, env_class));
+    ctx.body_class_expr_captures
+        .push((self_id, ids, env_class, byte_offset));
     Some(self_id)
 }
 

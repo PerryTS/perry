@@ -42,6 +42,7 @@ pub(super) fn try_process_module_methods(
                         byte_end: 0,
                         callee: Box::new(crate::lower::expr_member::process_native_property(
                             method_name,
+                            member.span.lo.0,
                         )),
                         args,
                         type_args: vec![],

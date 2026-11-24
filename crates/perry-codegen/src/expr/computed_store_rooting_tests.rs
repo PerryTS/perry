@@ -313,10 +313,11 @@ fn array_string_key_store_roots_both_operands_across_an_allocating_rhs() {
                     mutable: false,
                     init: Some(Expr::String("k".to_string())),
                 },
-                Stmt::Expr(Expr::synthetic_index_set(
+                Stmt::Expr(Expr::index_set_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(Expr::LocalGet(2)),
                     Box::new(value),
+                    0,
                 )),
             ]
         },
@@ -347,10 +348,11 @@ fn polymorphic_index_store_roots_both_operands_across_an_allocating_rhs() {
                     mutable: false,
                     init: Some(Expr::Object(Vec::new())),
                 },
-                Stmt::Expr(Expr::synthetic_index_set(
+                Stmt::Expr(Expr::index_set_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(Expr::LocalGet(2)),
                     Box::new(value),
+                    0,
                 )),
             ]
         },
@@ -368,9 +370,10 @@ fn typed_array_runtime_key_read_roots_receiver_only_when_key_collects() {
             label,
             vec![param(1, "ta", Type::Named("Int32Array".to_string()))],
             vec![Stmt::Return(
-                Some(Expr::synthetic_index_get(
+                Some(Expr::index_get_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(key),
+                    0,
                 )),
                 0,
             )],
@@ -412,10 +415,11 @@ fn typed_array_runtime_key_store_roots_operands_only_when_rhs_collects() {
                 param(1, "ta", Type::Named("Int32Array".to_string())),
                 param(2, "key", Type::Any),
             ],
-            vec![Stmt::Expr(Expr::synthetic_index_set(
+            vec![Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::LocalGet(2)),
                 Box::new(value),
+                0,
             ))],
         )
     };
@@ -460,10 +464,11 @@ fn erased_receiver_inline_store_roots_receiver_and_key_across_rhs() {
         compile_body_with_params(
             label,
             vec![param(1, "receiver", Type::Any), param(2, "key", Type::Any)],
-            vec![Stmt::Expr(Expr::synthetic_index_set(
+            vec![Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::LocalGet(2)),
                 Box::new(value),
+                0,
             ))],
         )
     };
@@ -540,10 +545,11 @@ fn put_value_index_fast_path_preserves_explicit_module_strictness() {
 fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
     let inert_store = compile_body(
         "native_view_inert_store",
-        with_native_f64_view(Stmt::Expr(Expr::synthetic_index_set(
+        with_native_f64_view(Stmt::Expr(Expr::index_set_at(
             Box::new(Expr::LocalGet(11)),
             Box::new(Expr::Integer(0)),
             Box::new(Expr::Number(1.0)),
+            0,
         ))),
     );
     assert!(
@@ -560,10 +566,11 @@ fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
 
     let collecting_store = compile_body(
         "native_view_collecting_store",
-        with_native_f64_view(Stmt::Expr(Expr::synthetic_index_set(
+        with_native_f64_view(Stmt::Expr(Expr::index_set_at(
             Box::new(Expr::LocalGet(11)),
             Box::new(Expr::Integer(0)),
             Box::new(Expr::NumberCoerce(Box::new(allocating_value()))),
+            0,
         ))),
     );
     assert!(
@@ -586,9 +593,10 @@ fn collecting_native_view_operands_decline_the_cached_pointer_fast_path() {
     let collecting_load = compile_body(
         "native_view_collecting_load",
         with_native_f64_view(Stmt::Return(
-            Some(Expr::synthetic_index_get(
+            Some(Expr::index_get_at(
                 Box::new(Expr::LocalGet(11)),
                 Box::new(collecting_index),
+                0,
             )),
             0,
         )),
@@ -703,9 +711,10 @@ fn masked_window_index_coercion_loop(key_ty: Type) -> String {
                 }),
                 // A bare read isolates the property under test: whether the
                 // unary index coercion is non-collecting.
-                body: vec![Stmt::Expr(Expr::synthetic_index_get(
+                body: vec![Stmt::Expr(Expr::index_get_at(
                     Box::new(Expr::LocalGet(1)),
                     Box::new(masked_index),
+                    0,
                 ))],
             },
             Stmt::Return(Some(Expr::Integer(0)), 0),
@@ -715,7 +724,7 @@ fn masked_window_index_coercion_loop(key_ty: Type) -> String {
 
 fn masked_window_rhs_coercion_loop(key_ty: Type) -> String {
     let read = |index| {
-        Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(index)))
+        Expr::index_get_at(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(index)), 0)
     };
     compile_masked_window_loop(
         key_ty,
@@ -739,7 +748,7 @@ fn masked_window_rhs_coercion_loop(key_ty: Type) -> String {
 fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
     let value = || {
         let read = |index| {
-            Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(index)))
+            Expr::index_get_at(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(index)), 0)
         };
         Expr::Binary {
             byte_offset: 0,
@@ -772,7 +781,7 @@ fn masked_window_rhs_coercion_region(key_ty: Type) -> String {
 
 fn masked_window_pair_sum() -> Expr {
     let read = |index| {
-        Expr::synthetic_index_get(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(index)))
+        Expr::index_get_at(Box::new(Expr::LocalGet(1)), Box::new(Expr::Integer(index)), 0)
     };
     Expr::Binary {
         byte_offset: 0,
@@ -984,10 +993,11 @@ fn growing_array_store_uses_the_reallocated_head_for_its_barrier() {
                 mutable: false,
                 init: Some(Expr::Array(vec![Expr::Undefined], None)),
             },
-            Stmt::Expr(Expr::synthetic_index_set(
+            Stmt::Expr(Expr::index_set_at(
                 Box::new(Expr::LocalGet(1)),
                 Box::new(Expr::Integer(8)),
                 Box::new(allocating_value()),
+                0,
             )),
         ],
     );

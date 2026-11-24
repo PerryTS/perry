@@ -423,7 +423,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         Some(("process.namespace", None))
                     )
                 {
-                    if let Some(expr) = process_metadata_native_property(prop) {
+                    if let Some(expr) = process_metadata_native_property(prop, member.span.lo.0) {
                         return Ok(expr);
                     }
                 }
@@ -498,7 +498,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     // .includes(name)) now does the right thing instead
                     // of crashing on the 0.0 sentinel.
                     "moduleLoadList" => return Ok(Expr::Array(vec![], None)),
-                    "finalization" => return Ok(process_native_property("finalization")),
+                    "finalization" => return Ok(process_native_property("finalization", member.span.lo.0)),
                     // #1379: process.config — object describing build-time
                     // config (`{ variables, target_defaults }` in Node).
                     // Perry has no `node-gyp`-style build to surface, but
@@ -523,7 +523,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "allowedNodeEnvironmentFlags" => {
                         return Ok(process_allowed_node_flags_literal())
                     }
-                    "report" => return Ok(process_native_property("report")),
+                    "report" => return Ok(process_native_property("report", member.span.lo.0)),
                     // #1346: process.argv0 / execPath / title — Node
                     // documents these as strings (program-invocation
                     // name / resolved-binary path / OS-displayed
@@ -541,7 +541,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
                             element_offset: 0,
-                            byte_offset: 0,
+                            byte_offset: member.span.lo.0,
                             byte_end: 0,
                             object: Box::new(Expr::ProcessArgv),
                             index: Box::new(Expr::Number(0.0)),
@@ -636,7 +636,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
             if let ast::MemberProp::Ident(prop_ident) = &member.prop {
                 let prop = prop_ident.sym.as_ref();
                 if prop != "sourceMapsEnabled" {
-                    if let Some(expr) = process_metadata_native_property(prop) {
+                    if let Some(expr) = process_metadata_native_property(prop, member.span.lo.0) {
                         return Ok(expr);
                     }
                 }
@@ -670,7 +670,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         })
                     }
                     "moduleLoadList" => return Ok(Expr::Array(vec![], None)),
-                    "finalization" => return Ok(process_native_property("finalization")),
+                    "finalization" => return Ok(process_native_property("finalization", member.span.lo.0)),
                     "config" => {
                         return Ok(Expr::Object(vec![
                             ("variables".to_string(), Expr::Object(Vec::new())),
@@ -680,11 +680,11 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     "allowedNodeEnvironmentFlags" => {
                         return Ok(process_allowed_node_flags_literal())
                     }
-                    "report" => return Ok(process_native_property("report")),
+                    "report" => return Ok(process_native_property("report", member.span.lo.0)),
                     "argv0" | "execPath" => {
                         return Ok(Expr::IndexGet {
                             element_offset: 0,
-                            byte_offset: 0,
+                            byte_offset: member.span.lo.0,
                             byte_end: 0,
                             object: Box::new(Expr::ProcessArgv),
                             index: Box::new(Expr::Number(0.0)),
@@ -958,7 +958,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                         if let Some(id) = ctx.lookup_local(&obj_name) {
                             return Ok(Expr::IndexGet {
                                 element_offset: 0,
-                                byte_offset: 0,
+                                byte_offset: member.span.lo.0,
                                 byte_end: 0,
                                 object: Box::new(Expr::LocalGet(id)),
                                 index: Box::new(Expr::String(member_name)),
@@ -1019,7 +1019,7 @@ fn lower_member_inner(ctx: &mut LoweringContext, member: &ast::MemberExpr) -> Re
                     };
                 return Ok(Expr::IndexGet {
                     element_offset: member.span.lo.0,
-                    byte_offset: 0,
+                    byte_offset: member.span.lo.0,
                     byte_end: 0,
                     object: Box::new(object),
                     index: Box::new(index),
