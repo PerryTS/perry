@@ -918,6 +918,16 @@ pub extern "C" fn perry_ui_menu_clear(_menu: i64) {}
 pub extern "C" fn perry_ui_menu_add_standard_action(_m: i64, _t: i64, _sel: i64, _s: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_open_file_dialog(_cb: f64) {}
+
+/// A file's contents as a `data:` URL is what a browser page needs to upload it; a
+/// native program reads the path from `openFileDialog` instead. This backend opens no
+/// dialog and reports a cancelled one: `callback("", "")`.
+#[no_mangle]
+pub extern "C" fn perry_ui_open_file_dialog_data(_accept_ptr: i64, callback: f64) {
+    // The inline empty string: nothing allocates between here and the call.
+    let empty = f64::from_bits(0x7FF9_0000_0000_0000);
+    unsafe { perry_ffi::call_value(callback, perry_ffi::JsThis::UNDEFINED, &[empty, empty]) };
+}
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_min_size(_app: i64, _w: f64, _h: f64) {}
 #[no_mangle]

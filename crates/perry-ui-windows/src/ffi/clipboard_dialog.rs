@@ -27,6 +27,16 @@ pub extern "C" fn perry_ui_open_file_dialog(callback: f64) {
     file_dialog::open_dialog(callback);
 }
 
+/// A file's contents as a `data:` URL is what a browser page needs to upload it; a
+/// native program reads the path from `openFileDialog` instead. This backend opens no
+/// dialog and reports a cancelled one: `callback("", "")`.
+#[no_mangle]
+pub extern "C" fn perry_ui_open_file_dialog_data(_accept_ptr: i64, callback: f64) {
+    // The inline empty string: nothing allocates between here and the call.
+    let empty = f64::from_bits(0x7FF9_0000_0000_0000);
+    unsafe { perry_ffi::call_value(callback, perry_ffi::JsThis::UNDEFINED, &[empty, empty]) };
+}
+
 /// Open a folder dialog.
 #[no_mangle]
 pub extern "C" fn perry_ui_open_folder_dialog(callback: f64) {

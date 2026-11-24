@@ -4993,6 +4993,30 @@ function perry_ui_open_file_dialog(callback) {
   input.click();
 }
 function perry_ui_open_folder_dialog(callback) { perry_ui_open_file_dialog(callback); }
+// The picked file's name and its contents as a base64 `data:` URL; ("", "") on cancel and
+// (name, "") for a file that cannot be read. The input stays in the document while the
+// dialog is open: some browsers ignore click() on a detached file input. A browser that
+// refuses to open the dialog sends no event, so the next call removes that input.
+let fileDataInput;
+function perry_ui_open_file_dialog_data(accept, callback) {
+  if (fileDataInput) fileDataInput.remove();
+  const input = fileDataInput = document.createElement("input"); input.type = "file";
+  if (accept) input.accept = String(accept);
+  input.style.display = "none";
+  const picked = () => {
+    const file = input.files && input.files[0];
+    input.remove();
+    if (!file) { callWasmClosure(callback, "", ""); return; }
+    const reader = new FileReader();
+    reader.onload = () => callWasmClosure(callback, file.name, String(reader.result));
+    reader.onerror = () => callWasmClosure(callback, file.name, "");
+    reader.readAsDataURL(file);
+  };
+  input.addEventListener("change", picked);
+  input.addEventListener("cancel", picked);
+  document.body.appendChild(input);
+  input.click();
+}
 function perry_ui_save_file_dialog(callback, defaultName) {
   const name = prompt("Save as:", defaultName || "file.txt");
   if (name) callWasmClosure(callback, name);
@@ -6184,6 +6208,7 @@ const __perryUiDispatch = {
   perry_ui_clipboard_read, perry_ui_clipboard_write,
   // Dialog
   perry_ui_open_file_dialog, perry_ui_open_folder_dialog, perry_ui_save_file_dialog, perry_ui_alert,
+  perry_ui_open_file_dialog_data,
   // Keyboard
   perry_ui_register_global_hotkey, perry_ui_add_keyboard_shortcut,
   perry_ui_widget_set_on_key_down, perry_ui_widget_set_on_key_up,

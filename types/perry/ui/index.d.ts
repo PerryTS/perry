@@ -1798,6 +1798,18 @@ export function alertWithButtons(
   callback: (index: number) => void,
 ): void;
 export function openFileDialog(callback: (path: string) => void): void;
+/**
+ * Web: pick a file and receive its name and its contents as a base64 `data:` URL,
+ * which is what a page needs to upload it (`openFileDialog` gives a browser page only
+ * the name). `accept` filters the picker: "image/*", ".pdf", or "" for any file.
+ * A cancelled picker passes ("", ""), and a file that cannot be read, or whose data URL
+ * does not fit in one string (above about 384 MB in Chrome), (name, ""). The page keeps
+ * each data URL, and each string made from it, in memory until it is closed. Call it from
+ * a user gesture: `callback` may never run without one, or on cancel in a browser without
+ * the `cancel` event. Native backends open no dialog and pass ("", ""); read the path from
+ * `openFileDialog` instead.
+ */
+export function openFileDialogData(accept: string, callback: (name: string, dataUrl: string) => void): void;
 export function openFolderDialog(callback: (path: string) => void): void;
 export function saveFileDialog(callback: (path: string) => void, defaultName: string, extension: string): void;
 export function pollOpenFile(): string;

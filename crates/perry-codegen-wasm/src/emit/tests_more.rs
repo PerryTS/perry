@@ -1186,6 +1186,64 @@ console.log(el.style.width);
     );
 }
 
+// `openFileDialogData` opens a file input attached to the document and hands the
+// callback the file's name and its contents as a base64 `data:` URL. A cancelled picker
+// delivers two empty strings, a file that cannot be read its name alone; the input is
+// gone after each.
+#[test]
+fn open_file_dialog_data_delivers_the_name_and_a_data_url() {
+    let dom = format!(
+        "{WIDGET_DOM}{}",
+        r#"
+FakeElement.prototype.click = function () { console.log("click " + this.type + " " + this.accept + " attached=" + document.body.children.includes(this)); };
+FakeElement.prototype.remove = function () { document.body.children = document.body.children.filter(c => c !== this); };
+globalThis.FileReader = class {
+  readAsDataURL(file) {
+    if (file.text === undefined) return this.onerror?.();
+    this.result = "data:text/plain;base64," + Buffer.from(file.text).toString("base64");
+    this.onload();
+  }
+};
+"#
+    );
+    assert_eq!(
+        run_web_source_with_dom(
+            r#"
+import { Button, openFileDialogData } from "perry/ui";
+Button("pick", () => {
+  openFileDialogData("image/*,.txt", (name: string, dataUrl: string) => { console.log(JSON.stringify([name, dataUrl])); });
+});
+"#,
+            &dom,
+            r#"
+const pick = [...uiHandles.values()].find(e => e.tagName === "BUTTON");
+const inputs = () => document.body.children.filter(e => e.type === "file");
+const step = (label, type, files) => {
+  pick.dispatch("click");
+  const [input] = inputs();
+  input.files = files;
+  input.dispatch(type);
+  console.log(label + " left=" + inputs().length);
+};
+step("pick", "change", [{ name: "note.txt", text: "hi there" }]);
+step("cancel", "cancel", []);
+step("empty", "change", []);
+step("unreadable", "change", [{ name: "gone.txt" }]);
+pick.dispatch("click");
+pick.dispatch("click");
+console.log("two opens left=" + inputs().length);
+"#
+        ),
+        concat!(
+            "click file image/*,.txt attached=true\n[\"note.txt\",\"data:text/plain;base64,aGkgdGhlcmU=\"]\npick left=0\n",
+            "click file image/*,.txt attached=true\n[\"\",\"\"]\ncancel left=0\n",
+            "click file image/*,.txt attached=true\n[\"\",\"\"]\nempty left=0\n",
+            "click file image/*,.txt attached=true\n[\"gone.txt\",\"\"]\nunreadable left=0\n",
+            "click file image/*,.txt attached=true\nclick file image/*,.txt attached=true\ntwo opens left=1"
+        )
+    );
+}
+
 // A static method called with spread arguments receives the closure itself, not a host wrapper.
 #[test]
 fn a_spread_call_to_a_static_method_passes_closures_unchanged() {
