@@ -1424,6 +1424,9 @@ mod class_prototype;
 #[path = "builtin_subclass_tests.rs"]
 mod builtin_subclass;
 
+#[path = "evaluated_builtin_subclass_tests.rs"]
+mod evaluated_builtin_subclass;
+
 #[path = "array_from_tests.rs"]
 mod array_from;
 

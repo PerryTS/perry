@@ -624,11 +624,12 @@ impl<'a> FuncEmitCtx<'a> {
                 // the capture refresh after it republishes captures read before then.
                 let ctor_slot = self.class_ctor_slot(template);
                 let caps = Expr::Array(captured_args.clone(), None);
+                let (base, init) = self.builtin_base_init(template);
                 self.emit_class_bridge(
                     func,
                     "class_fresh",
                     template,
-                    &[&Expr::Number(ctor_slot), &caps],
+                    &[&Expr::Number(ctor_slot), &caps, &base, &Expr::Number(init)],
                 );
             }
             Expr::RefreshClassExprCaptures {
@@ -1035,6 +1036,26 @@ impl FuncEmitCtx<'_> {
             name = parent;
         }
         false
+    }
+
+    /// What `new` on an evaluation of `class_name` does for a built-in parent, as the
+    /// `Expr::New` arm does for a declared class: the host base the instance is made
+    /// from (or `undefined`), and the `init` bits of `__classCtor` (1: the implicit
+    /// constructor forwards its args to the host base, 2: the parent is an Error,
+    /// 4: that Error takes the forwarded message).
+    pub(in crate::emit) fn builtin_base_init(&self, class_name: &str) -> (Expr, f64) {
+        let ctor = self.emitter.class_ctor_map.get(class_name);
+        let implicit = ctor.is_none() || self.emitter.implicit_ctor_classes.contains(class_name);
+        let host = self.host_base_parent(class_name);
+        let mut init = 0u8;
+        if host.is_some() && implicit {
+            init |= 1;
+        }
+        if self.extends_builtin_error(class_name) {
+            init |= if ctor.is_none() { 2 | 4 } else { 2 };
+        }
+        let base = host.map_or(Expr::Undefined, |h| Expr::String(h.to_string()));
+        (base, f64::from(init))
     }
 
     /// The built-in at the end of `class_name`'s chain of user classes, when it is one
