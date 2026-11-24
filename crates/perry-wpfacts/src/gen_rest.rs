@@ -518,11 +518,14 @@ impl<'a> Gen<'a> {
                 let fa = self.m.field_any(t);
                 // ECMA-262 20.1.2.18 / 20.1.2.10: Strings; 20.1.2.11:
                 // Symbols; 28.1.11 Reflect.ownKeys: both. Rule PK:
-                // getOwnPropertyNames gives the operand's own names.
+                // getOwnPropertyNames gives the operand's own names; rule
+                // EK: Object.keys its own enumerable String keys (7.3.23
+                // EnumerableOwnProperties, the keys `Object.entries` gives).
                 match (e, ops.first()) {
                     (Expr::ObjectGetOwnPropertyNames(..), Some(&o)) => {
                         self.m.cons(o, Cons::OwnNames { dst: fa });
                     }
+                    (Expr::ObjectKeys(..), Some(&o)) => self.m.cons(o, Cons::OwnKeys { dst: fa }),
                     (Expr::ObjectGetOwnPropertySymbols(..), _) => self.m.add_prim(fa, prim::SYMBOL),
                     (Expr::ReflectOwnKeys(..), _) => self.m.add_prim(fa, prim::STR | prim::SYMBOL),
                     _ => self.m.add_prim(fa, prim::STR),

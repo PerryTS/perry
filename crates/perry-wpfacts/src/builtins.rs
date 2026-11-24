@@ -3694,12 +3694,14 @@ fn ns_method_inner(
             match (name, arg(m, call, 0)) {
                 // Rule PK: the own names of the argument.
                 ("getOwnPropertyNames", Some(o)) => m.cons(o, Cons::OwnNames { dst: fa }),
+                // Rule EK: its own enumerable String keys (7.3.23).
+                ("keys", Some(o)) => m.cons(o, Cons::OwnKeys { dst: fa }),
                 ("getOwnPropertySymbols", _) => m.add_prim(fa, prim::SYMBOL),
                 _ => m.add_prim(fa, prim::STR),
             }
             ret_tok(m, call, pb);
         }
-        (BuiltinNs::Object, "values" | "entries") => {
+        (BuiltinNs::Object, "values") => {
             let arr = site_tmpl(m, call, "Array");
             let fa = m.field_any(arr);
             // Own enumerable values only (EnumerableOwnProperties): no
@@ -3708,8 +3710,29 @@ fn ns_method_inner(
                 m.cons(o, Cons::OwnValues { dst: fa });
             }
             m.add_prim(fa, prim::STR);
-            if name == "entries" {
-                m.add_tok(fa, arr);
+            ret_tok(m, call, arr);
+        }
+        // Each entry is CreateArrayFromList(« key, value ») (ECMA-262 7.3.23
+        // step 4.a.ii.2.b), a new ordinary Array: index 0 the key (rule EK,
+        // `Cons::OwnKeys`), index 1 the value, each its own slot, as
+        // `Gen` models a direct `Object.entries` call.
+        (BuiltinNs::Object, "entries") => {
+            let arr = site_tmpl(m, call, "Array");
+            let fa = m.field_any(arr);
+            if let Some(o) = arg(m, call, 0) {
+                let pair = site_tmpl_born(m, call, "entry", true, false);
+                if let Some(tm) = m.tmpl_of(pair) {
+                    m.ordinary_arrays.insert(tm);
+                }
+                let ks = m.node_l("ownkeys");
+                m.cons(o, Cons::OwnKeys { dst: ks });
+                let k0 = m.index_slot(pair, 0);
+                m.edge(ks, k0);
+                let vs = m.node_l("ownvalues");
+                m.cons(o, Cons::OwnValues { dst: vs });
+                let v1 = m.index_slot(pair, 1);
+                m.edge(vs, v1);
+                m.add_tok(fa, pair);
             }
             ret_tok(m, call, arr);
         }

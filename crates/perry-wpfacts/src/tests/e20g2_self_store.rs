@@ -140,3 +140,56 @@ fn e20g2_other_value_on_self_key_escapes() {
         assert!(!v_proven(&plain(s)), "{s}: n.v proven although n escaped");
     }
 }
+
+/// The m2 seed (audio/index.ts:27 beside browser.ts:228): a literal's own
+/// keys stored onto the global object, then the global object stored onto
+/// its self-reference.
+fn entries_src(store: &str, extra: &str) -> String {
+    format!(
+        "class A {{ v = 1; }}
+        const g = globalThis as Record<string, unknown>;
+        const classes: Record<string, unknown> = {{ A, B: A, C: 1 }};
+        {extra}
+        {store}
+        g[\"self\"] = globalThis;
+        g[\"globalThis\"] = globalThis;
+        const n = new A();
+        console.log(/*A*/ n.v);"
+    )
+}
+
+const ENTRIES: [&str; 3] = [
+    "for (const [k, v] of Object.entries(classes)) g[k] = v;",
+    "for (const k of Object.keys(classes)) g[k] = classes[k];",
+    "const oe = Object.entries; for (const [k, v] of oe(classes)) g[k] = v;",
+];
+
+/// RED: `Object.entries` / `Object.keys` of a literal whose keys are known
+/// yields exactly those keys (ECMA-262 7.3.23 EnumerableOwnProperties, rule
+/// EK): `g[k] = v` is a store under `A`, `B` and `C`, which no realm name
+/// is, so the global's self-reference keeps the global object and the
+/// realm is not held (was: a store under every key, then the E20 self
+/// store held the realm, the m2 hold).
+#[test]
+fn stop8_entries_store_is_under_the_known_keys() {
+    let mut bad = Vec::new();
+    for s in ENTRIES {
+        if held(&entries_src(s, "")) {
+            bad.push(format!("{s}: realm held"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// KEEP: the literal written under a key no name lists: `k` is any string,
+/// the store reaches the self-reference and the E20 store holds the realm.
+#[test]
+fn stop8_entries_unknown_key_keeps_the_hold() {
+    let mut bad = Vec::new();
+    for s in ENTRIES {
+        if !held(&entries_src(s, "classes[String(Date.now())] = A;")) {
+            bad.push(format!("{s}: realm not held"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
