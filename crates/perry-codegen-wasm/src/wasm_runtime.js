@@ -4716,7 +4716,7 @@ function perry_ui_navstack_pop(h) {
 // Links and the router. A route is `location.pathname + search + hash`. routerNavigate
 // pushes it onto the session history; it, a Link click and back/forward (popstate) all
 // notify every routerOnChange listener. A plain click on a same-origin Link navigates
-// client-side; another origin, a modified click or a `target` keeps the browser default.
+// client-side; every other click keeps the browser default.
 const routeListeners = [];
 function perry_ui_router_current_path() {
   return location.pathname + location.search + location.hash;
@@ -4728,9 +4728,11 @@ function notifyRouteListeners() {
 if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
   window.addEventListener("popstate", notifyRouteListeners);
 }
+function pushRoute(path) {
+  if (path !== perry_ui_router_current_path()) history.pushState(null, "", path);
+}
 function perry_ui_router_navigate(path) {
-  const p = String(path);
-  if (p !== perry_ui_router_current_path()) history.pushState(null, "", p);
+  pushRoute(String(path));
   notifyRouteListeners();
 }
 function perry_ui_router_on_change(callback) {
@@ -4741,12 +4743,17 @@ function perry_ui_link_create(text, href) {
   a.textContent = text === undefined ? "" : String(text);
   a.setAttribute("href", href === undefined ? "" : String(href));
   a.addEventListener("click", (e) => {
-    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || a.target) return;
+    if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    if ((a.target && a.target !== "_self") || a.hasAttribute("download")) return;
     let url;
     try { url = new URL(a.href, location.href); } catch (_) { return; }
-    if (url.origin !== location.origin) return;
+    // Opaque origins (file:, mailto:, data:) all read "null", so they compare equal.
+    if (!/^https?:$/.test(url.protocol) || url.origin !== location.origin) return;
+    // The browser scrolls to a fragment of this page and fires popstate itself.
+    if (url.hash && url.pathname === location.pathname && url.search === location.search) return;
+    try { pushRoute(url.pathname + url.search + url.hash); } catch (_) { return; }
     e.preventDefault();
-    perry_ui_router_navigate(url.pathname + url.search + url.hash);
+    notifyRouteListeners();
   });
   return uiAlloc(a);
 }

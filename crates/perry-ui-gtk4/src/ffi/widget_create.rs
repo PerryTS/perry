@@ -34,20 +34,33 @@ pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     widgets::button::create(label_ptr as *const u8, on_press)
 }
 
-/// Links and the router follow the browser's location and history, which exist on the
-/// web target only: here a Link is its text, navigation does nothing, no change is ever
-/// reported, and the current path is `undefined`.
+/// A Link is its text; a click opens its URL.
 #[no_mangle]
-pub extern "C" fn perry_ui_link_create(text_ptr: i64, _href_ptr: i64) -> i64 {
-    perry_ui_text_create(text_ptr)
+pub extern "C" fn perry_ui_link_create(text_ptr: i64, href_ptr: i64) -> i64 {
+    use gtk4::prelude::*;
+    let href = unsafe { perry_ffi::copy_string_from_raw(href_ptr as *const u8) };
+    let handle = perry_ui_text_create(text_ptr);
+    if let Some(widget) = widgets::get_widget(handle) {
+        let gesture = gtk4::GestureClick::new();
+        gesture.set_button(1);
+        gesture.connect_pressed(move |_, n_press, _, _| {
+            if n_press == 1 {
+                perry_ui::link::open_link(&href, super::system_weather::perry_system_open_url);
+            }
+        });
+        widget.add_controller(gesture);
+    }
+    handle
 }
+/// The router follows the browser's location and history, which exist on the web target
+/// only: here navigation does nothing, no change is ever reported, and the path is "".
 #[no_mangle]
 pub extern "C" fn perry_ui_router_navigate(_path_ptr: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_router_on_change(_callback: f64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_router_current_path() -> f64 {
-    f64::from_bits(0x7FFC_0000_0000_0001)
+pub extern "C" fn perry_ui_router_current_path() -> i64 {
+    perry_ffi::alloc_string("").as_raw() as i64
 }
 
 /// Create a VStack container.

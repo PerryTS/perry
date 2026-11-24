@@ -69,16 +69,19 @@ with `navstackPush(stack, view, title)`; pop with `navstackPop(stack)`:
 {{#include ../../examples/ui/layout/snippets.ts:navstack}}
 ```
 
-## Links and routes (web)
+## Links and routes
 
 On the web target a page has a URL: a reader can bookmark it, share it, and use
 the back button. `Link(text, href)` is an `<a href>`; a plain click on a
-same-origin `href` changes the URL without reloading the page. The router keeps
+same-origin `href` changes the URL without reloading the page. Every other click
+is the browser's: another origin, `mailto:` or `tel:`, a fragment of the page, a
+modifier key or middle click, or a page opened from `file://`. The router keeps
 the current route, `location.pathname + search + hash`:
 
-- `routerNavigate(path)` pushes `path` onto the session history.
+- `routerNavigate(path)` pushes `path` onto the session history. It throws where
+  the history refuses the path: another origin, or a `file://` page.
 - `routerOnChange(cb)` calls `cb(path)` after `routerNavigate`, a `Link` click,
-  or back/forward.
+  or back/forward. A listener stays for the page's life: register one per app.
 - `routerCurrentPath()` returns the current route, so a deep link opens on the
   right view.
 
@@ -90,8 +93,10 @@ routerOnChange((path) => textSetString(view, path));
 VStack(8, [Link("Requests", "/requests"), Link("Helpers", "/helpers"), view]);
 ```
 
-Native backends have no URL: a `Link` shows its text, `routerNavigate` and
-`routerOnChange` do nothing, and `routerCurrentPath()` returns `undefined`.
+Native backends have no URL: `routerNavigate` and `routerOnChange` do nothing,
+and `routerCurrentPath()` returns `""`. A `Link` there is a Text whose click opens
+an `http`, `https`, `mailto` or `tel` URL in its default app; any other `href` does
+nothing. On tvOS and watchOS the text cannot be activated.
 
 ## Spacer
 

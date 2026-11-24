@@ -77,7 +77,17 @@ pub extern "C" fn perry_system_open_url(url_ptr: i64) {
         if !url.is_null() {
             let app_cls = objc2::runtime::AnyClass::get(c"UIApplication").unwrap();
             let app: *mut objc2::runtime::AnyObject = objc2::msg_send![app_cls, sharedApplication];
-            let _: () = objc2::msg_send![app, openURL: url];
+            // `openURL:` without options returns NO for apps linked against a current SDK.
+            let options = objc2_foundation::NSDictionary::<
+                objc2::runtime::AnyObject,
+                objc2::runtime::AnyObject,
+            >::new();
+            let _: () = objc2::msg_send![
+                app,
+                openURL: url,
+                options: &*options,
+                completionHandler: None::<&block2::DynBlock<dyn Fn(objc2::runtime::Bool)>>
+            ];
         }
     }
 }

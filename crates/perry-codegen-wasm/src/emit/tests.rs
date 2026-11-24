@@ -31,6 +31,7 @@ class FakeElement {
   set textContent(value) { this.text = String(value); this.children = []; }
   set innerHTML(value) { this.text = ""; this.children = []; }
   setAttribute(name, value) { this[name] = String(value); }
+  hasAttribute(name) { return Object.hasOwn(this, name); }
   descendants() { return this.children.flatMap(c => [c, ...c.descendants()]); }
   querySelector(selector) {
     let found = this;
@@ -927,6 +928,67 @@ winListeners.popstate.forEach(fn => fn({}));
             "Elsewhere https://other.example/x prevented=false\nroute /requests"
         )
     );
+}
+
+// Where the router cannot take a click, the browser must: another scheme, a file://
+// page (whose origin is "null"), a fragment of the current page, a modified or middle
+// click, a target, a download, and a pushState that throws.
+#[test]
+fn link_leaves_the_browser_every_click_the_router_cannot_take() {
+    let run = |page: &str, push: &str| {
+        let dom = format!(
+            "{WIDGET_DOM}{}",
+            r#"
+const page = new URL("PAGE");
+globalThis.location = { pathname: page.pathname, search: page.search, hash: page.hash, href: page.href, origin: page.origin, protocol: page.protocol };
+globalThis.history = { pushState(_state, _title, path) { PUSH } };
+"#
+            .replace("PAGE", page)
+            .replace("PUSH", push)
+        );
+        run_web_source_with_dom(
+            r#"
+import { Link, routerOnChange } from "perry/ui";
+routerOnChange((path: string) => { console.log("route " + path); });
+Link("next", "/next");
+Link("mail", "mailto:a@b.test");
+Link("tel", "tel:+34600000000");
+Link("file", "file:///next");
+Link("frag", '#part');
+"#,
+            &dom,
+            r#"
+const links = Object.fromEntries([...uiHandles.values()].filter(e => e.tagName === "A").map(a => [a.textContent, a]));
+const click = (name, init) => {
+  const e = { button: 0, defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...init };
+  links[name].listeners.click[0](e);
+  return name + "=" + e.defaultPrevented;
+};
+console.log(Object.keys(links).map(name => click(name)).join(" "));
+console.log(["ctrlKey", "metaKey", "shiftKey", "altKey"].map(key => click("next", { [key]: true })).concat(click("next", { button: 1 })).join(" "));
+links.next.target = "_blank";
+console.log(click("next"));
+links.next.target = "_self";
+console.log(click("next"));
+links.next.setAttribute("download", "");
+console.log(click("next"));
+"#,
+        )
+    };
+    let modified = "next=false next=false next=false next=false next=false\nnext=false\n";
+    assert_eq!(
+        run("http://h.test/a", "console.log('push ' + path);"),
+        format!("push /next\nroute /a\nnext=true mail=false tel=false file=false frag=false\n{modified}push /next\nroute /a\nnext=true\nnext=false")
+    );
+    for (page, push) in [
+        ("file:///a/index.html", "console.log('push ' + path);"),
+        ("http://h.test/a", "throw new Error('SecurityError');"),
+    ] {
+        assert_eq!(
+            run(page, push),
+            format!("next=false mail=false tel=false file=false frag=false\n{modified}next=false\nnext=false")
+        );
+    }
 }
 
 #[test]

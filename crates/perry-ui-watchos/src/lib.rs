@@ -70,20 +70,20 @@ pub extern "C" fn perry_ui_button_create(label_ptr: i64, on_press: f64) -> i64 {
     tree::register_node(node)
 }
 
-/// Links and the router follow the browser's location and history, which exist on the
-/// web target only: here a Link is its text, navigation does nothing, no change is ever
-/// reported, and the current path is `undefined`.
+/// A Link is its text: watchOS has no `perry_system_open_url`.
 #[no_mangle]
 pub extern "C" fn perry_ui_link_create(text_ptr: i64, _href_ptr: i64) -> i64 {
     perry_ui_text_create(text_ptr)
 }
+/// The router follows the browser's location and history, which exist on the web target
+/// only: here navigation does nothing, no change is ever reported, and the path is "".
 #[no_mangle]
 pub extern "C" fn perry_ui_router_navigate(_path_ptr: i64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_router_on_change(_callback: f64) {}
 #[no_mangle]
-pub extern "C" fn perry_ui_router_current_path() -> f64 {
-    f64::from_bits(0x7FFC_0000_0000_0001)
+pub extern "C" fn perry_ui_router_current_path() -> i64 {
+    perry_ffi::alloc_string("").as_raw() as i64
 }
 
 #[no_mangle]

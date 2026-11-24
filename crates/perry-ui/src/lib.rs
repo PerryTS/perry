@@ -3,6 +3,7 @@ pub mod canvas_font;
 pub mod frame;
 pub mod key_dispatch;
 pub mod keys;
+pub mod link;
 pub mod sound_level;
 pub mod state;
 pub mod styling_matrix;

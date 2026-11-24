@@ -1509,18 +1509,33 @@ export function navstackPush(navStack: Widget, view: Widget, title: string): voi
 export function navstackPop(navStack: Widget): void;
 
 // ---------------------------------------------------------------------------
-// Link and router. They follow the browser's location and history, so they act
-// on the web target only: native backends show a Link as its text, ignore
-// routerNavigate and routerOnChange, and return undefined from routerCurrentPath.
+// Link and router. The router follows the browser's location and history, so it
+// acts on the web target only: on native, routerNavigate and routerOnChange do
+// nothing and routerCurrentPath returns "".
 // ---------------------------------------------------------------------------
 
-/** An `<a href>`. A plain click on a same-origin `href` navigates through the router. */
+/**
+ * On web, an `<a href>`: a plain click on a same-origin http(s) `href` navigates through
+ * the router, and the browser handles every other click (another origin or scheme, a
+ * fragment of the page, a modifier key, or a page the history refuses, such as `file://`).
+ *
+ * On macOS, iOS, visionOS, Android, GTK4 and Windows, a Text whose click opens an `http`,
+ * `https`, `mailto` or `tel` URL in its default app; any other `href` does nothing. On
+ * tvOS and watchOS the text cannot be activated.
+ */
 export function Link(text: string, href: string): Widget;
-/** Push `path` onto the session history and notify every `routerOnChange` listener. */
+/**
+ * Push `path` onto the session history and notify every `routerOnChange` listener. Throws
+ * where the history refuses it (another origin, or a `file://` page). No-op on native.
+ */
 export function routerNavigate(path: string): void;
-/** Called with the new path after `routerNavigate`, a `Link` click, or back/forward. */
+/**
+ * Call `onChange` with the new path after `routerNavigate`, a `Link` click, or
+ * back/forward. A listener stays for the page's life, so register one per app. Never
+ * called on native.
+ */
 export function routerOnChange(onChange: (path: string) => void): void;
-/** The current route: `location.pathname + search + hash`. */
+/** The current route, `location.pathname + search + hash`; `""` on native. */
 export function routerCurrentPath(): string;
 
 // ---------------------------------------------------------------------------

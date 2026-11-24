@@ -449,7 +449,7 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         method: "routerCurrentPath",
         runtime: "perry_ui_router_current_path",
         args: &[],
-        ret: ReturnKind::F64,
+        ret: ReturnKind::Str,
     },
     // ---- TabBar ----
     MethodRow {
