@@ -16,6 +16,6 @@ function make(k: number) {
   return new C(3);
 }
 const d1 = new D1(1, "x"), d2 = new D2(7), s = new S(1, 2, 3), f = new F(4, "f");
-console.log(d1.a, d1.b, d2.a, d2.b, s.first, s.more.join(","), f.tag, f.b);
+console.log(d1.a, d1.b, d2.a, d2.b, s.first, JSON.stringify(s.more), f.tag, f.b);
 const e = new E("boom"), m = new M([["k", 1]]), c = make(9);
 console.log(e.message, e instanceof Error, m.get("k"), m.size, c.v, c.k);

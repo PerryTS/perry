@@ -34,14 +34,21 @@ function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
 // throw "Cannot convert undefined to a BigInt". `prefix` is the count of leading
 // args already on the call (e.g. 1 for the receiver, or closure capture count).
 // A function with a rest parameter exports its slot as `__wasm_rest_<index>`; the
-// arguments from that slot on become one array, as a direct call packs them.
-function __padBigintArgs(fn, prefix, bigintArgs) {
+// arguments from that slot on become one array, as a direct call packs them. The last
+// `caps` arguments are a class's captures, the constructor's last parameters.
+function __padBigintArgs(fn, prefix, bigintArgs, caps = 0) {
   const rest = wasmInstance?.exports['__wasm_rest_' + fn.name];
+  const captures = bigintArgs.splice(bigintArgs.length - caps);
   if (rest) {
     const at = __Math.max(0, rest.value - (prefix | 0));
     while (bigintArgs.length < at) bigintArgs.push(TAG_UNDEFINED);
     bigintArgs.push(__jsValueToBits(bigintArgs.splice(at).map(__bitsToJsValue)));
+  } else if (caps > 0) {
+    const own = fn.length - (prefix | 0) - caps;
+    while (bigintArgs.length < own) bigintArgs.push(TAG_UNDEFINED);
+    bigintArgs.length = own;
   }
+  bigintArgs.push(...captures);
   const need = __Math.max(0, (fn.length | 0) - (prefix | 0));
   while (bigintArgs.length < need) bigintArgs.push(TAG_UNDEFINED);
   return bigintArgs;
@@ -1902,12 +1909,9 @@ function __classCtor(className, ctorIdx, caps) {
     // The constructor's trailing params are the class's captures (see
     // `synthesize_class_captures`): an evaluation passes its own.
     const envCaps = evaluated ? __evaluationOf(ctor).caps : [];
-    if (envCaps.length) {
-      args = args.slice(0, impl.length - 1 - envCaps.length);
-      while (args.length < impl.length - 1 - envCaps.length) args.push(undefined);
-      args.push(...envCaps);
-    }
-    const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...args.map(__jsValueToBits)));
+    args.push(...envCaps);
+    const result = __bitsToJsValue(
+      __invokeConstructor(impl, envCaps.length, __jsValueToBits(self), ...args.map(__jsValueToBits)));
     // [[Construct]]: only an object result replaces the instance; `return;` yields undefined.
     return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
   };
@@ -3298,22 +3302,16 @@ const __memDispatch = {
   error_new_kind: (kind, msg) =>
     new ([Error, TypeError, RangeError, ReferenceError, SyntaxError][kind] || Error)(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
+  // `super(...args)`: the parent's compiled constructor at table slot `ctorIdx` runs
+  // on `self` with `args`, then the parent's captures `caps`.
+  super_call_spread: (self, ctorIdx, args, caps) => {
+    const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx | 0);
+    __invokeConstructor(impl, caps.length, __jsValueToBits(self), ...[...args, ...caps].map(__jsValueToBits));
+    return undefined;
+  },
   // `super(msg)` in a class extending a built-in Error: the instance is a plain
   // object (see __classInstance), so it takes the message the Error constructor would
   // give it, non-enumerable as on a real Error. Returns the instance.
-  // `super(...args)`: the parent's compiled constructor at table slot `ctorIdx` runs
-  // on `self` with `args`; a rest parameter at `restAt` receives the tail as one array.
-  super_call_spread: (self, ctorIdx, args, restAt) => {
-    let a = Array.isArray(args) ? args : [];
-    if (restAt >= 0) {
-      const head = a.slice(0, restAt);
-      while (head.length < restAt) head.push(undefined);
-      a = [...head, a.slice(restAt)];
-    }
-    const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx | 0);
-    __invokeWasmCallback(impl, __jsValueToBits(self), ...a.map(__jsValueToBits));
-    return undefined;
-  },
   error_super_init: (obj, msg) => {
     if (!obj || typeof obj !== 'object') return obj;
     Object.defineProperty(obj, 'message', {
@@ -3863,7 +3861,13 @@ function uiAlloc(el) {
 function uiGet(h) { return uiHandles.get(h); }
 
 function __invokeWasmCallback(fn, ...bigintArgs) {
-  const result = fn(...__padBigintArgs(fn, 0, bigintArgs));
+  return __invokeConstructor(fn, 0, ...bigintArgs);
+}
+
+// `__invokeWasmCallback` of a constructor whose last `caps` arguments are its class's
+// captures.
+function __invokeConstructor(fn, caps, ...bigintArgs) {
+  const result = fn(...__padBigintArgs(fn, 0, bigintArgs, caps));
   __memDispatch.propagate_exception(true);
   return result;
 }

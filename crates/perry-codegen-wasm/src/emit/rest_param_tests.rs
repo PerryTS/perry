@@ -89,11 +89,40 @@ function make(k: number) {
   return new C(3);
 }
 const d1 = new D1(1, "x"), d2 = new D2(7), s = new S(1, 2, 3), f = new F(4, "f");
-console.log(d1.a, d1.b, d2.a, d2.b, s.first, s.more.join(","), f.tag, f.b);
+console.log(d1.a, d1.b, d2.a, d2.b, s.first, JSON.stringify(s.more), f.tag, f.b);
 const e = new E("boom"), m = new M([["k", 1]]), c = make(9);
 console.log(e.message, e instanceof Error, m.get("k"), m.size, c.v, c.k);
 "#
         ),
-        "1 x 7 y 1 2,3 40 f\nboom true 1 1 3 9"
+        "1 x 7 y 1 [2,3] 40 f\nboom true 1 1 3 9"
+    );
+}
+
+// A class's captures follow its constructor's rest parameter: `new` in the declaring
+// function and on a class value an evaluation made keep them out of the rest array, and
+// `super(...xs)` hands a derived class's to its parent.
+// Expected output is Node's.
+#[test]
+fn a_constructor_rest_parameter_leaves_the_captures_out() {
+    assert_eq!(
+        run_web_source(
+            r#"
+function declared(k: number) {
+  class C { v: any; constructor(a: any, ...xs: any[]) { this.v = [a, xs, k]; } }
+  return JSON.stringify([new C(1, 2, 3).v, new C(1).v]);
+}
+function evaluated(k: number) { return class { v: any; constructor(...xs: any[]) { this.v = [xs, k]; } }; }
+const E: any = evaluated(5);
+function derived(k: number) {
+  class B { v: any; constructor(...xs: any[]) { this.v = [xs, k]; } }
+  class D extends B { constructor(...xs: any[]) { super(...xs, "d"); } }
+  class F { v: any; constructor(a: any) { this.v = [a, k]; } }
+  class G extends F { constructor(...xs: any[]) { super(...(xs as [any])); } }
+  return JSON.stringify([new D(1, 2).v, new G(3, 4).v]);
+}
+console.log(declared(9), JSON.stringify([new E(1, 2).v, new E().v]), derived(7));
+"#
+        ),
+        "[[1,[2,3],9],[1,[],9]] [[[1,2],5],[[],5]] [[[1,2,\"d\"],7],[3,7]]"
     );
 }

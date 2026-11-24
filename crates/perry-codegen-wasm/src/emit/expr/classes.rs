@@ -186,7 +186,10 @@ impl<'a> FuncEmitCtx<'a> {
 
             // --- Class instantiation ---
             Expr::New {
-                class_name, args, ..
+                class_name,
+                args,
+                cap_args_appended,
+                ..
             } => {
                 // Handle built-in constructors that need native JS objects
                 match class_name.as_str() {
@@ -379,9 +382,11 @@ impl<'a> FuncEmitCtx<'a> {
                 if let Some(ctor_idx) = ctor {
                     // Stack: [instance_handle]
                     let ctor_args: &[Expr] = if forwarded { &[] } else { args };
-                    let ctor_args = self
-                        .emitter
-                        .with_rest_packed_after_receiver(ctor_idx, ctor_args);
+                    let ctor_args = self.emitter.with_rest_packed_after_receiver(
+                        ctor_idx,
+                        ctor_args,
+                        *cap_args_appended,
+                    );
                     for arg in ctor_args.iter() {
                         self.emit_expr(func, arg);
                     }
@@ -470,7 +475,7 @@ impl<'a> FuncEmitCtx<'a> {
                                 std::borrow::Cow::Borrowed(ctor_args)
                             } else {
                                 self.emitter
-                                    .with_rest_packed_after_receiver(ctor_idx, ctor_args)
+                                    .with_rest_packed_after_receiver(ctor_idx, ctor_args, 0)
                             };
                             // Call parent constructor with this + args
                             func.instruction(&Instruction::LocalGet(0)); // this
@@ -559,17 +564,25 @@ impl<'a> FuncEmitCtx<'a> {
                         .func_to_table_idx
                         .get(&ctor_idx)
                         .map_or(-1.0, |&slot| slot as f64);
-                    // A rest parameter's position among the arguments (`this` excluded).
-                    let rest_at = self
-                        .emitter
-                        .rest_params
-                        .get(&ctor_idx)
-                        .map_or(-1.0, |&at| at as f64 - 1.0);
+                    // A derived class holds its parent's captures in parameters of the same
+                    // names.
+                    let cap_params = &self.emitter.ctor_cap_params;
+                    let own = cap_params.get(&current_class);
+                    let caps = cap_params
+                        .get(parent_name)
+                        .into_iter()
+                        .flatten()
+                        .map(|(name, _)| {
+                            own.and_then(|own| own.iter().find(|(n, _)| n == name))
+                                .map_or(Expr::Undefined, |&(_, id)| Expr::LocalGet(id))
+                        })
+                        .collect();
+                    let caps = Expr::Array(caps, None);
                     self.emit_frame_begin(func, 4);
                     self.emit_store_arg(func, 0, &Expr::This);
                     self.emit_store_arg(func, 1, &Expr::Number(slot));
                     self.emit_store_arg(func, 2, &ctor_args);
-                    self.emit_store_arg(func, 3, &Expr::Number(rest_at));
+                    self.emit_store_arg(func, 3, &caps);
                     self.emit_memcall(func, "super_call_spread", 4);
                     func.instruction(&Instruction::Drop);
                 } else if self.extends_builtin_error(&current_class) {
