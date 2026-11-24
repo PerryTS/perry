@@ -1243,6 +1243,9 @@ mod date_setter;
 #[path = "class_value_tests.rs"]
 mod class_value;
 
+#[path = "weak_ref_tests.rs"]
+mod weak_ref;
+
 #[path = "function_value_tests.rs"]
 mod function_value;
 
