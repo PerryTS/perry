@@ -85,7 +85,19 @@ pub(super) fn destroy_stream(stream: f64, err: f64) {
     // queued: the native memory returns at once, not at the next sweep, and
     // a still-queued step finds the stream destroyed (STREAM-PAYLOAD §2).
     super::native_hooks::release_on_destroy(stream);
-    if let Some(destroy) = get_hidden_value(stream, super::STREAM_DESTROY_KEY) {
+    // node's destroy() calls `this._destroy(err, cb)`: the receiver's
+    // `_destroy` (an options.destroy own field, a subclass method, or one
+    // assigned later). A builtin prototype `_destroy` and a runtime-internal
+    // adapter hook (hidden slot only) take the hidden-slot path.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let rooted_stream = scope.root_nanbox_f64(stream);
+    let rooted_err = scope.root_nanbox_f64(err);
+    let visible = crate::runtime_state_key!(b"_destroy").read_value(stream);
+    let stream = rooted_stream.get_nanbox_f64();
+    let err = rooted_err.get_nanbox_f64();
+    let destroy = super::user_hook_value(visible)
+        .or_else(|| get_hidden_value(stream, super::STREAM_DESTROY_KEY));
+    if let Some(destroy) = destroy {
         if super::is_callable_value(destroy) {
             let cb = js_closure_alloc(
                 crate::fn_info!(ns_destroy_option_done, 1; with_declared(1)),
