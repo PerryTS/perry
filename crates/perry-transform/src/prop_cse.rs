@@ -246,8 +246,10 @@ fn guard_expr_is_analyzable(e: &Expr) -> bool {
 /// which the original may skip. The `Let` goes immediately before that guard,
 /// and every occurrence from there to the end of the run is replaced.
 fn rewrite_run(run: &mut [Stmt], next_local_id: &mut LocalId) -> Vec<(usize, Stmt)> {
-    // Candidate key per guard: its first unconditional read, if any.
-    let candidates: Vec<Option<ReadKey>> = run
+    // Candidate key per guard: its first unconditional read, if any, with
+    // that read's source span (the hoisted read is that read: it is
+    // evaluated first, and the later ones become the temp).
+    let candidates: Vec<Option<(ReadKey, (u32, u32))>> = run
         .iter()
         .map(|s| diverging_guard(s).and_then(first_unconditional_read))
         .collect();
@@ -255,7 +257,9 @@ fn rewrite_run(run: &mut [Stmt], next_local_id: &mut LocalId) -> Vec<(usize, Stm
     let mut hoists: Vec<(usize, Stmt)> = Vec::new();
     let mut claimed: Vec<ReadKey> = Vec::new();
     for (at, cand) in candidates.iter().enumerate() {
-        let Some(key) = cand else { continue };
+        let Some((key, (byte_offset, byte_end))) = cand else {
+            continue;
+        };
         if claimed.contains(key) {
             continue;
         }
@@ -283,10 +287,10 @@ fn rewrite_run(run: &mut [Stmt], next_local_id: &mut LocalId) -> Vec<(usize, Stm
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::PropertyGet {
-                    byte_end: 0,
+                    byte_end: *byte_end,
                     object: Box::new(Expr::LocalGet(key.0)),
                     property: key.1.clone(),
-                    byte_offset: 0,
+                    byte_offset: *byte_offset,
                 }),
             },
         ));
@@ -304,12 +308,15 @@ fn rewrite_run(run: &mut [Stmt], next_local_id: &mut LocalId) -> Vec<(usize, Stm
 /// The first `local.prop` read this expression evaluates on every path,
 /// walking left to right and never entering the right-hand side of a
 /// short-circuiting operator.
-fn first_unconditional_read(e: &Expr) -> Option<ReadKey> {
+fn first_unconditional_read(e: &Expr) -> Option<(ReadKey, (u32, u32))> {
     match e {
         Expr::PropertyGet {
-            object, property, ..
+            object,
+            property,
+            byte_offset,
+            byte_end,
         } => match object.as_ref() {
-            Expr::LocalGet(id) => Some((*id, property.clone())),
+            Expr::LocalGet(id) => Some(((*id, property.clone()), (*byte_offset, *byte_end))),
             _ => None,
         },
         Expr::Compare { left, right, .. } => {
