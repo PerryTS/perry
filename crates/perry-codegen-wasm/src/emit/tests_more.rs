@@ -1282,6 +1282,9 @@ mod get_prototype_of;
 #[path = "object_is_tests.rs"]
 mod object_is;
 
+#[path = "number_to_string_radix_tests.rs"]
+mod number_to_string_radix;
+
 #[path = "object_create_tests.rs"]
 mod object_create;
 
