@@ -7,8 +7,8 @@ use super::*;
 
 /// Records `FuncId`s whose calls appear in unsupported expression
 /// positions. Supported positions:
-/// 1. `Stmt::Let { init: Some(Expr::Call { callee: FuncRef(id), .. }) }` — let-bind producer call
-/// 2. `Stmt::Expr(Expr::Call { callee: FuncRef(id), .. })` — bare call (return ignored)
+/// 1. `Stmt::Let { init: Some(Expr::Call { callee: FuncRef(id), .. } | Expr::RegionCall { callee: FuncRef(id), .. }) }` — let-bind producer call
+/// 2. `Stmt::Expr(Expr::Call { callee: FuncRef(id), .. } | Expr::RegionCall { callee: FuncRef(id), .. })` — bare call (return ignored)
 ///
 /// Anywhere else (e.g. `f(args).join()`, `return f(args)`,
 /// `someFn(f(args))`) is unsafe because the rewritten producer
@@ -33,7 +33,7 @@ fn scan_stmt_call_sites(
         Stmt::Let { init, .. } => {
             if let Some(e) = init {
                 // Allowed shape: top-level Call { callee: FuncRef(prod) }
-                if let Expr::Call { callee, args, .. } = e {
+                if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = e {
                     if matches!(callee.as_ref(), Expr::FuncRef(id) if candidates.contains_key(id)) {
                         // The CALL ITSELF is fine. But its args may
                         // themselves contain producer calls in unsafe
@@ -49,7 +49,7 @@ fn scan_stmt_call_sites(
         }
         Stmt::Expr(e) => {
             // Allowed shape: top-level Stmt::Expr(Call { callee: FuncRef(prod) })
-            if let Expr::Call { callee, args, .. } = e {
+            if let Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } = e {
                 if matches!(callee.as_ref(), Expr::FuncRef(id) if candidates.contains_key(id)) {
                     for a in args {
                         scan_expr_call_sites(a, candidates, out);
@@ -60,7 +60,7 @@ fn scan_stmt_call_sites(
             scan_expr_call_sites(e, candidates, out);
         }
         Stmt::Throw(e) => scan_expr_call_sites(e, candidates, out),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 scan_expr_call_sites(e, candidates, out);
             }
@@ -114,6 +114,7 @@ fn scan_stmt_call_sites(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             scan_expr_call_sites(discriminant, candidates, out);
             for c in cases {
@@ -137,7 +138,7 @@ fn scan_expr_call_sites(
     candidates: &HashMap<FuncId, ProducerInfo>,
     out: &mut HashSet<FuncId>,
 ) {
-    if let Expr::Call { callee, .. } = e {
+    if let Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } = e {
         if let Expr::FuncRef(id) = callee.as_ref() {
             if candidates.contains_key(id) {
                 out.insert(*id);
@@ -191,7 +192,7 @@ fn scan_stmt_for_closures(
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_for_closures(e, candidates, out),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 scan_expr_for_closures(e, candidates, out);
             }
@@ -245,6 +246,7 @@ fn scan_stmt_for_closures(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             scan_expr_for_closures(discriminant, candidates, out);
             for c in cases {
@@ -349,7 +351,7 @@ impl StmtRefAllWalker<'_> {
                 }
             }
             Stmt::Expr(e) | Stmt::Throw(e) => self.visit_expr(e),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 if let Some(e) = opt {
                     self.visit_expr(e);
                 }
@@ -417,6 +419,7 @@ impl StmtRefAllWalker<'_> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.visit_expr(discriminant);
                 for c in cases {
@@ -483,7 +486,7 @@ fn scan_stmt_funcrefs(
             }
         }
         Stmt::Expr(e) | Stmt::Throw(e) => scan_expr_funcrefs(e, candidates, out),
-        Stmt::Return(opt) => {
+        Stmt::Return(opt, _) => {
             if let Some(e) = opt {
                 scan_expr_funcrefs(e, candidates, out);
             }
@@ -537,6 +540,7 @@ fn scan_stmt_funcrefs(
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             scan_expr_funcrefs(discriminant, candidates, out);
             for c in cases {
@@ -560,7 +564,7 @@ fn scan_expr_funcrefs(
     // only the args. Anywhere else (a bare FuncRef in argument
     // position, a let-init, etc.) is a "misuse" and we record it.
     match e {
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             // Don't recurse into the FuncRef callee, but DO recurse
             // into anything else.
             if !matches!(callee.as_ref(), Expr::FuncRef(id) if candidates.contains_key(id)) {

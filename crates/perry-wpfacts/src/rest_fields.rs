@@ -194,7 +194,7 @@ fn observes_this(e: &perry_hir::Expr) -> bool {
     if matches!(
         e,
         Expr::This
-            | Expr::SuperCall(_)
+            | Expr::SuperCall(_, _)
             | Expr::SuperCallSpread(_)
             | Expr::SuperMethodCall { .. }
             | Expr::SuperMethodCallSpread { .. }
@@ -453,8 +453,12 @@ fn mixed_reads(
     let mut buf = Vec::new();
     loop {
         let mut changed = false;
-        for rs in &g.read_sites {
-            if rs.byte_offset == 0 || rs.is_call || rs.value_call {
+        for rs in g.read_sites.iter().chain(
+            g.store_sites
+                .iter()
+                .filter(|s| s.access == crate::derive::Access::UpdateGet),
+        ) {
+            if rs.is_call || rs.value_call {
                 continue;
             }
             let key = m.atoms[rs.key as usize].clone();
@@ -529,8 +533,12 @@ pub(crate) fn export_reads(
     let copies = crate::rest_elems::node_copies(m);
     let mut buf = Vec::new();
     let mut found: FxHashMap<(u32, u32), u32> = FxHashMap::default();
-    for rs in &g.read_sites {
-        if rs.byte_offset == 0 || rs.is_call || rs.value_call {
+    for rs in g.read_sites.iter().chain(
+        g.store_sites
+            .iter()
+            .filter(|s| s.access == crate::derive::Access::UpdateGet),
+    ) {
+        if rs.is_call || rs.value_call {
             continue;
         }
         let key = m.atoms[rs.key as usize].as_str();

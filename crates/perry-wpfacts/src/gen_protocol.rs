@@ -244,6 +244,35 @@ impl<'a> Gen<'a> {
         }
     }
 
+    /// `new.target` (ECMA-262 13.3.12.1): the constructor whose body reads it,
+    /// a class derived from another value (`super()` passes its own target
+    /// along), a `Reflect.construct` new target, or what unknown code gives.
+    pub(crate) fn new_target_value(&mut self, fx: &Fx) -> NodeId {
+        let out = self.tmp("new-target");
+        let top = self.m.top_val("new.target");
+        self.m.edge(top, out);
+        self.m.edge(self.m.reflect_new_targets, out);
+        for (mi, (_, module)) in self.modules.iter().enumerate() {
+            for c in &module.classes {
+                let derived = c.extends.is_some()
+                    || c.extends_name.is_some()
+                    || c.extends_expr.is_some()
+                    || c.native_extends.is_some();
+                if let Some(&tm) = self.mods[mi].classes.get(&c.name) {
+                    if derived || fx.class == Some(tm) {
+                        let t = self.m.tok(TokKind::ClassObj(tm));
+                        self.m.add_tok(out, t);
+                    }
+                }
+            }
+        }
+        if let Some(f) = fx.new_target {
+            let t = self.m.tok(TokKind::Func(f, NO_CTX));
+            self.m.add_tok(out, t);
+        }
+        out
+    }
+
     /// What `v[Symbol.iterator]()` returns (GetIterator, ECMA-262 7.4.3):
     /// a protocol call.
     pub(crate) fn iterator_of(&mut self, v: NodeId) -> NodeId {

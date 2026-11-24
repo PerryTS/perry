@@ -212,7 +212,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             }
             let terminal_this_return = allow_terminal_this_return
                 && index + 1 == func.body.len()
-                && matches!(s, Stmt::Return(Some(Expr::This)));
+                && matches!(s, Stmt::Return(Some(Expr::This), _));
             safe &= terminal_this_return || self.stmt_this_safe(s, &ctx);
         }
         safe
@@ -225,7 +225,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 .map(|e| self.expr_this_safe(e, ctx))
                 .unwrap_or(true),
             Stmt::Expr(e) | Stmt::Throw(e) => self.expr_this_safe(e, ctx),
-            Stmt::Return(opt) => {
+            Stmt::Return(opt, _) => {
                 // A constructor `return <expr>` can OVERRIDE the `new` result
                 // (`js_ctor_return_override`): the provenance proof "the local
                 // holds exactly a C instance" would be wrong. Disqualify any
@@ -292,6 +292,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 self.expr_this_safe(discriminant, ctx)
                     && cases.iter().all(|case| {
@@ -325,7 +326,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             Expr::PropertySet { object, value, .. } if private_this(object, 0, 1) => {
                 self.expr_this_safe(value, ctx)
             }
-            Expr::Call { callee, args, .. }
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                 if matches!(
                     callee.as_ref(),
                     Expr::PropertyGet { object, .. } if private_this(object, 1, 0)
@@ -408,7 +409,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
                 self.expr_this_safe(value, ctx)
             }
             // `this.m(args)` — vet the callee method transitively.
-            Expr::Call { callee, args, .. }
+            Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
                 if matches!(
                     callee.as_ref(),
                     Expr::PropertyGet { object, .. } if matches!(object.as_ref(), Expr::This)
@@ -441,7 +442,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             // `ctor_chain_safe` (whole chain). Args must not leak `this`; in
             // constructor context, record them for parent-ctor parameter
             // resolution in the numeric-field proof.
-            Expr::SuperCall(args) => {
+            Expr::SuperCall(args, _) => {
                 if ctx.1 == "constructor" {
                     if let Some(pos) = self.chain.iter().position(|c| c.name == ctx.0) {
                         if let Some(parent) = self.chain.get(pos + 1) {
@@ -471,7 +472,7 @@ impl<'a, 'b> ThisFlowAnalysis<'a, 'b> {
             Expr::Delete(inner)
                 if matches!(
                     inner.as_ref(),
-                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. }
+                    Expr::PropertyGet { object, .. } | Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. }
                         if matches!(object.as_ref(), Expr::This)
                 ) =>
             {
@@ -561,7 +562,7 @@ fn expr_mentions_this(e: &Expr) -> bool {
                     visit(e, found);
                 }
             }
-            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e)) => visit(e, found),
+            Stmt::Expr(e) | Stmt::Throw(e) | Stmt::Return(Some(e), _) => visit(e, found),
             Stmt::If {
                 condition,
                 then_branch,
@@ -625,6 +626,7 @@ fn expr_mentions_this(e: &Expr) -> bool {
             Stmt::Switch {
                 discriminant,
                 cases,
+                ..
             } => {
                 visit(discriminant, found);
                 for case in cases {

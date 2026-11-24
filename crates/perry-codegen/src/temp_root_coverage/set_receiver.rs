@@ -60,6 +60,7 @@ fn set_delete(set: Expr, value: Expr) -> Stmt {
 /// (`js_set_has_string`) is selected.
 fn string_set_local() -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id: STRING_SET_LOCAL,
         name: "s".to_string(),
         ty: Type::Generic {

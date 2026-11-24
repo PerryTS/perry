@@ -55,7 +55,7 @@ impl<'a> ParamCalls<'a> {
         let mut calls: FxHashMap<(bool, u32), Vec<&'a [Expr]>> = FxHashMap::default();
         {
             let f = &mut |e: &'a Expr| match e {
-                Expr::Call { callee, args, .. } => {
+                Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
                     let k = match callee.as_ref() {
                         Expr::FuncRef(id) => (true, *id),
                         Expr::LocalGet(id) => (false, *id),
@@ -152,7 +152,7 @@ impl<'a> Gen<'a> {
         seen: &mut Vec<u32>,
     ) -> Option<KeyShape> {
         match e {
-            Expr::Call { callee, .. } => match callee.as_ref() {
+            Expr::Call { callee, .. } | Expr::RegionCall { callee, .. } => match callee.as_ref() {
                 Expr::FuncRef(id)
                     if !self.view.is_some_and(|v| v.foreign_funcs.contains_key(id)) =>
                 {

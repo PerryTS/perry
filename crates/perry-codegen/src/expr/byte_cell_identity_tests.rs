@@ -17,6 +17,7 @@ fn receiver_identity_after_a_collecting_call_uses_the_relocated_root() {
         "byte_identity_root",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 1,
                 name: "view".into(),
                 ty: Type::Named("Uint32Array".into()),
@@ -98,6 +99,7 @@ fn a_pure_lexical_binding_refreshes_the_byte_proof_on_every_iteration() {
         "byte_pure_binding",
         vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: 2,
                 name: "owner".into(),
                 ty: array_type.clone(),
@@ -108,6 +110,7 @@ fn a_pure_lexical_binding_refreshes_the_byte_proof_on_every_iteration() {
                 }),
             },
             Stmt::Let {
+                byte_offset: 0,
                 id: 3,
                 name: "views".into(),
                 ty: Type::Array(Box::new(array_type.clone())),
@@ -118,6 +121,7 @@ fn a_pure_lexical_binding_refreshes_the_byte_proof_on_every_iteration() {
                 condition: Expr::Bool(true),
                 body: vec![
                     Stmt::Let {
+                        byte_offset: 0,
                         id: 1,
                         name: "view".into(),
                         ty: array_type,

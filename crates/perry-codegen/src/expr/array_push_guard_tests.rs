@@ -130,6 +130,7 @@ fn node_class() -> Class {
         extends_expr: None,
         heritage_lexically_shadowed: false,
         fields: vec![ClassField {
+            byte_offset: 0,
             origin: perry_hir::ClassFieldOrigin::Definition,
             name: "v".to_string(),
             key_expr: None,
@@ -166,10 +167,12 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
     let mut m = Module::new("array_push_guard.ts");
     m.classes = classes;
     m.functions = vec![Function {
+        byte_offset: 0,
         id: 700,
         name: "chunk".to_string(),
         type_params: Vec::new(),
         params: vec![Param {
+            byte_offset: 0,
             id: BASE_ID,
             name: "base".to_string(),
             ty: Type::Number,
@@ -181,6 +184,7 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
         return_type: Type::Void,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: ARRAY_ID,
                 name: "keep".to_string(),
                 ty: Type::Array(Box::new(elem)),
@@ -189,6 +193,7 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
             },
             Stmt::For {
                 init: Some(Box::new(Stmt::Let {
+                    byte_offset: 0,
                     id: COUNTER_ID,
                     name: "j".to_string(),
                     ty: Type::Number,
@@ -196,6 +201,7 @@ fn push_module(elem: Type, value: Expr, classes: Vec<Class>) -> Module {
                     init: Some(Expr::Integer(0)),
                 })),
                 condition: Some(Expr::Compare {
+                    byte_offset: 0,
                     op: CompareOp::Lt,
                     left: Box::new(Expr::LocalGet(COUNTER_ID)),
                     right: Box::new(Expr::Integer(1000)),
@@ -286,6 +292,7 @@ fn function_body<'a>(ir: &'a str, marker: &str) -> &'a str {
 /// (`expr::helpers::expr_produces_numeric_bits_by_construction`).
 fn numeric_add_push() -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(COUNTER_ID)),
         right: Box::new(Expr::MathFloor(Box::new(Expr::LocalGet(COUNTER_ID)))),
@@ -297,6 +304,7 @@ fn numeric_add_push() -> Expr {
 /// keep the live runtime-number guard and generic push fallback.
 fn metadata_numeric_add_push() -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(BASE_ID)),
         right: Box::new(Expr::LocalGet(COUNTER_ID)),
@@ -548,6 +556,7 @@ fn a_metadata_selected_add_keeps_the_runtime_number_guard() {
 fn field_push_module(field_writeback: Option<String>) -> Module {
     const RECV_ID: u32 = 40;
     let method = Function {
+        byte_offset: 0,
         id: 710,
         name: "add".to_string(),
         type_params: Vec::new(),
@@ -555,6 +564,7 @@ fn field_push_module(field_writeback: Option<String>) -> Module {
         return_type: Type::Void,
         body: vec![
             Stmt::Let {
+                byte_offset: 0,
                 id: RECV_ID,
                 name: "__push_recv".to_string(),
                 ty: Type::Array(Box::new(Type::Number)),
@@ -586,6 +596,7 @@ fn field_push_module(field_writeback: Option<String>) -> Module {
     class.id = 405;
     class.name = "Buffer".to_string();
     class.fields = vec![ClassField {
+        byte_offset: 0,
         origin: perry_hir::ClassFieldOrigin::Definition,
         name: "items".to_string(),
         key_expr: None,
@@ -774,6 +785,7 @@ fn a_field_push_writes_the_field_back_on_a_handle_bits_change_behind_a_plain_obj
 fn class_field_push_checks_method_before_shared_argument_and_calls_builtin() {
     let mut module = field_push_module(None);
     let value = Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "process".into(),
         class_name: None,
         method: "memoryUsage".into(),
@@ -781,6 +793,7 @@ fn class_field_push_checks_method_before_shared_argument_and_calls_builtin() {
         args: vec![],
     };
     module.classes[0].methods[0].body[1] = Stmt::Expr(Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "array".into(),
         class_name: None,
         method: "push_field_single".into(),
@@ -836,6 +849,7 @@ fn private_module_init_field_receiver_does_not_repeat_lookup_after_argument() {
     let mut module = Module::new("class_field_push_init.ts");
     module.init = vec![
         Stmt::Let {
+            byte_offset: 0,
             id: 1,
             name: "__field_push_receiver".into(),
             ty: Type::Array(Box::new(Type::Number)),
@@ -843,11 +857,13 @@ fn private_module_init_field_receiver_does_not_repeat_lookup_after_argument() {
             init: Some(Expr::Array(vec![], None)),
         },
         Stmt::Expr(Expr::NativeMethodCall {
+            byte_offset: 0,
             module: "array".into(),
             class_name: None,
             method: "push_field_single".into(),
             object: Some(Box::new(Expr::LocalGet(1))),
             args: vec![Expr::NativeMethodCall {
+                byte_offset: 0,
                 module: "process".into(),
                 class_name: None,
                 method: "memoryUsage".into(),
@@ -916,6 +932,7 @@ fn the_elements_probe_loads_only_behind_the_branch_that_proves_the_address() {
 #[test]
 fn an_add_of_two_counters_is_proven_and_takes_no_guard() {
     let counters = Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(Expr::LocalGet(COUNTER_ID)),
         right: Box::new(Expr::LocalGet(COUNTER_ID)),

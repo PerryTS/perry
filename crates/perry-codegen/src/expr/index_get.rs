@@ -140,9 +140,9 @@ pub(crate) fn numeric_index_has_integer_array_index_proof(ctx: &FnCtx<'_>, index
     match index {
         Expr::Integer(i) => (0..=i32::MAX as i64).contains(i),
         Expr::Number(n) => n.is_finite() && n.fract() == 0.0 && *n >= 0.0 && *n <= i32::MAX as f64,
-        Expr::Binary { op, left, right } if matches!(op, BinaryOp::BitAnd) => {
-            bitand_has_nonnegative_i32_mask(left, right)
-        }
+        Expr::Binary {
+            op, left, right, ..
+        } if matches!(op, BinaryOp::BitAnd) => bitand_has_nonnegative_i32_mask(left, right),
         Expr::LocalGet(id) => {
             (ctx.integer_locals.contains(id)
                 || matches!(ctx.local_slot_reps.get(id), Some(super::SlotRep::I32)))
@@ -714,7 +714,8 @@ pub(crate) fn lower_unknown_local_index_get_for_number_context(
     ctx: &mut FnCtx<'_>,
     expr: &Expr,
 ) -> Result<Option<String>> {
-    let Expr::IndexGet { object, index, .. } = expr else {
+    let (Expr::IndexGet { object, index, .. } | Expr::RegionOut { object, index, .. }) = expr
+    else {
         return Ok(None);
     };
     if let Some(floor) = super::rest_elems::read_floor(ctx, expr) {
@@ -1002,6 +1003,7 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
                 object: None,
                 method,
                 args,
+                ..
             } = index.as_ref()
             {
                 if module == "__perry_runtime" && method == "arrayRecordIndex" {
@@ -2073,8 +2075,7 @@ fn lower_for_in_key(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<Option<String>> 
         object,
         index,
         element_offset: 0,
-        byte_offset: 0,
-        byte_end: 0,
+        ..
     } = expr
     else {
         return Ok(None);

@@ -1,0 +1,1 @@
+`--target web`: `super(...args)` in a derived constructor runs the parent constructor with the spread arguments (into a parent rest parameter, an `Error` or built-in parent too), and a derived class that captures a variable and declares no constructor runs its parent's, instead of leaving the parent's fields `undefined` (#15327).

@@ -26,6 +26,7 @@ fn ir_of(m: &Module) -> String {
 
 fn local(id: u32, init: Expr) -> Stmt {
     Stmt::Let {
+        byte_offset: 0,
         id,
         name: format!("k2d_{id}"),
         ty: Type::Any,
@@ -68,6 +69,7 @@ fn at0(receiver: Expr) -> Expr {
 
 fn concat(e: Expr) -> Expr {
     Expr::Binary {
+        byte_offset: 0,
         op: BinaryOp::Add,
         left: Box::new(e),
         right: Box::new(Expr::String(String::new())),

@@ -594,4 +594,13 @@ fn subclass_capture_lookup_uses_its_constructor_function_object() {
         crate::object::js_class_env_current(instance, template).to_bits(),
         parent.to_bits()
     );
+    assert_eq!(
+        crate::object::js_class_direct_method_owner(instance, template).to_bits(),
+        parent.to_bits()
+    );
+    let plain = crate::value::js_nanbox_pointer(crate::object::js_object_alloc(0, 0) as i64);
+    assert_eq!(
+        crate::object::js_class_direct_method_owner(plain, template).to_bits(),
+        crate::object::class_constructor_ref_value(template).to_bits()
+    );
 }

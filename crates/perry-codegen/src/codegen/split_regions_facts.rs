@@ -57,7 +57,7 @@ pub(super) fn for_each_own_expr<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
         Stmt::Let { init: Some(e), .. }
         | Stmt::Expr(e)
         | Stmt::Throw(e)
-        | Stmt::Return(Some(e)) => f(e),
+        | Stmt::Return(Some(e), _) => f(e),
         Stmt::If { condition, .. }
         | Stmt::While { condition, .. }
         | Stmt::DoWhile { condition, .. } => f(condition),
@@ -74,6 +74,7 @@ pub(super) fn for_each_own_expr<'a>(s: &'a Stmt, f: &mut dyn FnMut(&'a Expr)) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(discriminant);
             for c in cases {

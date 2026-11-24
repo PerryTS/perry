@@ -1,7 +1,7 @@
 //! A function declaration used as a value on the web target (`function_value` in
 //! `wasm_runtime.js`).
 
-use super::run_web_source;
+use super::{run_web_modules, run_web_source};
 
 // A function declaration used as a value is one object, with the `prototype` an
 // ordinary function has; `F.prototype = x` stores on it. Expected output is Node's.
@@ -36,5 +36,40 @@ console.log([typeof a, typeof b, typeof F].join(","));
 "#
         ),
         "object,object,function"
+    );
+}
+
+// An imported function an async body uses as a value is the same function value a
+// synchronous body and its own module see: callable with numbers through a variable
+// or an argument, an async function included (#15302). Expected output is Node's.
+#[test]
+fn an_imported_function_value_in_an_async_body_is_its_function_value() {
+    assert_eq!(
+        run_web_modules(&[
+            (
+                "lib",
+                r#"
+export function add(a: number, b: number) { return a + b; }
+export function inc(x: number) { return x + 1; }
+export async function dbl(x: number) { return x * 2; }
+export function isAdd(f: unknown) { return f === add; }
+"#
+            ),
+            (
+                "main",
+                r#"
+import { add, inc, dbl, isAdd } from "./lib";
+function twice(f: (x: number) => number, x: number) { return f(f(x)); }
+const syncAdd = add;
+async function run(): Promise<string> {
+  const g = add;
+  const d = dbl;
+  return [g(1, 2), twice(inc, 5), typeof add, await d(4), g === syncAdd, isAdd(g)].join(",");
+}
+run().then((v) => console.log(v), (e) => console.log("threw " + e.message));
+"#
+            ),
+        ]),
+        "3,7,function,8,true,true"
     );
 }

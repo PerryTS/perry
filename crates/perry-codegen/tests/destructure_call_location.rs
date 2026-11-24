@@ -100,6 +100,7 @@ fn base_opts() -> CompileOptions {
 fn module_with_destructure_coercible() -> Module {
     let mut m = Module::new("destr.ts");
     m.init = vec![Stmt::Expr(Expr::NativeMethodCall {
+        byte_offset: 0,
         module: "__perry_runtime".to_string(),
         class_name: None,
         object: None,

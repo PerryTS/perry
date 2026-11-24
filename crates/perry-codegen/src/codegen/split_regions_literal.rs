@@ -70,7 +70,7 @@ pub(super) fn literal_classes(hir: &HirModule) -> HashMap<String, LiteralClass> 
 /// initializer, a returned value or an assigned value.
 fn birth_position(s: &mut Stmt) -> Option<&mut Expr> {
     match s {
-        Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e)) => Some(e),
+        Stmt::Let { init: Some(e), .. } | Stmt::Return(Some(e), _) => Some(e),
         Stmt::Expr(Expr::LocalSet(_, e)) => Some(e.as_mut()),
         _ => None,
     }
@@ -244,20 +244,13 @@ pub(super) fn chunk_giant_literal(
         // One plain call, nothing written back: the chunk only initializes
         // slots of the object it is handed.
         let call = match (x.calls.pop(), x.calls.is_empty()) {
-            (Some(Stmt::Expr(call @ Expr::Call { .. })), true) => call,
+            (Some(Stmt::Expr(call @ Expr::RegionCall { .. })), true) => call,
             _ => {
                 refused = Some("chunk-writes-back");
                 break;
             }
         };
-        let Expr::Call {
-            callee,
-            mut args,
-            type_args,
-            byte_offset,
-            ..
-        } = call
-        else {
+        let Expr::RegionCall { callee, mut args } = call else {
             unreachable!()
         };
         let Expr::FuncRef(fid) = *callee else {
@@ -281,12 +274,9 @@ pub(super) fn chunk_giant_literal(
         f.params.insert(0, p);
         args.remove(at);
         args.insert(0, Expr::LiteralChunkObject);
-        calls.push(Expr::Call {
-            byte_end: 0,
+        calls.push(Expr::RegionCall {
             callee: Box::new(Expr::FuncRef(fid)),
             args,
-            type_args,
-            byte_offset,
         });
     }
     ctx.declared.remove(&obj);

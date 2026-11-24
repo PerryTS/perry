@@ -41,7 +41,7 @@ fn find_function<'m>(module: &'m Module, name: &str) -> &'m Function {
 
 fn returned_expr(func: &Function) -> &Expr {
     match func.body.as_slice() {
-        [Stmt::Return(Some(expr))] => expr,
+        [Stmt::Return(Some(expr), _)] => expr,
         other => panic!("expected single return in `{}`: {:?}", func.name, other),
     }
 }
@@ -86,7 +86,7 @@ fn stmt_any(stmt: &Stmt, pred: &impl Fn(&Expr) -> bool) -> bool {
             init: Some(init), ..
         }
         | Stmt::Expr(init) => expr_any(init, pred),
-        Stmt::Return(Some(value)) => expr_any(value, pred),
+        Stmt::Return(Some(value), _) => expr_any(value, pred),
         Stmt::If {
             condition,
             then_branch,

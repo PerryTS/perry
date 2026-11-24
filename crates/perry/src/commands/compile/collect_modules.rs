@@ -936,11 +936,11 @@ fn collect_module_one(
                     byte_end: 0,
                     object: Box::new(perry_hir::Expr::GlobalGet(0)),
                     property: "globalThis".to_string(),
-                    byte_offset: 0,
+                    byte_offset: hir_module.byte_offset,
                 }),
                 property: "Bun".to_string(),
                 value: Box::new(perry_hir::Expr::NativeModuleRef("bun".to_string())),
-                byte_offset: 0,
+                byte_offset: hir_module.byte_offset,
                 byte_end: 0,
             }),
         );
@@ -950,6 +950,7 @@ fn collect_module_one(
         hir_module.init.insert(
             0,
             perry_hir::Stmt::Expr(perry_hir::Expr::NativeMethodCall {
+                byte_offset: hir_module.byte_offset,
                 module: "__perry_runtime".to_string(),
                 class_name: None,
                 object: None,

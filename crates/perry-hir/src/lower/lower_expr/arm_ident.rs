@@ -10,7 +10,11 @@ use swc_ecma_ast as ast;
 /// name goes through here (the identifier arm and a shorthand property
 /// `{ C }`), so a scope-renamed class (`class_renames`) is the class this
 /// scope declared, never an earlier same-named one.
-pub(crate) fn class_binding_read(ctx: &LoweringContext, source_name: &str) -> Expr {
+pub(crate) fn class_binding_read(
+    ctx: &LoweringContext,
+    source_name: &str,
+    byte_offset: u32,
+) -> Expr {
     let class_name = ctx.resolve_class_name(source_name);
     // Keep the normal, overwhelmingly-common class read as a ClassRef
     // immediate. Besides preserving static class recognition downstream, it
@@ -29,7 +33,7 @@ pub(crate) fn class_binding_read(ctx: &LoweringContext, source_name: &str) -> Ex
         }),
         args: vec![Expr::ClassRef(class_name)],
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
@@ -53,7 +57,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
                     },
                     EnumValue::Computed => Expr::IndexGet {
                         element_offset: 0,
-                        byte_offset: 0,
+                        byte_offset: ident.span.lo.0,
                         byte_end: 0,
                         object: Box::new(Expr::LocalGet(
                             ctx.lookup_local(enum_name).expect("enum binding"),
@@ -139,7 +143,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
     // (`forward_class_shadows_local` is shared with the `new <Ident>` arm; see
     // #8040 for what happened while the two disagreed.)
     if ctx.forward_class_shadows_local(&name) {
-        return Ok(class_binding_read(ctx, &name));
+        return Ok(class_binding_read(ctx, &name, ident.span.lo.0));
     }
     // Chained-assignment class self-alias referenced from inside one of the
     // class's own method/getter/setter bodies. tsc's decorator-capture form
@@ -184,14 +188,14 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
                 }),
                 args: vec![Expr::LocalGet(id), Expr::String(n.clone())],
                 type_args: vec![],
-                byte_offset: 0,
+                byte_offset: ident.span.lo.0,
             });
         }
         Ok(Expr::LocalGet(id))
     } else if let Some(id) = ctx.lookup_func(&name) {
         Ok(Expr::FuncRef(id))
     } else if ctx.lookup_native_module(&name).is_some() {
-        Ok(native_module_binding_value(ctx, &name))
+        Ok(native_module_binding_value(ctx, &name, ident.span.lo.0))
     } else if let Some(orig_name) = ctx.lookup_imported_func(&name) {
         // Imported function - reference by its original exported name
         // Look up type information if available
@@ -210,7 +214,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         // `globalThis.setTimeout` does, instead of binding the runtime entry.
         Ok(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: ident.span.lo.0,
             object: Box::new(Expr::GlobalGet(0)),
             property: name,
         })
@@ -224,14 +228,14 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         })
     } else if ctx.lookup_class(&name).is_some() {
         // Class used as a first-class value (e.g., { Point: Point })
-        Ok(class_binding_read(ctx, &name))
+        Ok(class_binding_read(ctx, &name, ident.span.lo.0))
     } else if ctx.forward_class_names.contains(&name) {
         // Forward reference to a sibling class declared LATER in the
         // same function body (vendored zod: ZodType.optional() →
         // ZodOptional.create(...)). JS resolves this at call time;
         // emit a ClassRef by name — codegen resolves it from the
         // class registry, which has every pending class by then.
-        Ok(class_binding_read(ctx, &name))
+        Ok(class_binding_read(ctx, &name, ident.span.lo.0))
     } else if name == "undefined" {
         // Global undefined identifier
         Ok(Expr::Undefined)
@@ -278,7 +282,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
         // here.
         Ok(Expr::PropertyGet {
             byte_end: 0,
-            byte_offset: 0,
+            byte_offset: ident.span.lo.0,
             object: Box::new(Expr::GlobalGet(0)),
             property: name,
         })
@@ -306,7 +310,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
             }),
             args: vec![Expr::String(ctx.baked_source_path().replace('\\', "/"))],
             type_args: Vec::new(),
-            byte_offset: 0,
+            byte_offset: ident.span.lo.0,
         })
     } else {
         // GlobalGet(0) is a sentinel: codegen routes by name from the
@@ -378,7 +382,7 @@ pub(crate) fn lower_ident_expr(ctx: &mut LoweringContext, ident: &ast::Ident) ->
             }
             return Ok(Expr::PropertyGet {
                 byte_end: 0,
-                byte_offset: 0,
+                byte_offset: ident.span.lo.0,
                 object: Box::new(Expr::GlobalGet(0)),
                 property: name,
             });

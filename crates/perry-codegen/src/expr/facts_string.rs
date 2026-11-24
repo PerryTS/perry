@@ -48,7 +48,7 @@ fn call_kinds(ctx: &FnCtx<'_>, e: &Expr) -> Option<u16> {
     else {
         return None;
     };
-    if ctx.wpfacts_off || ctx.wpfacts.interp_guard || *byte_offset == 0 {
+    if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
         return None;
     }
     ctx.wpfacts
@@ -88,11 +88,14 @@ fn basis(ctx: &FnCtx<'_>, e: &Expr, depth: u8) -> Basis {
         return Basis::No;
     }
     match e {
-        Expr::Call { .. } if call_kinds(ctx, e) == Some(K_STR) => Basis::Facts,
+        Expr::Call { .. } | Expr::RegionCall { .. } if call_kinds(ctx, e) == Some(K_STR) => {
+            Basis::Facts
+        }
         Expr::Logical {
             op: LogicalOp::Coalesce,
             left,
             right,
+            ..
         } => {
             let left = match basis(ctx, left, depth - 1) {
                 Basis::No
@@ -110,6 +113,7 @@ fn basis(ctx: &FnCtx<'_>, e: &Expr, depth: u8) -> Basis {
             op: BinaryOp::Add,
             left,
             right,
+            ..
         } => basis(ctx, left, depth - 1).max(basis(ctx, right, depth - 1)),
         Expr::Conditional {
             then_expr,

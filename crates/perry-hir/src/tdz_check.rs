@@ -36,7 +36,7 @@ pub const TDZ_CHECK_THEN: &str = "js_tdz_check_binding_then";
 /// The unconditional throw a read that always runs in the dead zone becomes.
 pub const TDZ_THROW: &str = "js_throw_reference_error_tdz";
 
-fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
+fn extern_call(name: &str, args: Vec<Expr>, byte_offset: u32) -> Expr {
     Expr::Call {
         byte_end: 0,
         callee: Box::new(Expr::ExternFuncRef {
@@ -46,35 +46,37 @@ fn extern_call(name: &str, args: Vec<Expr>) -> Expr {
         }),
         args,
         type_args: Vec::new(),
-        byte_offset: 0,
+        byte_offset,
     }
 }
 
 /// `check(id)`: throws while `id` is uninitialized.
-pub fn check(id: LocalId, name: &str) -> Expr {
+pub fn check(id: LocalId, name: &str, byte_offset: u32) -> Expr {
     extern_call(
         TDZ_CHECK,
         vec![Expr::LocalGet(id), Expr::String(name.to_string())],
+        byte_offset,
     )
 }
 
 /// `check_then(id, value)`: evaluates `value`, then throws while `id` is
 /// uninitialized, else yields `value`.
-pub fn check_then(id: LocalId, name: &str, value: Expr) -> Expr {
+pub fn check_then(id: LocalId, name: &str, value: Expr, byte_offset: u32) -> Expr {
     extern_call(
         TDZ_CHECK_THEN,
         vec![Expr::LocalGet(id), Expr::String(name.to_string()), value],
+        byte_offset,
     )
 }
 
 /// The ReferenceError a dead-zone access throws.
-pub fn throw(name: &str) -> Expr {
-    extern_call(TDZ_THROW, vec![Expr::String(name.to_string())])
+pub fn throw(name: &str, byte_offset: u32) -> Expr {
+    extern_call(TDZ_THROW, vec![Expr::String(name.to_string())], byte_offset)
 }
 
 /// The binding a check expression tests, when `expr` is one.
 pub fn checked_binding(expr: &Expr) -> Option<LocalId> {
-    let Expr::Call { callee, args, .. } = expr else {
+    let (Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }) = expr else {
         return None;
     };
     let Expr::ExternFuncRef { name, .. } = callee.as_ref() else {
@@ -105,9 +107,19 @@ pub fn without_checks(mut expr: &Expr) -> &Expr {
     expr
 }
 
+/// True when `expr` is a dead-zone operation (`check`, `check_then` or
+/// `throw`): an operation of its own kind, told by its runtime callee, not a
+/// call of the program (a check inside `f(x)` and the call `f(x)` are two
+/// sites that share a start).
+pub fn is_dead_zone_op(expr: &Expr) -> bool {
+    matches!(expr, Expr::Call { callee, .. } | Expr::RegionCall { callee, .. }
+        if matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. }
+            if name == TDZ_CHECK || name == TDZ_CHECK_THEN || name == TDZ_THROW))
+}
+
 /// True when `expr` is a read check `check(id)` (not `check_then`).
 pub fn is_read_check(expr: &Expr) -> bool {
-    matches!(expr, Expr::Call { callee, args, .. }
+    matches!(expr, Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. }
         if args.len() == 2
             && matches!(callee.as_ref(), Expr::ExternFuncRef { name, .. } if name == TDZ_CHECK)
             && matches!(args.first(), Some(Expr::LocalGet(_))))
@@ -119,7 +131,7 @@ pub fn for_each_check_value_mut(expr: &mut Expr, f: &mut dyn FnMut(&mut Expr)) -
     if checked_binding(expr).is_none() {
         return false;
     }
-    if let Expr::Call { args, .. } = expr {
+    if let Expr::Call { args, .. } | Expr::RegionCall { args, .. } = expr {
         for arg in args.iter_mut().skip(2) {
             f(arg);
         }
@@ -352,7 +364,7 @@ pub(crate) fn for_each_stmt_part<'a>(stmt: &'a Stmt, f: &mut dyn FnMut(Part<'a>)
             }
         }
         Stmt::Expr(expr) | Stmt::Throw(expr) => f(Part::Expr(expr)),
-        Stmt::Return(expr) => {
+        Stmt::Return(expr, _) => {
             if let Some(expr) = expr {
                 f(Part::Expr(expr));
             }
@@ -411,6 +423,7 @@ pub(crate) fn for_each_stmt_part<'a>(stmt: &'a Stmt, f: &mut dyn FnMut(Part<'a>)
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             f(Part::Expr(discriminant));
             for case in cases {

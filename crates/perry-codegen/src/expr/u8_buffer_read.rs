@@ -498,7 +498,7 @@ pub(crate) fn loop_param_is_accessed(body: &[perry_hir::Stmt], id: u32) -> bool 
             return false;
         }
         if matches!(expr,
-            Expr::IndexGet { object, .. } | Expr::IndexSet { object, .. }
+            Expr::IndexGet { object, .. } | Expr::RegionOut { object, .. } | Expr::IndexSet { object, .. }
                 | Expr::Uint8ArrayGet { array: object, .. } | Expr::Uint8ArraySet { array: object, .. }
                 | Expr::BufferIndexGet { buffer: object, .. } | Expr::BufferIndexSet { buffer: object, .. }
                 if matches!(object.as_ref(), Expr::LocalGet(receiver) if *receiver == id))

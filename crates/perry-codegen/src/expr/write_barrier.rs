@@ -111,8 +111,9 @@ fn static_value(ctx: &FnCtx<'_>, e: &Expr) -> bool {
             condition,
             then_expr,
             else_expr,
+            ..
         } => store_free(condition) && static_value(ctx, then_expr) && static_value(ctx, else_expr),
-        Expr::Call { callee, args, .. } => {
+        Expr::Call { callee, args, .. } | Expr::RegionCall { callee, args, .. } => {
             let Expr::FuncRef(id) = callee.as_ref() else {
                 return false;
             };
@@ -150,8 +151,8 @@ fn function_returns_static(ctx: &FnCtx<'_>, id: u32) -> bool {
     }
     fn returns_ok(stmts: &[Stmt]) -> bool {
         stmts.iter().all(|s| match s {
-            Stmt::Return(Some(e)) => literal(e),
-            Stmt::Return(None) => true,
+            Stmt::Return(Some(e), _) => literal(e),
+            Stmt::Return(None, _) => true,
             Stmt::If {
                 then_branch,
                 else_branch,
@@ -174,6 +175,7 @@ fn store_free(e: &Expr) -> bool {
             | Expr::PropertySet { .. }
             | Expr::IndexSet { .. }
             | Expr::Call { .. }
+            | Expr::RegionCall { .. }
             | Expr::New { .. }
             | Expr::Closure { .. }
     );

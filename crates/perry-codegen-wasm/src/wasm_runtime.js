@@ -11,6 +11,11 @@ const __hostGlobal = globalThis;
 const __Math = Object.fromEntries(Object.getOwnPropertyNames(Math).map((k) => [k, Math[k]]));
 const __JSON = { parse: JSON.parse, stringify: JSON.stringify };
 
+// The runtime calls functions and checks own keys through these: a program may overwrite
+// `Function.prototype.call` / `apply`, `Object.prototype.hasOwnProperty` or `Reflect.apply`.
+const __reflectApply = Reflect.apply;
+const __hasOwn = Function.prototype.call.bind(Object.prototype.hasOwnProperty);
+
 const TAG_UNDEFINED = 0x7FFC_0000_0000_0001n;
 const TAG_NULL      = 0x7FFC_0000_0000_0002n;
 const TAG_FALSE     = 0x7FFC_0000_0000_0003n;
@@ -34,14 +39,21 @@ function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
 // throw "Cannot convert undefined to a BigInt". `prefix` is the count of leading
 // args already on the call (e.g. 1 for the receiver, or closure capture count).
 // A function with a rest parameter exports its slot as `__wasm_rest_<index>`; the
-// arguments from that slot on become one array, as a direct call packs them.
-function __padBigintArgs(fn, prefix, bigintArgs) {
+// arguments from that slot on become one array, as a direct call packs them. The last
+// `caps` arguments are a class's captures, the constructor's last parameters.
+function __padBigintArgs(fn, prefix, bigintArgs, caps = 0) {
   const rest = wasmInstance?.exports['__wasm_rest_' + fn.name];
+  const captures = bigintArgs.splice(bigintArgs.length - caps);
   if (rest) {
     const at = __Math.max(0, rest.value - (prefix | 0));
     while (bigintArgs.length < at) bigintArgs.push(TAG_UNDEFINED);
     bigintArgs.push(__jsValueToBits(bigintArgs.splice(at).map(__bitsToJsValue)));
+  } else if (caps > 0) {
+    const own = fn.length - (prefix | 0) - caps;
+    while (bigintArgs.length < own) bigintArgs.push(TAG_UNDEFINED);
+    bigintArgs.length = own;
   }
+  bigintArgs.push(...captures);
   const need = __Math.max(0, (fn.length | 0) - (prefix | 0));
   while (bigintArgs.length < need) bigintArgs.push(TAG_UNDEFINED);
   return bigintArgs;
@@ -1550,7 +1562,7 @@ function wrapForI64(fn, coerceNumberToBigInt = true) {
       if (typeof a === 'bigint') { _u64[0] = a; return _f64[0]; }
       return a;
     });
-    const result = fn.apply(this, convertedArgs);
+    const result = __reflectApply(fn, this, convertedArgs);
     if (typeof result === 'bigint') return result;
     if (typeof result === 'number') {
       // #1049 instance 1: this wrapper exists because most callees here are
@@ -1584,7 +1596,7 @@ function wrapFfiForI64(fn) {
   if (fn.__rawBigint === true) return fn;
   return function(...args) {
     const convertedArgs = args.map(a => (typeof a === 'bigint') ? __bitsToJsValue(a) : a);
-    const result = fn.apply(this, convertedArgs);
+    const result = __reflectApply(fn, this, convertedArgs);
     if (typeof result === 'bigint') return result;
     if (typeof result === 'number') {
       // #1049 instance 1: the WASM import side declares these as `i64`
@@ -1731,7 +1743,7 @@ function __classOf(obj) { return obj[__classTag]; }
 // The class whose instance `obj` is, for `instanceof`: a class prototype holds its
 // class's tag as an own key and is an instance of the parent class only.
 function __instanceClassOf(obj) {
-  return Object.prototype.hasOwnProperty.call(obj, __classTag)
+  return __hasOwn(obj, __classTag)
     ? classParentTable[obj[__classTag]] || null
     : __classOf(obj);
 }
@@ -1744,7 +1756,7 @@ function __classProto(className) {
   const t = __classTemplate(className);
   if (t.proto) return t.proto;
   const parent = classParentTable[className];
-  const base = parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)
+  const base = parent && __hasOwn(classCtorSlotTable, parent)
     ? __classProto(parent)
     : __classFunctionParentProto(className);
   t.proto = Object.create(base, { [__classTag]: { value: className } });
@@ -1775,7 +1787,7 @@ function __hostAdder(obj, name) {
     };
   }
   if (typeof fn !== 'function') throw new TypeError(`'${String(fn)}' returned for property '${name}' of object '#<${obj.constructor.name}>' is not a function`);
-  return (...args) => Reflect.apply(fn, obj, args);
+  return (...args) => __reflectApply(fn, obj, args);
 }
 // A Map or WeakMap constructor's entries: the adder is read once before the iteration,
 // so a subclass override sees them, and an entry is any object whose keys 0 and 1 are
@@ -1833,7 +1845,7 @@ const __perryClassCtors = new WeakSet();
 // The class a class value names. Own only: a subclass evaluation reaches its
 // parent's name through [[Prototype]] (see __linkClassParent) and is not that class.
 function __classNameOfValue(fn) {
-  return Object.prototype.hasOwnProperty.call(fn, __classRefName) ? fn[__classRefName] : undefined;
+  return __hasOwn(fn, __classRefName) ? fn[__classRefName] : undefined;
 }
 function __classRef(className, ctorIdx) {
   let ctor = __classRefs.get(className);
@@ -1851,7 +1863,7 @@ function __classRef(className, ctorIdx) {
 // [[Prototype]], so it inherits A's static side.
 function __linkClassParent(className, ctor) {
   const parent = classParentTable[className];
-  if (parent && Object.prototype.hasOwnProperty.call(classCtorSlotTable, parent)) {
+  if (parent && __hasOwn(classCtorSlotTable, parent)) {
     Object.setPrototypeOf(ctor, __classRef(parent, classCtorSlotTable[parent]));
   }
 }
@@ -1902,12 +1914,9 @@ function __classCtor(className, ctorIdx, caps) {
     // The constructor's trailing params are the class's captures (see
     // `synthesize_class_captures`): an evaluation passes its own.
     const envCaps = evaluated ? __evaluationOf(ctor).caps : [];
-    if (envCaps.length) {
-      args = args.slice(0, impl.length - 1 - envCaps.length);
-      while (args.length < impl.length - 1 - envCaps.length) args.push(undefined);
-      args.push(...envCaps);
-    }
-    const result = __bitsToJsValue(__invokeWasmCallback(impl, __jsValueToBits(self), ...args.map(__jsValueToBits)));
+    args.push(...envCaps);
+    const result = __bitsToJsValue(
+      __invokeConstructor(impl, envCaps.length, __jsValueToBits(self), ...args.map(__jsValueToBits)));
     // [[Construct]]: only an object result replaces the instance; `return;` yields undefined.
     return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
   };
@@ -1934,7 +1943,7 @@ function __classCtor(className, ctorIdx, caps) {
   if (evaluated) {
     for (let c = className; c; c = classParentTable[c] || null) {
       for (const m of Object.keys(classMethodTable[c] || {})) {
-        if (Object.prototype.hasOwnProperty.call(proto, m) || m.startsWith('__get_') || m.startsWith('__set_')) continue;
+        if (__hasOwn(proto, m) || m.startsWith('__get_') || m.startsWith('__set_')) continue;
         proto[m] = __classMethodValue(c, m, ctor);
       }
     }
@@ -2045,6 +2054,12 @@ function __arrayCallback(cb) {
   const fn = wasmInstance.exports.__indirect_function_table?.get(cb.funcIdx | 0);
   return fn && ((...bits) => __invokeWasmCallback(fn, ...cb.captures, ...bits));
 }
+// An array callback as a host array method calls it; a value that is not a Perry
+// callable is passed on for the host to call or reject.
+function __hostPredicate(cb) {
+  const call = __arrayCallback(cb);
+  return call ? (...args) => __bitsToJsValue(call(...args.map(__jsValueToBits))) : cb;
+}
 // The one value of a declared class's static method, shared by every class value
 // that reaches it, so `Sub.m === Base.m`.
 const __classStaticMethodValues = new Map();
@@ -2087,15 +2102,15 @@ function __classStaticRun(template, value, funcIdx) {
 function __classStaticGet(cls, name, receiver, fallback) {
   for (let c = cls; c; c = classParentTable[c] || null) {
     const statics = classStaticTable[c];
-    if (statics && Object.prototype.hasOwnProperty.call(statics, name)) return statics[name];
+    if (statics && __hasOwn(statics, name)) return statics[name];
     // A class value's own properties hold its static methods (a deleted one stays
     // deleted); a class with no value yet has them only in its table.
     const ref = __classRefs.get(c);
     if (ref) {
-      if (Object.prototype.hasOwnProperty.call(ref, name)) return Reflect.get(ref, name, receiver);
+      if (__hasOwn(ref, name)) return Reflect.get(ref, name, receiver);
     } else {
       const methods = classStaticMethodTable[c];
-      if (methods && Object.prototype.hasOwnProperty.call(methods, name)) return __classStaticMethodValue(c, name);
+      if (methods && __hasOwn(methods, name)) return __classStaticMethodValue(c, name);
     }
   }
   return Reflect.get(fallback, name, receiver);
@@ -2205,12 +2220,12 @@ function __iteratorClose(iter) {
   const ret = iter.return;
   if (ret === undefined || ret === null) return;
   if (typeof ret !== "function") throw new TypeError(`${String(ret)} is not a function`);
-  const result = Reflect.apply(ret, iter, []);
+  const result = __reflectApply(ret, iter, []);
   if (!__isObject(result)) throw new TypeError(`Iterator result ${String(result)} is not an object`);
 }
 function __iteratorStep(iter, next, read) {
   if (typeof next !== "function") throw new TypeError(`${String(next)} is not a function`);
-  const result = next.call(iter);
+  const result = __reflectApply(next, iter, []);
   if (!__isObject(result)) throw new TypeError(`Iterator result ${String(result)} is not an object`);
   const done = Boolean(result.done);
   __iteratorStepValue = !done && read !== false ? result.value : undefined;
@@ -2250,7 +2265,7 @@ const __memDispatch = {
   // ponytail: closes a fresh intrinsic iterator over `src`; JS cannot place its cursor at `index`.
   rt_arrayRecordClose: (src, index, done, error, throwing) => {
     if (done || !("return" in __ArrayIteratorPrototype)) return throwing ? error : undefined;
-    const iter = __intrinsicArrayValues.call(src);
+    const iter = __reflectApply(__intrinsicArrayValues, src, []);
     if (!throwing) return __iteratorClose(iter);
     try { __iteratorClose(iter); } catch (_) {}
     return error;
@@ -2355,7 +2370,7 @@ const __memDispatch = {
   math_imul: (a, b) => Math.imul(a, b),
   date_now: () => Date.now(),
   js_typeof: (val) => __typeOf(val),
-  parse_int: (val) => parseInt(String(val), 10),
+  parse_int: (val, radix) => parseInt(String(val), radix),
   parse_float: (val) => parseFloat(String(val)),
   js_mod: (a, b) => a % b,
   is_null_or_undefined: (val) => (val === null || val === undefined) ? 1 : 0,
@@ -2427,7 +2442,7 @@ const __memDispatch = {
   object_get_own_property_descriptor: (obj, key) => {
     const desc = Object.getOwnPropertyDescriptor(obj, __hostKey(key));
     if (desc && desc.set !== undefined && classStaticFieldAccessors.get(desc.get) === desc.set) {
-      return { value: desc.get.call(obj), writable: true, enumerable: desc.enumerable, configurable: desc.configurable };
+      return { value: __reflectApply(desc.get, obj, []), writable: true, enumerable: desc.enumerable, configurable: desc.configurable };
     }
     if (desc && 'get' in desc) {
       desc.get = hostAccessorClosures.get(desc.get) ?? desc.get;
@@ -2499,6 +2514,13 @@ const __memDispatch = {
     }
     return [value];
   },
+  // `[a, , b]`: a hole adds to the length without creating an element.
+  array_push_hole: (arr) => { if (Array.isArray(arr)) arr.length += 1; return arr; },
+  // `a.keys()` / `a.entries()` / `a.values()`: the method the receiver holds, which a
+  // program may have replaced with a Perry closure.
+  array_keys: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'keys'), []),
+  array_entries: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'entries'), []),
+  array_values: (arr) => __jsMethodInvoke(__jsMethodGet(arr, 'values'), []),
   // Every argument in one `push` call, so `a.push(x, y)` is the single call JS makes.
   array_push: (arr, ...values) => { if (Array.isArray(arr)) arr.push(...values); return arr; },
   array_pop: (arr) => { if (!Array.isArray(arr) || arr.length === 0) return undefined; return arr.pop(); },
@@ -2537,13 +2559,30 @@ const __memDispatch = {
   array_flat: (arr) => Array.isArray(arr) ? arr.flat() : [],
   array_is_array: (val) => Array.isArray(val) ? 1 : 0,
   array_from: (val) => Array.from(val),
+  // `Array.from(value, mapFn, thisArg)`: mapFn receives (element, index), with `this`
+  // bound to thisArg. An undefined mapFn maps nothing; any other value that is not
+  // callable is a TypeError before `value` is read. An exception mapFn left pending is
+  // thrown here, so the host stops and closes the iterator.
+  array_from_mapped: (val, fn, thisArg) => {
+    if (fn === undefined) return Array.from(val);
+    if (__typeOf(fn) !== 'function') {
+      const what = fn === null ? 'object null' : typeof fn === 'string' ? `string "${fn}"`
+        : ['object', 'bigint', 'symbol'].includes(typeof fn) ? typeof fn : `${typeof fn} ${fn}`;
+      throw new TypeError(`${what} is not a function`);
+    }
+    return Array.from(val, (v, i) => {
+      const mapped = __memDispatch.reflect_apply(fn, thisArg, [v, i]);
+      __memDispatch.propagate_exception(true);
+      return mapped;
+    });
+  },
   // `[...source]`: any iterable source (a Set, a Map, an iterator) spreads its values.
   // One push per value: `push(...source)` passes each value as an argument and
   // overflows the stack for a large source.
   array_push_spread: (target, source) => {
     const iterate = source?.[Symbol.iterator];
     if (Array.isArray(target) && typeof iterate === 'function') {
-      const it = iterate.call(source);
+      const it = __reflectApply(iterate, source, []);
       const next = it.next;
       while (!__iteratorStep(it, next, true)) target.push(__iteratorStepValue);
     }
@@ -2665,7 +2704,7 @@ const __memDispatch = {
   },
   reflect_apply: (fn, thisArg, args) => {
     const argArr = Array.isArray(args) ? args : args !== null && typeof args === 'object' ? Array.from(args) : [];
-    if (__classMethodFns.has(fn)) return Reflect.apply(fn, thisArg, argArr);
+    if (__classMethodFns.has(fn)) return __reflectApply(fn, thisArg, argArr);
     if (typeof fn === 'function') return __callHostFunction(fn, argArr, thisArg);
     return __callClosureMethod(fn, thisArg, argArr);
   },
@@ -2733,6 +2772,8 @@ const __memDispatch = {
     for (let i = 0; i < arr.length; i++) { if (__bitsToJsValue(call(__jsValueToBits(arr[i]), __jsValueToBits(i), __jsValueToBits(arr)))) return i; }
     return -1;
   },
+  array_find_last: (arr, cb) => __reflectApply(Array.prototype.findLast, arr, [__hostPredicate(cb)]),
+  array_find_last_index: (arr, cb) => __reflectApply(Array.prototype.findLastIndex, arr, [__hostPredicate(cb)]),
   array_sort: (arr, cb) => {
     if (!Array.isArray(arr)) return arr;
     if (cb === undefined || cb === null) { arr.sort(); return arr; }
@@ -2741,16 +2782,26 @@ const __memDispatch = {
     arr.sort((a, b) => { const r = call(__jsValueToBits(a), __jsValueToBits(b)); return __bitsToJsValue(r); });
     return arr;
   },
-  array_some: (arr, cb) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
-    if (!call) return 0;
-    return arr.some((v, i) => __bitsToJsValue(call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
+  // `reduceRight`, the change-by-copy methods and `copyWithin` run the host's own, so
+  // hole handling, argument coercions and errors are the host's. `initial` is empty when
+  // the call passes none: an explicit undefined is an initial value.
+  array_reduce_right: (arr, cb, ...initial) => {
+    const call = __arrayCallback(cb);
+    const fn = call ? (...args) => __bitsToJsValue(call(...args.map(__jsValueToBits))) : cb;
+    return __reflectApply(Array.prototype.reduceRight, arr, [fn, ...initial]);
   },
-  array_every: (arr, cb) => {
-    const call = Array.isArray(arr) ? __arrayCallback(cb) : undefined;
-    if (!call) return 0;
-    return arr.every((v, i) => __bitsToJsValue(call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) ? 1 : 0;
+  array_to_reversed: (arr) => __reflectApply(Array.prototype.toReversed, arr, []),
+  array_to_sorted: (arr) => __reflectApply(Array.prototype.toSorted, arr, []),
+  array_to_sorted_cmp: (arr, cb) => {
+    const call = __arrayCallback(cb);
+    const cmp = call ? (a, b) => __bitsToJsValue(call(__jsValueToBits(a), __jsValueToBits(b))) : cb;
+    return __reflectApply(Array.prototype.toSorted, arr, [cmp]);
   },
+  array_to_spliced: (arr, start, deleteCount, ...items) => __reflectApply(Array.prototype.toSpliced, arr, [start, deleteCount, ...items]),
+  array_with: (arr, index, value) => __reflectApply(Array.prototype.with, arr, [index, value]),
+  array_copy_within: (arr, target, start, end) => __reflectApply(Array.prototype.copyWithin, arr, [target, start, end]),
+  array_some: (arr, cb) => Array.isArray(arr) && arr.some(__hostPredicate(cb)) ? 1 : 0,
+  array_every: (arr, cb) => Array.isArray(arr) && arr.every(__hostPredicate(cb)) ? 1 : 0,
 
   // Classes — args are plain JS values. obj is the object, className/methodName are strings.
   // class_new returns a plain object carrying its class name (see __classInstance).
@@ -2793,7 +2844,7 @@ const __memDispatch = {
         Object.defineProperty(obj, i, { value: made[i], writable: true, enumerable: true, configurable: true });
       }
     } else if (obj instanceof Date) {
-      Date.prototype.setTime.call(obj, new Date(...a).getTime());
+      __reflectApply(Date.prototype.setTime, obj, [new Date(...a).getTime()]);
     }
     return obj;
   },
@@ -2858,7 +2909,7 @@ const __memDispatch = {
     const name = String(slot);
     const ev = __instanceEvaluationOf(instance);
     let key;
-    if (ev && Object.prototype.hasOwnProperty.call(ev, name)) key = ev[name];
+    if (ev && __hasOwn(ev, name)) key = ev[name];
     else key = (classStaticTable[String(className)] || {})[name];
     Object.defineProperty(instance, key, { value, writable: true, configurable: true, enumerable: true });
   },
@@ -3017,7 +3068,7 @@ const __memDispatch = {
       let cls = __classOf(obj);
       while (cls) {
         const methods = classMethodTable[cls];
-        if (methods && Object.prototype.hasOwnProperty.call(methods, fname)) break;
+        if (methods && __hasOwn(methods, fname)) break;
         if (methods && ('__get_' + fname) in methods) {
           const fn = wasmInstance?.exports.__indirect_function_table?.get(methods['__get_' + fname]);
           if (fn) return __bitsToJsValue(fn(__jsValueToBits(obj)));
@@ -3026,10 +3077,10 @@ const __memDispatch = {
       }
       // A compiled method read as a value (`o.m`, and the `o.m?.()` guard, which is
       // `o.m == null`): it lives in the WASM table, not on the object.
-      if (!Object.prototype.hasOwnProperty.call(obj, fname)) {
+      if (!__hasOwn(obj, fname)) {
         for (let c = __classOf(obj); c; c = classParentTable[c] || null) {
           const methods = classMethodTable[c];
-          if (methods && Object.prototype.hasOwnProperty.call(methods, fname)) {
+          if (methods && __hasOwn(methods, fname)) {
             return __classMethodValue(c, fname, __instanceEvaluationOf(obj));
           }
         }
@@ -3042,7 +3093,7 @@ const __memDispatch = {
       const fname = String(name);
       const cls = __classNameOfValue(obj);
       const statics = cls === undefined ? undefined : (classStaticTable[cls] ||= {});
-      if (statics && (Object.prototype.hasOwnProperty.call(statics, fname) || !(fname in obj))) {
+      if (statics && (__hasOwn(statics, fname) || !(fname in obj))) {
         statics[fname] = value;
         __classExposeStatic(cls, fname);
       } else obj[fname] = value;
@@ -3099,7 +3150,7 @@ const __memDispatch = {
   // Calls what class_super_get read, after the arguments were evaluated. A compiled
   // method gets its arguments as Perry values; a non-callable throws, as in JS.
   class_super_call: (fn, obj, mname, args) => {
-    if (__classMethodFns.has(fn)) return Reflect.apply(fn, obj, args);
+    if (__classMethodFns.has(fn)) return __reflectApply(fn, obj, args);
     if (typeof fn === 'function') return __callHostFunction(fn, args, obj);
     if (fn && typeof fn === 'object' && typeof fn.funcIdx !== 'undefined') return __callClosureMethod(fn, obj, args);
     throw new TypeError(`(intermediate value)${mname === undefined ? '' : '.' + String(mname)} is not a function`);
@@ -3137,14 +3188,14 @@ const __memDispatch = {
   // WeakRef / FinalizationRegistry are the host's; a Perry closure cleanup callback is
   // wrapped so the host can call it.
   weakref_new: (target) => new WeakRef(target),
-  weakref_deref: (ref) => WeakRef.prototype.deref.call(ref),
+  weakref_deref: (ref) => __reflectApply(WeakRef.prototype.deref, ref, []),
   finreg_new: (cb) => {
     const call = __arrayCallback(cb);
     return new FinalizationRegistry(call ? (held) => { call(__jsValueToBits(held)); } : cb);
   },
   finreg_register: (reg, target, held, token) =>
-    FinalizationRegistry.prototype.register.call(reg, target, held, token),
-  finreg_unregister: (reg, token) => FinalizationRegistry.prototype.unregister.call(reg, token),
+    __reflectApply(FinalizationRegistry.prototype.register, reg, [target, held, token]),
+  finreg_unregister: (reg, token) => __reflectApply(FinalizationRegistry.prototype.unregister, reg, [token]),
   // The Set/Map `for...of` fast path steps `slot = cursor_next(coll, slot + 1, ep)`,
   // then `ep = compaction_epoch(coll)`, and reads the entry with `*_at(coll, slot)`;
   // -1 ends the loop. A host collection has no slots, so each loop owns a live iterator:
@@ -3169,7 +3220,7 @@ const __memDispatch = {
     // A step that throws ends the loop without closing the iterator, as a host loop does.
     // User code in `next` may step another loop, so only a successful step publishes `id`.
     try {
-      const step = Reflect.apply(cur.next, cur.iter, []);
+      const step = __reflectApply(cur.next, cur.iter, []);
       if (Object(step) !== step) throw new TypeError('Iterator result is not an object');
       if (step.done) {
         loops.delete(id);
@@ -3196,7 +3247,7 @@ const __memDispatch = {
     try {
       const close = cur.iter.return;
       if (close == null) return;
-      const result = Reflect.apply(close, cur.iter, []);
+      const result = __reflectApply(close, cur.iter, []);
       if (Object(result) !== result) throw new TypeError('Iterator result is not an object');
     } catch (error) {
       if (!threw) throw error;
@@ -3221,7 +3272,7 @@ const __memDispatch = {
   date_to_locale_date_string: (d) => (d instanceof Date) ? d.toLocaleDateString() : '',
   date_to_locale_time_string: (d) => (d instanceof Date) ? d.toLocaleTimeString() : '',
   date_to_json: (d) => (d instanceof Date) ? d.toJSON() : null,
-  date_to_utc_string: (d) => Date.prototype.toUTCString.call(d),
+  date_to_utc_string: (d) => __reflectApply(Date.prototype.toUTCString, d, []),
   date_get_full_year: (d) => (d instanceof Date) ? d.getFullYear() : 0,
   date_get_month: (d) => (d instanceof Date) ? d.getMonth() : 0,
   date_get_date: (d) => (d instanceof Date) ? d.getDate() : 0,
@@ -3241,27 +3292,34 @@ const __memDispatch = {
   date_get_timezone_offset: (d) => (d instanceof Date) ? d.getTimezoneOffset() : 0,
   // A setter takes every argument the call passed and a non-Date receiver throws, as
   // the host's own setter does.
-  date_set_utc_full_year: (d, ...v) => Date.prototype.setUTCFullYear.apply(d, v),
-  date_set_utc_month: (d, ...v) => Date.prototype.setUTCMonth.apply(d, v),
-  date_set_utc_date: (d, ...v) => Date.prototype.setUTCDate.apply(d, v),
-  date_set_utc_hours: (d, ...v) => Date.prototype.setUTCHours.apply(d, v),
-  date_set_utc_minutes: (d, ...v) => Date.prototype.setUTCMinutes.apply(d, v),
-  date_set_utc_seconds: (d, ...v) => Date.prototype.setUTCSeconds.apply(d, v),
-  date_set_utc_milliseconds: (d, ...v) => Date.prototype.setUTCMilliseconds.apply(d, v),
-  date_set_full_year: (d, ...v) => Date.prototype.setFullYear.apply(d, v),
-  date_set_month: (d, ...v) => Date.prototype.setMonth.apply(d, v),
-  date_set_date: (d, ...v) => Date.prototype.setDate.apply(d, v),
-  date_set_hours: (d, ...v) => Date.prototype.setHours.apply(d, v),
-  date_set_minutes: (d, ...v) => Date.prototype.setMinutes.apply(d, v),
-  date_set_seconds: (d, ...v) => Date.prototype.setSeconds.apply(d, v),
-  date_set_milliseconds: (d, ...v) => Date.prototype.setMilliseconds.apply(d, v),
-  date_set_time: (d, ...v) => Date.prototype.setTime.apply(d, v),
+  date_set_utc_full_year: (d, ...v) => __reflectApply(Date.prototype.setUTCFullYear, d, v),
+  date_set_utc_month: (d, ...v) => __reflectApply(Date.prototype.setUTCMonth, d, v),
+  date_set_utc_date: (d, ...v) => __reflectApply(Date.prototype.setUTCDate, d, v),
+  date_set_utc_hours: (d, ...v) => __reflectApply(Date.prototype.setUTCHours, d, v),
+  date_set_utc_minutes: (d, ...v) => __reflectApply(Date.prototype.setUTCMinutes, d, v),
+  date_set_utc_seconds: (d, ...v) => __reflectApply(Date.prototype.setUTCSeconds, d, v),
+  date_set_utc_milliseconds: (d, ...v) => __reflectApply(Date.prototype.setUTCMilliseconds, d, v),
+  date_set_full_year: (d, ...v) => __reflectApply(Date.prototype.setFullYear, d, v),
+  date_set_month: (d, ...v) => __reflectApply(Date.prototype.setMonth, d, v),
+  date_set_date: (d, ...v) => __reflectApply(Date.prototype.setDate, d, v),
+  date_set_hours: (d, ...v) => __reflectApply(Date.prototype.setHours, d, v),
+  date_set_minutes: (d, ...v) => __reflectApply(Date.prototype.setMinutes, d, v),
+  date_set_seconds: (d, ...v) => __reflectApply(Date.prototype.setSeconds, d, v),
+  date_set_milliseconds: (d, ...v) => __reflectApply(Date.prototype.setMilliseconds, d, v),
+  date_set_time: (d, ...v) => __reflectApply(Date.prototype.setTime, d, v),
 
   // Error — args are plain JS values
   error_new: (msg) => new Error(msg === undefined ? undefined : String(msg)),
   error_new_kind: (kind, msg) =>
     new ([Error, TypeError, RangeError, ReferenceError, SyntaxError][kind] || Error)(msg === undefined ? undefined : String(msg)),
   error_message: (e) => (e instanceof Error) ? e.message : '',
+  // `super(...args)`: the parent's compiled constructor at table slot `ctorIdx` runs
+  // on `self` with `args`, then the parent's captures `caps`.
+  super_call_spread: (self, ctorIdx, args, caps) => {
+    const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx | 0);
+    __invokeConstructor(impl, caps.length, __jsValueToBits(self), ...[...args, ...caps].map(__jsValueToBits));
+    return undefined;
+  },
   // `super(msg)` in a class extending a built-in Error: the instance is a plain
   // object (see __classInstance), so it takes the message the Error constructor would
   // give it, non-enumerable as on a real Error. Returns the instance.
@@ -3328,7 +3386,17 @@ const __memDispatch = {
 
   // Crypto — args are plain JS values
   crypto_random_uuid: () => crypto.randomUUID(),
-  crypto_random_uuidv7: () => crypto.randomUUIDv7(),
+  // Web Crypto has no `randomUUIDv7`: an RFC 9562 version-7 UUID is the 48-bit Unix
+  // millisecond time, then random bits under the version and variant fields.
+  crypto_random_uuidv7: () => {
+    const b = crypto.getRandomValues(new Uint8Array(16));
+    let ms = Date.now();
+    for (let i = 5; i >= 0; i--, ms = Math.floor(ms / 256)) b[i] = ms % 256;
+    b[6] = (b[6] & 0x0f) | 0x70;
+    b[8] = (b[8] & 0x3f) | 0x80;
+    const h = Array.from(b, (x) => x.toString(16).padStart(2, '0')).join('');
+    return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
+  },
   crypto_random_bytes: (n) => crypto.getRandomValues(new Uint8Array(n)),
   crypto_sha256: (data) => {
     const str = String(data);
@@ -3814,7 +3882,13 @@ function uiAlloc(el) {
 function uiGet(h) { return uiHandles.get(h); }
 
 function __invokeWasmCallback(fn, ...bigintArgs) {
-  const result = fn(...__padBigintArgs(fn, 0, bigintArgs));
+  return __invokeConstructor(fn, 0, ...bigintArgs);
+}
+
+// `__invokeWasmCallback` of a constructor whose last `caps` arguments are its class's
+// captures.
+function __invokeConstructor(fn, caps, ...bigintArgs) {
+  const result = fn(...__padBigintArgs(fn, 0, bigintArgs, caps));
   __memDispatch.propagate_exception(true);
   return result;
 }
@@ -6147,7 +6221,7 @@ const __uiMethodMap = {
 
 function __callHostFunction(fn, args, receiver = undefined) {
   try {
-    return Reflect.apply(fn, receiver, __classMethodFns.has(fn) ? args : __hostArgs(fn, args, receiver));
+    return __reflectApply(fn, receiver, __classMethodFns.has(fn) ? args : __hostArgs(fn, args, receiver));
   } catch (error) {
     if (tryDepth === 0) throw error;
     currentException = error;
@@ -6233,7 +6307,7 @@ function __hostDescriptors(props) {
   if (!__holdsProperties(props)) return props;
   const descs = Object.create(null);
   for (const key of Reflect.ownKeys(props)) {
-    if (!Object.prototype.propertyIsEnumerable.call(props, key)) continue;
+    if (!__reflectApply(Object.prototype.propertyIsEnumerable, props, [key])) continue;
     descs[key] = __hostDescriptor(props[key]);
   }
   return descs;
@@ -6243,16 +6317,15 @@ function __hostDescriptors(props) {
 // so an object key is handed over as a view whose conversion methods run them.
 function __hostKey(key) {
   if (!__holdsProperties(key)) return key;
-  const own = Object.prototype.hasOwnProperty;
   // The compiled accessor the lookup resolves to, if any; a setter alone reads undefined.
   const classAccessor = (name) => {
-    if (!__classOf(key) || own.call(key, name)) return undefined;
+    if (!__classOf(key) || __hasOwn(key, name)) return undefined;
     for (let c = __classOf(key); c; c = classParentTable[c] || null) {
       const methods = classMethodTable[c];
       if (!methods) continue;
-      if (own.call(methods, name)) return undefined;
-      if (own.call(methods, '__get_' + name)) return 'get';
-      if (own.call(methods, '__set_' + name)) return 'set';
+      if (__hasOwn(methods, name)) return undefined;
+      if (__hasOwn(methods, '__get_' + name)) return 'get';
+      if (__hasOwn(methods, '__set_' + name)) return 'set';
     }
     return undefined;
   };
@@ -6263,7 +6336,7 @@ function __hostKey(key) {
     const value = accessor ? __memDispatch.class_get_field(key, name) : key[name];
     if (accessor) __memDispatch.propagate_exception(true);
     const fn = __hostAccessor(value);
-    return typeof fn === 'function' ? (...args) => Reflect.apply(fn, key, args) : fn;
+    return typeof fn === 'function' ? (...args) => __reflectApply(fn, key, args) : fn;
   };
   return {
     __proto__: null,
@@ -6273,14 +6346,17 @@ function __hostKey(key) {
   };
 }
 
-// The arguments of a host function; a property key argument goes through `__hostKey`.
 const __hostKeyFns = new Set([Object.prototype.hasOwnProperty, Object.prototype.propertyIsEnumerable]);
-function __hostArgs(fn, args, receiver) {
-  const hostArgs = args.map(__hostCallback);
+const __intrinsicCall = Function.prototype.call;
+const __intrinsicApply = Function.prototype.apply;
+// The arguments of a host function; a property key argument goes through `__hostKey`. Only
+// the first `callbacks` arguments are callbacks the host calls.
+function __hostArgs(fn, args, receiver, callbacks = args.length) {
+  const hostArgs = args.map((a, i) => i < callbacks ? __hostCallback(a) : a);
   if (__hostKeyFns.has(fn)) hostArgs[0] = __hostKey(args[0]);
   else if (__hostKeyFns.has(receiver)) {
-    if (fn === Function.prototype.call) hostArgs[1] = __hostKey(args[1]);
-    else if (fn === Function.prototype.apply && Array.isArray(args[1])) {
+    if (fn === __intrinsicCall) hostArgs[1] = __hostKey(args[1]);
+    else if (fn === __intrinsicApply && Array.isArray(args[1])) {
       // Read as `apply` reads it: by index, not through the list's own `map`.
       const list = args[1];
       hostArgs[1] = __hostArgs(receiver, Array.from({ length: list.length }, (_, i) => list[i]));
@@ -6293,8 +6369,10 @@ function __hostArgs(fn, args, receiver) {
 function __hostCallback(value) {
   if (!__isPerryClosure(value)) return value;
   if (!hostCallbacks.has(value)) {
-    hostCallbacks.set(value, __withKindProto((...args) => {
-      const result = callWasmClosure(value, ...args);
+    // Strict, so a host call without a receiver has an undefined `this`.
+    hostCallbacks.set(value, __withKindProto(function () {
+      'use strict';
+      const result = __callClosureMethod(value, this, [...arguments]);
       __memDispatch.propagate_exception(true);
       return result;
     }, __PerryClosure.protoKindOf(value)));
@@ -6335,7 +6413,7 @@ function __classMethodValue(cls, mname, evaluation) {
 // then the host base's prototype (or Object.prototype).
 function __superGet(home, key, receiver) {
   const name = typeof key === 'string' ? key : __memDispatch.to_property_key(key);
-  const own = (o, k) => o !== undefined && Object.prototype.hasOwnProperty.call(o, k);
+  const own = (o, k) => o !== undefined && __hasOwn(o, k);
   if (home && home.__classHome__ !== undefined) {
     const cls = home.__classHome__;
     // The static side reads the parent's statics as a static member access does: fields,
@@ -6388,7 +6466,7 @@ function __throwNullReceiver(obj, name) {
 // an absent member throws as calling it would.
 function __jsNativeMember(obj, name) {
   const member = obj[name];
-  if (typeof member === 'function') return member.call(obj);
+  if (typeof member === 'function') return __reflectApply(member, obj, []);
   if (name in Object(obj)) return member;
   throw new TypeError(String(name) + ' is not a function');
 }
@@ -6407,17 +6485,25 @@ function __jsMethodGet(obj, mname) {
     mname = __memDispatch.to_property_key(mname);
   }
   const tagged = obj && typeof obj === 'object' && __classOf(obj)
-    && !Object.prototype.hasOwnProperty.call(obj, mname);
+    && !__hasOwn(obj, mname);
   if (tagged && __classHasMethod(__classOf(obj), mname)) {
     return { r: obj, m: mname, user: true };
   }
   const f = obj[mname];
   if ((tagged || typeof obj !== 'object') && typeof f !== 'function'
-    && Object.prototype.hasOwnProperty.call(__uiMethodMap, mname)) {
+    && __hasOwn(__uiMethodMap, mname)) {
     return { r: obj, m: mname, user: true };
   }
   return { r: obj, m: mname, f };
 }
+
+// The host array methods, each with how many leading arguments it calls; the rest are data
+// and keep their identity. Read at load, before the program can replace one.
+const __arrayCallbackMethods = ['map', 'filter', 'forEach', 'find', 'findIndex', 'findLast',
+  'findLastIndex', 'some', 'every', 'flatMap', 'reduce', 'reduceRight', 'sort', 'toSorted'];
+const __arrayMethodCallbacks = new Map(Object.getOwnPropertyNames(Array.prototype)
+  .filter((name) => name !== 'constructor' && typeof Array.prototype[name] === 'function')
+  .map((name) => [Array.prototype[name], __arrayCallbackMethods.includes(name) ? 1 : 0]));
 
 function __jsMethodInvoke(ref, args) {
   if (ref.user) {
@@ -6434,15 +6520,16 @@ function __jsMethodInvoke(ref, args) {
   }
   if (typeof ref.f !== 'function') throw new TypeError(String(ref.m) + ' is not a function');
   // A compiled class method takes Perry values, as `reflect_apply` passes them.
-  if (__classMethodFns.has(ref.f)) return Reflect.apply(ref.f, ref.r, args);
-  return Reflect.apply(ref.f, ref.r, __hostArgs(ref.f, args, ref.r));
+  if (__classMethodFns.has(ref.f)) return __reflectApply(ref.f, ref.r, args);
+  const callbacks = __arrayMethodCallbacks.get(ref.f) ?? args.length;
+  return __reflectApply(ref.f, ref.r, __hostArgs(ref.f, args, ref.r, callbacks));
 }
 
 // Own keys only: `mname in methods` would also find Object.prototype's names.
 function __classHasMethod(cls, mname) {
   for (let c = cls; c; c = classParentTable[c] || null) {
     const methods = classMethodTable[c];
-    if (methods && Object.prototype.hasOwnProperty.call(methods, mname)) return true;
+    if (methods && __hasOwn(methods, mname)) return true;
   }
   return false;
 }
@@ -6470,7 +6557,7 @@ function __classDispatch(objVal, mname, rawArgs) {
       const methods = classMethodTable[cls];
       // Own keys only (see __classHasMethod): `in` finds Object.prototype's `toString`
       // in a subclass's table and hands a host function to Table.get.
-      if (methods && Object.prototype.hasOwnProperty.call(methods, mname)) {
+      if (methods && __hasOwn(methods, mname)) {
         const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
         if (fn) {
           // Pad for omitted TS optional params (Issue #1035).

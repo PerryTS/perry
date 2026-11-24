@@ -65,8 +65,8 @@ pub fn rewrite_expr_children(expr: &mut Expr) {
 
 pub fn rewrite_stmt(stmt: &mut Stmt) {
     match stmt {
-        Stmt::Expr(e) | Stmt::Return(Some(e)) | Stmt::Throw(e) => rewrite_expr(e),
-        Stmt::Return(None)
+        Stmt::Expr(e) | Stmt::Return(Some(e), _) | Stmt::Throw(e) => rewrite_expr(e),
+        Stmt::Return(None, _)
         | Stmt::Break
         | Stmt::Continue
         | Stmt::LabeledBreak(_)
@@ -142,6 +142,7 @@ pub fn rewrite_stmt(stmt: &mut Stmt) {
         Stmt::Switch {
             discriminant,
             cases,
+            ..
         } => {
             rewrite_expr(discriminant);
             for c in cases.iter_mut() {
