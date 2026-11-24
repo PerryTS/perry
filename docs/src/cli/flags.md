@@ -160,6 +160,8 @@ Use `--output-type` to change what's produced:
 | `dylib` | Shared library (`.dylib`/`.so`) for [plugins](../plugins/overview.md) |
 | `staticlib` | Static archive (`.a`/`.lib`) exposing `perry_module_init` for a native host |
 
+A native `staticlib` build also writes a manifest beside the archive, named with the archive's extension replaced: `libfoo.a` gets `libfoo.linkdeps.json`. The host passes the C compiler driver its `archive`, every `link_archives[].path` and every `link_args` entry; on macOS they are all the link needs, except for the archives and frameworks of `perry.nativeLibrary` packages, which the manifest does not list. Other platforms add their own system libraries.
+
 ## General Build and Platform Flags
 
 | Flag | Description |

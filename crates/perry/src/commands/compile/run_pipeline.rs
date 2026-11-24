@@ -8537,6 +8537,11 @@ pub fn run_with_parse_cache(
             "entry_symbol": "perry_module_init",
             "target": target.clone().unwrap_or_else(|| "native".to_string()),
             "link_archives": link_archives,
+            "link_args": link::staticlib_link_args(
+                &ctx,
+                target.as_deref(),
+                &optimized_libs.well_known_libs,
+            ),
         });
         if let Err(e) = fs::write(
             &manifest_path,
