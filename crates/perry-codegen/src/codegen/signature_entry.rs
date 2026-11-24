@@ -57,7 +57,7 @@ pub(crate) fn direct_call_offset() -> Option<u32> {
 thread_local! {
     /// ONCHG2: the facts site offset of the named method call being lowered
     /// (`with_method_site`).
-    static METHOD_SITE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+    static METHOD_SITE: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) };
 }
 
 /// Lower the named method call `o.k(args)` with its facts site offset
@@ -66,8 +66,8 @@ thread_local! {
 /// calls in the arguments set and restore their own.
 pub(crate) fn with_method_site<R>(callee: &Expr, f: impl FnOnce() -> R) -> R {
     let off = match callee {
-        Expr::PropertyGet { byte_offset, .. } => *byte_offset,
-        _ => direct_call_offset().unwrap_or(0),
+        Expr::PropertyGet { byte_offset, .. } => Some(*byte_offset),
+        _ => direct_call_offset(),
     };
     let saved = METHOD_SITE.with(|s| s.replace(off));
     let out = f();
@@ -76,7 +76,7 @@ pub(crate) fn with_method_site<R>(callee: &Expr, f: impl FnOnce() -> R) -> R {
 }
 
 /// The facts site offset of the named method call being lowered (0: none).
-pub(crate) fn method_site_offset() -> u32 {
+pub(crate) fn method_site_offset() -> Option<u32> {
     METHOD_SITE.with(|s| s.get())
 }
 
@@ -888,7 +888,7 @@ pub(crate) fn try_lower_typed_method_call(
         return Ok(None);
     };
     let offset = *byte_offset;
-    if offset == 0 || ctx.wpfacts_off || ctx.wpfacts.interp_guard {
+    if ctx.wpfacts_off || ctx.wpfacts.interp_guard {
         return Ok(None);
     }
     let Some(&mid) = ctx.wpfacts.typed_calls.get(&offset) else {
