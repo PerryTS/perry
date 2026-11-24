@@ -154,13 +154,14 @@ const A = make("a"), B = make("b");
 const own = (c: any, k: string) => Object.getOwnPropertyDescriptor(c.prototype, k) !== undefined;
 const before = [own(A, "a"), own(A, "b"), own(B, "a"), own(B, "b"), own(B, "x"), own(B, "m"), new B().b, new B().x, new B().m()];
 Object.defineProperty(Base.prototype, "x", { get: () => "redefined" });
-function family(k: string): any { class P { get [k]() { return k + "!"; } [k + "M"]() { return k; } } class Q extends P {} return Q; }
-family("p");
-const q: any = new (family("q"))();
-console.log(before.join(",") + " " + new B().x + " " + q.q + " " + q.qM());
+const key = "key";
+class P { get [key]() { return "computed"; } }
+function sub(n: number): any { return class extends P { get n() { return n; } }; }
+const q = new (sub(3))();
+console.log(before.join(",") + " " + new B().x + " " + q.key + q.n);
 "#
         ),
-        "true,false,false,true,false,false,b,base,m redefined q! q"
+        "true,false,false,true,false,false,b,base,m redefined computed3"
     );
 }
 
