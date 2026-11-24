@@ -1770,6 +1770,7 @@ fn the_env_gate_disables_element_facts() {
 fn source_walk(src: u32, root: u32, k: u32, condition_holds: bool, body: Vec<Stmt>) -> Vec<Stmt> {
     vec![
         Stmt::Let {
+            byte_offset: 0,
             id: src,
             name: format!("__perry_src_{src}"),
             ty: Type::Array(Box::new(Type::Named("C".to_string()))),
@@ -1778,8 +1779,10 @@ fn source_walk(src: u32, root: u32, k: u32, condition_holds: bool, body: Vec<Stm
         },
         Stmt::If {
             condition: Expr::Compare {
+                byte_offset: 0,
                 op: CompareOp::Eq,
                 left: Box::new(Expr::NativeMethodCall {
+                    byte_offset: 0,
                     module: "__perry_runtime".into(),
                     class_name: None,
                     object: None,

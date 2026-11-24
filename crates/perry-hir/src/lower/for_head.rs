@@ -258,7 +258,9 @@ pub(crate) fn guard_for_in_body(
         right: Box::new(Expr::String(name.to_string())),
     };
     let guard = Expr::Conditional {
+        byte_offset,
         condition: Box::new(Expr::Logical {
+            byte_offset,
             op: LogicalOp::Or,
             left: Box::new(type_is("object")),
             right: Box::new(type_is("function")),

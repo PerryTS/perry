@@ -969,6 +969,7 @@ impl<'a> ArrayWalk<'a> {
             op: perry_hir::CompareOp::Eq,
             left,
             right,
+            ..
         } = condition
         else {
             return false;
