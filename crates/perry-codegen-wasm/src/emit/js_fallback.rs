@@ -356,6 +356,7 @@ impl WasmModuleEmitter {
             Expr::GlobalGet(id) if !self.global_map.contains_key(id) => {
                 "globalThisValue()".to_string()
             }
+            Expr::GlobalThisExpr => "globalThisValue()".to_string(),
             // A declared global lives in its WASM global, which the module exports by
             // index; no JS binding `__g{id}` exists.
             Expr::GlobalGet(id) => format!(
@@ -896,6 +897,14 @@ impl WasmModuleEmitter {
                     o
                 )
             }
+            Expr::ObjectIs(a, b) => {
+                let a = self.emit_js_expr(a, locals);
+                let b = self.emit_js_expr(b, locals);
+                format!(
+                    "fromJsValue(__memDispatch.object_is(toJsValue({}), toJsValue({})))",
+                    a, b
+                )
+            }
             Expr::ObjectKeys(o) => {
                 let o = self.emit_js_expr(o, locals);
                 format!("fromJsValue(Object.keys(toJsValue({})))", o)
@@ -1144,6 +1153,13 @@ impl WasmModuleEmitter {
             }
             Expr::MathRandom => "Math.random()".to_string(),
             Expr::DateNow => "Date.now()".to_string(),
+            Expr::DateNew(args) => {
+                let operands: Vec<&Expr> = args.iter().collect();
+                self.emit_js_bridge_call("date_new_val", &operands, locals)
+            }
+            Expr::DateToUTCString(d) => {
+                self.emit_js_bridge_call("date_to_utc_string", &[d], locals)
+            }
             // `new` on a constructor value (`new Map<K, V>([...])` among others) and the Map and
             // Set nodes call the bridges their WASM arms call (`emit/expr/classes.rs`,
             // `emit/expr/map_set.rs`).
@@ -1162,6 +1178,26 @@ impl WasmModuleEmitter {
             Expr::SetValues(a) => self.emit_js_bridge_call("set_values", &[a], locals),
             Expr::MapClear(a) => self.emit_js_bridge_call("map_clear", &[a], locals),
             Expr::SetClear(a) => self.emit_js_bridge_call("set_clear", &[a], locals),
+            // The WeakRef and FinalizationRegistry nodes call the bridges their WASM arms
+            // call (`emit/expr/url_process_path.rs`).
+            Expr::WeakRefNew(a) => self.emit_js_bridge_call("weakref_new", &[a], locals),
+            Expr::WeakRefDeref(a) => self.emit_js_bridge_call("weakref_deref", &[a], locals),
+            Expr::FinalizationRegistryNew(a) => {
+                self.emit_js_bridge_call("finreg_new", &[a], locals)
+            }
+            Expr::FinalizationRegistryRegister {
+                registry,
+                target,
+                held,
+                token,
+            } => {
+                let mut operands: Vec<&Expr> = vec![registry, target, held];
+                operands.extend(token.as_deref());
+                self.emit_js_bridge_call("finreg_register", &operands, locals)
+            }
+            Expr::FinalizationRegistryUnregister { registry, token } => {
+                self.emit_js_bridge_call("finreg_unregister", &[registry, token], locals)
+            }
             Expr::MapGet { map, key } => self.emit_js_bridge_call("map_get", &[map, key], locals),
             // The `has` and `delete` bridges answer 1/0 and nothing, for their WASM callers;
             // JS wants the boolean, and `delete` says whether the entry was there.
@@ -1260,12 +1296,22 @@ impl WasmModuleEmitter {
                 }
                 format!("fromJsValue({closure})")
             }
+            // The function's one value, as the WASM arm in `emit/expr/classes.rs` makes it:
+            // the raw export takes i64 parameters, so a JS caller cannot pass it numbers.
             Expr::FuncRef(id) => {
-                if let Some(&func_idx) = self.func_map.get(id) {
-                    format!("fromJsValue(wasmInstance.exports.__wasm_func_{})", func_idx)
-                } else {
-                    "u64ToF64(TAG_UNDEFINED)".to_string()
-                }
+                let Some(&func_idx) = self.func_map.get(id) else {
+                    return "u64ToF64(TAG_UNDEFINED)".to_string();
+                };
+                let table_idx = self
+                    .func_to_table_idx
+                    .get(&func_idx)
+                    .copied()
+                    .unwrap_or(func_idx);
+                format!(
+                    "fromJsValue(__memDispatch.function_value({}, {}))",
+                    table_idx,
+                    self.fn_proto_code(func_idx)
+                )
             }
             Expr::New {
                 class_name, args, ..
@@ -1296,15 +1342,9 @@ impl WasmModuleEmitter {
                 };
                 let mut call_args = vec![format!("f64ToU64({})", instance)];
                 call_args.extend(args_js.iter().map(|a| format!("f64ToU64({})", a)));
-                // A WASM i64 parameter rejects a missing (undefined) argument, so pad
-                // to the constructor's arity. Excess arguments are still evaluated and
-                // the export ignores them.
-                if let Some(&expected) = self.func_param_counts.get(&ctor_idx) {
-                    while call_args.len() < expected {
-                        call_args.push("TAG_UNDEFINED".to_string());
-                    }
-                }
-                // Through the callback boundary: an exception the constructor raised
+                // Through the callback boundary, which packs a rest parameter's arguments
+                // and pads missing ones to the constructor's arity (excess ones are still
+                // evaluated, and the export ignores them): an exception the constructor raised
                 // under an enclosing WASM `try` is left pending, and this rethrows it
                 // here instead of handing back `this` as if it had succeeded.
                 format!(
@@ -1359,137 +1399,53 @@ impl WasmModuleEmitter {
             Expr::ArrayIterationPatched => {
                 "fromJsValue(__memDispatch.rt_arrayIterationPatched())".to_string()
             }
-            // Any other unhandled expression is undefined.
-            _ => self
-                .emit_js_array_method(expr, locals)
-                .unwrap_or_else(|| "u64ToF64(TAG_UNDEFINED)".to_string()),
-        }
-    }
-
-    /// JS for an array method node, or `None` for any other node: the host method call
-    /// `Expr::Call` emits for `receiver.method(...)`.
-    fn emit_js_array_method(&self, expr: &Expr, locals: &BTreeMap<u32, String>) -> Option<String> {
-        let js = |e: &Expr| format!("toJsValue({})", self.emit_js_expr(e, locals));
-        let local = |id: &LocalId| js(&Expr::LocalGet(*id));
-        let list = |required: &[&Expr], optional: &Option<Box<Expr>>| -> Vec<String> {
-            required
-                .iter()
-                .copied()
-                .chain(optional.as_deref())
-                .map(js)
-                .collect()
-        };
-        let (receiver, method, args) = match expr {
-            Expr::ArrayMap { array, callback } => (js(array), "map", vec![js(callback)]),
-            Expr::ArrayFilter { array, callback } => (js(array), "filter", vec![js(callback)]),
-            Expr::ArrayForEach { array, callback } => (js(array), "forEach", vec![js(callback)]),
-            Expr::ArrayFind { array, callback } => (js(array), "find", vec![js(callback)]),
-            Expr::ArrayFindIndex { array, callback } => {
-                (js(array), "findIndex", vec![js(callback)])
+            // The array method nodes `folded_call` does not name.
+            Expr::ArrayPop(id) => {
+                let array = self.emit_js_expr(&Expr::LocalGet(*id), locals);
+                format!("fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({array}), \"pop\"), []))")
             }
-            Expr::ArrayFindLast { array, callback } => (js(array), "findLast", vec![js(callback)]),
-            Expr::ArrayFindLastIndex { array, callback } => {
-                (js(array), "findLastIndex", vec![js(callback)])
-            }
-            Expr::ArraySome { array, callback } => (js(array), "some", vec![js(callback)]),
-            Expr::ArrayEvery { array, callback } => (js(array), "every", vec![js(callback)]),
-            Expr::ArrayFlatMap { array, callback } => (js(array), "flatMap", vec![js(callback)]),
-            Expr::ArraySort { array, comparator } => (js(array), "sort", vec![js(comparator)]),
-            Expr::ArrayToSorted { array, comparator } => {
-                (js(array), "toSorted", list(&[], comparator))
-            }
-            Expr::ArrayReduce {
-                array,
-                callback,
-                initial,
-            } => (js(array), "reduce", list(&[callback], initial)),
-            Expr::ArrayReduceRight {
-                array,
-                callback,
-                initial,
-            } => (js(array), "reduceRight", list(&[callback], initial)),
-            Expr::ArrayIndexOf {
-                array,
-                value,
-                from_index,
-            } => (js(array), "indexOf", list(&[value], from_index)),
-            Expr::ArrayLastIndexOf {
-                array,
-                value,
-                from_index,
-            } => (js(array), "lastIndexOf", list(&[value], from_index)),
-            Expr::ArrayIncludes {
-                array,
-                value,
-                from_index,
-            } => (js(array), "includes", list(&[value], from_index)),
-            Expr::ArrayAt { array, index } => (js(array), "at", vec![js(index)]),
-            Expr::ArraySlice {
-                array, start, end, ..
-            } => (js(array), "slice", list(&[start], end)),
-            Expr::ArrayFlat { array } => (js(array), "flat", vec![]),
-            Expr::ArrayToReversed { array } => (js(array), "toReversed", vec![]),
-            Expr::ArrayToSpliced {
-                array,
-                start,
-                delete_count,
-                items,
-            } => {
-                let mut args = vec![js(start), js(delete_count)];
-                args.extend(items.iter().map(js));
-                (js(array), "toSpliced", args)
-            }
-            Expr::ArrayWith {
-                array,
-                index,
-                value,
-            } => (js(array), "with", vec![js(index), js(value)]),
-            Expr::ArrayPop(id) => (local(id), "pop", vec![]),
-            Expr::ArrayShift(id) => (local(id), "shift", vec![]),
-            Expr::ArrayUnshift { array_id, value } => (local(array_id), "unshift", vec![js(value)]),
-            Expr::ArrayPushSpread { array_id, source } => {
-                (local(array_id), "push", vec![format!("...{}", js(source))])
-            }
-            Expr::ArraySplice {
-                array_id,
-                start,
-                delete_count,
-                items,
-            } => {
-                let mut args = list(&[start], delete_count);
-                args.extend(items.iter().map(js));
-                (local(array_id), "splice", args)
-            }
-            Expr::ArrayCopyWithin {
-                array_id,
-                target,
-                start,
-                end,
-            } => (local(array_id), "copyWithin", list(&[target, start], end)),
             Expr::ArrayLikeMethod {
                 method,
                 receiver,
                 args,
                 source,
             } => {
-                let receiver = js(receiver);
-                let args: Vec<String> = args.iter().map(js).collect();
-                if !matches!(source, perry_hir::ir::ArrayLikeSource::Receiver) {
-                    let method = js_string_literal(method);
-                    return Some(format!(
-                        "fromJsValue(__jsMethodInvoke({{ r: {receiver}, m: {method}, f: Array.prototype[{method}] }}, [{}]))",
-                        args.join(", ")
-                    ));
-                }
-                (receiver, method.as_str(), args)
+                let receiver = self.emit_js_expr(receiver, locals);
+                let args_js: Vec<String> = args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+                let method = js_string_literal(method);
+                let lookup = match source {
+                    perry_hir::ir::ArrayLikeSource::Receiver => {
+                        format!("__jsMethodGet(toJsValue({receiver}), {method})")
+                    }
+                    _ => format!(
+                        "{{ r: toJsValue({receiver}), m: {method}, f: Array.prototype[{method}] }}"
+                    ),
+                };
+                format!("fromJsValue(__jsMethodInvoke({lookup}, [{}]))", host_args(&args_js))
             }
-            _ => return None,
-        };
-        Some(format!(
-            "fromJsValue(__jsMethodInvoke(__jsMethodGet({receiver}, {}), [{}]))",
-            js_string_literal(method),
-            args.join(", ")
-        ))
+            _ => {
+                // A folded builtin-method node (`a.map(f)`, `m.get(k)`, ...) is the call
+                // `receiver.method(...args)`, made as an unfolded method call is.
+                if let Some(call) = perry_hir::folded_call::folded_call(expr) {
+                    let receiver = match call.receiver {
+                        perry_hir::folded_call::Receiver::Expr(e) => self.emit_js_expr(e, locals),
+                        perry_hir::folded_call::Receiver::Local(id) => {
+                            self.emit_js_expr(&Expr::LocalGet(id), locals)
+                        }
+                    };
+                    let args_js: Vec<String> =
+                        call.args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
+                    return format!(
+                        "fromJsValue(__jsMethodInvoke(__jsMethodGet(toJsValue({}), {}), [{}]))",
+                        receiver,
+                        js_string_literal(call.method),
+                        host_args(&args_js)
+                    );
+                }
+                // Fallback: return undefined for unhandled expressions
+                "u64ToF64(TAG_UNDEFINED)".to_string()
+            }
+        }
     }
 
     /// JS for a `__perry_runtime` intrinsic: the same contract as the WASM arms in
