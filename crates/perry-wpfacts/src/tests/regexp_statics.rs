@@ -4,7 +4,6 @@
 //! its realm declaration (`length`, `name`, `prototype`, `escape`,
 //! `@@species`; probe pn66/probe/rx.ts), then `Function.prototype`'s
 //! members: no unknown static, so nothing unknown is called.
-use super::*;
 
 fn held(src: &str) -> bool {
     let ast = Box::leak(Box::new(
