@@ -33,9 +33,7 @@ pub(crate) use in_flight::{
     finalize_or_park_request, finalize_request_handles_deferred, has_in_flight_requests,
     reap_in_flight_requests, response_writable_ended, retire_response,
 };
-mod deferred_events;
-#[cfg(test)]
-pub(crate) use deferred_events::register_close_callback;
+pub(crate) mod deferred_events;
 pub use deferred_events::ListenError;
 pub(crate) use deferred_events::{
     close_server, queue_deferred_close_emit, queue_deferred_listening_emit,
