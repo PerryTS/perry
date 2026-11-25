@@ -553,6 +553,15 @@ extern "C" fn http_getter_thunk(
             .read_value(receiver)
         };
         match name {
+            // node's IncomingMessage views: built once into `this[kHeaders]`
+            // (`this[kTrailers]`), then that same object on every read.
+            b"headers" => {
+                return message_header_view(receiver, HeaderView::Headers);
+            }
+            b"trailers" => {
+                return message_header_view(receiver, HeaderView::Trailers);
+            }
+            b"connection" => return field(b"socket"),
             b"writableEnded" => return field(b"finished"),
             b"headersSent" => {
                 return bool_value(crate::value::js_is_truthy(field(b"_header")) != 0)
@@ -585,6 +594,93 @@ extern "C" fn http_getter_thunk(
     }
 }
 
+/// Which of node's lazily built IncomingMessage header views.
+#[derive(Clone, Copy)]
+enum HeaderView {
+    Headers,
+    Trailers,
+}
+
+impl HeaderView {
+    fn symbol(self) -> &'static crate::object::layout_desc::StaticAtom {
+        match self {
+            HeaderView::Headers => &layouts::NP_SYMBOL_K_HEADERS,
+            HeaderView::Trailers => &layouts::NP_SYMBOL_K_TRAILERS,
+        }
+    }
+    fn count_symbol(self) -> &'static crate::object::layout_desc::StaticAtom {
+        match self {
+            HeaderView::Headers => &layouts::NP_SYMBOL_K_HEADERS_COUNT,
+            HeaderView::Trailers => &layouts::NP_SYMBOL_K_TRAILERS_COUNT,
+        }
+    }
+    fn raw(self) -> &'static [u8] {
+        match self {
+            HeaderView::Headers => b"rawHeaders",
+            HeaderView::Trailers => b"rawTrailers",
+        }
+    }
+}
+
+/// node's `IncomingMessage.prototype.headers` (`trailers`) getter on an
+/// ordinary message: `this[kHeaders]` when set; otherwise a fresh `{}` stored
+/// there, filled by `this._addHeaderLine(raw[n], raw[n + 1], dst)` for each
+/// pair below `this[kHeadersCount]`. One object per message, so identity and
+/// writes hold across reads.
+fn message_header_view(receiver: f64, view: HeaderView) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(receiver);
+    let symbol = scope.root_nanbox_f64(layouts::runtime_symbol_value(view.symbol()));
+    let current =
+        unsafe { crate::symbol::js_object_get_symbol_property(this.get_nanbox_f64(), symbol.get_nanbox_f64()) };
+    if crate::value::js_is_truthy(current) != 0 {
+        return current;
+    }
+    let dst = scope.root_nanbox_f64(boxed(crate::object::js_object_alloc(0, 0)));
+    unsafe {
+        crate::symbol::js_object_set_symbol_property(
+            this.get_nanbox_f64(),
+            symbol.get_nanbox_f64(),
+            dst.get_nanbox_f64(),
+        )
+    };
+    let raw_name = view.raw();
+    let src = scope.root_nanbox_f64(unsafe {
+        crate::runtime_state_key::js_runtime_state_key_get(
+            this.get_nanbox_f64(),
+            raw_name.as_ptr(),
+            raw_name.len(),
+        )
+    });
+    let mut n = 0.0;
+    loop {
+        let count_symbol = layouts::runtime_symbol_value(view.count_symbol());
+        let count = unsafe {
+            crate::symbol::js_object_get_symbol_property(this.get_nanbox_f64(), count_symbol)
+        };
+        if !(n < crate::builtins::js_number_coerce(count)) {
+            break;
+        }
+        let field = scope.root_nanbox_f64(crate::value::js_dyn_index_get(src.get_nanbox_f64(), n));
+        let value =
+            scope.root_nanbox_f64(crate::value::js_dyn_index_get(src.get_nanbox_f64(), n + 1.0));
+        let args = [field.get_nanbox_f64(), value.get_nanbox_f64(), dst.get_nanbox_f64()];
+        unsafe {
+            crate::runtime_state_key::js_runtime_state_key_call(
+                this.get_nanbox_f64(),
+                b"_addHeaderLine".as_ptr(),
+                14,
+                args.as_ptr(),
+                args.len(),
+            )
+        };
+        n += 2.0;
+    }
+    unsafe {
+        crate::symbol::js_object_get_symbol_property(this.get_nanbox_f64(), symbol.get_nanbox_f64())
+    }
+}
+
 /// Body of every http prototype setter: the native side keeps the socket and
 /// the request's header views.
 extern "C" fn http_setter_thunk(
@@ -594,6 +690,27 @@ extern "C" fn http_setter_thunk(
 ) -> f64 {
     let (name_ptr, name_len) = unsafe { captured_name(closure) };
     let receiver = this.as_f64();
+    let heap = !JSValue::from_bits(receiver.to_bits()).is_handle()
+        && crate::object::field_get_set::runtime_read_site::object_receiver(receiver).is_some();
+    if heap {
+        // node's setters: `headers`/`trailers` store their view symbol,
+        // `connection` is `this.socket`.
+        let name = unsafe { std::slice::from_raw_parts(name_ptr, name_len) };
+        let view = match name {
+            b"headers" => Some(HeaderView::Headers),
+            b"trailers" => Some(HeaderView::Trailers),
+            _ => None,
+        };
+        if let Some(view) = view {
+            let symbol = layouts::runtime_symbol_value(view.symbol());
+            unsafe { crate::symbol::js_object_set_symbol_property(receiver, symbol, value) };
+            return undefined();
+        }
+        if name == b"connection" {
+            unsafe { crate::runtime_state_key::js_runtime_state_key_set(receiver, b"socket".as_ptr(), 6, value) };
+            return undefined();
+        }
+    }
     if native_receiver(receiver).is_some() {
         if let Some(dispatch) = crate::object::class_handles::handle_property_set_dispatch() {
             unsafe {
