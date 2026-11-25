@@ -107,6 +107,43 @@ fn throw_unknown_encoding(value: f64) -> ! {
     crate::fs::validate::throw_type_error_with_code(&message, "ERR_UNKNOWN_ENCODING");
 }
 
+/// Node's `bidirectionalIndexOf` arguments for a `Buffer` receiver of
+/// `indexOf` / `lastIndexOf` / `includes`: `(start, encoding_tag)`.
+///
+/// A string `byteOffset` is the encoding. Any other offset is `+byteOffset`;
+/// NaN (`undefined`, `{}`, `"x"` …) searches the whole buffer: from the start
+/// for `indexOf`, from the end for `lastIndexOf`. The encoding applies to a
+/// string needle only, and there an unknown encoding name throws
+/// `ERR_UNKNOWN_ENCODING`.
+fn node_buffer_search_args(args: &[f64], len: i32, last: bool) -> (i32, i32) {
+    let undefined = f64::from_bits(crate::value::TAG_UNDEFINED);
+    let is_any_string = |v: f64| JSValue::from_bits(v.to_bits()).is_any_string();
+    let arg = |i: usize| args.get(i).copied().unwrap_or(undefined);
+    let (offset, encoding) = if is_any_string(arg(1)) {
+        (undefined, arg(1))
+    } else {
+        (arg(1), arg(2))
+    };
+    let offset = crate::builtins::js_number_coerce(offset);
+    let start = if offset.is_nan() {
+        if last {
+            len - 1
+        } else {
+            0
+        }
+    } else {
+        crate::array::array_slice_value_to_index(offset)
+    };
+    // A non-string encoding (`undefined`, a number) searches as utf8.
+    if !is_any_string(arg(0)) || !is_any_string(encoding) {
+        return (start, 0);
+    }
+    if crate::buffer::js_buffer_is_encoding(encoding) == 0 {
+        throw_unknown_encoding(encoding);
+    }
+    (start, crate::buffer::js_encoding_tag_from_value(encoding))
+}
+
 /// Whether `value` is an accepted `Buffer.prototype.copy/compare/equals`
 /// target, answered from the one view classification
 /// ([`super::view_brand::view_brand`]), and only for a view that carries the
@@ -1096,67 +1133,48 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
                 i32_num(crate::buffer::js_buffer_compare(buf_ptr, other))
             }
         }
-        "indexOf" => {
-            let enc = if args.len() >= 3 {
-                crate::buffer::js_encoding_tag_from_value(args[2])
-            } else {
-                0
-            };
-            i32_num(crate::buffer::js_buffer_index_of_enc(
-                buf_f64,
-                arg_or_zero(0),
-                arg_i32(1),
-                enc,
-            ))
-        }
-        "lastIndexOf" => {
+        "indexOf" | "lastIndexOf" | "includes" => {
             let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
-            // `Buffer#lastIndexOf` reads a string `byteOffset` as the encoding
-            // and searches the whole buffer for one that is NaN after `+`
-            // (`undefined`, `{}`, `"x"` …); `%TypedArray%.prototype.lastIndexOf`
-            // takes ToIntegerOrInfinity, so NaN is 0 for a `Uint8Array`.
-            let node_buffer = crate::buffer::is_node_buffer(addr);
-            let offset_is_encoding = node_buffer
-                && args.len() >= 2
-                && JSValue::from_bits(args[1].to_bits()).is_any_string();
-            let start = if args.len() < 2 || offset_is_encoding {
-                len - 1
-            } else if node_buffer {
-                let offset = crate::builtins::js_number_coerce(args[1]);
-                if offset.is_nan() {
+            let last = method_name == "lastIndexOf";
+            let (start, enc) = if crate::buffer::is_node_buffer(addr) {
+                node_buffer_search_args(args, len, last)
+            } else {
+                // `%TypedArray%.prototype` search methods: ToIntegerOrInfinity,
+                // so a NaN `fromIndex` is 0.
+                let start = if args.len() >= 2 {
+                    arg_i32(1)
+                } else if last {
                     len - 1
                 } else {
-                    crate::array::array_slice_value_to_index(offset)
-                }
-            } else {
-                arg_i32(1)
+                    0
+                };
+                let enc = if args.len() >= 3 {
+                    crate::buffer::js_encoding_tag_from_value(args[2])
+                } else {
+                    0
+                };
+                (start, enc)
             };
-            let enc = if offset_is_encoding {
-                crate::buffer::js_encoding_tag_from_value(args[1])
-            } else if args.len() >= 3 {
-                crate::buffer::js_encoding_tag_from_value(args[2])
-            } else {
-                0
-            };
-            i32_num(crate::buffer::js_buffer_last_index_of_enc(
-                buf_f64,
-                arg_or_zero(0),
-                start,
-                enc,
-            ))
-        }
-        "includes" => {
-            let enc = if args.len() >= 3 {
-                crate::buffer::js_encoding_tag_from_value(args[2])
-            } else {
-                0
-            };
-            i32_bool(crate::buffer::js_buffer_includes_enc(
-                buf_f64,
-                arg_or_zero(0),
-                arg_i32(1),
-                enc,
-            ))
+            match method_name {
+                "indexOf" => i32_num(crate::buffer::js_buffer_index_of_enc(
+                    buf_f64,
+                    arg_or_zero(0),
+                    start,
+                    enc,
+                )),
+                "lastIndexOf" => i32_num(crate::buffer::js_buffer_last_index_of_enc(
+                    buf_f64,
+                    arg_or_zero(0),
+                    start,
+                    enc,
+                )),
+                _ => i32_bool(crate::buffer::js_buffer_includes_enc(
+                    buf_f64,
+                    arg_or_zero(0),
+                    start,
+                    enc,
+                )),
+            }
         }
         // `buf.at(i)` — supports negative indices like Array.prototype.at.
         "at" => {
