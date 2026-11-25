@@ -36,8 +36,9 @@ pub(crate) mod string_methods;
 pub(crate) mod typed_array_methods;
 pub(crate) use collections::construct_into;
 pub(crate) use effects::{
-    construct_layout, declared_construct, declared_member, declared_proto_method, declared_static,
-    declared_super_construct, run_construct, run_function, run_member, run_super_construct,
+    construct_layout, declared_construct, declared_member, declared_proto_method,
+    declared_receiver_method, declared_static, declared_super_construct, run_construct,
+    run_function, run_member, run_native, run_super_construct,
 };
 
 use collections::{array_method, array_method_on, bobj_method, function_method, iterate};
@@ -54,8 +55,7 @@ pub use native_protocol::{
     native_writers_why, native_written, native_written_by, note_foreign_holds, note_global_in_top,
     note_handed_to_unknown, note_native_accessor, note_native_data_write, note_native_write,
     note_realm_held, program_global_fn, require_parts, runtime_global_call, settle_native_given,
-    GlobalAnyRead,
-    WriteValue,
+    GlobalAnyRead, WriteValue,
 };
 use native_protocol::{native_method, native_skips, opaque_written};
 
@@ -2252,7 +2252,10 @@ pub(crate) fn ns_may_be_array(ns: BuiltinNs) -> bool {
 }
 
 fn family_may_be_array(fam: Family) -> bool {
-    matches!(fam, Family::Array | Family::Box | Family::Wrapper | Family::Opaque)
+    matches!(
+        fam,
+        Family::Array | Family::Box | Family::Wrapper | Family::Opaque
+    )
 }
 
 /// Does the realm give the namespace or constructor `ns` no enumerable own

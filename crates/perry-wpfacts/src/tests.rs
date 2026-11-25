@@ -1674,6 +1674,7 @@ mod fn_number_key;
 mod forin1;
 mod getter_forms;
 mod getter_producer_slots;
+mod evteff;
 mod getter_result_decls;
 mod given_proto_census;
 mod given_proto_members;

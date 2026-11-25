@@ -309,6 +309,19 @@ pub(crate) fn declared_proto_method(identity: &str) -> Option<&'static RealmEntr
     declared_at(owner, key).filter(|e| !names_this(e.effects))
 }
 
+/// The declaration of prototype method `identity`
+/// (`EventTarget.prototype.addEventListener`) when the runtime declares
+/// what a call does to its receiver as well (`this`): it runs per receiver
+/// token (`Model::declared_proto_call`). A receiver of another brand
+/// throws before any of it (the declaration is a superset).
+pub(crate) fn declared_receiver_method(identity: &str) -> Option<&'static RealmEntry> {
+    let (owner, key) = identity.rsplit_once('.')?;
+    if !owner.ends_with(".prototype") || key.starts_with('<') {
+        return None;
+    }
+    declared_at(owner, key).filter(|e| names_this(e.effects))
+}
+
 /// The declaration of getter `key` of `proto` (`AbortController.prototype`,
 /// `signal`), when the runtime declares what a call of it does in forms
 /// `run_native` runs: a load of the key reads the getter's declared result
@@ -425,8 +438,8 @@ pub(super) fn declared_at(owner: &str, name: &str) -> Option<&'static RealmEntry
 /// `Array.prototype` arrays (or another prototype's object with no
 /// elements), `bound` and species construction (of the receiver) only as
 /// the result, slots: `elems` and `field` steps over the receiver or one
-/// argument (`field(field(arg(0), pathname), length)`), or one `field`
-/// over the result.
+/// argument (`field(field(arg(0), pathname), length)`), or `field` /
+/// `islot` steps over the result (`field(islot(result, listeners), handleEvent)`).
 pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
     fn slot(s: &RealmSlot) -> bool {
         matches!(
@@ -436,11 +449,10 @@ pub(crate) fn interpretable(effects: &[RealmEffect]) -> bool {
                     RealmSlotRoot::This | RealmSlotRoot::Arg(_) | RealmSlotRoot::Callee,
                     [_, ..]
                 )
-                | (
-                    RealmSlotRoot::Result,
-                    [RealmSlotStep::Field(_) | RealmSlotStep::Internal(_)]
-                )
-        )
+        ) || (s.root == RealmSlotRoot::Result
+            && s.steps
+                .iter()
+                .all(|st| matches!(st, RealmSlotStep::Field(_) | RealmSlotStep::Internal(_))))
     }
     fn operand(o: &RealmOperand) -> bool {
         operand_in(o, false)
@@ -574,11 +586,11 @@ impl Run {
     fn recv(&mut self, m: &mut Model) -> NodeId {
         *self.recv.get_or_insert_with(|| {
             let n = m.node_l("arr-recv");
-            m.add_tok(
-                n,
-                self.t
-                    .expect("a declaration naming `this` runs on a receiver"),
-            );
+            // No receiver (`this` undefined, `declared_proto_call`): the
+            // slot holds no value.
+            if let Some(t) = self.t {
+                m.add_tok(n, t);
+            }
             n
         })
     }
@@ -656,10 +668,7 @@ impl Run {
             }
             // The receiver's elements: its element node.
             (RealmSlotRoot::This, [RealmSlotStep::Elems]) => Vals {
-                nodes: vec![m.field_any(
-                    self.t
-                        .expect("a declaration naming `this` runs on a receiver"),
-                )],
+                nodes: self.t.map(|t| m.field_any(t)).into_iter().collect(),
                 spread: vec![],
             },
             // An argument's elements: the values a load of any key reads.
@@ -1024,8 +1033,7 @@ impl Run {
     fn held(&mut self, m: &mut Model, o: &RealmOperand, holder: Tok) -> NodeId {
         match o {
             RealmOperand::Native(path) => {
-                let e =
-                    native_value(path).expect("interpretable() takes a realm native only");
+                let e = native_value(path).expect("interpretable() takes a realm native only");
                 if !names_callee(e.effects) {
                     return self.operand(m, o);
                 }

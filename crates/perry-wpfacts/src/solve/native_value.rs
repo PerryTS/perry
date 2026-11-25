@@ -83,7 +83,7 @@ impl Model {
         // declares without naming `this` runs its declaration, whatever the
         // receiver (`Performance.prototype.toJSON` as JSON's protocol call).
         let Some((fam, what, name)) = builtins::native_model(self, t) else {
-            return self.declared_proto_call(call, t, identity);
+            return self.declared_proto_call(call, t, identity, this_tok);
         };
         let key = self.atom(&name.replace("@@", builtins::WK_PREFIX));
         let r = match (this_tok, &self.calls[call as usize].this) {
@@ -111,7 +111,7 @@ impl Model {
             {
                 return self.method_undefined_this(call, t, fam, name);
             }
-            (None, ThisArg::Undef) => return self.declared_proto_call(call, t, identity),
+            (None, ThisArg::Undef) => return self.declared_proto_call(call, t, identity, None),
         };
         if !builtins::native_receiver(self, fam, what, r) {
             if fam == Family::Str {
@@ -123,7 +123,7 @@ impl Model {
             if builtins::no_this_value(self, fam, what, r) {
                 return self.this_value_throws(call, t, r);
             }
-            return self.declared_proto_call(call, t, identity);
+            return self.declared_proto_call(call, t, identity, Some(r));
         }
         if self.bind_done.insert((call, t, r)) {
             self.diagnostic_callee(call, t);
@@ -172,13 +172,50 @@ impl Model {
     /// naming `this`: the declaration runs, whatever the receiver (one of
     /// another brand throws before any of it: the declaration is a
     /// superset). `false`: no such declaration, the unknown callee's arm.
-    fn declared_proto_call(&mut self, call: CallId, t: Tok, identity: &str) -> bool {
-        let Some(e) = builtins::declared_proto_method(identity) else {
+    ///
+    /// A declaration that names `this` (`EventTarget.prototype.addEventListener`
+    /// keeps its listener in an internal slot of the receiver) runs per
+    /// receiver token `this_tok` (else the call's own `this`; each value of
+    /// a receiver node on its own, `Cons::NativeThis`). A ⊤ receiver is
+    /// unknown code's object: the unknown callee's arm. With `this`
+    /// undefined the receiver slot holds nothing (a receiver of another
+    /// brand throws a realm TypeError before any of it: a superset).
+    fn declared_proto_call(
+        &mut self,
+        call: CallId,
+        t: Tok,
+        identity: &str,
+        this_tok: Option<Tok>,
+    ) -> bool {
+        if let Some(e) = builtins::declared_proto_method(identity) {
+            if self.bind_done.insert((call, t, u32::MAX - 7)) {
+                self.diagnostic_callee(call, t);
+                self.with_native(call, |m, call| builtins::run_function(m, e, call));
+            }
+            return true;
+        }
+        let Some(e) = builtins::declared_receiver_method(identity) else {
             return false;
         };
-        if self.bind_done.insert((call, t, u32::MAX - 7)) {
+        let r = match (this_tok, &self.calls[call as usize].this) {
+            (Some(r), _) | (None, &ThisArg::Tok(r)) => Some(r),
+            (None, &ThisArg::Node(n)) => {
+                if self.bind_done.insert((call, t, u32::MAX - 5)) {
+                    self.cons(n, Cons::NativeThis { call, f: t });
+                }
+                return true;
+            }
+            (None, ThisArg::Undef) => None,
+        };
+        if r == Some(TOP) {
+            return false;
+        }
+        if self.bind_done.insert((call, t, r.unwrap_or(u32::MAX - 8))) {
             self.diagnostic_callee(call, t);
-            self.with_native(call, |m, call| builtins::run_function(m, e, call));
+            self.with_native(call, |m, call| match r {
+                Some(r) => builtins::run_native(m, e, r, call),
+                None => builtins::run_function(m, e, call),
+            });
         }
         true
     }

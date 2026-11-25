@@ -372,21 +372,21 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
         "EventTarget" => {
             method(
                 "addEventListener",
-                crate::fn_info!(#[realm(EventTarget.prototype.addEventListener, spec = {length = 2}, emit = metadata(realm_eventtarget_prototype_addeventlistener_metadata))] export crate::event_target::event_target_add_event_listener_thunk, 3; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(EventTarget.prototype.addEventListener, effects = { reads(field(this, constructor)); reads(field(field(this, constructor), "nodejs.event_target")); coerce(arg(0), ToPrimitive); reads(field(arg(2), capture), field(arg(2), once), field(arg(2), signal)); stores(arg(1) -> islot(this, listeners)); returns(prim(undefined)) }, spec = {length = 2}, emit = metadata(realm_eventtarget_prototype_addeventlistener_metadata))] export crate::event_target::event_target_add_event_listener_thunk, 3; with_flags(crate::closure::FN_BUILTIN)),
                 3,
                 realm_eventtarget_prototype_addeventlistener_metadata!(length),
                 true,
             );
             method(
                 "removeEventListener",
-                crate::fn_info!(#[realm(EventTarget.prototype.removeEventListener, spec = {length = 2}, emit = metadata(realm_eventtarget_prototype_removeeventlistener_metadata))] export crate::event_target::event_target_remove_event_listener_thunk, 3; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(EventTarget.prototype.removeEventListener, effects = { reads(field(this, constructor)); reads(field(field(this, constructor), "nodejs.event_target")); coerce(arg(0), ToPrimitive); reads(field(arg(2), capture)); identity(arg(1)); returns(prim(undefined)) }, spec = {length = 2}, emit = metadata(realm_eventtarget_prototype_removeeventlistener_metadata))] export crate::event_target::event_target_remove_event_listener_thunk, 3; with_flags(crate::closure::FN_BUILTIN)),
                 3,
                 realm_eventtarget_prototype_removeeventlistener_metadata!(length),
                 true,
             );
             method(
                 "dispatchEvent",
-                crate::fn_info!(#[realm(EventTarget.prototype.dispatchEvent, effects = { stores(this -> islot(arg(0), target)); escapes(arg(0)); escapes(this); returns(prim(bool)) })] export crate::event_target::event_target_dispatch_event_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(EventTarget.prototype.dispatchEvent, effects = { reads(field(this, constructor)); reads(field(field(this, constructor), "nodejs.event_target")); stores(this -> islot(arg(0), target)); calls(islot(this, listeners), this = this, args = [arg(0)]); calls(field(islot(this, listeners), handleEvent), this = islot(this, listeners), args = [arg(0)]); stores(arg(0) -> islot(this, dispatched)); returns(prim(bool)) })] export crate::event_target::event_target_dispatch_event_thunk, 1; with_flags(crate::closure::FN_BUILTIN)),
                 1,
                 1,
                 true,
@@ -498,7 +498,7 @@ pub(super) fn install(name: &str, proto: *mut ObjectHeader) {
             );
             method(
                 "abort",
-                crate::fn_info!(#[realm(AbortController.prototype.abort, effects = { stores(arg(0) -> islot(islot(this, signal), reason)); calls(islot(islot(this, signal), onabort), this = islot(this, signal), args = [fresh(Event.prototype, slots = {target: islot(this, signal)})]); stores(fresh); returns(prim(undefined)) }, spec = {length = 0}, emit = metadata(realm_abortcontroller_prototype_abort_metadata))] export crate::event_target::prototype::abort, 1; with_flags(crate::closure::FN_BUILTIN)),
+                crate::fn_info!(#[realm(AbortController.prototype.abort, effects = { stores(arg(0) -> islot(islot(this, signal), reason)); calls(islot(islot(this, signal), onabort), this = islot(this, signal), args = [fresh(Event.prototype, slots = {target: islot(this, signal)})]); calls(islot(islot(this, signal), listeners), this = islot(this, signal), args = [fresh(Event.prototype, slots = {target: islot(this, signal)})]); calls(field(islot(islot(this, signal), listeners), handleEvent), this = islot(islot(this, signal), listeners), args = [fresh(Event.prototype, slots = {target: islot(this, signal)})]); stores(fresh); returns(prim(undefined)) }, spec = {length = 0}, emit = metadata(realm_abortcontroller_prototype_abort_metadata))] export crate::event_target::prototype::abort, 1; with_flags(crate::closure::FN_BUILTIN)),
                 1,
                 realm_abortcontroller_prototype_abort_metadata!(length),
                 true,
