@@ -784,3 +784,260 @@ fn controller_value_round_trips_and_stays_out_of_the_allocator() {
     assert_eq!(js_stream_handle_kind(stream_id(controller)), 6);
     assert_eq!(js_stream_handle_kind(id), 1);
 }
+
+// WHATWG ClearAlgorithms: a stream that closed or errored drops its
+// underlying source/sink/transformer algorithms (they stop being GC roots),
+// and no later operation calls them.
+static ALGORITHM_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+extern "C" fn counting_algorithm0(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+) -> f64 {
+    ALGORITHM_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn counting_algorithm1(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _arg: f64,
+) -> f64 {
+    ALGORITHM_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" fn counting_algorithm2(
+    _closure: *const ClosureHeader,
+    _this: perry_runtime::closure::JsThis,
+    _arg0: f64,
+    _arg1: f64,
+) -> f64 {
+    ALGORITHM_CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn counting_closure0() -> i64 {
+    js_closure_alloc(
+        perry_runtime::fn_info!(counting_algorithm0, 0; with_declared(0)),
+        0,
+    ) as i64
+}
+
+fn counting_closure1() -> i64 {
+    js_closure_alloc(
+        perry_runtime::fn_info!(counting_algorithm1, 1; with_declared(1)),
+        0,
+    ) as i64
+}
+
+fn counting_closure2() -> i64 {
+    js_closure_alloc(
+        perry_runtime::fn_info!(counting_algorithm2, 2; with_declared(2)),
+        0,
+    ) as i64
+}
+
+fn closure_value(closure: i64) -> f64 {
+    f64::from_bits(JSValue::pointer(closure as *const u8).bits())
+}
+
+fn algorithm_calls() -> usize {
+    ALGORITHM_CALLS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+fn readable_algorithms(id: usize) -> [i64; 4] {
+    let g = READABLE_STREAMS.lock().unwrap();
+    let s = g.get(&id).unwrap();
+    [s.start_cb, s.pull_cb, s.cancel_cb, s.strategy_size_cb]
+}
+
+fn writable_algorithms(id: usize) -> [i64; 4] {
+    let g = WRITABLE_STREAMS.lock().unwrap();
+    let s = g.get(&id).unwrap();
+    [s.write_cb, s.close_cb, s.abort_cb, s.strategy_size_cb]
+}
+
+#[test]
+fn readable_keeps_algorithms_while_close_requested_and_clears_them_once_drained() {
+    let _serial = serial_guard();
+    let id = alloc_readable_with_strategy(
+        counting_closure1(),
+        counting_closure1(),
+        counting_closure1(),
+        1.0,
+        false,
+        counting_closure1(),
+    );
+    {
+        let mut g = READABLE_STREAMS.lock().unwrap();
+        let s = g.get_mut(&id).unwrap();
+        s.started = true;
+        s.push_chunk(1.0f64.to_bits(), 1.0);
+    }
+    unsafe { js_readable_stream_controller_close(controller_value(id)) };
+    // Close requested with a chunk queued: cancel may still run the source's
+    // cancel algorithm, so nothing is cleared yet.
+    assert!(readable_algorithms(id).iter().all(|cb| *cb != 0));
+    let reader = unsafe { js_readable_stream_get_reader(stream_value(id)) };
+    let read = unsafe { js_reader_read(reader) };
+    js_promise_run_microtasks();
+    assert_eq!(perry_runtime::promise::js_promise_state(read), 1);
+    assert_eq!(readable_algorithms(id), [0; 4], "drained close clears");
+    let calls = algorithm_calls();
+    let cancel = unsafe { js_reader_cancel(reader, 2.0) };
+    js_promise_run_microtasks();
+    assert_eq!(perry_runtime::promise::js_promise_state(cancel), 1);
+    assert_eq!(
+        algorithm_calls(),
+        calls,
+        "a closed stream never calls cancel"
+    );
+}
+
+#[test]
+fn readable_error_clears_algorithms_and_cancel_answers_the_stored_error() {
+    let _serial = serial_guard();
+    let id = alloc_readable(
+        counting_closure1(),
+        counting_closure1(),
+        counting_closure1(),
+        1.0,
+    );
+    unsafe { js_readable_stream_controller_error(controller_value(id), 5.0) };
+    assert_eq!(readable_algorithms(id), [0; 4]);
+    let calls = algorithm_calls();
+    let cancel = unsafe { js_readable_stream_cancel(stream_value(id), 2.0) };
+    js_promise_run_microtasks();
+    assert_eq!(perry_runtime::promise::js_promise_state(cancel), 2);
+    assert_eq!(perry_runtime::promise::js_promise_reason(cancel), 5.0);
+    assert_eq!(algorithm_calls(), calls);
+    assert!(matches!(
+        READABLE_STREAMS.lock().unwrap().get(&id).unwrap().state,
+        ReadableState::Errored
+    ));
+}
+
+#[test]
+fn readable_cancel_runs_the_cancel_algorithm_then_clears() {
+    let _serial = serial_guard();
+    let id = alloc_readable(
+        counting_closure1(),
+        counting_closure1(),
+        counting_closure1(),
+        1.0,
+    );
+    let calls = algorithm_calls();
+    let cancel = unsafe { js_readable_stream_cancel(stream_value(id), 2.0) };
+    js_promise_run_microtasks();
+    assert_eq!(algorithm_calls(), calls + 1, "cancel algorithm runs once");
+    assert_eq!(perry_runtime::promise::js_promise_state(cancel), 1);
+    assert_eq!(readable_algorithms(id), [0; 4]);
+}
+
+#[test]
+fn writable_close_clears_after_the_close_algorithm_and_abort_keeps_closed() {
+    let _serial = serial_guard();
+    let id = alloc_writable_with_strategy(
+        counting_closure1(),
+        counting_closure0(),
+        counting_closure1(),
+        1.0,
+        counting_closure1(),
+    );
+    let calls = algorithm_calls();
+    let close = unsafe { js_writable_stream_close(stream_value(id)) };
+    assert_eq!(algorithm_calls(), calls + 1, "close algorithm runs once");
+    assert_eq!(writable_algorithms(id), [0; 4]);
+    js_promise_run_microtasks();
+    assert_eq!(perry_runtime::promise::js_promise_state(close), 1);
+    let abort = unsafe { js_writable_stream_abort(stream_value(id), 3.0) };
+    js_promise_run_microtasks();
+    assert_eq!(perry_runtime::promise::js_promise_state(abort), 1);
+    assert_eq!(
+        algorithm_calls(),
+        calls + 1,
+        "a closed stream never calls abort"
+    );
+    assert!(matches!(
+        WRITABLE_STREAMS.lock().unwrap().get(&id).unwrap().state,
+        WritableState::Closed
+    ));
+}
+
+#[test]
+fn writable_abort_runs_the_abort_algorithm_once_and_keeps_the_stored_error() {
+    let _serial = serial_guard();
+    let id = alloc_writable(
+        counting_closure1(),
+        counting_closure0(),
+        counting_closure1(),
+        1.0,
+    );
+    let calls = algorithm_calls();
+    let first = unsafe { js_writable_stream_abort(stream_value(id), 4.0) };
+    assert_eq!(algorithm_calls(), calls + 1);
+    assert_eq!(writable_algorithms(id), [0; 4]);
+    let second = unsafe { js_writable_stream_abort(stream_value(id), 6.0) };
+    js_promise_run_microtasks();
+    assert_eq!(perry_runtime::promise::js_promise_state(first), 1);
+    assert_eq!(perry_runtime::promise::js_promise_state(second), 1);
+    assert_eq!(algorithm_calls(), calls + 1);
+    assert_eq!(
+        WRITABLE_STREAMS
+            .lock()
+            .unwrap()
+            .get(&id)
+            .unwrap()
+            .error_value,
+        4.0f64.to_bits()
+    );
+}
+
+#[test]
+fn transform_flush_clears_the_transformer() {
+    let _serial = serial_guard();
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    let transform = counting_closure2();
+    let flush = counting_closure1();
+    let stream = unsafe {
+        js_transform_stream_new(
+            undefined,
+            closure_value(transform),
+            closure_value(flush),
+            undefined,
+            undefined,
+        )
+    };
+    let transform_id = stream_id(stream);
+    let writable = stream_id(unsafe { js_transform_stream_writable(stream) });
+    let calls = algorithm_calls();
+    let close = unsafe { transform_close(writable) };
+    js_promise_run_microtasks();
+    assert_eq!(algorithm_calls(), calls + 1, "flush runs once");
+    assert_eq!(perry_runtime::promise::js_promise_state(close), 1);
+    let g = TRANSFORM_STREAMS.lock().unwrap();
+    let t = g.get(&transform_id).unwrap();
+    assert_eq!((t.transform_cb, t.flush_cb), (0, 0));
+}
+
+#[test]
+fn transform_readable_error_clears_the_transformer() {
+    let _serial = serial_guard();
+    let undefined = f64::from_bits(TAG_UNDEFINED);
+    let stream = unsafe {
+        js_transform_stream_new(
+            undefined,
+            closure_value(counting_closure2()),
+            closure_value(counting_closure1()),
+            undefined,
+            undefined,
+        )
+    };
+    let transform_id = stream_id(stream);
+    let readable = stream_id(unsafe { js_transform_stream_readable(stream) });
+    unsafe { js_readable_stream_controller_error(controller_value(readable), 9.0) };
+    let g = TRANSFORM_STREAMS.lock().unwrap();
+    let t = g.get(&transform_id).unwrap();
+    assert_eq!((t.transform_cb, t.flush_cb), (0, 0));
+}

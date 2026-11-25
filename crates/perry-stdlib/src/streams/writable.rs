@@ -194,12 +194,19 @@ pub(super) unsafe fn js_writable_stream_abort_inner(
     let id = stream_id(stream_handle);
     let reason_bits = reason.to_bits();
     let mut locked_reject = false;
+    let mut already_terminal = false;
     let (cb, closed_p, close_request) = {
         let mut g = WRITABLE_STREAMS.lock().unwrap();
         match g.get_mut(&id) {
             Some(s) => {
                 if !allow_locked && s.writer_handle.is_some() {
                     locked_reject = true;
+                    (0, std::ptr::null_mut(), std::ptr::null_mut())
+                } else if matches!(s.state, WritableState::Closed | WritableState::Errored) {
+                    // WritableStreamAbort steps 2-3: a closed or errored stream
+                    // keeps its state and stored error; its sink (whose
+                    // algorithms the close/abort cleared) is not consulted.
+                    already_terminal = true;
                     (0, std::ptr::null_mut(), std::ptr::null_mut())
                 } else {
                     s.state = WritableState::Errored;
@@ -217,6 +224,10 @@ pub(super) unsafe fn js_writable_stream_abort_inner(
         reject_type_error(promise, "Invalid state: WritableStream is locked");
         return promise;
     }
+    if already_terminal {
+        js_promise_resolve(promise, f64::from_bits(TAG_UNDEFINED));
+        return promise;
+    }
     let action = if cb != 0 {
         match try_call_stream_action(cb, reason) {
             Ok(result) => stream_action_promise(result),
@@ -228,6 +239,11 @@ pub(super) unsafe fn js_writable_stream_abort_inner(
     } else {
         None
     };
+    // [[AbortSteps]]: the abort algorithm ran, ClearAlgorithms. On a
+    // TransformStream's writable side this is the sink abort algorithm
+    // (abort, readable cancel, terminate), which clears the transformer too.
+    writable_clear_algorithms(id);
+    transform_clear_algorithms(id);
     if !closed_p.is_null() {
         js_promise_reject(closed_p, reason);
     }
@@ -463,11 +479,16 @@ unsafe fn finish_writable_close(stream_id: usize) {
         }
     };
 
+    // WritableStreamDefaultControllerProcessClose: call the close algorithm,
+    // then ClearAlgorithms, whatever its outcome.
     if cb == 0 {
+        writable_clear_algorithms(stream_id);
         finish_writable_close_success(stream_id, close_promise);
         return;
     }
-    let result = match try_call_writable_close(cb) {
+    let result = try_call_writable_close(cb);
+    writable_clear_algorithms(stream_id);
+    let result = match result {
         Ok(result) => result,
         Err(reason) => {
             finish_writable_close_error(stream_id, close_promise, f64::from_bits(reason));
