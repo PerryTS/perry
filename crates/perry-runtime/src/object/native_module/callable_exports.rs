@@ -1828,13 +1828,18 @@ pub(crate) unsafe fn nm_attach_crypto(
     value
 }
 
-#[allow(unused_mut)]
+/// A perf_hooks constructor minted by its static export body (a member read
+/// such as `perf_hooks.PerformanceObserver.supportedEntryTypes` before any
+/// `new`) gets the prototype and statics `bound_native_callable_export_value`
+/// gives it: whichever path mints the constructor first is the only one that
+/// decorates it (#15223).
 #[inline(always)]
 pub(crate) unsafe fn nm_attach_perf_hooks(
-    _property_name: &str,
+    property_name: &str,
     value: f64,
-    _closure_addr: usize,
+    closure_addr: usize,
 ) -> f64 {
+    crate::perf_hook_slots::attach_perf_hooks_constructor(property_name, value, closure_addr);
     value
 }
 
