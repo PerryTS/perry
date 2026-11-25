@@ -29,8 +29,19 @@ const _convBuf = new ArrayBuffer(8);
 const _f64 = new Float64Array(_convBuf);
 const _u64 = new BigUint64Array(_convBuf);
 
-function f64ToU64(f) { _f64[0] = f; return _u64[0]; }
-function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
+function f64ToU64(f) {
+  if (typeof f === 'bigint') return f;
+  _f64[0] = f; return _u64[0];
+}
+// A boxed value is a JS number only when it is a number. Every other NaN-boxed value
+// (undefined, null, a boolean, a string, a handle, an int32) stays its BigInt bits:
+// JavaScriptCore and SpiderMonkey keep a single NaN in a JS number, so a payload
+// read into one is lost there. f64ToU64 takes either form back.
+const __QUIET_NAN_BITS = 0x7FF8000000000000n;
+function u64ToF64(u) {
+  if ((u & 0x7FF8000000000000n) === __QUIET_NAN_BITS && u !== __QUIET_NAN_BITS) return u;
+  _u64[0] = u; return _f64[0];
+}
 
 // Issue #1035: pad a BigInt arg list to match the WASM function's declared arity.
 // Missing trailing slots correspond to TS optional params the caller omitted; the
@@ -1190,7 +1201,7 @@ function buildImports() {
         const arr = getHandle(arrHandle);
         if (!arr || !Array.isArray(arr)) return nanboxPointer(allocHandle(new Uint8Array(0)));
         const bufs = arr.map(v => {
-          const h = typeof v === 'number' ? getHandle(v) : v;
+          const h = typeof v === 'number' || typeof v === 'bigint' ? getHandle(v) : v;
           return h instanceof Uint8Array ? h : new Uint8Array(0);
         });
         const total = bufs.reduce((s, b) => s + b.length, 0);
@@ -1533,8 +1544,7 @@ const __NON_I64_RETURN_IMPORTS = new Set([
 // via `mem_call`).
 // An import argument's i64 bits as the f64 the runtime reads them as.
 function __i64ArgToF64(a) {
-  if (typeof a !== 'bigint') return a;
-  _u64[0] = a; return _f64[0];
+  return typeof a === 'bigint' ? u64ToF64(a) : a;
 }
 function wrapForI64(fn, coerceNumberToBigInt = true) {
   if (fn.__rawBigint === true) return fn;
@@ -3600,8 +3610,19 @@ const INT32_TAG     = 0x7FFEn;
 const _convBuf = new ArrayBuffer(8);
 const _f64 = new Float64Array(_convBuf);
 const _u64 = new BigUint64Array(_convBuf);
-function f64ToU64(f) { _f64[0] = f; return _u64[0]; }
-function u64ToF64(u) { _u64[0] = u; return _f64[0]; }
+function f64ToU64(f) {
+  if (typeof f === 'bigint') return f;
+  _f64[0] = f; return _u64[0];
+}
+// A boxed value is a JS number only when it is a number. Every other NaN-boxed value
+// (undefined, null, a boolean, a string, a handle, an int32) stays its BigInt bits:
+// JavaScriptCore and SpiderMonkey keep a single NaN in a JS number, so a payload
+// read into one is lost there. f64ToU64 takes either form back.
+const __QUIET_NAN_BITS = 0x7FF8000000000000n;
+function u64ToF64(u) {
+  if ((u & 0x7FF8000000000000n) === __QUIET_NAN_BITS && u !== __QUIET_NAN_BITS) return u;
+  _u64[0] = u; return _f64[0];
+}
 
 const stringTable = [];
 const handleStore = new Map();
@@ -3951,7 +3972,7 @@ function callWasmClosure(closureVal, ...extraArgs) {
   if (typeof closureVal === 'object' && closureVal !== null) {
     // Already a JS closure object (came through toJsValue)
     closure = closureVal;
-  } else if (typeof closureVal === 'number') {
+  } else if (typeof closureVal === 'number' || typeof closureVal === 'bigint') {
     if (isUndefined(closureVal) || isNull(closureVal)) return u64ToF64(TAG_UNDEFINED);
     closure = isPointer(closureVal) ? handleStore.get(getPointerId(closureVal)) : undefined;
   }

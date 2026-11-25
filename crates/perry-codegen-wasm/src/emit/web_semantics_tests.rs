@@ -118,3 +118,23 @@ console.log("ran");
         "ran"
     );
 }
+
+// Every NaN-boxed value except a number stays its BigInt bits on the JS side:
+// JavaScriptCore (Safari) and SpiderMonkey (Firefox) keep one NaN in a JS number,
+// so a string or handle read into a number there became NaN.
+#[test]
+fn boxed_values_other_than_numbers_stay_bigint_bits() {
+    assert_eq!(
+        run_web_source_then(
+            r#"console.log("booted");"#,
+            r#"
+const boxes = [TAG_UNDEFINED, TAG_NULL, TAG_TRUE, (STRING_TAG << 48n) | 3n, (POINTER_TAG << 48n) | 9n, (INT32_TAG << 48n) | 7n];
+console.log(boxes.map(b => typeof u64ToF64(b)).join(" "));
+console.log(boxes.every(b => f64ToU64(u64ToF64(b)) === b));
+console.log(typeof u64ToF64(0x3FF0000000000000n), u64ToF64(0x3FF0000000000000n), Number.isNaN(u64ToF64(0x7FF8000000000000n)));
+console.log(toJsValue(fromJsValue("text")), toJsValue(fromJsValue(undefined)), toJsValue(fromJsValue(2.5)));
+"#
+        ),
+        "booted\nbigint bigint bigint bigint bigint bigint\ntrue\nnumber 1 true\ntext undefined 2.5"
+    );
+}
