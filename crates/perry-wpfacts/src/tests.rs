@@ -157,6 +157,7 @@ mod hold_once;
 mod host_objects;
 mod hub_tokens;
 mod hub_wrap;
+mod decls;
 mod hub_install;
 mod json_rt;
 mod identity_routes;

@@ -360,6 +360,127 @@ pub struct SumState {
     pub made_of: FxHashMap<(CallId, Maker, u32), CallId>,
     /// Maker context `BORN - 1 - i` -> (its birth site, its maker).
     pub made: Vec<(CallId, Maker)>,
+    /// Rule SINKBIRTH: the instance copies of calls whose result reaches
+    /// only nodes every run shares (`sink_calls`), with the operands every
+    /// run shares (bit 0 the receiver, bit 1 + i argument i): the object
+    /// such a copy returns from those operands alone is born as the
+    /// template run's (`Model::birth_ctx_result`).
+    pub sink_calls: FxHashMap<CallId, u32>,
+    /// `sink_calls` of each summary, with the summary it was read from.
+    pub(crate) sink_of: FxHashMap<FnIdx, (Rc<Summary>, Rc<Vec<SinkCall>>)>,
+}
+
+/// One `sink_calls` entry: the call's index in `Summary::calls`, whether
+/// its result reaches an outer slot, and its operands (bit 0 the receiver,
+/// bit 1 + i argument i) that are absolute nodes / outer slots.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SinkCall {
+    pub k: u32,
+    pub via_outer: bool,
+    pub abs: u32,
+    pub outer: u32,
+}
+
+/// Rule SINKBIRTH: the calls of `s` (index in `calls`) whose result reaches
+/// only nodes every run of `s` shares, and whether an outer slot is among
+/// them (shared only by the runs with no closure context). The result term
+/// is an absolute node, an outer slot, or a fresh slot whose only uses are
+/// copy edges into such nodes: no rule reads or names it, no call takes it
+/// (or returns into it besides this one), no closure captures it, and it is
+/// no parameter, `this`, rest or the body's result. With each, the call's
+/// operands every run shares: an absolute node, or an outer slot (shared
+/// only by the runs with no closure context); with a spread argument no
+/// argument is (its positions come from a run's array).
+pub(crate) fn sink_calls(s: &Summary) -> Vec<SinkCall> {
+    let n = s.nslots as usize;
+    let ix = |x: NodeId| (x != NO_NODE && x & SLOT != 0).then(|| (x & !SLOT) as usize);
+    let mut outer = vec![false; n];
+    for &o in &s.outer {
+        outer[o as usize] = true;
+    }
+    let mut used = vec![false; n];
+    let mut rets = vec![0u32; n];
+    {
+        let mut mark = |x: NodeId| {
+            if let Some(i) = ix(x) {
+                used[i] = true;
+            }
+        };
+        for &p in s.params.iter().chain([&s.ret, &s.this, &s.rest]) {
+            mark(p);
+        }
+        for (h, c) in &s.cons {
+            mark(*h);
+            for x in cons_fields(c).0 {
+                mark(x);
+            }
+        }
+        for (_, cs) in &s.calls {
+            if let ThisArg::Node(x) = cs.this {
+                mark(x);
+            }
+            for &x in cs.args.iter().chain(&cs.spread) {
+                mark(x);
+            }
+            mark(cs.region);
+        }
+        for (sl, _, terms, _) in &s.closures {
+            mark(SLOT | sl);
+            for &x in terms {
+                mark(x);
+            }
+        }
+    }
+    for (_, cs) in &s.calls {
+        if let Some(i) = ix(cs.ret) {
+            rets[i] += 1;
+        }
+    }
+    let mut shared_out = vec![true; n];
+    let mut via_outer = vec![false; n];
+    for &(a, b) in &s.edges {
+        let Some(i) = ix(a) else { continue };
+        match ix(b) {
+            Some(j) if outer[j] => via_outer[i] = true,
+            Some(_) => shared_out[i] = false,
+            None => {}
+        }
+    }
+    // Operand `x` at bit `b`: absolute (`abs`) or an outer slot (`outer`).
+    let shared = |x: NodeId, b: u32, abs: &mut u32, out: &mut u32| match ix(x) {
+        None => *abs |= 1 << b,
+        Some(i) if outer[i] => *out |= 1 << b,
+        Some(_) => {}
+    };
+    let mut out = Vec::new();
+    for (k, (_, cs)) in s.calls.iter().enumerate() {
+        if cs.ret == NO_NODE {
+            continue;
+        }
+        let via_outer = match ix(cs.ret) {
+            None => false,
+            Some(i) if outer[i] => true,
+            Some(i) if !used[i] && rets[i] == 1 && shared_out[i] => via_outer[i],
+            Some(_) => continue,
+        };
+        let (mut abs, mut outs) = (0u32, 0u32);
+        match cs.this {
+            ThisArg::Node(x) => shared(x, 0, &mut abs, &mut outs),
+            ThisArg::Undef | ThisArg::Tok(_) => abs |= 1,
+        }
+        if cs.spread.is_empty() {
+            for (i, &x) in cs.args.iter().enumerate().take(31) {
+                shared(x, 1 + i as u32, &mut abs, &mut outs);
+            }
+        }
+        out.push(SinkCall {
+            k: k as u32,
+            via_outer,
+            abs,
+            outer: outs,
+        });
+    }
+    out
 }
 
 mod map;
@@ -837,6 +958,43 @@ impl Model {
             Some((l, vc)) => self.made_ctx(site, l, vc),
             None => site,
         }
+    }
+
+    /// Rule SINKBIRTH: the birth context of the object `call` returns,
+    /// whose contents come from the call operands `need` (bit 0 the
+    /// receiver, bit 1 + i argument i; `u32::MAX`: from anything else). An
+    /// instance's copy of a call whose result reaches only nodes every run
+    /// shares, and whose `need` operands are nodes every run shares
+    /// (`SumState::sink_calls`), births it as the template run does (its
+    /// program site's context). Every run's copy is then the same
+    /// constraints over the same nodes, apart from the birth's token: the
+    /// per-run objects are images of one another under exchanging them, so
+    /// one token stands for them with the same value sets (DECLS.md).
+    /// Every other birth is `birth_ctx`'s.
+    pub(crate) fn birth_ctx_result(&mut self, call: CallId, need: u32) -> CallId {
+        if self
+            .sum
+            .sink_calls
+            .get(&call)
+            .is_some_and(|&ok| need & !ok == 0)
+        {
+            if let Some(site) = self.origin_of(call).filter(|&s| self.prog_call(s)) {
+                return self.birth_ctx(site);
+            }
+        }
+        self.birth_ctx(call)
+    }
+
+    /// The `sink_calls` of the summary of `f` (`s`), read once per summary.
+    fn sink_calls_of(&mut self, f: FnIdx, s: &Rc<Summary>) -> Rc<Vec<SinkCall>> {
+        if let Some((k, v)) = self.sum.sink_of.get(&f) {
+            if Rc::ptr_eq(k, s) {
+                return v.clone();
+            }
+        }
+        let v = Rc::new(sink_calls(s));
+        self.sum.sink_of.insert(f, (s.clone(), v.clone()));
+        v
     }
 
     /// The object lexical context `lay` names (a constructor run or a
@@ -1733,6 +1891,15 @@ impl Model {
             TokKind::Func(_, c) => c,
             _ => NO_CTX,
         };
+        // Rule SINKBIRTH: the copies whose result reaches only nodes every
+        // run shares, with their shared operands; an outer slot is one only
+        // without a closure context (it is then the template's own node).
+        for sc in self.sink_calls_of(f, &s).iter() {
+            if !sc.via_outer || ctx == NO_CTX {
+                let ok = sc.abs | if ctx == NO_CTX { sc.outer } else { 0 };
+                self.sum.sink_calls.insert(kmap[sc.k as usize], ok);
+            }
+        }
         for (slot, g, terms, cap) in &s.closures {
             let nodes: Vec<NodeId> = terms.iter().map(|&x| tr(x)).collect();
             let (key, clay) = match *cap {

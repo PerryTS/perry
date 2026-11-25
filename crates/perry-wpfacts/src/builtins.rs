@@ -563,12 +563,32 @@ pub(crate) fn runtime_global_event(m: &mut Model, call: CallId) {
 
 /// A per-call-site template (solve-time births: promises, arrays …).
 fn site_tmpl(m: &mut Model, call: CallId, what: &'static str) -> Tok {
-    let t = site_tmpl_born(m, call, what, false, false);
+    site_tmpl_in(m, call, what, None)
+}
+
+/// `site_tmpl` for the object `call` returns, and nothing else holds
+/// first, whose contents come from the call operands `need`: born in
+/// `Model::birth_ctx_result`'s context (rule SINKBIRTH).
+pub(crate) fn site_tmpl_result(m: &mut Model, call: CallId, what: &'static str, need: u32) -> Tok {
+    site_tmpl_in(m, call, what, Some(need))
+}
+
+fn site_tmpl_in(m: &mut Model, call: CallId, what: &'static str, result: Option<u32>) -> Tok {
+    let born = |m: &mut Model, what: &'static str| {
+        let site = m.calls[call as usize].site;
+        let tm = site_template(m, site, what, false, false);
+        let ctx = match result {
+            Some(need) => m.birth_ctx_result(call, need),
+            None => m.birth_ctx(call),
+        };
+        m.site_tok(tm, ctx)
+    };
+    let t = born(m, what);
     // A view born without a buffer argument allocates its own
     // (23.2.5.1.1 AllocateTypedArray, 23.2.5.1.6 AllocateTypedArrayBuffer):
     // one ArrayBuffer per birth site.
     if matches!(what, "TypedArray" | "Buffer" | "DataView") {
-        let ab = site_tmpl_born(m, call, "ArrayBuffer", false, false);
+        let ab = born(m, "ArrayBuffer");
         let f = viewed_buffer(m, t);
         m.add_tok(f, ab);
     }

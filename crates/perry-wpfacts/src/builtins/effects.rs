@@ -228,6 +228,67 @@ pub(crate) fn names_callee(effects: &[RealmEffect]) -> bool {
     names_root(effects, RealmSlotRoot::Callee)
 }
 
+/// Rule SINKBIRTH: the call operands a declaration's result object takes
+/// its contents from: bit 0 the receiver (`this`), bit 1 + i argument i;
+/// `u32::MAX` when they come from anything else (a callback's result, a
+/// rest list, the callee), when another effect names the result (a
+/// callback is handed it, a store writes it or into it), or for a
+/// constructor (`super(...)`'s object is the caller's).
+fn result_need(effects: &[RealmEffect], ctor: bool) -> u32 {
+    const ALL: u32 = u32::MAX;
+    if ctor || names_root(effects, RealmSlotRoot::Result) {
+        return ALL;
+    }
+    fn slot(s: &RealmSlot) -> u32 {
+        match s.root {
+            RealmSlotRoot::This => 1,
+            RealmSlotRoot::Arg(i) if i < 31 => 1 << (1 + i),
+            _ => ALL,
+        }
+    }
+    fn operand(o: &RealmOperand) -> u32 {
+        match o {
+            RealmOperand::Prim(_)
+            | RealmOperand::Native(_)
+            | RealmOperand::Namespace(_)
+            | RealmOperand::Never => 0,
+            RealmOperand::Slot(s) => slot(s),
+            RealmOperand::Fresh {
+                elems,
+                fields,
+                slots,
+                ..
+            } => elems
+                .iter()
+                .map(operand)
+                .chain(fields.iter().chain(slots.iter()).map(|f| operand(&f.value)))
+                .fold(0, |a, b| a | b),
+            RealmOperand::Promise { value, reject } => value
+                .iter()
+                .chain(reject.iter())
+                .map(|v| operand(v))
+                .fold(0, |a, b| a | b),
+            RealmOperand::Species { of, args, elems } => {
+                slot(of)
+                    | args
+                        .iter()
+                        .map(operand)
+                        .chain(elems.iter().map(slot))
+                        .fold(0, |a, b| a | b)
+            }
+            RealmOperand::Union(us) => us.iter().map(operand).fold(0, |a, b| a | b),
+            _ => ALL,
+        }
+    }
+    effects
+        .iter()
+        .map(|e| match e {
+            RealmEffect::Returns(o) => operand(o),
+            _ => 0,
+        })
+        .fold(0, |a, b| a | b)
+}
+
 fn names_root(effects: &[RealmEffect], root: RealmSlotRoot) -> bool {
     let slot = |s: &RealmSlot| s.root == root;
     fn operand(o: &RealmOperand, slot: &dyn Fn(&RealmSlot) -> bool, root: RealmSlotRoot) -> bool {
@@ -563,6 +624,9 @@ struct Run {
     c: CallSite,
     recv: Option<NodeId>,
     returned: Vec<NodeId>,
+    /// Rule SINKBIRTH: the call operands the declared result's contents
+    /// come from (`result_need`).
+    need: u32,
     /// `super(...)` into this constructor (ECMA-262 13.3.7.1): the instance
     /// under construction, the object OrdinaryCreateFromConstructor makes
     /// with NewTarget's prototype (10.1.13). The declared result's `fresh`
@@ -865,7 +929,7 @@ impl Run {
                 fields,
                 slots,
             } => {
-                let out = self.fresh(m, proto, elems, fields);
+                let out = self.fresh(m, proto, elems, fields, false);
                 self.slots(m, out, slots);
                 let n = m.node_l("native-fresh");
                 m.add_tok(n, out);
@@ -948,6 +1012,7 @@ impl Run {
         proto: &Cow<'static, str>,
         elems: &[RealmOperand],
         fields: &[RealmField],
+        result: bool,
     ) -> Tok {
         // `own`: an object of the realm prototype itself (no hand model
         // makes one), whose declared fields are its definite birth keys.
@@ -981,7 +1046,12 @@ impl Run {
             Cow::Owned(p) if p == "Array.prototype" => "Array",
             Cow::Owned(_) => "builtin",
         };
-        let out = site_tmpl(m, self.call, what);
+        // The call's result (`returns`) is born in the result's context
+        // (rule SINKBIRTH, `site_tmpl_result`).
+        let out = match result {
+            true => site_tmpl_result(m, self.call, what, self.need),
+            false => site_tmpl(m, self.call, what),
+        };
         if !elems.is_empty() {
             let ofa = m.field_any(out);
             for e in elems {
@@ -1133,7 +1203,7 @@ impl Run {
                 fields,
                 slots,
             } => {
-                let out = self.fresh(m, proto, elems, fields);
+                let out = self.fresh(m, proto, elems, fields, true);
                 self.slots(m, out, slots);
                 ret_tok(m, self.call, out);
             }
@@ -1170,7 +1240,7 @@ impl Run {
             RealmOperand::Species { args, elems, .. } => {
                 let elems: Vec<RealmOperand> =
                     elems.iter().cloned().map(RealmOperand::Slot).collect();
-                let out = self.fresh(m, &Cow::Borrowed("Array.prototype"), &elems, &[]);
+                let out = self.fresh(m, &Cow::Borrowed("Array.prototype"), &elems, &[], true);
                 if let Some(t) = self.t {
                     let args = args.iter().map(|a| self.operand(m, a)).collect();
                     super::collections::species_from(m, out, t, self.call, Some(args));
@@ -1296,6 +1366,7 @@ fn run(
         c: m.calls[call as usize].clone(),
         recv: None,
         returned: Vec::new(),
+        need: result_need(&entry.effects, new_target.is_some()),
         new_target,
     };
     for e in entry.effects.iter() {
