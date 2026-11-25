@@ -25,6 +25,15 @@ pub fn create(text_ptr: *const u8) -> i64 {
             jni::jni_sig!("(Ljava/lang/CharSequence;)V"),
             &[JValue::Object(&jstr)],
         );
+        // Line box = the font's ascent + descent, like UILabel / NSTextField
+        // (TextView adds extra top/bottom font padding by default), and the
+        // single-line default iOS labels have.
+        let _ = env.call_method(
+            &text_view,
+            jni::jni_str!("setIncludeFontPadding"),
+            jni::jni_sig!("(Z)V"),
+            &[JValue::Bool(false)],
+        );
 
         let global =
             jni_bridge::new_global_ref(env, text_view).expect("Failed to create global ref");
@@ -105,32 +114,23 @@ pub fn set_font_size(handle: i64, size: f64) {
 
 /// Set the font weight of a TextView.
 /// weight >= 1.0 means bold (Typeface.BOLD=1), otherwise normal (Typeface.NORMAL=0).
-pub fn set_font_weight(handle: i64, _size: f64, weight: f64) {
+pub fn set_font_weight(handle: i64, size: f64, weight: f64) {
     if let Some(view_ref) = super::get_widget(handle) {
         jni_bridge::with_env(|env| {
-            let _ = jni_bridge::push_local_frame(env, 16);
-            let style = if weight >= 0.5 { 1i32 } else { 0i32 }; // Typeface.BOLD=1, NORMAL=0
-
-            // Create a Typeface with the default font family and desired style.
-            // Passing null Typeface to setTypeface corrupts the text content,
-            // so we must create a valid Typeface via Typeface.defaultFromStyle().
-            let typeface = env.call_static_method(
-                jni::jni_str!("android/graphics/Typeface"),
-                jni::jni_str!("defaultFromStyle"),
-                jni::jni_sig!("(I)Landroid/graphics/Typeface;"),
-                &[JValue::Int(style)],
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("setFontWeight"),
+                jni::jni_sig!("(Landroid/view/View;FF)V"),
+                &[
+                    JValue::Object(view_ref.as_obj()),
+                    JValue::Float(size as f32),
+                    JValue::Float(weight as f32),
+                ],
             );
-            if let Ok(tf_val) = typeface {
-                if let Ok(tf) = tf_val.l() {
-                    let _ = env.call_method(
-                        view_ref.as_obj(),
-                        jni::jni_str!("setTypeface"),
-                        jni::jni_sig!("(Landroid/graphics/Typeface;)V"),
-                        &[JValue::Object(&tf)],
-                    );
-                }
-            }
-
             unsafe {
                 let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
             }
@@ -182,32 +182,30 @@ pub fn set_font_family(handle: i64, family_ptr: *const u8) {
 /// Set text wrapping on a TextView.
 /// max_width > 0: enable wrapping at that width. max_width <= 0: disable wrapping (single line).
 pub fn set_wraps(handle: i64, max_width: f64) {
+    // As on iOS (numberOfLines = 0): always wrap, unlimited lines; a positive
+    // max_width also caps the width.
     if let Some(view_ref) = super::get_widget(handle) {
         jni_bridge::with_env(|env| {
             let _ = jni_bridge::push_local_frame(env, 16);
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setSingleLine"),
+                jni::jni_sig!("(Z)V"),
+                &[JValue::Bool(false)],
+            );
+            let _ = env.call_method(
+                view_ref.as_obj(),
+                jni::jni_str!("setMaxLines"),
+                jni::jni_sig!("(I)V"),
+                &[JValue::Int(i32::MAX)],
+            );
             if max_width > 0.0 {
-                // Enable wrapping
-                let _ = env.call_method(
-                    view_ref.as_obj(),
-                    jni::jni_str!("setSingleLine"),
-                    jni::jni_sig!("(Z)V"),
-                    &[JValue::Bool(false)],
-                );
-                // Set max width in dp → px
                 let max_px = super::dp_to_px(env, max_width as f32);
                 let _ = env.call_method(
                     view_ref.as_obj(),
                     jni::jni_str!("setMaxWidth"),
                     jni::jni_sig!("(I)V"),
                     &[JValue::Int(max_px)],
-                );
-            } else {
-                // Disable wrapping
-                let _ = env.call_method(
-                    view_ref.as_obj(),
-                    jni::jni_str!("setSingleLine"),
-                    jni::jni_sig!("(Z)V"),
-                    &[JValue::Bool(true)],
                 );
             }
             unsafe {

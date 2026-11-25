@@ -222,6 +222,7 @@ pub(super) fn server_is_active(s: &HttpServer) -> bool {
         || s.pending_close_emit
         || !s.deferred_close_cbs.is_empty()
         || s.pending_error_emit.is_some()
+        || !s.pending_client_errors.is_empty()
     {
         return true;
     }

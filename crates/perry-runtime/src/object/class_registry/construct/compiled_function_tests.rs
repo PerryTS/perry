@@ -9,7 +9,9 @@ extern "C" fn empty_body(_closure: *const ClosureHeader, _this: crate::closure::
 /// A compiled constructing function as codegen emits it: one own slot after
 /// the captures holds `prototype` (the family's SLOT entry).
 fn compiled_function() -> f64 {
-    static INFO: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    per_test_global! {
+        static INFO: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    }
     let info = *INFO.get_or_init(|| {
         let base: *const crate::closure::JsFunctionInfo =
             crate::fn_info!(empty_body, 0; with_declared(0), with_flags(FN_COMPILED_BODY));

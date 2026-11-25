@@ -821,6 +821,10 @@ pub extern "C" fn perry_ui_register_global_hotkey(_key: i64, _mods: f64, _cb: f6
 pub extern "C" fn perry_ui_widget_set_on_key_down(_handle: i64, _cb: f64) {}
 #[no_mangle]
 pub extern "C" fn perry_ui_widget_set_on_key_up(_handle: i64, _cb: f64) {}
+/// Android-only (system Back); no-op here.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_back(_callback: f64) {}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_on_key_down(_cb: f64) {}
 #[no_mangle]

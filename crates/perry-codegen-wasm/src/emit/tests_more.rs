@@ -1497,6 +1497,9 @@ mod evaluated_builtin_subclass;
 #[path = "array_from_tests.rs"]
 mod array_from;
 
+#[path = "array_last_index_of_tests.rs"]
+mod array_last_index_of;
+
 #[path = "rest_param_tests.rs"]
 mod rest_param;
 

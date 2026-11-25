@@ -217,6 +217,17 @@ pub extern "C" fn Java_com_perry_app_PerryBridge_nativePumpTick(
         }
     }
     unsafe {
+        // One non-blocking turn of the native event loop: fetch / net / http
+        // complete on turnloop NET completions that only a loop turn
+        // collects. CLI programs turn it in `js_wait_for_event`; this pump
+        // owns the UI thread instead, so without this no network I/O ever
+        // finishes and `await fetch(...)` hangs (same fix as iOS / macOS).
+        {
+            extern "C" {
+                fn js_loop_settle_once();
+            }
+            js_loop_settle_once();
+        }
         js_stdlib_process_pending();
         crate::ws::js_ws_process_pending();
         // Turn this thread's turnloop: fetch / node:http progress only on a turn.
@@ -267,6 +278,14 @@ pub fn app_run(_app_handle: i64) {
     unsafe {
         __android_log_print(3, b"PerryApp\0".as_ptr(), b"app_run: called\0".as_ptr());
     }
+
+    // The Activity owns the run loop and the pump (nativePumpTick) turns the
+    // event loop, timers and microtasks, as on watchOS. Without this flag the
+    // generated entry, once App() returns here, runs the CLI drain loop
+    // (parking the UI thread while a timer or fetch is live) and then the
+    // process-exit epilogue, which destroys this thread's event loop and frees
+    // its Map/Set storage while the app keeps running.
+    perry_runtime::event_pump::js_set_event_loop_host_driven(1);
 
     // Phase 2 v3.3: register cross-platform showToast / setText handlers.
     // Forwards perry_arkts_show_toast → PerryBridge.showToast (UI-thread

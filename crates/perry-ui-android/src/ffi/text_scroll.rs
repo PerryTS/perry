@@ -84,6 +84,12 @@ pub extern "C" fn perry_ui_add_keyboard_shortcut(key_ptr: i64, modifiers: f64, c
     app::add_keyboard_shortcut(key_ptr as *const u8, modifiers, callback);
 }
 
+/// System Back handler (`onBackPressed`); see `crate::back`.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_back(callback: f64) {
+    crate::back::set_on_back(callback);
+}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_register_global_hotkey(_key: i64, _mods: f64, _cb: f64) {}
 

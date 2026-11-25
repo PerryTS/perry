@@ -151,139 +151,64 @@ pub extern "C" fn perry_ui_stack_set_detaches_hidden(handle: i64, flag: i64) {
 
 #[no_mangle]
 pub extern "C" fn perry_ui_stack_set_distribution(handle: i64, distribution: f64) {
-    // On Android LinearLayout, distribution maps to weight distribution.
-    // 0=Fill (default), 1=FillEqually — set all children to equal weight.
-    // Other values are no-ops since Android doesn't have direct equivalents.
-    if distribution as i64 == 1 {
-        // FillEqually: set all children to weight=1
-        if let Some(view_ref) = widgets::get_widget(handle) {
-            jni_bridge::with_env(|env| {
-                let _ = jni_bridge::push_local_frame(env, 32);
-                let child_count = env
-                    .call_method(
-                        view_ref.as_obj(),
-                        jni::jni_str!("getChildCount"),
-                        jni::jni_sig!("()I"),
-                        &[],
-                    )
-                    .map(|v| v.i().unwrap_or(0))
-                    .unwrap_or(0);
-                for i in 0..child_count {
-                    let child = env.call_method(
-                        view_ref.as_obj(),
-                        jni::jni_str!("getChildAt"),
-                        jni::jni_sig!("(I)Landroid/view/View;"),
-                        &[jni::JValue::Int(i)],
-                    );
-                    if let Ok(child_val) = child {
-                        if let Ok(child_obj) = child_val.l() {
-                            if !child_obj.is_null() {
-                                if let Ok(lp) = env.call_method(
-                                    &child_obj,
-                                    jni::jni_str!("getLayoutParams"),
-                                    jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
-                                    &[],
-                                ) {
-                                    if let Ok(lp_obj) = lp.l() {
-                                        if !lp_obj.is_null() {
-                                            if env
-                                                .is_instance_of(
-                                                    &lp_obj,
-                                                    jni::jni_str!(
-                                                        "android/widget/LinearLayout$LayoutParams"
-                                                    ),
-                                                )
-                                                .unwrap_or(false)
-                                            {
-                                                let _ = env.set_field(
-                                                    &lp_obj,
-                                                    jni::jni_str!("weight"),
-                                                    jni::jni_sig!("F"),
-                                                    jni::JValue::Float(1.0),
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                unsafe {
-                    let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
-                }
-            })
-        }
+    // UIStackView distributions: 0 fill (default), 1 fillEqually; the others
+    // (fillProportionally, equalSpacing, equalCentering) lay out as fill.
+    // Recorded per stack in PerryBridge, whose relayout gives every child of a
+    // fillEqually stack an equal share of the main axis, whatever order the
+    // children are added in (setting LinearLayout weights here only reached
+    // children that already existed, and relayout overwrote them).
+    let d: i32 = if distribution as i64 == 1 { 1 } else { 0 };
+    if let Some(view_ref) = widgets::get_widget(handle) {
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("setStackDistribution"),
+                jni::jni_sig!("(Landroid/view/View;I)V"),
+                &[jni::JValue::Object(view_ref.as_obj()), jni::JValue::Int(d)],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+            }
+        })
     }
 }
 
 #[no_mangle]
 pub extern "C" fn perry_ui_stack_set_alignment(handle: i64, alignment: f64) {
-    // On Android LinearLayout, alignment maps to gravity on the cross-axis.
-    // iOS/macOS alignment values: 0=Fill, 1=Leading, 3=Center, 4=Trailing
-    // For HStack (horizontal), cross-axis is vertical: TOP=48, CENTER_VERTICAL=16, BOTTOM=80
-    // For VStack (vertical), cross-axis is horizontal: LEFT=3, CENTER_HORIZONTAL=1, RIGHT=5
-    // Fill (0) means children stretch to fill the cross-axis — we don't set gravity
-    // so that MATCH_PARENT on children takes effect.
+    // Public constants are NSLayoutAttribute values (5 leading, 9 centerX,
+    // 7 width, 3 top, 10 centerY, 4 bottom, ...), as on iOS. Normalised to
+    // 0 fill, 1 leading/top, 3 center, 4 trailing/bottom; the children's
+    // LayoutParams follow (PerryBridge.setStackAlignment).
+    let align: i32 = match alignment as i64 {
+        0 | 7 | 8 => 0,
+        1 | 3 | 5 | 11 | 12 => 1,
+        2 | 4 | 6 => 4,
+        9 | 10 => 3,
+        _ => return,
+    };
     if let Some(view_ref) = widgets::get_widget(handle) {
-        let orientation = jni_bridge::with_env(|env| {
+        jni_bridge::with_env(|env| {
             let _ = jni_bridge::push_local_frame(env, 8);
-
-            // Determine orientation: 0=HORIZONTAL (HStack), 1=VERTICAL (VStack)
-            let orientation = env
-                .call_method(
-                    view_ref.as_obj(),
-                    jni::jni_str!("getOrientation"),
-                    jni::jni_sig!("()I"),
-                    &[],
-                )
-                .map(|v| v.i().unwrap_or(0))
-                .unwrap_or(0);
-
-            let align = alignment as i64;
-            let gravity = if orientation == 0 {
-                // HStack: cross-axis is vertical
-                match align {
-                    0 => -1, // Fill — no gravity override (let children use MATCH_PARENT height)
-                    1 => 48, // Leading → TOP
-                    3 => 16, // Center → CENTER_VERTICAL
-                    4 => 80, // Trailing → BOTTOM
-                    _ => -1,
-                }
-            } else {
-                // VStack: cross-axis is horizontal
-                match align {
-                    0 => -1, // Fill — no gravity override
-                    1 => 3,  // Leading → LEFT
-                    3 => 1,  // Center → CENTER_HORIZONTAL
-                    4 => 5,  // Trailing → RIGHT
-                    _ => -1,
-                }
-            };
-
-            if gravity >= 0 {
-                let _ = env.call_method(
-                    view_ref.as_obj(),
-                    jni::jni_str!("setGravity"),
-                    jni::jni_sig!("(I)V"),
-                    &[jni::JValue::Int(gravity)],
-                );
-            }
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("setStackAlignment"),
+                jni::jni_sig!("(Landroid/view/View;I)V"),
+                &[
+                    jni::JValue::Object(view_ref.as_obj()),
+                    jni::JValue::Int(align),
+                ],
+            );
             unsafe {
                 let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
             }
-            orientation
-        });
-        // VStack: leading/center/trailing keep each child's own width (like
-        // UIStackView); only fill stretches. Done outside the env closure
-        // because it walks the children with its own JNI frame.
-        if orientation == 1 {
-            match alignment as i64 {
-                0 => widgets::set_vstack_fill(handle, true),
-                1 | 3 | 4 => widgets::set_vstack_fill(handle, false),
-                _ => {}
-            }
-        }
+        })
     }
 }
 

@@ -158,7 +158,7 @@ fn ignore_socket_errors(socket: &net::RootedSocket) {
 pub(crate) fn drain_client_errors(server_handle: i64) -> i32 {
     let mut count = 0;
     while let Some((error, listeners)) = with_base_server_mut(server_handle, |server| {
-        let error = server.pending_client_errors.pop_front()?;
+        let error = server.with_client_errors(|errors| errors.pop_front())?;
         Some((error, take_server_event_listeners(server, "clientError")))
     })
     .flatten()
