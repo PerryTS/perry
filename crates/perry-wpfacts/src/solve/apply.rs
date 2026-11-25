@@ -994,6 +994,7 @@ impl Model {
                             builtins::WriteValue::Absent,
                         );
                         self.top_reshape(Some(key));
+                        self.enum_top_lose();
                         let k = self.atoms[key as usize].clone();
                         self.note_shared(SharedWrite::Removed(Some(k)));
                     } else {
@@ -2044,10 +2045,14 @@ impl Model {
                     // A prototype with enumerable built-in members (a host
                     // one, or one the seed of `from` does not name): its
                     // keys in full.
-                    if !self.enum_link(from, q) {
+                    // B-del: a link a delete may have taken a key from
+                    // (`enum_kept`): OrdinaryGet goes on past the deleted
+                    // key to the builtin members above it.
+                    if !self.enum_link(from, q) || !self.enum_kept(q) {
                         self.load_from(of, q, key, dst);
                         continue;
                     }
+                    self.enum_file(q, EnumFiled::Chain { of, key, dst });
                     // SKINROOT7: a typed-array link's enumerable own
                     // properties are its elements (10.4.5.1): a Number or
                     // BigInt under an index key.

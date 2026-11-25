@@ -467,6 +467,7 @@ impl Model {
             l.mark_escaped(t, reason);
         }
         self.escaped.insert(t, reason);
+        self.enum_note_escape(t);
         if self.objtag_watch.contains_key(&t) {
             self.objtag_widen(t);
         }
@@ -1532,6 +1533,16 @@ impl Model {
         // never sees (`members::locked_read`, the same decision). It removes
         // no key of a program object and installs no setter: no layout on a
         // chain through it changes, no own key stops shadowing it.
+        // B-del: a delete (or `with`, whose `delete x` deletes a key of the
+        // object) may take an own key of `t`: its enumerable reads go on to
+        // the chain (`Model::enum_kept`).
+        if matches!(kind, Hard::E7Delete | Hard::E15With) {
+            if t == TOP {
+                self.enum_top_lose();
+            } else {
+                self.enum_lose(t);
+            }
+        }
         self.arr_len_top(t);
         self.map_open(t);
         let lock_delete =

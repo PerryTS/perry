@@ -942,6 +942,24 @@ pub const STRS_K: usize = usize::MAX;
 /// An interned key shape (`Model::key_shapes`); 0: any string.
 pub type KeyShapeId = u32;
 
+/// B-del: an enumerable read of one token (`Model::enum_kept`), as the
+/// ordinary read it becomes once a delete may have taken a key of the token.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EnumFiled {
+    /// `Cons::IdxLoad` / `Cons::IdxOwnLoad` (`Model::idx_load_from`).
+    Idx {
+        origin: Tok,
+        idx: NodeId,
+        dst: NodeId,
+        shape: KeyShapeId,
+        kept: bool,
+    },
+    /// `Cons::EnumChain` on a prototype link of subject `of`.
+    Chain { of: Tok, key: Key, dst: NodeId },
+    /// `Cons::EnumLoad`, a primitive subject's prototype (`enum_read_key`).
+    Key { key: Key, dst: NodeId },
+}
+
 impl Key {
     /// A computed key of no known shape.
     pub const fn any() -> Key {
@@ -2608,6 +2626,16 @@ pub struct Model {
     /// class, an instance of it or of a subclass, or a receiver of it.
     pub inst_escaped: crate::pts::FxHashSet<TmplId>,
     pub inst_lose: crate::pts::FxHashSet<TmplId>,
+    /// B-del: objects a delete (or `with`, whose `delete x` deletes a key of
+    /// the object) may have taken an own key from (`Model::enum_kept`);
+    /// `enum_top_lost`: a delete went through ⊤ (in any unit).
+    pub enum_lost: crate::pts::FxHashSet<Tok>,
+    pub enum_top_lost: bool,
+    /// B-del: the enumerable reads taken on a token while `enum_kept` held,
+    /// by token: they run again as the ordinary read once it does not
+    /// (`Model::enum_flush`).
+    pub enum_filed: FxHashMap<Tok, Vec<EnumFiled>>,
+    pub enum_filed_seen: crate::pts::FxHashSet<(Tok, EnumFiled)>,
     /// Calls the runtime makes for a protocol (ToPrimitive, iteration …).
     pub protocol_calls: crate::pts::FxHashSet<CallId>,
     /// The `join` calls of the Array.prototype.toString model (ECMA-262
