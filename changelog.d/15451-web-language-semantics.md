@@ -1,0 +1,1 @@
+`--target web`: `a || b`, `a && b` and `a ?? b` evaluate `a` once; `Math.round` takes a tie toward +∞; `declare const __platform__` reads 5; a `void` FFI function imported from a native library validates as a statement; and import arguments keep their NaN-boxed bits, so a string passed to an `async` function no longer arrives as `NaN` in Chrome (#15451).
