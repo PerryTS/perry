@@ -1,0 +1,1 @@
+On `--target web`, `new Int32Array(...)` and every other typed-array constructor, `new ArrayBuffer(n)` and `new Int32Array(buffer, offset, length)` make the host's typed array instead of `undefined` or a plain object, a typed array's `length` reads its length instead of 0, and a `Uint8Array` inside an async function is no longer `undefined` (#15428).
