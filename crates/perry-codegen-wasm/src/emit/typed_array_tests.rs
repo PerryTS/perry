@@ -95,3 +95,57 @@ run().then((s) => console.log(s));
         "1,3,3,1,0,-1,true,false\n-1,true,2,false,2,1,false\n2,0,1,false"
     );
 }
+
+// The array methods a typed array shares run on it, each with the typed array's own
+// semantics (`map` and `filter` make a typed array, `sort` is numeric). Expected output
+// is Node's.
+#[test]
+fn typed_array_methods_match_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const s = (v: any): string => (v && typeof v === "object" ? Object.prototype.toString.call(v).slice(8, -1) + "[" + Array.from(v as ArrayLike<number>).join(",") + "]" : String(v));
+const mk = () => new Int16Array([3, 1, 2]);
+const out: string[] = [];
+const t = (name: string, f: () => any) => { try { out.push(name + "=" + s(f())); } catch (e) { out.push(name + "!" + (e as Error).name); } };
+t("join", () => mk().join("-"));
+t("join0", () => mk().join());
+t("toString", () => mk().toString());
+t("slice", () => mk().slice(1));
+t("slice2", () => mk().slice(0, 2));
+t("subarray", () => mk().subarray(1));
+t("sort", () => mk().sort());
+t("sortfn", () => mk().sort((a: number, b: number) => b - a));
+t("map", () => mk().map((x: number) => x * 2));
+t("filter", () => mk().filter((x: number) => x > 1));
+t("fill", () => mk().fill(7));
+t("fill2", () => mk().fill(7, 1, 2));
+t("reverse", () => mk().reverse());
+t("forEach", () => { let a = 0; mk().forEach((x: number) => { a += x; }); return a; });
+t("reduce", () => mk().reduce((a: number, x: number) => a + x, 0));
+t("reduceRight", () => mk().reduceRight((a: number, x: number) => a + "" + x, ""));
+t("some", () => mk().some((x: number) => x > 2));
+t("every", () => mk().every((x: number) => x > 0));
+t("find", () => mk().find((x: number) => x < 3));
+t("findIndex", () => mk().findIndex((x: number) => x === 2));
+t("findLast", () => mk().findLast((x: number) => x > 1));
+t("findLastIndex", () => mk().findLastIndex((x: number) => x > 1));
+t("at", () => mk().at(-1));
+t("set", () => { const a = mk(); a.set([9, 8], 1); return a; });
+t("copyWithin", () => mk().copyWithin(0, 1));
+t("entries", () => Array.from(mk().entries()).join("|"));
+t("keys", () => Array.from(mk().keys()).join("|"));
+t("values", () => Array.from(mk().values()).join("|"));
+t("toReversed", () => mk().toReversed());
+t("toSorted", () => mk().toSorted());
+t("with", () => mk().with(0, 5));
+t("from", () => Int16Array.from([1, 2]));
+t("of", () => Float64Array.of(1, 2));
+t("spread", () => [...mk()].join(","));
+t("ArrayFrom", () => Array.from(mk()).join(","));
+console.log(out.join("\n"));
+"#
+        ),
+        "join=3-1-2\njoin0=3,1,2\ntoString=3,1,2\nslice=Int16Array[1,2]\nslice2=Int16Array[3,1]\nsubarray=Int16Array[1,2]\nsort=Int16Array[1,2,3]\nsortfn=Int16Array[3,2,1]\nmap=Int16Array[6,2,4]\nfilter=Int16Array[3,2]\nfill=Int16Array[7,7,7]\nfill2=Int16Array[3,7,2]\nreverse=Int16Array[2,1,3]\nforEach=6\nreduce=6\nreduceRight=213\nsome=true\nevery=true\nfind=1\nfindIndex=2\nfindLast=2\nfindLastIndex=2\nat=2\nset=Int16Array[3,9,8]\ncopyWithin=Int16Array[1,2,2]\nentries=0,3|1,1|2,2\nkeys=0|1|2\nvalues=3|1|2\ntoReversed=Int16Array[2,1,3]\ntoSorted=Int16Array[1,2,3]\nwith=Int16Array[5,1,2]\nfrom=Int16Array[1,2]\nof=Float64Array[1,2]\nspread=3,1,2\nArrayFrom=3,1,2"
+    );
+}
