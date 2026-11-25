@@ -98,4 +98,8 @@ fn embedded_open_requires_a_registered_asset_and_a_read_flag() {
     for flags in ["r+", "w", "a"] {
         assert!(open(PATH, boxed(flags)).is_err(), "{flags} opened an asset");
     }
+    #[cfg(unix)]
+    for flags in [libc::O_CREAT, libc::O_APPEND, libc::O_TRUNC, libc::O_WRONLY] {
+        assert!(open(PATH, flags as f64).is_err(), "{flags} opened an asset");
+    }
 }
