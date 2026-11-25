@@ -127,9 +127,14 @@ impl<'a> FuncEmitCtx<'a> {
     pub(super) fn emit_stmt(&mut self, func: &mut Function, stmt: &Stmt, in_returning_func: bool) {
         self.returns_value = in_returning_func;
         match stmt {
-            Stmt::Let { id, init, .. } => {
+            Stmt::Let { id, name, init, .. } => {
                 if let Some(init_expr) = init {
                     self.emit_expr(func, init_expr);
+                } else if name == "__platform__" {
+                    // `declare const __platform__` keeps an initializer-less `Let`
+                    // (perry-hir `lower::ambient`); the target supplies its value.
+                    func.instruction(&f64_const(WEB_PLATFORM_ID));
+                    func.instruction(&Instruction::I64ReinterpretF64);
                 } else {
                     // Default: undefined
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));

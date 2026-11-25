@@ -1531,14 +1531,33 @@ const __NON_I64_RETURN_IMPORTS = new Set([
 // "Cannot convert a BigInt value to a number" on the very first call
 // (instances 2/3 reproduce as soon as `_start` invokes `class_set_method`
 // via `mem_call`).
+// An import argument's i64 bits as the f64 the runtime reads them as.
+function __i64ArgToF64(a) {
+  if (typeof a !== 'bigint') return a;
+  _u64[0] = a; return _f64[0];
+}
 function wrapForI64(fn, coerceNumberToBigInt = true) {
   if (fn.__rawBigint === true) return fn;
+  // The converted arguments go to `fn` as call arguments, never through an array
+  // of numbers: V8 may store such an array as doubles and silence a NaN's payload
+  // there, which turned a NaN-boxed string argument into NaN once the page was hot.
+  // The arrays for longer calls hold `undefined` first, so they never become doubles.
+  // WebAssembly calls an import without a receiver, so `fn` needs none.
   return function(...args) {
-    const convertedArgs = args.map(a => {
-      if (typeof a === 'bigint') { _u64[0] = a; return _f64[0]; }
-      return a;
-    });
-    const result = __reflectApply(fn, this, convertedArgs);
+    const c = __i64ArgToF64;
+    let result;
+    switch (args.length) {
+      case 0: result = fn(); break;
+      case 1: result = fn(c(args[0])); break;
+      case 2: result = fn(c(args[0]), c(args[1])); break;
+      case 3: result = fn(c(args[0]), c(args[1]), c(args[2])); break;
+      case 4: result = fn(c(args[0]), c(args[1]), c(args[2]), c(args[3])); break;
+      default: {
+        const convertedArgs = new Array(args.length).fill(undefined);
+        for (let i = 0; i < args.length; i++) convertedArgs[i] = c(args[i]);
+        result = __reflectApply(fn, undefined, convertedArgs);
+      }
+    }
     if (typeof result === 'bigint') return result;
     if (typeof result === 'number') {
       // #1049 instance 1: this wrapper exists because most callees here are
