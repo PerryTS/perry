@@ -145,7 +145,10 @@ fn trapless_proxy_get_passes_proxy_to_typed_array_getter() {
     }
 }
 
-static GETTER_CALLS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+per_test_global! {
+    static GETTER_CALLS: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+}
 
 extern "C" fn counting_getter(
     _closure: *const crate::ClosureHeader,

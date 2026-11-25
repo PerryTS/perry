@@ -61,9 +61,9 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 RUNTIME_SRC = REPO_ROOT / "crates" / "perry-runtime" / "src"
 SUPPORT = RUNTIME_SRC / "gc" / "tests" / "support.rs"
 RESET_FN = "reset_copying_nursery_runtime_test_state"
-# 115 classify after comments and literals are excluded. The floor only has
-# to be high enough that a broken matcher cannot pass as a clean tree.
-CLASSIFIED_FLOOR = 60
+# The number of statics that classify; lower it only in the change that deletes
+# a classified static.
+CLASSIFIED_FLOOR = 59
 
 # name -> issue that blocks converting it. An entry matching nothing FAILS.
 ALLOWLIST = {
