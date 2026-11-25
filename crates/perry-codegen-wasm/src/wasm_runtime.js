@@ -4033,15 +4033,18 @@ function perry_ui_show_toast(message) {
   drain();
 }
 
-function perry_ui_app_create(titleOrOpts, width, height) {
-  let title = "Perry App", bodyH, w = 800, ht = 600;
+function perry_ui_app_create(titleOrOpts, _width, _height) {
+  let title = "Perry App", bodyH;
   if (typeof titleOrOpts === "object" && titleOrOpts !== null) {
-    title = titleOrOpts.title || title; w = titleOrOpts.width || w; ht = titleOrOpts.height || ht;
+    title = titleOrOpts.title || title;
     bodyH = titleOrOpts.body;
-  } else { title = titleOrOpts || title; w = width || w; ht = height || ht; }
+  } else { title = titleOrOpts || title; }
   document.title = title;
+  // The browser window is the app's window: `width` and `height` are a native
+  // window's initial size, and the user resizes that window, so the root fills
+  // the viewport instead of drawing a fixed-size box inside it.
   const root = uiGetRoot();
-  root.style.width = w + "px"; root.style.maxWidth = "100%"; root.style.height = ht + "px"; root.style.maxHeight = "100%";
+  root.style.width = "100%"; root.style.height = "100%";
   const h = uiAlloc(root);
   if (bodyH !== undefined) { const bodyEl = uiGet(bodyH); if (bodyEl) root.appendChild(bodyEl); }
   return h;
@@ -4050,17 +4053,21 @@ function perry_ui_vstack_create(spacing, children) {
   const el = document.createElement("div");
   el.style.display = "flex"; el.style.flexDirection = "column";
   if (spacing) el.style.gap = spacing + "px";
-  el.style.flex = "1 1 0%"; el.style.minHeight = "0"; el.style.overflow = "auto";
+  // A stack starts from its content's size, as a native one does; a sibling with a
+  // low hugging priority takes the free space (widgetSetHugging).
+  el.style.flex = "1 1 auto"; el.style.minHeight = "0"; el.style.overflow = "auto";
+  el._perryStack = true;
   const h = uiAlloc(el);
-  if (Array.isArray(children)) { for (var i = 0; i < children.length; i++) { var c = uiGet(children[i]); if (c) el.appendChild(c); } }
+  if (Array.isArray(children)) { for (var i = 0; i < children.length; i++) { var c = uiGet(children[i]); if (c) { el.appendChild(c); uiStackItem(el, c); } } }
   return h;
 }
 function perry_ui_hstack_create(spacing, children) {
   const el = document.createElement("div");
   el.style.display = "flex"; el.style.flexDirection = "row"; el.style.alignItems = "center";
   if (spacing) el.style.gap = spacing + "px";
+  el._perryStack = true;
   const h = uiAlloc(el);
-  if (Array.isArray(children)) { for (var i = 0; i < children.length; i++) { var c = uiGet(children[i]); if (c) el.appendChild(c); } }
+  if (Array.isArray(children)) { for (var i = 0; i < children.length; i++) { var c = uiGet(children[i]); if (c) { el.appendChild(c); uiStackItem(el, c); } } }
   return h;
 }
 function perry_ui_zstack_create() {
@@ -4324,7 +4331,25 @@ function perry_ui_textarea_get_string(h) { const el = uiGet(h); return el ? el.v
 // ---------- Child management ----------
 function perry_ui_widget_add_child(parentH, childH) {
   const p = uiGet(parentH), c = uiGet(childH);
-  if (p && c) p.appendChild(c);
+  if (p && c) { p.appendChild(c); uiStackItem(p, c); }
+}
+// Sizes `child` along `stack`'s main axis as the stack's distribution says
+// (stackSetDistribution): equal shares for FillEqually, shares by content for
+// FillProportionally. Under Fill, the default, a row gives its free width to a
+// child stack that has no hugging priority of its own, since a native stack view
+// hugs its content at low priority; widgetSetHugging decides for everything else.
+function uiStackItem(stack, child) {
+  if (!stack._perryStack) return;
+  const row = stack.style.flexDirection === "row";
+  const distribution = stack._perryDistribution;
+  if (distribution === 1 || distribution === 2) {
+    child.style.flex = distribution === 1 ? "1 1 0%" : "1 1 auto";
+  } else if (row && child._perryStack && child._perryHugging === undefined) {
+    // Weight 1 on top of its content: a sibling with a low hugging priority of its
+    // own (weight 250 - priority) takes nearly all the free width, as it would natively.
+    child.style.flex = "1 1 auto";
+  } else return;
+  if (row) child.style.minWidth = "0"; else child.style.minHeight = "0";
 }
 // The widgets added to `el`: a Section's legend or a Disclosure's summary is its title.
 function uiChildren(el) { return Array.from(el.children).filter(c => c !== el._perryTitle); }
@@ -4365,12 +4390,27 @@ function perry_ui_set_foreground(h, r, g, b, a) {
 function perry_ui_set_font_size(h, size) { const el = uiGet(h); if (el) el.style.fontSize = size + "px"; }
 function perry_ui_set_font_weight(h, weight) { const el = uiGet(h); if (el) el.style.fontWeight = weight; }
 // `textSetFontWeight(widget, size, weight)` sets the size and the weight together.
-// The weight is the native 0..1 scale (Apple's `systemFont(ofSize:weight:)`), mapped
-// onto CSS 100..900 and clamped, as the HarmonyOS backend maps it.
+// The weight is Apple's `systemFont(ofSize:weight:)` scale, which macOS uses as is:
+// regular 0, medium 0.23, semibold 0.3, bold 0.4, heavy 0.56, black 0.62, and the
+// light weights below 0. It is not linear, so CSS weights come from its named points.
+const __appleFontWeights = [[-0.8, 100], [-0.6, 200], [-0.4, 300], [0, 400], [0.23, 500], [0.3, 600], [0.4, 700], [0.56, 800], [0.62, 900]];
+function uiCssFontWeight(weight) {
+  const w = Number(weight) || 0;
+  const points = __appleFontWeights;
+  if (w <= points[0][0]) return points[0][1];
+  for (let i = 1; i < points.length; i++) {
+    const [x1, y1] = points[i];
+    if (w <= x1) {
+      const [x0, y0] = points[i - 1];
+      return __Math.round((y0 + (y1 - y0) * (w - x0) / (x1 - x0)) / 100) * 100;
+    }
+  }
+  return 900;
+}
 function perry_ui_text_set_font_weight(h, size, weight) {
   const el = uiGet(h); if (!el) return;
   el.style.fontSize = size + "px";
-  el.style.fontWeight = String(__Math.round(1 + 8 * __Math.min(__Math.max(weight, 0), 1)) * 100);
+  el.style.fontWeight = String(uiCssFontWeight(weight));
 }
 function perry_ui_set_font_family(h, family) { const el = uiGet(h); if (el) el.style.fontFamily = family; }
 function perry_ui_set_padding(h, top, left, bottom, right) {
@@ -4428,6 +4468,20 @@ function perry_ui_text_set_decoration(h, decoration) {
 // Issue #3621 — horizontal text alignment. Canonical Perry/AppKit values:
 // 0=left, 1=right, 2=center, 3=justified, 4=natural. Maps to CSS
 // `text-align` (natural → `start`, which follows the element's direction).
+// Lines beyond `lines` are cut with an ellipsis; 0 removes the limit.
+function perry_ui_text_set_number_of_lines(h, lines) {
+  const el = uiGet(h); if (!el) return;
+  const n = Number(lines);
+  if (n > 0) {
+    el.style.display = "-webkit-box";
+    el.style.webkitBoxOrient = "vertical";
+    el.style.webkitLineClamp = String(n);
+    el.style.overflow = "hidden";
+  } else {
+    el.style.webkitLineClamp = "";
+    el.style.overflow = "";
+  }
+}
 function perry_ui_text_set_text_alignment(h, alignment) {
   const el = uiGet(h);
   if (!el) return;
@@ -4453,16 +4507,19 @@ function perry_ui_textfield_set_borderless(h, borderless) {
 // Issue #185 Phase B closure 11 — Stack alignment via CSS flex.
 // Numeric enum: 0=fill, 1=center, 2=leading, 3=trailing, 4=baseline.
 // Maps to CSS `align-items` (cross-axis on flex containers).
+// `alignment` is an NSLayoutAttribute, as on macOS where it goes to NSStackView
+// unchanged (docs/src/ui/layout.md): it places children on the cross axis.
 function perry_ui_stack_set_alignment(h, alignment) {
   const el = uiGet(h);
   if (!el) return;
-  const value = alignment === 0 ? "stretch"
-    : alignment === 1 ? "center"
-    : alignment === 2 ? "flex-start"
-    : alignment === 3 ? "flex-end"
-    : alignment === 4 ? "baseline"
-    : "stretch";
-  el.style.alignItems = value;
+  const value = {
+    1: "flex-start", 3: "flex-start", 5: "flex-start",   // left, top, leading
+    2: "flex-end", 4: "flex-end", 6: "flex-end",         // right, bottom, trailing
+    7: "stretch", 8: "stretch",                          // width, height
+    9: "center", 10: "center",                           // centerX, centerY
+    11: "last baseline", 12: "first baseline",
+  }[Number(alignment)];
+  if (value) el.style.alignItems = value;
 }
 // Drop shadow (issue #185 Phase B closure 2). Same arg shape as the
 // Apple CALayer twin — `(r,g,b,a)` is shadow color, `blur` is shadow
@@ -4531,14 +4588,30 @@ function perry_ui_widget_set_width(h, w) {
     if (el) { el.style.width = w + "px"; el.style.minWidth = w + "px"; el.style.maxWidth = w + "px"; el.style.flexShrink = "0"; }
 }
 function perry_ui_widget_set_height(h, height) { const el = uiGet(h); if (el) el.style.height = height + "px"; }
-function perry_ui_widget_set_hugging(h) { const el = uiGet(h); if (el) el.style.flex = "0 0 auto"; }
+// Below 250 a widget stretches to take its stack's free space, as a low hugging
+// priority lets Auto Layout stretch it; from 250 up it keeps its natural size. The
+// lower the priority, the larger its share, so the lowest one takes nearly all of it.
+function perry_ui_widget_set_hugging(h, priority) {
+  const el = uiGet(h); if (!el) return;
+  el._perryHugging = Number(priority);
+  if (el._perryHugging < 250) { el.style.flex = `${250 - __Math.max(0, el._perryHugging)} 1 0%`; el.style.minWidth = "0"; }
+  else el.style.flex = "0 0 auto";
+}
 function perry_ui_widget_match_parent_width(h) { const el = uiGet(h); if (el) el.style.width = "100%"; }
 function perry_ui_widget_match_parent_height(h) { const el = uiGet(h); if (el) el.style.height = "100%"; }
 function perry_ui_widget_set_edge_insets(h, top, left, bottom, right) {
   perry_ui_set_padding(h, top, left, bottom, right);
 }
 function perry_ui_stack_set_detaches_hidden(h) { /* no-op in web */ }
-function perry_ui_stack_set_distribution(h) { /* no-op in web */ }
+// NSStackView distributions: 0 Fill, 1 FillEqually, 2 FillProportionally,
+// 3 EqualSpacing, 4 EqualCentering.
+function perry_ui_stack_set_distribution(h, distribution) {
+  const el = uiGet(h); if (!el) return;
+  el._perryDistribution = Number(distribution);
+  el.style.justifyContent = el._perryDistribution === 3 ? "space-between"
+    : el._perryDistribution === 4 ? "space-around" : "";
+  for (const child of uiChildren(el)) uiStackItem(el, child);
+}
 function perry_ui_widget_set_context_menu(widgetH, menuH) { /* simplified stub */ }
 
 // ---------- Animations ----------
@@ -4592,6 +4665,21 @@ function perry_ui_set_on_hover(h, callback) {
 }
 function perry_ui_set_on_double_click(h, callback) {
   const el = uiGet(h); if (el) el.addEventListener("dblclick", () => callWasmClosure(callback));
+}
+// widgetSetOnClick makes any widget a button: it takes the pointer cursor, keyboard
+// focus, and Enter or Space to activate it, as a native button would.
+function perry_ui_widget_set_on_click(h, callback) {
+  const el = uiGet(h); if (!el) return;
+  el.addEventListener("click", () => callWasmClosure(callback));
+  if (el.tagName === "BUTTON") return;
+  el.style.cursor = "pointer";
+  if (!el.hasAttribute("tabindex")) el.tabIndex = 0;
+  if (!el.hasAttribute("role")) el.setAttribute("role", "button");
+  el.addEventListener("keydown", (event) => {
+    if (event.target !== el || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    callWasmClosure(callback);
+  });
 }
 
 // ---------- State ----------
@@ -4865,7 +4953,27 @@ function perry_ui_wheel_picker_set_selected(h, index) { const el = uiGet(h); if 
 function perry_ui_wheel_picker_get_selected(h) { const el = uiGet(h); return el ? el.selectedIndex : -1; }
 
 // ---------- Image ----------
-function perry_ui_image_create_symbol(name) { return perry_ui_text_create("⬜ " + name); }
+// A symbol is `symbols/<name>.svg` beside the page, drawn as a mask over the current
+// colour so imageSetTint colours it the way it colours a native symbol image. The
+// browser has no system symbol set; the app ships the SVGs it names, and a missing
+// file leaves the space empty.
+function perry_ui_image_create_symbol(name) {
+  const el = document.createElement("span");
+  const url = `url("symbols/${encodeURIComponent(String(name ?? ""))}.svg")`;
+  el.ariaHidden = "true";
+  el.style.display = "inline-block";
+  el.style.flexShrink = "0";
+  el.style.width = "1em";
+  el.style.height = "1em";
+  el.style.backgroundColor = "currentColor";
+  for (const prefix of ["webkitMask", "mask"]) {
+    el.style[prefix + "Image"] = url;
+    el.style[prefix + "Size"] = "contain";
+    el.style[prefix + "Repeat"] = "no-repeat";
+    el.style[prefix + "Position"] = "center";
+  }
+  return uiAlloc(el);
+}
 function perry_ui_image_create_url(url, alt) {
   const el = document.createElement("img");
   el.src = url || "";
@@ -5356,6 +5464,28 @@ function perry_system_haptic_play(type) {
   };
   try { navigator.vibrate(patterns[type] ?? 10); } catch (e) { /* no-op */ }
 }
+// The form factor from the input device and the viewport: a touch screen narrower
+// than a tablet is a "phone", a wider one a "pad", anything else "desktop".
+function perry_get_device_idiom() {
+  const touch = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+  if (!touch) return "desktop";
+  const width = Math.min(window.innerWidth || 0, (window.screen && window.screen.width) || Infinity);
+  return width < 600 ? "phone" : "pad";
+}
+// The system share sheet where the browser has one (navigator.share), otherwise
+// the URL goes to the clipboard.
+function perry_system_share_url(url, title) {
+  const text = String(url ?? "");
+  if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+    navigator.share(title ? { url: text, title: String(title) } : { url: text }).catch(() => {});
+  } else if (typeof navigator !== "undefined" && navigator.clipboard) {
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
+}
+// Remote push needs a Web Push subscription the page cannot create on its own, so
+// the callback is never called: the app sees no device token, as on a device
+// where the user declined notifications.
+function perry_system_notification_register_remote(_callback) {}
 function perry_system_keychain_save(key, value) { try { localStorage.setItem("__pk_" + key, value); } catch(e) {} }
 function perry_system_keychain_get(key) { return localStorage.getItem("__pk_" + key) || ""; }
 function perry_system_keychain_delete(key) { localStorage.removeItem("__pk_" + key); }
@@ -6258,6 +6388,7 @@ const __perryUiDispatch = {
   perry_ui_on_frame, perry_ui_cancel_frame,
   // Events
   perry_ui_set_on_click, perry_ui_set_on_hover, perry_ui_set_on_double_click,
+  perry_ui_widget_set_on_click,
   // State
   perry_ui_state_create, perry_ui_state_get, perry_ui_state_set,
   perry_ui_state_on_change, perry_ui_state_bind_text, perry_ui_state_bind_text_numeric,
@@ -6269,7 +6400,7 @@ const __perryUiDispatch = {
   // Text/Button/TextField ops
   perry_ui_text_set_string, perry_ui_text_set_selectable, perry_ui_text_set_wraps, perry_ui_text_set_color,
   perry_ui_text_set_letter_spacing, perry_ui_text_set_line_height,
-  perry_ui_text_set_text_alignment,
+  perry_ui_text_set_text_alignment, perry_ui_text_set_number_of_lines,
   perry_ui_button_set_bordered, perry_ui_button_set_title, perry_ui_button_set_text_color,
   perry_ui_button_set_image, perry_ui_button_set_content_tint_color, perry_ui_button_set_image_position,
   perry_ui_textfield_focus, perry_ui_textfield_set_string, perry_ui_textfield_get_string,
@@ -6324,6 +6455,7 @@ const __perryUiDispatch = {
   // System
   perry_system_open_url, perry_system_is_dark_mode, perry_system_preferences_get,
   perry_system_preferences_set, perry_system_haptic_play,
+  perry_get_device_idiom, perry_system_share_url, perry_system_notification_register_remote,
   perry_system_keychain_save, perry_system_keychain_get,
   perry_system_keychain_delete, perry_system_notification_send,
   // Frame split
