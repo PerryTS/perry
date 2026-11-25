@@ -993,30 +993,29 @@ fn is_other_platform_archive(archive: &Path, triple: &str) -> bool {
     let Ok(file) = std::fs::File::open(archive) else {
         return false;
     };
-    // Reads the members up to the first object, not the whole archive.
+    // Reads object headers through the cache, never whole members.
     let data = object::ReadCache::new(file);
     let Ok(members) = object::read::archive::ArchiveFile::parse(&data) else {
         return false;
     };
     for member in members.members().flatten() {
-        let Ok(bytes) = member.data(&data) else {
-            continue;
-        };
-        if let Ok(object) = object::File::parse(bytes) {
+        let (offset, size) = member.file_range();
+        if let Ok(object) = object::File::parse(data.range(offset, size)) {
             return object.format() != format || object.architecture() != architecture;
         }
     }
     false
 }
 
-/// One line per searched path. A path that exists was rejected
-/// ([`is_other_platform_archive`]).
+/// One line per searched path. A path that exists, raw or compressed, was
+/// rejected ([`locate_among`]).
 fn searched_report(searched: &[PathBuf]) -> String {
     searched
         .iter()
         .map(|p| {
-            let rejected = if p.exists() {
-                " (built for another target)"
+            let present = p.exists() || super::compressed_libs::compressed_sibling(p).exists();
+            let rejected = if present {
+                " (built for another target or unreadable)"
             } else {
                 ""
             };

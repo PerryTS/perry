@@ -62,7 +62,31 @@ fn a_cross_target_skips_the_host_archive_for_its_own() {
     let searched = locate_among(vec![host.clone()], LIB, Some("android")).unwrap_err();
     assert_eq!(
         searched_report(&searched),
-        format!("  - {} (built for another target)", host.display())
+        format!(
+            "  - {} (built for another target or unreadable)",
+            host.display()
+        )
+    );
+}
+
+#[test]
+fn a_compressed_host_archive_is_rejected_and_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let raw = archive(dir.path(), &macho(MACHO_ARM64));
+    let compressed = zstd::stream::encode_all(&fs::read(&raw).unwrap()[..], 1).unwrap();
+    fs::write(raw.with_extension("a.zst"), compressed).unwrap();
+    fs::remove_file(&raw).unwrap();
+
+    // Run with RUST_TEST_THREADS=1 like the rest of the env-touching tests.
+    std::env::set_var("PERRY_LIB_CACHE_DIR", dir.path().join("cache"));
+    let searched = locate_among(vec![raw.clone()], LIB, Some("android"));
+    std::env::remove_var("PERRY_LIB_CACHE_DIR");
+    assert_eq!(
+        searched_report(&searched.unwrap_err()),
+        format!(
+            "  - {} (built for another target or unreadable)",
+            raw.display()
+        )
     );
 }
 
