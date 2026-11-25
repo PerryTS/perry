@@ -173,8 +173,7 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         };
 
         let private_buf = alloc_crypto_key_from_slice(&private_der);
-        let public_buf = alloc_crypto_key_from_slice(&public_der);
-        if private_buf.is_null() || public_buf.is_null() {
+        if private_buf.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
         register_crypto_key(
@@ -187,28 +186,31 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
                 private_usages,
             ),
         );
+        let private_value = scope.root_nanbox_u64(JSValue::pointer(private_buf.cast()).bits());
+        let public_buf = alloc_crypto_key_from_slice(&public_der);
+        if public_buf.is_null() {
+            return reject_with_dom_exception("OperationError", "The operation failed");
+        }
         register_crypto_key(
             public_buf as usize,
             CryptoKeyMaterial::new(key_algo, hash, KeyKind::Public, true, public_usages),
         );
+        let public_value = scope.root_nanbox_u64(JSValue::pointer(public_buf.cast()).bits());
 
-        let obj = js_object_alloc(0, 2);
-        if obj.is_null() {
+        let pair = js_object_alloc(0, 2);
+        if pair.is_null() {
             return reject_with_dom_exception("OperationError", "The operation failed");
         }
-        let public_key_name = perry_runtime::js_string_from_bytes(b"publicKey".as_ptr(), 9);
-        let private_key_name = perry_runtime::js_string_from_bytes(b"privateKey".as_ptr(), 10);
-        js_object_set_field_by_name(
-            obj,
-            public_key_name,
-            f64::from_bits(JSValue::pointer(public_buf as *const u8).bits()),
-        );
-        js_object_set_field_by_name(
-            obj,
-            private_key_name,
-            f64::from_bits(JSValue::pointer(private_buf as *const u8).bits()),
-        );
-        return resolve_with_bits(JSValue::pointer(obj as *const u8).bits());
+        let pair = scope.root_raw_mut_ptr(pair);
+        for (name, value) in [
+            (&b"publicKey"[..], public_value),
+            (b"privateKey", private_value),
+        ] {
+            let key = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            js_object_set_field_by_name(pair.get_raw_mut_ptr(), key, value.get_nanbox_f64());
+        }
+        let pair = pair.get_raw_mut_ptr::<perry_runtime::ObjectHeader>();
+        return resolve_with_bits(JSValue::pointer(pair.cast()).bits());
     }
     if algo_upper == "ED25519" {
         let (private_usages, public_usages) = match validate_key_pair_usages(
