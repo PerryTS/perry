@@ -167,6 +167,14 @@ pub(super) fn set_visible_readable_encoding(stream: f64, encoding: f64) {
     }
 }
 
+/// EOF was pushed (node's `state.ended`, the readable side's own ended
+/// flag); `readable` turns false only when `'end'` is emitted
+/// (`mark_stream_ended`).
+pub(super) fn mark_readable_eof(stream: f64) {
+    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
+    set_visible_readable_ended(stream, true);
+}
+
 pub(super) fn mark_stream_ended(stream: f64) {
     set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
     set_visible_readable(stream, false);

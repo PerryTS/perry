@@ -691,11 +691,20 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
     let jsval = JSValue::from_bits(chunk.to_bits());
     if jsval.is_null() || jsval.is_undefined() {
         flush_readable_decoder(stream);
-        mark_stream_ended(stream);
+        // node's `onEofChunk`: `state.ended` only. The stream stays
+        // `readable` until `'end'` is emitted, and `'end'` waits for a
+        // reader: a stream nobody has asked for data (`flowing` still null,
+        // nothing delivered) ends on its first `read()` / `resume()`.
+        mark_readable_eof(stream);
         refresh_readable_aborted_flag(stream);
-        // node's `onEofChunk`: a reader waiting in `readable` learns of EOF
-        // while data it has not drained is still buffered.
+        // A reader waiting in `readable` learns of EOF while data it has not
+        // drained is still buffered.
         schedule_readable_event(stream);
+        if JSValue::from_bits(readable_flowing_value(stream).to_bits()).is_null()
+            && !has_truthy_hidden(stream, hidden_disturbed_key())
+        {
+            return f64::from_bits(TAG_FALSE);
+        }
         schedule_readable_end(stream);
         return f64::from_bits(TAG_FALSE);
     }
