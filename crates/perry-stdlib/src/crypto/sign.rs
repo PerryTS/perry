@@ -463,31 +463,37 @@ unsafe fn generate_rsa_key_pair(options: f64) -> Result<*mut ObjectHeader, RsaKe
             .unwrap_or_default()
     };
 
-    let obj = js_object_alloc(0, 2);
+    let obj = scope.root_raw_mut_ptr(js_object_alloc(0, 2));
 
     if public_as_jwk {
         if let Some(public_jwk) = rsa_public_jwk_object(&public_key) {
-            set_object_value_field(obj, b"publicKey", nanbox_pointer(public_jwk));
+            set_object_value_field(
+                obj.get_raw_mut_ptr(),
+                b"publicKey",
+                nanbox_pointer(public_jwk),
+            );
         }
     } else {
-        let name = js_string_from_bytes(b"publicKey".as_ptr(), 9);
         let val = js_string_from_bytes(public_pem.as_ptr(), public_pem.len() as u32);
         mark_keyobject_string(val, KeyKind::Public, 1);
-        js_object_set_field_by_name(obj, name, nanbox_str(val));
+        set_object_value_field(obj.get_raw_mut_ptr(), b"publicKey", nanbox_str(val));
     }
 
     if private_as_jwk {
         if let Some(private_jwk) = rsa_private_jwk_object(&private_key) {
-            set_object_value_field(obj, b"privateKey", nanbox_pointer(private_jwk));
+            set_object_value_field(
+                obj.get_raw_mut_ptr(),
+                b"privateKey",
+                nanbox_pointer(private_jwk),
+            );
         }
     } else {
-        let name = js_string_from_bytes(b"privateKey".as_ptr(), 10);
         let val = js_string_from_bytes(private_pem.as_ptr(), private_pem.len() as u32);
         mark_keyobject_string(val, KeyKind::Private, 1);
-        js_object_set_field_by_name(obj, name, nanbox_str(val));
+        set_object_value_field(obj.get_raw_mut_ptr(), b"privateKey", nanbox_str(val));
     }
 
-    Ok(obj)
+    Ok(obj.get_raw_mut_ptr())
 }
 
 /// crypto.generateKeyPairSync("ec", { namedCurve: "prime256v1", ...pem }) ->
