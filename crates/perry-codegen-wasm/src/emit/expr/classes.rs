@@ -260,8 +260,13 @@ impl<'a> FuncEmitCtx<'a> {
                         self.emit_memcall(func, "map_new", 0);
                         return true;
                     }
-                    // The host's WeakMap, constructed as a bare `new Map` is (see new_dynamic).
-                    "WeakMap" if !self.emitter.user_classes.contains(class_name.as_str()) => {
+                    // The host's WeakMap, constructed as a bare `new Map` is (see new_dynamic),
+                    // its ArrayBuffer, and a typed array over a buffer
+                    // (`new Int32Array(buffer, offset, length)`).
+                    name if (matches!(name, "WeakMap" | "ArrayBuffer")
+                        || perry_hir::ir::typed_array_kind_for_name(name).is_some())
+                        && !self.emitter.user_classes.contains(name) =>
+                    {
                         let callee = Expr::PropertyGet {
                             byte_offset: 0,
                             byte_end: 0,

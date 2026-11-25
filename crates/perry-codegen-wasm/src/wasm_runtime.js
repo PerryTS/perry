@@ -2350,6 +2350,8 @@ const __memDispatch = {
   string_eq: (a, b) => a === b ? 1 : 0,
   string_len: (val) => {
     if (typeof val === 'string') return val.length;
+    // A typed array's own `length` (a DataView has none, so it reads undefined).
+    if (ArrayBuffer.isView(val)) return val.length;
     if (Array.isArray(val)) return val.length;
     return 0;
   },

@@ -1219,6 +1219,33 @@ impl WasmModuleEmitter {
                 self.emit_js_bridge_call("date_to_utc_string", &[d], locals)
             }
             Expr::CryptoRandomUUID => self.emit_js_bridge_call("crypto_random_uuid", &[], locals),
+            // A typed array is made, read and written as its WASM arm does it
+            // (`emit/expr/buffers.rs`).
+            Expr::Uint8ArrayNew(arg) => {
+                let arg = arg.as_deref().unwrap_or(&Expr::Undefined);
+                self.emit_js_bridge_call("uint8array_new", &[arg], locals)
+            }
+            Expr::Uint8ArrayFrom(a) => self.emit_js_bridge_call("uint8array_from", &[a], locals),
+            Expr::Uint8ArrayLength(a) => {
+                self.emit_js_bridge_call("uint8array_length", &[a], locals)
+            }
+            Expr::Uint8ArrayGet { array, index } => {
+                self.emit_js_bridge_call("uint8array_get", &[array, index], locals)
+            }
+            Expr::Uint8ArraySet {
+                array,
+                index,
+                value,
+            } => format!(
+                "(__memDispatch.uint8array_set({}), u64ToF64(TAG_UNDEFINED))",
+                host_args(&[array, index, value].map(|e| self.emit_js_expr(e, locals)))
+            ),
+            Expr::TypedArrayNew { kind, arg } => {
+                match super::expr::typed_array_new(*kind, arg.as_deref()) {
+                    Some(new) => self.emit_js_expr(&new, locals),
+                    None => "u64ToF64(TAG_UNDEFINED)".to_string(),
+                }
+            }
             // `new` on a constructor value (`new Map<K, V>([...])` among others) and the Map and
             // Set nodes call the bridges their WASM arms call (`emit/expr/classes.rs`,
             // `emit/expr/map_set.rs`).
