@@ -2465,6 +2465,10 @@ js_node_http_im_signal	f64	i64
 js_node_http_im_trailers_distinct_json	ptr	i64
 js_node_http_im_trailers_json	ptr	i64
 js_node_http_im_url	ptr	i64
+js_node_http_incoming_message_abort_signal	void	f64
+js_node_http_incoming_message_birth	f64	f64,f64,f64,f64,f64,f64,f64,f64
+js_node_http_incoming_message_create	f64	f64
+js_node_http_incoming_message_dump_unread	void	f64
 js_node_http_incoming_message_init	void	f64,f64
 js_node_http_incoming_message_standalone_new	i64	f64
 js_node_http_method_fallback	f64	ptr,i64,f64,f64,f64

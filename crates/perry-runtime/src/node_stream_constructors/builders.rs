@@ -47,13 +47,40 @@ pub(crate) fn init_readable_in_place(
     how: StreamInit,
     provided: Option<super::birth_memo::Input>,
 ) {
+    init_readable(this, opts, how, provided, None)
+}
+
+/// `Readable.call(this, { highWaterMark: hwm })` from a native constructor
+/// (IncomingMessage's) on a receiver born on its layout under its sealed,
+/// unwritten chain: node's options object holds only `hwm`, so the state is
+/// born from the number (validated as node's `getHighWaterMark` does), with
+/// no options object and no birth memo; the layout is the birth's proof.
+/// The chain's own `_read`/`_destroy` are the hooks, as for any subclass.
+pub(crate) fn init_readable_native(this: f64, hwm: f64) {
+    init_readable(
+        this,
+        f64::from_bits(TAG_UNDEFINED),
+        StreamInit::Subclass,
+        None,
+        Some(hwm),
+    )
+}
+
+fn init_readable(
+    this: f64,
+    opts: f64,
+    how: StreamInit,
+    provided: Option<super::birth_memo::Input>,
+    native_hwm: Option<f64>,
+) {
+    let memo = native_hwm.is_none();
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this);
     let opts = scope.root_nanbox_f64(opts);
     let t = &this;
     let o = &opts;
     let birth = provided.or_else(|| {
-        if how == StreamInit::Subclass {
+        if how == StreamInit::Subclass && memo {
             super::birth_memo::begin_existing(
                 t.get_nanbox_f64(),
                 o.get_nanbox_f64(),
@@ -73,7 +100,7 @@ pub(crate) fn init_readable_in_place(
     }
     install_stream_state_layout(t.get_nanbox_f64());
     init_lifecycle_state(&this, &opts);
-    init_readable_state(&this, &opts, false);
+    init_readable_state_with(&this, &opts, false, native_hwm);
     if let Some(read) = read_callback_from_options(&opts) {
         let read = scope.root_nanbox_f64(read);
         stream_birth_field!(
@@ -105,11 +132,15 @@ pub(crate) fn init_readable_in_place(
             subclass_hook(t.get_nanbox_f64(), crate::runtime_state_key!(b"_destroy"))
         {
             let destroy = scope.root_nanbox_f64(destroy);
-            set_hidden_value(t.get_nanbox_f64(), STREAM_DESTROY_KEY, destroy.get_nanbox_f64());
+            set_hidden_value(
+                t.get_nanbox_f64(),
+                STREAM_DESTROY_KEY,
+                destroy.get_nanbox_f64(),
+            );
         }
     }
     invoke_construct_callback(&this, &opts, birth);
-    if provided.is_none() && how == StreamInit::Subclass {
+    if provided.is_none() && how == StreamInit::Subclass && memo {
         super::birth_memo::finish_existing(t.get_nanbox_f64(), birth, super::birth::Kind::Readable);
     }
 }

@@ -68,8 +68,23 @@ pub(super) unsafe fn is_intrinsic_write_head(value: f64) -> bool {
 
 /// Cold prototype construction protocol of the existing HTTP export provider.
 /// The result is immutable image metadata, never a JS value or a heap edge.
+/// node's `IncomingMessage.prototype._addHeaderLine(field, value, dest)`, its
+/// own body: `matchKnownFields` on `dest`, whatever the receiver.
+extern "C" fn add_header_line_body(
+    _c: *const RawClosureHeader,
+    _this: JsThis,
+    field: f64,
+    value: f64,
+    dest: f64,
+) -> f64 {
+    unsafe { super::request::js_node_http_im_add_header_line(0, field, value, dest) };
+    f64::from_bits(TAG_UNDEFINED)
+}
+#[rustfmt::skip] perry_ffi::realm_decl! { info perry_ffi::fn_info!(export static ADD_HEADER_LINE = crate::server::response_methods::add_header_line_body, 3; with_declared(3)); realm { "node:http.IncomingMessage.prototype._addHeaderLine", capture = property_key, constructible = true; } }
+
 pub(super) fn info(name: &str) -> f64 {
     let info = match name {
+        "_addHeaderLine" => &ADD_HEADER_LINE,
         "setHeader" => &SET_HEADER,
         "writeHead" => &WRITE_HEAD,
         "write" => &WRITE,
