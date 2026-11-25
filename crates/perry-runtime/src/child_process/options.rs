@@ -405,6 +405,9 @@ pub(crate) fn cp_stdio_from_fd(fd: i32) -> Stdio {
     if let Some(file) = crate::fs_hook_slots::try_clone_registered_fd(fd) {
         return Stdio::from(file);
     }
+    if crate::fs::fd_is_embedded(fd) {
+        return Stdio::null();
+    }
 
     let dup_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 0) };
     if dup_fd < 0 {

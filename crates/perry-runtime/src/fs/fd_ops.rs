@@ -153,6 +153,15 @@ pub(crate) unsafe fn fs_open_sync_result(
             ));
         }
     };
+    if opens_read_only(flags_value) {
+        if let Some(bytes) = crate::embedded::lookup(&path_str) {
+            let entry = FdEntry::Embedded(std::io::Cursor::new(bytes));
+            return Ok(register_opened_file(entry, &path_str, false));
+        }
+        if crate::embedded::is_virtual_path(&path_str) {
+            return Err((enoent_os_error(), path_str));
+        }
+    }
     let (opts, append_mode) = open_options_from_flags(flags_value);
     match opts.open(&path_str) {
         Ok(file) => Ok(register_opened_file(file, &path_str, append_mode)),
@@ -160,8 +169,16 @@ pub(crate) unsafe fn fs_open_sync_result(
     }
 }
 
+/// Whether an open with these flags can be served by the embedded registry.
+fn opens_read_only(flags_value: f64) -> bool {
+    if flags_value.is_finite() {
+        return flags_value as i32 & 0x3 == 0;
+    }
+    matches!(flag_string(flags_value).as_str(), "r" | "rs" | "sr")
+}
+
 /// Register an opened file under a fresh synthetic fd.
-fn register_opened_file(file: fs::File, path_str: &str, append_mode: bool) -> i32 {
+fn register_opened_file(file: impl Into<FdEntry>, path_str: &str, append_mode: bool) -> i32 {
     crate::fs_hook_slots::install_fd();
     let fd = allocate_synthetic_fd();
     FD_REGISTRY.with(|r| {

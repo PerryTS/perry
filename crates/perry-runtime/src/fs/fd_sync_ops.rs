@@ -61,7 +61,7 @@ pub(crate) unsafe fn js_fs_ftruncate_result(
     };
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
-        let Some(file) = reg.get(&fd) else {
+        let Some(file) = reg.get(&fd).and_then(FdEntry::os_file) else {
             return Err(crate::fs::validate::ebadf_error("ftruncate"));
         };
         match file.set_len(len) {
@@ -99,7 +99,7 @@ pub(crate) fn fsync_sync_inner(fd: i32) -> i32 {
         let Some(file) = reg.get(&fd) else {
             return 0;
         };
-        if file.sync_all().is_ok() {
+        if file.os_file().is_none_or(|file| file.sync_all().is_ok()) {
             1
         } else {
             0
@@ -121,7 +121,7 @@ pub(crate) fn fdatasync_sync_inner(fd: i32) -> i32 {
         let Some(file) = reg.get(&fd) else {
             return 0;
         };
-        if file.sync_data().is_ok() {
+        if file.os_file().is_none_or(|file| file.sync_data().is_ok()) {
             1
         } else {
             0
@@ -141,7 +141,7 @@ pub extern "C" fn js_fs_fchmod_sync(fd_value: f64, mode: f64) -> i32 {
     let fd = fd_value as i32;
     FD_REGISTRY.with(|r| {
         let reg = r.borrow();
-        let Some(file) = reg.get(&fd) else {
+        let Some(file) = reg.get(&fd).and_then(FdEntry::os_file) else {
             return 0;
         };
         #[cfg(unix)]
@@ -222,7 +222,7 @@ pub(crate) unsafe fn fchown_sync_inner_result(
     {
         FD_REGISTRY.with(|r| {
             let reg = r.borrow();
-            let Some(file) = reg.get(&fd) else {
+            let Some(file) = reg.get(&fd).and_then(FdEntry::os_file) else {
                 return Err(crate::fs::validate::ebadf_error("fchown"));
             };
             let rc = libc::fchown(
@@ -275,6 +275,13 @@ pub(crate) fn fstat_stats_value(fd: i32, bigint: bool) -> Result<f64, crate::err
         let reg = r.borrow();
         let Some(file) = reg.get(&fd) else {
             return Err(crate::fs::validate::ebadf_error("fstat"));
+        };
+        let file = match file {
+            FdEntry::Owned(file) => file,
+            FdEntry::Adopted(file) => file,
+            FdEntry::Embedded(cursor) => {
+                return Ok(unsafe { embedded_file_stats(cursor.get_ref().len(), bigint) })
+            }
         };
         match file.metadata() {
             Ok(meta) => {
