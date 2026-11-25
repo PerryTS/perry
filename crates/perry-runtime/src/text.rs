@@ -657,9 +657,9 @@ pub extern "C" fn js_text_decoder_decode_llvm(handle: f64, value: f64) -> i64 {
     }
 
     let value = crate::value::js_nanbox_pointer(ptr_usize as i64);
-    // shortcut: UTF-8 and UTF-16LE keep a leading BOM here; strip it for every
-    // encoding once lowering forwards a non-literal `ignoreBOM`.
-    let consume_bom = encoding == DecoderEncoding::Utf16Be && !state.ignore_bom;
+    // A non-streaming `decode` starts a fresh stream, so its leading BOM is
+    // consumed unless the decoder was built with `ignoreBOM: true`.
+    let consume_bom = !state.ignore_bom;
     let decode = |bytes| {
         let bytes = if consume_bom {
             strip_bom(bytes, encoding)
@@ -1179,5 +1179,44 @@ mod tests {
                 .to_string()
         };
         assert_eq!(got, expected, "decode(DataView) must see the backing bytes");
+    }
+
+    /// `decode` consumes one leading BOM for every Unicode encoding unless the
+    /// decoder was built with `ignoreBOM` (#15462); a single-byte encoding
+    /// keeps the bytes.
+    #[test]
+    fn decode_consumes_a_leading_bom_unless_ignore_bom() {
+        let _serialized = crate::array::test_serialize();
+        let undef = f64::from_bits(crate::value::TAG_UNDEFINED);
+        let truthy = f64::from_bits(crate::value::TAG_TRUE);
+        let decode = |label: &str, ignore_bom: f64, bytes: &[u8]| {
+            let label_ptr = crate::string::js_string_from_bytes(label.as_ptr(), label.len() as u32);
+            let label = f64::from_bits(crate::value::JSValue::string_ptr(label_ptr).bits());
+            let decoder =
+                crate::value::js_nanbox_pointer(js_text_decoder_new(label, undef, ignore_bom));
+            let values: Vec<f64> = bytes.iter().map(|&b| b as f64).collect();
+            let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+            let buf = crate::buffer::js_uint8array_new(crate::value::js_nanbox_pointer(arr as i64));
+            let input = f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits());
+            let s = js_text_decoder_decode_llvm(decoder, input) as *const StringHeader;
+            crate::string::string_as_str(s).to_string()
+        };
+        for (label, bom, body) in [
+            ("utf-8", &[0xEF, 0xBB, 0xBF][..], &[0x48][..]),
+            ("utf-16le", &[0xFF, 0xFE], &[0x48, 0x00]),
+            ("utf-16be", &[0xFE, 0xFF], &[0x00, 0x48]),
+        ] {
+            let bytes = [bom, body].concat();
+            assert_eq!(decode(label, undef, &bytes), "H", "{label}");
+            assert_eq!(
+                decode(label, truthy, &bytes),
+                "\u{FEFF}H",
+                "{label} ignoreBOM"
+            );
+        }
+        assert_eq!(
+            decode("windows-1252", undef, &[0xEF, 0xBB, 0xBF]),
+            "\u{EF}\u{BB}\u{BF}"
+        );
     }
 }
