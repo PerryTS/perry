@@ -3331,21 +3331,28 @@ pub(crate) fn native_namespace_call(
 }
 
 /// The host object a member access on a token of `ns` under `name` reads:
-/// `console` and the stdio streams themselves, and `console` for a call of
-/// one of its methods on the global sentinel (`console.log(x)` lowers to a
-/// call on `GlobalGet(0)`).
+/// a member of `console` or a stdio stream the host owns, and `console` for
+/// a call of one of its own methods on the global sentinel (`console.log(x)`
+/// lowers to a call on `GlobalGet(0)`; the console lowering takes the names
+/// `perry_hir::method_call::console_method_name` accepts). A key the host's
+/// description places on its chain (`console.toString`, `Object.prototype`'s)
+/// or declares absent (`console[Symbol.toPrimitive]`) is no host member: it
+/// reads as on any described namespace. A stream key its description does
+/// not list may be on its undeclared TTY layout: the host's.
 pub(crate) fn host_of(ns: BuiltinNs, name: &str, call: bool) -> Option<BuiltinNs> {
     match ns {
         BuiltinNs::Other
             if call
-                && matches!(
-                    members::ns_member(BuiltinNs::Console, name),
-                    Some(Some(Mem::Fn))
-                ) =>
+                && perry_hir::method_call::console_method_name(name)
+                && members::ns_own_fn(BuiltinNs::Console, name) =>
         {
             Some(BuiltinNs::Console)
         }
-        ns if members::is_host(ns) => Some(ns),
+        ns if members::is_host(ns)
+            && (members::ns_own_member(ns, name) || members::ns_member(ns, name).is_none()) =>
+        {
+            Some(ns)
+        }
         _ => None,
     }
 }

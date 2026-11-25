@@ -1014,6 +1014,24 @@ fn realm_statics(ns: BuiltinNs, prototype: NsProto) -> NsStatics {
     NsStatics { prototype, members }
 }
 
+/// A host object the realm declares as entry `name` (its one birth): its
+/// own properties (`RealmEntry::own`) and its [[Prototype]]
+/// (`RealmEntry::proto`), as the runtime builds them. No declaration, or an
+/// own value this description has no member for: undescribed.
+fn host_statics(name: &str) -> NsStatics {
+    let entry = realm_entry(name);
+    let prototype = match entry.and_then(|e| e.proto) {
+        Some("Object.prototype") => NsProto::Object,
+        Some("Function.prototype") => NsProto::Function,
+        _ => NsProto::Unknown(Family::Object),
+    };
+    let members = entry
+        .map(|e| e.own)
+        .filter(|own| own.iter().all(|p| realm_mem(p).is_some()))
+        .map(Own::Realm);
+    NsStatics { prototype, members }
+}
+
 /// The own properties and [[Prototype]] of a builtin namespace. Missing
 /// own descriptions remain opaque even when a structural parent is known.
 pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
@@ -1270,7 +1288,10 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         BuiltinNs::WeakMap | BuiltinNs::WeakSet => {
             (NsProto::Function, Some(&[("prototype", Mem::Proto)]))
         }
-        BuiltinNs::Console => (NsProto::Unknown(Family::Object), Some(CONSOLE)),
+        // `console` is one native namespace object (native_module.rs
+        // `js_create_native_module_namespace`), its one birth declared by
+        // the realm: its own keys and [[Prototype]] are that declaration.
+        BuiltinNs::Console => return host_statics("console"),
         BuiltinNs::Stdout | BuiltinNs::Stderr => (NsProto::Unknown(Family::Object), Some(STDOUT)),
         BuiltinNs::Stdin => (NsProto::Unknown(Family::Object), Some(STDIN)),
         // `Other`, the HIR global sentinel (what a bare global name is read
@@ -1285,28 +1306,6 @@ pub(super) fn ns_statics(ns: BuiltinNs) -> NsStatics {
         prototype,
     }
 }
-
-/// The members of `console` the runtime gives every program (its methods).
-const CONSOLE: &[(&str, Mem)] = &[
-    ("assert", FN),
-    ("count", FN),
-    ("countReset", FN),
-    ("debug", FN),
-    ("dir", FN),
-    ("dirxml", FN),
-    ("error", FN),
-    ("group", FN),
-    ("groupCollapsed", FN),
-    ("groupEnd", FN),
-    ("info", FN),
-    ("log", FN),
-    ("table", FN),
-    ("time", FN),
-    ("timeEnd", FN),
-    ("timeLog", FN),
-    ("trace", FN),
-    ("warn", FN),
-];
 
 /// The own members of `process.stdout` / `process.stderr` in both of the
 /// runtime's layouts (`build_stream_object_with_write`: the TTY write stream
@@ -1347,9 +1346,15 @@ const STDIN: &[(&str, Mem)] = &[
     ("write", FN),
 ];
 
-/// A host object of perry's runtime (`console`, the stdio streams): only its
-/// own members are described ([`ns_statics`]); a key it does not list may be
-/// on a chain the model does not describe, so it is no absent key.
+/// A host object of perry's runtime (`console`, the stdio streams): its own
+/// members are the runtime's host methods (DECISIONS 255 funnel,
+/// `builtins::host_of`). `console` is described by its realm declaration,
+/// own keys and chain ([`host_statics`]). A stdio stream is born in one of
+/// two layouts chosen at run time (`build_stream_object_with_write`:
+/// `tty::is_tty_fd`); the realm declares the non-TTY birth only, the TTY one
+/// (its tty class, chain `node:tty.WriteStream.prototype`) is not declared:
+/// only the members both layouts own are listed, and a key they do not list
+/// may be on the TTY layout or its chain, so it is no absent key.
 pub(super) fn is_host(ns: BuiltinNs) -> bool {
     matches!(
         ns,
