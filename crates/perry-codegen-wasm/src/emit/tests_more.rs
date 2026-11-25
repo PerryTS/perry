@@ -263,7 +263,9 @@ fn widget_prefixed_setters_reach_the_web_setters() {
             r#"
 import { Button, Toggle, widgetSetEnabled, widgetSetControlSize, widgetSetOnClick, widgetSetOnHover, widgetSetOnDoubleClick } from "perry/ui";
 const b = Button("B", () => {});
-widgetSetEnabled(Toggle("T", (on: boolean) => {}), 0);
+const t = Toggle("T", (on: boolean) => {});
+widgetSetEnabled(t, 0);
+widgetSetOnClick(t, () => { console.log("toggle click"); });
 widgetSetEnabled(b, 0);
 widgetSetControlSize(b, 1);
 widgetSetOnClick(b, () => { console.log("click"); });
@@ -274,10 +276,12 @@ widgetSetOnDoubleClick(b, () => { console.log("dblclick"); });
 const el = [...uiHandles.values()].find(e => e.textContent === "B");
 console.log(el.disabled + " " + el.style.fontSize);
 for (const type of ["click", "mouseenter", "mouseleave", "dblclick"]) el.dispatch(type);
-console.log([...uiHandles.values()].find(e => e.textContent === "T")._inp.disabled);
+const toggle = [...uiHandles.values()].find(e => e.textContent === "T");
+console.log(toggle._inp.disabled);
+toggle._inp.dispatch("click");
 "#
         ),
-        "true 0.85em\nclick\nhover true false\nhover false true\ndblclick\ntrue"
+        "true 0.85em\nclick\nhover true false\nhover false true\ndblclick\ntrue\ntoggle click"
     );
 }
 

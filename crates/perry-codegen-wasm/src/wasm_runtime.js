@@ -4580,8 +4580,9 @@ function perry_ui_on_frame(callback) {
 }
 function perry_ui_cancel_frame(id) { cancelAnimationFrame(id); }
 
+// On a Toggle, a click on the wrapper also clicks its checkbox and both reach the wrapper.
 function perry_ui_set_on_click(h, callback) {
-  const el = uiGet(h); if (el) el.addEventListener("click", () => callWasmClosure(callback));
+  const el = uiGet(h); if (el) (el._inp || el).addEventListener("click", () => callWasmClosure(callback));
 }
 function perry_ui_set_on_hover(h, callback) {
   const el = uiGet(h); if (!el) return;
