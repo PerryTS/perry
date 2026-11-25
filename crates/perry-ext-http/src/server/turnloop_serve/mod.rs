@@ -265,6 +265,20 @@ unsafe extern "C" fn accepted(closure: *const RawClosureHeader, _: JsThis, socke
     f64::from_bits(JsValue::UNDEFINED.bits())
 }
 
+/// A transport callback capturing its server as a handle word, so the server
+/// id stays named while the callback can still run. The result is unrooted.
+fn server_closure(info: &'static perry_ffi::JsFunctionInfo, server_handle: i64) -> f64 {
+    let callback = perry_ffi::alloc_closure(info, 1);
+    unsafe {
+        perry_ffi::set_closure_capture_f64(
+            callback as *mut RawClosureHeader,
+            0,
+            f64::from_bits(JsValue::from_handle(server_handle as u64).bits()),
+        );
+    }
+    f64::from_bits(JsValue::from_object_ptr(callback as *mut u8).bits())
+}
+
 /// Bind and start accepting. Returns the listener id and the bound port.
 ///
 /// The bind is synchronous, so `server.address().port` is correct inside the
@@ -287,22 +301,12 @@ pub(crate) fn listen(
     let listener = scope.root_nanbox(if net::server_link(existing).is_ok() {
         existing
     } else {
-        let callback = scope.root_addr(perry_ffi::alloc_closure(
-            perry_ffi::js_function_info!(accepted, 1; with_flags(perry_ffi::FN_BUILTIN)),
-            1,
-        ) as i64);
-        unsafe {
-            perry_ffi::set_closure_capture_f64(
-                callback.get() as *mut RawClosureHeader,
-                0,
-                // Captured as a handle word, so the server id stays named
-                // while this callback can still run.
-                f64::from_bits(perry_ffi::JsValue::from_handle(server_handle as u64).bits()),
-            );
-        }
         net::new_server(
             f64::from_bits(JsValue::UNDEFINED.bits()),
-            f64::from_bits(JsValue::from_object_ptr(callback.get() as *mut u8).bits()),
+            server_closure(
+                perry_ffi::js_function_info!(accepted, 1; with_flags(perry_ffi::FN_BUILTIN)),
+                server_handle,
+            ),
         )
     });
     // Publish the existing logical server's traced edge before init hooks.
@@ -324,10 +328,28 @@ pub(crate) fn listen(
     Ok((listener.get(), bound.port, bound.address))
 }
 
+/// The transport listener and its last connection have closed.
+unsafe extern "C" fn drained(closure: *const RawClosureHeader, _: JsThis) -> f64 {
+    let server_handle =
+        (perry_ffi::closure_capture_f64(closure, 0).to_bits() & 0xFFFF_FFFF_FFFF) as i64;
+    let _ = crate::server::server::with_base_server_mut(
+        server_handle,
+        crate::server::server::queue_deferred_close_emit,
+    );
+    f64::from_bits(JsValue::UNDEFINED.bits())
+}
+
 /// `server.close()` — stop accepting. In-flight connections finish, which is
 /// Node's contract; `closeAllConnections` is what tears those down.
-pub(crate) fn close_listener(listener: f64) {
-    net::close_server(listener);
+pub(crate) fn close_listener(listener: f64, server_handle: i64) {
+    let scope = TransientRootScope::enter();
+    let listener = scope.root_nanbox(listener);
+    let callback = server_closure(
+        perry_ffi::js_function_info!(drained, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        server_handle,
+    );
+    net::once(listener.get(), "close", callback);
+    net::close_server(listener.get());
 }
 
 /// The application's existing traced ownership edge, never a lookup table.

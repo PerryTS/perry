@@ -106,7 +106,7 @@ mod tests {
             queue_deferred_listening_emit(&mut server);
             assert_eq!(count.load(Ordering::Relaxed), 1);
             server.set_listening(false);
-            queue_deferred_close_emit(&mut server, 0);
+            queue_deferred_close_emit(&mut server);
             let handle = perry_ffi::register_handle(server);
             assert_eq!(drain_deferred_listen_for::<HttpServer, _>(handle, |s| s), 0);
             assert_eq!(count.load(Ordering::Relaxed), 1);
@@ -132,6 +132,28 @@ mod tests {
             let mut server = HttpServer::with_handler(0);
             server.set_listening(true);
             let handle = perry_ffi::register_handle(server);
+            assert_eq!(count.load(Ordering::Relaxed), 1);
+            assert!(perry_ffi::drop_handle(handle));
+            assert_eq!(count.load(Ordering::Relaxed), 0);
+        });
+    }
+
+    /// `close(cb)` on a server whose transport still drains owes nothing yet:
+    /// the pump finds no emit, and the callback alone keeps no loop alive.
+    #[test]
+    fn a_close_callback_waits_for_the_drained_transport() {
+        on_private_agent(|| {
+            let count = current_count();
+            let mut server = HttpServer::with_handler(0);
+            // A slot no drain in this test reaches with a live closure.
+            register_close_callback(&mut server, 8);
+            let handle = perry_ffi::register_handle(server);
+            assert_eq!(count.load(Ordering::Relaxed), 0);
+            assert_eq!(drain_deferred_close_for::<HttpServer, _>(handle, |s| s), 0);
+            let server = perry_ffi::get_handle_mut::<HttpServer>(handle).unwrap();
+            assert_eq!(server.deferred_close_cbs, [8]);
+            assert_eq!(server.listeners["close"], [8]);
+            queue_deferred_close_emit(server);
             assert_eq!(count.load(Ordering::Relaxed), 1);
             assert!(perry_ffi::drop_handle(handle));
             assert_eq!(count.load(Ordering::Relaxed), 0);
