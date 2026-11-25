@@ -1789,6 +1789,12 @@ impl Model {
             // `s`'s keys on the Proxy (`spread_into`, `store_into`). Other
             // copies (a literal's spread, a rest object) copy into a fresh
             // object, never into a Proxy.
+            // JSON-RT: a Proxy's serialization runs its traps: content the
+            // model does not hold (`json_rt_apply`).
+            Cons::JsonCopy { dst, site, arr, at } => {
+                let t = self.tok(TokKind::Proxy(p));
+                self.json_rt_apply(dst, site, arr, at, crate::delta::Tokens::Slice(&[t]), 0);
+            }
             Cons::SpreadFrom { src, site, from } => {
                 let t = self.tok(TokKind::Proxy(p));
                 self.spread_into(src, t, site, from);

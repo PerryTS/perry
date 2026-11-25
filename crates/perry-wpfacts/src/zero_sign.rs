@@ -175,7 +175,9 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::Hard { .. }
         | Cons::TopIfTop { .. }
         | Cons::OwnTest { .. }
-        | Cons::OwnGate { .. } => Use::Absorb,
+        | Cons::OwnGate { .. }
+        // JSON-RT: `-0` serializes as `0` (25.5.2.2 step 9, Number::toString).
+        | Cons::JsonCopy { .. } => Use::Absorb,
         // Constraints of objects: a store's value reaches its slot by an
         // edge (`Store`, `BirthField`, spreads, iteration, `Array.from`);
         // calling, constructing or defining on a Number throws or does

@@ -385,6 +385,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::CjsPublish { .. } => Reject(R5Contract(c.kind_name().into())),
         // Iteration, spread, enumeration.
         Cons::Spread { .. }
+        | Cons::JsonCopy { .. }
         | Cons::SpreadFrom { .. }
         | Cons::OwnComputedKey { .. }
         | Cons::ProtoKeySet { .. }

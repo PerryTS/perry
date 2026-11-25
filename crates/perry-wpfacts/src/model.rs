@@ -2102,6 +2102,18 @@ pub struct Model {
     /// token, the last step) -> the class's object and array tokens.
     /// Compiler-internal: nothing of it reaches the binary.
     pub json_class: FxHashMap<(Tok, JsonStep), (Tok, Tok)>,
+    /// JSON-RT parse sites (`solve::json_rt`): the site's `json` object
+    /// token -> its any-JSON value, root and nested nodes (made on first
+    /// use). Compiler-internal, as everything below.
+    pub json_rt_loose: FxHashMap<Tok, (NodeId, NodeId)>,
+    /// JSON-RT: (site, source token) -> the source's copy at that site.
+    pub json_rt_copy: FxHashMap<(Tok, Tok), Tok>,
+    /// JSON-RT: source token -> its copies (copy, site), for keys it gains
+    /// later.
+    /// (copy, site, site's Array token).
+    pub json_rt_to: FxHashMap<Tok, Vec<(Tok, Tok, Tok)>>,
+    /// What `toJSON` returns on a token (`Protocol::Json`'s result node).
+    pub json_rt_ret: FxHashMap<Tok, NodeId>,
     /// An array's values under a key no store named (`Model::named_any`):
     /// what its named non-index keys read. Its elements are not among them.
     /// A module namespace's values every name reads (DECISIONS 215).

@@ -44,6 +44,7 @@ mod store;
 mod escape;
 mod fields;
 mod json_pos;
+pub(crate) mod json_rt;
 mod shaped_keys;
 pub(crate) mod strs;
 mod virt;
@@ -2668,7 +2669,11 @@ impl Model {
         if !calls {
             return;
         }
-        let ret = self.node_named("implicit-ret", || format!("implicit-ret({t})"));
+        // JSON-RT reads what `toJSON` returns (`json_rt_ret`).
+        let ret = match proto {
+            Protocol::Json => self.json_rt_ret(t),
+            _ => self.node_named("implicit-ret", || format!("implicit-ret({t})")),
+        };
         if proto == Protocol::ToPrimitive {
             self.to_prim_ret.insert(t, ret);
             self.to_prim_ret_nodes.insert(ret);

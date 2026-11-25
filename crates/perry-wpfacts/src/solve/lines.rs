@@ -321,6 +321,7 @@ impl Model {
             Cons::RetInto { call, run } => format!("retinto {n} {call} {run}"),
             Cons::ArgInto { call, run, i } => format!("arginto {n} {call} {run} {i}"),
             Cons::Spread { into, site } => format!("spread {n} {into} {site}"),
+            Cons::JsonCopy { dst, site, arr, at } => format!("jsoncopy {n} {dst} {site} {arr} {at}"),
             Cons::SpreadFrom { src, site, .. } => format!("spreadfrom {n} {src} {site}"),
             Cons::OwnComputedKey { key, val } => format!("owncomputedkey {n} {key} {val}"),
             Cons::ProtoKeySet { target, val, site } => {

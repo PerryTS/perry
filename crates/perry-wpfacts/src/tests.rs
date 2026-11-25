@@ -158,6 +158,7 @@ mod host_objects;
 mod hub_tokens;
 mod hub_wrap;
 mod hub_install;
+mod json_rt;
 mod identity_routes;
 mod idx_prim_call;
 mod in_bounds;

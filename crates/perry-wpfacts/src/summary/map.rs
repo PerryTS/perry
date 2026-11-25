@@ -636,6 +636,12 @@ pub fn map_cons(
             into: n(into),
             site,
         },
+        JsonCopy { dst, site, arr, at } => JsonCopy {
+            dst: n(dst),
+            site,
+            arr,
+            at,
+        },
         SpreadFrom { src, site, from } => SpreadFrom {
             src,
             site,
@@ -729,6 +735,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | OwnDescValues { .. }
             | CjsPublish { .. }
             | Spread { .. }
+            | JsonCopy { .. }
             | Store { .. }
             | Call { .. }
             | New { .. }

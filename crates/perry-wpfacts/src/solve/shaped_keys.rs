@@ -173,6 +173,8 @@ impl Model {
         for (d, site) in self.spread_to.get(&t).cloned().unwrap_or_default() {
             self.store_into(d, Key::Any(s), n, site);
         }
+        // And every JSON-RT copy of `t` (`json_rt_shaped`).
+        self.json_rt_shaped(t, n);
         n
     }
 

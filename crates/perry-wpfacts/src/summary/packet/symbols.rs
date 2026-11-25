@@ -622,6 +622,11 @@ impl Model {
                     .get(site as usize)
                     .map(|s| (&s.desc, s.birth, s.rooted))
             ),
+            Cons::JsonCopy { dst, site, arr, at } => format!(
+                "JsonCopy dst={dst:?} site={:?} arr={:?} at={at}",
+                self.packet_token(site, packet),
+                self.packet_token(arr, packet)
+            ),
             Cons::OwnComputedKey { key, val } => format!("OwnComputedKey key={key:?} val={val:?}"),
             Cons::ProtoKeySet { target, val, site } => format!(
                 "ProtoKeySet target={:?} val={val:?} site={site:?}",

@@ -165,12 +165,15 @@ impl Model {
                 self.store_into(d, Key::Named(a), n, site);
             }
         }
+        // And every JSON-RT copy of `t` has it.
+        self.json_rt_replay(t, a, n);
     }
 
     /// `t` escaped: each own key of it may now be enumerable (`enum_own`):
     /// the fields not enumerable before join its for-in keys and its
     /// spreads.
     pub(crate) fn enum_escaped(&mut self, t: Tok) {
+        self.json_rt_escaped(t);
         for a in self.field_keys.get(&t).cloned().unwrap_or_default() {
             let f = self.field_r(t, a);
             if self.nodes[f as usize].enum_key || self.is_num_atom(a) {

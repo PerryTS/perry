@@ -3287,6 +3287,9 @@ impl Model {
                     );
                 }
             }
+            Cons::JsonCopy { dst, site, arr, at } => {
+                self.json_rt_apply(dst, site, arr, at, toks, prim)
+            }
             Cons::SpreadFrom { src, site, from } => {
                 for &d in toks {
                     // A copy into an Array (`Object.assign`) may write any

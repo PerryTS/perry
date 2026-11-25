@@ -1055,6 +1055,11 @@ pub enum Cons {
     /// by key, into each target (`Model::spread_into`), never through one
     /// any-key bucket.
     Spread { into: NodeId, site: SiteId },
+    /// JSON-RT (`solve::json_rt`): the node's values, serialized by
+    /// `JSON.stringify` at position `at` (`JSON_AT_*`) and parsed back, are
+    /// what `dst` holds; `site` / `arr` are the parse site's `json` object
+    /// and Array tokens.
+    JsonCopy { dst: NodeId, site: Tok, arr: Tok, at: u8 },
     /// The node holds the targets of a spread from source token `src`; `from` is the node of the
     /// spread's source value (the census attributes a spread of ⊤ to it).
     SpreadFrom {
@@ -1331,6 +1336,7 @@ impl Cons {
             Cons::RetInto { .. } => "retinto",
             Cons::ArgInto { .. } => "arginto",
             Cons::Spread { .. } => "spread",
+            Cons::JsonCopy { .. } => "jsoncopy",
             Cons::SpreadFrom { .. } => "spreadfrom",
             Cons::OwnComputedKey { .. } => "owncomputedkey",
             Cons::ProtoKeySet { .. } => "protokeyset",

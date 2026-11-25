@@ -308,6 +308,45 @@ impl<'a> Gen<'a> {
                 }
                 on
             }
+            // JSON-RT (`solve::json_rt`): the parse of `JSON.stringify(x)`
+            // with no replacer function is a fresh tree mirroring `x`.
+            Expr::JsonParse(text) | Expr::JsonParseTyped { text, .. }
+                if json_rt_operands(text).is_some() =>
+            {
+                let (x, rest) = json_rt_operands(text).unwrap();
+                // The stringify itself, as its own arm makes it.
+                let r = self.m.reason("JSON.stringify value");
+                let v = self.expr(fx, x);
+                self.m.cons(
+                    v,
+                    Cons::Implicit {
+                        reason: r,
+                        proto: Protocol::Json,
+                        region: self.m.thrown,
+                    },
+                );
+                let _ = self.prim_op(
+                    fx,
+                    &rest,
+                    prim::ALL,
+                    "JSON.stringify replacer",
+                    Protocol::Any,
+                );
+                let (obj, _) = self.bobj(mi, "json");
+                let arr = self.new_arr_template(mi, "json");
+                let at = self.m.tok(TokKind::Obj(arr, NO_CTX));
+                let out = self.tmp("json-rt");
+                self.m.cons(
+                    v,
+                    Cons::JsonCopy {
+                        dst: out,
+                        site: obj,
+                        arr: at,
+                        at: crate::solve::json_rt::JSON_AT_ROOT,
+                    },
+                );
+                out
+            }
             Expr::JsonParse(..) | Expr::JsonParseTyped { .. } | Expr::JsonRawJson(..) => {
                 let _ = self.prim_kids(fx, e, prim::STR, "JSON.parse text", Protocol::ToPrimitive);
                 {
@@ -1318,5 +1357,26 @@ impl<'a> Gen<'a> {
         self.m.calls[emit as usize].region = host;
         self.m.calls[tick as usize].region = host;
         crate::builtins::process_worker_event(&mut self.m, n, emit, tick);
+    }
+}
+
+/// JSON-RT: the value and the other operands of a `JSON.stringify` text
+/// with no replacer function (absent, `null` or `undefined`: 25.5.2.1
+/// step 4 then keeps every key); `None` for a text of any other origin.
+fn json_rt_operands(text: &Expr) -> Option<(&Expr, Vec<&Expr>)> {
+    let nullish = |r: &Expr| matches!(r, Expr::Null | Expr::Undefined);
+    match text {
+        Expr::JsonStringify(x) => Some((x, vec![])),
+        Expr::JsonStringifyPretty {
+            value,
+            replacer,
+            space,
+        } if replacer.as_deref().is_none_or(nullish) => {
+            let mut rest: Vec<&Expr> = replacer.as_deref().into_iter().collect();
+            rest.push(space);
+            Some((value, rest))
+        }
+        Expr::JsonStringifyFull(x, r, s) if nullish(r) => Some((x, vec![&**r, &**s])),
+        _ => None,
     }
 }
