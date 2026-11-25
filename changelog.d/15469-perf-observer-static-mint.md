@@ -1,0 +1,1 @@
+A `node:perf_hooks` constructor first reached through a static member read (`perf_hooks.PerformanceObserver.supportedEntryTypes`, before any `new`) gets its prototype methods, `Symbol.toStringTag` and static accessors, so a later `observer.observe(...)` no longer recurses until the stack overflows (#15223).
