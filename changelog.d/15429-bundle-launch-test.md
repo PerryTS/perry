@@ -1,0 +1,1 @@
+The macOS bundle launch test of `perry run` starts its child as libtest's per-test process, so it checks the app's arguments, streams and exit status again. It selected the child by thread name, which is `main` under `panic-abort-tests`, and no test ran.

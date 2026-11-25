@@ -1,0 +1,1 @@
+`--target web`: modules initialize in the entry's import order (an imported module before its importer, siblings in source order) instead of sorted-path order, so a module imported first no longer runs after one whose path sorts earlier (#15450).

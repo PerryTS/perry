@@ -345,6 +345,11 @@ the generating asset module where applicable.
 > binary. Read a real on-disk file by absolute path, and use the explicit
 > `$perryfs/<path>` form when you specifically mean the embedded copy.
 >
+> Every read-only open follows the same rule: `openSync`, `fs.promises.open` and
+> `createReadStream` serve the embedded bytes. Opening with a write flag goes to
+> disk. An embedded descriptor has no OS file behind it, so it cannot be passed as
+> a child process's `stdio`.
+>
 > Embedding supports host builds on macOS, Linux, and Windows. Windows uses
 > LLVM clang to emit a COFF registration object; set `PERRY_LLVM_CLANG` when
 > the matching clang is not first on `PATH`. Cross-target embedding is not

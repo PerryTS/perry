@@ -104,6 +104,7 @@ impl WasmModuleEmitter {
             "array_join",
             "array_index_of",
             "array_includes",
+            "array_last_index_of",
             "array_concat",
             "array_reverse",
             "array_flat",
@@ -231,7 +232,10 @@ impl WasmModuleEmitter {
             "generator_new",
             "box_new",
             "box_get",
+            "box_peek",
             "box_set",
+            "box_init",
+            "box_new_tdz",
             "class_set_static",
             "class_get_static",
             "class_instanceof",
@@ -531,7 +535,14 @@ impl WasmModuleEmitter {
 
     pub(super) fn collect_strings_in_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Let { init, .. } => {
+            Stmt::Let { id, name, init, .. } => {
+                // A `PreallocateTdzBoxes` before this `Let` left a placeholder.
+                if let Some(slot) = self.tdz_names.get_mut(&(self.current_mod_idx, *id)) {
+                    if slot.is_empty() {
+                        *slot = name.clone();
+                        self.intern_string(name);
+                    }
+                }
                 if let Some(e) = init {
                     self.collect_strings_in_expr(e);
                 }
@@ -610,7 +621,14 @@ impl WasmModuleEmitter {
                 }
             }
             Stmt::Break | Stmt::Continue | Stmt::LabeledBreak(_) | Stmt::LabeledContinue(_) => {}
-            Stmt::PreallocateBoxes(_) | Stmt::PreallocateTdzBoxes(_) | Stmt::ReleaseBoxes(_) => {}
+            Stmt::PreallocateTdzBoxes(ids) => {
+                for id in ids {
+                    self.tdz_names
+                        .entry((self.current_mod_idx, *id))
+                        .or_default();
+                }
+            }
+            Stmt::PreallocateBoxes(_) | Stmt::ReleaseBoxes(_) => {}
         }
     }
 
@@ -927,6 +945,11 @@ impl WasmModuleEmitter {
                 from_index,
             }
             | Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            }
+            | Expr::ArrayLastIndexOf {
                 array,
                 value,
                 from_index,

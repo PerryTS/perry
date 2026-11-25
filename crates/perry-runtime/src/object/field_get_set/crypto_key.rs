@@ -42,20 +42,29 @@ pub(crate) unsafe fn crypto_key_property_value(addr: usize, key_bytes: &[u8]) ->
 }
 
 unsafe fn crypto_key_algorithm_value(addr: usize, algo: u8, hash: u8, bit_length: u32) -> JSValue {
-    let obj = js_object_alloc(0, 3);
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let key = scope.root_nanbox_u64(JSValue::pointer(addr as *const u8).bits());
+    let obj = js_object_alloc(0, 4);
     if obj.is_null() {
         return JSValue::undefined();
     }
-    set_string_field(obj, b"name", crypto_key_algorithm_name(algo));
+    let obj = scope.root_nanbox_u64(JSValue::pointer(obj as *const u8).bits());
+    set_string_field(&scope, &obj, b"name", crypto_key_algorithm_name(algo));
+    if crypto_key_algorithm_is_rsa(algo) {
+        set_rsa_key_fields(&key, &obj);
+    }
     if crypto_key_algorithm_has_hash(algo) {
         let hash_obj = js_object_alloc(0, 1);
         if !hash_obj.is_null() {
-            set_string_field(hash_obj, b"name", crypto_key_hash_name(hash));
-            set_value_field(obj, b"hash", JSValue::pointer(hash_obj as *const u8));
+            let hash_obj = scope.root_nanbox_u64(JSValue::pointer(hash_obj as *const u8).bits());
+            set_string_field(&scope, &hash_obj, b"name", crypto_key_hash_name(hash));
+            let hash_value = JSValue::from_bits(hash_obj.get_nanbox_u64());
+            set_value_field(&scope, &obj, b"hash", hash_value);
         }
     }
     if crypto_key_algorithm_has_length(algo) {
-        let key = addr as *const crate::buffer::BufferHeader;
+        let key =
+            JSValue::from_bits(key.get_nanbox_u64()).as_pointer::<crate::buffer::BufferHeader>();
         let bits = if bit_length != 0 {
             bit_length as f64
         } else if key.is_null() {
@@ -63,12 +72,29 @@ unsafe fn crypto_key_algorithm_value(addr: usize, algo: u8, hash: u8, bit_length
         } else {
             crate::buffer::js_buffer_length(key) as f64 * 8.0
         };
-        set_value_field(obj, b"length", JSValue::number(bits));
+        set_value_field(&scope, &obj, b"length", JSValue::number(bits));
     }
     if let Some(curve) = crypto_key_named_curve(algo) {
-        set_string_field(obj, b"namedCurve", curve);
+        set_string_field(&scope, &obj, b"namedCurve", curve);
     }
-    JSValue::pointer(obj as *const u8)
+    JSValue::from_bits(obj.get_nanbox_u64())
+}
+
+/// Adds `modulusLength` and `publicExponent`. They are encoded in the key's DER,
+/// and the decoder lives in perry-stdlib.
+unsafe fn set_rsa_key_fields(
+    key: &crate::gc::RuntimeHandle<'_>,
+    algorithm: &crate::gc::RuntimeHandle<'_>,
+) {
+    let ptr = crate::value::JS_NATIVE_WEBCRYPTO_DISPATCH.load(std::sync::atomic::Ordering::SeqCst);
+    if ptr.is_null() {
+        return;
+    }
+    let dispatch: unsafe extern "C" fn(*const u8, usize, *const f64, usize) -> f64 =
+        std::mem::transmute(ptr);
+    let args = [key.get_nanbox_f64(), algorithm.get_nanbox_f64()];
+    let method = "setRsaKeyAlgorithmFields";
+    dispatch(method.as_ptr(), method.len(), args.as_ptr(), args.len());
 }
 
 fn crypto_key_algorithm_name(algo: u8) -> &'static str {
@@ -117,8 +143,12 @@ fn crypto_key_hash_name(hash: u8) -> &'static str {
     }
 }
 
+fn crypto_key_algorithm_is_rsa(algo: u8) -> bool {
+    matches!(algo, 12 | 13 | 14)
+}
+
 fn crypto_key_algorithm_has_hash(algo: u8) -> bool {
-    matches!(algo, 1 | 12 | 13 | 14)
+    algo == 1 || crypto_key_algorithm_is_rsa(algo)
 }
 
 fn crypto_key_algorithm_has_length(algo: u8) -> bool {
@@ -161,15 +191,26 @@ unsafe fn crypto_key_usages_value(usages: u32) -> JSValue {
     JSValue::array_ptr(arr)
 }
 
-unsafe fn set_string_field(obj: *mut ObjectHeader, key: &[u8], value: &str) {
-    let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    let value = crate::string::js_string_from_bytes(value.as_ptr(), value.len() as u32);
-    js_object_set_field_by_name(obj, key, f64::from_bits(JSValue::string_ptr(value).bits()));
+unsafe fn set_string_field(
+    scope: &crate::gc::RuntimeHandleScope,
+    obj: &crate::gc::RuntimeHandle<'_>,
+    key: &[u8],
+    value: &str,
+) {
+    let value = string_value(value);
+    set_value_field(scope, obj, key, value);
 }
 
-unsafe fn set_value_field(obj: *mut ObjectHeader, key: &[u8], value: JSValue) {
+unsafe fn set_value_field(
+    scope: &crate::gc::RuntimeHandleScope,
+    obj: &crate::gc::RuntimeHandle<'_>,
+    key: &[u8],
+    value: JSValue,
+) {
+    let value = scope.root_nanbox_f64(f64::from_bits(value.bits()));
     let key = crate::string::js_string_from_bytes(key.as_ptr(), key.len() as u32);
-    js_object_set_field_by_name(obj, key, f64::from_bits(value.bits()));
+    let obj = JSValue::from_bits(obj.get_nanbox_u64()).as_pointer::<ObjectHeader>();
+    js_object_set_field_by_name(obj.cast_mut(), key, value.get_nanbox_f64());
 }
 
 unsafe fn string_value(value: &str) -> JSValue {

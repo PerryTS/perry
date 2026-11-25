@@ -13,9 +13,18 @@ fn with_source<T>(
         if let Some(fd) = numeric_fd_value(path_value) {
             return FD_REGISTRY.with(|registry| {
                 let mut registry = registry.borrow_mut();
-                let file = registry
+                let file = match registry
                     .get_mut(&fd)
-                    .ok_or_else(|| FsReadFailure::read(ebadf_os_error()))?;
+                    .ok_or_else(|| FsReadFailure::read(ebadf_os_error()))?
+                {
+                    FdEntry::Owned(file) => file,
+                    FdEntry::Adopted(file) => &mut **file,
+                    FdEntry::Embedded(cursor) => {
+                        let mut rest = Vec::new();
+                        cursor.read_to_end(&mut rest).map_err(FsReadFailure::read)?;
+                        return embedded(&rest).map_err(FsReadFailure::read);
+                    }
+                };
                 let hint = file.metadata().ok().filter(|m| m.is_file()).map_or(0, |m| {
                     file.stream_position()
                         .map_or(0, |at| m.len().saturating_sub(at))

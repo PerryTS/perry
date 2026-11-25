@@ -76,9 +76,9 @@ pub(crate) fn withdraw_listen_callbacks(s: &mut HttpServer) {
     s.finish_activity_change(was_active);
 }
 
-pub(crate) fn queue_deferred_close_emit(s: &mut HttpServer, callback: i64) {
-    let was_active = server_is_active(s);
-    s.pending_close_emit = true;
+/// Register a `close(cb)` callback as a once `'close'` listener. It does not
+/// keep the loop alive: the transport the emit waits for does.
+pub(crate) fn register_close_callback(s: &mut HttpServer, callback: i64) {
     if callback != 0 {
         s.listeners
             .entry("close".to_string())
@@ -86,7 +86,31 @@ pub(crate) fn queue_deferred_close_emit(s: &mut HttpServer, callback: i64) {
             .push(callback);
         s.deferred_close_cbs.push(callback);
     }
+}
+
+pub(crate) fn queue_deferred_close_emit(s: &mut HttpServer) {
+    let was_active = server_is_active(s);
+    s.pending_close_emit = true;
     s.finish_activity_change(was_active);
+}
+
+/// `server.close(cb)` for every server kind. `'close'` is owed once the
+/// transport listener emits its own, which follows the last connection's close;
+/// a server without a listener waits for its unanswered requests.
+pub(crate) fn close_server(server_handle: i64, callback: i64) {
+    let _ = super::with_base_server_mut(server_handle, |s| {
+        s.set_listening(false);
+        s.connections_checking_interval_destroyed = true;
+        register_close_callback(s, callback);
+    });
+    match crate::server::turnloop_serve::listener_for_server(server_handle) {
+        Some(listener) => {
+            crate::server::turnloop_serve::close_listener(listener, server_handle);
+        }
+        None => {
+            let _ = super::with_base_server_mut(server_handle, queue_deferred_close_emit);
+        }
+    }
 }
 
 /// #4903 — fire a server's queued `'listening'` listeners + `listen(cb)`
@@ -169,7 +193,11 @@ where
         Some(server) => {
             let base = base_of(server);
             let was_active = server_is_active(base);
-            if !std::mem::take(&mut base.pending_close_emit) {
+            // A SCHED_RR worker's adopted connections are nobody's children:
+            // its unanswered requests are what `'close'` waits for.
+            let unanswered = !(base.pending.is_empty() && base.in_flight.is_empty())
+                && perry_ext_net::native_transport::server_link(base.transport_listener).is_err();
+            if unanswered || !std::mem::take(&mut base.pending_close_emit) {
                 return 0;
             }
             let callbacks = take_server_event_listeners(base, "close");
@@ -220,7 +248,8 @@ pub(super) fn server_is_active(s: &HttpServer) -> bool {
     if s.pending_listening_emit
         || !s.deferred_listen_cbs.is_empty()
         || s.pending_close_emit
-        || !s.deferred_close_cbs.is_empty()
+        || s.pending_error_emit.is_some()
+        || !s.pending_client_errors.is_empty()
     {
         return true;
     }
@@ -251,111 +280,6 @@ pub struct ListenError {
     pub port: u16,
 }
 
-/// libuv's description for the codes a `listen()` can fail with, which is the
-/// middle of Node's message: `listen EADDRINUSE: address already in use
-/// 127.0.0.1:47421`. Measured on Node 26.5.1 rather than transcribed.
-fn listen_error_description(code: &str) -> &'static str {
-    match code {
-        "EADDRINUSE" => "address already in use",
-        "EACCES" => "permission denied",
-        "EADDRNOTAVAIL" => "address not available",
-        "EINVAL" => "invalid argument",
-        "ENOTFOUND" => "getaddrinfo ENOTFOUND",
-        "EAFNOSUPPORT" => "address family not supported",
-        "EMFILE" => "too many open files",
-        "ENOTSUP" => "operation not supported on socket",
-        "EAGAIN" => "resource temporarily unavailable",
-        _ => "listen failed",
-    }
-}
-
-/// The fallback when the error object could not be allocated: hand the
-/// listener the message string alone, so something still arrives.
-fn listen_error_message_value(err: &ListenError) -> f64 {
-    let s = alloc_string(&listen_error_message(err));
-    f64::from_bits(JsValue::from_string_ptr(s.as_raw()).bits())
-}
-
-/// Node's `err.message` for a failed listen.
-fn listen_error_message(err: &ListenError) -> String {
-    if err.address.is_empty() {
-        format!(
-            "{} {}: {}",
-            err.syscall,
-            err.code,
-            listen_error_description(&err.code)
-        )
-    } else {
-        format!(
-            "{} {}: {} {}:{}",
-            err.syscall,
-            err.code,
-            listen_error_description(&err.code),
-            err.address,
-            err.port
-        )
-    }
-}
-
-/// Build the value the `'error'` listener receives.
-///
-/// This follows `perry-ext-net`'s `build_error_object` rather than inventing a
-/// second shape: a plain object carrying `message` / `code` / `name` / `errno`
-/// / `syscall`, plus the two fields Node adds for a listen failure (`address`,
-/// `port`). One divergence, pre-existing and Perry-wide for `'error'` payloads:
-/// `err instanceof Error` is false, because this is an object rather than a
-/// real `Error`. Every field a program reads is present.
-///
-/// GC: each freshly allocated string is rooted through the same scope as the
-/// receiver **before the next store**, because a field write can collect and a
-/// raw local would be read back stale (#8082).
-unsafe fn build_listen_error_value(err: &ListenError) -> f64 {
-    let obj: *mut perry_ffi::ObjectHeader = unsafe {
-        perry_ffi::runtime_layouts::alloc_runtime_record(
-            perry_ffi::runtime_layouts::RECORD_F17_0::desc(),
-        )
-    };
-    if obj.is_null() {
-        return listen_error_message_value(err);
-    }
-    // Root `obj` BEFORE anything in this function can allocate. The failure
-    // path above is a separate function for the same reason: its `alloc_string`
-    // is unreachable from here, but it sat lexically between the alloc and the
-    // root, and `unrooted_local_shape.py` is flow-insensitive by design --
-    // an unrooted window it cannot rule out is one a reader cannot either.
-    let roots = perry_ffi::TransientRootScope::enter();
-    let object = roots.root_nanbox(f64::from_bits(
-        JsValue::from_object_ptr(obj as *mut u8).bits(),
-    ));
-    let message = listen_error_message(err);
-    let set_string = |index: u32, value: &str| {
-        let rooted = roots.root_nanbox(f64::from_bits(
-            JsValue::from_string_ptr(alloc_string(value).as_raw()).bits(),
-        ));
-        perry_ffi::js_object_set_field(
-            (object.get().to_bits() & PTR_MASK) as *mut perry_ffi::ObjectHeader,
-            index,
-            JsValue::from_bits(rooted.get().to_bits()),
-        );
-    };
-    set_string(0, &message);
-    set_string(1, &err.code);
-    set_string(2, "Error");
-    perry_ffi::js_object_set_field(
-        (object.get().to_bits() & PTR_MASK) as *mut perry_ffi::ObjectHeader,
-        3,
-        JsValue::from_number(err.errno as f64),
-    );
-    set_string(4, &err.syscall);
-    set_string(5, &err.address);
-    perry_ffi::js_object_set_field(
-        (object.get().to_bits() & PTR_MASK) as *mut perry_ffi::ObjectHeader,
-        6,
-        JsValue::from_number(err.port as f64),
-    );
-    object.get()
-}
-
 struct DeferredErrorCall {
     callbacks: *const perry_ffi::TransientRootedAddr,
     len: usize,
@@ -371,7 +295,17 @@ unsafe extern "C" fn call_deferred_error_callbacks(data: *mut std::ffi::c_void) 
     // `call1` can run arbitrary JS and collect, so the value is re-read from
     // its root slot for every listener rather than carried in a bare local.
     let roots = perry_ffi::TransientRootScope::enter();
-    let error = roots.root_nanbox(build_listen_error_value(&*call.error));
+    let failed = &*call.error;
+    let error = roots.root_nanbox(perry_ext_net::listen_error_value(
+        &failed.code,
+        failed.errno,
+        &failed.syscall,
+        &failed.address,
+        i32::from(failed.port),
+    ));
+    if callbacks.is_empty() {
+        perry_ext_net::native_transport::uncaught(error.get());
+    }
     let mut fired = 0;
     for callback in callbacks {
         let callback = callback.get();
@@ -443,8 +377,7 @@ pub(crate) fn queue_listen_error_parts(
 /// the server — on the pump's tick, never inside `listen()`, because Node emits
 /// it asynchronously (measured: `after-listen-call, error`).
 ///
-/// An `'error'` with no listener is left to the existing uncaught path rather
-/// than being invented here: `fired == 0` simply reports zero.
+/// An `'error'` with no listener is uncaught, as Node's EventEmitter throws it.
 fn drain_deferred_error_for<T, F>(server_handle: i64, base_of: F) -> i32
 where
     T: Send + Sync + 'static,
@@ -454,9 +387,11 @@ where
         match get_handle_mut::<T>(server_handle) {
             Some(t) => {
                 let s = base_of(t);
+                let was_active = server_is_active(s);
                 let Some(error) = s.pending_error_emit.take() else {
                     return 0;
                 };
+                s.finish_activity_change(was_active);
                 let snapshot = take_server_event_listeners(s, "error");
                 (snapshot, s.async_id, error)
             }
@@ -497,31 +432,6 @@ mod listen_error_tests {
         }
     }
 
-    /// Node 26.5.1, measured: `listen EADDRINUSE: address already in use
-    /// 127.0.0.1:47421`. The shape is `<syscall> <CODE>: <description>
-    /// <address>:<port>`, and a program that matches on `err.message` sees it.
-    #[test]
-    fn message_matches_nodes_shape() {
-        assert_eq!(
-            listen_error_message(&err("EADDRINUSE", "127.0.0.1", 47421)),
-            "listen EADDRINUSE: address already in use 127.0.0.1:47421"
-        );
-        assert_eq!(
-            listen_error_message(&err("EACCES", "0.0.0.0", 80)),
-            "listen EACCES: permission denied 0.0.0.0:80"
-        );
-    }
-
-    /// A pipe listen has no address; the tail is omitted rather than rendered
-    /// as a stray `:0`.
-    #[test]
-    fn message_without_an_address_omits_the_tail() {
-        assert_eq!(
-            listen_error_message(&err("EADDRINUSE", "", 0)),
-            "listen EADDRINUSE: address already in use"
-        );
-    }
-
     /// A `listen(cb)` whose bind was posted to the loop's owner registers its
     /// callback up front (so the scanner roots it) without arming the
     /// `'listening'` emit; a bind that then fails must take the callback back
@@ -549,16 +459,6 @@ mod listen_error_tests {
         assert!(!server_is_active(&server));
     }
 
-    /// A listen with no loop anywhere (a host where `Loop::new` failed) is
-    /// reported as Node would report an unsupported socket operation.
-    #[test]
-    fn no_loop_message_names_the_operation() {
-        assert_eq!(
-            listen_error_message(&err("ENOTSUP", "127.0.0.1", 8080)),
-            "listen ENOTSUP: operation not supported on socket 127.0.0.1:8080"
-        );
-    }
-
     /// A failed listen never became a listening server, so a `'listening'`
     /// emit queued before the bind was attempted must not survive it — Node
     /// fires `'error'` and nothing else.
@@ -571,5 +471,9 @@ mod listen_error_tests {
         assert!(!server.pending_listening_emit);
         assert!(!server.listening);
         assert!(server.pending_error_emit.is_some());
+        assert!(
+            server_is_active(&server),
+            "the queued 'error' must keep the loop alive until the pump emits it"
+        );
     }
 }

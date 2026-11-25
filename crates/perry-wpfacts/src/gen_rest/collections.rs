@@ -322,9 +322,13 @@ impl<'a> Gen<'a> {
                 }
                 self.m.edge(v, out);
                 // A record's payload holds `v` in the returned iterator's place
-                // (`Cons::IterNext` steps it); any other reader (a `yield*`
+                // (`Cons::IterNext` steps it), guarded by RP2 or not (a literal
+                // record has no RP2 source); any other reader (a `yield*`
                 // delegation) reads `next` off the iterator itself.
-                if !record {
+                let payload = matches!(x.as_ref(), Expr::LocalGet(s)
+                    if matches!(e, Expr::GetIterator(_))
+                        && self.record_sources.contains(&(mi, *s)));
+                if !payload {
                     self.m.edge(returned, out);
                 }
                 out

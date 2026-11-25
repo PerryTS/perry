@@ -1531,14 +1531,33 @@ const __NON_I64_RETURN_IMPORTS = new Set([
 // "Cannot convert a BigInt value to a number" on the very first call
 // (instances 2/3 reproduce as soon as `_start` invokes `class_set_method`
 // via `mem_call`).
+// An import argument's i64 bits as the f64 the runtime reads them as.
+function __i64ArgToF64(a) {
+  if (typeof a !== 'bigint') return a;
+  _u64[0] = a; return _f64[0];
+}
 function wrapForI64(fn, coerceNumberToBigInt = true) {
   if (fn.__rawBigint === true) return fn;
+  // The converted arguments go to `fn` as call arguments, never through an array
+  // of numbers: V8 may store such an array as doubles and silence a NaN's payload
+  // there, which turned a NaN-boxed string argument into NaN once the page was hot.
+  // The arrays for longer calls hold `undefined` first, so they never become doubles.
+  // WebAssembly calls an import without a receiver, so `fn` needs none.
   return function(...args) {
-    const convertedArgs = args.map(a => {
-      if (typeof a === 'bigint') { _u64[0] = a; return _f64[0]; }
-      return a;
-    });
-    const result = __reflectApply(fn, this, convertedArgs);
+    const c = __i64ArgToF64;
+    let result;
+    switch (args.length) {
+      case 0: result = fn(); break;
+      case 1: result = fn(c(args[0])); break;
+      case 2: result = fn(c(args[0]), c(args[1])); break;
+      case 3: result = fn(c(args[0]), c(args[1]), c(args[2])); break;
+      case 4: result = fn(c(args[0]), c(args[1]), c(args[2]), c(args[3])); break;
+      default: {
+        const convertedArgs = new Array(args.length).fill(undefined);
+        for (let i = 0; i < args.length; i++) convertedArgs[i] = c(args[i]);
+        result = __reflectApply(fn, undefined, convertedArgs);
+      }
+    }
     if (typeof result === 'bigint') return result;
     if (typeof result === 'number') {
       // #1049 instance 1: this wrapper exists because most callees here are
@@ -1632,6 +1651,12 @@ function wrapImportsForI64(imports) {
     }
   }
   return wrapped;
+}
+
+// The key of a cell's dead-zone mark: a symbol, which no property of a program's can be.
+const __tdz = Symbol('perry.tdz');
+function __throwDeadZone(name) {
+  throw new ReferenceError(`Cannot access '${name}' before initialization`);
 }
 
 // What closure_new makes. Its class, not its keys, tells a closure from a plain
@@ -1861,16 +1886,39 @@ function __isComputedKeySlot(key) {
   return key.startsWith('__perry_computed_field_key_');
 }
 
+// Re-parents onto the built-in `base`'s prototype the first prototype up `className`'s
+// chain of user classes that inherits from Object.prototype.
+function __linkHostBase(className, base) {
+  const { prototype } = globalThis[base];
+  for (let c = className; c && c !== base; c = classParentTable[c]) {
+    const p = __classProto(c);
+    const up = Object.getPrototypeOf(p);
+    if (up === prototype) break;
+    if (up === Object.prototype) {
+      Object.setPrototypeOf(p, prototype);
+      break;
+    }
+  }
+}
+
 // With `caps`, the constructor is one evaluation of a class expression
 // (`Expr::ClassExprFresh`) with that capture environment. Its `prototype` holds
 // the class's own members bound to the evaluation, and its instances inherit from it.
-function __classCtor(className, ctorIdx, caps) {
+// `base` / `init` (an evaluation only; see `builtin_base_init` in emit/expr/classes.rs):
+// the built-in parent the instance is made from, and how the implicit constructor
+// forwards its args to it, as `new` on a declared class does (class_new_host,
+// host_super_init, error_super_init).
+function __classCtor(className, ctorIdx, caps, base, init = 0) {
   const evaluated = caps !== undefined;
   const ctor = function (...args) {
     if (new.target === undefined) {
       throw new TypeError(`Class constructor ${className} cannot be invoked without 'new'`);
     }
-    const self = __classInstance(className, evaluated ? proto : undefined);
+    const self = typeof base === 'string'
+      ? Object.setPrototypeOf(Reflect.construct(globalThis[base], []), proto)
+      : __classInstance(className, evaluated ? proto : undefined);
+    if (init & 1) __memDispatch.host_super_init(self, args);
+    if (init & 2) __memDispatch.error_super_init(self, init & 4 ? args[0] : undefined);
     if (ctorIdx < 0) return self;
     const impl = wasmInstance.exports.__indirect_function_table.get(ctorIdx);
     // The constructor's trailing params are the class's captures (see
@@ -1901,7 +1949,13 @@ function __classCtor(className, ctorIdx, caps) {
   if (evaluated) Object.defineProperty(ctor, __evaluationRecord, { value: { template: className, caps } });
   // A declared class's value shares its instances' prototype (see __classProto). An
   // evaluation has its own, holding the class's members bound to it.
-  const proto = evaluated ? Object.create(__classProtoBase(className)) : __classProto(className);
+  // With a built-in parent, an evaluation's instances are the built-in's objects, whose
+  // methods its prototype inherits, directly or through its declared parent classes.
+  if (typeof base === 'string') __linkHostBase(classParentTable[className], base);
+  const protoBase = evaluated ? __classProtoBase(className) : undefined;
+  const proto = evaluated
+    ? Object.create(typeof base === 'string' && protoBase === Object.prototype ? globalThis[base].prototype : protoBase)
+    : __classProto(className);
   __defineHidden(proto, 'constructor', ctor);
   if (evaluated) {
     for (const m of Object.keys(classMethodTable[className] || {})) {
@@ -1958,8 +2012,8 @@ function __classTemplate(className) {
   if (!t) __classTemplates.set(className, (t = { first: undefined, slots: [], proto: undefined, fields: new Set() }));
   return t;
 }
-function __classEvaluate(className, ctorIdx, caps) {
-  const ctor = __classCtor(className, ctorIdx, Array.isArray(caps) ? caps : []);
+function __classEvaluate(className, ctorIdx, caps, base, init) {
+  const ctor = __classCtor(className, ctorIdx, Array.isArray(caps) ? caps : [], base, init);
   __linkClassParent(className, ctor);
   const t = __classTemplate(className);
   if (t.first === undefined) t.first = ctor;
@@ -2262,8 +2316,26 @@ const __memDispatch = {
   },
   // A cell holds a local that closures capture and mutate, so all of them share it.
   box_new: (value) => ({ value }),
-  box_get: (cell) => cell.value,
-  box_set: (cell, value) => { cell.value = value; return value; },
+  // A lexical binding's cell in its dead zone carries the binding's name under `__tdz`; reading
+  // or assigning it throws until its declaration runs `box_init`. The mark is on the cell
+  // because testing the value could run a Proxy trap of the program's.
+  box_new_tdz: (name) => ({ value: undefined, [__tdz]: name }),
+  box_get: (cell) => {
+    if (cell[__tdz] !== undefined) __throwDeadZone(cell[__tdz]);
+    return cell.value;
+  },
+  // The compiler's own read of a binding (see with_tdz_suppressed): undefined in its dead zone.
+  box_peek: (cell) => cell.value,
+  box_set: (cell, value) => {
+    if (cell[__tdz] !== undefined) __throwDeadZone(cell[__tdz]);
+    cell.value = value;
+    return value;
+  },
+  box_init: (cell, value) => {
+    if (cell[__tdz] !== undefined) cell[__tdz] = undefined;
+    cell.value = value;
+    return value;
+  },
   // Console — args are already decoded by __bitsToJsValue
   console_log: (...args) => { console.log(...args); },
   console_warn: (...args) => { console.warn(...args); },
@@ -2556,6 +2628,9 @@ const __memDispatch = {
   },
   array_index_of: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value, fromIndex); },
   array_includes: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return 0; return arr.includes(value, fromIndex) ? 1 : 0; },
+  // fromIndex goes through only when the call passes one: an explicit `undefined`
+  // searches from index 0, not from the end.
+  array_last_index_of: (arr, value, ...fromIndex) => Array.isArray(arr) ? arr.lastIndexOf(value, ...fromIndex) : -1,
   array_concat: (a1, a2) => (Array.isArray(a1) ? a1 : []).concat(Array.isArray(a2) ? a2 : []),
   array_reverse: (arr) => { if (Array.isArray(arr)) arr.reverse(); return arr; },
   array_flat: (arr) => Array.isArray(arr) ? arr.flat() : [],
@@ -2812,21 +2887,11 @@ const __memDispatch = {
   // class_set_method/class_call_method interact with WASM indirect call table.
   class_new: (className, ctorIdx) => __classInstance(__classNoteCtorSlot(className, ctorIdx)),
   // `new C()` where C's chain of user classes ends at the built-in `base` (Map, Array,
-  // ...): the built-in object itself, on C's prototype. The first prototype up the chain
-  // that inherits from Object.prototype is re-parented onto base's.
+  // ...): the built-in object itself, on C's prototype.
   class_new_host: (className, ctorIdx, base) => {
     const cls = __classNoteCtorSlot(className, ctorIdx);
-    const Base = globalThis[String(base)];
-    for (let c = cls; c && c !== String(base); c = classParentTable[c]) {
-      const p = __classProto(c);
-      const up = Object.getPrototypeOf(p);
-      if (up === Base.prototype) break;
-      if (up === Object.prototype) {
-        Object.setPrototypeOf(p, Base.prototype);
-        break;
-      }
-    }
-    return Object.setPrototypeOf(Reflect.construct(Base, []), __classProto(cls));
+    __linkHostBase(cls, String(base));
+    return Object.setPrototypeOf(Reflect.construct(globalThis[String(base)], []), __classProto(cls));
   },
   // `super(...args)` into the built-in an instance from class_new_host was made from.
   // A collection's entries go through the instance's `set`/`add` (see __addMapEntries).
@@ -2853,9 +2918,10 @@ const __memDispatch = {
     return obj;
   },
   class_ref: (className, ctorIdx) => __classRef(String(className), ctorIdx | 0),
-  class_fresh: (className, ctorIdx, caps) => __classEvaluate(String(className), ctorIdx | 0, caps),
-  class_eval_begin: (className, ctorIdx) => {
-    const ctor = __classEvaluate(String(className), ctorIdx | 0, []);
+  class_fresh: (className, ctorIdx, caps, base, init) =>
+    __classEvaluate(String(className), ctorIdx | 0, caps, base, init | 0),
+  class_eval_begin: (className, ctorIdx, base, init) => {
+    const ctor = __classEvaluate(String(className), ctorIdx | 0, [], base, init | 0);
     __classDefining.push(ctor);
     return ctor;
   },
@@ -3986,20 +4052,23 @@ function perry_ui_show_toast(message) {
   drain();
 }
 
-function perry_ui_app_create(titleOrOpts, width, height) {
-  let title = "Perry App", bodyH, w = 800, ht = 600;
+function perry_ui_app_create(titleOrOpts, _width, _height) {
+  let title = "Perry App", bodyH;
   if (typeof titleOrOpts === "object" && titleOrOpts !== null) {
-    title = titleOrOpts.title || title; w = titleOrOpts.width || w; ht = titleOrOpts.height || ht;
+    title = titleOrOpts.title || title;
     bodyH = titleOrOpts.body;
-  } else { title = titleOrOpts || title; w = width || w; ht = height || ht; }
+  } else { title = titleOrOpts || title; }
   document.title = title;
+  // The browser window is the app's window: `width` and `height` are a native
+  // window's initial size, and the user resizes that window, so the root fills
+  // the viewport instead of drawing a fixed-size box inside it.
   const root = uiGetRoot();
+  root.style.width = "100%"; root.style.height = "100%";
   // A page snapshotted by scripts/web_prerender.mjs ships its rendered DOM inside the root
   // for crawlers and for readers before the WASM boots; the live UI replaces it.
   if (root.hasAttribute("data-perry-prerendered")) {
     root.replaceChildren(); root.removeAttribute("data-perry-prerendered");
   }
-  root.style.width = w + "px"; root.style.maxWidth = "100%"; root.style.height = ht + "px"; root.style.maxHeight = "100%";
   const h = uiAlloc(root);
   if (bodyH !== undefined) { const bodyEl = uiGet(bodyH); if (bodyEl) root.appendChild(bodyEl); }
   return h;
@@ -4008,17 +4077,21 @@ function perry_ui_vstack_create(spacing, children) {
   const el = document.createElement("div");
   el.style.display = "flex"; el.style.flexDirection = "column";
   if (spacing) el.style.gap = spacing + "px";
-  el.style.flex = "1 1 0%"; el.style.minHeight = "0"; el.style.overflow = "auto";
+  // A stack starts from its content's size, as a native one does; a sibling with a
+  // low hugging priority takes the free space (widgetSetHugging).
+  el.style.flex = "1 1 auto"; el.style.minHeight = "0"; el.style.overflow = "auto";
+  el._perryStack = true;
   const h = uiAlloc(el);
-  if (Array.isArray(children)) { for (var i = 0; i < children.length; i++) { var c = uiGet(children[i]); if (c) el.appendChild(c); } }
+  if (Array.isArray(children)) { for (var i = 0; i < children.length; i++) { var c = uiGet(children[i]); if (c) { el.appendChild(c); uiStackItem(el, c); } } }
   return h;
 }
 function perry_ui_hstack_create(spacing, children) {
   const el = document.createElement("div");
   el.style.display = "flex"; el.style.flexDirection = "row"; el.style.alignItems = "center";
   if (spacing) el.style.gap = spacing + "px";
+  el._perryStack = true;
   const h = uiAlloc(el);
-  if (Array.isArray(children)) { for (var i = 0; i < children.length; i++) { var c = uiGet(children[i]); if (c) el.appendChild(c); } }
+  if (Array.isArray(children)) { for (var i = 0; i < children.length; i++) { var c = uiGet(children[i]); if (c) { el.appendChild(c); uiStackItem(el, c); } } }
   return h;
 }
 function perry_ui_zstack_create() {
@@ -4282,7 +4355,25 @@ function perry_ui_textarea_get_string(h) { const el = uiGet(h); return el ? el.v
 // ---------- Child management ----------
 function perry_ui_widget_add_child(parentH, childH) {
   const p = uiGet(parentH), c = uiGet(childH);
-  if (p && c) p.appendChild(c);
+  if (p && c) { p.appendChild(c); uiStackItem(p, c); }
+}
+// Sizes `child` along `stack`'s main axis as the stack's distribution says
+// (stackSetDistribution): equal shares for FillEqually, shares by content for
+// FillProportionally. Under Fill, the default, a row gives its free width to a
+// child stack that has no hugging priority of its own, since a native stack view
+// hugs its content at low priority; widgetSetHugging decides for everything else.
+function uiStackItem(stack, child) {
+  if (!stack._perryStack) return;
+  const row = stack.style.flexDirection === "row";
+  const distribution = stack._perryDistribution;
+  if (distribution === 1 || distribution === 2) {
+    child.style.flex = distribution === 1 ? "1 1 0%" : "1 1 auto";
+  } else if (row && child._perryStack && child._perryHugging === undefined) {
+    // Weight 1 on top of its content: a sibling with a low hugging priority of its
+    // own (weight 250 - priority) takes nearly all the free width, as it would natively.
+    child.style.flex = "1 1 auto";
+  } else return;
+  if (row) child.style.minWidth = "0"; else child.style.minHeight = "0";
 }
 // The widgets added to `el`: a Section's legend or a Disclosure's summary is its title.
 function uiChildren(el) { return Array.from(el.children).filter(c => c !== el._perryTitle); }
@@ -4323,12 +4414,27 @@ function perry_ui_set_foreground(h, r, g, b, a) {
 function perry_ui_set_font_size(h, size) { const el = uiGet(h); if (el) el.style.fontSize = size + "px"; }
 function perry_ui_set_font_weight(h, weight) { const el = uiGet(h); if (el) el.style.fontWeight = weight; }
 // `textSetFontWeight(widget, size, weight)` sets the size and the weight together.
-// The weight is the native 0..1 scale (Apple's `systemFont(ofSize:weight:)`), mapped
-// onto CSS 100..900 and clamped, as the HarmonyOS backend maps it.
+// The weight is Apple's `systemFont(ofSize:weight:)` scale, which macOS uses as is:
+// regular 0, medium 0.23, semibold 0.3, bold 0.4, heavy 0.56, black 0.62, and the
+// light weights below 0. It is not linear, so CSS weights come from its named points.
+const __appleFontWeights = [[-0.8, 100], [-0.6, 200], [-0.4, 300], [0, 400], [0.23, 500], [0.3, 600], [0.4, 700], [0.56, 800], [0.62, 900]];
+function uiCssFontWeight(weight) {
+  const w = Number(weight) || 0;
+  const points = __appleFontWeights;
+  if (w <= points[0][0]) return points[0][1];
+  for (let i = 1; i < points.length; i++) {
+    const [x1, y1] = points[i];
+    if (w <= x1) {
+      const [x0, y0] = points[i - 1];
+      return __Math.round((y0 + (y1 - y0) * (w - x0) / (x1 - x0)) / 100) * 100;
+    }
+  }
+  return 900;
+}
 function perry_ui_text_set_font_weight(h, size, weight) {
   const el = uiGet(h); if (!el) return;
   el.style.fontSize = size + "px";
-  el.style.fontWeight = String(__Math.round(1 + 8 * __Math.min(__Math.max(weight, 0), 1)) * 100);
+  el.style.fontWeight = String(uiCssFontWeight(weight));
 }
 function perry_ui_set_font_family(h, family) { const el = uiGet(h); if (el) el.style.fontFamily = family; }
 function perry_ui_set_padding(h, top, left, bottom, right) {
@@ -4386,6 +4492,20 @@ function perry_ui_text_set_decoration(h, decoration) {
 // Issue #3621 — horizontal text alignment. Canonical Perry/AppKit values:
 // 0=left, 1=right, 2=center, 3=justified, 4=natural. Maps to CSS
 // `text-align` (natural → `start`, which follows the element's direction).
+// Lines beyond `lines` are cut with an ellipsis; 0 removes the limit.
+function perry_ui_text_set_number_of_lines(h, lines) {
+  const el = uiGet(h); if (!el) return;
+  const n = Number(lines);
+  if (n > 0) {
+    el.style.display = "-webkit-box";
+    el.style.webkitBoxOrient = "vertical";
+    el.style.webkitLineClamp = String(n);
+    el.style.overflow = "hidden";
+  } else {
+    el.style.webkitLineClamp = "";
+    el.style.overflow = "";
+  }
+}
 function perry_ui_text_set_text_alignment(h, alignment) {
   const el = uiGet(h);
   if (!el) return;
@@ -4411,16 +4531,19 @@ function perry_ui_textfield_set_borderless(h, borderless) {
 // Issue #185 Phase B closure 11 — Stack alignment via CSS flex.
 // Numeric enum: 0=fill, 1=center, 2=leading, 3=trailing, 4=baseline.
 // Maps to CSS `align-items` (cross-axis on flex containers).
+// `alignment` is an NSLayoutAttribute, as on macOS where it goes to NSStackView
+// unchanged (docs/src/ui/layout.md): it places children on the cross axis.
 function perry_ui_stack_set_alignment(h, alignment) {
   const el = uiGet(h);
   if (!el) return;
-  const value = alignment === 0 ? "stretch"
-    : alignment === 1 ? "center"
-    : alignment === 2 ? "flex-start"
-    : alignment === 3 ? "flex-end"
-    : alignment === 4 ? "baseline"
-    : "stretch";
-  el.style.alignItems = value;
+  const value = {
+    1: "flex-start", 3: "flex-start", 5: "flex-start",   // left, top, leading
+    2: "flex-end", 4: "flex-end", 6: "flex-end",         // right, bottom, trailing
+    7: "stretch", 8: "stretch",                          // width, height
+    9: "center", 10: "center",                           // centerX, centerY
+    11: "last baseline", 12: "first baseline",
+  }[Number(alignment)];
+  if (value) el.style.alignItems = value;
 }
 // Drop shadow (issue #185 Phase B closure 2). Same arg shape as the
 // Apple CALayer twin — `(r,g,b,a)` is shadow color, `blur` is shadow
@@ -4489,14 +4612,30 @@ function perry_ui_widget_set_width(h, w) {
     if (el) { el.style.width = w + "px"; el.style.minWidth = w + "px"; el.style.maxWidth = w + "px"; el.style.flexShrink = "0"; }
 }
 function perry_ui_widget_set_height(h, height) { const el = uiGet(h); if (el) el.style.height = height + "px"; }
-function perry_ui_widget_set_hugging(h) { const el = uiGet(h); if (el) el.style.flex = "0 0 auto"; }
+// Below 250 a widget stretches to take its stack's free space, as a low hugging
+// priority lets Auto Layout stretch it; from 250 up it keeps its natural size. The
+// lower the priority, the larger its share, so the lowest one takes nearly all of it.
+function perry_ui_widget_set_hugging(h, priority) {
+  const el = uiGet(h); if (!el) return;
+  el._perryHugging = Number(priority);
+  if (el._perryHugging < 250) { el.style.flex = `${250 - __Math.max(0, el._perryHugging)} 1 0%`; el.style.minWidth = "0"; }
+  else el.style.flex = "0 0 auto";
+}
 function perry_ui_widget_match_parent_width(h) { const el = uiGet(h); if (el) el.style.width = "100%"; }
 function perry_ui_widget_match_parent_height(h) { const el = uiGet(h); if (el) el.style.height = "100%"; }
 function perry_ui_widget_set_edge_insets(h, top, left, bottom, right) {
   perry_ui_set_padding(h, top, left, bottom, right);
 }
 function perry_ui_stack_set_detaches_hidden(h) { /* no-op in web */ }
-function perry_ui_stack_set_distribution(h) { /* no-op in web */ }
+// NSStackView distributions: 0 Fill, 1 FillEqually, 2 FillProportionally,
+// 3 EqualSpacing, 4 EqualCentering.
+function perry_ui_stack_set_distribution(h, distribution) {
+  const el = uiGet(h); if (!el) return;
+  el._perryDistribution = Number(distribution);
+  el.style.justifyContent = el._perryDistribution === 3 ? "space-between"
+    : el._perryDistribution === 4 ? "space-around" : "";
+  for (const child of uiChildren(el)) uiStackItem(el, child);
+}
 function perry_ui_widget_set_context_menu(widgetH, menuH) { /* simplified stub */ }
 
 // ---------- Animations ----------
@@ -4550,6 +4689,21 @@ function perry_ui_set_on_hover(h, callback) {
 }
 function perry_ui_set_on_double_click(h, callback) {
   const el = uiGet(h); if (el) el.addEventListener("dblclick", () => callWasmClosure(callback));
+}
+// widgetSetOnClick makes any widget a button: it takes the pointer cursor, keyboard
+// focus, and Enter or Space to activate it, as a native button would.
+function perry_ui_widget_set_on_click(h, callback) {
+  const el = uiGet(h); if (!el) return;
+  el.addEventListener("click", () => callWasmClosure(callback));
+  if (el.tagName === "BUTTON") return;
+  el.style.cursor = "pointer";
+  if (!el.hasAttribute("tabindex")) el.tabIndex = 0;
+  if (!el.hasAttribute("role")) el.setAttribute("role", "button");
+  el.addEventListener("keydown", (event) => {
+    if (event.target !== el || (event.key !== "Enter" && event.key !== " ")) return;
+    event.preventDefault();
+    callWasmClosure(callback);
+  });
 }
 
 // ---------- State ----------
@@ -4823,7 +4977,27 @@ function perry_ui_wheel_picker_set_selected(h, index) { const el = uiGet(h); if 
 function perry_ui_wheel_picker_get_selected(h) { const el = uiGet(h); return el ? el.selectedIndex : -1; }
 
 // ---------- Image ----------
-function perry_ui_image_create_symbol(name) { return perry_ui_text_create("⬜ " + name); }
+// A symbol is `symbols/<name>.svg` beside the page, drawn as a mask over the current
+// colour so imageSetTint colours it the way it colours a native symbol image. The
+// browser has no system symbol set; the app ships the SVGs it names, and a missing
+// file leaves the space empty.
+function perry_ui_image_create_symbol(name) {
+  const el = document.createElement("span");
+  const url = `url("symbols/${encodeURIComponent(String(name ?? ""))}.svg")`;
+  el.ariaHidden = "true";
+  el.style.display = "inline-block";
+  el.style.flexShrink = "0";
+  el.style.width = "1em";
+  el.style.height = "1em";
+  el.style.backgroundColor = "currentColor";
+  for (const prefix of ["webkitMask", "mask"]) {
+    el.style[prefix + "Image"] = url;
+    el.style[prefix + "Size"] = "contain";
+    el.style[prefix + "Repeat"] = "no-repeat";
+    el.style[prefix + "Position"] = "center";
+  }
+  return uiAlloc(el);
+}
 function perry_ui_image_create_url(url, alt) {
   const el = document.createElement("img");
   el.src = url || "";
@@ -5314,6 +5488,28 @@ function perry_system_haptic_play(type) {
   };
   try { navigator.vibrate(patterns[type] ?? 10); } catch (e) { /* no-op */ }
 }
+// The form factor from the input device and the viewport: a touch screen narrower
+// than a tablet is a "phone", a wider one a "pad", anything else "desktop".
+function perry_get_device_idiom() {
+  const touch = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches;
+  if (!touch) return "desktop";
+  const width = Math.min(window.innerWidth || 0, (window.screen && window.screen.width) || Infinity);
+  return width < 600 ? "phone" : "pad";
+}
+// The system share sheet where the browser has one (navigator.share), otherwise
+// the URL goes to the clipboard.
+function perry_system_share_url(url, title) {
+  const text = String(url ?? "");
+  if (typeof navigator !== "undefined" && typeof navigator.share === "function") {
+    navigator.share(title ? { url: text, title: String(title) } : { url: text }).catch(() => {});
+  } else if (typeof navigator !== "undefined" && navigator.clipboard) {
+    navigator.clipboard.writeText(text).catch(() => {});
+  }
+}
+// Remote push needs a Web Push subscription the page cannot create on its own, so
+// the callback is never called: the app sees no device token, as on a device
+// where the user declined notifications.
+function perry_system_notification_register_remote(_callback) {}
 function perry_system_keychain_save(key, value) { try { localStorage.setItem("__pk_" + key, value); } catch(e) {} }
 function perry_system_keychain_get(key) { return localStorage.getItem("__pk_" + key) || ""; }
 function perry_system_keychain_delete(key) { localStorage.removeItem("__pk_" + key); }
@@ -6216,6 +6412,7 @@ const __perryUiDispatch = {
   perry_ui_on_frame, perry_ui_cancel_frame,
   // Events
   perry_ui_set_on_click, perry_ui_set_on_hover, perry_ui_set_on_double_click,
+  perry_ui_widget_set_on_click,
   // State
   perry_ui_state_create, perry_ui_state_get, perry_ui_state_set,
   perry_ui_state_on_change, perry_ui_state_bind_text, perry_ui_state_bind_text_numeric,
@@ -6227,7 +6424,7 @@ const __perryUiDispatch = {
   // Text/Button/TextField ops
   perry_ui_text_set_string, perry_ui_text_set_selectable, perry_ui_text_set_wraps, perry_ui_text_set_color,
   perry_ui_text_set_letter_spacing, perry_ui_text_set_line_height,
-  perry_ui_text_set_text_alignment,
+  perry_ui_text_set_text_alignment, perry_ui_text_set_number_of_lines,
   perry_ui_button_set_bordered, perry_ui_button_set_title, perry_ui_button_set_text_color,
   perry_ui_button_set_image, perry_ui_button_set_content_tint_color, perry_ui_button_set_image_position,
   perry_ui_textfield_focus, perry_ui_textfield_set_string, perry_ui_textfield_get_string,
@@ -6282,6 +6479,7 @@ const __perryUiDispatch = {
   // System
   perry_system_open_url, perry_system_is_dark_mode, perry_system_preferences_get,
   perry_system_preferences_set, perry_system_haptic_play,
+  perry_get_device_idiom, perry_system_share_url, perry_system_notification_register_remote,
   perry_system_keychain_save, perry_system_keychain_get,
   perry_system_keychain_delete, perry_system_notification_send,
   // Frame split

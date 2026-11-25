@@ -28,11 +28,11 @@ pub extern "C" fn perry_ui_adbanner_create(unit_id_ptr: i64, size_ptr: i64) -> i
     widgets::adbanner::create(unit_id_ptr as *const u8, size_ptr as *const u8)
 }
 
-/// #635 stub: remote URL images aren't fetched on Android yet —
-/// register an empty image widget so layout still works.
+/// Image(url, alt): an aspect-fill ImageView that PerryBridge fetches and
+/// decodes off the UI thread (cached by URL), like the iOS backend.
 #[no_mangle]
-pub extern "C" fn perry_ui_image_create_url(_url_ptr: i64, _alt_ptr: i64) -> i64 {
-    widgets::image::create_symbol(0 as *const u8)
+pub extern "C" fn perry_ui_image_create_url(url_ptr: i64, alt_ptr: i64) -> i64 {
+    widgets::image::create_url(url_ptr as *const u8, alt_ptr as *const u8)
 }
 
 #[no_mangle]
@@ -248,18 +248,25 @@ pub extern "C" fn perry_ui_save_file_dialog(
 }
 
 #[no_mangle]
-pub extern "C" fn perry_ui_alert(
-    title_ptr: i64,
-    message_ptr: i64,
-    buttons_ptr: i64,
-    callback: f64,
-) {
+pub extern "C" fn perry_ui_alert(title_ptr: i64, message_ptr: i64, buttons: f64, callback: f64) {
+    // The dispatch row passes the buttons array as a NaN-boxed F64 (like
+    // iOS/macOS); taking it as i64 read the wrong register.
+    extern "C" {
+        fn js_nanbox_get_pointer(value: f64) -> i64;
+    }
+    let buttons_ptr = unsafe { js_nanbox_get_pointer(buttons) };
     dialog::alert(
         title_ptr as *const u8,
         message_ptr as *const u8,
-        buttons_ptr as *const u8,
+        buttons_ptr,
         callback,
     );
+}
+
+/// `alert(title, message)`: one OK button, no callback.
+#[no_mangle]
+pub extern "C" fn perry_ui_alert_simple(title_ptr: i64, message_ptr: i64) {
+    dialog::alert(title_ptr as *const u8, message_ptr as *const u8, 0, 0.0);
 }
 
 // =============================================================================

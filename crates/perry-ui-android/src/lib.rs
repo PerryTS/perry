@@ -13,6 +13,7 @@ extern crate perry_ext_sharp;
 pub mod app;
 pub mod audio;
 pub mod audio_playback;
+pub mod back;
 pub mod background;
 pub mod callback;
 pub mod camera;
@@ -20,6 +21,10 @@ pub mod clipboard;
 pub mod deeplinks;
 pub mod dialog;
 pub mod drag_drop;
+// Legacy synchronous JNI fetch (HttpURLConnection). Its `js_fetch_*` exports
+// collide with perry-stdlib's (different signatures), and every program that
+// calls fetch links perry-stdlib, so it is opt-in only.
+#[cfg(feature = "jni-fetch")]
 pub mod fetch;
 pub mod ffi;
 pub mod file_dialog;
@@ -133,6 +138,55 @@ pub(crate) fn catch_panic_void(name: &str, f: impl FnOnce() + std::panic::Unwind
     }
 }
 
+/// Android apps have no terminal: stdout / stderr go to /dev/null, so
+/// `console.log`, `console.error` and the runtime's own warnings vanish.
+/// Pipe both into logcat (tag "Perry", one line per entry).
+fn redirect_stdio_to_logcat() {
+    extern "C" {
+        fn pipe(fds: *mut i32) -> i32;
+        fn dup2(old: i32, new: i32) -> i32;
+        fn read(fd: i32, buf: *mut std::ffi::c_void, n: usize) -> isize;
+        fn setvbuf(stream: *mut std::ffi::c_void, buf: *mut u8, mode: i32, size: usize) -> i32;
+        fn __android_log_write(prio: i32, tag: *const u8, text: *const u8) -> i32;
+        static stdout: *mut std::ffi::c_void;
+        static stderr: *mut std::ffi::c_void;
+    }
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        let mut fds = [0i32; 2];
+        if pipe(fds.as_mut_ptr()) != 0 {
+            return;
+        }
+        // Line-buffered C stdio, unbuffered stderr (as on a terminal).
+        setvbuf(stdout, std::ptr::null_mut(), 1, 0);
+        setvbuf(stderr, std::ptr::null_mut(), 2, 0);
+        dup2(fds[1], 1);
+        dup2(fds[1], 2);
+        let rfd = fds[0];
+        let _ = std::thread::Builder::new()
+            .name("perry-stdio".into())
+            .spawn(move || {
+                let mut buf = [0u8; 4096];
+                let mut line: Vec<u8> = Vec::new();
+                loop {
+                    let n = read(rfd, buf.as_mut_ptr().cast(), buf.len());
+                    if n <= 0 {
+                        break;
+                    }
+                    for &b in &buf[..n as usize] {
+                        if b == b'\n' || line.len() >= 3000 {
+                            line.push(0);
+                            __android_log_write(4, b"Perry\0".as_ptr(), line.as_ptr());
+                            line.clear();
+                        } else {
+                            line.push(b);
+                        }
+                    }
+                }
+            });
+    });
+}
+
 /// Called by the JVM when the native library is loaded via System.loadLibrary().
 #[no_mangle]
 pub extern "C" fn JNI_OnLoad(
@@ -174,6 +228,7 @@ pub extern "C" fn JNI_OnLoad(
     }
 
     jni_bridge::init_vm(vm);
+    redirect_stdio_to_logcat();
     unsafe {
         __android_log_print(3, b"PerryJNI\0".as_ptr(), b"JNI_OnLoad: done\0".as_ptr());
     }

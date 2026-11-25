@@ -313,6 +313,14 @@ impl<'a> FuncEmitCtx<'a> {
                 let argc = self.emit_array_search_frame(func, array, value, from_index);
                 self.emit_memcall(func, "array_index_of", argc);
             }
+            Expr::ArrayLastIndexOf {
+                array,
+                value,
+                from_index,
+            } => {
+                let argc = self.emit_array_search_frame(func, array, value, from_index);
+                self.emit_memcall(func, "array_last_index_of", argc);
+            }
             Expr::ArrayIncludes {
                 array,
                 value,
@@ -569,8 +577,8 @@ impl<'a> FuncEmitCtx<'a> {
         true
     }
 
-    /// Opens the frame of `indexOf` / `includes`: the array, the value and, when given,
-    /// fromIndex. Returns the slot count.
+    /// Opens the frame of `indexOf` / `lastIndexOf` / `includes`: the array, the value
+    /// and, when given, fromIndex. Returns the slot count.
     fn emit_array_search_frame(
         &mut self,
         func: &mut Function,

@@ -38,6 +38,19 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
             jni::jni_sig!("(Z)V"),
             &[JValue::Bool(true)],
         );
+        // Keep the app font (password input type switches to monospace) and
+        // mask the text; after setSingleLine, which resets the transformation.
+        {
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("passwordFont"),
+                jni::jni_sig!("(Landroid/view/View;)V"),
+                &[JValue::Object(&edit_text)],
+            );
+        }
 
         // Password input type LAST: setSingleLine() above installs a
         // single-line transformation that replaced the password mask (the

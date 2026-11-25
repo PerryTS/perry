@@ -20,6 +20,7 @@ mod kdf;
 mod keys;
 mod prime;
 mod random;
+pub(crate) mod rsa_keygen;
 mod sign;
 pub(crate) mod util;
 mod uuid;
@@ -27,7 +28,7 @@ mod wide_digest;
 mod x509;
 
 // Private imports keep sibling modules able to share `pub(super)` helpers.
-use self::{cipher::*, ec_sign::*, kdf::*, keys::*, random::*, util::*, x509::*};
+use self::{cipher::*, ec_sign::*, kdf::*, keys::*, random::*, rsa_keygen::*, util::*, x509::*};
 
 // Public re-exports preserve the parent module surface for FFI entry points.
 pub use self::{

@@ -402,6 +402,7 @@ pub(crate) const API_MANIFEST_PART_4: &[ApiEntry] = &[
     method("perry/ui", "onKeyUp", false, None),
     method("perry/ui", "onAppKeyDown", false, None),
     method("perry/ui", "onAppKeyUp", false, None),
+    method("perry/ui", "onBackPressed", false, None),
     method("perry/ui", "focus", false, None),
     method("perry/ui", "blur", false, None),
     method("perry/ui", "isKeyDown", false, None),

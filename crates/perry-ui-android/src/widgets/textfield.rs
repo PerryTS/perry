@@ -103,12 +103,22 @@ pub fn set_string_str(handle: i64, text: &str) {
         jni_bridge::with_env(|env| {
             let _ = jni_bridge::push_local_frame(env, 8);
             let jstr = env.new_string(text).expect("Failed to create JNI string");
-            let _ = env.call_method(
-                view_ref.as_obj(),
-                jni::jni_str!("setText"),
-                jni::jni_sig!("(Ljava/lang/CharSequence;)V"),
-                &[JValue::Object(&jstr)],
+            // Through PerryBridge.setTextQuiet: as on iOS/macOS, setting the
+            // text from code must not fire the field's onChange (Android's
+            // TextWatcher reports every change, so an editor that filled its
+            // fields marked itself edited).
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("setTextQuiet"),
+                jni::jni_sig!("(Landroid/view/View;Ljava/lang/String;)V"),
+                &[JValue::Object(view_ref.as_obj()), JValue::Object(&jstr)],
             );
+            if env.exception_check() {
+                let _ = env.exception_clear();
+            }
             unsafe {
                 let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
             }
@@ -178,22 +188,114 @@ pub fn get_string_value(handle: i64) -> *const u8 {
 
 /// Set whether the text field is borderless (stub).
 pub fn set_borderless(handle: i64, borderless: f64) {
-    let _ = (handle, borderless);
+    if let Some(view_ref) = super::get_widget(handle) {
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("styleTextField"),
+                jni::jni_sig!("(Landroid/view/View;IFI)V"),
+                &[
+                    JValue::Object(view_ref.as_obj()),
+                    JValue::Int(0),
+                    JValue::Float(borderless as f32),
+                    JValue::Int(0),
+                ],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+            }
+        })
+    }
 }
 
-/// Set the background color of the text field (stub).
+/// Set the background color of the text field.
 pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
-    let _ = (handle, r, g, b, a);
+    let argb = (((a * 255.0) as u32) << 24
+        | ((r * 255.0) as u32) << 16
+        | ((g * 255.0) as u32) << 8
+        | ((b * 255.0) as u32)) as i32;
+    if let Some(view_ref) = super::get_widget(handle) {
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("styleTextField"),
+                jni::jni_sig!("(Landroid/view/View;IFI)V"),
+                &[
+                    JValue::Object(view_ref.as_obj()),
+                    JValue::Int(1),
+                    JValue::Float(0.0),
+                    JValue::Int(argb),
+                ],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+            }
+        })
+    }
 }
 
-/// Set the font size of the text field (stub).
+/// Set the font size of the text field (sp).
 pub fn set_font_size(handle: i64, size: f64) {
-    let _ = (handle, size);
+    if let Some(view_ref) = super::get_widget(handle) {
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("styleTextField"),
+                jni::jni_sig!("(Landroid/view/View;IFI)V"),
+                &[
+                    JValue::Object(view_ref.as_obj()),
+                    JValue::Int(2),
+                    JValue::Float(size as f32),
+                    JValue::Int(0),
+                ],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+            }
+        })
+    }
 }
 
-/// Set the text color of the text field (stub).
+/// Set the text color of the text field (placeholder: the same, faded).
 pub fn set_text_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
-    let _ = (handle, r, g, b, a);
+    let argb = (((a * 255.0) as u32) << 24
+        | ((r * 255.0) as u32) << 16
+        | ((g * 255.0) as u32) << 8
+        | ((b * 255.0) as u32)) as i32;
+    if let Some(view_ref) = super::get_widget(handle) {
+        jni_bridge::with_env(|env| {
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("styleTextField"),
+                jni::jni_sig!("(Landroid/view/View;IFI)V"),
+                &[
+                    JValue::Object(view_ref.as_obj()),
+                    JValue::Int(3),
+                    JValue::Float(0.0),
+                    JValue::Int(argb),
+                ],
+            );
+            unsafe {
+                let _ = jni_bridge::pop_local_frame(env, &jni::objects::JObject::null());
+            }
+        })
+    }
 }
 
 /// Set a callback for when the user presses Enter/Done on the keyboard.
