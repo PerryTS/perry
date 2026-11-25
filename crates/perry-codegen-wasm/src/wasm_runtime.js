@@ -2609,6 +2609,9 @@ const __memDispatch = {
   },
   array_index_of: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value, fromIndex); },
   array_includes: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return 0; return arr.includes(value, fromIndex) ? 1 : 0; },
+  // fromIndex goes through only when the call passes one: an explicit `undefined`
+  // searches from index 0, not from the end.
+  array_last_index_of: (arr, value, ...fromIndex) => Array.isArray(arr) ? arr.lastIndexOf(value, ...fromIndex) : -1,
   array_concat: (a1, a2) => (Array.isArray(a1) ? a1 : []).concat(Array.isArray(a2) ? a2 : []),
   array_reverse: (arr) => { if (Array.isArray(arr)) arr.reverse(); return arr; },
   array_flat: (arr) => Array.isArray(arr) ? arr.flat() : [],

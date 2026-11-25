@@ -104,6 +104,7 @@ impl WasmModuleEmitter {
             "array_join",
             "array_index_of",
             "array_includes",
+            "array_last_index_of",
             "array_concat",
             "array_reverse",
             "array_flat",
@@ -944,6 +945,11 @@ impl WasmModuleEmitter {
                 from_index,
             }
             | Expr::ArrayIncludes {
+                array,
+                value,
+                from_index,
+            }
+            | Expr::ArrayLastIndexOf {
                 array,
                 value,
                 from_index,
