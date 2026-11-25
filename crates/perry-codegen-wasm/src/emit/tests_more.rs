@@ -1445,6 +1445,9 @@ mod thread_callback;
 #[path = "math_minmax_tests.rs"]
 mod math_minmax;
 
+#[path = "web_semantics_tests.rs"]
+mod web_semantics;
+
 #[path = "parse_int_radix_tests.rs"]
 mod parse_int_radix;
 

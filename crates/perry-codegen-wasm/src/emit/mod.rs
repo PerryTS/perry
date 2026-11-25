@@ -60,6 +60,7 @@ use closures::{
 // `#[allow(dead_code)]` annotation on its original definition).
 use constants::{
     f64_const, EnumResolvedValue, STRING_TAG, TAG_FALSE, TAG_NULL, TAG_TRUE, TAG_UNDEFINED,
+    WEB_PLATFORM_ID,
 };
 use func_emit_ctx::{FinallyTarget, FuncEmitCtx};
 use function::{constructor_of, declares_no_constructor};
