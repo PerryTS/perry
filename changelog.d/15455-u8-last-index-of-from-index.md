@@ -1,0 +1,1 @@
+`Uint8Array#lastIndexOf` and `Buffer#lastIndexOf` with a `fromIndex`/`byteOffset` below `-length` (including `-Infinity`) return `-1` instead of `0` on the native target, and a multi-byte `Buffer` needle with a negative in-range offset no longer panics with an out-of-range slice (#15440).
