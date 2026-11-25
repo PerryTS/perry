@@ -617,6 +617,27 @@ impl HeaderView {
             HeaderView::Trailers => &layouts::NP_SYMBOL_K_TRAILERS_COUNT,
         }
     }
+    fn slot(self) -> u32 {
+        use crate::object::runtime_layouts::incoming_slot as s;
+        match self {
+            HeaderView::Headers => s::K_HEADERS,
+            HeaderView::Trailers => s::K_TRAILERS,
+        }
+    }
+    fn count_slot(self) -> u32 {
+        use crate::object::runtime_layouts::incoming_slot as s;
+        match self {
+            HeaderView::Headers => s::K_HEADERS_COUNT,
+            HeaderView::Trailers => s::K_TRAILERS_COUNT,
+        }
+    }
+    fn raw_slot(self) -> u32 {
+        use crate::object::runtime_layouts::incoming_slot as s;
+        match self {
+            HeaderView::Headers => s::RAW_HEADERS,
+            HeaderView::Trailers => s::RAW_TRAILERS,
+        }
+    }
     fn raw(self) -> &'static [u8] {
         match self {
             HeaderView::Headers => b"rawHeaders",
@@ -631,36 +652,51 @@ impl HeaderView {
 /// pair below `this[kHeadersCount]`. One object per message, so identity and
 /// writes hold across reads.
 fn message_header_view(receiver: f64, view: HeaderView) -> f64 {
+    // A request on its layout holds the view in its slot: one load.
+    if let Some(current) = incoming_field(receiver, view.slot()) {
+        if crate::value::js_is_truthy(current) != 0 {
+            return current;
+        }
+    }
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(receiver);
-    let symbol = scope.root_nanbox_f64(layouts::runtime_symbol_value(view.symbol()));
-    let current =
-        unsafe { crate::symbol::js_object_get_symbol_property(this.get_nanbox_f64(), symbol.get_nanbox_f64()) };
+    let get_symbol = |atom: &'static crate::object::layout_desc::StaticAtom, slot: u32| {
+        incoming_field(this.get_nanbox_f64(), slot).unwrap_or_else(|| unsafe {
+            crate::symbol::js_object_get_symbol_property(
+                this.get_nanbox_f64(),
+                layouts::runtime_symbol_value(atom),
+            )
+        })
+    };
+    let current = get_symbol(view.symbol(), view.slot());
     if crate::value::js_is_truthy(current) != 0 {
         return current;
     }
     let dst = scope.root_nanbox_f64(boxed(crate::object::js_object_alloc(0, 0)));
-    unsafe {
-        crate::symbol::js_object_set_symbol_property(
-            this.get_nanbox_f64(),
-            symbol.get_nanbox_f64(),
-            dst.get_nanbox_f64(),
-        )
-    };
+    if incoming_field(this.get_nanbox_f64(), view.slot()).is_some() {
+        incoming_set(this.get_nanbox_f64(), view.slot(), b"", dst.get_nanbox_f64());
+    } else {
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(
+                this.get_nanbox_f64(),
+                layouts::runtime_symbol_value(view.symbol()),
+                dst.get_nanbox_f64(),
+            )
+        };
+    }
     let raw_name = view.raw();
-    let src = scope.root_nanbox_f64(unsafe {
-        crate::runtime_state_key::js_runtime_state_key_get(
-            this.get_nanbox_f64(),
-            raw_name.as_ptr(),
-            raw_name.len(),
-        )
-    });
+    let src = scope.root_nanbox_f64(
+        incoming_field(this.get_nanbox_f64(), view.raw_slot()).unwrap_or_else(|| unsafe {
+            crate::runtime_state_key::js_runtime_state_key_get(
+                this.get_nanbox_f64(),
+                raw_name.as_ptr(),
+                raw_name.len(),
+            )
+        }),
+    );
     let mut n = 0.0;
     loop {
-        let count_symbol = layouts::runtime_symbol_value(view.count_symbol());
-        let count = unsafe {
-            crate::symbol::js_object_get_symbol_property(this.get_nanbox_f64(), count_symbol)
-        };
+        let count = get_symbol(view.count_symbol(), view.count_slot());
         if !(n < crate::builtins::js_number_coerce(count)) {
             break;
         }
@@ -679,9 +715,7 @@ fn message_header_view(receiver: f64, view: HeaderView) -> f64 {
         };
         n += 2.0;
     }
-    unsafe {
-        crate::symbol::js_object_get_symbol_property(this.get_nanbox_f64(), symbol.get_nanbox_f64())
-    }
+    get_symbol(view.symbol(), view.slot())
 }
 
 /// Body of every http prototype setter: the native side keeps the socket and
@@ -757,12 +791,15 @@ pub unsafe extern "C" fn js_node_http_outgoing_message_init(this: f64) {
 
 /// Node's IncomingMessage constructor on its explicit receiver. Readable owns
 /// stream-state initialization; the remaining stores follow Node's constructor
-/// order and use ordinary [[Get]]/[[Set]] so inherited accessors participate.
+/// order. On an object born on the request layout (or on its keys under a
+/// plain derived chain) each store fills its slot; on any other object each
+/// is the ordinary [[Set]], so inherited accessors participate.
 ///
 /// # Safety
 /// `this` and `socket` are live JavaScript values.
 #[no_mangle]
 pub unsafe extern "C" fn js_node_http_incoming_message_init(this: f64, socket: f64) {
+    use crate::object::runtime_layouts::incoming_slot as s;
     let scope = crate::gc::RuntimeHandleScope::new();
     let this = scope.root_nanbox_f64(this);
     let socket = scope.root_nanbox_f64(socket);
@@ -774,13 +811,53 @@ pub unsafe extern "C" fn js_node_http_incoming_message_init(this: f64, socket: f
         }
         .read_value(value)
     };
-    let put = |name: &'static [u8], value| {
-        crate::runtime_state_key::js_runtime_state_key_set(
-            this.get_nanbox_f64(),
-            name.as_ptr(),
-            name.len(),
-            value,
-        );
+    let receiver = || {
+        crate::object::field_get_set::runtime_read_site::object_receiver(this.get_nanbox_f64())
+    };
+    // One chain check here, then each store fills its slot while the object
+    // stays on the layout's keys.
+    let plain_chain = receiver().is_some_and(|obj| {
+        crate::node_stream::instance_birth::on_layout_with_plain_chain(
+            obj,
+            layouts::INCOMING_MESSAGE::WORD,
+        )
+    });
+    let on_layout = || plain_chain && receiver().is_some_and(|obj| on_incoming_layout(obj));
+    let hole_on_layout = |slot: u32| {
+        on_layout()
+            && receiver().is_some_and(|obj| {
+                let fields =
+                    (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+                *fields.add(slot as usize) == crate::value::TAG_HOLE
+            })
+    };
+    let put = |slot: u32, name: &'static [u8], value: f64| {
+        if hole_on_layout(slot) {
+            crate::node_stream::instance_birth::birth_store(
+                receiver().expect("a live request"),
+                slot,
+                value,
+            );
+        } else {
+            crate::runtime_state_key::js_runtime_state_key_set(
+                this.get_nanbox_f64(),
+                name.as_ptr(),
+                name.len(),
+                value,
+            );
+        }
+    };
+    let put_symbol = |slot: u32, atom: &'static crate::object::layout_desc::StaticAtom, value: f64| {
+        if hole_on_layout(slot) {
+            crate::node_stream::instance_birth::birth_store(
+                receiver().expect("a live request"),
+                slot,
+                value,
+            );
+        } else {
+            let symbol = layouts::runtime_symbol_value(atom);
+            crate::symbol::js_object_set_symbol_property(this.get_nanbox_f64(), symbol, value);
+        }
     };
     let options = if crate::value::js_is_truthy(socket.get_nanbox_f64()) != 0 {
         let high_water_mark =
@@ -797,19 +874,30 @@ pub unsafe extern "C" fn js_node_http_incoming_message_init(this: f64, socket: f
         undefined()
     };
     let options = scope.root_nanbox_f64(options);
-    // Reuse the Readable explicit-this path, including its instanceof check:
-    // an unrelated receiver gets a fresh discarded Readable, as in Node.
-    crate::object::native_module_registry::js_nm_install_stream();
-    let readable = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
-        "stream", "Readable",
-    ));
-    let args = [options.get_nanbox_f64()];
-    let _ = crate::object::native_this_alias::maybe_run_stream_subclass_init_via_this(
-        readable.get_nanbox_f64(),
-        this.get_nanbox_f64(),
-        args.as_ptr(),
-        args.len(),
-    );
+    if plain_chain {
+        // `Readable.call(this, opts)` on a receiver whose chain is
+        // IncomingMessage.prototype's: a Readable, so node's constructor runs
+        // in place, and its stores fill the layout's Readable slots.
+        crate::node_stream::js_node_stream_readable_subclass_init(
+            this.get_nanbox_f64(),
+            options.get_nanbox_f64(),
+        );
+    } else {
+        // Reuse the Readable explicit-this path, including its instanceof
+        // check: an unrelated receiver gets a fresh discarded Readable, as in
+        // Node.
+        crate::object::native_module_registry::js_nm_install_stream();
+        let readable = scope.root_nanbox_f64(crate::object::bound_native_callable_export_value(
+            "stream", "Readable",
+        ));
+        let args = [options.get_nanbox_f64()];
+        let _ = crate::object::native_this_alias::maybe_run_stream_subclass_init_via_this(
+            readable.get_nanbox_f64(),
+            this.get_nanbox_f64(),
+            args.as_ptr(),
+            args.len(),
+        );
+    }
     let state = scope.root_nanbox_f64(read(this.get_nanbox_f64(), b"_readableState"));
     let state_value = JSValue::from_bits(state.get_nanbox_u64());
     if state_value.is_undefined() || state_value.is_null() {
@@ -826,50 +914,91 @@ pub unsafe extern "C" fn js_node_http_incoming_message_init(this: f64, socket: f
         bool_value(true),
     );
     let null = f64::from_bits(crate::value::TAG_NULL);
-    put(b"socket", socket.get_nanbox_f64());
-    for name in [
-        b"httpVersionMajor".as_slice(),
-        b"httpVersionMinor",
-        b"httpVersion",
-    ] {
-        put(name, null);
-    }
-    put(b"complete", bool_value(false));
+    let f = bool_value(false);
+    put(s::SOCKET, b"socket", socket.get_nanbox_f64());
+    put(s::HTTP_VERSION_MAJOR, b"httpVersionMajor", null);
+    put(s::HTTP_VERSION_MINOR, b"httpVersionMinor", null);
+    put(s::HTTP_VERSION, b"httpVersion", null);
+    put(s::COMPLETE, b"complete", f);
+    let raw = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::array::js_array_alloc(0) as i64,
+    ));
+    put(s::RAW_HEADERS, b"rawHeaders", raw.get_nanbox_f64());
+    let raw = scope.root_nanbox_f64(crate::value::js_nanbox_pointer(
+        crate::array::js_array_alloc(0) as i64,
+    ));
+    put(s::RAW_TRAILERS, b"rawTrailers", raw.get_nanbox_f64());
+    put(s::JOIN_DUPLICATE_HEADERS, b"joinDuplicateHeaders", f);
+    put(s::ABORTED, b"aborted", f);
+    put(s::UPGRADE, b"upgrade", null);
     put(
-        b"rawHeaders",
-        crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64),
-    );
-    put(
-        b"rawTrailers",
-        crate::value::js_nanbox_pointer(crate::array::js_array_alloc(0) as i64),
-    );
-    put(b"joinDuplicateHeaders", bool_value(false));
-    put(b"aborted", bool_value(false));
-    put(b"upgrade", null);
-    put(
+        s::URL,
         b"url",
         crate::value::nanbox_string_key(crate::string::js_string_from_bytes(b"".as_ptr(), 0)),
     );
-    put(b"method", null);
-    put(b"statusCode", null);
-    put(b"statusMessage", null);
-    put(b"client", socket.get_nanbox_f64());
-    put(b"_consuming", bool_value(false));
-    put(b"_dumped", bool_value(false));
+    put(s::METHOD, b"method", null);
+    put(s::STATUS_CODE, b"statusCode", null);
+    put(s::STATUS_MESSAGE, b"statusMessage", null);
+    put(s::CLIENT, b"client", socket.get_nanbox_f64());
+    put(s::CONSUMING, b"_consuming", f);
+    put(s::DUMPED, b"_dumped", f);
     use layouts as p;
-    for (atom, value) in [
-        (&p::NP_SYMBOL_K_HEADERS, null),
-        (&p::NP_SYMBOL_K_HEADERS_COUNT, 0.0),
-        (&p::NP_SYMBOL_K_TRAILERS, null),
-        (&p::NP_SYMBOL_K_TRAILERS_COUNT, 0.0),
-        (&p::NP_SYMBOL_K_ABORT_CONTROLLER, null),
-        (&p::NP_SYMBOL_K_ABORT_SIGNAL_SOCKET, null),
-        (&p::NP_SYMBOL_K_ABORT_SIGNAL_LISTENER, null),
-        (&p::NP_SYMBOL_K_ABORT_SIGNAL_DETACHED, bool_value(false)),
-    ] {
-        let symbol = p::runtime_symbol_value(atom);
-        crate::symbol::js_object_set_symbol_property(this.get_nanbox_f64(), symbol, value);
+    put_symbol(s::K_HEADERS, &p::NP_SYMBOL_K_HEADERS, null);
+    put_symbol(s::K_HEADERS_COUNT, &p::NP_SYMBOL_K_HEADERS_COUNT, 0.0);
+    put_symbol(s::K_TRAILERS, &p::NP_SYMBOL_K_TRAILERS, null);
+    put_symbol(s::K_TRAILERS_COUNT, &p::NP_SYMBOL_K_TRAILERS_COUNT, 0.0);
+    put_symbol(s::K_ABORT_CONTROLLER, &p::NP_SYMBOL_K_ABORT_CONTROLLER, null);
+    put_symbol(s::K_ABORT_SIGNAL_SOCKET, &p::NP_SYMBOL_K_ABORT_SIGNAL_SOCKET, null);
+    put_symbol(s::K_ABORT_SIGNAL_LISTENER, &p::NP_SYMBOL_K_ABORT_SIGNAL_LISTENER, null);
+    put_symbol(s::K_ABORT_SIGNAL_DETACHED, &p::NP_SYMBOL_K_ABORT_SIGNAL_DETACHED, f);
+}
+
+/// Is `obj` exactly on the request layout's keys (born on it, or on its keys
+/// under a derived chain; no shadow bit), so each of its keys names its slot?
+///
+/// # Safety
+/// `obj` is a live object header.
+#[inline]
+unsafe fn on_incoming_layout(obj: *const ObjectHeader) -> bool {
+    crate::node_stream::instance_birth::instance_layout(obj)
+        .is_some_and(|desc| (*desc).layout_id == layouts::INCOMING_MESSAGE::WORD)
+}
+
+/// The word in `slot` of a request on its layout ([`on_incoming_layout`]),
+/// `None` when the receiver is not on it or the slot holds the hole (the key
+/// is absent; the caller's ordinary read decides).
+fn incoming_field(receiver: f64, slot: u32) -> Option<f64> {
+    let obj = crate::object::field_get_set::runtime_read_site::object_receiver(receiver)?;
+    // SAFETY: a live object; a layout's slots are its inline storage.
+    unsafe {
+        if !on_incoming_layout(obj) {
+            return None;
+        }
+        let bits = *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64)
+            .add(slot as usize);
+        (bits != crate::value::TAG_HOLE).then_some(f64::from_bits(bits))
     }
+}
+
+/// Store `value` as `name` (slot `slot`) of a request: a present data key of
+/// its layout is one slot store, anything else the ordinary [[Set]].
+fn incoming_set(receiver: f64, slot: u32, name: &'static [u8], value: f64) {
+    if incoming_field(receiver, slot).is_some() {
+        let obj = crate::object::field_get_set::runtime_read_site::object_receiver(receiver)
+            .expect("a live request");
+        // SAFETY: the key is present plain data in its slot.
+        unsafe { crate::object::store_object_field_slot(obj, slot as usize, value.to_bits()) };
+        return;
+    }
+    // SAFETY: `receiver` is a live value.
+    unsafe {
+        crate::runtime_state_key::js_runtime_state_key_set(
+            receiver,
+            name.as_ptr(),
+            name.len(),
+            value,
+        )
+    };
 }
 
 /// [`js_node_http_server_response_init`] with `req`, and its
@@ -1091,7 +1220,15 @@ pub unsafe extern "C" fn js_node_http_incoming_message_create(proto: f64) -> f64
     } else {
         ensure_http_prototype(HttpProto::IncomingMessage)
     };
-    crate::object::js_object_create(proto)
+    // Born on the request layout when `proto` is the sealed, unwritten
+    // `IncomingMessage.prototype`, as a response is on its own.
+    match crate::node_stream::instance_birth::alloc_on_layout(
+        proto,
+        layouts::INCOMING_MESSAGE::desc(),
+    ) {
+        Some(obj) => boxed(obj),
+        None => crate::object::js_object_create(proto),
+    }
 }
 
 /// node's constructor and parser fields on `this`, a fresh object from
@@ -1118,30 +1255,30 @@ pub unsafe extern "C" fn js_node_http_incoming_message_birth(
     let url = scope.root_nanbox_f64(url);
     let method = scope.root_nanbox_f64(method);
     let obj = scope.root_nanbox_f64(this);
+    use crate::object::runtime_layouts::incoming_slot as s;
     js_node_http_incoming_message_init(obj.get_nanbox_f64(), socket.get_nanbox_f64());
-    let put = |name: &'static [u8], value: f64| {
-        crate::runtime_state_key::js_runtime_state_key_set(
-            obj.get_nanbox_f64(),
-            name.as_ptr(),
-            name.len(),
-            value,
-        );
+    let put = |slot: u32, name: &'static [u8], value: f64| {
+        incoming_set(obj.get_nanbox_f64(), slot, name, value);
     };
-    put(b"httpVersionMajor", major);
-    put(b"httpVersionMinor", minor);
-    put(b"httpVersion", version.get_nanbox_f64());
-    put(b"url", url.get_nanbox_f64());
-    put(b"method", method.get_nanbox_f64());
+    put(s::HTTP_VERSION_MAJOR, b"httpVersionMajor", major);
+    put(s::HTTP_VERSION_MINOR, b"httpVersionMinor", minor);
+    put(s::HTTP_VERSION, b"httpVersion", version.get_nanbox_f64());
+    put(s::URL, b"url", url.get_nanbox_f64());
+    put(s::METHOD, b"method", method.get_nanbox_f64());
     let count = crate::array::js_array_length(
         (raw.get_nanbox_u64() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader,
     ) as f64;
     if count > 0.0 {
-        put(b"rawHeaders", raw.get_nanbox_f64());
-        crate::symbol::js_object_set_symbol_property(
-            obj.get_nanbox_f64(),
-            layouts::runtime_symbol_value(&layouts::NP_SYMBOL_K_HEADERS_COUNT),
-            count,
-        );
+        put(s::RAW_HEADERS, b"rawHeaders", raw.get_nanbox_f64());
+        if incoming_field(obj.get_nanbox_f64(), s::K_HEADERS_COUNT).is_some() {
+            incoming_set(obj.get_nanbox_f64(), s::K_HEADERS_COUNT, b"", count);
+        } else {
+            crate::symbol::js_object_set_symbol_property(
+                obj.get_nanbox_f64(),
+                layouts::runtime_symbol_value(&layouts::NP_SYMBOL_K_HEADERS_COUNT),
+                count,
+            );
+        }
     }
     obj.get_nanbox_f64()
 }
