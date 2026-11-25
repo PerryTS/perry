@@ -57,31 +57,35 @@ pub fn console_method(callee: &crate::Expr) -> Option<&str> {
     else {
         return None;
     };
-    (matches!(object.as_ref(), Expr::GlobalGet(_))
-        && matches!(
-            property.as_str(),
-            "log"
-                | "info"
-                | "warn"
-                | "error"
-                | "debug"
-                | "dir"
-                | "dirxml"
-                | "profile"
-                | "profileEnd"
-                | "timeStamp"
-                | "table"
-                | "trace"
-                | "group"
-                | "groupEnd"
-                | "groupCollapsed"
-                | "time"
-                | "timeEnd"
-                | "timeLog"
-                | "count"
-                | "countReset"
-                | "clear"
-                | "assert"
-        ))
-    .then_some(property.as_str())
+    (matches!(object.as_ref(), Expr::GlobalGet(_)) && console_method_name(property))
+        .then_some(property.as_str())
+}
+
+/// The console methods the console lowering takes on the global sentinel.
+pub fn console_method_name(name: &str) -> bool {
+    matches!(
+        name,
+        "log"
+            | "info"
+            | "warn"
+            | "error"
+            | "debug"
+            | "dir"
+            | "dirxml"
+            | "profile"
+            | "profileEnd"
+            | "timeStamp"
+            | "table"
+            | "trace"
+            | "group"
+            | "groupEnd"
+            | "groupCollapsed"
+            | "time"
+            | "timeEnd"
+            | "timeLog"
+            | "count"
+            | "countReset"
+            | "clear"
+            | "assert"
+    )
 }
