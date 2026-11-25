@@ -1452,6 +1452,18 @@ pub(super) fn ns_chain(ns: BuiltinNs) -> Family {
     }
 }
 
+/// Is namespace `ns` an ordinary object, never callable: the realm
+/// describes its [[Prototype]] as `Object.prototype` (`NsProto::Object`:
+/// `Reflect`, `JSON`, `Math`, the global object, `process`, a node module
+/// namespace object, a host object declared with that prototype such as
+/// `console`). Every realm function object has `Function.prototype` or a
+/// constructor as its [[Prototype]] (CreateBuiltinFunction, ECMA-262
+/// 10.3.4), and [[Call]] is fixed at birth. An undescribed chain
+/// (`NsProto::Unknown`) may be a function.
+pub(super) fn ns_ordinary_object(ns: BuiltinNs) -> bool {
+    matches!(ns_statics(ns).prototype, NsProto::Object)
+}
+
 /// What a key that may name any member reads on the family's chain
 /// (`Object.prototype` included): the kinds of its data members, and
 /// whether its own prototype has a function member (`Object.prototype`'s
