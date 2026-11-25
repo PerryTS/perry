@@ -1497,14 +1497,23 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 )?
                 .unwrap());
             }
-            // Handle TextDecoder constructor: new TextDecoder(label?, opts?)
+            // Handle TextDecoder constructor: new TextDecoder(label?, opts?).
+            // Options that are not a plain object literal construct through
+            // the runtime `TextDecoder`, which reads them with [[Get]].
             if class_name == "TextDecoder" && !shadowed_by_user_binding {
-                return Ok(lower_url_encoding_constructor(
-                    ctx,
-                    "TextDecoder",
-                    new_expr.args.as_deref(),
-                )?
-                .unwrap());
+                if let Some(decoder) =
+                    lower_url_encoding_constructor(ctx, "TextDecoder", new_expr.args.as_deref())?
+                {
+                    return Ok(decoder);
+                }
+                let callee = lower_expr(ctx, &new_expr.callee)?;
+                let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                return Ok(Expr::NewDynamic {
+                    byte_end: 0,
+                    callee: Box::new(callee),
+                    args,
+                    byte_offset: new_byte_offset,
+                });
             }
 
             // Handle Uint8Array constructor

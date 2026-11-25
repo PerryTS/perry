@@ -70,19 +70,20 @@ pub(super) fn try_textencoder_decoder(
                             return Ok(Ok(encoder_call(receiver, method_name, args, call)));
                         }
                         if class_name == "TextDecoder" && method_name == "decode" {
-                            let decoder = super::super::expr_new::lower_text_decoder_new(
+                            if let Some(decoder) = super::super::expr_new::lower_text_decoder_new(
                                 ctx,
                                 new_expr.args.as_deref(),
-                            )?;
-                            let input = if !args.is_empty() {
-                                args.into_iter().next().unwrap()
-                            } else {
-                                Expr::Undefined
-                            };
-                            return Ok(Ok(Expr::TextDecoderDecode {
-                                decoder: Box::new(decoder),
-                                input: Box::new(input),
-                            }));
+                            )? {
+                                let input = if !args.is_empty() {
+                                    args.into_iter().next().unwrap()
+                                } else {
+                                    Expr::Undefined
+                                };
+                                return Ok(Ok(Expr::TextDecoderDecode {
+                                    decoder: Box::new(decoder),
+                                    input: Box::new(input),
+                                }));
+                            }
                         }
                     }
                 }

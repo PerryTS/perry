@@ -68,41 +68,53 @@ pub(crate) fn is_depd_wrapfunction_shape(args: &[ast::ExprOrSpread]) -> bool {
 /// `Expr::TextDecoderNew { label, fatal, ignore_bom }`. Shared by
 /// `expr_new.rs` (bound to a local) and `textencoder.rs` (inline
 /// `new TextDecoder(...).decode(...)`).
+///
+/// `None` when the options are not an object literal of plain `key: value`
+/// properties (`new TextDecoder(label, opts)`): the caller then constructs
+/// through the runtime `TextDecoder`, which reads `fatal` and `ignoreBOM`
+/// from whatever value it is given.
 pub(crate) fn lower_text_decoder_new(
     ctx: &mut LoweringContext,
     args: Option<&[ast::ExprOrSpread]>,
-) -> Result<Expr> {
+) -> Result<Option<Expr>> {
+    let mut fatal = Expr::Bool(false);
+    let mut ignore_bom = Expr::Bool(false);
+    let mut options = Vec::new();
+    if let Some(opts) = args.and_then(|a| a.get(1)) {
+        let ast::Expr::Object(obj) = opts.expr.as_ref() else {
+            return Ok(None);
+        };
+        for prop in &obj.props {
+            let ast::PropOrSpread::Prop(p) = prop else {
+                return Ok(None);
+            };
+            let ast::Prop::KeyValue(kv) = p.as_ref() else {
+                return Ok(None);
+            };
+            let key = match &kv.key {
+                ast::PropName::Ident(i) => i.sym.to_string(),
+                ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
+                _ => return Ok(None),
+            };
+            options.push((key, kv.value.as_ref()));
+        }
+    }
     let label = match args.and_then(|a| a.first()) {
         Some(arg) => lower_expr(ctx, &arg.expr)?,
         None => Expr::Undefined,
     };
-    let mut fatal = Expr::Bool(false);
-    let mut ignore_bom = Expr::Bool(false);
-    if let Some(opts) = args.and_then(|a| a.get(1)) {
-        if let ast::Expr::Object(obj) = opts.expr.as_ref() {
-            for prop in &obj.props {
-                if let ast::PropOrSpread::Prop(p) = prop {
-                    if let ast::Prop::KeyValue(kv) = p.as_ref() {
-                        let key = match &kv.key {
-                            ast::PropName::Ident(i) => i.sym.to_string(),
-                            ast::PropName::Str(s) => s.value.as_str().unwrap_or("").to_string(),
-                            _ => continue,
-                        };
-                        match key.as_str() {
-                            "fatal" => fatal = lower_expr(ctx, &kv.value)?,
-                            "ignoreBOM" => ignore_bom = lower_expr(ctx, &kv.value)?,
-                            _ => {}
-                        }
-                    }
-                }
-            }
+    for (key, value) in options {
+        match key.as_str() {
+            "fatal" => fatal = lower_expr(ctx, value)?,
+            "ignoreBOM" => ignore_bom = lower_expr(ctx, value)?,
+            _ => {}
         }
     }
-    Ok(Expr::TextDecoderNew {
+    Ok(Some(Expr::TextDecoderNew {
         label: Box::new(label),
         fatal: Box::new(fatal),
         ignore_bom: Box::new(ignore_bom),
-    })
+    }))
 }
 
 pub(crate) fn peel_new_callee(mut expr: &ast::Expr) -> &ast::Expr {
@@ -244,7 +256,7 @@ pub(crate) fn lower_url_encoding_constructor(
             }))
         }
         "TextEncoder" => Ok(Some(Expr::TextEncoderNew)),
-        "TextDecoder" => Ok(Some(lower_text_decoder_new(ctx, args)?)),
+        "TextDecoder" => lower_text_decoder_new(ctx, args),
         _ => Ok(None),
     }
 }
