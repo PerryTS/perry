@@ -93,6 +93,13 @@ fn event_exception(error: f64) -> f64 {
     }
 }
 
+/// An `'error'` event no listener takes, raised from a native completion:
+/// `error` is uncaught, under the same boundary as a throwing listener.
+#[no_mangle]
+pub extern "C" fn js_perry_event_uncaught(error: f64) -> f64 {
+    event_exception(error)
+}
+
 /// A property Get used by a native event callback. A destination's getter may
 /// throw; catch inside this call so binding roots and Rust temporaries still
 /// retire on the ordinary return path.
@@ -226,6 +233,8 @@ pub unsafe extern "C" fn js_perry_event_call_in_resource(
 #[cfg(feature = "keepalive-anchors")]
 mod keepalive {
     use super::*;
+    #[used(compiler)]
+    static UNCAUGHT: extern "C" fn(f64) -> f64 = js_perry_event_uncaught;
     #[used(compiler)]
     static GET: extern "C" fn(f64, f64) -> f64 = js_perry_event_get;
     #[used(compiler)]
