@@ -212,3 +212,18 @@ f().then((v) => console.log("async " + v));
         "1,3,true,3,true,4,false,0,true,false,false\n9,true,20,1,\ntrue,hi,true,true,false,false,false,\nTypeError,TypeError,TypeError,TypeError,TypeError,TypeError\n7,1,true,5,1\nasync 1,true,2,true,,20,true,false,false,false"
     );
 }
+
+// A closure's bookkeeping keys do not shadow what it inherits. Expected output is Node's.
+#[test]
+fn reflect_get_reads_past_a_closures_bookkeeping() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const f: any = () => 1;
+Reflect.setPrototypeOf(f, { captures: 9, get funcIdx() { return this === f; } });
+console.log(Reflect.get(f, "captures"), Reflect.get(f, "funcIdx"), Reflect.get(() => 1, "captures"), f());
+"#
+        ),
+        "9 true undefined 1"
+    );
+}

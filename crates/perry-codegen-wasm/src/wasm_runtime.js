@@ -2482,8 +2482,12 @@ const __memDispatch = {
   reflect_get: (obj, key, receiver) => {
     if (!__holdsProperties(obj)) return Reflect.get(obj, key);
     const k = __memDispatch.to_property_key(key);
-    if ((k === 'funcIdx' || k === 'captures') && !__memDispatch.reflect_has(obj, k)) return undefined;
-    return Reflect.get(obj, k, receiver === undefined ? obj : receiver);
+    let holder = obj;
+    if (k === 'funcIdx' || k === 'captures') {
+      while (holder !== null && !__memDispatch.object_has_own(holder, k)) holder = Reflect.getPrototypeOf(holder);
+      if (holder === null) return undefined;
+    }
+    return Reflect.get(holder, k, receiver === undefined ? obj : receiver);
   },
   reflect_set: (obj, key, value, receiver) => {
     if (!__holdsProperties(obj)) return Reflect.set(obj, key, value);
