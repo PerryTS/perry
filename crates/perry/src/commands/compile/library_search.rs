@@ -919,20 +919,28 @@ pub(super) fn locate_library(
     name: &str,
     target: Option<&str>,
 ) -> Result<LocatedLibrary, Vec<PathBuf>> {
-    locate_among(collect_library_candidates(name, target), name)
+    locate_among(collect_library_candidates(name, target), name, target)
 }
 
-/// The first of `candidates` that exists, raw or as an npm `*.a.zst`.
+/// The first of `candidates` that exists, raw or as an npm `*.a.zst`, and is
+/// not built for another platform than `target`: the PERRY_RUNTIME_DIR /
+/// PERRY_LIB_DIR candidates name no triple, so they can hold the host's.
 pub(super) fn locate_among(
     candidates: Vec<PathBuf>,
     name: &str,
+    target: Option<&str>,
 ) -> Result<LocatedLibrary, Vec<PathBuf>> {
+    let triple = rust_target_triple(target);
+    let links = |path: &Path| !triple.is_some_and(|t| is_other_platform_archive(path, t));
     for path in &candidates {
         if path.exists() {
-            return Ok(LocatedLibrary {
-                link: path.clone(),
-                candidate: path.clone(),
-            });
+            if links(path) {
+                return Ok(LocatedLibrary {
+                    link: path.clone(),
+                    candidate: path.clone(),
+                });
+            }
+            continue;
         }
         // npm per-platform packages ship `*.a.zst` (the raw archives exceed
         // npm's tarball upload limit). When only the compressed sibling is
@@ -941,12 +949,13 @@ pub(super) fn locate_among(
         if compressed.exists() {
             let lib_name = path.file_name().and_then(|s| s.to_str()).unwrap_or(name);
             match super::compressed_libs::decompressed_archive(&compressed, lib_name) {
-                Ok(decompressed) => {
+                Ok(decompressed) if links(&decompressed) => {
                     return Ok(LocatedLibrary {
                         link: decompressed,
                         candidate: path.clone(),
                     });
                 }
+                Ok(_) => {}
                 // A compressed archive is present but couldn't be expanded
                 // (corrupt download, out of disk, …). Surface the real cause
                 // loudly here — otherwise it's masked by the generic "library
@@ -960,6 +969,61 @@ pub(super) fn locate_among(
         }
     }
     Err(candidates)
+}
+
+/// Whether `archive` holds objects of another format or architecture than
+/// `triple`'s. An archive with no recognizable object is not claimed.
+fn is_other_platform_archive(archive: &Path, triple: &str) -> bool {
+    use object::{Architecture, BinaryFormat, Object};
+    let format = if triple.contains("-apple-") {
+        BinaryFormat::MachO
+    } else if triple.contains("-windows-") {
+        BinaryFormat::Coff
+    } else if triple.starts_with("wasm32-") {
+        BinaryFormat::Wasm
+    } else {
+        BinaryFormat::Elf
+    };
+    let architecture = match triple.split('-').next() {
+        Some("aarch64") => Architecture::Aarch64,
+        Some("arm64_32") => Architecture::Aarch64_Ilp32,
+        Some("x86_64") => Architecture::X86_64,
+        _ => Architecture::Unknown,
+    };
+    let Ok(file) = std::fs::File::open(archive) else {
+        return false;
+    };
+    // Reads the members up to the first object, not the whole archive.
+    let data = object::ReadCache::new(file);
+    let Ok(members) = object::read::archive::ArchiveFile::parse(&data) else {
+        return false;
+    };
+    for member in members.members().flatten() {
+        let Ok(bytes) = member.data(&data) else {
+            continue;
+        };
+        if let Ok(object) = object::File::parse(bytes) {
+            return object.format() != format || object.architecture() != architecture;
+        }
+    }
+    false
+}
+
+/// One line per searched path. A path that exists was rejected
+/// ([`is_other_platform_archive`]).
+fn searched_report(searched: &[PathBuf]) -> String {
+    searched
+        .iter()
+        .map(|p| {
+            let rejected = if p.exists() {
+                " (built for another target)"
+            } else {
+                ""
+            };
+            format!("  - {}{rejected}", p.display())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn find_library(name: &str, target: Option<&str>) -> Option<PathBuf> {
@@ -1163,6 +1227,7 @@ pub(super) fn locate_or_fetch_from(
     let searched = match locate_among(
         collect_library_candidates_from(name, target, exe, home),
         name,
+        target,
     ) {
         Ok(found) => return Ok(found),
         Err(searched) => searched,
@@ -1187,6 +1252,7 @@ pub(super) fn locate_or_fetch_from(
         Some(PackageFetch::Installed) => locate_among(
             collect_library_candidates_from(name, target, exe, home),
             name,
+            target,
         )
         .or_else(|searched| missed(searched, None)),
         Some(PackageFetch::Refused(message)) => missed(searched, Some(message)),
@@ -1376,6 +1442,19 @@ pub(super) fn collect_library_candidates_from(
     candidates
 }
 
+/// How to get the archives an instrumented compile links, or nothing for the
+/// default variant.
+fn instrumented_hint() -> &'static str {
+    if super::optimized_libs::instrumented_variant_requested() {
+        "\n- This compile sets a GC/diagnostic instrument knob (or PERRY_GC_TRACE / \
+         PERRY_CHECK_CONTRACTS), so it links the instrumented archives. Build them with \
+         scripts/build_instr_runtime.sh <target-triple> from the perry workspace, or unset \
+         the knob to link the default (instrument-free) archives."
+    } else {
+        ""
+    }
+}
+
 /// Find the runtime library for linking
 pub(super) fn find_runtime_library(target: Option<&str>) -> Result<PathBuf> {
     locate_runtime_library(target).map(|l| l.link)
@@ -1392,21 +1471,10 @@ pub(super) fn locate_runtime_library(target: Option<&str>) -> Result<LocatedLibr
     // knob is set while compiling; see `instrumented_variant_requested`.
     let lib_name_owned = super::optimized_libs::variant_archive_name(default_name);
     let lib_name = lib_name_owned.as_str();
-    let instr_hint = if super::optimized_libs::instrumented_variant_requested() {
-        "\n- This compile sets a GC/diagnostic instrument knob (or PERRY_GC_TRACE / \
-         PERRY_CHECK_CONTRACTS), so it links the instrumented archives. Build them with \
-         scripts/build_instr_runtime.sh <target-triple> from the perry workspace, or unset \
-         the knob to link the default (instrument-free) archives."
-    } else {
-        ""
-    };
+    let instr_hint = instrumented_hint();
     locate_or_fetch(lib_name, target).map_err(|missed| {
         let Missed { searched, refused } = missed;
-        let searched_list = searched
-            .iter()
-            .map(|p| format!("  - {}", p.display()))
-            .collect::<Vec<_>>()
-            .join("\n");
+        let searched_list = searched_report(&searched);
         // A packaged cross target with nothing installed: say which package
         // to install, pinned to this exact perry, before the search list. A
         // triple with no package keeps the generic text below.
@@ -1465,18 +1533,42 @@ pub(super) fn find_stdlib_library(target: Option<&str>) -> Option<PathBuf> {
 
 /// [`find_stdlib_library`], keeping the candidate path (sidecar lookup).
 pub(super) fn locate_stdlib_library(target: Option<&str>) -> Option<LocatedLibrary> {
-    let lib_name = if is_windows_target(target) {
+    // A refused fetch is the runtime lookup's to report: every cross link
+    // needs the runtime from the same package, and a stdlib is optional.
+    locate_or_fetch(&stdlib_archive_name(target), target).ok()
+}
+
+fn stdlib_archive_name(target: Option<&str>) -> String {
+    super::optimized_libs::variant_archive_name(default_stdlib_name(target))
+}
+
+fn default_stdlib_name(target: Option<&str>) -> &'static str {
+    if is_windows_target(target) {
         "perry_stdlib.lib"
     } else {
         "libperry_stdlib.a"
+    }
+}
+
+/// The error for a program that needs the stdlib when a cross link found no
+/// archive for its target. The Android and HarmonyOS linkers only warn about
+/// the symbols it would define, so the link must not run without it.
+pub(super) fn check_missing_stdlib(target: Option<&str>) -> Result<()> {
+    let Some(triple) =
+        rust_target_triple(target).filter(|t| *t != super::target_packages::HOST_TRIPLE)
+    else {
+        return Ok(());
     };
-    // A refused fetch is the runtime lookup's to report: every cross link
-    // needs the runtime from the same package, and a stdlib is optional.
-    locate_or_fetch(
-        &super::optimized_libs::variant_archive_name(lib_name),
-        target,
-    )
-    .ok()
+    let name = stdlib_archive_name(target);
+    Err(anyhow!(
+        "this program links `{name}`, which was not found for target `{}` ({triple}).\n\
+         Searched:\n{}\n\
+         Build it:\n  {}{}",
+        target.unwrap_or_default(),
+        searched_report(&collect_library_candidates(&name, target)),
+        super::target_packages::source_build_commands(default_stdlib_name(target), Some(triple)),
+        instrumented_hint(),
+    ))
 }
 
 /// An archive only some programs link (`program` says which: a perry/ui or
@@ -1779,6 +1871,9 @@ pub(super) fn harmonyos_cross_env(
 
 #[cfg(test)]
 mod apple_lib_name_tests;
+
+#[cfg(test)]
+mod archive_platform_tests;
 
 #[cfg(test)]
 mod target_package_candidate_tests;
