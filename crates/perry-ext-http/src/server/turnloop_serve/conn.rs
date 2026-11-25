@@ -1115,11 +1115,24 @@ fn complete_response(conn_id: &RootedSocket, seq: u64, framing: Framing) {
 /// `res.destroy()` / `socket.destroy()` on the turnloop connection.
 pub(crate) fn destroy_connection(conn_id: &RootedSocket) {
     note_aborted(conn_id);
+    hold_until_closed(conn_id);
     net::destroy(conn_id.value());
+}
+
+/// A teardown in progress keeps the loop alive even on an `unref()`ed socket,
+/// as libuv's shutdown and closing handle do: `server.close()` waits for it.
+fn hold_until_closed(conn_id: &RootedSocket) {
+    if conn_id.is_current() && !net::has_ref(conn_id.value()) {
+        net::set_ref(conn_id.value(), true);
+    }
 }
 
 fn finish_and_close(conn_id: &RootedSocket) {
     cancel_deadline(conn_id);
+    // A WebSocket's close also waits for its peer, which holds nothing.
+    if !is_websocket(conn_id) {
+        hold_until_closed(conn_id);
+    }
     with_conn(conn_id, |c| c.closing = true);
     if net::shutdown(conn_id.value(), 0).is_err() {
         net::destroy(conn_id.value());
