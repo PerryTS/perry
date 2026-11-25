@@ -530,6 +530,11 @@ pub struct ClassComputedMember {
     /// Zero-based position in the source ClassBody. Computed field and member
     /// names share this ordering during ClassDefinitionEvaluation.
     pub source_order: usize,
+    /// This entry registers a plain-named ClassBody member in source order
+    /// (it follows an evaluated computed key), keyed by its own name
+    /// (`key_expr` is that name). The member is still its declaration: a
+    /// static method's own function object runs the declaration's body.
+    pub names_declaration: bool,
 }
 
 impl ClassComputedMember {
@@ -544,6 +549,21 @@ impl ClassComputedMember {
     /// The key is evaluated by ClassDefinitionEvaluation (not known here).
     pub fn is_evaluated(&self) -> bool {
         self.known_symbol().is_none()
+    }
+
+    /// The name of the ClassBody static method this entry registers in
+    /// source order (`names_declaration`): that declaration (the class's
+    /// `static_methods` entry) is the method, with its one body and one
+    /// `JsFunctionInfo`.
+    pub fn declared_static_method(&self) -> Option<&str> {
+        match (&self.key_expr, self.kind) {
+            (Expr::String(name), ClassComputedMemberKind::Method)
+                if self.names_declaration && self.is_static =>
+            {
+                Some(name.as_str())
+            }
+            _ => None,
+        }
     }
 }
 

@@ -430,6 +430,7 @@ fn async_generator_class_methods_are_recorded_like_top_level() {
         is_static: false,
         kind: ClassComputedMemberKind::Method,
         source_order: 0,
+        names_declaration: false,
     });
     module.classes.push(class);
 
@@ -1014,6 +1015,7 @@ fn async_closure_in_computed_member_body_is_collected() {
         is_static: false,
         kind: ClassComputedMemberKind::Method,
         source_order: 0,
+        names_declaration: false,
     });
     module.classes.push(class);
 
@@ -1073,6 +1075,7 @@ fn computed_generator_receivers_match_named_methods() {
                     is_static,
                     kind: ClassComputedMemberKind::Method,
                     source_order: 0,
+                    names_declaration: false,
                 });
             } else if is_static {
                 class.static_methods.push(function);
