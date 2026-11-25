@@ -794,6 +794,9 @@ pub unsafe fn adopt_descriptor(
         return Err(map_error(Error::new(ErrorKind::InvalidInput), "adopt"));
     }
     let stdio = fd <= 2;
+    if crate::fs::fd_is_embedded(fd) {
+        return Err(map_error(Error::new(ErrorKind::InvalidInput), "adopt"));
+    }
     let registered = if stdio {
         None
     } else {
