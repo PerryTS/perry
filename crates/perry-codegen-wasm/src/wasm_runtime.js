@@ -1718,6 +1718,7 @@ function __callClosureMethod(closure, receiver, args) {
 function __typeOf(v) {
   return __isPerryClosure(v) ? 'function' : typeof v;
 }
+
 // The prototype a function of each kind has: plain, async, generator, async generator.
 const __fnKindProtos = [
   Function.prototype,
@@ -6725,6 +6726,62 @@ function __hostCallback(value) {
 // value per evaluation and runs in that evaluation's environment whatever its `this`.
 const __classMethodValues = new Map();
 const __classMethodFns = new WeakSet();
+// A closure is not a host function, so it inherits Function.prototype's methods but
+// cannot use its call / apply / bind / toString, which need a callable receiver: these
+// stand in for them, and `instanceof Function` holds for a closure as for a function.
+function __closureReceiverCheck(fn, method) {
+  if (!__isPerryClosure(fn)) {
+    throw new TypeError(`Function.prototype.${method} called on a value that is not a function`);
+  }
+}
+// `new` on a closure (from a bound function): an object on the closure's `prototype`,
+// unless the closure returns an object.
+function __constructClosure(closure, args) {
+  const proto = closure.prototype;
+  const self = Object.create(proto !== null && typeof proto === 'object' ? proto : Object.prototype);
+  const result = __callClosureMethod(closure, self, args);
+  return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
+}
+Object.setPrototypeOf(__PerryClosure.prototype, Function.prototype);
+for (const [key, value] of Object.entries({
+  call(thisArg, ...args) {
+    __closureReceiverCheck(this, 'call');
+    return __callClosureMethod(this, thisArg, args);
+  },
+  apply(thisArg, list) {
+    __closureReceiverCheck(this, 'apply');
+    if (list !== null && list !== undefined && typeof list !== 'object' && typeof list !== 'function') {
+      throw new TypeError('CreateListFromArrayLike called on non-object');
+    }
+    return __callClosureMethod(this, thisArg, list == null ? [] : Array.from({ length: list.length >>> 0 }, (_, i) => list[i]));
+  },
+  // There is no source text to give back: a native function's form, with the name.
+  toString() {
+    __closureReceiverCheck(this, 'toString');
+    return `function ${typeof this.name === 'string' ? this.name : ''}() { [native code] }`;
+  },
+  bind(thisArg, ...bound) {
+    __closureReceiverCheck(this, 'bind');
+    const target = this;
+    const fn = function (...args) {
+      return new.target
+        ? __constructClosure(target, [...bound, ...args])
+        : __callClosureMethod(target, thisArg, [...bound, ...args]);
+    };
+    const length = typeof target.length === 'number' ? Math.max(0, target.length - bound.length) : 0;
+    Object.defineProperty(fn, 'length', { value: length, configurable: true });
+    Object.defineProperty(fn, 'name', {
+      value: `bound ${typeof target.name === 'string' ? target.name : ''}`,
+      configurable: true,
+    });
+    __classMethodFns.add(fn);
+    return fn;
+  },
+})) {
+  // They take Perry values as a compiled method does (see __jsMethodInvoke).
+  __classMethodFns.add(value);
+  Object.defineProperty(__PerryClosure.prototype, key, { value, writable: true, configurable: true });
+}
 // Keyed by class, then by method name, which a computed member may make a Symbol.
 // SetFunctionName: a symbol key names a method by its bracketed description.
 function __methodKeyName(key) {
