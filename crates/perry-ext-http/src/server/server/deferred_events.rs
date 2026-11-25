@@ -96,7 +96,7 @@ pub(crate) fn queue_deferred_close_emit(s: &mut HttpServer) {
 
 /// `server.close(cb)` for every server kind. `'close'` is owed once the
 /// transport listener emits its own, which follows the last connection's close;
-/// a server without a listener has nothing to wait for.
+/// a server without a listener waits for its unanswered requests.
 pub(crate) fn close_server(server_handle: i64, callback: i64) {
     let _ = super::with_base_server_mut(server_handle, |s| {
         s.set_listening(false);
@@ -193,7 +193,11 @@ where
         Some(server) => {
             let base = base_of(server);
             let was_active = server_is_active(base);
-            if !std::mem::take(&mut base.pending_close_emit) {
+            // A SCHED_RR worker's adopted connections are nobody's children:
+            // its unanswered requests are what `'close'` waits for.
+            let unanswered = !(base.pending.is_empty() && base.in_flight.is_empty())
+                && perry_ext_net::native_transport::server_link(base.transport_listener).is_err();
+            if unanswered || !std::mem::take(&mut base.pending_close_emit) {
                 return 0;
             }
             let callbacks = take_server_event_listeners(base, "close");
