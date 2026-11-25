@@ -71,3 +71,77 @@ fn birth_field_writes_only_the_born_literal() {
         "a foreign value the holder holds gets none"
     );
 }
+
+/// A Proxy `new Proxy(target, handler)` with its parts: target node holding
+/// an object, handler node holding `handler` (an object, or ⊤).
+fn proxy(m: &mut Model, handler: Tok) -> (u32, Tok, Tok) {
+    let (_, tt) = arr(m);
+    let target = m.node_l("proxy-target");
+    m.add_tok(target, tt);
+    let h = m.node_l("proxy-handler");
+    m.add_tok(h, handler);
+    let p = m.proxies.len() as u32;
+    m.proxies.push(crate::solve::proxy::ProxyRec {
+        target,
+        handler: h,
+        ops: Default::default(),
+        callable: false,
+        calls: Vec::new(),
+    });
+    (p, m.tok(TokKind::Proxy(p)), tt)
+}
+
+/// Rule PXBIRTH: a Proxy the holder holds is a foreign value of the holder:
+/// the birth defines on the new literal (CreateDataPropertyOrThrow on the
+/// literal, 13.2.5.5 / 13.2.4.1), so no internal method of the Proxy runs
+/// (no [[DefineOwnProperty]] 10.5.6, no trap, no forward). The Proxy does
+/// not escape and its target gets none of the content, whether the
+/// handler is a program object or ⊤ (no handler code is reached).
+#[test]
+fn birth_field_runs_nothing_on_a_proxy_the_holder_holds() {
+    for top_handler in [false, true] {
+        let mut m = copy_solver_model();
+        let (born, tb) = arr(&mut m);
+        let h = match top_handler {
+            false => arr(&mut m).1,
+            true => crate::model::TOP,
+        };
+        let (p, tp, tt) = proxy(&mut m, h);
+        let holder = m.node_l("holder");
+        m.add_tok(holder, tb);
+        m.add_tok(holder, tp);
+        let src = m.node_l("src");
+        m.add_prim(src, prim::NUM);
+        m.cons(holder, Cons::BirthField { key: Key::any(), src, tm: born });
+        m.solve();
+        let fb = m.field_any(tb);
+        assert!(m.nodes[fb as usize].prim & prim::NUM != 0, "the born literal gets its content");
+        assert!(
+            !m.proxies[p as usize]
+                .ops
+                .contains_key(&crate::solve::proxy::ProxyOp::Escape),
+            "the Proxy does not escape (top handler: {top_handler})"
+        );
+        assert!(!m.is_escaped(tt), "the Proxy target does not escape");
+        let ft = m.field_any(tt);
+        assert_eq!(m.nodes[ft as usize].prim & prim::NUM, 0, "the Proxy target gets none");
+    }
+}
+
+/// Control: a ⊤ sink on a node holding the Proxy is still its escape
+/// (rule PXESC): the target escapes.
+#[test]
+fn proxy_at_a_top_sink_still_escapes() {
+    let mut m = copy_solver_model();
+    let (_, th) = arr(&mut m);
+    let (p, tp, tt) = proxy(&mut m, th);
+    let n = m.node_l("sink");
+    m.add_tok(n, tp);
+    let reason = m.reason("test sink");
+    m.cons(n, Cons::TopSink { reason });
+    m.solve();
+    assert!(m.proxies[p as usize]
+        .ops
+        .contains_key(&crate::solve::proxy::ProxyOp::Escape));
+    assert!(m.is_escaped(tt), "the Proxy target escapes");
+}

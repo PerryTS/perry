@@ -2411,6 +2411,14 @@ impl Model {
                     self.cons(like, Cons::Load { key: ek, dst });
                 }
             }
+            // Rule PXBIRTH: a literal's birth in a summarized body (13.2.5.5
+            // / 13.2.4.1 CreateDataPropertyOrThrow on the new literal; the
+            // reviver's CreateDataProperty on a parse-made object) writes its
+            // own template's tokens only (`apply`): a Proxy the holder node
+            // also holds is a foreign value of it. No internal method of the
+            // Proxy runs: no [[DefineOwnProperty]] (10.5.6), no trap, no
+            // forward, whatever the handler is.
+            Cons::BirthField { .. } => {}
             // Rule PXESC: the rules with no Proxy model yet, each named (a new
             // rule must take a place in this match). The operation may run
             // any internal method of the Proxy: its escape, the rule named in
@@ -2421,7 +2429,6 @@ impl Model {
             | Cons::AddsKeys { .. }
             | Cons::AnnexBDefine { .. }
             | Cons::AnnexBLookup { .. }
-            | Cons::BirthField { .. }
             | Cons::BoundCall { .. }
             | Cons::CallerValue { .. }
             | Cons::CjsPublish { .. }
