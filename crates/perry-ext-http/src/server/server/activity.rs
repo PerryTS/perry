@@ -1,6 +1,7 @@
 //! Server liveness is maintained when its existing state changes. No handle
 //! enumeration and no remembered active bit: the state is the authority.
 use super::{deferred_events::server_is_active, HttpServer};
+use crate::server::client_error::ClientError;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, LazyLock};
 
@@ -45,6 +46,17 @@ impl HttpServer {
         let before = server_is_active(self);
         self.listening = listening;
         self.finish_activity_change(before);
+    }
+
+    /// Mutate the queued `'clientError'`s, which keep the server active.
+    pub(crate) fn with_client_errors<R>(
+        &mut self,
+        f: impl FnOnce(&mut std::collections::VecDeque<ClientError>) -> R,
+    ) -> R {
+        let before = server_is_active(self);
+        let result = f(&mut self.pending_client_errors);
+        self.finish_activity_change(before);
+        result
     }
 
     pub(crate) fn set_refed(&mut self, refed: bool) {
@@ -102,6 +114,19 @@ mod tests {
             assert_eq!(count.load(Ordering::Relaxed), 0);
             assert!(perry_ffi::drop_handle(handle));
             assert!(!perry_ffi::handle_exists(handle));
+
+            let mut server = HttpServer::with_handler(0);
+            server.with_client_errors(|errors| {
+                errors.push_back(ClientError {
+                    socket: 0.0,
+                    code: "HPE_INVALID_EOF_STATE".into(),
+                    kind: crate::server::client_error::ClientErrorKind::Timeout,
+                    read_ended: true,
+                })
+            });
+            assert_eq!(count.load(Ordering::Relaxed), 1);
+            server.with_client_errors(|errors| errors.clear());
+            assert_eq!(count.load(Ordering::Relaxed), 0);
 
             // Removal must also release an active server, including wrappers.
             let mut server = HttpServer::with_handler(0);

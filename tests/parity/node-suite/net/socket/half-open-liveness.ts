@@ -1,0 +1,50 @@
+import net from "node:net";
+
+const reached = setTimeout(() => {
+  console.log("still alive");
+  process.exit(3);
+}, 5000);
+reached.unref();
+
+const half = (port: number, ms: number) =>
+  new Promise<string>((resolve) => {
+    let received = "";
+    const client = net.connect({ port, host: "127.0.0.1", allowHalfOpen: true }, () => client.end("x"));
+    client.on("data", (chunk) => (received += chunk));
+    client.on("error", () => {});
+    client.on("close", () => resolve(received.length > 100 ? String(received.length) : received));
+    if (ms) setTimeout(() => client.destroy(), ms);
+  });
+
+const listen = (onSocket: (socket: net.Socket) => void, run: (port: number) => Promise<void>) =>
+  new Promise<void>((resolve) => {
+    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+      socket.on("error", () => {});
+      socket.resume();
+      onSocket(socket);
+    });
+    server.listen(0, "127.0.0.1", async () => {
+      await run((server.address() as net.AddressInfo).port);
+      server.close(() => console.log("server close"));
+      resolve();
+    });
+  });
+
+await listen(
+  (socket) => socket.on("end", () => setTimeout(() => socket.end("late"), 20)),
+  async (port) => console.log("late answer:", await half(port, 0)),
+);
+const big = "a".repeat(8 * 1024 * 1024);
+await listen(
+  (socket) => socket.on("end", () => setImmediate(() => socket.end(big))),
+  async (port) => console.log("large late answer:", await half(port, 0)),
+);
+// The peer is gone and nothing writes: the half-open socket does not hold the loop.
+await listen(
+  (socket) => {
+    socket.on("end", () => console.log("end"));
+    socket.on("close", () => console.log("abandoned close"));
+  },
+  async (port) => console.log("abandoned:", JSON.stringify(await half(port, 50))),
+);
+process.on("exit", (code) => console.log("exit", code));
