@@ -370,7 +370,7 @@ pub(super) const DEAD_KEY_PRUNES: &[DeadKeyPrune] = &[
         prune: crate::object::shapes::prune_dead_shape_prototypes,
         // A minor roots every young word (`scan_shape_table_rekey_mut`),
         // so only a full trace can find a word's prototype dead.
-        full_only: false,
+        full_only: true,
         young_prune: None,
     },
     // #10868 step 2.5 stage 1b: the canonical keys trie holds its arrays
