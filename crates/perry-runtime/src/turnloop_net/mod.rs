@@ -271,6 +271,8 @@ struct Entry {
     connecting: bool,
     /// `close` was submitted; the entry survives until its `Closed` arrives.
     closing: bool,
+    /// The peer's EOF was delivered: nothing is read any more.
+    ended: bool,
     referenced: bool,
     #[cfg(windows)]
     pipe_drain: Option<OpId>,
@@ -296,6 +298,7 @@ impl Entry {
             posted: false,
             connecting: false,
             closing: false,
+            ended: false,
             referenced: true,
             #[cfg(windows)]
             pipe_drain: None,
