@@ -95,6 +95,19 @@ pub(crate) fn init_readable_in_place(
         );
     }
     install_common_lifecycle_callbacks(&this, &opts);
+    // node's `destroy()` calls `this._destroy(err, cb)`: a subclass's own
+    // (IncomingMessage's, a program class's) is the hook when no option
+    // gave one.
+    if how == StreamInit::Subclass
+        && get_hidden_value(t.get_nanbox_f64(), STREAM_DESTROY_KEY).is_none()
+    {
+        if let Some(destroy) =
+            subclass_hook(t.get_nanbox_f64(), crate::runtime_state_key!(b"_destroy"))
+        {
+            let destroy = scope.root_nanbox_f64(destroy);
+            set_hidden_value(t.get_nanbox_f64(), STREAM_DESTROY_KEY, destroy.get_nanbox_f64());
+        }
+    }
     invoke_construct_callback(&this, &opts, birth);
     if provided.is_none() && how == StreamInit::Subclass {
         super::birth_memo::finish_existing(t.get_nanbox_f64(), birth, super::birth::Kind::Readable);

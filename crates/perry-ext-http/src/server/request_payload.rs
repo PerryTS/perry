@@ -183,6 +183,22 @@ pub(crate) fn abort(handle: i64) -> bool {
     }
     true
 }
+/// The connection died before the response ended: node's `abortIncoming`,
+/// `req.destroy(new ConnResetException('aborted'))`. `_destroy` marks the
+/// message aborted and emits `'aborted'`; the stream is destroyed unended, so
+/// its `'close'` sees `readableEnded === false`.
+pub(crate) fn abort_incoming(handle: i64) {
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(value(handle));
+    if truthy(unsafe { perry_ffi::runtime_get(owner.get(), b"destroyed") }) {
+        return;
+    }
+    let err = roots.root_nanbox(f64::from_bits(
+        perry_ffi::error_value_with_code("aborted", "ECONNRESET", perry_ffi::ErrorKind::Error)
+            .bits(),
+    ));
+    unsafe { perry_ffi::runtime_call(owner.get(), b"destroy", &[err.get()]) };
+}
 /// node's `IncomingMessage.prototype` methods on a heap request.
 pub(crate) unsafe fn method(handle: i64, name: &str, args: &[f64]) -> Option<f64> {
     let roots = TransientRootScope::enter();
@@ -202,7 +218,9 @@ pub(crate) unsafe fn method(handle: i64, name: &str, args: &[f64]) -> Option<f64
             }
             Some(undef)
         }
-        // `_destroy(err, cb)`: an incomplete message is aborted, then cb(err).
+        // `_destroy(err, cb)`: an incomplete message is aborted, then node's
+        // `onError`: the error goes to cb only when an `'error'` listener
+        // is attached (backward-compatible behavior), else cb().
         "_destroy" => {
             let err = roots.root_nanbox(args.first().copied().unwrap_or(undef));
             let cb = roots.root_nanbox(args.get(1).copied().unwrap_or(undef));
@@ -212,7 +230,16 @@ pub(crate) unsafe fn method(handle: i64, name: &str, args: &[f64]) -> Option<f64
                 abort((owner.get().to_bits() & PTR_MASK) as i64);
             }
             if JsValue::from_bits(cb.get().to_bits()).is_pointer() {
-                perry_ffi::runtime_call(cb.get(), b"call", &[undef, err.get()]);
+                let event = roots.root_nanbox(string_value("error"));
+                let listeners =
+                    perry_ffi::runtime_call(owner.get(), b"listenerCount", &[event.get()]);
+                let listened = JsValue::from_bits(listeners.to_bits()).is_number()
+                    && JsValue::from_bits(listeners.to_bits()).to_number() > 0.0;
+                if listened {
+                    perry_ffi::runtime_call(cb.get(), b"call", &[undef, err.get()]);
+                } else {
+                    perry_ffi::runtime_call(cb.get(), b"call", &[undef]);
+                }
             }
             Some(undef)
         }

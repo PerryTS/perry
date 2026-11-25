@@ -177,7 +177,7 @@ pub(crate) fn reap_in_flight_requests() {
         }
     }
     for req in aborted {
-        crate::server::request_payload::abort(object_handle(req.get()));
+        crate::server::request_payload::abort_incoming(object_handle(req.get()));
     }
     for ls in drain_listeners {
         crate::server::request::emit_no_arg_to_listeners(&ls);
