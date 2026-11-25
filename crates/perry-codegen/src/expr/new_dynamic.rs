@@ -439,13 +439,27 @@ pub(crate) fn lower(ctx: &mut FnCtx<'_>, expr: &Expr) -> Result<String> {
             // `new v8.Serializer()` / `new v8.Deserializer(buf)` (and the
             // `Default*` subclasses) (#3680) — route to the runtime
             // constructors that allocate a codec-backed instance object whose
-            // methods dispatch through the native-module method table.
+            // methods dispatch through the native-module method table. That
+            // table resolves `v8.Serializer` / `v8.Deserializer` only after
+            // `js_nm_install_v8()`, which a program whose other `v8.*` uses are
+            // all direct-lowered never emits elsewhere (#15227).
             if let Expr::PropertyGet {
                 object, property, ..
             } = callee.as_ref()
             {
                 if let Expr::NativeModuleRef(mod_name) = object.as_ref() {
                     if mod_name == "v8" {
+                        if matches!(
+                            property.as_str(),
+                            "Serializer"
+                                | "DefaultSerializer"
+                                | "Deserializer"
+                                | "DefaultDeserializer"
+                        ) {
+                            if let Some(s) = crate::nm_install::nm_install_symbol("v8.Serializer") {
+                                ctx.block().call_void(s, &[]);
+                            }
+                        }
                         match property.as_str() {
                             "Serializer" | "DefaultSerializer" => {
                                 for a in args {
@@ -930,5 +944,48 @@ mod tests {
             !ir.contains("call double @js_new_function_construct("),
             "{ir}"
         );
+    }
+
+    #[test]
+    fn v8_serde_constructors_install_the_v8_dispatch_bucket() {
+        use perry_hir::{Expr, Module, Stmt};
+        for property in [
+            "Serializer",
+            "DefaultSerializer",
+            "Deserializer",
+            "DefaultDeserializer",
+        ] {
+            let mut module = Module::new("v8_serde_install.ts");
+            module.init.push(Stmt::Expr(Expr::NewDynamic {
+                byte_end: 0,
+                callee: Box::new(Expr::PropertyGet {
+                    object: Box::new(Expr::NativeModuleRef("v8".into())),
+                    property: property.into(),
+                    byte_offset: 0,
+                    byte_end: 0,
+                }),
+                args: vec![],
+                byte_offset: 0,
+            }));
+            let ir = String::from_utf8(
+                crate::compile_module(
+                    &module,
+                    crate::CompileOptions {
+                        emit_ir_only: true,
+                        ..Default::default()
+                    },
+                )
+                .unwrap(),
+            )
+            .unwrap();
+            let install = ir.find("call void @js_nm_install_v8(");
+            let construct = ir
+                .find("call double @js_v8_serializer_new(")
+                .or_else(|| ir.find("call double @js_v8_deserializer_new("));
+            assert!(
+                install.is_some() && install < construct,
+                "{property}: the v8 bucket is installed before construction\n{ir}"
+            );
+        }
     }
 }
