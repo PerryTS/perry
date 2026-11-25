@@ -98,7 +98,9 @@ console.log(G.viaLocal(), new G().k());
         "the registry entry and the source-order registration both name {declared}"
     );
     assert!(
-        !ir.lines().any(|l| l.starts_with('@') && l.contains("computed_method_named") && l.contains("__clo$info =")),
+        !ir.lines().any(|l| l.starts_with('@')
+            && l.contains("computed_method_named")
+            && l.contains("__clo$info =")),
         "no second entry info is defined for the declaration"
     );
 }
