@@ -383,7 +383,7 @@ pub unsafe extern "C" fn js_webcrypto_import_key(
         KeyAlgo::RsaOaep | KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss
     ) {
         let ok = if kind == KeyKind::Public {
-            RsaPublicKey::from_public_key_der(&key_bytes).is_ok()
+            rsa_public_key_from_spki_der(&key_bytes).is_some()
         } else {
             RsaPrivateKey::from_pkcs8_der(&key_bytes).is_ok()
         };
@@ -916,7 +916,7 @@ pub(super) unsafe fn jwk_import_key_bytes(
         let der = private_key.to_pkcs8_der().ok()?;
         Some(der.as_bytes().to_vec())
     } else {
-        let public_key = RsaPublicKey::new(n, e).ok()?;
+        let public_key = rsa_public_key(n, e)?;
         let der = public_key.to_public_key_der().ok()?;
         Some(der.as_bytes().to_vec())
     }
@@ -927,7 +927,7 @@ pub(super) unsafe fn rsa_jwk_export_object(
     mat: CryptoKeyMaterial,
 ) -> Option<*mut perry_runtime::ObjectHeader> {
     if mat.kind == KeyKind::Public {
-        let public_key = RsaPublicKey::from_public_key_der(key_bytes).ok()?;
+        let public_key = rsa_public_key_from_spki_der(key_bytes)?;
         let obj = js_object_alloc(0, 4);
         if obj.is_null() {
             return None;
