@@ -65,6 +65,9 @@ pub(crate) fn build_and_run_link(
     // (LLVM / WASM / ArkTS / HarmonyOS / Glance / SwiftUI / JS)
     // inherits the gate from one chokepoint.
     super::super::run_lock_verify_for_compile(ctx, target)?;
+    if ctx.needs_stdlib && stdlib_lib.is_none() {
+        super::super::library_search::check_missing_stdlib(target)?;
+    }
 
     let is_ios = matches!(target, Some("ios-simulator") | Some("ios"));
     let is_visionos = matches!(target, Some("visionos-simulator") | Some("visionos"));
