@@ -402,6 +402,8 @@ impl<'a> EndTail<'a> {
         if owner != 0 && super::response_payload::is_response(owner) {
             if event == "close" {
                 super::response_payload::emit_close(owner);
+            } else if event == "finish" {
+                super::response_payload::emit_finish(owner);
             } else {
                 super::response_payload::emit(owner, event);
             }

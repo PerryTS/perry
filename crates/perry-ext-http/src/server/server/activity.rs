@@ -210,8 +210,12 @@ mod tests {
         message.listeners.insert("data".into(), vec![1]);
         let request = perry_ffi::register_handle(message);
         let response = perry_ffi::register_handle(ServerResponse::new());
-        finalize_request_handles_deferred(request, response, None);
-        let message = perry_ffi::get_handle::<IncomingMessage>(request)
+        finalize_request_handles_deferred(
+            crate::server::request::handle_to_pointer_f64(request),
+            crate::server::request::handle_to_pointer_f64(response),
+            None,
+        );
+        let message = crate::server::request::message(request)
             .expect("the collector, not the exchange, releases the request");
         assert_eq!(message.method, "POST");
         assert!(message.close_emitted && message.destroyed && message.complete);

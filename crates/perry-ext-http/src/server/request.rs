@@ -165,6 +165,17 @@ extern "C" {
     fn js_abort_controller_abort(controller: *mut perry_ffi::ObjectHeader);
 }
 
+/// The request `handle` names: a registry message (HTTP/2 compat, upgrade,
+/// standalone) or a heap request's payload.
+pub(crate) fn message(handle: i64) -> Option<&'static IncomingMessage> {
+    perry_ffi::get_handle::<IncomingMessage>(handle)
+        .or_else(|| unsafe { super::request_payload::state(handle) }.map(|im| &*im))
+}
+pub(crate) fn message_mut(handle: i64) -> Option<&'static mut IncomingMessage> {
+    perry_ffi::get_handle_mut::<IncomingMessage>(handle)
+        .or_else(|| unsafe { super::request_payload::state(handle) })
+}
+
 fn is_undefined(value: f64) -> bool {
     JsValue::from_bits(value.to_bits()).is_undefined()
 }
@@ -208,7 +219,10 @@ fn abort_signal(im: &mut IncomingMessage) {
 /// `req.method` — returns the uppercase HTTP method string.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_method(handle: i64) -> *mut StringHeader {
-    let s = get_handle::<IncomingMessage>(handle)
+    if let Some(s) = crate::server::request_payload::get_str(handle, b"method") {
+        return s;
+    }
+    let s = message(handle)
         .map(|im| im.method.clone())
         .unwrap_or_default();
     alloc_string(&s).as_raw()
@@ -217,16 +231,20 @@ pub extern "C" fn js_node_http_im_method(handle: i64) -> *mut StringHeader {
 /// `req.url` — path + optional query string.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_url(handle: i64) -> *mut StringHeader {
-    let s = get_handle::<IncomingMessage>(handle)
-        .map(|im| im.url.clone())
-        .unwrap_or_default();
+    if let Some(s) = crate::server::request_payload::get_str(handle, b"url") {
+        return s;
+    }
+    let s = message(handle).map(|im| im.url.clone()).unwrap_or_default();
     alloc_string(&s).as_raw()
 }
 
 /// `req.httpVersion` — `"1.0"` / `"1.1"` / `"2.0"`.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_http_version(handle: i64) -> *mut StringHeader {
-    let s = get_handle::<IncomingMessage>(handle)
+    if let Some(s) = crate::server::request_payload::get_str(handle, b"httpVersion") {
+        return s;
+    }
+    let s = message(handle)
         .map(|im| im.http_version.clone())
         .unwrap_or_else(|| "1.1".to_string());
     alloc_string(&s).as_raw()
@@ -235,19 +253,25 @@ pub extern "C" fn js_node_http_im_http_version(handle: i64) -> *mut StringHeader
 /// `req.httpVersionMajor` — numeric major half of `httpVersion`.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_http_version_major(handle: i64) -> f64 {
+    if let Some(v) = crate::server::request_payload::get(handle, b"httpVersionMajor") {
+        return v;
+    }
     incoming_http_version_part(handle, false)
 }
 
 /// `req.httpVersionMinor` — numeric minor half of `httpVersion`.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_http_version_minor(handle: i64) -> f64 {
+    if let Some(v) = crate::server::request_payload::get(handle, b"httpVersionMinor") {
+        return v;
+    }
     incoming_http_version_part(handle, true)
 }
 
 /// `req.httpVersionMajor` / `req.httpVersionMinor` — numeric halves of
 /// `httpVersion` ("1.0" → 1 / 0).
 pub(crate) fn incoming_http_version_part(handle: i64, minor: bool) -> f64 {
-    let version = get_handle::<IncomingMessage>(handle)
+    let version = message(handle)
         .map(|im| im.http_version.clone())
         .unwrap_or_else(|| "1.1".to_string());
     let mut parts = version.split('.');
@@ -273,7 +297,7 @@ pub(crate) fn incoming_http_version_part(handle: i64, minor: bool) -> f64 {
 /// JSON round-trip is simpler and same approach perry-ext-axios uses.)
 #[no_mangle]
 pub extern "C" fn js_node_http_im_headers_json(handle: i64) -> *mut StringHeader {
-    let s = get_handle::<IncomingMessage>(handle)
+    let s = message(handle)
         .map(|im| combined_headers_json(&im.raw_headers, Some(&im.headers)))
         .unwrap_or_else(|| "{}".to_string());
     alloc_string(&s).as_raw()
@@ -365,7 +389,7 @@ fn combined_headers_json(
 /// flat list (alternating). TS-side reconstructs an array of strings.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_raw_headers_json(handle: i64) -> *mut StringHeader {
-    let s = get_handle::<IncomingMessage>(handle)
+    let s = message(handle)
         .map(|im| {
             let flat: Vec<&str> = im
                 .raw_headers
@@ -382,7 +406,7 @@ pub extern "C" fn js_node_http_im_raw_headers_json(handle: i64) -> *mut StringHe
 /// preserving duplicates from `rawHeaders`.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_headers_distinct_json(handle: i64) -> *mut StringHeader {
-    let s = get_handle::<IncomingMessage>(handle)
+    let s = message(handle)
         .map(|im| {
             let mut distinct: BTreeMap<String, Vec<String>> = BTreeMap::new();
             for (name, value) in &im.raw_headers {
@@ -400,7 +424,7 @@ pub extern "C" fn js_node_http_im_headers_distinct_json(handle: i64) -> *mut Str
 /// `req.trailers` — JSON-stringify the lowercase-keyed trailer map.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_trailers_json(handle: i64) -> *mut StringHeader {
-    let s = get_handle::<IncomingMessage>(handle)
+    let s = message(handle)
         .map(|im| {
             let trailers: BTreeMap<&String, &String> = im.trailers.iter().collect();
             serde_json::to_string(&trailers).unwrap_or_else(|_| "{}".to_string())
@@ -419,7 +443,7 @@ pub extern "C" fn js_node_http_im_raw_trailers_json(_handle: i64) -> *mut String
 /// `req.trailersDistinct` — lowercase trailer keys mapped to arrays.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_trailers_distinct_json(handle: i64) -> *mut StringHeader {
-    let s = get_handle::<IncomingMessage>(handle)
+    let s = message(handle)
         .map(|im| {
             let mut distinct: BTreeMap<String, Vec<String>> = BTreeMap::new();
             for (name, value) in &im.trailers {
@@ -438,7 +462,10 @@ pub extern "C" fn js_node_http_im_trailers_distinct_json(handle: i64) -> *mut St
 /// emitted to listeners.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_complete(handle: i64) -> i32 {
-    get_handle::<IncomingMessage>(handle)
+    if let Some(v) = crate::server::request_payload::get_flag(handle, b"complete") {
+        return v;
+    }
+    message(handle)
         .map(|im| if im.complete { 1 } else { 0 })
         .unwrap_or(0)
 }
@@ -446,7 +473,10 @@ pub extern "C" fn js_node_http_im_complete(handle: i64) -> i32 {
 /// `req.aborted` — `true` if the underlying connection was reset.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_aborted(handle: i64) -> i32 {
-    get_handle::<IncomingMessage>(handle)
+    if let Some(v) = crate::server::request_payload::get_flag(handle, b"aborted") {
+        return v;
+    }
+    message(handle)
         .map(|im| if im.aborted { 1 } else { 0 })
         .unwrap_or(0)
 }
@@ -454,7 +484,10 @@ pub extern "C" fn js_node_http_im_aborted(handle: i64) -> i32 {
 /// `req.destroyed` — `true` after `.destroy()` was called.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_destroyed(handle: i64) -> i32 {
-    get_handle::<IncomingMessage>(handle)
+    if let Some(v) = crate::server::request_payload::get_flag(handle, b"destroyed") {
+        return v;
+    }
+    message(handle)
         .map(|im| if im.destroyed { 1 } else { 0 })
         .unwrap_or(0)
 }
@@ -467,7 +500,7 @@ pub extern "C" fn js_node_http_im_destroyed(handle: i64) -> i32 {
 /// body-parser from treating an unread POST body as already finished.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_readable(handle: i64) -> i32 {
-    get_handle::<IncomingMessage>(handle)
+    message(handle)
         .map(|im| {
             if !im.complete && !im.destroyed && !im.aborted {
                 1
@@ -492,7 +525,7 @@ pub extern "C" fn js_node_http_im_readable(handle: i64) -> i32 {
 /// non-GET/HEAD methods).
 #[no_mangle]
 pub extern "C" fn js_node_http_im_raw_body(handle: i64) -> f64 {
-    let bytes = get_handle::<IncomingMessage>(handle)
+    let bytes = message(handle)
         .map(|im| im.body_bytes.clone())
         .unwrap_or_default();
     let buf = alloc_buffer(&bytes);
@@ -506,7 +539,7 @@ pub extern "C" fn js_node_http_im_raw_body(handle: i64) -> f64 {
 /// `req.signal` — lazily-created AbortSignal for the request lifetime.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_signal(handle: i64) -> f64 {
-    get_handle_mut::<IncomingMessage>(handle)
+    message_mut(handle)
         .map(ensure_signal)
         .unwrap_or_else(|| f64::from_bits(crate::server::types::TAG_UNDEFINED))
 }
@@ -514,7 +547,7 @@ pub extern "C" fn js_node_http_im_signal(handle: i64) -> f64 {
 /// `req.socket.remoteAddress` — peer IP as a dotted string.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_remote_address(handle: i64) -> *mut StringHeader {
-    let s = get_handle::<IncomingMessage>(handle)
+    let s = message(handle)
         .map(|im| im.remote_address.clone())
         .unwrap_or_default();
     alloc_string(&s).as_raw()
@@ -523,7 +556,7 @@ pub extern "C" fn js_node_http_im_remote_address(handle: i64) -> *mut StringHead
 /// `req.socket.remotePort` — peer ephemeral port.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_remote_port(handle: i64) -> f64 {
-    get_handle::<IncomingMessage>(handle)
+    message(handle)
         .map(|im| im.remote_port as f64)
         .unwrap_or(0.0)
 }
@@ -537,7 +570,7 @@ pub extern "C" fn js_node_http_im_pause(handle: i64) {
         crate::client_incoming_read::pause(handle);
         return;
     }
-    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+    if let Some(im) = message_mut(handle) {
         im.paused = true;
     }
 }
@@ -548,6 +581,9 @@ pub extern "C" fn js_node_http_im_pause(handle: i64) {
 /// Mirrors `js_node_http_res_set_header_self` (#5011/#2129 self-return).
 #[no_mangle]
 pub extern "C" fn js_node_http_im_pause_self(handle: i64) -> i64 {
+    if let Some(v) = crate::server::request_payload::call(handle, b"pause", &[]) {
+        return (v.to_bits() & crate::server::request_payload::PTR_MASK) as i64;
+    }
     js_node_http_im_pause(handle);
     handle
 }
@@ -567,7 +603,7 @@ pub extern "C" fn js_node_http_im_resume(handle: i64) {
     let data_listeners;
     let end_listeners;
     let encoding;
-    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+    if let Some(im) = message_mut(handle) {
         im.paused = false;
         body_bytes = im.body_bytes.clone();
         data_listeners = im.listeners.get("data").cloned().unwrap_or_default();
@@ -612,6 +648,9 @@ pub extern "C" fn js_node_http_im_resume(handle: i64) {
 /// `js_node_http_res_set_header_self` (#5011/#2129 self-return).
 #[no_mangle]
 pub extern "C" fn js_node_http_im_resume_self(handle: i64) -> i64 {
+    if let Some(v) = crate::server::request_payload::call(handle, b"resume", &[]) {
+        return (v.to_bits() & crate::server::request_payload::PTR_MASK) as i64;
+    }
     js_node_http_im_resume(handle);
     handle
 }
@@ -619,12 +658,15 @@ pub extern "C" fn js_node_http_im_resume_self(handle: i64) -> i64 {
 /// Destroy a request handle, or the transport behind an accepted socket.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_destroy(handle: i64) {
+    if crate::server::request_payload::call(handle, b"destroy", &[]).is_some() {
+        return;
+    }
     if crate::client_surface::js_http_is_incoming_message(handle) != 0 {
         // SAFETY: `handle` is a live client IncomingMessage (checked above).
         unsafe { crate::client_incoming_read::destroy(handle, None) };
         return;
     }
-    let socket = if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+    let socket = if let Some(im) = message_mut(handle) {
         im.destroyed = true;
         im.socket_value
     } else {
@@ -654,7 +696,7 @@ pub unsafe fn js_node_http_im_pipe(handle: i64, dest: f64, options: f64) -> f64 
     let scope = perry_ffi::TransientRootScope::enter();
     let dest = scope.root_nanbox(dest);
     let options = scope.root_nanbox(options);
-    let (body, encoding) = match get_handle_mut::<IncomingMessage>(handle) {
+    let (body, encoding) = match message_mut(handle) {
         Some(im) if !im.body_taken => {
             im.body_taken = true;
             im.data_emitted = true;
@@ -704,6 +746,16 @@ pub unsafe extern "C" fn js_node_http_im_on(
     event_name_ptr: *const StringHeader,
     callback: i64,
 ) -> f64 {
+    if let Some(v) = crate::server::request_payload::call(
+        handle,
+        b"on",
+        &[
+            crate::server::request_payload::string_arg(event_name_ptr),
+            crate::server::request_payload::closure_arg(callback),
+        ],
+    ) {
+        return v;
+    }
     let event = read_string_header(event_name_ptr as *mut _).unwrap_or_default();
     let body_to_emit;
     let encoding_to_emit;
@@ -714,7 +766,7 @@ pub unsafe extern "C" fn js_node_http_im_on(
     let mut deferred_end: Vec<i64> = Vec::new();
     let mut schedule_readable = false;
     {
-        let im = match get_handle_mut::<IncomingMessage>(handle) {
+        let im = match message_mut(handle) {
             Some(im) => im,
             None => {
                 // Issue #1124 followup — the same `("http",
@@ -856,7 +908,17 @@ pub unsafe extern "C" fn js_node_http_im_once(
     event_name_ptr: *const StringHeader,
     callback: i64,
 ) -> f64 {
-    if get_handle_mut::<IncomingMessage>(handle).is_none() {
+    if let Some(v) = crate::server::request_payload::call(
+        handle,
+        b"once",
+        &[
+            crate::server::request_payload::string_arg(event_name_ptr),
+            crate::server::request_payload::closure_arg(callback),
+        ],
+    ) {
+        return v;
+    }
+    if message_mut(handle).is_none() {
         extern "C" {
             fn js_http_once(handle: i64, event_ptr: *const StringHeader, callback: i64) -> i64;
         }
@@ -924,7 +986,7 @@ extern "C" fn im_once_wrapper(
             .unwrap_or_default();
         let callback = (perry_ffi::closure_capture_f64(closure, 2).to_bits() & PTR_MASK) as i64;
         let wrapper = (perry_ffi::closure_capture_f64(closure, 3).to_bits() & PTR_MASK) as i64;
-        let removed = get_handle_mut::<IncomingMessage>(handle)
+        let removed = message_mut(handle)
             .and_then(|im| {
                 let listeners = im.listeners.get_mut(&event)?;
                 let position = listeners.iter().rposition(|entry| *entry == wrapper)?;
@@ -954,7 +1016,7 @@ pub unsafe extern "C" fn js_node_http_im_set_encoding(
     encoding_ptr: *const StringHeader,
 ) -> i64 {
     let encoding = read_string_header(encoding_ptr as *mut _).unwrap_or_else(|| "utf8".to_string());
-    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+    if let Some(im) = message_mut(handle) {
         im.encoding = Some(encoding);
     }
     handle
@@ -964,6 +1026,16 @@ pub unsafe extern "C" fn js_node_http_im_set_encoding(
 /// for now; expose Node's chainable shape.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_set_timeout(handle: i64, _msecs: f64, _callback: i64) -> i64 {
+    if let Some(v) = crate::server::request_payload::call(
+        handle,
+        b"setTimeout",
+        &[
+            _msecs,
+            crate::server::request_payload::closure_arg(_callback),
+        ],
+    ) {
+        return (v.to_bits() & crate::server::request_payload::PTR_MASK) as i64;
+    }
     handle
 }
 
@@ -972,6 +1044,9 @@ pub extern "C" fn js_node_http_im_set_timeout(handle: i64, _msecs: f64, _callbac
 /// `null` thereafter.
 #[no_mangle]
 pub extern "C" fn js_node_http_im_read(handle: i64) -> f64 {
+    if let Some(v) = crate::server::request_payload::call(handle, b"read", &[]) {
+        return v;
+    }
     if crate::client_surface::js_http_is_incoming_message(handle) != 0 {
         return crate::client_incoming_read::read(handle, None);
     }
@@ -987,7 +1062,7 @@ pub extern "C" fn js_node_http_im_read(handle: i64) -> f64 {
             false
         }
     };
-    let (bytes, encoding, end_turn) = match get_handle_mut::<IncomingMessage>(handle) {
+    let (bytes, encoding, end_turn) = match message_mut(handle) {
         Some(im) => {
             if im.data_emitted {
                 let end_turn = schedule_end(im);
@@ -1106,7 +1181,7 @@ unsafe extern "C" fn readable_turn(
     _: perry_ffi::JsThis,
 ) -> f64 {
     let handle = perry_ffi::closure_capture_f64(closure, 0) as i64;
-    let listeners = match get_handle_mut::<IncomingMessage>(handle) {
+    let listeners = match message_mut(handle) {
         Some(im) => {
             im.readable_scheduled = false;
             im.listeners.get("readable").cloned().unwrap_or_default()
@@ -1116,7 +1191,7 @@ unsafe extern "C" fn readable_turn(
     emit_no_arg_to_listeners(&listeners);
     // The body is one chunk: once it was read (or there was none), the
     // stream is at its end.
-    let end = match get_handle_mut::<IncomingMessage>(handle) {
+    let end = match message_mut(handle) {
         Some(im) if !im.end_emitted && (im.data_emitted || im.body_bytes.is_empty()) => {
             im.end_emitted = true;
             im.complete = true;
@@ -1153,8 +1228,16 @@ pub(crate) fn emit_no_arg_to_listeners(listeners: &[i64]) {
 
 /// Mark the request as closed, abort `req.signal`, and fire `'close'` once.
 pub(crate) fn close_incoming_message(handle: i64) {
+    if super::request_payload::is_request(handle) {
+        match message_mut(handle) {
+            Some(im) if !im.close_emitted => im.close_emitted = true,
+            _ => return,
+        }
+        super::request_payload::close(handle);
+        return;
+    }
     let close_listeners;
-    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+    if let Some(im) = message_mut(handle) {
         if im.close_emitted {
             return;
         }
@@ -1174,7 +1257,7 @@ pub(crate) fn close_incoming_message(handle: i64) {
 /// `new IncomingMessage()` belongs to no exchange and is left alone.
 pub(crate) fn end_server_request(req: f64) {
     let handle = (req.to_bits() & 0x0000_FFFF_FFFF_FFFF) as i64;
-    if !get_handle::<IncomingMessage>(handle).is_some_and(|im| !im.standalone) {
+    if !message(handle).is_some_and(|im| !im.standalone) {
         return;
     }
     close_incoming_message(handle);
@@ -1186,7 +1269,15 @@ pub(crate) fn end_server_request(req: f64) {
 /// only through a word naming it and drops it once none does (Node keeps
 /// `req` usable for as long as it is held).
 pub(crate) fn retire_incoming_message(handle: i64) {
-    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+    if super::request_payload::is_request(handle) {
+        // node's fields live on the object; only the native buffers go.
+        if let Some(im) = message_mut(handle) {
+            im.retired = true;
+            im.body_bytes = Vec::new();
+        }
+        return;
+    }
+    if let Some(im) = message_mut(handle) {
         if std::mem::replace(&mut im.retired, true) {
             return;
         }
@@ -1245,13 +1336,13 @@ pub(crate) fn alloc_incoming_message(im: IncomingMessage) -> i64 {
 /// does not currently share the transport's exact byte counter, so this is a
 /// deliberate nonzero approximation rather than Node's precise total.
 pub(crate) fn mark_connection_written(handle: i64) {
-    if let Some(message) = get_handle_mut::<IncomingMessage>(handle) {
+    if let Some(message) = message_mut(handle) {
         message.connection_bytes_written = message.connection_bytes_written.max(1);
     }
 }
 
 pub(crate) fn incoming_peer_certificate_json(handle: i64) -> *mut StringHeader {
-    let value = get_handle::<IncomingMessage>(handle)
+    let value = message(handle)
         .and_then(|message| message.peer_certificate_cn.clone())
         .map(|cn| serde_json::json!({"subject": {"CN": cn}}))
         .unwrap_or_else(|| serde_json::json!({}));
@@ -1293,7 +1384,7 @@ pub extern "C" fn js_node_http_incoming_message_standalone_new(socket: f64) -> i
 /// is server-attached and untouched — dispatch falls back to the legacy
 /// self-pointer placeholder.
 pub(crate) fn incoming_socket_override(handle: i64) -> Option<f64> {
-    get_handle::<IncomingMessage>(handle).and_then(|im| {
+    message(handle).and_then(|im| {
         if im.standalone || im.socket_overridden {
             Some(im.socket_value)
         } else {
@@ -1305,7 +1396,7 @@ pub(crate) fn incoming_socket_override(handle: i64) -> Option<f64> {
 /// `req.socket = v` / `req.connection = v`. Node's `connection` accessor
 /// writes `this.socket`, so both aliases land on the same slot.
 pub(crate) fn incoming_socket_assign(handle: i64, value: f64) -> bool {
-    if let Some(im) = get_handle_mut::<IncomingMessage>(handle) {
+    if let Some(im) = message_mut(handle) {
         im.socket_value = value;
         im.socket_overridden = true;
         true
@@ -1577,9 +1668,9 @@ mod add_header_line_tests {
         ));
         js_node_http_im_destroy(handle);
         assert_eq!(js_node_http_im_destroyed(handle), 1);
-        assert!(get_handle::<IncomingMessage>(handle).unwrap().close_emitted);
+        assert!(message(handle).unwrap().close_emitted);
         js_node_http_im_destroy(handle);
-        assert!(get_handle::<IncomingMessage>(handle).unwrap().close_emitted);
+        assert!(message(handle).unwrap().close_emitted);
         perry_ffi::drop_handle(handle);
     }
 }

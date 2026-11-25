@@ -157,7 +157,7 @@ fn http2_compat_pump_keeps_unfinished_response_alive() {
     let server_handle = register_handle(server::HttpServer::with_handler(0));
     let pending = server::HttpPendingRequest {
         server_handle,
-        request_handle: request,
+        request: crate::server::request::handle_to_pointer_f64(request),
         response: crate::server::request::handle_to_pointer_f64(f.response),
         skip_default_response: false,
         h2_stream_handle: 0,

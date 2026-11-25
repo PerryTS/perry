@@ -478,7 +478,7 @@ fn queue_promise(
     stage: PromiseStage,
 ) {
     let entry = PendingPromise {
-        request_handle: context.request_handle,
+        request_handle: context.request_handle(),
         response: context.response,
         fetch_request,
         promise: promise as i64,
@@ -574,7 +574,7 @@ fn settle_failure(
 
 pub(crate) fn process_request(mut pending: HttpPendingRequest) {
     unsafe {
-        js_handle_clear_side_tables(pending.request_handle);
+        js_handle_clear_side_tables(pending.request_handle());
         if crate::server::response::is_legacy_response_handle(pending.response_handle()) {
             js_handle_clear_side_tables(pending.response_handle());
         }
@@ -582,7 +582,7 @@ pub(crate) fn process_request(mut pending: HttpPendingRequest) {
     // Rooted for the dispatch; each JS step below writes the fresh word back.
     let exchange_roots = TransientRootScope::enter();
     let res_root = exchange_roots.root_nanbox(pending.response);
-    let fetch_request = make_fetch_request(pending.server_handle, pending.request_handle);
+    let fetch_request = make_fetch_request(pending.server_handle, pending.request_handle());
     pending.response = res_root.get();
     let Some(fetch_request) = fetch_request else {
         let reason = f64::from_bits(
@@ -671,7 +671,7 @@ pub(crate) fn process_pending_promises() -> i32 {
         }
         let mut context = HttpPendingRequest {
             server_handle,
-            request_handle: entry.request_handle,
+            request: crate::server::request::handle_to_pointer_f64(entry.request_handle),
             response: response.get(),
             skip_default_response: false,
             h2_stream_handle: 0,
