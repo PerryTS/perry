@@ -197,7 +197,17 @@ pub(crate) fn listen(owner: f64, a: f64, b: f64, c: f64) -> f64 {
         result.and_then(|_| tl::link_accept_start(&mut *core, server))
     };
     if let Err(failure) = result {
-        let error = socket::error(&failure.code, &failure.message());
+        let (address, port) = match &path {
+            Some(path) => (path.as_str(), -1),
+            None => (host.as_str(), port as i32),
+        };
+        let errno = if failure.errno != 0 {
+            failure.errno
+        } else {
+            tl::errno_for_code(&failure.code)
+        };
+        let error =
+            super::payload_io::listen_error_value(&failure.code, errno, "listen", address, port);
         events::queue_emit(owner.get(), "error", &[error]);
         close(owner.get(), p::undefined());
         return owner.get();
