@@ -773,6 +773,30 @@ impl WasmModuleEmitter {
                 }
                 format!("fromJsValue({{{}}})", parts.join(", "))
             }
+            // `{ a, ...src, [k]: v }` is a JS object literal with its parts in source order:
+            // a spread copies own enumerable properties (null and undefined copy none) and
+            // a later part overrides an earlier one, as in the WASM arm.
+            Expr::ObjectSpread { parts } => {
+                let parts: Vec<String> = parts
+                    .iter()
+                    .map(|part| match part {
+                        perry_hir::ObjectPart::Spread(e) => {
+                            format!("...toJsValue({})", self.emit_js_expr(e, locals))
+                        }
+                        perry_hir::ObjectPart::Define(key, e) => format!(
+                            "{}: toJsValue({})",
+                            js_string_literal(key),
+                            self.emit_js_expr(e, locals)
+                        ),
+                        perry_hir::ObjectPart::Computed { key, value } => format!(
+                            "[toJsValue({})]: toJsValue({})",
+                            self.emit_js_expr(key, locals),
+                            self.emit_js_expr(value, locals)
+                        ),
+                    })
+                    .collect();
+                format!("fromJsValue({{{}}})", parts.join(", "))
+            }
             Expr::Array(elements, _) => {
                 let elems: Vec<String> = elements
                     .iter()

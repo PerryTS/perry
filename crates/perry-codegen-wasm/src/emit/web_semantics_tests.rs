@@ -138,3 +138,25 @@ console.log(toJsValue(fromJsValue("text")), toJsValue(fromJsValue(undefined)), t
         "booted\nbigint bigint bigint bigint bigint bigint\ntrue\nnumber 1 true\ntext undefined 2.5"
     );
 }
+
+// An object literal with a spread inside an `async` function (the JS fallback) keeps
+// every part in source order; it was an empty object, so `fetch(url, { method,
+// ...(body ? { body } : {}) })` sent a bare GET.
+#[test]
+fn object_spread_in_an_async_function_keeps_its_parts() {
+    assert_eq!(
+        run_web_source(
+            r#"
+async function build(method: string, input: string): Promise<string> {
+  const base = { a: 1, b: 2 };
+  const key = "k";
+  const o = { method, ...base, ...(input ? { body: input } : {}), b: 3, [key]: true, ...null };
+  return JSON.stringify(o);
+}
+build("POST", "x").then(s => console.log(s));
+build("GET", "").then(s => console.log(s));
+"#
+        ),
+        "{\"method\":\"POST\",\"a\":1,\"b\":3,\"body\":\"x\",\"k\":true}\n{\"method\":\"GET\",\"a\":1,\"b\":3,\"k\":true}"
+    );
+}
