@@ -32,3 +32,16 @@ for (const bytes of inputs) {
     show("utf-16le", swapped, fatal);
   }
 }
+
+for (const ignoreBOM of [false, true]) {
+  const decoder = new TextDecoder("utf-16be", { ignoreBOM: ignoreBOM });
+  for (const bytes of [
+    [0xfe, 0xff, 0x00, 0x41], // leading BOM
+    [0xfe, 0xff, 0xfe, 0xff, 0x00, 0x41], // only the first BOM is consumed
+    [0x00, 0x41, 0xfe, 0xff], // embedded BOM
+    [0xff, 0xfe, 0x00, 0x41], // the utf-16le signature is content
+  ]) {
+    const text = decoder.decode(new Uint8Array(bytes));
+    console.log(ignoreBOM, [...text].map((c) => c.codePointAt(0)!.toString(16)).join(" "));
+  }
+}
