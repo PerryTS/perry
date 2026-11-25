@@ -1236,6 +1236,7 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
             drain_deferred_close_for::<crate::server::http2_server::Http2SecureServer, _>(h, |s| {
                 &mut s.base
             });
+        count += crate::server::client_error::drain_client_errors(h);
         count += crate::server::http2_server::process_pending_h2_events();
         while let Some(p) = crate::server::http2_server::try_recv_pending_h2_nonblocking(h) {
             crate::server::http2_server::process_pending_h2(p);
