@@ -87,7 +87,7 @@ pub const ASYNC_LOCAL_STORAGE_LEGACY: u32 = 0xFFFF_0078;
 /// family between them carries a `native_state` word the far side of a
 /// `postMessage` could not reconstruct.
 const NATIVE_BACKED_FIRST: u32 = ABORT_CONTROLLER;
-const NATIVE_BACKED_LAST: u32 = COMPONENT_DRIVER_PUMP;
+const NATIVE_BACKED_LAST: u32 = HTTP_SERVER_INCOMING_MESSAGE;
 
 /// Class ids whose instances are ordinary objects carrying native state that
 /// cannot cross a thread boundary (#340/#341).
@@ -174,6 +174,7 @@ const ALL: &[u32] = &[
     COMPONENT_CALL_OPERATION,
     COMPONENT_GUEST_FRAME,
     COMPONENT_DRIVER_PUMP,
+    HTTP_SERVER_INCOMING_MESSAGE,
 ];
 
 /// Strictly ascending ⟹ no two families share an id, and the block stays
@@ -267,6 +268,7 @@ mod tests {
             COMPONENT_CALL_OPERATION,
             COMPONENT_GUEST_FRAME,
             COMPONENT_DRIVER_PUMP,
+            HTTP_SERVER_INCOMING_MESSAGE,
             ASYNC_LOCAL_STORAGE_LEGACY,
             ASYNC_RESOURCE_LEGACY,
         ] {
