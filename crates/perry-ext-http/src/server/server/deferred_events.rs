@@ -76,9 +76,9 @@ pub(crate) fn withdraw_listen_callbacks(s: &mut HttpServer) {
     s.finish_activity_change(was_active);
 }
 
-pub(crate) fn queue_deferred_close_emit(s: &mut HttpServer, callback: i64) {
-    let was_active = server_is_active(s);
-    s.pending_close_emit = true;
+/// Register a `close(cb)` callback as a once `'close'` listener. It does not
+/// keep the loop alive: the transport the emit waits for does.
+pub(crate) fn register_close_callback(s: &mut HttpServer, callback: i64) {
     if callback != 0 {
         s.listeners
             .entry("close".to_string())
@@ -86,7 +86,31 @@ pub(crate) fn queue_deferred_close_emit(s: &mut HttpServer, callback: i64) {
             .push(callback);
         s.deferred_close_cbs.push(callback);
     }
+}
+
+pub(crate) fn queue_deferred_close_emit(s: &mut HttpServer) {
+    let was_active = server_is_active(s);
+    s.pending_close_emit = true;
     s.finish_activity_change(was_active);
+}
+
+/// `server.close(cb)` for every server kind. `'close'` is owed once the
+/// transport listener emits its own, which follows the last connection's close;
+/// a server without a listener has nothing to wait for.
+pub(crate) fn close_server(server_handle: i64, callback: i64) {
+    let _ = super::with_base_server_mut(server_handle, |s| {
+        s.set_listening(false);
+        s.connections_checking_interval_destroyed = true;
+        register_close_callback(s, callback);
+    });
+    match crate::server::turnloop_serve::listener_for_server(server_handle) {
+        Some(listener) => {
+            crate::server::turnloop_serve::close_listener(listener, server_handle);
+        }
+        None => {
+            let _ = super::with_base_server_mut(server_handle, queue_deferred_close_emit);
+        }
+    }
 }
 
 /// #4903 — fire a server's queued `'listening'` listeners + `listen(cb)`
@@ -220,7 +244,6 @@ pub(super) fn server_is_active(s: &HttpServer) -> bool {
     if s.pending_listening_emit
         || !s.deferred_listen_cbs.is_empty()
         || s.pending_close_emit
-        || !s.deferred_close_cbs.is_empty()
         || s.pending_error_emit.is_some()
     {
         return true;
