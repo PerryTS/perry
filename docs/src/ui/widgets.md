@@ -520,10 +520,10 @@ Every widget handle accepts these:
 | `widgetSetOpacity(w, alpha)` | Opacity in [0, 1] |
 | `widgetSetEnabled(w, flag)` | `0` disables, `1` enables |
 | `widgetSetHidden(w, flag)` | `0` visible, `1` hidden |
-| `widgetSetTooltip(w, text)` | Tooltip on hover (desktop only) |
+| `widgetSetTooltip(w, text)` | Tooltip on hover (desktop and web) |
 | `widgetSetAccessibilityLabel(w, text)` | Name a screen reader announces for a control, not a layout container (web `aria-label`; `accessibilityLabel` on Apple targets; content description on Android, where it replaces a text field's value: use `Label`; GTK4 accessible label; no-op on Windows and HarmonyOS) |
 | `widgetSetOnClick(w, cb)` | Click handler |
-| `widgetSetOnHover(w, cb)` | Hover enter/leave (desktop only) |
+| `widgetSetOnHover(w, cb)` | Hover enter/leave (desktop and web) |
 | `widgetSetOnDoubleClick(w, cb)` | Double-click handler |
 | `setPadding(w, value)` / `setPadding(w, top, left, bottom, right)` | Padding around contents |
 | `widgetSetBorderColor(w, r, g, b, a)` / `widgetSetBorderWidth(w, n)` | Border |

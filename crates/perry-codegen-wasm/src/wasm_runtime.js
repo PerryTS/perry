@@ -4472,7 +4472,8 @@ function perry_ui_widget_set_shadow(h, r, g, b, a, blur, offsetX, offsetY) {
 }
 function perry_ui_set_opacity(h, opacity) { const el = uiGet(h); if (el) el.style.opacity = opacity; }
 function perry_ui_set_enabled(h, enabled) {
-  const el = uiGet(h); if (el) { el.disabled = !enabled; el.style.pointerEvents = enabled ? "" : "none"; el.style.opacity = enabled ? "" : "0.5"; }
+  // On a Toggle the checkbox is the control: disabling its wrapper leaves the keyboard working.
+  const el = uiGet(h); if (el) { (el._inp || el).disabled = !enabled; el.style.pointerEvents = enabled ? "" : "none"; el.style.opacity = enabled ? "" : "0.5"; }
 }
 function perry_ui_set_tooltip(h, text) { const el = uiGet(h); if (el) el.title = text || ""; }
 // On a Toggle the name goes on the checkbox: a screen reader ignores one on its wrapper.
@@ -4584,8 +4585,8 @@ function perry_ui_set_on_click(h, callback) {
 }
 function perry_ui_set_on_hover(h, callback) {
   const el = uiGet(h); if (!el) return;
-  el.addEventListener("mouseenter", () => callWasmClosure(callback, 1.0));
-  el.addEventListener("mouseleave", () => callWasmClosure(callback, 0.0));
+  el.addEventListener("mouseenter", () => callWasmClosure(callback, true));
+  el.addEventListener("mouseleave", () => callWasmClosure(callback, false));
 }
 function perry_ui_set_on_double_click(h, callback) {
   const el = uiGet(h); if (el) el.addEventListener("dblclick", () => callWasmClosure(callback));

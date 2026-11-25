@@ -261,21 +261,23 @@ fn widget_prefixed_setters_reach_the_web_setters() {
     assert_eq!(
         run_web_ui_source_then(
             r#"
-import { Button, widgetSetEnabled, widgetSetControlSize, widgetSetOnClick, widgetSetOnHover, widgetSetOnDoubleClick } from "perry/ui";
+import { Button, Toggle, widgetSetEnabled, widgetSetControlSize, widgetSetOnClick, widgetSetOnHover, widgetSetOnDoubleClick } from "perry/ui";
 const b = Button("B", () => {});
+widgetSetEnabled(Toggle("T", (on: boolean) => {}), 0);
 widgetSetEnabled(b, 0);
 widgetSetControlSize(b, 1);
 widgetSetOnClick(b, () => { console.log("click"); });
-widgetSetOnHover(b, (inside: number) => { console.log("hover " + inside); });
+widgetSetOnHover(b, (inside: boolean) => { console.log("hover " + (inside === true) + " " + (inside === false)); });
 widgetSetOnDoubleClick(b, () => { console.log("dblclick"); });
 "#,
             r#"
 const el = [...uiHandles.values()].find(e => e.textContent === "B");
 console.log(el.disabled + " " + el.style.fontSize);
-for (const type of ["click", "mouseenter", "dblclick"]) el.dispatch(type);
+for (const type of ["click", "mouseenter", "mouseleave", "dblclick"]) el.dispatch(type);
+console.log([...uiHandles.values()].find(e => e.textContent === "T")._inp.disabled);
 "#
         ),
-        "true 0.85em\nclick\nhover 1\ndblclick"
+        "true 0.85em\nclick\nhover true false\nhover false true\ndblclick\ntrue"
     );
 }
 
