@@ -152,6 +152,7 @@ pub fn map_cons(
         NotUndefined { dst } => NotUndefined { dst: n(dst) },
         NotNull { dst } => NotNull { dst: n(dst) },
         RecordEntry { dst } => RecordEntry { dst: n(dst) },
+        ArrayRecordEntry { dst } => ArrayRecordEntry { dst: n(dst) },
         TypeIs { mask, dst } => TypeIs { mask, dst: n(dst) },
         ProtoObjects { dst } => ProtoObjects { dst: n(dst) },
         NotRegExp { dst } => NotRegExp { dst: n(dst) },
@@ -758,6 +759,7 @@ pub(super) fn gen_kind(c: &Cons) -> bool {
             | ProtoObjects { .. }
             | NotNull { .. }
             | RecordEntry { .. }
+            | ArrayRecordEntry { .. }
             | TypeIs { .. }
             | Objects { .. }
             | NotUndefined { .. }

@@ -164,6 +164,7 @@ impl Model {
             Cons::NotUndefined { dst } => format!("NotUndefined dst={:?}", dst),
             Cons::NotNull { dst } => format!("NotNull dst={:?}", dst),
             Cons::RecordEntry { dst } => format!("RecordEntry dst={:?}", dst),
+            Cons::ArrayRecordEntry { dst } => format!("ArrayRecordEntry dst={:?}", dst),
             Cons::TypeIs { mask, dst } => format!("TypeIs mask={mask:#x} dst={:?}", dst),
             Cons::ProtoObjects { dst } => format!("ProtoObjects dst={:?}", dst),
             Cons::NotRegExp { dst } => format!("NotRegExp dst={:?}", dst),

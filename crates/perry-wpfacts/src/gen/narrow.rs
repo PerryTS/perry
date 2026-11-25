@@ -868,6 +868,19 @@ pub(crate) enum Presence {
     /// Rule RP2: `arrayRecordNeedsIterator(local)` true (`Cons::RecordEntry`):
     /// no Array the runtime takes the array arm for.
     RecordProtocol,
+    /// Rule RP2-false: `arrayRecordNeedsIterator(local)` false
+    /// (`Cons::ArrayRecordEntry`): only a value the runtime may take the
+    /// array arm for.
+    ArrayRecord,
+}
+
+/// What `arrayRecordNeedsIterator(t)` decided `needs` tells of `t`: rule
+/// RP2 (true) or RP2-false (false).
+fn record_presence(needs: bool) -> Presence {
+    match needs {
+        true => Presence::RecordProtocol,
+        false => Presence::ArrayRecord,
+    }
 }
 
 /// The source local of `arrayRecordNeedsIterator(t)`: the test of a guarded
@@ -959,7 +972,9 @@ fn implied<'p>(
         // Rule RP2: `arrayRecordNeedsIterator(t)` decided true, bare or
         // compared with a Boolean constant (ECMA-262 7.2.16: only `b` is
         // `b`): what runs there never sees `t` an Array the runtime takes
-        // the array arm for.
+        // the array arm for. Rule RP2-false: decided false, what runs there
+        // sees `t` only as a value the runtime answers false for, an Array
+        // object (`js_array_record_needs_iterator`).
         Expr::Compare {
             op: op @ (CompareOp::Eq | CompareOp::Ne),
             left,
@@ -970,13 +985,13 @@ fn implied<'p>(
                 return;
             };
             let needs = *b == ((*op == CompareOp::Eq) == positive);
-            if let Some(id) = needs.then(|| needs_iterator_of(left)).flatten().and_then(|t| host_of(t, subst, depth)) {
-                out.push(Implied::Present(id, Presence::RecordProtocol));
+            if let Some(id) = needs_iterator_of(left).and_then(|t| host_of(t, subst, depth)) {
+                out.push(Implied::Present(id, record_presence(needs)));
             }
         }
-        Expr::NativeMethodCall { .. } if positive && needs_iterator_of(c).is_some() => {
+        Expr::NativeMethodCall { .. } if needs_iterator_of(c).is_some() => {
             if let Some(id) = needs_iterator_of(c).and_then(|t| host_of(t, subst, depth)) {
-                out.push(Implied::Present(id, Presence::RecordProtocol));
+                out.push(Implied::Present(id, record_presence(positive)));
             }
         }
         // Rule G2: a truthy `local.key` (module docs, "Guards"); rule
@@ -1753,6 +1768,9 @@ impl<'a> Gen<'a> {
                 }
                 Implied::Present(_, Presence::RecordProtocol) => {
                     self.m.cons(src, Cons::RecordEntry { dst: start })
+                }
+                Implied::Present(_, Presence::ArrayRecord) => {
+                    self.m.cons(src, Cons::ArrayRecordEntry { dst: start })
                 }
                 Implied::Present(_, Presence::TypeIs(mask)) => {
                     self.m.cons(src, Cons::TypeIs { mask, dst: start })

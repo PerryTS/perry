@@ -395,6 +395,7 @@ impl Model {
                 | Cons::NotRegExp { dst }
                 | Cons::NotNull { dst }
  | Cons::RecordEntry { dst }
+ | Cons::ArrayRecordEntry { dst }
                 | Cons::TypeIs { dst, .. }
                 | Cons::Objects { dst }
                 | Cons::NotUndefined { dst }

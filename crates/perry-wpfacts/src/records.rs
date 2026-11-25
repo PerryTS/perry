@@ -273,6 +273,7 @@ fn record_use(c: &Cons, m: &Model, keys: &[Atom]) -> Use {
         | Cons::NotRegExp { .. }
         | Cons::NotNull { .. }
  | Cons::RecordEntry { .. }
+ | Cons::ArrayRecordEntry { .. }
         | Cons::TypeIs { .. }
         | Cons::NotUndefined { .. }
         | Cons::Guard { .. }
@@ -430,6 +431,7 @@ fn array_use(c: &Cons, m: &Model) -> Use {
         | Cons::NotRegExp { .. }
         | Cons::NotNull { .. }
         | Cons::RecordEntry { .. }
+        | Cons::ArrayRecordEntry { .. }
         | Cons::TypeIs { .. }
         | Cons::NotUndefined { .. }
         | Cons::Guard { .. }
@@ -1369,6 +1371,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                                     | Cons::NotRegExp { .. }
                                     | Cons::NotNull { .. }
                                     | Cons::RecordEntry { .. }
+                                    | Cons::ArrayRecordEntry { .. }
                                     | Cons::TypeIs { .. }
                                     | Cons::NotUndefined { .. }
                                     | Cons::Guard { .. }
@@ -1939,6 +1942,7 @@ impl<'a, 'g> Scan<'a, 'g> {
                 | Cons::NotRegExp { .. }
                 | Cons::NotNull { .. }
                 | Cons::RecordEntry { .. }
+                | Cons::ArrayRecordEntry { .. }
                 | Cons::TypeIs { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Guard { .. }

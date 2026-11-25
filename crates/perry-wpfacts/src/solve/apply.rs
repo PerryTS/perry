@@ -639,6 +639,15 @@ impl Model {
                     self.cur_range = saved;
                 }
             }
+            // Rule RP2-false: the array arm sees only a value the runtime
+            // may take it for (`solve/record_entry.rs`); a primitive never.
+            Cons::ArrayRecordEntry { dst } => {
+                for &t in toks {
+                    if self.array_arm_may_see(t) {
+                        self.add_tok(dst, t);
+                    }
+                }
+            }
             Cons::Defined { dst }
             | Cons::NotNullish { dst }
             | Cons::NotUndefined { dst }

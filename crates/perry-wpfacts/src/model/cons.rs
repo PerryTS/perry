@@ -365,6 +365,11 @@ pub enum Cons {
     /// which is held back until it no longer qualifies
     /// (`settle_record_entry`).
     RecordEntry { dst: NodeId },
+    /// Rule RP2-false (`solve/record_entry.rs`): the values the array arm of
+    /// a guarded iterator record may see: only those
+    /// `arrayRecordNeedsIterator` may answer false for
+    /// (`Model::array_arm_may_see`: an Array object, ⊤, a marker).
+    ArrayRecordEntry { dst: NodeId },
     /// R9READ6 rule T6: a local `x` where `typeof x === s` held, `s`
     /// "string", "number", "boolean" or "undefined": only its primitives
     /// of `mask` (the one type with that typeof result, ECMA-262 13.5.3)
@@ -1145,6 +1150,7 @@ impl Cons {
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
                 | Cons::RecordEntry { .. }
+                | Cons::ArrayRecordEntry { .. }
                 | Cons::TypeIs { .. }
                 | Cons::NotUndefined { .. }
         )
@@ -1174,6 +1180,7 @@ impl Cons {
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
                 | Cons::RecordEntry { .. }
+                | Cons::ArrayRecordEntry { .. }
                 | Cons::TypeIs { .. }
                 | Cons::NotUndefined { .. }
                 | Cons::Falsy { .. }
@@ -1226,6 +1233,7 @@ impl Cons {
             Cons::NotUndefined { .. } => "notundefined",
             Cons::NotNull { .. } => "notnull",
             Cons::RecordEntry { .. } => "recordentry",
+            Cons::ArrayRecordEntry { .. } => "arrayrecordentry",
             Cons::TypeIs { .. } => "typeis",
             Cons::NotBuffer { .. } => "notbuffer",
             Cons::NotObjectProto { .. } => "notobjectproto",

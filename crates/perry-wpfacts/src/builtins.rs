@@ -2229,6 +2229,32 @@ pub(crate) fn iterates_indices(what: &str) -> bool {
     members::bobj_family(what) == Family::Box
 }
 
+/// Rule RP2-false (`Model::array_arm_may_see`): may a builtin object of kind
+/// `what` be an Array object? A box whose creator allocates an ordinary or a
+/// null-prototype object (`members::box_chain`) is not, nor is a value of a
+/// family the model describes as no Array (a collection, an iterator, a
+/// promise, an error, a plain object); an array box, an undescribed box, a
+/// wrapper (`Object(v)` may be `v`) and an opaque kind may be.
+pub(crate) fn bobj_may_be_array(what: &str) -> bool {
+    match members::bobj_family(what) {
+        Family::Box => !matches!(
+            members::box_chain(what),
+            members::BoxChain::Object | members::BoxChain::Null
+        ),
+        fam => family_may_be_array(fam),
+    }
+}
+
+/// Rule RP2-false: may the builtin namespace value `ns` be an Array object
+/// (`members::ns_chain`: the family of its chain)?
+pub(crate) fn ns_may_be_array(ns: BuiltinNs) -> bool {
+    family_may_be_array(members::ns_chain(ns))
+}
+
+fn family_may_be_array(fam: Family) -> bool {
+    matches!(fam, Family::Array | Family::Box | Family::Wrapper | Family::Opaque)
+}
+
 /// Does the realm give the namespace or constructor `ns` no enumerable own
 /// property, so that a copy of its own enumerable properties (`{...ns}`,
 /// `Object.assign`, `Object.values`) reads only what the program put on it

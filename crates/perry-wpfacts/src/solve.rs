@@ -393,6 +393,7 @@ impl Model {
                 | Cons::ProtoObjects { .. }
                 | Cons::NotNull { .. }
                 | Cons::RecordEntry { .. }
+                | Cons::ArrayRecordEntry { .. }
                 | Cons::TypeIs { .. }
                 | Cons::Objects { .. }
                 | Cons::NotUndefined { .. }

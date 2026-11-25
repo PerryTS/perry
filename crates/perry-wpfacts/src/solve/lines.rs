@@ -91,6 +91,7 @@ impl Model {
             Cons::NotUndefined { dst } => format!("notundefined {n} {dst}"),
             Cons::NotNull { dst } => format!("notnull {n} {dst}"),
             Cons::RecordEntry { dst } => format!("recordentry {n} {dst}"),
+            Cons::ArrayRecordEntry { dst } => format!("arrayrecordentry {n} {dst}"),
             Cons::TypeIs { mask, dst } => format!("typeis {n} {mask:#x} {dst}"),
             Cons::NotBuffer { shared, dst } => format!("notbuffer {n} {dst} shared={shared}"),
             Cons::NotRegExp { dst } => format!("notregexp {n} {dst}"),

@@ -1939,6 +1939,7 @@ impl Model {
             | Cons::NotUndefined { .. }
             | Cons::NotNull { .. }
  | Cons::RecordEntry { .. }
+ | Cons::ArrayRecordEntry { .. }
             | Cons::TypeIs { .. }
             | Cons::Falsy { .. }
             | Cons::Objects { .. }
