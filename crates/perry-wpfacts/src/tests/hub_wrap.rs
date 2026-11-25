@@ -92,3 +92,68 @@ onAfterFrame(() => { if (!wrapped) { const gl = cv.getContext(\"webgl2\") as unk
     let post = "return; } });\nfor (const cb of cbs) cb();\n";
     strings_only(&run(make, pre, post), "factory map");
 }
+
+/// Lowered the way c09 is: every direct namespace call as the pair
+/// `NamespacePatched(Object) ? Object.m(…) : <intrinsic>` (`namespace_pairs`,
+/// as tests/mathb1.rs), so `Object.getOwnPropertyDescriptor(p, k)` is a
+/// call inside the per-key run (summary call copy).
+fn facts_pairs(src: &str) -> ProgramFacts {
+    let module = perry_parser::parse_typescript(src, "t.ts").expect("parses");
+    let mut set = perry_hir::PatchedBuiltins::new();
+    perry_hir::scan_patched_builtins(&module, &mut set);
+    set.namespace_pairs = true;
+    perry_hir::set_patched_builtins(std::sync::Arc::new(set));
+    let hir = perry_hir::lower_module(&module, "t", "t.ts");
+    perry_hir::clear_patched_builtins();
+    let hir = hir.expect("lowers");
+    let mut cfg = FactsConfig::default();
+    cfg.max_work.get_or_insert(50_000_000);
+    cfg.namespace_pairs = true;
+    compute(&[("t.ts".to_string(), &hir)], &cfg)
+}
+
+/// HUB4: each run of the key loop's body calls `getOwnPropertyDescriptor`
+/// itself, and each call returns a new descriptor object (ECMA-262 20.1.2.8
+/// step 4, 6.2.6.4 FromPropertyDescriptor: OrdinaryObjectCreate), so one
+/// key's `d.value` is that key's method only: `gl.a(t)` (an object) and
+/// `gl.a(1)` reach `a` alone, never `b`/`mid`/`core`.
+#[test]
+fn hub_wrap_namespace_pairs_descriptor_per_run() {
+    let src = format!(
+        "{BASE}{DIRECT}const seen = new Set<string>();\nlet inGl = 0, calls = 0;\n{LOOP}{USE}console.log(inGl, calls);\n"
+    );
+    let pf = facts_pairs(&src);
+    strings_only(&pf, "namespace pairs");
+    forwarded(&pf, "namespace pairs");
+}
+
+/// Each wrapper forwards its own call's arguments to its own method:
+/// `b("x")` gives `bs` a String, `a(1)` gives `at` a Number (a fix that
+/// empties `f` fails here).
+fn forwarded(pf: &ProgramFacts, what: &str) {
+    for (c, f, p) in [
+        ("GL", "bs", crate::model::prim::STR),
+        ("GL", "at", crate::model::prim::NUM),
+        ("GL", "ms", crate::model::prim::STR),
+        ("GL", "cs", crate::model::prim::STR),
+    ] {
+        let k = field(tmpl(pf, c), f).kind.clone();
+        assert!(k.prims & p != 0 && !k.top, "{what}: {c}.{f} {k:?}");
+    }
+}
+
+/// HUB5, the c09 condition: some program class has a `value` getter
+/// (`needs_accessor_walk`), so the template run's `d.value` walks the
+/// descriptor's holder sets (`Model::holders`, keyed by the template
+/// token): a lookup cache of that token, not a holder of it. The run's
+/// descriptor stays its own object (20.1.2.8 step 4 / 6.2.6.4: a new one
+/// per call): one key's `d.value` is that key's method only.
+#[test]
+fn hub_wrap_namespace_pairs_descriptor_value_getter() {
+    let src = format!(
+        "{BASE}class V {{ get value(): number {{ return 1; }} }}\nconsole.log(new V().value);\n{DIRECT}const seen = new Set<string>();\nlet inGl = 0, calls = 0;\n{LOOP}{USE}console.log(inGl, calls);\n"
+    );
+    let pf = facts_pairs(&src);
+    strings_only(&pf, "value getter");
+    forwarded(&pf, "value getter");
+}
