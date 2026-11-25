@@ -112,6 +112,10 @@ pub extern "C" fn perry_ui_widget_set_on_key_down(handle: i64, cb: f64) {
 pub extern "C" fn perry_ui_widget_set_on_key_up(handle: i64, cb: f64) {
     kb::set_on_key_up(handle, cb);
 }
+/// Android-only (system Back); no-op here.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_back(_callback: f64) {}
+
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_on_key_down(cb: f64) {
     kb::set_on_key_down(0, cb);

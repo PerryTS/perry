@@ -192,6 +192,10 @@ pub extern "C" fn perry_ui_widget_set_on_key_up(handle: i64, callback: f64) {
     widgets::keyboard::set_on_key_up(handle, callback);
 }
 
+/// Android-only (system Back); no-op here.
+#[no_mangle]
+pub extern "C" fn perry_ui_app_set_on_back(_callback: f64) {}
+
 /// App-level key-down fallback. Fires when no widget owns focus.
 #[no_mangle]
 pub extern "C" fn perry_ui_app_set_on_key_down(callback: f64) {
