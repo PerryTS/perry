@@ -22,3 +22,11 @@ default = ["perry-stdlib/default"]
 
 [dependencies]
 perry-stdlib = { path = "../perry-stdlib", default-features = false }
+
+# Android links this archive next to libperry_ui_android.a, which bundles its
+# own perry-runtime with the RegExp / Temporal / URL engines. Both copies must
+# be built with the same runtime features, or the linker mixes objects from
+# two different runtimes (a realm initialised without the RegExp intrinsic
+# then aborts on the first regex literal).
+[target.'cfg(target_os = "android")'.dependencies]
+perry-runtime = { path = "../perry-runtime", default-features = false, features = ["regex-engine", "temporal", "url-engine"] }
