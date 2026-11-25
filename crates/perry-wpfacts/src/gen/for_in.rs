@@ -38,7 +38,8 @@ pub(crate) struct ForIn<'s> {
 /// What the receiver of an ENUM read `Q[k]` must be (`Gen::enum_scope`).
 #[derive(Clone, Debug)]
 pub(crate) enum EnumSubject {
-    /// ENUM1 (exact): the local `__forin_obj` copies, never written.
+    /// ENUM1 (exact): the local `__forin_obj` copies, or the operand of
+    /// `Object.keys` whose keys a counted walk binds, never written.
     Local(u32),
     /// F-A (exact): the loop subject path, re-read in the body, with the
     /// gate of its ordinary read (`Gen::path_watch`).
@@ -494,9 +495,34 @@ impl<'a> Gen<'a> {
     /// F-A: for `for (k in P)` with `P` a side-effect-free path
     /// (`SubjPath`), `P[k]` in the body is that same read until the body
     /// may change the path (`path_watch`).
+    ///
+    /// ENUM1 over `Object.keys(o)`: the counted walk of the keys Array
+    /// (`for_of_keys_shape`, rule E1) binds `k` to one of `o`'s own
+    /// enumerable String keys (ECMA-262 20.1.2.18 Object.keys, 7.3.23
+    /// EnumerableOwnProperties), so `o[k]` reads one of `o`'s enumerable
+    /// keys, as in `for (k in o)` (whose read rule also covers the
+    /// inherited ones), while neither `k` nor `o` is written. The subject is
+    /// `o` itself: `Object.keys` reads the local, no `__forin_obj` copy.
+    /// `Object.getOwnPropertyNames` lists non-enumerable keys too: no rule.
     pub(crate) fn enum_scope(&mut self, fx: &Fx, body: &[Stmt]) -> Option<(u32, u32, EnumSubject)> {
         let mi = fx.module;
-        let f = for_in_shape(body, |k| self.for_in_keys_of.get(&(mi, k)).copied())?;
+        let keys_of = |k| self.for_in_keys_of.get(&(mi, k)).copied();
+        let f = match for_in_shape(body, keys_of) {
+            Some(f) => f,
+            None => {
+                let walked = |a, i| self.for_of_walks.contains(&(mi, a, i));
+                let f = for_of_keys_shape(body, keys_of, walked)?;
+                if f.list != KeyList::OwnKeys {
+                    return None;
+                }
+                let (key, obj) = (f.key, f.obj);
+                let w = self.written_locals(mi);
+                if w.contains(&key) || w.contains(&obj) {
+                    return None;
+                }
+                return Some((mi, key, EnumSubject::Local(obj)));
+            }
+        };
         let (key, obj) = (f.key, f.obj);
         let src = self.local_copies.get(&(mi, obj)).copied();
         let path = match src {

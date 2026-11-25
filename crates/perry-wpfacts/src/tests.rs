@@ -225,6 +225,7 @@ mod not_error;
 mod null_proto_box_key;
 mod num_key;
 mod numeric_key_names;
+mod object_keys_enumerable_read;
 mod object_proto_constructor;
 mod object_proto_test;
 mod objproto_protocol;
