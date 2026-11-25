@@ -1111,8 +1111,29 @@ pub(crate) unsafe fn dispatch_builtin_buffer_method(
         }
         "lastIndexOf" => {
             let len = crate::buffer::store::raw_length(buf_ptr as usize) as i32;
-            let start = if args.len() >= 2 { arg_i32(1) } else { len - 1 };
-            let enc = if args.len() >= 3 {
+            // `Buffer#lastIndexOf` reads a string `byteOffset` as the encoding
+            // and searches the whole buffer for one that is NaN after `+`
+            // (`undefined`, `{}`, `"x"` …); `%TypedArray%.prototype.lastIndexOf`
+            // takes ToIntegerOrInfinity, so NaN is 0 for a `Uint8Array`.
+            let node_buffer = crate::buffer::is_node_buffer(addr);
+            let offset_is_encoding = node_buffer
+                && args.len() >= 2
+                && JSValue::from_bits(args[1].to_bits()).is_any_string();
+            let start = if args.len() < 2 || offset_is_encoding {
+                len - 1
+            } else if node_buffer {
+                let offset = crate::builtins::js_number_coerce(args[1]);
+                if offset.is_nan() {
+                    len - 1
+                } else {
+                    crate::array::array_slice_value_to_index(offset)
+                }
+            } else {
+                arg_i32(1)
+            };
+            let enc = if offset_is_encoding {
+                crate::buffer::js_encoding_tag_from_value(args[1])
+            } else if args.len() >= 3 {
                 crate::buffer::js_encoding_tag_from_value(args[2])
             } else {
                 0
