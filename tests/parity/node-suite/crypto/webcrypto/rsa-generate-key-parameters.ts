@@ -48,7 +48,7 @@ for (const modulusLength of [1024, 3072]) {
 
 const lengths: any[] = [
   undefined, null, "1024", "x", NaN, Infinity, 1024.9, -1, 4294967296, 4294967296 + 1024, 1024n, Symbol("s"), {}, true,
-  { valueOf: () => 1024 }, 0, 8, 511, 512, 1023, 2049, 1073741826, 2147483648,
+  { valueOf: () => 1024 }, { valueOf: () => "1024" }, { valueOf: () => "x" }, 0, 8, 511, 512, 1023, 2049, 1073741826, 2147483648,
 ];
 for (const modulusLength of lengths) {
   await attempt(`modulusLength ${String(modulusLength)}`, { ...pss, modulusLength, publicExponent: F4 });

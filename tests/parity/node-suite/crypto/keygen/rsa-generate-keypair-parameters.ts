@@ -60,7 +60,7 @@ for (const options of [undefined, null, 5, "x", []] as any[]) {
 }
 attempt("options symbol", () => (generateKeyPairSync("rsa", Symbol("x") as any), "generated"));
 attempt("options omitted", () => ((generateKeyPairSync as any)("rsa"), "generated"));
-for (const modulusLength of [undefined, null, "2048", 2048n, true, {}, NaN, Infinity, 2048.5, -1, 4294967296, 0, 8, 511, 1073741826, 2147483648]) {
+for (const modulusLength of [undefined, null, "2048", 2048n, true, {}, NaN, Infinity, 2048.5, 1e-7, -1, 4294967296, -4294967297, 5e9, 1e20, 1e21, 0, 8, 511, 1073741826, 2147483648]) {
   attempt(`modulusLength ${String(modulusLength)}`, () => sync({ modulusLength }));
 }
 for (const publicExponent of ["3", 3n, true, {}, new Uint8Array([1, 0, 1]), NaN, 3.5, -1, 4294967296, 0, 1, 2, 4, 65536]) {
