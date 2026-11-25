@@ -32,7 +32,7 @@ pub(crate) fn try_recv_pending_h2_nonblocking(server_handle: i64) -> Option<Http
 /// architectural change, we no longer block on the handler-returned
 /// Promise.
 pub(crate) fn process_pending_h2(mut pending: HttpPendingRequest) {
-    let req_f64 = handle_to_pointer_f64(pending.request_handle);
+    let req_f64 = pending.request;
     // The response is rooted for the dispatch: every callback below can run
     // a moving collection. The fresh word goes back before parking.
     let exchange_roots = perry_ffi::TransientRootScope::enter();
@@ -42,7 +42,7 @@ pub(crate) fn process_pending_h2(mut pending: HttpPendingRequest) {
     // The HTTP/2 stream handle is recycled from the same pool, so clear it too
     // (no-op when `h2_stream_handle == 0`).
     unsafe {
-        crate::server::types::js_handle_clear_side_tables(pending.request_handle);
+        crate::server::types::js_handle_clear_side_tables(pending.request_handle());
         if crate::server::response::is_legacy_response_handle(pending.response_handle()) {
             crate::server::types::js_handle_clear_side_tables(pending.response_handle());
         }
@@ -122,7 +122,7 @@ pub(crate) fn process_pending_h2(mut pending: HttpPendingRequest) {
         synthesize_default_h2_stream_response(pending.h2_stream_handle);
     }
     if pending.skip_default_response {
-        perry_ffi::drop_handle(pending.request_handle);
+        perry_ffi::drop_handle(pending.request_handle());
         crate::server::server::retire_response(pending.response_handle(), None);
     } else {
         // A compat handler may resume after `drain`, a timer, or an await.

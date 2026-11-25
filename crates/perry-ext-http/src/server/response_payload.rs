@@ -304,6 +304,19 @@ pub(crate) fn emit_close(handle: i64) {
     set_field(h(), b"_closed", bool_value(true));
     emit(h(), "close");
 }
+/// `'finish'`, after node's `resOnFinish` (registered before any program
+/// listener): an unread request body is dumped.
+pub(crate) fn emit_finish(handle: i64) {
+    let roots = TransientRootScope::enter();
+    let owner = roots.root_nanbox(value(handle));
+    if let Some(req) = field(handle, b"req") {
+        let req = (req.to_bits() & PTR_MASK) as i64;
+        if super::request_payload::is_request(req) {
+            super::request_payload::dump_unread(req);
+        }
+    }
+    emit((owner.get().to_bits() & PTR_MASK) as i64, "finish");
+}
 /// Whether the response's `'close'` has fired.
 pub(crate) fn close_emitted(handle: i64) -> bool {
     field(handle, b"_closed").is_some_and(truthy)
@@ -466,7 +479,7 @@ extern "C" fn flushed(
         return f64::from_bits(TAG_UNDEFINED);
     }
     run_end_callbacks(h());
-    emit(h(), "finish");
+    emit_finish(h());
     f64::from_bits(TAG_UNDEFINED)
 }
 /// The heap response's final socket write: node finishes (the queued write

@@ -240,7 +240,9 @@ pub(crate) fn take_server_event_listeners(server: &mut HttpServer, event: &str) 
 /// A decoded request queued for the main-thread pump.
 pub struct HttpPendingRequest {
     pub server_handle: i64,
-    pub request_handle: i64,
+    /// The request object word (a registry id boxes as a handle), visited
+    /// with `response` while queued.
+    pub request: f64,
     /// The response object word (a legacy registry id boxes as a handle).
     /// Parked on the server, which visits it; a dispatcher roots its copy
     /// before running JS and writes the fresh word back before parking.
@@ -261,6 +263,10 @@ pub struct HttpPendingRequest {
 }
 
 impl HttpPendingRequest {
+    /// The request's handle: the heap object's address, or a registry id.
+    pub(crate) fn request_handle(&self) -> i64 {
+        object_handle(self.request)
+    }
     /// The response's handle: the heap object's address, or a legacy id.
     pub(crate) fn response_handle(&self) -> i64 {
         object_handle(self.response)
@@ -934,16 +940,16 @@ pub extern "C" fn js_node_http_server_close_all_connections(handle: i64) {
         .into_iter()
         .map(|e| {
             (
-                e.request_handle,
+                roots.root_nanbox(e.request),
                 roots.root_nanbox(e.response),
                 e.recycle_deadline(),
             )
         })
         .collect();
     for (req, res, deadline) in parked {
-        let res = object_handle(res.get());
-        let recycle_deadline = (!response_writable_ended(res)).then_some(deadline);
-        finalize_request_handles_deferred(req, res, recycle_deadline);
+        let recycle_deadline =
+            (!response_writable_ended(object_handle(res.get()))).then_some(deadline);
+        finalize_request_handles_deferred(req.get(), res.get(), recycle_deadline);
     }
 }
 
@@ -1306,6 +1312,15 @@ pub(crate) fn try_recv_pending_nonblocking(server_handle: i64) -> Option<HttpPen
     crate::server::turnloop_serve::take_pending(server_handle)
 }
 
+/// A heap request's body reaches its stream once the `'request'` listeners
+/// have run, as node's parser pushes it after `parserOnIncoming` returns.
+fn deliver_heap_body(req: f64) {
+    let handle = object_handle(req);
+    if crate::server::request_payload::is_request(handle) {
+        crate::server::request_payload::deliver_body(handle);
+    }
+}
+
 /// Dispatch one pending request — fire `'request'` listeners, then
 /// the main handler, then await any returned Promise. The handler is
 /// expected to call `res.end(...)` itself; the response oneshot
@@ -1326,7 +1341,8 @@ fn process_pending(mut pending: HttpPendingRequest) {
     if incoming_async_id != 0 {
         unsafe { crate::js_async_hooks_provider_enter(incoming_async_id) };
     }
-    let req_f64 = handle_to_pointer_f64(pending.request_handle);
+    // The request word moves with the collector: every use re-reads the root.
+    let req_root = exchange_roots.root_nanbox(pending.request);
 
     // #6710: this handler is about to run on a possibly-RECYCLED handle id —
     // perry-ffi's bounded freelist hands a freed `IncomingMessage` /
@@ -1343,7 +1359,10 @@ fn process_pending(mut pending: HttpPendingRequest) {
     // already fresh per request via `IncomingMessage::new`; only these
     // id-keyed JS side tables leak.)
     unsafe {
-        js_handle_clear_side_tables(pending.request_handle);
+        // A heap request is never a recycled id: no side tables to clear.
+        if !crate::server::request_payload::is_request(pending.request_handle()) {
+            js_handle_clear_side_tables(pending.request_handle());
+        }
         // A heap response is never a recycled id: no side tables to clear.
         if crate::server::response::is_legacy_response_handle(pending.response_handle()) {
             js_handle_clear_side_tables(pending.response_handle());
@@ -1352,7 +1371,7 @@ fn process_pending(mut pending: HttpPendingRequest) {
 
     let res_root = exchange_roots.root_nanbox(crate::server::response::exchange_response(
         pending.server_handle,
-        req_f64,
+        req_root.get(),
         res_root.get(),
     ));
 
@@ -1375,7 +1394,7 @@ fn process_pending(mut pending: HttpPendingRequest) {
     // scanner DOES rewrite; the routing decision (`is_check_continue`) keeps
     // the arrival-time snapshot semantics. Then root the refreshed values,
     // because each callback below can itself run a moving collection.
-    // (`req_f64`/`server_this` are small handle ids; the response is rooted above.)
+    // (`req_root.get()`/`server_this` are small handle ids; the response is rooted above.)
     let (fresh_request_listeners, fresh_check_continue_listeners, fresh_handler) =
         match get_handle_mut::<HttpServer>(pending.server_handle) {
             Some(server) if pending.is_check_continue => (
@@ -1408,14 +1427,16 @@ fn process_pending(mut pending: HttpPendingRequest) {
                 if !closure.is_null() {
                     let _ = closure.call2(
                         perry_ffi::JsThis::from_f64(server_this),
-                        req_f64,
+                        req_root.get(),
                         res_root.get(),
                     );
                 }
                 js_promise_run_microtasks();
             }
         }
+        deliver_heap_body(req_root.get());
         pending.response = res_root.get();
+        pending.request = req_root.get();
         finalize_or_park_request(&pending);
         if incoming_async_id != 0 {
             unsafe {
@@ -1444,14 +1465,18 @@ fn process_pending(mut pending: HttpPendingRequest) {
                 // `'request'` listener — same `this` = server binding.
                 let _ = closure.call2(
                     perry_ffi::JsThis::from_f64(server_this),
-                    req_f64,
+                    req_root.get(),
                     res_root.get(),
                 );
+            }
+            if request_rooted.is_empty() {
+                deliver_heap_body(req_root.get());
             }
             js_promise_run_microtasks();
         }
     }
-    for cb in &request_rooted {
+    let last_listener = request_rooted.len();
+    for (index, cb) in request_rooted.iter().enumerate() {
         let addr = cb.get();
         if addr == 0 {
             continue;
@@ -1462,13 +1487,17 @@ fn process_pending(mut pending: HttpPendingRequest) {
             if !closure.is_null() {
                 let _ = closure.call2(
                     perry_ffi::JsThis::from_f64(server_this),
-                    req_f64,
+                    req_root.get(),
                     res_root.get(),
                 );
+            }
+            if index + 1 == last_listener {
+                deliver_heap_body(req_root.get());
             }
             js_promise_run_microtasks();
         }
     }
+    deliver_heap_body(req_root.get());
 
     // #4728 — if the handler already finished the response (the common
     // synchronous `res.end(...)` shape, or an async handler whose
@@ -1481,6 +1510,7 @@ fn process_pending(mut pending: HttpPendingRequest) {
     // finalizes it once `res.end()` flushes the real response or the
     // peer/connection is explicitly destroyed.
     pending.response = res_root.get();
+    pending.request = req_root.get();
     finalize_or_park_request(&pending);
     if incoming_async_id != 0 {
         unsafe {

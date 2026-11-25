@@ -562,6 +562,9 @@ extern "C" fn http_getter_thunk(
                 return message_header_view(receiver, HeaderView::Trailers);
             }
             b"connection" => return field(b"socket"),
+            b"signal" => {
+                return message_signal(receiver);
+            }
             b"writableEnded" => return field(b"finished"),
             b"headersSent" => {
                 return bool_value(crate::value::js_is_truthy(field(b"_header")) != 0)
@@ -1070,6 +1073,122 @@ pub unsafe extern "C" fn js_node_http_server_response_birth(proto: f64, req: f64
     let obj = scope.root_nanbox_f64(obj);
     js_node_http_server_response_init(obj.get_nanbox_f64(), req.get_nanbox_f64());
     obj.get_nanbox_f64()
+}
+
+/// A server request as node's parser makes it, in two steps: the object on
+/// `proto` (`IncomingMessage.prototype` when `proto` is not an object), then
+/// (after the payload attach) `new IncomingMessage(socket)`'s fields and `parserOnHeadersComplete`'s stores in its order (`httpVersionMajor`,
+/// `httpVersionMinor`, `httpVersion`, `url`, `method`) and
+/// `_addHeaderLines(rawHeaders, n)` (`rawHeaders`, `this[kHeadersCount]`).
+/// The native payload is attached by the caller.
+///
+/// # Safety
+/// FFI entry: every argument is a live JS value; `raw_headers` is an array.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_incoming_message_create(proto: f64) -> f64 {
+    let proto = if JSValue::from_bits(proto.to_bits()).is_pointer() {
+        proto
+    } else {
+        ensure_http_prototype(HttpProto::IncomingMessage)
+    };
+    crate::object::js_object_create(proto)
+}
+
+/// node's constructor and parser fields on `this`, a fresh object from
+/// [`js_node_http_incoming_message_create`] whose payload the caller has
+/// attached (a stream's state record joins an existing payload cell).
+///
+/// # Safety
+/// FFI entry: every argument is a live JS value; `raw_headers` is an array.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_incoming_message_birth(
+    this: f64,
+    socket: f64,
+    raw_headers: f64,
+    major: f64,
+    minor: f64,
+    version: f64,
+    url: f64,
+    method: f64,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(socket);
+    let raw = scope.root_nanbox_f64(raw_headers);
+    let version = scope.root_nanbox_f64(version);
+    let url = scope.root_nanbox_f64(url);
+    let method = scope.root_nanbox_f64(method);
+    let obj = scope.root_nanbox_f64(this);
+    js_node_http_incoming_message_init(obj.get_nanbox_f64(), socket.get_nanbox_f64());
+    let put = |name: &'static [u8], value: f64| {
+        crate::runtime_state_key::js_runtime_state_key_set(
+            obj.get_nanbox_f64(),
+            name.as_ptr(),
+            name.len(),
+            value,
+        );
+    };
+    put(b"httpVersionMajor", major);
+    put(b"httpVersionMinor", minor);
+    put(b"httpVersion", version.get_nanbox_f64());
+    put(b"url", url.get_nanbox_f64());
+    put(b"method", method.get_nanbox_f64());
+    let count = crate::array::js_array_length(
+        (raw.get_nanbox_u64() & crate::value::POINTER_MASK) as *const crate::array::ArrayHeader,
+    ) as f64;
+    if count > 0.0 {
+        put(b"rawHeaders", raw.get_nanbox_f64());
+        crate::symbol::js_object_set_symbol_property(
+            obj.get_nanbox_f64(),
+            layouts::runtime_symbol_value(&layouts::NP_SYMBOL_K_HEADERS_COUNT),
+            count,
+        );
+    }
+    obj.get_nanbox_f64()
+}
+
+/// node's `IncomingMessage.prototype.signal` getter: `this[kAbortController]`,
+/// created on first read, and its signal.
+fn message_signal(receiver: f64) -> f64 {
+    extern "C" {
+        fn js_abort_controller_new() -> *mut ObjectHeader;
+        fn js_abort_controller_signal(controller: *mut ObjectHeader) -> *mut ObjectHeader;
+    }
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(receiver);
+    let key = layouts::runtime_symbol_value(&layouts::NP_SYMBOL_K_ABORT_CONTROLLER);
+    let mut controller =
+        unsafe { crate::symbol::js_object_get_symbol_property(this.get_nanbox_f64(), key) };
+    if crate::value::js_is_truthy(controller) == 0 {
+        controller = boxed(unsafe { js_abort_controller_new() });
+        let c = scope.root_nanbox_f64(controller);
+        let key = layouts::runtime_symbol_value(&layouts::NP_SYMBOL_K_ABORT_CONTROLLER);
+        unsafe {
+            crate::symbol::js_object_set_symbol_property(this.get_nanbox_f64(), key, c.get_nanbox_f64())
+        };
+        controller = c.get_nanbox_f64();
+    }
+    let ptr = (controller.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    boxed(unsafe { js_abort_controller_signal(ptr) })
+}
+
+/// The request's exchange is over: abort `this[kAbortController]` if a
+/// program read `req.signal` (node's `abortIncoming` / `onRequestClose`).
+///
+/// # Safety
+/// FFI entry: `this` is a live JS value.
+#[no_mangle]
+pub unsafe extern "C" fn js_node_http_incoming_message_abort_signal(this: f64) {
+    extern "C" {
+        fn js_abort_controller_abort(controller: *mut ObjectHeader);
+    }
+    if crate::object::field_get_set::runtime_read_site::object_receiver(this).is_none() {
+        return;
+    }
+    let key = layouts::runtime_symbol_value(&layouts::NP_SYMBOL_K_ABORT_CONTROLLER);
+    let controller = crate::symbol::js_object_get_symbol_property(this, key);
+    if JSValue::from_bits(controller.to_bits()).is_pointer() {
+        js_abort_controller_abort((controller.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader);
+    }
 }
 
 #[cfg(test)]

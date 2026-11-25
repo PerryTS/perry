@@ -65,6 +65,7 @@ mod https_server;
 // #10428: runtime callback for http/https/http2 exports used as values.
 mod native_dispatch;
 mod request;
+pub(crate) mod request_payload;
 mod response;
 mod response_cork;
 mod response_end;
@@ -167,9 +168,11 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
             // reachable from the server, so this walk is their only root.
             if !exchange_slot_sabotage() {
                 for pending in server.pending.iter_mut() {
+                    visitor.visit_nanbox_f64_slot(&mut pending.request);
                     visitor.visit_nanbox_f64_slot(&mut pending.response);
                 }
                 for parked in server.in_flight.iter_mut() {
+                    visitor.visit_nanbox_f64_slot(&mut parked.request);
                     visitor.visit_nanbox_f64_slot(&mut parked.response);
                 }
             }
@@ -739,7 +742,7 @@ mod tests {
         let mut http = HttpServer::with_handler(0);
         http.pending.push_back(server::HttpPendingRequest {
             server_handle: 0,
-            request_handle: 0,
+            request: f64::from_bits(crate::server::types::TAG_UNDEFINED),
             response: pending_response,
             skip_default_response: false,
             h2_stream_handle: 0,

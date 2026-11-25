@@ -92,6 +92,9 @@ impl ResponseShape {
 /// The `IncomingMessage` handle a response answers, read back after the
 /// response's own borrow has ended.
 pub(crate) fn req_handle_of(handle: i64) -> i64 {
+    if let Some(req) = crate::server::response_payload::field(handle, b"req") {
+        return crate::server::server::object_handle(req);
+    }
     response_state(handle).map(|sr| sr.req_handle).unwrap_or(0)
 }
 
@@ -123,21 +126,23 @@ pub(crate) fn alloc_server_response_for_turnloop(conn_id: i64, seq: u64, req_han
 pub(crate) fn alloc_http1_server_response_for_turnloop(
     socket: f64,
     seq: u64,
-    req_handle: i64,
+    req: f64,
     max_requests_per_socket: f64,
 ) -> f64 {
     let scope = perry_ffi::TransientRootScope::enter();
     let socket = scope.root_nanbox(socket);
+    let req = scope.root_nanbox(req);
+    // The request is the response's own `req` field (node's), read back by
+    // [`req_handle_of`]: an object address the collector moves is never
+    // kept in the native state.
     let mut state = ResponseState::new();
-    state.req_handle = req_handle;
     state.turnloop = perry_ext_net::native_transport::snapshot(socket.get()).map(|incarnation| {
         (
             crate::server::turnloop_route::ResponseConnection::Socket { incarnation },
             seq,
         )
     });
-    let req = crate::server::request::handle_to_pointer_f64(req_handle);
-    let handle = unsafe { crate::server::response_payload::alloc(state, req) };
+    let handle = unsafe { crate::server::response_payload::alloc(state, req.get()) };
     if handle == 0 {
         return f64::from_bits(TAG_UNDEFINED);
     }

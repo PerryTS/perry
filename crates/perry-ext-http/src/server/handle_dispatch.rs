@@ -207,7 +207,7 @@ pub extern "C" fn js_ext_http_server_is_handle(handle: i64) -> i32 {
 /// Probe: is `handle` a live server-side `IncomingMessage`?
 #[no_mangle]
 pub extern "C" fn js_ext_http_incoming_message_is_handle(handle: i64) -> i32 {
-    if get_handle::<IncomingMessage>(handle).is_some() {
+    if super::request::message(handle).is_some() {
         1
     } else {
         0
@@ -786,6 +786,11 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_method(
         return undef;
     }
     let args = args_slice(args_ptr, args_len);
+    if super::request_payload::is_request(handle) {
+        if let Some(result) = super::request_payload::method(handle, &method, args) {
+            return result;
+        }
+    }
     let self_ref = handle_to_pointer_f64(handle);
 
     match method.as_str() {
@@ -1188,14 +1193,14 @@ pub unsafe extern "C" fn js_ext_http_incoming_message_dispatch_property(
         "remoteAddress" => string_ptr_value(js_node_http_im_remote_address(handle)),
         "remotePort" => js_node_http_im_remote_port(handle),
         "encrypted" => {
-            bool_value(get_handle::<IncomingMessage>(handle).is_some_and(|message| message.is_tls))
+            bool_value(super::request::message(handle).is_some_and(|message| message.is_tls))
         }
         "authorized" => bool_value(false),
-        "servername" => get_handle::<IncomingMessage>(handle)
+        "servername" => super::request::message(handle)
             .and_then(|message| message.tls_servername.clone())
             .map(|value| string_ptr_value(alloc_string(&value).as_raw()))
             .unwrap_or_else(|| bool_value(false)),
-        "bytesWritten" => get_handle::<IncomingMessage>(handle)
+        "bytesWritten" => super::request::message(handle)
             .map(|message| message.connection_bytes_written as f64)
             .unwrap_or(0.0),
         "rawBody" => js_node_http_im_raw_body(handle),
