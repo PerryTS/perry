@@ -231,7 +231,7 @@ fn asymmetric_key_surrogate(mat: CryptoKeyMaterial, bytes: &[u8]) -> Option<(Str
     let ed_key: Option<[u8; 32]> = bytes.try_into().ok();
     match (mat.algo, mat.kind) {
         (KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss | KeyAlgo::RsaOaep, KeyKind::Public) => {
-            let key = RsaPublicKey::from_public_key_der(bytes).ok()?;
+            let key = rsa_public_key_from_spki_der(bytes)?;
             Some((key.to_public_key_pem(Default::default()).ok()?, 1))
         }
         (KeyAlgo::RsassaPkcs1 | KeyAlgo::RsaPss | KeyAlgo::RsaOaep, KeyKind::Private) => {

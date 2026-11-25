@@ -479,9 +479,9 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         {
             return reject_with_dom_exception(name, message);
         }
-        let public_key = match RsaPublicKey::from_public_key_der(&key_bytes) {
-            Ok(k) => k,
-            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
+        let public_key = match rsa_public_key_from_spki_der(&key_bytes) {
+            Some(k) => k,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         rsa_pkcs1_verify(mat.hash, public_key, &data_bytes, &provided_sig).unwrap_or(false)
     } else if algo_upper == "RSA-PSS" {
@@ -499,9 +499,9 @@ pub unsafe extern "C" fn js_webcrypto_verify(
         let salt_len = object_field_bits(algo_bits.to_bits(), b"saltLength")
             .and_then(number_from_bits)
             .unwrap_or(32) as usize;
-        let public_key = match RsaPublicKey::from_public_key_der(&key_bytes) {
-            Ok(k) => k,
-            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
+        let public_key = match rsa_public_key_from_spki_der(&key_bytes) {
+            Some(k) => k,
+            None => return reject_with_dom_exception("OperationError", "The operation failed"),
         };
         rsa_pss_verify(mat.hash, public_key, &data_bytes, &provided_sig, salt_len).unwrap_or(false)
     } else {

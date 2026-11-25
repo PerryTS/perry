@@ -1,5 +1,109 @@
 use super::*;
 
+/// The `modulusLength` and `publicExponent` of an `RsaHashedKeyGenParams`,
+/// read in Web IDL's order. Throws when one is missing or does not convert.
+unsafe fn rsa_key_gen_params(algorithm: &perry_runtime::gc::RuntimeHandle<'_>) -> (u32, Vec<u8>) {
+    use perry_runtime::fs::validate::throw_type_error_with_code;
+
+    let member = |name: &str| {
+        let value = JSValue::from_bits(algorithm.get_nanbox_u64());
+        // The string shorthand has no members.
+        let field = if value.is_pointer() {
+            let key = perry_runtime::js_string_from_bytes(name.as_ptr(), name.len() as u32);
+            let object = JSValue::from_bits(algorithm.get_nanbox_u64()).as_pointer();
+            perry_runtime::js_object_get_field_by_name(object, key)
+        } else {
+            JSValue::undefined()
+        };
+        if field.is_undefined() {
+            let message = format!(
+                "Failed to normalize algorithm: passed algorithm cannot be converted to \
+                 'RsaHashedKeyGenParams' because '{name}' is required in 'RsaHashedKeyGenParams'."
+            );
+            throw_type_error_with_code(&message, "ERR_MISSING_OPTION");
+        }
+        field
+    };
+    let modulus_bits = enforce_range_u32(member("modulusLength"), "modulusLength");
+    let exponent = member("publicExponent");
+    let is_uint8_array =
+        perry_runtime::object::js_util_types_is_uint8_array(f64::from_bits(exponent.bits()));
+    if !JSValue::from_bits(is_uint8_array.to_bits()).as_bool() {
+        throw_type_error_with_code(
+            "Failed to normalize algorithm: publicExponent in passed algorithm is not an \
+             Uint8Array object.",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    (modulus_bits, bytes_from_jsvalue(exponent.bits()))
+}
+
+/// Web IDL's `[EnforceRange] unsigned long`.
+unsafe fn enforce_range_u32(value: JSValue, name: &str) -> u32 {
+    use perry_runtime::fs::validate::throw_type_error_with_code;
+
+    let fail = |problem: &str, code: &'static str| -> ! {
+        let message =
+            format!("Failed to normalize algorithm: {name} in passed algorithm {problem}.");
+        throw_type_error_with_code(&message, code)
+    };
+    let number = f64::from_bits(value.bits());
+    if value.is_bigint() {
+        fail(
+            "is a BigInt and cannot be converted to a number",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    if perry_runtime::symbol::js_is_symbol(number) != 0 {
+        fail(
+            "is a Symbol and cannot be converted to a number",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    let number = perry_runtime::builtins::js_number_coerce(number);
+    if !number.is_finite() {
+        fail("is not a finite number", "ERR_INVALID_ARG_TYPE");
+    }
+    let number = number.trunc();
+    if !(0.0..=f64::from(u32::MAX)).contains(&number) {
+        fail(
+            "is outside the expected range of 0 to 4294967295",
+            "ERR_OUT_OF_RANGE",
+        );
+    }
+    number as u32
+}
+
+/// Generates the key, or returns the message of the OperationError.
+fn generate_web_rsa_key(
+    modulus_bits: u32,
+    public_exponent: &[u8],
+) -> Result<RsaPrivateKey, &'static str> {
+    if modulus_bits < 512 {
+        return Err("algorithm.modulusLength must be at least 512");
+    }
+    // A big-endian BigInteger, with any number of leading zeros.
+    let zeros = public_exponent
+        .iter()
+        .take_while(|byte| **byte == 0)
+        .count();
+    let digits = &public_exponent[zeros..];
+    if digits.len() > 4 {
+        return Err("algorithm.publicExponent must fit in an unsigned 32-bit integer");
+    }
+    let exponent = digits
+        .iter()
+        .fold(0, |value, byte| value << 8 | u32::from(*byte));
+    if exponent < 3 {
+        return Err("algorithm.publicExponent must be at least 3");
+    }
+    if exponent % 2 == 0 {
+        return Err("algorithm.publicExponent must be odd");
+    }
+    crate::crypto::rsa_keygen::generate_rsa_key(modulus_bits, exponent)
+        .map_err(|_| "The operation failed for an operation-specific reason")
+}
+
 /// `crypto.subtle.generateKey(algorithm, extractable, keyUsages)` →
 /// Promise<CryptoKey>
 ///
@@ -30,7 +134,15 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
     let algo_upper = algo_name.to_ascii_uppercase();
     let algo_is_string = string_from_jsvalue(algo_bits.to_bits()).is_some();
     if algo_upper == "RSA-OAEP" || algo_upper == "RSASSA-PKCS1-V1_5" || algo_upper == "RSA-PSS" {
-        let hash = extract_algorithm_hash(algo_bits.to_bits(), HashAlgo::Sha1);
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let algo = scope.root_nanbox_f64(algo_bits);
+        let usages = scope.root_nanbox_f64(usages_bits);
+        let (modulus_bits, public_exponent) =
+            match perry_runtime::exception::catch_js_throw(|| rsa_key_gen_params(&algo)) {
+                Ok(params) => params,
+                Err(error) => return perry_runtime::js_promise_rejected(error),
+            };
+        let hash = extract_algorithm_hash(algo.get_nanbox_f64().to_bits(), HashAlgo::Sha1);
         let key_algo = match algo_upper.as_str() {
             "RSA-OAEP" => KeyAlgo::RsaOaep,
             "RSASSA-PKCS1-V1_5" => KeyAlgo::RsassaPkcs1,
@@ -39,17 +151,16 @@ pub unsafe extern "C" fn js_webcrypto_generate_key(
         };
         let (private_usages, public_usages) = match validate_key_pair_usages(
             key_algo,
-            usages_bits.to_bits(),
+            usages.get_nanbox_f64().to_bits(),
             "Usages cannot be empty when creating a key.",
             "Unsupported key usage for the requested algorithm",
         ) {
             Ok(u) => u,
             Err((name, message)) => return reject_with_dom_exception(name, message),
         };
-        let mut rng = rand_core_06::OsRng;
-        let private_key = match RsaPrivateKey::new(&mut rng, 2048) {
+        let private_key = match generate_web_rsa_key(modulus_bits, &public_exponent) {
             Ok(k) => k,
-            Err(_) => return reject_with_dom_exception("OperationError", "The operation failed"),
+            Err(message) => return reject_with_dom_exception("OperationError", message),
         };
         let public_key = RsaPublicKey::from(&private_key);
         let private_der = match private_key.to_pkcs8_der() {
