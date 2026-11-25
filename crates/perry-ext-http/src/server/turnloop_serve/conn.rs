@@ -1230,7 +1230,7 @@ fn queue_client_error(
         read_ended,
     };
     with_base_server_mut(server_handle, move |server| {
-        server.pending_client_errors.push_back(error)
+        server.with_client_errors(|errors| errors.push_back(error));
     });
 }
 

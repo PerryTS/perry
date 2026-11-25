@@ -760,6 +760,14 @@ pub(crate) const PERRY_UI_TABLE_PART_B: &[MethodRow] = &[
         args: &[ArgKind::Closure],
         ret: ReturnKind::Void,
     },
+    // System Back (Android button/gesture); the handler returns true when it
+    // handled Back. No-op on other platforms.
+    MethodRow {
+        method: "onBackPressed",
+        runtime: "perry_ui_app_set_on_back",
+        args: &[ArgKind::Closure],
+        ret: ReturnKind::Void,
+    },
     // Programmatic focus management (paired with `style: { focusable: true }`
     // on widgets that are not naturally focusable, e.g. Canvas / VStack).
     MethodRow {

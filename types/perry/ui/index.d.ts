@@ -1961,6 +1961,13 @@ export function onAppKeyUp(
     handler: (key: Key, modifiers: number) => void,
 ): void;
 
+/**
+ * System Back (Android's back button / gesture). Return `true` when the app
+ * handled it (e.g. popped its own navigation); `false` lets Android apply its
+ * default (leave the app). No-op on other platforms.
+ */
+export function onBackPressed(handler: () => boolean): void;
+
 /** Route subsequent keyboard events to this widget. Pair with `style: { focusable: true }`. */
 export function focus(widget: Widget): void;
 

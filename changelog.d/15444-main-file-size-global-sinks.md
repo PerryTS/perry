@@ -1,0 +1,1 @@
+Internal: the file-size and per-test global-sink gates match the tree again (gen_expr.rs count re-recorded, the classified-statics floor equals the current count of 59, four test statics are per-test, and the changed review sources are re-audited).

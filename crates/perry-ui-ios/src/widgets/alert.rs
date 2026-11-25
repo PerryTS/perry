@@ -34,7 +34,7 @@ unsafe extern "C" fn alert_callback_trampoline(ctx: *mut std::ffi::c_void) {
 /// Locate the topmost view controller for presenting modals. Walks up from
 /// the keyWindow's rootViewController past any already-presented modals so
 /// we can stack alerts.
-unsafe fn topmost_view_controller() -> *mut AnyObject {
+pub(crate) unsafe fn topmost_view_controller() -> *mut AnyObject {
     let app_cls = match AnyClass::get(c"UIApplication") {
         Some(c) => c,
         None => return std::ptr::null_mut(),

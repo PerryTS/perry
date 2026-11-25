@@ -286,7 +286,7 @@ extern "C" fn retire_transport_edges(agent: u64) {
             server.pending.clear();
             server.in_flight.clear();
             server.response_class = undefined;
-            server.pending_client_errors.clear();
+            server.with_client_errors(|errors| errors.clear());
             server.bun_promises.clear();
         }
     };
