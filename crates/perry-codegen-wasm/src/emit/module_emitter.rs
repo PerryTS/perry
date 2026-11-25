@@ -94,6 +94,11 @@ pub(super) struct WasmModuleEmitter {
     /// Each function's `length` (parameters before the first default or rest), by wasm
     /// function index, for the same functions as `fn_names`.
     pub(super) fn_lengths: BTreeMap<u32, u32>,
+    /// The wasm global holding the `__FnInfo` record (name, length, prototype kind) of
+    /// each function a closure or function value is made of, by wasm function index.
+    /// The start function fills each once (`fn_info`); `closure_new` and
+    /// `function_value` pass the record.
+    pub(super) fn_info_globals: BTreeMap<u32, u32>,
     /// Set of WASM function indices that return void (no return value).
     /// Used to push TAG_UNDEFINED after calling void functions via FuncRef.
     pub(super) void_funcs: std::collections::BTreeSet<u32>,
@@ -143,15 +148,6 @@ impl WasmModuleEmitter {
             Some(FnProtoKind::Function) | None => 0.0,
         }
     }
-    /// The `name` and `length` arguments of `closure_new` and `function_value`.
-    pub(super) fn fn_name_length_args(&self, func_idx: u32) -> (f64, f64) {
-        let name = match self.fn_names.get(&func_idx) {
-            Some(&id) => f64::from_bits((STRING_TAG << 48) | u64::from(id)),
-            None => f64::from_bits(TAG_UNDEFINED),
-        };
-        let length = self.fn_lengths.get(&func_idx).copied().unwrap_or(0);
-        (name, f64::from(length))
-    }
     pub(super) fn new() -> Self {
         Self {
             string_table: Vec::new(),
@@ -188,6 +184,7 @@ impl WasmModuleEmitter {
             fn_proto_kinds: BTreeMap::new(),
             fn_names: BTreeMap::new(),
             fn_lengths: BTreeMap::new(),
+            fn_info_globals: BTreeMap::new(),
             void_funcs: std::collections::BTreeSet::new(),
             func_param_counts: BTreeMap::new(),
             rest_params: BTreeMap::new(),

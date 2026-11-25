@@ -46,16 +46,13 @@ impl<'a> FuncEmitCtx<'a> {
                         .copied()
                         .unwrap_or(func_idx);
                     let this = closure_this(*captures_this, *is_arrow, body);
-                    let (name, length) = self.emitter.fn_name_length_args(func_idx);
-                    self.emit_frame_begin(func, 6);
+                    self.emit_frame_begin(func, 4);
                     self.emit_store_const(func, 0, table_idx as f64);
                     self.emit_store_const(func, 1, captures.len() as f64);
                     let receives_this = this == ClosureThis::Receiver;
                     self.emit_store_const(func, 2, f64::from(u8::from(receives_this)));
-                    self.emit_store_const(func, 3, self.emitter.fn_proto_code(func_idx));
-                    self.emit_store_const(func, 4, name);
-                    self.emit_store_const(func, 5, length);
-                    self.emit_memcall(func, "closure_new", 6);
+                    self.emit_store_fn_info(func, 3, func_idx);
+                    self.emit_memcall(func, "closure_new", 4);
                     // Set captures, then the captured `this` (see compile_closure).
                     let local_map = self.local_map;
                     let cap_locals = captures

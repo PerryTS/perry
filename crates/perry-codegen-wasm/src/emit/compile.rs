@@ -960,6 +960,8 @@ impl WasmModuleEmitter {
                         user_func_idx,
                         FnProtoKind::of_function(module, &member.function),
                     );
+                    self.fn_lengths
+                        .insert(user_func_idx, fn_length(&member.function.params));
                     self.record_rest_param(user_func_idx, 1, &member.function.params);
                     user_func_idx += 1;
                 }
@@ -999,6 +1001,7 @@ impl WasmModuleEmitter {
                     let id = self.intern_string(name);
                     self.fn_names.insert(idx, id);
                     self.fn_lengths.insert(idx, fn_length(&f.params));
+                    self.fn_info_globals.insert(idx, 0);
                 }
             }
         }
@@ -1007,7 +1010,13 @@ impl WasmModuleEmitter {
                 let id = self.intern_string(&name);
                 self.fn_names.insert(idx, id);
                 self.fn_lengths.insert(idx, length);
+                self.fn_info_globals.insert(idx, 0);
             }
+        }
+        // One global per function a value is made of, for its `__FnInfo` record.
+        for gidx in self.fn_info_globals.values_mut() {
+            *gidx = self.num_globals;
+            self.num_globals += 1;
         }
 
         // Register globals from all modules. This precedes the async JS generation below,
@@ -1508,6 +1517,10 @@ impl WasmModuleEmitter {
             for &gidx in self.global_map.values() {
                 exported_globals.insert(gidx);
             }
+            // An async body (JS) passes a function's `__FnInfo` from its global.
+            for &gidx in self.fn_info_globals.values() {
+                exported_globals.insert(gidx);
+            }
             for gidx in exported_globals {
                 export_section.export(&format!("__wasm_global_{}", gidx), ExportKind::Global, gidx);
             }
@@ -1653,6 +1666,29 @@ impl WasmModuleEmitter {
             // Call __init_strings first
             func.instruction(&Instruction::Call(init_strings_idx));
 
+            // Each function's `__FnInfo` record, once, before any code can make a closure.
+            {
+                let no_locals = BTreeMap::new();
+                let infos: Vec<(u32, u32)> =
+                    self.fn_info_globals.iter().map(|(&f, &g)| (f, g)).collect();
+                let mut ctx = FuncEmitCtx::new(self, &no_locals, start_temp_local, start_temp_i32);
+                for (func_idx, gidx) in infos {
+                    let name = ctx.emitter.fn_names.get(&func_idx).copied().unwrap_or(0);
+                    let length = ctx.emitter.fn_lengths.get(&func_idx).copied().unwrap_or(0);
+                    let proto = ctx.emitter.fn_proto_code(func_idx);
+                    ctx.emit_frame_begin(&mut func, 3);
+                    ctx.emit_store_const(
+                        &mut func,
+                        0,
+                        f64::from_bits((STRING_TAG << 48) | u64::from(name)),
+                    );
+                    ctx.emit_store_const(&mut func, 1, f64::from(length));
+                    ctx.emit_store_const(&mut func, 2, proto);
+                    ctx.emit_memcall(&mut func, "fn_info", 3);
+                    func.instruction(&Instruction::GlobalSet(gidx));
+                }
+            }
+
             // Initialize globals — swap in per-module func_map for correct FuncRef resolution
             for (mod_idx, (_, module)) in modules.iter().enumerate() {
                 self.func_map = self.module_func_maps[mod_idx].clone();
@@ -1710,11 +1746,11 @@ impl WasmModuleEmitter {
                         .get(&class.name)
                         .into_iter()
                         .flatten();
-                    // The constructor registers its `name` and `length` for the class value.
+                    // The constructor registers its `length` for the class value.
                     let ctor = self
                         .class_ctor_map
                         .get(&class.name)
-                        .map(|&idx| ("function_name_length", class.name.clone(), idx, 0.0));
+                        .map(|&idx| ("class_set_ctor_length", class.name.clone(), idx, 0.0));
                     // The last argument is a method's `fn_proto_code` or an `accessor_code`.
                     let registrations: Vec<(&str, String, u32, f64)> = methods
                         .map(|(name, &idx)| ("class_set_method", name, idx))
@@ -1945,7 +1981,10 @@ fn fn_length(params: &[perry_hir::ir::Param]) -> u32 {
     params
         .iter()
         .take_while(|p| {
-            p.default.is_none() && !p.is_rest && !perry_hir::cap_fields::is_cap_field_name(&p.name)
+            p.default.is_none()
+                && !p.is_rest
+                && p.arguments_object.is_none()
+                && !perry_hir::cap_fields::is_cap_field_name(&p.name)
         })
         .count() as u32
 }
