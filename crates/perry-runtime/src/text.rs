@@ -47,6 +47,7 @@ enum DecoderEncoding {
     /// 1:1 Latin-1 approximation mis-decoded the 0x80–0x9F range.
     SingleByte(&'static [u16; 128]),
     Utf16Le,
+    Utf16Be,
 }
 
 #[derive(Clone, Copy)]
@@ -259,6 +260,7 @@ pub(crate) fn decode_bytes_with_label(bytes: &[u8], raw_label: &str) -> Option<i
     let bytes = match encoding {
         DecoderEncoding::Utf8 => bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes),
         DecoderEncoding::Utf16Le => bytes.strip_prefix(&[0xFF, 0xFE]).unwrap_or(bytes),
+        DecoderEncoding::Utf16Be => bytes.strip_prefix(&[0xFE, 0xFF]).unwrap_or(bytes),
         DecoderEncoding::SingleByte(_) => bytes,
     };
     Some(decode_bytes(bytes, encoding, false, label))
@@ -277,6 +279,7 @@ fn resolve_decoder_label(raw: &str) -> Option<(DecoderEncoding, &'static str)> {
         // WHATWG utf-16le label set (`utf-16-le` is not a real label).
         "utf-16le" | "utf-16" | "unicode" | "csunicode" | "unicodefeff" | "iso-10646-ucs-2"
         | "ucs-2" => Some((DecoderEncoding::Utf16Le, "utf-16le")),
+        "utf-16be" | "unicodefffe" => Some((DecoderEncoding::Utf16Be, "utf-16be")),
         // All WHATWG single-byte encodings (incl. windows-1252 and its
         // latin1/iso-8859-1/ascii labels). Multi-byte encodings (gbk, big5,
         // shift_jis, euc-*) are intentionally NOT recognized here — perry can't
@@ -682,7 +685,7 @@ fn throw_invalid_decode_input() -> ! {
 }
 
 /// Decode `bytes` per `encoding`; returns a `*mut StringHeader` as i64.
-/// `fatal` only affects UTF-8 (latin1/utf-16le never error in Node).
+/// With `fatal`, malformed input throws instead of decoding to U+FFFD.
 fn decode_bytes(bytes: &[u8], encoding: DecoderEncoding, fatal: bool, label: &str) -> i64 {
     match encoding {
         DecoderEncoding::Utf8 => {
@@ -717,20 +720,26 @@ fn decode_bytes(bytes: &[u8], encoding: DecoderEncoding, fatal: bool, label: &st
             }
             js_string_from_bytes(out.as_ptr(), out.len() as u32) as i64
         }
-        DecoderEncoding::Utf16Le => {
-            // Little-endian UTF-16 code units; an odd trailing byte and
-            // unpaired surrogates decode to U+FFFD (lossy, matching Node's
-            // non-fatal default). We keep inputs in safe ranges in tests.
-            let mut units: Vec<u16> = Vec::with_capacity(bytes.len() / 2);
-            let mut i = 0;
-            while i + 1 < bytes.len() {
-                units.push(u16::from_le_bytes([bytes[i], bytes[i + 1]]));
-                i += 2;
-            }
-            if i < bytes.len() {
-                units.push(0xFFFD);
-            }
-            let s = String::from_utf16_lossy(&units);
+        DecoderEncoding::Utf16Le | DecoderEncoding::Utf16Be => {
+            let to_unit = match encoding {
+                DecoderEncoding::Utf16Be => u16::from_be_bytes,
+                _ => u16::from_le_bytes,
+            };
+            let pairs = bytes.chunks_exact(2);
+            let odd_byte = !pairs.remainder().is_empty();
+            let mut units: Vec<u16> = pairs.map(|p| to_unit([p[0], p[1]])).collect();
+            let s = match String::from_utf16(&units) {
+                Ok(s) if !odd_byte => s,
+                _ if fatal => throw_invalid_encoded_data(label),
+                _ => {
+                    // A trailing high surrogate and the odd byte after it are
+                    // one end-of-input error, so they share one U+FFFD.
+                    if odd_byte && !matches!(units.last(), Some(0xD800..=0xDBFF)) {
+                        units.push(0xFFFD);
+                    }
+                    String::from_utf16_lossy(&units)
+                }
+            };
             js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64
         }
     }
@@ -1055,6 +1064,20 @@ mod tests {
             before + 1,
             "…and naming it again does not"
         );
+    }
+
+    #[test]
+    fn utf_16be_labels_decode_big_endian_and_consume_their_bom() {
+        for label in ["utf-16be", "unicodefffe"] {
+            let decoded =
+                decode_bytes_with_label(&[0xFE, 0xFF, 0x00, 0x41, 0x20, 0xAC], label).unwrap();
+            assert_eq!(
+                text_string_header_to_string(decoded as *const StringHeader),
+                "A€",
+                "{label}"
+            );
+        }
+        assert!(resolve_decoder_label("utf16be").is_none());
     }
 
     /// A foreign receiver is refused rather than silently decoded as utf-8 --
