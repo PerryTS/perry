@@ -345,6 +345,53 @@ pub fn socket_error_value(syscall: &str, code: &str, target: Option<&tl::Endpoin
     error.get()
 }
 
+/// libuv's description for the codes a `listen()` can fail with.
+fn listen_error_description(code: &str) -> &'static str {
+    match code {
+        "EADDRINUSE" => "address already in use",
+        "EACCES" => "permission denied",
+        "EADDRNOTAVAIL" => "address not available",
+        "EINVAL" => "invalid argument",
+        "ENOTFOUND" => "getaddrinfo ENOTFOUND",
+        "EAFNOSUPPORT" => "address family not supported",
+        "EMFILE" => "too many open files",
+        "ENOTSUP" => "operation not supported on socket",
+        "EAGAIN" => "resource temporarily unavailable",
+        _ => "listen failed",
+    }
+}
+
+/// Node's message for a failed listen: `<syscall> <CODE>: <description>`, then
+/// `<address>:<port>`, or the address alone when there is no port (a pipe).
+fn listen_error_message(code: &str, syscall: &str, address: &str, port: i32) -> String {
+    let description = listen_error_description(code);
+    if address.is_empty() {
+        format!("{syscall} {code}: {description}")
+    } else if port > 0 {
+        format!("{syscall} {code}: {description} {address}:{port}")
+    } else {
+        format!("{syscall} {code}: {description} {address}")
+    }
+}
+
+/// The `Error` a server emits for a failed `listen()`, shared by `net` and the
+/// HTTP servers. `port` is -1 for a pipe, as in Node. The caller roots the
+/// result before allocating again.
+pub fn listen_error_value(code: &str, errno: i32, syscall: &str, address: &str, port: i32) -> f64 {
+    let scope = TransientRootScope::enter();
+    let message = listen_error_message(code, syscall, address, port);
+    let value = perry_ffi::error_value_with_code(&message, "", perry_ffi::ErrorKind::Error);
+    let error = scope.root_nanbox(f64::from_bits(value.bits()));
+    p::own_set(error.get(), "code", events::string(code));
+    p::own_set(error.get(), "errno", f64::from(errno));
+    p::own_set(error.get(), "syscall", events::string(syscall));
+    p::own_set(error.get(), "address", events::string(address));
+    if port != 0 {
+        p::own_set(error.get(), "port", f64::from(port));
+    }
+    error.get()
+}
+
 pub(crate) fn connected(owner: f64) {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(owner);
@@ -885,5 +932,38 @@ fn queue_close_job(owner: f64, record: f64, info: &'static perry_ffi::JsFunction
             fn js_queue_next_tick(job: i64);
         }
         js_queue_next_tick(job.get());
+    }
+}
+
+#[cfg(test)]
+mod listen_error_tests {
+    use super::listen_error_message;
+
+    #[test]
+    fn message_matches_nodes_shape() {
+        assert_eq!(
+            listen_error_message("EADDRINUSE", "listen", "127.0.0.1", 47421),
+            "listen EADDRINUSE: address already in use 127.0.0.1:47421"
+        );
+        assert_eq!(
+            listen_error_message("EACCES", "listen", "0.0.0.0", 80),
+            "listen EACCES: permission denied 0.0.0.0:80"
+        );
+        assert_eq!(
+            listen_error_message("ENOTSUP", "listen", "127.0.0.1", 8080),
+            "listen ENOTSUP: operation not supported on socket 127.0.0.1:8080"
+        );
+    }
+
+    #[test]
+    fn message_without_a_port_names_the_address_alone() {
+        assert_eq!(
+            listen_error_message("EADDRINUSE", "listen", "/tmp/s.sock", -1),
+            "listen EADDRINUSE: address already in use /tmp/s.sock"
+        );
+        assert_eq!(
+            listen_error_message("EADDRINUSE", "listen", "", 0),
+            "listen EADDRINUSE: address already in use"
+        );
     }
 }
