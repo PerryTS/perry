@@ -56,7 +56,8 @@ Clipboard helpers live in `perry/ui` (not `perry/system`):
 `getDeviceIdiom()` returns the broad form factor as a string: `"phone"` or
 `"pad"` on iOS (and `"phone"` on Android), `"mac"` on macOS, `"tv"` on tvOS,
 `"watch"` on watchOS, `"vision"` on visionOS, and `"desktop"` on Windows and
-Linux. `getDeviceModel()` returns the platform-specific model identifier
+Linux. On the web target it is `"phone"` or `"pad"` for a touch screen (narrower or wider than
+600 px) and `"desktop"` otherwise. `getDeviceModel()` returns the platform-specific model identifier
 (`"iPhone15,2"`, `"MacBookPro18,3"`, etc. — on macOS this is sysctl
 `hw.model`).
 

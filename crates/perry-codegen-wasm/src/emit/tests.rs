@@ -1175,7 +1175,7 @@ console.log(sv(1) + " " + sv(1, 2, 3, 4) + " " + sunk);
 }
 
 // `Image(url, alt?)` and `Image({url, alt?})` keep the alt text; `Image({systemName})`
-// is a symbol, as `ImageSymbol(name)` is.
+// is a symbol, as `ImageSymbol(name)` is, drawn from `symbols/<name>.svg`.
 #[test]
 fn image_keeps_alt_text_in_both_forms() {
     assert_eq!(
@@ -1187,10 +1187,10 @@ Image({ url: "y.png", alt: "avatar" });
 Image({ systemName: "gear" });
 "#,
             r#"
-for (const e of uiHandles.values()) console.log(e.src !== undefined ? e.src + " " + e.alt : e.textContent);
+for (const e of uiHandles.values()) console.log(e.src !== undefined ? e.src + " " + e.alt : e.style.maskImage);
 "#
         ),
-        "x.png photo\ny.png avatar\n\u{2b1c} gear"
+        "x.png photo\ny.png avatar\nurl(\"symbols/gear.svg\")"
     );
 }
 
