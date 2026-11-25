@@ -1527,6 +1527,40 @@ pub(super) fn compile_for_web(
 
 /// Compile for WebAssembly target: emit WASM binary + JS runtime bridge
 #[cfg(feature = "backend-wasm")]
+/// The order the web target initializes modules in: depth-first from the entry, so
+/// an imported module runs before its importer and siblings run in the importer's
+/// source order, as in Node. `deps` lists every module with its imports in source
+/// order; modules the entry does not reach follow in path order.
+fn wasm_init_order(entry: &PathBuf, deps: &HashMap<PathBuf, Vec<PathBuf>>) -> Vec<PathBuf> {
+    fn visit(
+        path: &PathBuf,
+        deps: &HashMap<PathBuf, Vec<PathBuf>>,
+        visited: &mut HashSet<PathBuf>,
+        sorted: &mut Vec<PathBuf>,
+    ) {
+        // A module is marked on entry, so an import cycle stops at the module it
+        // started from, which then runs after the modules it reached.
+        if !visited.insert(path.clone()) {
+            return;
+        }
+        if let Some(module_deps) = deps.get(path) {
+            for dep in module_deps {
+                visit(dep, deps, visited, sorted);
+            }
+        }
+        sorted.push(path.clone());
+    }
+    let mut rest: Vec<&PathBuf> = deps.keys().collect();
+    rest.sort();
+    let mut visited = HashSet::new();
+    let mut sorted = Vec::new();
+    visit(entry, deps, &mut visited, &mut sorted);
+    for path in rest {
+        visit(path, deps, &mut visited, &mut sorted);
+    }
+    sorted
+}
+
 pub(super) fn compile_for_wasm(
     ctx: &CompilationContext,
     args: &CompileArgs,
@@ -1543,7 +1577,7 @@ pub(super) fn compile_for_wasm(
         .unwrap_or_else(|_| args.input.clone());
 
     // Build topologically sorted module list (same as web target)
-    let mut sorted_paths: Vec<PathBuf> = Vec::new();
+    let mut sorted_paths: Vec<PathBuf>;
     {
         let mut path_to_deps: HashMap<PathBuf, Vec<PathBuf>> = HashMap::new();
         for (path, hir_module) in &ctx.native_modules {
@@ -1559,41 +1593,7 @@ pub(super) fn compile_for_wasm(
             path_to_deps.insert(path.clone(), deps);
         }
 
-        let mut visited_set: HashSet<PathBuf> = HashSet::new();
-        let mut visiting_set: HashSet<PathBuf> = HashSet::new();
-
-        fn topo_visit_wasm(
-            path: &PathBuf,
-            deps: &HashMap<PathBuf, Vec<PathBuf>>,
-            visited: &mut HashSet<PathBuf>,
-            visiting: &mut HashSet<PathBuf>,
-            sorted: &mut Vec<PathBuf>,
-        ) {
-            if visited.contains(path) || visiting.contains(path) {
-                return;
-            }
-            visiting.insert(path.clone());
-            if let Some(module_deps) = deps.get(path) {
-                for dep in module_deps {
-                    topo_visit_wasm(dep, deps, visited, visiting, sorted);
-                }
-            }
-            visiting.remove(path);
-            visited.insert(path.clone());
-            sorted.push(path.clone());
-        }
-
-        let mut all: Vec<PathBuf> = ctx.native_modules.keys().cloned().collect();
-        all.sort();
-        for path in &all {
-            topo_visit_wasm(
-                path,
-                &path_to_deps,
-                &mut visited_set,
-                &mut visiting_set,
-                &mut sorted_paths,
-            );
-        }
+        sorted_paths = wasm_init_order(&entry_path, &path_to_deps);
     }
 
     // Ensure entry module is last
@@ -1674,4 +1674,70 @@ pub(super) fn compile_for_wasm(
         link_cache_stats: None,
         build_cache_stats: None,
     })
+}
+
+#[cfg(test)]
+mod wasm_init_order_tests {
+    use super::*;
+
+    fn deps(edges: &[(&str, &[&str])]) -> HashMap<PathBuf, Vec<PathBuf>> {
+        edges
+            .iter()
+            .map(|(module, imports)| {
+                (
+                    PathBuf::from(module),
+                    imports.iter().map(PathBuf::from).collect(),
+                )
+            })
+            .collect()
+    }
+
+    fn order(entry: &str, edges: &[(&str, &[&str])]) -> Vec<String> {
+        wasm_init_order(&PathBuf::from(entry), &deps(edges))
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect()
+    }
+
+    // An entry that sorts after the modules it imports still runs them in its
+    // import order: the edition module that configures the app runs first.
+    #[test]
+    fn imports_run_in_the_entrys_source_order_whatever_their_paths() {
+        assert_eq!(
+            order(
+                "/p/web/main.ts",
+                &[
+                    (
+                        "/p/web/main.ts",
+                        &["/p/web/edition.ts", "/p/src/app/main.ts"]
+                    ),
+                    ("/p/web/edition.ts", &[]),
+                    ("/p/src/app/main.ts", &["/p/src/app/ui.ts"]),
+                    ("/p/src/app/ui.ts", &[]),
+                ],
+            ),
+            [
+                "/p/web/edition.ts",
+                "/p/src/app/ui.ts",
+                "/p/src/app/main.ts",
+                "/p/web/main.ts"
+            ]
+        );
+    }
+
+    // A cycle stops where it closes, and modules the entry never reaches still run.
+    #[test]
+    fn cycles_end_and_unreached_modules_follow() {
+        assert_eq!(
+            order(
+                "/p/z.ts",
+                &[
+                    ("/p/z.ts", &["/p/y.ts"]),
+                    ("/p/y.ts", &["/p/z.ts"]),
+                    ("/p/a.ts", &[]),
+                ],
+            ),
+            ["/p/y.ts", "/p/z.ts", "/p/a.ts"]
+        );
+    }
 }
