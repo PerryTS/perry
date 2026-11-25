@@ -28,6 +28,144 @@ pub(super) fn own_enumerable_keys_of_value(bits: u64) -> Option<*mut ArrayHeader
     unsafe { keys_of_headed(obj, header.obj_type) }
 }
 
+/// `Object.values` / `Object.entries` of a NaN-boxed ordinary object from its
+/// structure (KEYSARR): taken exactly when [`keys_in_place`] proves the
+/// record's key list is the own enumerable key sequence verbatim and the
+/// summary has no accessor. Then no [[Get]] runs user code (no key can vanish
+/// or change while the values are read), and with no attribute words key `i`
+/// lives in storage slot `i`: value `i` is a slot read, never a lookup by
+/// name. Entries pair the verbatim key-list copy (the Object.keys funnel) with
+/// those values. Fresh arrays every call; nothing is stored. `None`: the
+/// generic builder.
+pub(super) fn own_enumerable_values_of_value(bits: u64, pairs: bool) -> Option<*mut ArrayHeader> {
+    let header = crate::value::addr_class::pointer_value_header(bits)?;
+    let obj = (bits & crate::value::POINTER_MASK) as *const ObjectHeader;
+    unsafe { values_of_headed(obj, header.obj_type, pairs) }
+}
+
+/// [`own_enumerable_values_of_value`] of a raw receiver pointer.
+pub(super) fn own_enumerable_values(
+    obj: *const ObjectHeader,
+    pairs: bool,
+) -> Option<*mut ArrayHeader> {
+    let addr = strip_nanbox_addr(obj);
+    let header = unsafe { crate::value::addr_class::try_read_tracked_gc_header(addr) }?;
+    unsafe { values_of_headed(addr as *const ObjectHeader, header.as_ref().obj_type, pairs) }
+}
+
+unsafe fn values_of_headed(
+    obj: *const ObjectHeader,
+    obj_type: u8,
+    pairs: bool,
+) -> Option<*mut ArrayHeader> {
+    if crate::gc_type_is_not_object!(obj_type) {
+        return None;
+    }
+    let record = crate::object::shapes::object_shape_record(obj)?;
+    if record.summary() & crate::object::key_attrs::SUMMARY_ACCESSOR != 0 {
+        return None;
+    }
+    let (k0, _, n) = keys_in_place(obj, record)?;
+    if let Some(out) = values_young(obj, k0, n, pairs) {
+        return Some(out);
+    }
+    // A refused young birth: the collecting allocations, the receiver rooted.
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let obj_h = scope.root_raw_const_ptr(obj);
+    // Values: one birth of capacity `n`, then `n` slot reads (no allocation).
+    let (values, obj) = obj_h.across_const::<ObjectHeader, _>(|| crate::array::js_array_alloc(n));
+    let live = crate::object::object_live_slot_count(obj);
+    let mut out = values;
+    for i in 0..n {
+        let v = super::object_field_at_with_live(obj, i, live);
+        out = crate::array::js_array_push_f64(out, f64::from_bits(v.bits()));
+    }
+    if !pairs {
+        return Some(out);
+    }
+    let values_h = scope.root_raw_mut_ptr(out);
+    // Keys: the verbatim copy of the same key list (`keys_of_record`).
+    let (keys, obj) = obj_h.across_const::<ObjectHeader, _>(|| {
+        let obj: *const ObjectHeader = obj_h.with_const_ptr(|o| o);
+        crate::object::shapes::object_shape_record(obj)
+            .and_then(|record| keys_of_record(obj, record))
+            .map(|(keys, _)| keys)
+    });
+    let _ = obj;
+    let keys = keys?;
+    let keys_h = scope.root_raw_mut_ptr(keys);
+    let count = crate::array::js_array_length(keys).min(n);
+    let (result, _) = keys_h.across_mut::<ArrayHeader, _>(|| crate::array::js_array_alloc(count));
+    let out_h = scope.root_raw_mut_ptr(result);
+    for i in 0..count {
+        let pair = crate::array::js_array_alloc(2);
+        let key = keys_h.with_mut_ptr(|k: *mut ArrayHeader| crate::array::js_array_get(k, i));
+        let value = values_h.with_mut_ptr(|v: *mut ArrayHeader| crate::array::js_array_get(v, i));
+        let pair = crate::array::js_array_push_f64(pair, f64::from_bits(key.bits()));
+        let pair = crate::array::js_array_push_f64(pair, f64::from_bits(value.bits()));
+        let grown = out_h.with_mut_ptr(|o: *mut ArrayHeader| {
+            crate::array::js_array_push_f64(o, f64::from_bits(JSValue::array_ptr(pair).bits()))
+        });
+        out_h.set_raw_mut_ptr(grown);
+    }
+    Some(out_h.with_mut_ptr(|p| p))
+}
+
+/// [`values_of_headed`] through young births that cannot collect
+/// (`js_array_try_alloc_tag_scanned_unfilled`): nothing moves, so `obj` and
+/// its key list `k0` stay current, the young results need no barrier, and
+/// the words are written in place. A value string is shared the way a push
+/// shares it (`js_string_addref_if_heap_string`); key words are shared by P1
+/// (`copy_key_is_shared`). `None` when a birth is refused (the partial result
+/// is dropped unreachable).
+///
+/// # Safety
+/// `obj` is a live ordinary layout object; `k0` is its record's dense key list
+/// of `n` keys (`keys_in_place`), key `i` in storage slot `i`.
+#[inline(always)]
+unsafe fn values_young(
+    obj: *const ObjectHeader,
+    k0: *mut ArrayHeader,
+    n: u32,
+    pairs: bool,
+) -> Option<*mut ArrayHeader> {
+    let out = crate::array::js_array_try_alloc_tag_scanned_unfilled(n);
+    if out.is_null() {
+        return None;
+    }
+    let live = crate::object::object_live_slot_count(obj);
+    let dest = crate::array::array_elements_ptr(out) as *mut u64;
+    let keys = crate::array::array_elements_ptr(k0) as *const u64;
+    for i in 0..n {
+        let value = super::object_field_at_with_live(obj, i, live).bits();
+        crate::string::js_string_addref_if_heap_string(f64::from_bits(value));
+        let word = if pairs {
+            let pair = crate::array::js_array_try_alloc_tag_scanned_unfilled(2);
+            if pair.is_null() {
+                (*out).length = i;
+                crate::array::fill_capacity_with_holes_from(out, i);
+                return None;
+            }
+            let pd = crate::array::array_elements_ptr(pair) as *mut u64;
+            let key = *keys.add(i as usize);
+            debug_assert!(copy_key_is_shared(key));
+            // GC_STORE_AUDIT(INIT): young pair before its length is published.
+            pd.write(key);
+            pd.add(1).write(value);
+            (*pair).length = 2;
+            crate::array::fill_capacity_with_holes_from(pair, 2);
+            JSValue::array_ptr(pair).bits()
+        } else {
+            value
+        };
+        // GC_STORE_AUDIT(INIT): young result before its length is published.
+        dest.add(i as usize).write(word);
+    }
+    (*out).length = n;
+    crate::array::fill_capacity_with_holes_from(out, n);
+    Some(out)
+}
+
 /// `for-in` keys of a NaN-boxed value from structure (DYNP E3): the own
 /// enumerable keys ([`own_enumerable_keys_of_value`]) when every prototype
 /// level is an ordinary object that structurally has no enumerable string key
@@ -128,7 +266,7 @@ unsafe fn keys_in_place(
     let class_id = (*obj).class_id;
     if class_id != 0
         && (class_id >= crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE
-            || crate::array::subclass_elements::backed(obj as usize).is_some())
+            || crate::array::subclass_elements::backed_raw(obj as usize).is_some())
     {
         return None;
     }
@@ -286,7 +424,7 @@ unsafe fn level_has_no_enumerable_key(
     ) {
         return false;
     }
-    if (*obj).class_id != 0 && crate::array::subclass_elements::backed(obj as usize).is_some() {
+    if (*obj).class_id != 0 && crate::array::subclass_elements::backed_raw(obj as usize).is_some() {
         return false;
     }
     let t = table_of_object(obj);
@@ -357,7 +495,7 @@ unsafe fn keys_of_record(
     if class_id != 0
         && (class_id >= crate::object::class_registry::prototype_objects::SYNTHETIC_CLASS_ID_BASE
             || summary & ka::SUMMARY_NON_ENUMERABLE != 0
-            || crate::array::subclass_elements::backed(obj as usize).is_some())
+            || crate::array::subclass_elements::backed_raw(obj as usize).is_some())
     {
         return None;
     }
@@ -376,6 +514,17 @@ unsafe fn keys_of_record(
     // current, and the young result needs no barrier.
     let out = crate::array::js_array_try_alloc_tag_scanned_unfilled(count);
     if !out.is_null() {
+        // A table whose key column is its own enumerable keys verbatim past
+        // its keyless prefix ([`copy_table_keys_verbatim`]) is copied as one
+        // block, out of line: the layout copy below keeps its own shape.
+        if !t.is_null()
+            && !holes
+            && !non_enumerable
+            && (*t).summary & ka::TABLE_KEY_HIDDEN == 0
+            && (*t).deleted == 0
+        {
+            return Some((out, copy_table_keys_verbatim(t, out, count)));
+        }
         // A table's entry words are read only for attributed keys.
         let keys = if !t.is_null() {
             if holes || non_enumerable {
@@ -449,6 +598,47 @@ unsafe fn copy_key_is_shared(key: u64) -> bool {
         || (*((key & crate::value::POINTER_MASK) as *const crate::StringHeader)).refcount != 1
 }
 
+/// The own enumerable keys of the table `t` into the young unfilled result
+/// `out` ([`crate::array::js_array_try_alloc_tag_scanned_unfilled`], capacity
+/// `count`) when its key column is them verbatim past the keyless prefix: no
+/// entry was written but by the plain append (no `TABLE_KEY_HIDDEN`: string
+/// atoms with plain names), none was tombstoned (`deleted == 0`) and no entry
+/// is attributed (the caller's `!holes && !non_enumerable`). The prefix
+/// `[0, fixed_prefix)` holds keyless holes and is the fact's base, as the
+/// per-key loop of [`copy_own_keys`] counts it; `keys[fixed_prefix..length)`
+/// is one block of shared key words (P1: table keys are property atoms).
+/// Out of line so the layout copy keeps its shape. Returns the loop fact.
+///
+/// # Safety
+/// `t` is the current table of a live object; `out` is as above.
+#[inline(never)]
+unsafe fn copy_table_keys_verbatim(
+    t: *mut crate::object::overflow::Table,
+    out: *mut ArrayHeader,
+    count: u32,
+) -> u64 {
+    let source = crate::object::overflow::keys_ptr(t) as *const u64;
+    let available = ((*t).length as usize).min(count as usize);
+    let lead = ((*t).fixed_prefix as usize).min(available);
+    debug_assert!((0..lead).all(|i| *source.add(i) == crate::value::TAG_HOLE));
+    debug_assert!((lead..available).all(|i| {
+        JSValue::from_bits(*source.add(i)).is_any_string() && copy_key_is_shared(*source.add(i))
+    }));
+    let dest = crate::array::array_elements_ptr(out) as *mut u64;
+    let written = available - lead;
+    // GC_STORE_AUDIT(INIT): the fresh young tag-scanned result before its
+    // length is published; no barrier.
+    std::ptr::copy_nonoverlapping(source.add(lead), dest, written);
+    (*out).length = written as u32;
+    crate::array::fill_capacity_with_holes_from(out, written as u32);
+    let n = written as u64;
+    if n == 0 || n >= 1 << 30 {
+        0
+    } else {
+        FACT_SET | FACT_TABLE | (n << 32) | lead as u64
+    }
+}
+
 #[inline(always)]
 #[allow(clippy::too_many_arguments)]
 unsafe fn copy_own_keys(
@@ -512,8 +702,17 @@ unsafe fn copy_own_keys(
         let from = written;
         for i in from..available {
             let key = *source.add(i);
-            // Symbols and tombstoned table entries are not string keys.
-            if !JSValue::from_bits(key).is_any_string() {
+            // Symbols and tombstoned table entries are not string keys. The
+            // tag (`TAG_MASK` is the top 16 bits) is compared as a 16-bit
+            // value, so no 64-bit mask or tag constant is live in this loop.
+            let tag = key >> 48;
+            debug_assert_eq!(
+                tag == crate::value::STRING_TAG >> 48
+                    || tag == crate::value::SHORT_STRING_TAG >> 48,
+                JSValue::from_bits(key).is_any_string()
+            );
+            if tag != crate::value::STRING_TAG >> 48 && tag != crate::value::SHORT_STRING_TAG >> 48
+            {
                 if prefix_end.is_none() {
                     if table && written == 0 {
                         base += 1;
