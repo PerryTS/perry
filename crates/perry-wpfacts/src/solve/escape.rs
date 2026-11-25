@@ -3,6 +3,28 @@
 use super::*;
 
 impl Model {
+    /// The prototype token of a literal-shape class (`__AnonShape_*`, HIR
+    /// `Class::is_literal_shape`): the model's link for the rest of an
+    /// object literal's chain. The runtime births such an object as a plain
+    /// literal (perry-codegen `static_shape_ids::BirthProto::Literal`), so
+    /// its [[Prototype]] is %Object.prototype% (ECMA-262 13.2.5.5
+    /// OrdinaryObjectCreate(%Object.prototype%)): unknown code reaching it
+    /// through a handed literal reaches that intrinsic, which it never
+    /// writes (owner premise 2026-11-19). It reads what the program stored
+    /// there; it writes no key (`escape_inner`).
+    pub(crate) fn literal_shape_proto(&self, t: Tok) -> bool {
+        match self.toks[t as usize] {
+            TokKind::Proto(tm) => matches!(
+                self.tmpls[tm as usize].kind,
+                TmplKind::Class {
+                    literal_shape: true,
+                    ..
+                }
+            ),
+            _ => false,
+        }
+    }
+
     /// A program object, prototype, function or class (not an array, not a
     /// built-in object): the runtime acts on it only by its contract
     /// (owner premise Phase B, 2026-11-23), so handed to a builtin it gets
@@ -1250,7 +1272,10 @@ impl Model {
         // and host act on a handed value only as the builtin's contract
         // states): no write under any key, no unknown value stored. Code no
         // contract describes (`writes_any`) may write it.
-        let wr = self.writes_any(reason) || !self.contracted_tok(t);
+        // A literal shape's prototype is %Object.prototype% at run time
+        // (`literal_shape_proto`): no write by the code holding it.
+        let wr = (self.writes_any(reason) || !self.contracted_tok(t))
+            && !self.literal_shape_proto(t);
         if !up {
             self.virt_escape(t);
             self.note_inst(t, false);
