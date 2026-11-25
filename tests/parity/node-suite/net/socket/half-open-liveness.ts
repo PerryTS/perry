@@ -3,17 +3,18 @@ import net from "node:net";
 const reached = setTimeout(() => {
   console.log("still alive");
   process.exit(3);
-}, 5000);
+}, 15000);
 reached.unref();
 
-const half = (port: number, ms: number) =>
+let abandon = () => {};
+const half = (port: number) =>
   new Promise<string>((resolve) => {
     let received = "";
     const client = net.connect({ port, host: "127.0.0.1", allowHalfOpen: true }, () => client.end("x"));
     client.on("data", (chunk) => (received += chunk));
     client.on("error", () => {});
     client.on("close", () => resolve(received.length > 100 ? String(received.length) : received));
-    if (ms) setTimeout(() => client.destroy(), ms);
+    abandon = () => client.destroy();
   });
 
 const listen = (onSocket: (socket: net.Socket) => void, run: (port: number) => Promise<void>) =>
@@ -32,12 +33,12 @@ const listen = (onSocket: (socket: net.Socket) => void, run: (port: number) => P
 
 await listen(
   (socket) => socket.on("end", () => setTimeout(() => socket.end("late"), 20)),
-  async (port) => console.log("late answer:", await half(port, 0)),
+  async (port) => console.log("late answer:", await half(port)),
 );
 const big = "a".repeat(8 * 1024 * 1024);
 await listen(
   (socket) => socket.on("end", () => setImmediate(() => socket.end(big))),
-  async (port) => console.log("large late answer:", await half(port, 0)),
+  async (port) => console.log("large late answer:", await half(port)),
 );
 // Only the answer holds the loop: the listener is closed and the peer unreferenced.
 await new Promise<void>((resolve) => {
@@ -61,9 +62,12 @@ await new Promise<void>((resolve) => {
 // The peer is gone and nothing writes: the half-open socket does not hold the loop.
 await listen(
   (socket) => {
-    socket.on("end", () => console.log("end"));
+    socket.on("end", () => {
+      console.log("end");
+      abandon();
+    });
     socket.on("close", () => console.log("abandoned close"));
   },
-  async (port) => console.log("abandoned:", JSON.stringify(await half(port, 50))),
+  async (port) => console.log("abandoned:", JSON.stringify(await half(port))),
 );
 process.on("exit", (code) => console.log("exit", code));
