@@ -2,7 +2,7 @@
 
 use super::*;
 use perry_runtime::fs::validate::{
-    describe_received, format_received_number, is_numeric, throw_range_error_with_code,
+    describe_received, is_numeric, read_js_string_pub, throw_range_error_with_code,
     throw_type_error_with_code,
 };
 
@@ -145,8 +145,25 @@ fn require_u32(name: &str, value: JSValue) -> u32 {
     };
     throw_range_error_with_code(&format!(
         "The value of \"options.{name}\" is out of range. It must be {expected}. Received {}",
-        format_received_number(number)
+        received_number(number)
     ))
+}
+
+/// A number as Node's range errors print it: `String(number)`, with separators
+/// in an integer past 2^32.
+fn received_number(number: f64) -> String {
+    let text = read_js_string_pub(perry_runtime::string::js_number_to_string_box(number));
+    if number.fract() != 0.0 || number.abs() <= 4294967296.0 || !number.is_finite() {
+        return text;
+    }
+    let first = usize::from(text.starts_with('-'));
+    let mut head = text.len();
+    let mut tail = String::new();
+    while head >= first + 4 {
+        tail = format!("_{}{tail}", &text[head - 3..head]);
+        head -= 3;
+    }
+    format!("{}{tail}", &text[..head])
 }
 
 #[cfg(test)]
@@ -177,6 +194,23 @@ mod tests {
         assert!(load(4097).is_some());
         assert!(load(16384).is_some());
         assert!(load(16385).is_none());
+    }
+
+    #[test]
+    fn a_range_error_prints_the_number_like_node() {
+        for (number, text) in [
+            (-1.0, "-1"),
+            (4294967296.0, "4294967296"),
+            (5e9, "5_000_000_000"),
+            (-4294967297.0, "-4_294_967_297"),
+            (1e20, "100_000_000_000_000_000_000"),
+            (1e21, "1e_+21"),
+            (1e-7, "1e-7"),
+            (f64::NAN, "NaN"),
+            (f64::NEG_INFINITY, "-Infinity"),
+        ] {
+            assert_eq!(received_number(number), text);
+        }
     }
 
     #[test]
