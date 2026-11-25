@@ -4629,12 +4629,7 @@ fn ns_method_inner(
         // (`loads::tok_load`, REALMVAL: a key it lacks reads `undefined`, or
         // what a write stored). A call of the member's own value
         // (`identified`) is that value's call, not a lookup.
-        (_, n)
-            if !identified
-                && !m.unit_mode
-                && ns != BuiltinNs::Other
-                && members::ns_statics(ns).members.is_none() =>
-        {
+        (_, n) if !identified && declaration_answers_keys(m, ns) => {
             let t = m.tok(TokKind::Builtin(ns));
             let a = m.atom(n);
             m.call_read_member(t, Key::Named(a), call)
@@ -4654,6 +4649,17 @@ fn ns_method_inner(
             )
         }
     }
+}
+
+/// A host object no namespace model describes (`ns_statics` lists no
+/// members: the global object, `process`, `require`, a realm host namespace
+/// or node module object such as `Atomics`, `Intl`, `node:fs`; not `Other`,
+/// the HIR global sentinel): in whole-program mode the realm declaration
+/// answers [[Get]] of every key on it, a well-known symbol key included
+/// (`loads::tok_load`, REALMVAL: a key it lacks reads `undefined`, or what
+/// a write stored).
+pub(super) fn declaration_answers_keys(m: &Model, ns: BuiltinNs) -> bool {
+    !m.unit_mode && ns != BuiltinNs::Other && members::ns_statics(ns).members.is_none()
 }
 
 /// A call of the Worker global's own native `n` (`%WorkerGlobal%.<n>`,

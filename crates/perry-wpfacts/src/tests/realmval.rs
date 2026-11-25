@@ -148,6 +148,12 @@ fn stop3_host_namespace_call_calls_the_read_value() {
         "(Atomics as any).toString()",
         "(process as any).toJSON()",
         "(globalThis as any).toJSON()",
+        // NSPRIM: ToPrimitive looks up `@@toPrimitive` first (7.1.1), a
+        // named key read like any other: absent, so `valueOf`/`toString`.
+        "+(Atomics as any)",
+        "`${Atomics as any}`",
+        "(Intl as any) + \"\"",
+        "+(process as any)",
     ]
     .iter()
     .map(|s| s.to_string())
