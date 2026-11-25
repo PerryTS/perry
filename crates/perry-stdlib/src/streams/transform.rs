@@ -819,7 +819,15 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
             None => (0, 0),
         }
     };
+    // Writable ProcessClose: the close algorithm (TransformStreamDefaultSink-
+    // CloseAlgorithm: flush, then TransformStreamDefaultControllerClear-
+    // Algorithms) runs, then the writable's ClearAlgorithms.
+    let clear_close_algorithms = || {
+        transform_clear_algorithms(writable_id);
+        writable_clear_algorithms(writable_id);
+    };
     if let Some(error_bits) = native_error {
+        clear_close_algorithms();
         if readable_id != 0 {
             js_readable_stream_controller_error(
                 controller_value(readable_id),
@@ -854,6 +862,7 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
     } else {
         None
     };
+    clear_close_algorithms();
 
     if let Some(fv) = flush_result {
         if perry_runtime::promise::js_value_is_promise(fv) != 0 {

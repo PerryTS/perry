@@ -190,6 +190,9 @@ pub(super) unsafe fn advance_body(id: usize) {
         // The consumer just emptied a stream that closed with its body still
         // queued (a small body that arrived before `text()`), so the close
         // could not retire it; nothing else reaches this stream again (#12862).
+        // A closed stream whose queue just drained: ClearAlgorithms (error
+        // already cleared them in error_pending).
+        readable_clear_algorithms(id);
         idalloc::retire_readable_terminal(id);
     } else if READABLE_STREAMS
         .lock()
