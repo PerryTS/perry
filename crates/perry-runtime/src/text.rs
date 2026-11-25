@@ -75,7 +75,11 @@ struct DecoderState {
 //     bit 0       present
 //     bit 1       fatal
 //     bit 2       ignoreBOM
-//     bits 8..    index into `ENCODINGS`
+//     bit 3       a `stream: true` decode has consumed (or ruled out) the BOM
+//     bits 8..32  index into `ENCODINGS`
+//     bits 32..34 how many bytes an unfinished `stream: true` decode keeps
+//     bits 40..64 those bytes (at most 3: the start of a UTF-8 sequence, or
+//                 an odd byte and/or a high surrogate of UTF-16)
 //
 // `ENCODINGS` interns the DISTINCT encodings a program actually names. It is
 // bounded by the compile-time label set (~40 entries), never grows per decoder,
@@ -92,7 +96,14 @@ pub(crate) const TEXT_DECODER_CLASS_ID: u32 = crate::native_class_ids::TEXT_DECO
 const STATE_PRESENT: u64 = 1;
 const STATE_FATAL: u64 = 1 << 1;
 const STATE_IGNORE_BOM: u64 = 1 << 2;
+const STATE_STREAM_STARTED: u64 = 1 << 3;
 const STATE_ENCODING_SHIFT: u32 = 8;
+const STATE_ENCODING_MASK: u64 = 0xFF_FFFF;
+const STATE_PENDING_LEN_SHIFT: u32 = 32;
+const STATE_PENDING_SHIFT: u32 = 40;
+/// The bits that describe an unfinished stream; a stream's end clears them.
+const STATE_STREAM_MASK: u64 =
+    STATE_STREAM_STARTED | (0b11 << STATE_PENDING_LEN_SHIFT) | (0xFF_FFFF << STATE_PENDING_SHIFT);
 
 per_test_global! {
     /// Distinct `(encoding, canonical label)` pairs named so far. Append-only,
@@ -145,7 +156,7 @@ fn unpack_decoder_state(word: u64) -> Option<DecoderState> {
     if word & STATE_PRESENT == 0 {
         return None;
     }
-    let (encoding, label) = encoding_at(word >> STATE_ENCODING_SHIFT);
+    let (encoding, label) = encoding_at((word >> STATE_ENCODING_SHIFT) & STATE_ENCODING_MASK);
     Some(DecoderState {
         encoding,
         label,
@@ -261,13 +272,7 @@ pub(crate) fn decode_bytes_with_label(bytes: &[u8], raw_label: &str) -> Option<i
 /// Only Unicode encodings have BOM signatures; single-byte labels preserve
 /// these bytes as ordinary content.
 fn strip_bom(bytes: &[u8], encoding: DecoderEncoding) -> &[u8] {
-    let bom: &[u8] = match encoding {
-        DecoderEncoding::Utf8 => &[0xEF, 0xBB, 0xBF],
-        DecoderEncoding::Utf16Le => &[0xFF, 0xFE],
-        DecoderEncoding::Utf16Be => &[0xFE, 0xFF],
-        DecoderEncoding::SingleByte(_) => return bytes,
-    };
-    bytes.strip_prefix(bom).unwrap_or(bytes)
+    bytes.strip_prefix(bom_of(encoding)).unwrap_or(bytes)
 }
 
 fn resolve_decoder_label(raw: &str) -> Option<(DecoderEncoding, &'static str)> {
@@ -616,6 +621,168 @@ pub extern "C" fn js_text_encoder_encode_into_llvm(source: f64, dest: f64) -> i6
     text_encoder_result(read, written) as i64
 }
 
+/// The bytes an unfinished `stream: true` decode keeps for the next call.
+fn stream_pending(word: u64) -> ([u8; 3], usize) {
+    let len = ((word >> STATE_PENDING_LEN_SHIFT) & 0b11) as usize;
+    let bytes = (word >> STATE_PENDING_SHIFT).to_le_bytes();
+    ([bytes[0], bytes[1], bytes[2]], len)
+}
+
+fn with_stream_state(word: u64, started: bool, pending: &[u8]) -> u64 {
+    debug_assert!(pending.len() <= 3);
+    let mut word = word & !STATE_STREAM_MASK;
+    if started {
+        word |= STATE_STREAM_STARTED;
+    }
+    let mut packed = [0u8; 8];
+    packed[..pending.len()].copy_from_slice(pending);
+    word | ((pending.len() as u64) << STATE_PENDING_LEN_SHIFT)
+        | (u64::from_le_bytes(packed) << STATE_PENDING_SHIFT)
+}
+
+/// Store a decoder's state word back on the receiver `decoder_state_of` read.
+fn store_decoder_word(value: f64, word: u64) {
+    if text_native_state(value, TEXT_DECODER_CLASS_ID).is_none() {
+        return;
+    }
+    let obj = (value.to_bits() & crate::value::POINTER_MASK) as *mut ObjectHeader;
+    unsafe {
+        let meta = crate::meta_read!(crate::meta_obj_runtime_born!(obj as *mut _));
+        if !meta.is_null() {
+            (*meta).native_state = word;
+        }
+    }
+}
+
+fn bom_of(encoding: DecoderEncoding) -> &'static [u8] {
+    match encoding {
+        DecoderEncoding::Utf8 => &[0xEF, 0xBB, 0xBF],
+        DecoderEncoding::Utf16Le => &[0xFF, 0xFE],
+        DecoderEncoding::Utf16Be => &[0xFE, 0xFF],
+        DecoderEncoding::SingleByte(_) => &[],
+    }
+}
+
+/// How many trailing bytes of `bytes` start a sequence the next chunk can
+/// still complete: a UTF-8 sequence whose bytes so far are a valid prefix, or
+/// for UTF-16 an odd byte and/or a high surrogate waiting for its low half.
+/// An invalid prefix is not kept: it decodes (to U+FFFD) in this call.
+fn incomplete_tail_len(bytes: &[u8], encoding: DecoderEncoding) -> usize {
+    match encoding {
+        DecoderEncoding::Utf8 => {
+            for back in 1..=bytes.len().min(3) {
+                let lead = bytes[bytes.len() - back];
+                if (0x80..=0xBF).contains(&lead) {
+                    continue;
+                }
+                let need = match lead {
+                    0xC2..=0xDF => 2,
+                    0xE0..=0xEF => 3,
+                    0xF0..=0xF4 => 4,
+                    _ => return 0,
+                };
+                if back >= need {
+                    return 0;
+                }
+                // The second byte has a narrower range after some leads.
+                let second_ok = |b: u8| match lead {
+                    0xE0 => (0xA0..=0xBF).contains(&b),
+                    0xED => (0x80..=0x9F).contains(&b),
+                    0xF0 => (0x90..=0xBF).contains(&b),
+                    0xF4 => (0x80..=0x8F).contains(&b),
+                    _ => (0x80..=0xBF).contains(&b),
+                };
+                let tail = &bytes[bytes.len() - back..];
+                return if tail.len() < 2 || second_ok(tail[1]) {
+                    back
+                } else {
+                    0
+                };
+            }
+            0
+        }
+        DecoderEncoding::Utf16Le | DecoderEncoding::Utf16Be => {
+            let odd = bytes.len() % 2;
+            let whole = bytes.len() - odd;
+            if whole >= 2 {
+                let pair = [bytes[whole - 2], bytes[whole - 1]];
+                let unit = match encoding {
+                    DecoderEncoding::Utf16Be => u16::from_be_bytes(pair),
+                    _ => u16::from_le_bytes(pair),
+                };
+                if (0xD800..=0xDBFF).contains(&unit) {
+                    return 2 + odd;
+                }
+            }
+            odd
+        }
+        DecoderEncoding::SingleByte(_) => 0,
+    }
+}
+
+/// One `decode` call over `input` with the decoder's state `word`: the decoded
+/// string (`None` when `fatal` rejects the input) and the word to store. A
+/// `stream: true` call keeps an unfinished sequence for the next one and
+/// consumes the BOM once per stream; any other call ends the stream, so what
+/// is still pending decodes now and the next call starts a new stream. A
+/// rejected decode also ends the stream.
+fn decode_with_state(
+    state: &DecoderState,
+    word: u64,
+    input: &[u8],
+    stream: bool,
+) -> (Option<i64>, u64) {
+    let (pending, pending_len) = stream_pending(word);
+    let joined;
+    let mut bytes = if pending_len == 0 {
+        input
+    } else {
+        joined = [&pending[..pending_len], input].concat();
+        &joined[..]
+    };
+    let mut started = word & STATE_STREAM_STARTED != 0;
+    if !started {
+        let bom = bom_of(state.encoding);
+        if !state.ignore_bom && !bom.is_empty() {
+            if stream && bytes.len() < bom.len() && bom.starts_with(bytes) {
+                // Too few bytes yet to tell a BOM from content.
+                let empty = js_string_from_bytes(std::ptr::null(), 0) as i64;
+                return (Some(empty), with_stream_state(word, false, bytes));
+            }
+            bytes = bytes.strip_prefix(bom).unwrap_or(bytes);
+        }
+        started = pending_len > 0 || !input.is_empty();
+    }
+    let keep = if stream {
+        incomplete_tail_len(bytes, state.encoding)
+    } else {
+        0
+    };
+    let (body, tail) = bytes.split_at(bytes.len() - keep);
+    let decoded = decode_bytes(body, state.encoding, state.fatal);
+    let next = if stream && decoded.is_some() {
+        with_stream_state(word, started, tail)
+    } else {
+        with_stream_state(word, false, &[])
+    };
+    (decoded, next)
+}
+
+/// `options.stream` of a `decode(input, options)` call.
+fn decode_stream_option(options: f64) -> bool {
+    let jsval = crate::value::JSValue::from_bits(options.to_bits());
+    if !jsval.is_pointer() {
+        return false;
+    }
+    let obj = jsval.as_pointer::<ObjectHeader>();
+    if obj.is_null() {
+        return false;
+    }
+    let key = js_string_from_bytes(b"stream".as_ptr(), 6);
+    let value = crate::object::js_object_get_field_by_name(obj, key);
+    crate::value::js_is_truthy(f64::from_bits(value.bits())) != 0
+}
+
 /// `decoder.decode(buf)` — UTF-8 decode a NaN-boxed `BufferHeader` value.
 ///
 /// Returns a `*const StringHeader` as i64 — the codegen NaN-boxes with
@@ -623,67 +790,69 @@ pub extern "C" fn js_text_encoder_encode_into_llvm(source: f64, dest: f64) -> i6
 /// the same packed-u8 BufferHeader layout, so a single read path covers both.
 #[no_mangle]
 pub extern "C" fn js_text_decoder_decode_llvm(handle: f64, value: f64) -> i64 {
+    text_decoder_decode(handle, value, false)
+}
+
+/// `decoder.decode(input, { stream })`: the shared body of both entry points.
+fn text_decoder_decode(handle: f64, value: f64, stream: bool) -> i64 {
     // Pull the decoder state (encoding / fatal). Unknown handle → utf-8,
     // non-fatal (matches the old stateless default).
     let state = decoder_state_of(handle);
-    let (encoding, fatal) = (state.encoding, state.fatal);
+    let word = text_native_state(handle, TEXT_DECODER_CLASS_ID).unwrap_or(0);
 
     // Node `TextDecoder.prototype.decode(input)` input contract:
-    //   - omitted / undefined → decode empty (returns "").
+    //   - omitted / undefined → no bytes (still ends a stream).
     //   - null / arrays / numbers / strings / any non-buffer-source →
     //     ERR_INVALID_ARG_TYPE.
     //   - ArrayBuffer / SharedArrayBuffer / DataView / TypedArray view →
     //     decode exactly the bytes in the relevant view range.
     let jsval = crate::value::JSValue::from_bits(value.to_bits());
-    if jsval.is_undefined() {
-        return js_string_from_bytes(std::ptr::null(), 0) as i64;
-    }
-
-    let bits = value.to_bits();
-    let ptr_usize: usize = {
-        const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
-        const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
-        const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
-        if (bits & TAG_MASK) == POINTER_TAG {
-            (bits & POINTER_MASK) as usize
-        } else {
-            0
-        }
-    };
-
-    if ptr_usize < 0x1000 {
-        // null, numbers, booleans, small pointers — not a buffer source.
-        throw_invalid_decode_input();
-    }
-
-    let value = crate::value::js_nanbox_pointer(ptr_usize as i64);
-    // A non-streaming `decode` starts a fresh stream, so its leading BOM is
-    // consumed unless the decoder was built with `ignoreBOM: true`.
-    let consume_bom = !state.ignore_bom;
-    let decode = |bytes| {
-        let bytes = if consume_bom {
-            strip_bom(bytes, encoding)
-        } else {
-            bytes
+    let (decoded, next) = if jsval.is_undefined() {
+        decode_with_state(&state, word, &[], stream)
+    } else {
+        let bits = value.to_bits();
+        let ptr_usize: usize = {
+            const POINTER_TAG: u64 = 0x7FFD_0000_0000_0000;
+            const POINTER_MASK: u64 = 0x0000_FFFF_FFFF_FFFF;
+            const TAG_MASK: u64 = 0xFFFF_0000_0000_0000;
+            if (bits & TAG_MASK) == POINTER_TAG {
+                (bits & POINTER_MASK) as usize
+            } else {
+                0
+            }
         };
-        decode_bytes(bytes, encoding, fatal)
-    };
-    let decoded = match crate::buffer::bytes::pin(value) {
-        Ok(pin) => decode(unsafe { std::slice::from_raw_parts(pin.as_ptr(), pin.len()) }),
-        Err(
-            crate::buffer::bytes::NotBytes::UnstableForeign
-            | crate::buffer::bytes::NotBytes::Frozen,
-        ) => {
-            // Foreign engines have no retain protocol. Copy in a borrow scope
-            // before decoding can allocate the returned JavaScript string.
-            let input = crate::buffer::bytes::no_gc(|scope| {
-                crate::buffer::bytes::bytes(value, scope).map(<[u8]>::to_vec)
-            })
-            .unwrap_or_else(|_| throw_invalid_decode_input());
-            decode(&input)
+
+        if ptr_usize < 0x1000 {
+            // null, numbers, booleans, small pointers — not a buffer source.
+            throw_invalid_decode_input();
         }
-        Err(_) => throw_invalid_decode_input(),
+
+        let value = crate::value::js_nanbox_pointer(ptr_usize as i64);
+        match crate::buffer::bytes::pin(value) {
+            Ok(pin) => decode_with_state(
+                &state,
+                word,
+                unsafe { std::slice::from_raw_parts(pin.as_ptr(), pin.len()) },
+                stream,
+            ),
+            Err(
+                crate::buffer::bytes::NotBytes::UnstableForeign
+                | crate::buffer::bytes::NotBytes::Frozen,
+            ) => {
+                // Foreign engines have no retain protocol. Copy in a borrow scope
+                // before decoding can allocate the returned JavaScript string.
+                let input = crate::buffer::bytes::no_gc(|scope| {
+                    crate::buffer::bytes::bytes(value, scope).map(<[u8]>::to_vec)
+                })
+                .unwrap_or_else(|_| throw_invalid_decode_input());
+                decode_with_state(&state, word, &input, stream)
+            }
+            Err(_) => throw_invalid_decode_input(),
+        }
     };
+    if next != word {
+        store_decoder_word(handle, next);
+    }
     decoded.unwrap_or_else(|| throw_invalid_encoded_data(state.label))
 }
 
@@ -809,6 +978,7 @@ pub(crate) extern "C" fn text_decoder_decode_thunk(
     _closure: *const crate::closure::ClosureHeader,
     this: crate::closure::JsThis,
     input: f64,
+    options: f64,
 ) -> f64 {
     let this = this.as_f64();
     require_text_brand(
@@ -816,7 +986,7 @@ pub(crate) extern "C" fn text_decoder_decode_thunk(
         TEXT_DECODER_CLASS_ID,
         b"TextDecoder.prototype.decode called on an incompatible receiver",
     );
-    let s = js_text_decoder_decode_llvm(this, input);
+    let s = text_decoder_decode(this, input, decode_stream_option(options));
     f64::from_bits(crate::value::JSValue::string_ptr(s as *mut StringHeader).bits())
 }
 
@@ -1218,5 +1388,40 @@ mod tests {
             decode("windows-1252", undef, &[0xEF, 0xBB, 0xBF]),
             "\u{EF}\u{BB}\u{BF}"
         );
+    }
+
+    /// What a `stream: true` decode keeps for the next call: a valid prefix of
+    /// a UTF-8 sequence, or a UTF-16 odd byte and/or unpaired high surrogate.
+    #[test]
+    fn incomplete_tail_len_keeps_only_a_completable_prefix() {
+        let utf8 = DecoderEncoding::Utf8;
+        assert_eq!(incomplete_tail_len(&[0x41, 0xE2], utf8), 1);
+        assert_eq!(incomplete_tail_len(&[0xE2, 0x82], utf8), 2);
+        assert_eq!(incomplete_tail_len(&[0xE2, 0x82, 0xAC], utf8), 0);
+        assert_eq!(incomplete_tail_len(&[0xF0, 0x9F, 0x98], utf8), 3);
+        // E0 80 can never complete: it decodes now.
+        assert_eq!(incomplete_tail_len(&[0xE0, 0x80], utf8), 0);
+        assert_eq!(incomplete_tail_len(&[0xFF], utf8), 0);
+        let le = DecoderEncoding::Utf16Le;
+        assert_eq!(incomplete_tail_len(&[0x41, 0x00, 0x3D], le), 1);
+        assert_eq!(incomplete_tail_len(&[0x3D, 0xD8], le), 2);
+        assert_eq!(incomplete_tail_len(&[0x3D, 0xD8, 0x00], le), 3);
+        assert_eq!(incomplete_tail_len(&[0x3D, 0xD8, 0x00, 0xDE], le), 0);
+        assert_eq!(
+            incomplete_tail_len(&[0xD8, 0x3D], DecoderEncoding::Utf16Be),
+            2
+        );
+    }
+
+    /// The pending bytes and the BOM flag ride in the state word next to the
+    /// encoding, and a stream's end clears exactly those bits (#15476).
+    #[test]
+    fn stream_state_round_trips_through_the_word() {
+        let base = STATE_PRESENT | STATE_FATAL | (5 << STATE_ENCODING_SHIFT);
+        let word = with_stream_state(base, true, &[0xE2, 0x82]);
+        assert_eq!(stream_pending(word), ([0xE2, 0x82, 0], 2));
+        assert_ne!(word & STATE_STREAM_STARTED, 0);
+        assert_eq!((word >> STATE_ENCODING_SHIFT) & STATE_ENCODING_MASK, 5);
+        assert_eq!(with_stream_state(word, false, &[]), base);
     }
 }

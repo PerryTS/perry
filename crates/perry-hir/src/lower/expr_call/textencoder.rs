@@ -69,7 +69,8 @@ pub(super) fn try_textencoder_decoder(
                             let receiver = lower_expr(ctx, &member.obj)?;
                             return Ok(Ok(encoder_call(receiver, method_name, args, call)));
                         }
-                        if class_name == "TextDecoder" && method_name == "decode" {
+                        if class_name == "TextDecoder" && method_name == "decode" && args.len() <= 1
+                        {
                             if let Some(decoder) = super::super::expr_new::lower_text_decoder_new(
                                 ctx,
                                 new_expr.args.as_deref(),
@@ -102,7 +103,7 @@ pub(super) fn try_textencoder_decoder(
                         .lookup_local_type(&obj_name)
                         .map(|ty| matches!(ty, Type::Named(name) if name == "TextDecoder"))
                         .unwrap_or(false);
-                    if is_text_decoder && method_name == "decode" {
+                    if is_text_decoder && method_name == "decode" && args.len() <= 1 {
                         let decoder = lower_expr(ctx, &member.obj)?;
                         let input = if !args.is_empty() {
                             args.into_iter().next().unwrap()
