@@ -1,0 +1,1 @@
+On the web target, `widgetSetTooltip` sets the widget's `title` (its native tooltip), and `widgetSetEnabled`, `widgetSetControlSize`, `widgetSetOnClick`, `widgetSetOnHover` and `widgetSetOnDoubleClick` take effect; each was silently dropped before because it resolved to a native-only runtime name.
