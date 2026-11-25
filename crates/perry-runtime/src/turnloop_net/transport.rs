@@ -942,11 +942,9 @@ pub unsafe fn close(core: *mut TransportCore, link: OwnerLink) -> NetResult<bool
             }
         }
         c.backlog = Backlog::default();
-        let Some(entry) = c.entry.take() else {
+        let Some(mut entry) = c.entry.take() else {
             return Ok(false);
         };
-        #[cfg(windows)]
-        let mut entry = entry;
         #[cfg(windows)]
         {
             windows_pipe::cancel_eof(driver, name, &mut entry);
@@ -963,7 +961,9 @@ pub unsafe fn close(core: *mut TransportCore, link: OwnerLink) -> NetResult<bool
         census::note_submit(OP_CLOSE);
         if c.referenced && !entry.referenced {
             // An ended socket's close is work again: its `Closed` is owed.
-            let _ = driver.set_ref(entry.handle, true);
+            if driver.set_ref(entry.handle, true).is_ok() {
+                entry.referenced = true;
+            }
         }
         match driver.close(entry.handle, name.token(OP_CLOSE)) {
             Ok(()) => Ok(true),

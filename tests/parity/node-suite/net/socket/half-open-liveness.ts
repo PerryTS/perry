@@ -39,6 +39,25 @@ await listen(
   (socket) => socket.on("end", () => setImmediate(() => socket.end(big))),
   async (port) => console.log("large late answer:", await half(port, 0)),
 );
+// Only the answer holds the loop: the listener is closed and the peer unreferenced.
+await new Promise<void>((resolve) => {
+  const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+    server.close();
+    socket.resume();
+    socket.on("end", () => socket.end(big, () => console.log("unaided answer flushed")));
+    socket.on("close", () => {
+      console.log("unaided socket close");
+      resolve();
+    });
+  });
+  server.listen(0, "127.0.0.1", () => {
+    const { port } = server.address() as net.AddressInfo;
+    const client = net.connect({ port, host: "127.0.0.1", allowHalfOpen: true }, () => client.end("x"));
+    client.on("data", () => {});
+    client.on("end", () => client.destroy());
+    client.unref();
+  });
+});
 // The peer is gone and nothing writes: the half-open socket does not hold the loop.
 await listen(
   (socket) => {
