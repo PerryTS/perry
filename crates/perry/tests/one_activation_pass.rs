@@ -5,9 +5,9 @@
 //!
 //! * a facts-only whole-program compile of a program with dynamic `import()`
 //!   prints exactly one `activation pass` profile line;
-//! * `PERRY_FACTS_ACTIVATION_CHECK=1` (the facts run their own pass over the
-//!   final HIR) prints two, and they agree: same active count, same key
-//!   digest (the hand-over invariant's detector);
+//! * `PERRY_FACTS_ACTIVATION_CHECK=1`: the facts do not take the handed
+//!   pass but their own activation over the final HIR, which since D2 is the
+//!   final solve's (one `activation (final solve)` line, no second pass);
 //! * the dynamic reach line counts dynamic edges without
 //!   `PERRY_DYNAMIC_REACH_REPORT` (it used to print 0 unless the report was
 //!   on), and the module only a dead site loads is dropped.
@@ -99,14 +99,19 @@ fn one_activation_pass_per_compile() {
 }
 
 #[test]
-fn the_facts_own_pass_over_the_final_hir_agrees() {
+fn the_facts_own_activation_over_the_final_hir_is_the_final_solve() {
+    // D2 (owner 11-24 C1): with the check the facts do not take the handed
+    // pass; they take the activation from their own final solve.
     let dir = tempfile::tempdir().unwrap();
     let err = facts_only(dir.path(), true);
     let p = passes(&err);
-    assert_eq!(p.len(), 2, "the check runs the facts' own pass too\n{err}");
-    assert_eq!(
-        p[0], p[1],
-        "the handed-over pass equals the final-HIR pass\n{err}"
-    );
+    assert_eq!(p.len(), 1, "only dynamic reach runs a pass\n{err}");
     assert!(!p[0].2, "{err}");
+    assert_eq!(
+        err.lines()
+            .filter(|l| l.starts_with("perry: wpfacts activation (final solve):"))
+            .count(),
+        1,
+        "the facts take D2\n{err}"
+    );
 }
