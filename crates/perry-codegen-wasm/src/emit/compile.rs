@@ -1179,7 +1179,7 @@ impl WasmModuleEmitter {
                             for name in &public {
                                 self.intern_string(name);
                                 if let Some(class) =
-                                    resolve_export_to_class(modules, src_idx, name, 8)
+                                    resolve_export_to_class(modules, &name_to_idx, src_idx, name, 8)
                                 {
                                     classes.insert(name.clone(), class);
                                 }

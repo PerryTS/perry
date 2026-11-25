@@ -2406,7 +2406,8 @@ const __memDispatch = {
         const cell = wasmInstance.exports[`__wasm_global_${globals[key]}`];
         Object.defineProperty(ns, key, { get: () => toJsValue(u64ToF64(cell.value)), enumerable: true });
       } else {
-        Object.defineProperty(ns, key, { value: values[key], writable: true, enumerable: true });
+        // Not writable, as an importer cannot assign an export.
+        Object.defineProperty(ns, key, { value: values[key], enumerable: true });
       }
     }
     Object.defineProperty(ns, Symbol.toStringTag, { value: 'Module' });

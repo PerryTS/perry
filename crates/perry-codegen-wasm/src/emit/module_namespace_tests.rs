@@ -45,3 +45,46 @@ run().then((v) => console.log(v));
          object,6,true,1,1,3"
     );
 }
+
+// Only the public names are keys: a renamed local is not one, `export *` leaves out
+// `default`, and a class is followed through an import a barrel re-exports. An importer
+// cannot replace an export.
+#[test]
+fn namespace_keys_are_the_public_names_and_exports_are_read_only() {
+    assert_eq!(
+        run_web_modules(&[
+            (
+                "lib",
+                r#"
+const inner = 8;
+export { inner as renamed };
+export class K { v = 3; }
+export function f() { return 2; }
+export default inner;
+"#
+            ),
+            (
+                "barrel",
+                r#"
+import { K } from "./lib";
+export * from "./lib";
+export { K as PublicK };
+export const own = 1;
+"#
+            ),
+            (
+                "main",
+                r#"
+import * as lib from "./lib";
+import * as barrel from "./barrel";
+console.log(Object.keys(lib).join(","), Object.keys(barrel).join(","));
+console.log(new barrel.PublicK().v, lib.renamed, "inner" in lib);
+const ns: any = lib;
+try { ns.f = 9; } catch { }
+console.log(typeof ns.f, ns.f());
+"#
+            ),
+        ]),
+        "K,default,f,renamed K,PublicK,f,own,renamed\n3 8 false\nfunction 2"
+    );
+}

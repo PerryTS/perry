@@ -24,6 +24,7 @@ pub(super) struct NamespaceImport {
 /// following `export { K as L }`, `export { K } from` and `export * from`.
 pub(super) fn resolve_export_to_class(
     modules: &[(String, perry_hir::ir::Module)],
+    name_to_idx: &std::collections::HashMap<&str, usize>,
     mod_idx: usize,
     name: &str,
     depth: u32,
@@ -39,6 +40,27 @@ pub(super) fn resolve_export_to_class(
                 if let Some(c) = local_class(local) {
                     return Some(c.name.clone());
                 }
+                // The exported local may itself be an import binding.
+                for import in m.imports.iter().filter(|i| !i.type_only) {
+                    for spec in &import.specifiers {
+                        if let perry_hir::ir::ImportSpecifier::Named {
+                            imported,
+                            local: il,
+                        } = spec
+                        {
+                            if il == local {
+                                let si = resolve_source_module_idx(modules, import, name_to_idx)?;
+                                return resolve_export_to_class(
+                                    modules,
+                                    name_to_idx,
+                                    si,
+                                    imported,
+                                    depth - 1,
+                                );
+                            }
+                        }
+                    }
+                }
             }
             perry_hir::ir::Export::ReExport {
                 source,
@@ -46,7 +68,7 @@ pub(super) fn resolve_export_to_class(
                 exported,
             } if exported == name => {
                 let si = resolve_module_idx_by_source(modules, source)?;
-                return resolve_export_to_class(modules, si, imported, depth - 1);
+                return resolve_export_to_class(modules, name_to_idx, si, imported, depth - 1);
             }
             _ => {}
         }
@@ -61,7 +83,7 @@ pub(super) fn resolve_export_to_class(
         perry_hir::ir::Export::ExportAll { source } => {
             resolve_module_idx_by_source(modules, source)
                 .filter(|&si| si != mod_idx)
-                .and_then(|si| resolve_export_to_class(modules, si, name, depth - 1))
+                .and_then(|si| resolve_export_to_class(modules, name_to_idx, si, name, depth - 1))
         }
         _ => None,
     })
