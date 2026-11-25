@@ -261,9 +261,9 @@ impl<'a> FuncEmitCtx<'a> {
                         return true;
                     }
                     // The host's WeakMap, constructed as a bare `new Map` is (see new_dynamic),
-                    // its ArrayBuffer, and a typed array over a buffer
+                    // its ArrayBuffer and DataView, and a typed array over a buffer
                     // (`new Int32Array(buffer, offset, length)`).
-                    name if (matches!(name, "WeakMap" | "ArrayBuffer")
+                    name if (matches!(name, "WeakMap" | "ArrayBuffer" | "DataView")
                         || perry_hir::ir::typed_array_kind_for_name(name).is_some())
                         && !self.emitter.user_classes.contains(name) =>
                     {

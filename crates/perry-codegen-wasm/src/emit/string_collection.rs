@@ -244,6 +244,7 @@ impl WasmModuleEmitter {
             "map_new",
             "WeakMap",
             "ArrayBuffer",
+            "DataView",
             "weakref_new",
             "weakref_deref",
             "finreg_new",

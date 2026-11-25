@@ -149,3 +149,37 @@ console.log(out.join("\n"));
         "join=3-1-2\njoin0=3,1,2\ntoString=3,1,2\nslice=Int16Array[1,2]\nslice2=Int16Array[3,1]\nsubarray=Int16Array[1,2]\nsort=Int16Array[1,2,3]\nsortfn=Int16Array[3,2,1]\nmap=Int16Array[6,2,4]\nfilter=Int16Array[3,2]\nfill=Int16Array[7,7,7]\nfill2=Int16Array[3,7,2]\nreverse=Int16Array[2,1,3]\nforEach=6\nreduce=6\nreduceRight=213\nsome=true\nevery=true\nfind=1\nfindIndex=2\nfindLast=2\nfindLastIndex=2\nat=2\nset=Int16Array[3,9,8]\ncopyWithin=Int16Array[1,2,2]\nentries=0,3|1,1|2,2\nkeys=0|1|2\nvalues=3|1|2\ntoReversed=Int16Array[2,1,3]\ntoSorted=Int16Array[1,2,3]\nwith=Int16Array[5,1,2]\nfrom=Int16Array[1,2]\nof=Float64Array[1,2]\nspread=3,1,2\nArrayFrom=3,1,2"
     );
 }
+
+// `new DataView(buffer, offset?, length?)` is the host's DataView: its getters and
+// setters, both byte orders, read and write the buffer the typed arrays share, in a
+// plain and an async body. Expected output is Node's.
+#[test]
+fn data_view_is_the_hosts() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const ab = new ArrayBuffer(16);
+const dv = new DataView(ab);
+dv.setInt16(0, -2);
+dv.setUint32(2, 0xdeadbeef, true);
+dv.setFloat64(8, 1.5);
+dv.setInt8(6, -1);
+console.log(typeof dv, dv.byteLength, dv.byteOffset, dv.buffer === ab, dv instanceof DataView);
+console.log(dv.getInt16(0), dv.getUint16(0), dv.getUint32(2, true), dv.getUint32(2), dv.getFloat64(8), dv.getInt8(6), dv.getUint8(6));
+const part = new DataView(ab, 4, 8);
+console.log(part.byteLength, part.byteOffset, part.getUint8(0), new DataView(ab, 12).byteLength);
+dv.setFloat32(12, 0.5, true);
+console.log(dv.getFloat32(12, true), new Uint8Array(ab, 12, 4).join(","), Object.prototype.toString.call(dv));
+const u8 = new Uint8Array([1, 2, 3, 4]);
+console.log(new DataView(u8.buffer).getUint32(0), new DataView(u8.buffer, 1, 2).getUint16(0, true));
+async function main(): Promise<void> {
+  const d = new DataView(new ArrayBuffer(4));
+  d.setUint16(0, 513);
+  console.log("async", d.getUint8(0), d.getUint8(1), d.byteLength);
+}
+main();
+"#
+        ),
+        "object 16 0 true true\n-2 65534 3735928559 4022250974 1.5 -1 255\n8 4 173 4\n0.5 0,0,0,63 [object DataView]\n16909060 770\nasync 2 1 4"
+    );
+}
