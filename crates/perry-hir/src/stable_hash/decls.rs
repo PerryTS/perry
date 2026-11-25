@@ -84,6 +84,7 @@ impl SH for ClassComputedMember {
         self.is_static.hash(h);
         self.kind.hash(h);
         self.source_order.hash(h);
+        self.names_declaration.hash(h);
     }
 }
 
