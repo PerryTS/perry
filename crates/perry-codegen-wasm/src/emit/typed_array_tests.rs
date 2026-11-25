@@ -71,3 +71,27 @@ async-u8 object 1 1 0 9
 async-f64 object 1 8 0 0"
     );
 }
+
+// `indexOf`, `lastIndexOf` and `includes` search a typed array as they search an array,
+// fromIndex included: NaN is never found by index and `includes` finds it, `-0` is found
+// as `0` (#15396). Expected output is Node's.
+#[test]
+fn typed_array_search_methods_match_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const i = new Int32Array([1, 2, 3, 2, 1]);
+const f = new Float64Array([NaN, 0.5, -0]);
+const u = new Uint8Array([7, 8, 7]);
+console.log([i.indexOf(2), i.indexOf(2, 2), i.lastIndexOf(2), i.lastIndexOf(2, 2), i.lastIndexOf(1, -2), i.lastIndexOf(9), i.includes(3), i.includes(3, 3)].join(","));
+console.log([f.indexOf(NaN), f.includes(NaN), f.lastIndexOf(0), f.includes(0.5, -1), u.lastIndexOf(7), u.indexOf(8), u.includes(9)].join(","));
+async function run(): Promise<string> {
+  const a = new Int16Array([5, 6, 5]);
+  return [a.lastIndexOf(5), a.lastIndexOf(5, 1), a.indexOf(6), a.includes(5, 3)].join(",");
+}
+run().then((s) => console.log(s));
+"#
+        ),
+        "1,3,3,1,0,-1,true,false\n-1,true,2,false,2,1,false\n2,0,1,false"
+    );
+}

@@ -2264,6 +2264,9 @@ const __missingWellKnownSymbols = Object.create(null);
 
 // The bridge tables have no prototype: mem_call indexes them by a call site's method name,
 // and `o.isPrototypeOf(x)` must fall through to __classDispatch, not find Object.prototype's.
+// The receivers `indexOf` / `lastIndexOf` / `includes` search: an array or a typed array.
+const __searchable = (v) => Array.isArray(v) || (ArrayBuffer.isView(v) && !(v instanceof DataView));
+
 const __memDispatch = {
   __proto__: null,
   // `()` asks only whether array iteration is patched; `(value[, packed])` whether
@@ -2628,11 +2631,11 @@ const __memDispatch = {
     if (!Array.isArray(arr)) return '';
     return arr.join(separator);
   },
-  array_index_of: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return -1; return arr.indexOf(value, fromIndex); },
-  array_includes: (arr, value, fromIndex) => { if (!Array.isArray(arr)) return 0; return arr.includes(value, fromIndex) ? 1 : 0; },
+  array_index_of: (arr, value, fromIndex) => { if (!__searchable(arr)) return -1; return arr.indexOf(value, fromIndex); },
+  array_includes: (arr, value, fromIndex) => { if (!__searchable(arr)) return 0; return arr.includes(value, fromIndex) ? 1 : 0; },
   // fromIndex goes through only when the call passes one: an explicit `undefined`
   // searches from index 0, not from the end.
-  array_last_index_of: (arr, value, ...fromIndex) => Array.isArray(arr) ? arr.lastIndexOf(value, ...fromIndex) : -1,
+  array_last_index_of: (arr, value, ...fromIndex) => __searchable(arr) ? arr.lastIndexOf(value, ...fromIndex) : -1,
   array_concat: (a1, a2) => (Array.isArray(a1) ? a1 : []).concat(Array.isArray(a2) ? a2 : []),
   array_reverse: (arr) => { if (Array.isArray(arr)) arr.reverse(); return arr; },
   array_flat: (arr) => Array.isArray(arr) ? arr.flat() : [],
