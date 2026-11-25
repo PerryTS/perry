@@ -244,6 +244,7 @@ pub fn specialize_class(class: &Class, type_args: &[Type], new_id: ClassId) -> C
             .map(|member| ClassComputedMember {
                 key_expr: substitute_expr(&member.key_expr, &substitutions),
                 source_order: member.source_order,
+                names_declaration: member.names_declaration,
                 function: Function {
                     byte_offset: member.function.byte_offset,
                     id: member.function.id,

@@ -1366,7 +1366,22 @@ pub(crate) fn lower_computed_member_registration(
             if let Some(&class_id) = ctx.class_ids.get(class_name) {
                 if class_id != 0 {
                     let registry_name = if *is_static {
-                        crate::codegen::static_method_registry_key(method_name)
+                        // A plain-named static registered in source order is
+                        // its declaration: one body, one `JsFunctionInfo`
+                        // (the one `CLASS_STATIC_METHODS` records).
+                        let declared = ctx
+                            .classes
+                            .get(class_name)
+                            .and_then(|c| {
+                                c.computed_members
+                                    .iter()
+                                    .find(|m| m.function.name == *method_name)
+                            })
+                            .and_then(|m| m.declared_static_method())
+                            .map(str::to_string);
+                        crate::codegen::static_method_registry_key(
+                            declared.as_deref().unwrap_or(method_name),
+                        )
                     } else {
                         method_name.clone()
                     };

@@ -482,6 +482,7 @@ pub(crate) fn lower_class_from_ast(
                                 is_static: false,
                                 kind: ClassComputedMemberKind::Method,
                                 source_order: member_index,
+                                names_declaration: false,
                             });
                             continue;
                         }
