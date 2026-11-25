@@ -63,3 +63,28 @@ console.log(k[work].name, k[bare].name === "", typeof k[work].name);
         "1 2 0 1\n[work] true string"
     );
 }
+
+// A computed method's `length`, instance and static, a function that reads `arguments`,
+// and an anonymous arrow returned from a function. Expected output is Node's.
+#[test]
+fn computed_methods_and_arguments_have_their_length() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const work = Symbol("work");
+class K {
+  [work](a: number, b: number) { return a + b; }
+  ["str"](a: number) { return a; }
+  static [work](a: number, b: number, c: number) { return a; }
+}
+function withArgs(a: number, b: number) { return arguments.length + a + b; }
+function mk() { return (x: number) => x; }
+const k: any = new K();
+const S: any = K;
+console.log(k[work].name, k[work].length, k.str.name, k.str.length, S[work].name, S[work].length);
+console.log(withArgs.length, mk().name === "", mk().length);
+"#
+        ),
+        "[work] 2 str 1 [work] 3\n2 true 1"
+    );
+}
