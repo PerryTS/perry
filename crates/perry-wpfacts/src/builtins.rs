@@ -1927,6 +1927,11 @@ pub(crate) fn never_callable(m: &Model, r: Tok) -> bool {
         TokKind::Obj(tm, _) => !matches!(&m.tmpls[*tm as usize].kind,
             TmplKind::BObj { what, .. } if members::bobj_family(what) == Family::Function),
         TokKind::Proto(_) | TokKind::ObjectProto => true,
+        // A realm namespace object the realm describes with [[Prototype]]
+        // `Object.prototype` (`globalThis`, `Math`, `JSON`, `Reflect`,
+        // `process`, a node module namespace): an ordinary object, no
+        // function (`members::ns_ordinary_object`).
+        TokKind::Builtin(ns) => members::ns_ordinary_object(*ns),
         _ => false,
     }
 }

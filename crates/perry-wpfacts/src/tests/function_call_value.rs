@@ -112,3 +112,38 @@ console.log(o.pa + 1);
     );
     assert!(escape_with_field(&pf, "pa").is_some(), "{}", pf.dump_text());
 }
+
+// A realm namespace object as `this` (perry-web events.ts
+// `handler.call(target._self(), event)`, the receiver holding the global
+// object, the handler `Function.prototype.toString`): the namespaces whose
+// [[Prototype]] the realm describes as `Object.prototype` are ordinary
+// objects, never callable, so each of the four methods throws the realm's
+// TypeError. Red on 54c419f480: the namespace was the receiver of an
+// unknown callee, handed to unknown code, which may throw (the caught
+// value ⊤).
+#[test]
+fn function_method_on_a_realm_namespace_throws_a_realm_error() {
+    for m in ["call", "apply", "bind", "toString"] {
+        for recv in ["globalThis", "Math", "JSON", "Reflect", "process"] {
+            let src = format!(
+                r#"
+class H {{ v: any = 0; }}
+const h = new H();
+const f: any = Function.prototype.{m};
+const arg = {{ pb: 2 }};
+try {{ f.call({recv}, arg); }} catch (e) {{ h.v = e; }}
+console.log(h.v, arg.pb + 1);
+"#
+            );
+            let pf = whole(&src);
+            let k = field(tmpl(&pf, "H"), "v").kind.clone();
+            assert!(!k.top, "{m} on {recv}: {k:?}\n{}", pf.dump_text());
+            assert_eq!(
+                escape_with_field(&pf, "pb"),
+                None,
+                "{m} on {recv}\n{}",
+                pf.dump_text()
+            );
+        }
+    }
+}
