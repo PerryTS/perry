@@ -53,6 +53,7 @@ mod buffer_view_reads;
 mod builtin_ctor_call;
 mod builtin_fn_absent_member;
 mod builtin_fn_identity;
+mod builtin_fn_iteration;
 mod builtin_fn_keys;
 mod builtin_member_call;
 mod builtin_members;

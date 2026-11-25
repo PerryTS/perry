@@ -945,13 +945,14 @@ impl Model {
         }
         if self.is_iter_key(key) {
             match self.toks[t as usize] {
-                TokKind::Top
-                | TokKind::Builtin(_)
-                | TokKind::BuiltinFn(_)
-                | TokKind::NativeProto(..) => {}
+                TokKind::Top | TokKind::Builtin(_) | TokKind::NativeProto(..) => {}
                 TokKind::Obj(_, _) if self.is_array_like(t) => {}
                 // A program object/function iterates only through its
-                // protocol, which `Gen::iterate` follows separately.
+                // protocol, which `Gen::iterate` follows separately. So does
+                // a builtin function: it has no own `@@iterator` and no list
+                // of entries, nor has `%Function.prototype%` (ECMA-262
+                // 20.2.3, 20.2.4); an `@@iterator` the program installs on
+                // its chain is that protocol call.
                 _ => return,
             }
             // An Array's iteration reads each index below its length: an
