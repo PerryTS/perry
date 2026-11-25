@@ -213,6 +213,7 @@ pub(crate) fn is_widget_factory(name: &str) -> bool {
             | "Slider"
             | "Picker"
             | "WheelPicker"
+            | "RadioGroup"
             | "Combobox"
             | "RichTextEditor"
             | "Calendar"

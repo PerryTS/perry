@@ -64,7 +64,7 @@ Perry widgets map to HTML elements:
 | `TextField` | `<input type="text">` (`textfieldSetInputType` sets `tel`, `email`, `number`, `url` or `search`) |
 | `SecureField` | `<input type="password">` |
 | `Toggle` | `<input type="checkbox">` |
-| `RadioGroup` | `<fieldset>` of `<input type="radio">` |
+| `RadioGroup` | `<fieldset role="radiogroup">` of `<input type="radio">` |
 | `Slider` | `<input type="range">` |
 | `Picker` | `<select>` |
 | `DatePicker` | `<input type="date">` |

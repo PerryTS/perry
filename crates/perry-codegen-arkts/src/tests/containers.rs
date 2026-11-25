@@ -634,6 +634,21 @@ fn wheel_picker_uses_native_looping_text_picker() {
 }
 
 #[test]
+fn radio_group_falls_back_to_the_wheel_picker() {
+    let mut m = empty_module();
+    m.init
+        .push(app_with_body(nmc("RadioGroup", vec![closure_stub()])));
+    let r = emit_index_ets(&mut m).unwrap().unwrap();
+    assert!(r
+        .ets_source
+        .contains("TextPicker({ range: [], value: '' })"));
+    assert!(r
+        .ets_source
+        .contains("perryEntry.invokeCallback1(0, index)"));
+    assert_eq!(r.callbacks.len(), 1);
+}
+
+#[test]
 fn combobox_emits_arkui_select() {
     // Issue #475 — Combobox(initial, onChange) → Select with onSelect.
     // Asserts the canonical patterns: Select( + .onSelect( + the

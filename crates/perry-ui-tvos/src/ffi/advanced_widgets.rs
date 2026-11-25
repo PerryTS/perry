@@ -281,8 +281,8 @@ pub extern "C" fn perry_ui_wheel_picker_get_selected(handle: i64) -> i64 {
     widgets::picker::get_selected(handle)
 }
 
-/// RadioGroup shares Picker's API and index callback; the radio buttons exist on the
-/// web target only, so this backend shows a picker.
+/// RadioGroup shares Picker's API; the radio buttons exist on the web target only, so
+/// this backend shows a picker, which never calls `on_change`.
 #[no_mangle]
 pub extern "C" fn perry_ui_radio_group_create(on_change: f64) -> i64 {
     perry_ui_picker_create(on_change)

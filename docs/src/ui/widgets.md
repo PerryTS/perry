@@ -122,6 +122,10 @@ A numeric slider.
 
 A dropdown selection control. Items are added with `pickerAddItem`.
 
+```typescript,no-test
+{{#include ../../examples/ui/widgets/picker.ts}}
+```
+
 ## WheelPicker
 
 A wheel-style selector for long sequential lists such as hours, minutes, or
@@ -142,7 +146,8 @@ for (let hour = 0; hour < 24; hour++) {
 Radio buttons for a short list where every choice should stay visible. It
 takes Picker's API: items are added with `radioGroupAddItem`, and `onChange`
 receives the chosen index. The web target renders a `<fieldset>` of radio
-buttons; native backends show a Picker.
+buttons, which `widgetSetAccessibilityLabel` names; native backends show a
+Picker, and visionOS its wheel picker.
 
 ```typescript,no-test
 import { RadioGroup, radioGroupAddItem } from "perry/ui";
@@ -153,9 +158,10 @@ radioGroupAddItem(urgency, "This week");
 radioGroupAddItem(urgency, "Any time");
 ```
 
-```typescript,no-test
-{{#include ../../examples/ui/widgets/picker.ts}}
-```
+- `radioGroupGetSelected` returns -1 on the web and Windows until something is
+  chosen. The other native targets report the first item, 0, once they have items.
+- tvOS never calls `onChange`, and HarmonyOS shows no added items.
+- On macOS two items cannot share a title: the later one replaces the earlier.
 
 ## ImageFile / ImageSymbol
 
