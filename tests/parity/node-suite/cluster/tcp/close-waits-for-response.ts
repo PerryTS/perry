@@ -10,7 +10,8 @@ if (cluster.isPrimary) {
   let pending = 2;
   const done = () => {
     if (--pending > 0) return;
-    console.log("client got:", received.split("\r\n")[0] || "(nothing)");
+    const [head, body] = received.split("\r\n\r\n");
+    console.log("client got:", head.split("\r\n")[0] || "(nothing)", JSON.stringify(body));
     console.log("worker exit:", exitCode);
   };
   worker.on("listening", (address) => {
