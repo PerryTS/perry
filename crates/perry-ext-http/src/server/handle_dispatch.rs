@@ -1498,7 +1498,10 @@ mod response_socket_tests {
             assert!(incoming_socket_assign(request, socket));
             let response = crate::server::server::object_handle(
                 crate::server::response::alloc_http1_server_response_for_turnloop(
-                    socket, 0, request, 0.0,
+                    socket,
+                    0,
+                    handle_to_pointer_f64(request),
+                    0.0,
                 ),
             );
             assert_eq!(response_socket_value(response).to_bits(), socket.to_bits());
@@ -1542,7 +1545,7 @@ mod response_socket_tests {
         let http1_response = crate::server::response::alloc_http1_server_response_for_turnloop(
             f64::from_bits(TAG_UNDEFINED),
             0,
-            http1_request,
+            handle_to_pointer_f64(http1_request),
             0.0,
         );
         let http1_response = scope.root_nanbox(http1_response);
