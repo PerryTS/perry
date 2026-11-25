@@ -137,6 +137,26 @@ pub fn native_written_by(m: &Model, np: Tok, a: Atom) -> (bool, bool) {
     written_by(m, np, a, false, &|_| true)
 }
 
+/// [`native_written`] past the writes that only delete (ECMA-262 13.5.1.2,
+/// OrdinaryDelete 10.1.10): a delete stores no value and runs no code (a
+/// Proxy's `deleteProperty` trap is the handler's call, modeled at the
+/// delete), so a key only deletes reached holds the realm's value or is
+/// absent. Under such writes `new Name(...)` of a declared global
+/// constructor constructs the realm's constructor or throws the realm's
+/// ReferenceError (6.2.5.5 GetValue of an unresolvable binding) before an
+/// argument is handed anywhere. True: a writer that may have stored a value
+/// (a store, a define, an accessor, a prototype, unmodeled code).
+pub fn native_value_written(m: &Model, np: Tok, a: Atom) -> bool {
+    let (top, own) = written_by(m, np, a, false, &|w| {
+        w.opaque
+            || !w.stored.is_empty()
+            || w.accessor
+            || !w.getters.is_empty()
+            || !w.setters.is_empty()
+    });
+    top || own
+}
+
 /// Diagnostic: the reasons of the writes [`native_written`] counts for
 /// `np`'s key `a`, with the written key (`None`: any key).
 fn cliffc_diag() -> bool {
@@ -961,6 +981,7 @@ fn replay_pending(m: &mut Model) {
                     }
                     stored
                 }
+                NativeMiss::New(_) => native_value_written(m, np, a),
                 NativeMiss::Lookup(dst, setter) => {
                     let unknown = native_accessor_written(m, np, a);
                     if !unknown {
