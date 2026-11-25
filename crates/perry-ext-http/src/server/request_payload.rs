@@ -29,6 +29,7 @@ extern "C" {
         method: f64,
     ) -> f64;
     fn js_node_http_incoming_message_abort_signal(this: f64);
+    fn js_node_http_incoming_message_dump_unread(this: f64);
 }
 pub(crate) fn value(handle: i64) -> f64 {
     f64::from_bits(JsValue::from_object_ptr(handle as usize as *mut u8).bits())
@@ -147,41 +148,17 @@ pub(crate) fn deliver_body(handle: i64) {
         );
     }
 }
-/// The response finished or the connection went away (node's `resOnFinish`
-/// / `abortIncoming`): the signal aborts; an unread body is dumped
-/// (`_dump`), so the stream ends and closes.
+/// The exchange is over (node's `resOnFinish` / `abortIncoming`): the signal
+/// aborts. The unread body was dumped by the response's finish
+/// ([`dump_unread`]), or the request was destroyed.
 pub(crate) fn close(handle: i64) {
-    let roots = TransientRootScope::enter();
-    let owner = roots.root_nanbox(value(handle));
-    unsafe { js_node_http_incoming_message_abort_signal(owner.get()) };
-    dump_unread((owner.get().to_bits() & PTR_MASK) as i64);
+    unsafe { js_node_http_incoming_message_abort_signal(value(handle)) };
 }
-/// node's `resOnFinish` check: `_dump()` unless a reader consumes the body
-/// or a `resume()` is scheduled.
+/// node's `resOnFinish` check: `_dump()` unless a reader consumes the body,
+/// a `resume()` is scheduled or the request is destroyed (perry-runtime's
+/// body, on the request's slots).
 pub(crate) fn dump_unread(handle: i64) {
-    let roots = TransientRootScope::enter();
-    let owner = roots.root_nanbox(value(handle));
-    let get = |name: &'static [u8]| unsafe { perry_ffi::runtime_get(owner.get(), name) };
-    let state = roots.root_nanbox(get(b"_readableState"));
-    let resume_scheduled = JsValue::from_bits(state.get().to_bits()).is_pointer()
-        && truthy(unsafe { perry_ffi::runtime_get(state.get(), b"resumeScheduled") });
-    if !truthy(get(b"_consuming")) && !resume_scheduled && !truthy(get(b"destroyed")) {
-        unsafe { perry_ffi::runtime_call(owner.get(), b"_dump", &[]) };
-    }
-}
-/// The connection died before the response completed: node's `'aborted'`.
-pub(crate) fn abort(handle: i64) -> bool {
-    let roots = TransientRootScope::enter();
-    let owner = roots.root_nanbox(value(handle));
-    if truthy(unsafe { perry_ffi::runtime_get(owner.get(), b"aborted") }) {
-        return false;
-    }
-    unsafe {
-        perry_ffi::runtime_set(owner.get(), b"aborted", bool_value(true));
-        let event = roots.root_nanbox(string_value("aborted"));
-        perry_ffi::runtime_call(owner.get(), b"emit", &[event.get()]);
-    }
-    true
+    unsafe { js_node_http_incoming_message_dump_unread(value(handle)) };
 }
 /// The connection died before the response ended: node's `abortIncoming`,
 /// `req.destroy(new ConnResetException('aborted'))`. `_destroy` marks the
@@ -205,44 +182,8 @@ pub(crate) unsafe fn method(handle: i64, name: &str, args: &[f64]) -> Option<f64
     let owner = roots.root_nanbox(value(handle));
     let undef = f64::from_bits(TAG_UNDEFINED);
     match name {
-        // `_read`: the first read marks the message consumed; the body is
-        // already buffered, so there is nothing to start.
-        "_read" => {
-            if !truthy(perry_ffi::runtime_get(owner.get(), b"_consuming")) {
-                let state =
-                    roots.root_nanbox(perry_ffi::runtime_get(owner.get(), b"_readableState"));
-                if JsValue::from_bits(state.get().to_bits()).is_pointer() {
-                    perry_ffi::runtime_set(state.get(), b"readingMore", bool_value(false));
-                }
-                perry_ffi::runtime_set(owner.get(), b"_consuming", bool_value(true));
-            }
-            Some(undef)
-        }
-        // `_destroy(err, cb)`: an incomplete message is aborted, then node's
-        // `onError`: the error goes to cb only when an `'error'` listener
-        // is attached (backward-compatible behavior), else cb().
-        "_destroy" => {
-            let err = roots.root_nanbox(args.first().copied().unwrap_or(undef));
-            let cb = roots.root_nanbox(args.get(1).copied().unwrap_or(undef));
-            if !truthy(perry_ffi::runtime_get(owner.get(), b"readableEnded"))
-                || !truthy(perry_ffi::runtime_get(owner.get(), b"complete"))
-            {
-                abort((owner.get().to_bits() & PTR_MASK) as i64);
-            }
-            if JsValue::from_bits(cb.get().to_bits()).is_pointer() {
-                let event = roots.root_nanbox(string_value("error"));
-                let listeners =
-                    perry_ffi::runtime_call(owner.get(), b"listenerCount", &[event.get()]);
-                let listened = JsValue::from_bits(listeners.to_bits()).is_number()
-                    && JsValue::from_bits(listeners.to_bits()).to_number() > 0.0;
-                if listened {
-                    perry_ffi::runtime_call(cb.get(), b"call", &[undef, err.get()]);
-                } else {
-                    perry_ffi::runtime_call(cb.get(), b"call", &[undef]);
-                }
-            }
-            Some(undef)
-        }
+        // `_read`, `_destroy` and `_dump` are perry-runtime's own bodies
+        // (`node_stream::http_incoming`); `_dumpAndCloseReadable` is `_dump`.
         // `_dump`: drop the body without a reader.
         "_dump" | "_dumpAndCloseReadable" => {
             if !truthy(perry_ffi::runtime_get(owner.get(), b"_dumped")) {

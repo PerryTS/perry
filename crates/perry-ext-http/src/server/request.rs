@@ -21,8 +21,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use perry_ffi::{
-    alloc_buffer, alloc_string, get_handle, get_handle_mut, register_handle, JsClosure, JsValue,
-    RawClosureHeader, StringHeader,
+    alloc_buffer, alloc_string, register_handle, JsClosure, JsValue, RawClosureHeader, StringHeader,
 };
 
 use crate::server::types::{jsvalue_to_owned_string, read_string_header, PTR_MASK, STRING_TAG};
