@@ -1143,6 +1143,10 @@ impl Model {
         self.nodes[n as usize].pts.sorted_into(&mut toks);
         // The replay is solve work: the bound covers it.
         self.charge_work(toks.len() as u64 + 1);
+        if self.past_work_bound() {
+            self.bufs.push(toks);
+            return;
+        }
         if let Some(p) = self.prof.as_mut() {
             let e = p.kind.entry(c.kind_name()).or_default();
             e.2 += 1;

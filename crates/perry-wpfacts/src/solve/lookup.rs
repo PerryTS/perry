@@ -2676,6 +2676,10 @@ impl Model {
             // A replay per new call is solve work.
             self.charge_work(toks.len() as u64);
             for &t in &toks {
+                // Each token's binding replays rules: the bound holds here.
+                if self.past_work_bound() {
+                    break;
+                }
                 self.this_calls(t, origin, &[call]);
             }
             self.bufs.push(toks);
@@ -2705,6 +2709,9 @@ impl Model {
             // A replay per new call is solve work.
             self.charge_work(toks.len() as u64);
             for &t in &toks {
+                if self.past_work_bound() {
+                    break;
+                }
                 if self.per_receiver_callee(t) {
                     self.call_tok(call, t, Some(origin));
                 }

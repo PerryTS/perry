@@ -219,6 +219,9 @@ impl Model {
         };
         for &(key, src, site) in ss {
             self.charge_work(1);
+            if self.past_work_bound() {
+                return;
+            }
             self.store_into(y, key, src, site);
         }
     }

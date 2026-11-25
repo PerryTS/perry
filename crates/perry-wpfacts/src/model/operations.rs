@@ -1081,6 +1081,9 @@ impl Model {
             while let Some((x, b)) = st.pop() {
                 // Each marker the walk visits is solve work (113-CWL3).
                 self.charge_work(1);
+                if self.past_work_bound() {
+                    return;
+                }
                 if !self.is_arg_marker(x) {
                     self.mark_use(x, b);
                     continue;
@@ -1348,6 +1351,9 @@ impl Model {
         while let Some((x, b)) = st.pop() {
             // Each marker the walk visits is solve work (113-CWL3).
             self.charge_work(1);
+            if self.past_work_bound() {
+                return;
+            }
             if self.reach_marker.contains(&x) {
                 self.mark_use(x, b);
                 continue;

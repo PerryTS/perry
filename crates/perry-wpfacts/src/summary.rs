@@ -1239,6 +1239,13 @@ impl Model {
         if call != NO_NODE && self.composed_away(call, f) {
             return;
         }
+        // The work bound is looked at where it decides: work charged since
+        // the last check (inside a fill or a replay) counts here, and this
+        // one answer governs the whole binding (key, by-value, M1).
+        if self.past_work_bound() {
+            return;
+        }
+        let widened = self.widened;
         let lay = match x {
             Some(t) if self.has_this_term(f) => self.recv_lay(t),
             _ => LAY_NONE,
@@ -1259,14 +1266,14 @@ impl Model {
             _ if let Some(&sh) = self.sum.trap_shape.get(&call) => (8, self.trap_ctx(lay, sh), ft),
             _ => (1, lay, ft),
         };
-        // Widened (`past_work_bound`): no new calling context. The call
+        // Widened (`past_work_bound`, above): no new calling context. The call
         // runs the function's shared instance, which gets this receiver
         // and these arguments by the same edges (below): a merge of
         // callers. A birth's run (5) stays per object: its key is what
         // it births.
         let key = match key.0 {
             0 | 1 | 7 | 8
-                if self.widened
+                if widened
                     && !self
                         .sum
                         .inst_key
@@ -1279,13 +1286,13 @@ impl Model {
         // A function that only calls a parameter runs once per function
         // value a call passes there alone; checked again once the
         // worklist is empty (`settle_val_runs`).
-        let val = match by_val && !self.widened {
+        let val = match by_val && !widened {
             true => self.called_val(call, f),
             false => NO_VAL,
         };
         // Its argument holds nothing yet: the run is chosen once the
         // worklist is empty (`settle_val_runs`).
-        if val == NO_VAL && by_val && !self.widened && self.called_pending(call, f) {
+        if val == NO_VAL && by_val && !widened && self.called_pending(call, f) {
             self.val_runs.push((call, ft, x, prim, NO_VAL));
             return;
         }
@@ -1294,7 +1301,7 @@ impl Model {
         }
         // Rule M1: an argument that holds only string constants runs the
         // run of each one (the clauses a value it holds selects, none other).
-        let vals = match val == NO_VAL && by_val && !self.widened {
+        let vals = match val == NO_VAL && by_val && !widened {
             true => self.switch_vals(call, f),
             false => Vec::new(),
         };
@@ -1756,6 +1763,11 @@ impl Model {
             if bit != REACH_ALL && s.edge_reach.get(&(a, b)).is_some_and(|&m| m & bit == 0) {
                 continue;
             }
+            // An edge sends what its source holds now (`register_copy`):
+            // the bound holds inside one fill too.
+            if self.past_work_bound() {
+                return;
+            }
             self.edge(tr(a), tr(b));
         }
         for (i, (t, cs)) in s.calls.iter().enumerate() {
@@ -1769,6 +1781,10 @@ impl Model {
         for (ci, (h, c)) in s.cons.iter().enumerate() {
             if s.cons_reach.get(ci).is_some_and(|&m| m & bit == 0) {
                 continue;
+            }
+            // Each rule replays on what its node holds now (`replay_cons`).
+            if self.past_work_bound() {
+                return;
             }
             let c2 = map_cons(c, tr, |k| {
                 if k != NO_NODE && k & CALL != 0 {
