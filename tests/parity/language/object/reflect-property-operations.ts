@@ -21,4 +21,7 @@ async function f() {
   const a: any = { x: 1 };
   return [Reflect.get(a, "x"), Reflect.set(a, "y", 2), a.y, Reflect.deleteProperty(a, "x"), a.x, Reflect.get(g, "v", r), Reflect.preventExtensions(a), Reflect.isExtensible(a), Reflect.set(a, "z", 1), Reflect.setPrototypeOf(a, p)].join(",");
 }
+const lit = { w: 1, get v() { return (this as any).w; }, set v(x: any) { (this as any).w = x + 1; } };
+const lr: any = { w: 7 };
+console.log([Reflect.get(lit, "v", lr), Reflect.get(lit, "v"), Reflect.set(lit, "v", 4, lr), lr.w, lit.w].join(","));
 f().then((v) => console.log("async " + v));
