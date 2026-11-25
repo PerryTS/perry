@@ -15,6 +15,7 @@ pub mod image;
 pub mod image_gallery;
 pub mod lazyvstack;
 pub mod map_view;
+pub mod material_symbols;
 pub mod navstack;
 pub mod picker;
 pub mod progressview;
@@ -186,107 +187,8 @@ pub fn clear_children(handle: i64) {
     }
 }
 
-/// Vertical stacks whose cross-axis alignment is not "fill" (leading / center
-/// / trailing). Like a UIStackView with that alignment, their children keep
-/// their own width instead of being stretched to the stack's width, and the
-/// stack's gravity positions them.
-static NON_FILL_VSTACKS: Mutex<Option<std::collections::HashSet<i64>>> = Mutex::new(None);
-
-fn vstack_fills_width(handle: i64) -> bool {
-    NON_FILL_VSTACKS
-        .lock()
-        .map(|s| !s.as_ref().is_some_and(|set| set.contains(&handle)))
-        .unwrap_or(true)
-}
-
-/// Record a vertical stack's cross-axis alignment (`fill == false` for
-/// leading / center / trailing) and re-apply it to the children it already
-/// has: stack constructors add children before `stackSetAlignment` runs, so
-/// children stretched to MATCH_PARENT by `add_child` go back to WRAP_CONTENT.
-/// Children with an explicit width are left alone.
-pub fn set_vstack_fill(handle: i64, fill: bool) {
-    if let Ok(mut guard) = NON_FILL_VSTACKS.lock() {
-        let set = guard.get_or_insert_with(Default::default);
-        if fill {
-            set.remove(&handle);
-        } else {
-            set.insert(handle);
-        }
-    }
-    let Some(parent_ref) = get_widget(handle) else {
-        return;
-    };
-    jni_bridge::with_env(|env| {
-        let _ = jni_bridge::push_local_frame(env, 16);
-        let count = env
-            .call_method(
-                parent_ref.as_obj(),
-                jni::jni_str!("getChildCount"),
-                jni::jni_sig!("()I"),
-                &[],
-            )
-            .and_then(|v| v.i())
-            .unwrap_or(0);
-        let (from, to) = if fill { (-2, -1) } else { (-1, -2) };
-        for i in 0..count {
-            let Ok(child) = env
-                .call_method(
-                    parent_ref.as_obj(),
-                    jni::jni_str!("getChildAt"),
-                    jni::jni_sig!("(I)Landroid/view/View;"),
-                    &[JValue::Int(i)],
-                )
-                .and_then(|v| v.l())
-            else {
-                continue;
-            };
-            let Ok(lp_obj) = env
-                .call_method(
-                    &child,
-                    jni::jni_str!("getLayoutParams"),
-                    jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
-                    &[],
-                )
-                .and_then(|v| v.l())
-            else {
-                continue;
-            };
-            if lp_obj.is_null() {
-                continue;
-            }
-            let cur_w = env
-                .get_field(&lp_obj, jni::jni_str!("width"), jni::jni_sig!("I"))
-                .and_then(|v| v.i())
-                .unwrap_or(0);
-            if cur_w == from {
-                let _ = env.set_field(
-                    &lp_obj,
-                    jni::jni_str!("width"),
-                    jni::jni_sig!("I"),
-                    JValue::Int(to),
-                );
-                let _ = env.call_method(
-                    &child,
-                    jni::jni_str!("setLayoutParams"),
-                    jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
-                    &[JValue::Object(&lp_obj)],
-                );
-            }
-        }
-        if env.exception_check() {
-            let _ = env.exception_clear();
-        }
-        unsafe {
-            let _ = jni_bridge::pop_local_frame(env, &JObject::null());
-        }
-    })
-}
-
-/// Add a child view to a parent ViewGroup.
-/// For vertical LinearLayout parents (VStack) with the default fill alignment,
-/// stretches the child's width to MATCH_PARENT to match iOS UIStackView fill
-/// behaviour. An explicit width (`widgetSetWidth` before the add) is kept, and
-/// so is WRAP_CONTENT under a leading/center/trailing-aligned stack.
+/// Add a child view to a parent ViewGroup. PerryBridge.relayout sizes it from
+/// its layout intent and the parent stack's alignment / distribution.
 pub fn add_child(parent_handle: i64, child_handle: i64) {
     if let (Some(parent_ref), Some(child_ref)) =
         (get_widget(parent_handle), get_widget(child_handle))
@@ -312,138 +214,9 @@ pub fn add_child(parent_handle: i64, child_handle: i64) {
                 &[JValue::Object(child_ref.as_obj())],
             );
 
-            // Match iOS UIStackView fill alignment: adjust child LayoutParams
-            // based on parent type
+            // Size the child by its layout intent and the parent's rules.
             if result.is_ok() {
-                if env
-                    .is_instance_of(
-                        parent_ref.as_obj(),
-                        jni::jni_str!("android/widget/FrameLayout"),
-                    )
-                    .unwrap_or(false)
-                    && !env
-                        .is_instance_of(
-                            parent_ref.as_obj(),
-                            jni::jni_str!("android/widget/LinearLayout"),
-                        )
-                        .unwrap_or(false)
-                {
-                    // FrameLayout (ZStack): children fill parent by default (match iOS ZStack behavior)
-                    if let Ok(lp) = env.call_method(
-                        child_ref.as_obj(),
-                        jni::jni_str!("getLayoutParams"),
-                        jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
-                        &[],
-                    ) {
-                        if let Ok(lp_obj) = lp.l() {
-                            if !lp_obj.is_null() {
-                                let _ = env.set_field(
-                                    &lp_obj,
-                                    jni::jni_str!("width"),
-                                    jni::jni_sig!("I"),
-                                    JValue::Int(-1),
-                                ); // MATCH_PARENT
-                                let _ = env.set_field(
-                                    &lp_obj,
-                                    jni::jni_str!("height"),
-                                    jni::jni_sig!("I"),
-                                    JValue::Int(-1),
-                                ); // MATCH_PARENT
-                                let _ = env.call_method(
-                                    child_ref.as_obj(),
-                                    jni::jni_str!("setLayoutParams"),
-                                    jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
-                                    &[JValue::Object(&lp_obj)],
-                                );
-                            }
-                        }
-                    }
-                } else if env
-                    .is_instance_of(
-                        parent_ref.as_obj(),
-                        jni::jni_str!("android/widget/LinearLayout"),
-                    )
-                    .unwrap_or(false)
-                {
-                    let orientation = env
-                        .call_method(
-                            parent_ref.as_obj(),
-                            jni::jni_str!("getOrientation"),
-                            jni::jni_sig!("()I"),
-                            &[],
-                        )
-                        .map(|v| v.i().unwrap_or(-1))
-                        .unwrap_or(-1);
-                    if let Ok(lp) = env.call_method(
-                        child_ref.as_obj(),
-                        jni::jni_str!("getLayoutParams"),
-                        jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
-                        &[],
-                    ) {
-                        if let Ok(lp_obj) = lp.l() {
-                            if !lp_obj.is_null() {
-                                if orientation == 1 {
-                                    // VERTICAL — stretch children to fill width,
-                                    // unless the child has an explicit width
-                                    // (> 0) or the stack isn't fill-aligned.
-                                    let cur_w = env
-                                        .get_field(
-                                            &lp_obj,
-                                            jni::jni_str!("width"),
-                                            jni::jni_sig!("I"),
-                                        )
-                                        .map(|v| v.i().unwrap_or(0))
-                                        .unwrap_or(0);
-                                    if cur_w < 0 && vstack_fills_width(parent_handle) {
-                                        let _ = env.set_field(
-                                            &lp_obj,
-                                            jni::jni_str!("width"),
-                                            jni::jni_sig!("I"),
-                                            JValue::Int(-1),
-                                        ); // MATCH_PARENT
-                                    }
-                                } else if orientation == 0 {
-                                    // HORIZONTAL — share space equally
-                                    // If child has MATCH_PARENT width, convert to weight-based
-                                    // so multiple children share the HStack evenly
-                                    let cur_w = env
-                                        .get_field(
-                                            &lp_obj,
-                                            jni::jni_str!("width"),
-                                            jni::jni_sig!("I"),
-                                        )
-                                        .map(|v| v.i().unwrap_or(0))
-                                        .unwrap_or(0);
-                                    if cur_w == -1 {
-                                        // MATCH_PARENT
-                                        let _ = env.set_field(
-                                            &lp_obj,
-                                            jni::jni_str!("width"),
-                                            jni::jni_sig!("I"),
-                                            JValue::Int(0),
-                                        );
-                                        if env
-                                            .is_instance_of(
-                                                &lp_obj,
-                                                jni::jni_str!(
-                                                    "android/widget/LinearLayout$LayoutParams"
-                                                ),
-                                            )
-                                            .unwrap_or(false)
-                                        {
-                                            let _ = env.set_field(
-                                                &lp_obj,
-                                                jni::jni_str!("weight"),
-                                                jni::jni_sig!("F"),
-                                                JValue::Float(1.0),
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
+                relayout(env, child_ref.as_obj());
             }
 
             unsafe {
@@ -478,6 +251,7 @@ pub fn add_child_at(parent_handle: i64, child_handle: i64, index: i64) {
                     JValue::Int(index as i32),
                 ],
             );
+            relayout(env, child_ref.as_obj());
             unsafe {
                 let _ = jni_bridge::pop_local_frame(env, &JObject::null());
             }
@@ -813,7 +587,15 @@ pub fn set_background_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
 
             // MaterialButton: the real paint path is backgroundTintList.
             // Set it to our solid color so the button actually shows DaisyUI fills.
-            if let Ok(csl) = env.call_static_method(
+            // Buttons only: on any other view the tint (SRC_IN) multiplies the
+            // drawable's alpha by the colour's alpha a second time, so a 20%
+            // white fill painted at 4%.
+            let is_button = env
+                .is_instance_of(view_ref.as_obj(), jni::jni_str!("android/widget/Button"))
+                .unwrap_or(false);
+            if !is_button {
+                // nothing: the GradientDrawable above already has the colour
+            } else if let Ok(csl) = env.call_static_method(
                 jni::jni_str!("android/content/res/ColorStateList"),
                 jni::jni_str!("valueOf"),
                 jni::jni_sig!("(I)Landroid/content/res/ColorStateList;"),
@@ -1095,64 +877,26 @@ pub fn animate_position(handle: i64, dx: f64, dy: f64, duration_secs: f64) {
 }
 
 /// Set a fixed width on a widget via LayoutParams.
-pub fn set_width(handle: i64, width: f64) {
+/// Record a sizing intent and recompute the view's LayoutParams (see
+/// `PerryBridge.relayout`). kind: 0 width px, 1 height px, 2 hugging,
+/// 3 match width, 4 match height.
+pub fn layout_intent(handle: i64, kind: i32, value: f32) {
     if let Some(view_ref) = get_widget(handle) {
         jni_bridge::with_env(|env| {
-            let _ = jni_bridge::push_local_frame(env, 16);
-            let width_px = dp_to_px(env, width as f32);
-            if let Ok(lp) = env.call_method(
-                view_ref.as_obj(),
-                jni::jni_str!("getLayoutParams"),
-                jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
-                &[],
-            ) {
-                if let Ok(lp_obj) = lp.l() {
-                    if !lp_obj.is_null() {
-                        let _ = env.set_field(
-                            &lp_obj,
-                            jni::jni_str!("width"),
-                            jni::jni_sig!("I"),
-                            JValue::Int(width_px),
-                        );
-                        // Clear weight so width is respected
-                        if env
-                            .is_instance_of(
-                                &lp_obj,
-                                jni::jni_str!("android/widget/LinearLayout$LayoutParams"),
-                            )
-                            .unwrap_or(false)
-                        {
-                            let _ = env.set_field(
-                                &lp_obj,
-                                jni::jni_str!("weight"),
-                                jni::jni_sig!("F"),
-                                JValue::Float(0.0),
-                            );
-                        }
-                        let _ = env.call_method(
-                            view_ref.as_obj(),
-                            jni::jni_str!("setLayoutParams"),
-                            jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
-                            &[JValue::Object(&lp_obj)],
-                        );
-                    } else {
-                        // No LayoutParams yet — create one
-                        let params = env.new_object(
-                            jni::jni_str!("android/widget/LinearLayout$LayoutParams"),
-                            jni::jni_sig!("(II)V"),
-                            &[JValue::Int(width_px), JValue::Int(-2)], // -2 = WRAP_CONTENT
-                        );
-                        if let Ok(params) = params {
-                            let _ = env.call_method(
-                                view_ref.as_obj(),
-                                jni::jni_str!("setLayoutParams"),
-                                jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
-                                &[JValue::Object(&params)],
-                            );
-                        }
-                    }
-                }
-            }
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            let _ = env.call_static_method(
+                bridge_cls,
+                jni::jni_str!("layoutIntent"),
+                jni::jni_sig!("(Landroid/view/View;IF)V"),
+                &[
+                    JValue::Object(view_ref.as_obj()),
+                    JValue::Int(kind),
+                    JValue::Float(value),
+                ],
+            );
             unsafe {
                 let _ = jni_bridge::pop_local_frame(env, &JObject::null());
             }
@@ -1160,54 +904,28 @@ pub fn set_width(handle: i64, width: f64) {
     }
 }
 
+/// Recompute a just-added child's LayoutParams from its intent and parent.
+fn relayout(env: &mut jni::Env, child: &JObject) {
+    let bridge_class =
+        jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+    let bridge_cls: &jni::objects::JClass = &bridge_class;
+    let _ = env.call_static_method(
+        bridge_cls,
+        jni::jni_str!("relayout"),
+        jni::jni_sig!("(Landroid/view/View;)V"),
+        &[JValue::Object(child)],
+    );
+}
+
+pub fn set_width(handle: i64, width: f64) {
+    let px = jni_bridge::with_env(|env| dp_to_px(env, width as f32));
+    layout_intent(handle, 0, px as f32);
+}
+
 /// Set a fixed height on a widget via LayoutParams.
 pub fn set_height(handle: i64, height: f64) {
-    if let Some(view_ref) = get_widget(handle) {
-        jni_bridge::with_env(|env| {
-            let _ = jni_bridge::push_local_frame(env, 16);
-            let height_px = dp_to_px(env, height as f32);
-            if let Ok(lp) = env.call_method(
-                view_ref.as_obj(),
-                jni::jni_str!("getLayoutParams"),
-                jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
-                &[],
-            ) {
-                if let Ok(lp_obj) = lp.l() {
-                    if !lp_obj.is_null() {
-                        let _ = env.set_field(
-                            &lp_obj,
-                            jni::jni_str!("height"),
-                            jni::jni_sig!("I"),
-                            JValue::Int(height_px),
-                        );
-                        let _ = env.call_method(
-                            view_ref.as_obj(),
-                            jni::jni_str!("setLayoutParams"),
-                            jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
-                            &[JValue::Object(&lp_obj)],
-                        );
-                    } else {
-                        let params = env.new_object(
-                            jni::jni_str!("android/widget/LinearLayout$LayoutParams"),
-                            jni::jni_sig!("(II)V"),
-                            &[JValue::Int(-2), JValue::Int(height_px)], // -2 = WRAP_CONTENT
-                        );
-                        if let Ok(params) = params {
-                            let _ = env.call_method(
-                                view_ref.as_obj(),
-                                jni::jni_str!("setLayoutParams"),
-                                jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
-                                &[JValue::Object(&params)],
-                            );
-                        }
-                    }
-                }
-            }
-            unsafe {
-                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
-            }
-        })
-    }
+    let px = jni_bridge::with_env(|env| dp_to_px(env, height as f32));
+    layout_intent(handle, 1, px as f32);
 }
 
 /// Remove a single child view from a parent ViewGroup.
@@ -1270,72 +988,12 @@ pub fn reorder_child(parent_handle: i64, from_index: i64, to_index: i64) {
 
 /// Pin a child view's width to match its parent (MATCH_PARENT).
 pub fn match_parent_width(child_handle: i64) {
-    if let Some(view_ref) = get_widget(child_handle) {
-        jni_bridge::with_env(|env| {
-            let _ = jni_bridge::push_local_frame(env, 16);
-            if let Ok(lp) = env.call_method(
-                view_ref.as_obj(),
-                jni::jni_str!("getLayoutParams"),
-                jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
-                &[],
-            ) {
-                if let Ok(lp_obj) = lp.l() {
-                    if !lp_obj.is_null() {
-                        let _ = env.set_field(
-                            &lp_obj,
-                            jni::jni_str!("width"),
-                            jni::jni_sig!("I"),
-                            JValue::Int(-1),
-                        ); // MATCH_PARENT
-                        let _ = env.call_method(
-                            view_ref.as_obj(),
-                            jni::jni_str!("setLayoutParams"),
-                            jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
-                            &[JValue::Object(&lp_obj)],
-                        );
-                    }
-                }
-            }
-            unsafe {
-                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
-            }
-        })
-    }
+    layout_intent(child_handle, 3, 1.0);
 }
 
 /// Pin a child view's height to match its parent (MATCH_PARENT).
 pub fn match_parent_height(child_handle: i64) {
-    if let Some(view_ref) = get_widget(child_handle) {
-        jni_bridge::with_env(|env| {
-            let _ = jni_bridge::push_local_frame(env, 16);
-            if let Ok(lp) = env.call_method(
-                view_ref.as_obj(),
-                jni::jni_str!("getLayoutParams"),
-                jni::jni_sig!("()Landroid/view/ViewGroup$LayoutParams;"),
-                &[],
-            ) {
-                if let Ok(lp_obj) = lp.l() {
-                    if !lp_obj.is_null() {
-                        let _ = env.set_field(
-                            &lp_obj,
-                            jni::jni_str!("height"),
-                            jni::jni_sig!("I"),
-                            JValue::Int(-1),
-                        ); // MATCH_PARENT
-                        let _ = env.call_method(
-                            view_ref.as_obj(),
-                            jni::jni_str!("setLayoutParams"),
-                            jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
-                            &[JValue::Object(&lp_obj)],
-                        );
-                    }
-                }
-            }
-            unsafe {
-                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
-            }
-        })
-    }
+    layout_intent(child_handle, 4, 1.0);
 }
 
 /// Set detachesHiddenViews equivalent — no-op on Android.
@@ -1344,68 +1002,27 @@ pub fn set_detaches_hidden_views(_handle: i64, _detaches: bool) {
     // No-op: Android LinearLayout already excludes GONE views from layout.
 }
 
-/// Set border color on a widget via GradientDrawable stroke.
+/// Set border color (GradientDrawable stroke). PerryBridge keeps colour and
+/// width per view, so the two setters can come in either order.
 pub fn set_border_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     if let Some(view_ref) = get_widget(handle) {
         jni_bridge::with_env(|env| {
-            let _ = jni_bridge::push_local_frame(env, 16);
+            let _ = jni_bridge::push_local_frame(env, 8);
             let color = argb_color(a, r, g, b);
-            // Try to reuse existing GradientDrawable
-            if let Ok(bg) = env.call_method(
-                view_ref.as_obj(),
-                jni::jni_str!("getBackground"),
-                jni::jni_sig!("()Landroid/graphics/drawable/Drawable;"),
-                &[],
-            ) {
-                if let Ok(bg_obj) = bg.l() {
-                    if !bg_obj.is_null() {
-                        if env
-                            .is_instance_of(
-                                &bg_obj,
-                                jni::jni_str!("android/graphics/drawable/GradientDrawable"),
-                            )
-                            .unwrap_or(false)
-                        {
-                            let _ = env.call_method(
-                                &bg_obj,
-                                jni::jni_str!("setStroke"),
-                                jni::jni_sig!("(II)V"),
-                                &[JValue::Int(2), JValue::Int(color)],
-                            ); // 2px default width
-                            unsafe {
-                                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
-                            }
-                            return;
-                        }
-                    }
-                }
-            }
-            // Create new GradientDrawable with border
-            let gd = env
-                .new_object(
-                    jni::jni_str!("android/graphics/drawable/GradientDrawable"),
-                    jni::jni_sig!("()V"),
-                    &[],
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            if env
+                .call_static_method(
+                    bridge_cls,
+                    jni::jni_str!("setBorderColor"),
+                    jni::jni_sig!("(Landroid/view/View;I)V"),
+                    &[JValue::Object(view_ref.as_obj()), JValue::Int(color)],
                 )
-                .expect("GradientDrawable");
-            let _ = env.call_method(
-                &gd,
-                jni::jni_str!("setColor"),
-                jni::jni_sig!("(I)V"),
-                &[JValue::Int(0)],
-            ); // transparent fill
-            let _ = env.call_method(
-                &gd,
-                jni::jni_str!("setStroke"),
-                jni::jni_sig!("(II)V"),
-                &[JValue::Int(2), JValue::Int(color)],
-            );
-            let _ = env.call_method(
-                view_ref.as_obj(),
-                jni::jni_str!("setBackground"),
-                jni::jni_sig!("(Landroid/graphics/drawable/Drawable;)V"),
-                &[JValue::Object(&gd)],
-            );
+                .is_err()
+            {
+                let _ = env.exception_clear();
+            }
             unsafe {
                 let _ = jni_bridge::pop_local_frame(env, &JObject::null());
             }
@@ -1413,37 +1030,29 @@ pub fn set_border_color(handle: i64, r: f64, g: f64, b: f64, a: f64) {
     }
 }
 
-/// Set border width on a widget via GradientDrawable stroke.
+/// Set border width in points (GradientDrawable stroke, keeps the colour).
 pub fn set_border_width(handle: i64, width: f64) {
     if let Some(view_ref) = get_widget(handle) {
         jni_bridge::with_env(|env| {
-            let _ = jni_bridge::push_local_frame(env, 16);
-            let width_px = dp_to_px(env, width as f32);
-            if let Ok(bg) = env.call_method(
-                view_ref.as_obj(),
-                jni::jni_str!("getBackground"),
-                jni::jni_sig!("()Landroid/graphics/drawable/Drawable;"),
-                &[],
-            ) {
-                if let Ok(bg_obj) = bg.l() {
-                    if !bg_obj.is_null() {
-                        if env
-                            .is_instance_of(
-                                &bg_obj,
-                                jni::jni_str!("android/graphics/drawable/GradientDrawable"),
-                            )
-                            .unwrap_or(false)
-                        {
-                            // setStroke requires both width and color
-                            let _ = env.call_method(
-                                &bg_obj,
-                                jni::jni_str!("setStroke"),
-                                jni::jni_sig!("(II)V"),
-                                &[JValue::Int(width_px), JValue::Int(0xFF000000u32 as i32)],
-                            ); // black default
-                        }
-                    }
-                }
+            let _ = jni_bridge::push_local_frame(env, 8);
+            let width_px = if width <= 0.0 {
+                0
+            } else {
+                dp_to_px(env, width as f32).max(1)
+            };
+            let bridge_class =
+                jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
+            let bridge_cls: &jni::objects::JClass = &bridge_class;
+            if env
+                .call_static_method(
+                    bridge_cls,
+                    jni::jni_str!("setBorderWidthPx"),
+                    jni::jni_sig!("(Landroid/view/View;I)V"),
+                    &[JValue::Object(view_ref.as_obj()), JValue::Int(width_px)],
+                )
+                .is_err()
+            {
+                let _ = env.exception_clear();
             }
             unsafe {
                 let _ = jni_bridge::pop_local_frame(env, &JObject::null());
@@ -1523,83 +1132,7 @@ pub fn set_on_click(handle: i64, callback: f64) {
 /// On Android, this maps to LinearLayout.LayoutParams.weight.
 /// A low hugging value means the view WANTS to expand (high weight).
 pub fn set_hugging(handle: i64, priority: f64) {
-    if let Some(view_ref) = get_widget(handle) {
-        jni_bridge::with_env(|env| {
-            let _ = jni_bridge::push_local_frame(env, 16);
-
-            // Determine parent orientation to set the correct axis
-            let parent_horizontal = (|| -> Option<bool> {
-                let parent = env
-                    .call_method(
-                        view_ref.as_obj(),
-                        jni::jni_str!("getParent"),
-                        jni::jni_sig!("()Landroid/view/ViewParent;"),
-                        &[],
-                    )
-                    .ok()?
-                    .l()
-                    .ok()?;
-                if parent.is_null() {
-                    return None;
-                }
-                if !env
-                    .is_instance_of(&parent, jni::jni_str!("android/widget/LinearLayout"))
-                    .unwrap_or(false)
-                {
-                    return None;
-                }
-                let orient = env
-                    .call_method(
-                        &parent,
-                        jni::jni_str!("getOrientation"),
-                        jni::jni_sig!("()I"),
-                        &[],
-                    )
-                    .map(|v| v.i().unwrap_or(-1))
-                    .unwrap_or(-1);
-                Some(orient == 0) // 0=HORIZONTAL
-            })()
-            .unwrap_or(false);
-
-            // Map hugging priority to weight:
-            // low hugging (< 100) = high weight (expands), high hugging = compact (wrap content)
-            let expand = priority < 100.0;
-            let weight = if expand { 1.0f32 } else { 0.0f32 };
-
-            let (w, h) = if parent_horizontal {
-                // HStack: weight distributes WIDTH; cross-axis (height) = MATCH_PARENT
-                if expand {
-                    (0, -1)
-                } else {
-                    (-2, -1)
-                } // width=0+weight or WRAP_CONTENT; height=MATCH_PARENT
-            } else {
-                // VStack (default): weight distributes HEIGHT; cross-axis (width) = MATCH_PARENT
-                if expand {
-                    (-1, 0)
-                } else {
-                    (-1, -2)
-                } // width=MATCH_PARENT; height=0+weight or WRAP_CONTENT
-            };
-
-            let params = env.new_object(
-                jni::jni_str!("android/widget/LinearLayout$LayoutParams"),
-                jni::jni_sig!("(IIF)V"),
-                &[JValue::Int(w), JValue::Int(h), JValue::Float(weight)],
-            );
-            if let Ok(params) = params {
-                let _ = env.call_method(
-                    view_ref.as_obj(),
-                    jni::jni_str!("setLayoutParams"),
-                    jni::jni_sig!("(Landroid/view/ViewGroup$LayoutParams;)V"),
-                    &[JValue::Object(&params)],
-                );
-            }
-            unsafe {
-                let _ = jni_bridge::pop_local_frame(env, &JObject::null());
-            }
-        })
-    }
+    layout_intent(handle, 2, priority as f32);
 }
 
 fn argb_color(a: f64, r: f64, g: f64, b: f64) -> i32 {

@@ -64,6 +64,14 @@ pub fn create(placeholder_ptr: *const u8, on_change: f64) -> i64 {
         let bridge_class =
             jni_bridge::with_cache(|c| env.new_local_ref(&c.perry_bridge_class).unwrap());
         let bridge_cls: &jni::objects::JClass = &bridge_class;
+        // Same look as iOS/macOS: 16 pt system font, inner padding, no
+        // underline (Android's default was ~18 sp text on a Material line).
+        let _ = env.call_static_method(
+            bridge_cls,
+            jni::jni_str!("styleTextArea"),
+            jni::jni_sig!("(Landroid/widget/EditText;)V"),
+            &[JValue::Object(&edit_text)],
+        );
         let _ = env.call_static_method(
             bridge_cls,
             jni::jni_str!("setTextChangedCallback"),

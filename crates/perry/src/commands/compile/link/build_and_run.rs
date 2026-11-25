@@ -1087,7 +1087,16 @@ pub(crate) fn build_and_run_link(
             // members with UI-specific monomorphizations are retained. Android
             // remains untouched because skip_runtime=true makes the UI lib the
             // sole provider of perry-runtime symbols.
-            let ui_lib = if is_android || is_visionos {
+            let ui_lib = if is_android && ctx.needs_stdlib && stdlib_lib.is_some() {
+                // The Android UI archive bundles perry-runtime WITHOUT the
+                // `stdlib` feature, so it also carries the no-op
+                // `stdlib_stubs` (js_stdlib_init_dispatch,
+                // js_stdlib_process_pending, js_fetch_with_options, …). Linked
+                // before perry-stdlib they win, and fetch never runs (#5000's
+                // shadowing, on Android). Localize them so stdlib's real
+                // bodies bind.
+                localize_stdlib_stub_symbols(&ui_lib, stdlib_lib.as_ref().unwrap())
+            } else if is_android || is_visionos {
                 ui_lib
             } else {
                 // #8455: the trim's evidence set must equal the archives that
