@@ -434,6 +434,11 @@ pub(crate) fn process_pending_https(mut pending: HttpPendingRequest) {
             crate::server::types::js_handle_clear_side_tables(pending.response_handle());
         }
     }
+    let res_root = exchange_roots.root_nanbox(crate::server::response::exchange_response(
+        pending.server_handle,
+        req_f64,
+        res_root.get(),
+    ));
     // #4903 — Node invokes `'request'` listeners (and the `createServer`
     // handler, which is one) with `this` bound to the server.
     let server_this = handle_to_pointer_f64(pending.server_handle);

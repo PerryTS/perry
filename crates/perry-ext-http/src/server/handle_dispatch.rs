@@ -248,6 +248,13 @@ pub(crate) extern "C" fn http_server_handle_kind(handle: i64) -> u8 {
             2 // IncomingMessage
         };
     }
+    // perry-runtime's `HTTP_SERVER_KIND` / `HTTPS_SERVER_KIND`.
+    if get_handle::<HttpServer>(handle).is_some_and(|server| !server.is_bun_server) {
+        return 16;
+    }
+    if get_handle::<HttpsServer>(handle).is_some() {
+        return 17;
+    }
     0
 }
 
