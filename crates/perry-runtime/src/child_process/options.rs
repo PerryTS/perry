@@ -220,10 +220,11 @@ pub(crate) fn cp_stdio_stream_fd(value: f64, fd_index: usize) -> Option<i32> {
 }
 
 fn cp_stdio_kind(value: f64, fd_index: usize) -> CpStdio {
-    if let Some(fd) = cp_stdio_number_fd(value) {
-        return CpStdio::Fd(fd);
-    }
-    if let Some(fd) = cp_stdio_stream_fd(value, fd_index) {
+    if let Some(fd) = cp_stdio_number_fd(value).or_else(|| cp_stdio_stream_fd(value, fd_index)) {
+        // No OS descriptor exists for the child to inherit.
+        if crate::fs::fd_is_embedded(fd) {
+            return CpStdio::Ignore;
+        }
         return CpStdio::Fd(fd);
     }
 
@@ -682,6 +683,31 @@ mod posix_spawn_tests {
 #[cfg(test)]
 mod tests {
     use super::cp_should_use_node_interpreter;
+
+    #[test]
+    fn an_embedded_descriptor_is_ignored_in_every_stdio_slot() {
+        use super::{cp_stdio_kind, CpStdio};
+        let _global = crate::gc::global_side_table_test_lock();
+        const NAME: &[u8] = b"embedded-stdio/asset.txt";
+        let path = "$perryfs/embedded-stdio/asset.txt";
+        unsafe {
+            crate::embedded::js_register_embedded_asset(
+                NAME.as_ptr(),
+                NAME.len(),
+                b"x".as_ptr(),
+                1,
+            );
+        }
+        let path = crate::string::js_string_from_bytes(path.as_ptr(), path.len() as u32);
+        let fd = unsafe {
+            crate::fs::fs_open_sync_result(crate::value::js_nanbox_string(path as i64), 0.0)
+        }
+        .expect("embedded asset opens");
+        let kinds = [0, 3].map(|slot| cp_stdio_kind(fd as f64, slot));
+        crate::fs::js_fs_close_sync(fd as f64);
+        assert_eq!(kinds, [CpStdio::Ignore; 2]);
+        assert_eq!(cp_stdio_kind(2.0, 2), CpStdio::Fd(2));
+    }
 
     #[cfg(unix)]
     #[test]

@@ -171,7 +171,7 @@ fn a_compressed_archive_in_a_package_links_the_cache_slot_and_keeps_the_sidecar_
     assert_eq!(candidates, [pkg.join("lib").join(LIB)]);
     // Run with RUST_TEST_THREADS=1 like the rest of the env-touching tests.
     std::env::set_var("PERRY_LIB_CACHE_DIR", &cache);
-    let located = locate_among(candidates, LIB);
+    let located = locate_among(candidates, LIB, Some("ios"));
     std::env::remove_var("PERRY_LIB_CACHE_DIR");
     let located = located.expect("the package's runtime is found");
 
@@ -507,6 +507,7 @@ fn a_host_ui_or_wasm_host_miss_fetches_only_its_kind_once() {
         if let Ok(found) = locate_among(
             collect_library_candidates_from(name, None, Some(&exe), Some(&home)),
             name,
+            None,
         ) {
             eprintln!("skip {name}: an install layout has it at {:?}", found.link);
             continue;

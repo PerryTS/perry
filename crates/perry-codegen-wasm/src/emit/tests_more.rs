@@ -1400,6 +1400,9 @@ mod static_method;
 #[path = "date_setter_tests.rs"]
 mod date_setter;
 
+#[path = "tdz_cell_tests.rs"]
+mod tdz_cell;
+
 #[path = "class_value_tests.rs"]
 mod class_value;
 
@@ -1453,6 +1456,9 @@ mod class_prototype;
 
 #[path = "builtin_subclass_tests.rs"]
 mod builtin_subclass;
+
+#[path = "evaluated_builtin_subclass_tests.rs"]
+mod evaluated_builtin_subclass;
 
 #[path = "array_from_tests.rs"]
 mod array_from;

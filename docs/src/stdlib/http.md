@@ -30,6 +30,13 @@ Supported on `ServerResponse`: `.statusCode` (get/set),
 `.on('finish'|'close', cb)`. Auto Content-Length on `.end()` when no
 `Transfer-Encoding` was set.
 
+`createServer({ ServerResponse: MyResponse }, handler)` constructs each HTTP/1
+response from that class. The `IncomingMessage` option is not supported yet.
+
+`server.on('clientError', (error, socket) => …)` receives parse failures
+(`HPE_*`), `ERR_HTTP_REQUEST_TIMEOUT` and socket errors, and owns the socket.
+Without a listener the server answers 400, 408 or 431 and closes.
+
 ### Live request and response prototypes
 
 HTTP/1 handler arguments inherit from `http.IncomingMessage.prototype` and

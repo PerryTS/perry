@@ -154,6 +154,11 @@ pub struct HttpServer {
     pub(crate) in_flight: Vec<in_flight::InFlightRequest>,
     /// `Bun.serve` fetch/error promises still settling, with their exchange.
     pub(crate) bun_promises: Vec<crate::server::bun_server::PendingPromise>,
+    /// `createServer({ ServerResponse })`, or `undefined`.
+    pub(crate) response_class: f64,
+    /// Failures waiting for the pump to emit `'clientError'`.
+    pub(crate) pending_client_errors:
+        std::collections::VecDeque<crate::server::client_error::ClientError>,
     activity_count: Arc<std::sync::atomic::AtomicUsize>,
 }
 
@@ -203,6 +208,8 @@ impl HttpServer {
             pending: std::collections::VecDeque::new(),
             in_flight: Vec::new(),
             bun_promises: Vec::new(),
+            response_class: f64::from_bits(TAG_UNDEFINED),
+            pending_client_errors: std::collections::VecDeque::new(),
             activity_count: activity::current_count(),
         }
     }
@@ -458,7 +465,21 @@ pub(crate) fn apply_server_options(server: &mut HttpServer, options_f64: f64) {
     if !v.is_pointer() {
         return;
     }
-    let Some(json) = perry_ffi::json_stringify(v) else {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let options = scope.root_nanbox(options_f64);
+    let json = perry_ffi::json_stringify(v);
+    extern "C" {
+        fn js_is_truthy(value: f64) -> i32;
+    }
+    let class = perry_ffi::object_field_by_name(
+        JsValue::from_bits(options.get().to_bits()),
+        "ServerResponse",
+    );
+    let class = f64::from_bits(class.bits());
+    if unsafe { js_is_truthy(class) } != 0 {
+        server.response_class = class;
+    }
+    let Some(json) = json else {
         return;
     };
     let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&json) else {
@@ -1161,6 +1182,7 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         // Drain upgrades first so they don't get starved by a busy
         // request stream.
         count += drain_upgrades(h);
+        count += crate::server::client_error::drain_client_errors(h);
         while let Some(p) = try_recv_pending_nonblocking(h) {
             process_pending(p);
             count += 1;
@@ -1190,6 +1212,7 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
         // had no reader. The queue is keyed by server handle and is transport-
         // agnostic, so this is the same drain as the HTTP one.
         count += drain_upgrades(h);
+        count += crate::server::client_error::drain_client_errors(h);
         while let Some(p) = crate::server::https_server::try_recv_pending_https_nonblocking(h) {
             crate::server::https_server::process_pending_https(p);
             count += 1;
@@ -1213,6 +1236,7 @@ pub extern "C" fn js_node_http_server_process_pending() -> i32 {
             drain_deferred_close_for::<crate::server::http2_server::Http2SecureServer, _>(h, |s| {
                 &mut s.base
             });
+        count += crate::server::client_error::drain_client_errors(h);
         count += crate::server::http2_server::process_pending_h2_events();
         while let Some(p) = crate::server::http2_server::try_recv_pending_h2_nonblocking(h) {
             crate::server::http2_server::process_pending_h2(p);
@@ -1331,6 +1355,12 @@ fn process_pending(mut pending: HttpPendingRequest) {
             js_handle_clear_side_tables(pending.response_handle());
         }
     }
+
+    let res_root = exchange_roots.root_nanbox(crate::server::response::exchange_response(
+        pending.server_handle,
+        req_f64,
+        res_root.get(),
+    ));
 
     // Fire `'request'` listeners (Node's `server.on('request', ...)`).
     // Node's emitter invokes them with `this` bound to the server, so the
