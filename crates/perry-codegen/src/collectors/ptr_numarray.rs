@@ -987,6 +987,7 @@ mod tests {
 
     fn capturing_closure(captures: Vec<u32>) -> Expr {
         Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 0,
             params: vec![],

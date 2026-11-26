@@ -22,6 +22,7 @@ fn comparator(effect: bool) -> Expr {
         );
     }
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 99,
         params: [17, 23]

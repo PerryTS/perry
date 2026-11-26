@@ -904,6 +904,7 @@ fn selector_rejects_mutated_defaulted_and_closure_captured_indices() {
     captured.body.insert(
         0,
         Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 901,
             params: Vec::new(),

@@ -88,6 +88,7 @@ pub(crate) fn app_with_body(body: Expr) -> Stmt {
 
 pub(crate) fn closure_stub() -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 0 as perry_hir::types::FuncId,
         params: vec![],

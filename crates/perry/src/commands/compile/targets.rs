@@ -1525,8 +1525,7 @@ pub(super) fn compile_for_web(
     })
 }
 
-/// Compile for WebAssembly target: emit WASM binary + JS runtime bridge
-#[cfg(feature = "backend-wasm")]
+#[cfg(any(feature = "backend-wasm", test))]
 /// The order the web target initializes modules in: depth-first from the entry, so
 /// an imported module runs before its importer and siblings run in the importer's
 /// source order, as in Node. `deps` lists every module with its imports in source
@@ -1561,6 +1560,8 @@ fn wasm_init_order(entry: &PathBuf, deps: &HashMap<PathBuf, Vec<PathBuf>>) -> Ve
     sorted
 }
 
+/// Compile for WebAssembly target: emit WASM binary + JS runtime bridge
+#[cfg(feature = "backend-wasm")]
 pub(super) fn compile_for_wasm(
     ctx: &CompilationContext,
     args: &CompileArgs,

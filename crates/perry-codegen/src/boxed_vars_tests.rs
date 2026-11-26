@@ -4,6 +4,7 @@ use perry_hir::{Expr, Stmt};
 
 fn closure(func_id: u32, captured_id: u32) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id,
         params: Vec::new(),

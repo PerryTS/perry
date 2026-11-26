@@ -347,6 +347,7 @@ fn an_exposure_in_a_closure_or_another_function_is_remote() {
     // const a = ...; a.buffer;           (own body: late)
     // const b = ...; () => b.buffer;     (closure: remote)
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 99,
         params: vec![],
