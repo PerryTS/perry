@@ -86,6 +86,23 @@ fn ensure_initialized() -> Instant {
     *st.get_or_insert_with(Instant::now)
 }
 
+/// libuv's loop clock: `uv_now`, whole milliseconds since the timer origin,
+/// read fresh (`uv_update_time`) and floored.
+///
+/// Node starts a timer at `getLibuvNow()` and runs it when that clock, read at
+/// the timers phase, is at least `start + delay` — both whole milliseconds. Two
+/// `setTimeout(f, 1)` scheduled in the same millisecond therefore share one
+/// deadline and fire in the same timers phase, back to back with only their
+/// checkpoints between, never with a check phase between them. Perry kept the
+/// exact `Instant` of each call, so the second deadline sat microseconds after
+/// the first and a phase whose clock read fell between them split the pair.
+/// Deadlines and the phase clock are both taken on this grid (NXH13).
+pub(crate) fn loop_now(origin: Instant) -> Instant {
+    let now = Instant::now();
+    let ms = now.saturating_duration_since(origin).as_millis() as u64;
+    origin + Duration::from_millis(ms)
+}
+
 /// Get current time in milliseconds since program start
 #[no_mangle]
 pub extern "C" fn js_timer_now() -> f64 {
@@ -122,10 +139,10 @@ pub extern "C" fn js_set_timeout_value_ref(
 
 fn schedule_promise_timer(delay_ms: f64, value: f64, has_ref: bool) -> *mut Promise {
     crate::promise::bump(&PROFILE_PROMISE_TIMER_REGISTRATIONS);
-    ensure_initialized();
+    let origin = ensure_initialized();
 
     let promise = js_promise_new();
-    let deadline = Instant::now() + Duration::from_millis(normalize_timer_delay(delay_ms));
+    let deadline = loop_now(origin) + Duration::from_millis(normalize_timer_delay(delay_ms));
     store::with_current(|timers| {
         timers.insert_timer(Entry::promise(deadline, promise, value, has_ref));
     });
@@ -686,7 +703,7 @@ pub extern "C" fn js_timer_unref(timer_id: i64) {
 /// Node's `refresh()` re-inserts the timer and never re-refs it.
 #[no_mangle]
 pub extern "C" fn js_timer_refresh(timer_id: i64) {
-    let now = Instant::now();
+    let now = loop_now(ensure_initialized());
     if store::with_current(|timers| timers.refresh(timer_id, now)) {
         sync_loop_timer();
     }
@@ -885,7 +902,7 @@ fn schedule_callback_timer_inner(
     // nothing reads its deadline (the heap and `refresh` are timer-only), so it
     // carries the timer origin and scheduling it reads no clock.
     let deadline = if class.is_timer() {
-        Instant::now() + Duration::from_millis(delay_ms)
+        loop_now(origin) + Duration::from_millis(delay_ms)
     } else {
         origin
     };
