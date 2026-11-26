@@ -48,23 +48,12 @@ pub fn tok_store(m: &mut Model, t: Tok, _key: Key, src: NodeId) {
     crate::family_reach::tok(m, t, _key);
     // R-GLOBAL-NAME: a named global the runtime never reads by name is the
     // program's own property of the global object (its field, written by
-    // the store); no E20 sink.
+    // the store); no E20 sink. The self keys (`globalThis`, `global`) are
+    // such names (R-GLOBAL-SELF): the runtime reaches the global object
+    // through `js_get_global_this`, and every program read of the name
+    // (bare `globalThis`, `globalThis.X`, `typeof globalThis`) reads the
+    // field (`declared_global_value`).
     if !m.unit_mode && super::global_object(m, t) && !super::global_store_escapes(m, t, _key) {
-        return;
-    }
-    // The global object's self-reference (`globalThis.globalThis = v`):
-    // bare reads of the name are the global object, so a stored global
-    // object (the receiver itself) hands unknown code nothing new and the
-    // realm stays the program's; any other stored value escapes as before.
-    if !m.unit_mode && super::global_object(m, t) && super::global_self_key(m, t, _key) {
-        let r = m.reason("E20 stored on the global object's self-reference");
-        m.cons(
-            src,
-            Cons::RuntimeStore {
-                reason: r,
-                retained: t,
-            },
-        );
         return;
     }
     match m.toks[t as usize] {
