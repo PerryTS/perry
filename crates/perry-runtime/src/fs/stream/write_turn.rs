@@ -37,7 +37,7 @@ pub(super) fn schedule_write_stream_turn(id: usize) {
             1,
         );
         crate::closure::closure_set_capture_word(closure, 0, id as i64);
-        let _ = crate::timer::schedule_native_timeout(closure as i64, 0.0, "FSREQCALLBACK");
+        let _ = crate::timer::schedule_native_turn(closure as i64, "FSREQCALLBACK");
     }
 }
 

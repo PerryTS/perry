@@ -840,7 +840,7 @@ fn schedule_callback_timer(
 ) -> i64 {
     schedule_callback_timer_inner(
         callback,
-        delay_ms,
+        normalize_timer_delay(delay_ms),
         args,
         type_name,
         class,
@@ -864,12 +864,16 @@ fn schedule_js_timer(
     class: Class,
     kind: CallbackTimerKind,
 ) -> i64 {
+    let delay_ms = normalize_timer_delay(delay_ms);
     schedule_callback_timer_inner(callback, delay_ms, args, type_name, class, None, Some(kind)).1
 }
 
+/// `delay_ms` is already normalized: whole milliseconds, as node's `Timeout`
+/// clamps a JS delay ([`normalize_timer_delay`]), or the exact delay of a
+/// runtime-owned turn ([`schedule_native_turn`]).
 fn schedule_callback_timer_inner(
     callback: i64,
-    delay_ms: f64,
+    delay_ms: u64,
     args: Vec<f64>,
     type_name: &str,
     class: Class,
@@ -901,7 +905,6 @@ fn schedule_callback_timer_inner(
     let callback_handle =
         scope.root_raw_const_ptr(callback as *const crate::closure::ClosureHeader);
     let arg_handles = scope.root_nanbox_f64_slice(&args);
-    let delay_ms = normalize_timer_delay(delay_ms);
     // Only a timer has a start time: Node's `insert` reads the loop clock
     // (`getLibuvNow`, which updates libuv's time) once per timer, and an
     // Immediate has none. A check- or poll-phase entry runs in queue order and
@@ -1058,7 +1061,26 @@ pub fn schedule_native_immediate(callback: i64, args: &[f64], provider_type: &'s
     )
 }
 
-/// The timers-phase sibling of [`schedule_native_immediate`].
+/// A runtime-owned job that runs in the very next timers phase: an fs request
+/// Perry performs on the next loop turn (`FSREQCALLBACK` / `FSREQPROMISE`).
+/// It is not a node `Timeout`, so it takes no delay and node's 1 ms floor
+/// for `setTimeout(f, 0)` does not apply to it.
+pub fn schedule_native_turn(callback: i64, provider_type: &'static str) -> i64 {
+    schedule_callback_timer_inner(
+        callback,
+        0,
+        Vec::new(),
+        provider_type,
+        Class::Timeout,
+        None,
+        None,
+    )
+    .0
+}
+
+/// The timers-phase sibling of [`schedule_native_immediate`]: an internal
+/// node `Timeout` (an abort-signal or socket timeout), so its delay is
+/// normalized as `setTimeout`'s is.
 pub fn schedule_native_timeout(callback: i64, delay_ms: f64, provider_type: &'static str) -> i64 {
     schedule_callback_timer(
         callback,
