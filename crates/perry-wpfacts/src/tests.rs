@@ -143,6 +143,7 @@ mod for_of_next_argument;
 mod for_of_yield;
 mod forin_key_string;
 mod fresh_static_blocks;
+mod census;
 mod assign_source_kinds;
 mod function_call_value;
 mod written_global_ctor;

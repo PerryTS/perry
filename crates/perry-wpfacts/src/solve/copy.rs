@@ -315,7 +315,8 @@ impl Model {
         prim: u16,
         strs: StrSet,
     ) {
-        let top = (self.explain || self.diagnostic.is_some())
+        // The seed census books an adopted set's ⊤ (`topstop::Census`).
+        let top = (self.explain || self.diagnostic.is_some() || self.stop_top.is_some())
             && self.nodes[src as usize].pts.contains_tok(TOP)
             && !self.nodes[dst as usize].pts.contains_tok(TOP);
         if self.relations.is_some() {

@@ -123,6 +123,13 @@ impl Model {
     /// new calling contexts) and goes on to its fixpoint; past `WIDENED_WORK` times it, or past it
     /// at all per unit, the solve stops and claims nothing.
     pub(crate) fn past_work_bound(&mut self) -> bool {
+        if self
+            .stop_top
+            .as_ref()
+            .is_some_and(|s| s.census_due(self.work.get()))
+        {
+            self.census_finish("work budget");
+        }
         if self.max_work == 0 || self.work.get() <= self.max_work {
             return false;
         }
@@ -1291,6 +1298,11 @@ impl Model {
 
     pub fn solve(&mut self) {
         self.solve_fixpoint();
+        // The seed census (`topstop::Census`) reports at the end of the
+        // solve that stands (a hold restart solves again).
+        if !self.hold_restart && self.stop_top.as_ref().is_some_and(|s| s.census.is_some()) {
+            self.census_finish("solve end");
+        }
         // The interned sets stay with their nodes; their index is the solve's.
         self.sets.clear();
     }
@@ -2182,6 +2194,9 @@ impl Model {
                 return;
             }
             l.sink(n, reason, std::panic::Location::caller());
+        }
+        if self.stop_top.as_ref().is_some_and(|s| s.census.is_some()) {
+            self.census_sink(n);
         }
         if let Some(d) = &mut self.diagnostic {
             if let Some(c) = d.cause_node.filter(|&c| c != n) {

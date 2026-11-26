@@ -31,6 +31,18 @@
 //! (default all).
 //! The process exits with code 86 after printing one block to stderr.
 //! Off: `Model::stop_top` is `None`, and nothing of this runs.
+//!
+//! `PERRY_FACTS_STOP_ON_TOP_LIST=<n>` (with `PERRY_FACTS_STOP_ON_TOP=1`):
+//! the seed census, for ordering work only (`Census`). No creation stops
+//! the solve. The first creation of each seed key (solver line, program
+//! position) prints one `CENSUS-SEED` line; every first ⊤ arrival in a node
+//! is booked to the seed its ⊤ came from (an S creation books itself, a
+//! propagation or an A creation books the seed of its ⊤ input). At `n`
+//! distinct seeds, or past `PERRY_FACTS_STOP_ON_TOP_WORK=<w>` work when that
+//! is set (keys past `n` are then booked together as `later`), or at the end
+//! of the solve, one `CENSUS-REACH` line per seed gives the nodes booked to
+//! it, and the process exits with code 86. A seed whose rule input already
+//! held ⊤ is `down=#k`: a consequence of seed k, not an independent root.
 
 use crate::model::{CallId, Cons, Model, NodeId, Tok, NO_NODE, TOP};
 use crate::pts::FxHashMap;
@@ -119,6 +131,8 @@ pub struct StopTop {
     /// (`cur_src`), the reason named, the rule running, the solver line,
     /// the origin `add_top` names and the escape that runs (if any).
     top_from: FxHashMap<NodeId, (NodeId, u32, Option<(NodeId, Cons)>, &'static Location<'static>, String)>,
+    /// `PERRY_FACTS_STOP_ON_TOP_LIST`: the seed census.
+    pub(crate) census: Option<Box<Census>>,
     /// Tests (`tests::amp_flow`): every ⊤ creation is recorded here and the
     /// solve goes on (nothing printed, no exit).
     #[cfg(test)]
@@ -162,10 +176,63 @@ pub fn capture_on() {
 }
 
 pub fn take_captured() -> Vec<String> {
+    CENSUS.with(|c| c.set((0, 0)));
     CAPTURE.with_borrow_mut(|c| c.take()).unwrap_or_default()
 }
 
-pub(crate) type RuleSaved = (Option<(NodeId, Cons)>, (u32, u32), (u32, u32), u32);
+thread_local! {
+    /// Tests: the census bounds (distinct seeds, work) of the next captured
+    /// solves on this thread; (0, 0) = no census.
+    static CENSUS: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Tests: captured solves run the seed census (`Census`) with these bounds;
+/// the report is one captured block.
+pub fn census_capture_on(seeds: u64, work: u64) {
+    CENSUS.with(|c| c.set((seeds, work)));
+    capture_on();
+}
+
+/// A node's first ⊤ arrival booked to no listed seed: its ⊤ input had no
+/// booked arrival (`LOST`), or its seed key came past the listed count
+/// (`LATER`).
+const C_NONE: u32 = u32::MAX;
+const C_LATER: u32 = u32::MAX - 1;
+const C_LOST: u32 = u32::MAX - 2;
+
+/// The seed census (`PERRY_FACTS_STOP_ON_TOP_LIST`).
+#[derive(Default)]
+pub(crate) struct Census {
+    /// Distinct seeds to list, and the work bound (0 = none).
+    max: u64,
+    work: u64,
+    seeds: Vec<CensusSeed>,
+    by_key: FxHashMap<(&'static str, u32, (u32, u32)), u32>,
+    /// By node: the seed its first ⊤ arrival is booked to (`C_*` else).
+    root: Vec<u32>,
+    /// S creations in all, and those of keys past `max`.
+    creations: u64,
+    later: u64,
+    /// A sink attached by a rule on a ⊤ node: that ⊤'s seed (`census_sink`).
+    sink_root: FxHashMap<NodeId, u32>,
+    /// `CENSUS-LOST` lines printed (at most 8).
+    lost_seen: u32,
+    /// The printed lines (kept for a captured report).
+    lines: Vec<String>,
+}
+
+struct CensusSeed {
+    /// Its first creation: work, ordinal among S creations, the seed it is
+    /// downstream of (`C_NONE`: independent).
+    work: u64,
+    seq: u64,
+    down: u32,
+    creations: u64,
+    /// Creations whose rule input held no ⊤.
+    indep: u64,
+}
+
+pub(crate) type RuleSaved =(Option<(NodeId, Cons)>, (u32, u32), (u32, u32), u32);
 
 impl StopTop {
     pub(crate) fn from_env(paths: Vec<String>) -> Option<Box<StopTop>> {
@@ -208,7 +275,24 @@ impl StopTop {
             }
             _ => 7,
         };
+        let num = |v: &str| std::env::var(v).ok().and_then(|s| s.parse::<f64>().ok());
+        let (max, work) = if capture {
+            CENSUS.with(|c| c.get())
+        } else {
+            (
+                num("PERRY_FACTS_STOP_ON_TOP_LIST").map_or(0, |v| v as u64),
+                num("PERRY_FACTS_STOP_ON_TOP_WORK").map_or(0, |v| v as u64),
+            )
+        };
+        let census = (max != 0).then(|| {
+            Box::new(Census {
+                max,
+                work,
+                ..Default::default()
+            })
+        });
         Some(Box::new(StopTop {
+            census,
             skip,
             class,
             capture,
@@ -232,6 +316,11 @@ impl StopTop {
             std::mem::replace(&mut self.shared_pos, NOPOS),
             std::mem::replace(&mut self.rule_ci, ci),
         )
+    }
+
+    /// The census is past its work bound.
+    pub(crate) fn census_due(&self, work: u64) -> bool {
+        self.census.as_ref().is_some_and(|c| c.work != 0 && work > c.work)
     }
 
     pub(crate) fn leave_rule(&mut self, r: RuleSaved) {
@@ -655,6 +744,9 @@ impl Model {
                 }
             } else if src_top {
                 // An edge copy from a node that holds ⊤: propagation.
+                if s.census.is_some() {
+                    self.census_arrival(n, 0, src, None, None, at, String::new);
+                }
                 return;
             } else if src == NO_NODE {
                 (1, "direct ⊤ token".into(), None)
@@ -673,6 +765,15 @@ impl Model {
                 None => rule_name,
             };
             f.push(FlowArrival { class, node: n, tok: TOP, rule: rule_any, what, at });
+            return;
+        }
+        if s.census.is_some() {
+            let srcn = if src_ok { src } else { NO_NODE };
+            let what = || match &trigger {
+                Some(t) => format!("{rule_name} ({t})"),
+                None => rule_name.clone(),
+            };
+            self.census_arrival(n, class, srcn, esc.map(|e| e.2), rule_any.map(|r| r.0), at, what);
             return;
         }
         if s.class & class == 0 {
@@ -753,6 +854,271 @@ impl Model {
             ));
         }
         self.finish_block(b, capture);
+    }
+
+    /// The census: node `n` becomes a sink (what reaches it escapes into
+    /// unknown code) while a rule runs on a node that holds ⊤ (a call of an
+    /// unknown callee): what that escape makes is booked to that ⊤'s seed.
+    pub(crate) fn census_sink(&mut self, n: NodeId) {
+        let st = self.stop_top.as_ref().unwrap();
+        let held = |x: NodeId| {
+            x != NO_NODE
+                && (x as usize) < self.nodes.len()
+                && self.nodes[x as usize].pts.contains_tok(TOP)
+        };
+        let from = st.rule.map(|r| r.0).filter(|&x| held(x)).or_else(|| Some(self.cur_src).filter(|&x| held(x)));
+        let Some(x) = from else {
+            return;
+        };
+        let c = self.stop_top.as_mut().unwrap().census.as_mut().unwrap();
+        if let Some(&r) = c.root.get(x as usize).filter(|&&r| r != C_NONE) {
+            c.sink_root.entry(n).or_insert(r);
+        }
+    }
+
+    /// The census books the first ⊤ arrival in `n` (class 0: propagation
+    /// from `src`; 1 S; 2 A) and lists a new seed key.
+    #[allow(clippy::too_many_arguments)]
+    fn census_arrival(
+        &mut self,
+        n: NodeId,
+        class: u8,
+        src: NodeId,
+        sink: Option<NodeId>,
+        rule_node: Option<NodeId>,
+        at: &'static Location<'static>,
+        what: impl FnOnce() -> String,
+    ) {
+        let st = self.stop_top.as_ref().unwrap();
+        let c = st.census.as_ref().unwrap();
+        // The seed of the first input that holds ⊤ (the sender, the escape's
+        // sink, the node the rule runs on).
+        let up = [src, sink.unwrap_or(NO_NODE), rule_node.unwrap_or(NO_NODE)]
+            .into_iter()
+            .find(|&x| {
+                x != NO_NODE
+                    && (x as usize) < self.nodes.len()
+                    && self.nodes[x as usize].pts.contains_tok(TOP)
+            })
+            .map(|x| match c.root.get(x as usize).copied().unwrap_or(C_NONE) {
+                C_NONE => (C_LOST, x),
+                r => (r, x),
+            })
+            // An escape with no ⊤ input: the seed of the ⊤ that made its
+            // sink (`census_sink`), innermost escape first.
+            .or_else(|| {
+                st.esc
+                    .iter()
+                    .rev()
+                    .find_map(|&(_, _, k)| c.sink_root.get(&k).map(|&r| (r, k)))
+            });
+        // The first arrivals booked to no seed: their ⊤ input and its label.
+        if let Some((C_LOST, x)) = up {
+            if c.lost_seen < 8 {
+                let l = format!(
+                    "CENSUS-LOST class={class} node {n} `{}` <- node {x} `{}` ({}:{}) work={}",
+                    self.labels[n as usize],
+                    self.labels[x as usize],
+                    at.file(),
+                    at.line(),
+                    self.work.get()
+                );
+                let capture = st.capture;
+                let c = self.stop_top.as_mut().unwrap().census.as_mut().unwrap();
+                c.lost_seen += 1;
+                if !capture {
+                    eprintln!("{l}");
+                }
+                c.lines.push(l);
+            }
+        }
+        let st = self.stop_top.as_ref().unwrap();
+        let c = st.census.as_ref().unwrap();
+        let up = up.map(|u| u.0);
+        let book = |c: &mut Census, r: u32| {
+            if c.root.len() <= n as usize {
+                c.root.resize(n as usize + 1, C_NONE);
+            }
+            c.root[n as usize] = r;
+        };
+        if class != 1 && up.is_none() && c.lost_seen < 8 {
+            let lb = |x: Option<NodeId>| match x {
+                Some(x) if x != NO_NODE && (x as usize) < self.nodes.len() => {
+                    format!("{x} `{}`", self.labels[x as usize])
+                }
+                _ => "-".into(),
+            };
+            let l = format!(
+                "CENSUS-LOST class={class} node {n} `{}` no ⊤ input: src {} sink {} rule-node {} ({}:{}) {}",
+                self.labels[n as usize],
+                lb(Some(src)),
+                lb(sink),
+                lb(rule_node),
+                at.file(),
+                at.line(),
+                what().replace(char::is_control, " ")
+            );
+            let capture = st.capture;
+            let c = self.stop_top.as_mut().unwrap().census.as_mut().unwrap();
+            c.lost_seen += 1;
+            if !capture {
+                eprintln!("{l}");
+            }
+            c.lines.push(l);
+            book(c, C_LOST);
+            return;
+        }
+        if class != 1 {
+            let c = self.stop_top.as_mut().unwrap().census.as_mut().unwrap();
+            book(c, up.unwrap_or(C_LOST));
+            return;
+        }
+        let op_pos = match st.topvals.get(&src).filter(|_| src != NO_NODE) {
+            Some(&(_, _, p)) => p,
+            None => st.cur_pos(),
+        };
+        let key = (at.file(), at.line(), op_pos);
+        let work = self.work.get();
+        let line = if c.by_key.contains_key(&key) || c.seeds.len() as u64 >= c.max {
+            None
+        } else {
+            let one = |t: String| t.replace(char::is_control, " ");
+            let down = match up {
+                Some(C_LOST) | Some(C_LATER) => " down=?".to_string(),
+                Some(r) => format!(" down=#{r}"),
+                None => " indep".to_string(),
+            };
+            let v: String = self.node_words_short(n).chars().take(200).collect();
+            Some(format!(
+                "CENSUS-SEED #{} seq={} work={work}{down} solver={}:{} site={} | rule: {} | src: {} | value: {}",
+                c.seeds.len(),
+                c.creations + 1,
+                at.file(),
+                at.line(),
+                self.pos_text(op_pos),
+                one(what()),
+                one(self.source_line(op_pos).unwrap_or_default()),
+                one(v)
+            ))
+        };
+        let capture = self.stop_top.as_ref().unwrap().capture;
+        let c = self.stop_top.as_mut().unwrap().census.as_mut().unwrap();
+        c.creations += 1;
+        let r = if let Some(&id) = c.by_key.get(&key) {
+            let sd = &mut c.seeds[id as usize];
+            sd.creations += 1;
+            sd.indep += up.is_none() as u64;
+            id
+        } else if let Some(l) = line {
+            let id = c.seeds.len() as u32;
+            c.by_key.insert(key, id);
+            c.seeds.push(CensusSeed {
+                work,
+                seq: c.creations,
+                down: up.unwrap_or(C_NONE),
+                creations: 1,
+                indep: up.is_none() as u64,
+            });
+            if !capture {
+                eprintln!("{l}");
+            }
+            c.lines.push(l);
+            id
+        } else {
+            c.later += 1;
+            C_LATER
+        };
+        let c = self.stop_top.as_mut().unwrap().census.as_mut().unwrap();
+        book(c, r);
+        if c.work == 0 && c.seeds.len() as u64 >= c.max {
+            self.census_finish("seed count");
+        }
+    }
+
+    /// The census report (`CENSUS-REACH` per seed, by reach), then exit 86
+    /// (a captured test solve: one block, and the solve goes on unreported).
+    pub(crate) fn census_finish(&mut self, why: &str) {
+        let Some(s) = self.stop_top.as_mut() else {
+            return;
+        };
+        let Some(c) = s.census.take() else {
+            return;
+        };
+        s.done = true;
+        let capture = s.capture;
+        let k = c.seeds.len();
+        // Per seed: nodes booked to it, of them nodes that run a read,
+        // store or method call (`ops`); the same with every downstream seed
+        // (`total`).
+        let (mut own, mut ops) = (vec![0u64; k + 3], vec![0u64; k + 3]);
+        let slot = |r: u32| match r {
+            C_LATER => k,
+            C_LOST => k + 1,
+            r => r as usize,
+        };
+        for (n, &r) in c.root.iter().enumerate() {
+            if r == C_NONE {
+                continue;
+            }
+            let i = slot(r);
+            own[i] += 1;
+            if self.nodes[n]
+                .cons
+                .iter()
+                .any(|c| matches!(c.kind_name(), "load" | "store" | "storeout" | "mcall"))
+            {
+                ops[i] += 1;
+            }
+        }
+        let (mut total, mut total_ops) = (own.clone(), ops.clone());
+        for j in (0..k).rev() {
+            let d = c.seeds[j].down;
+            if (d as usize) < k {
+                total[d as usize] += total[j];
+                total_ops[d as usize] += total_ops[j];
+            }
+        }
+        let mut order: Vec<usize> = (0..k).collect();
+        order.sort_by(|&a, &b| total[b].cmp(&total[a]).then(a.cmp(&b)));
+        let mut b = String::new();
+        for l in &c.lines {
+            b.push_str(l);
+            b.push('\n');
+        }
+        b.push_str(&format!(
+            "CENSUS-END why={why} work={} seeds={k} creations={} later-creations={} booked={} later-nodes={} lost-nodes={}\n",
+            self.work.get(),
+            c.creations,
+            c.later,
+            own.iter().sum::<u64>(),
+            own[k],
+            own[k + 1]
+        ));
+        for i in order {
+            let sd = &c.seeds[i];
+            let down = if sd.down == C_NONE {
+                "indep".to_string()
+            } else if (sd.down as usize) < k {
+                format!("down=#{}", sd.down)
+            } else {
+                "down=?".to_string()
+            };
+            b.push_str(&format!(
+                "CENSUS-REACH #{i} {down} nodes={} ops={} total={} total-ops={} creations={} indep-creations={} work={} seq={}\n",
+                own[i], ops[i], total[i], total_ops[i], sd.creations, sd.indep, sd.work, sd.seq
+            ));
+        }
+        if capture {
+            CAPTURE.with_borrow_mut(|v| {
+                if let Some(v) = v.as_mut() {
+                    v.push(b);
+                }
+            });
+            return;
+        }
+        // The seed and lost lines were printed as they came.
+        eprint!("{}", b.split_inclusive('\n').skip(c.lines.len()).collect::<String>());
+        std::process::exit(86);
     }
 
     fn finish_block(&self, b: String, capture: bool) {
@@ -1041,7 +1407,8 @@ impl Model {
             f.push(FlowArrival { class: 4, node: NO_NODE, tok: t, rule, what: what.to_string(), at });
             return;
         }
-        if s.done || s.class & 4 == 0 {
+        // The census lists seeds (S) only; a marker is no node arrival.
+        if s.done || s.class & 4 == 0 || s.census.is_some() {
             return;
         }
         s.seen += 1;
