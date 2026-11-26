@@ -515,6 +515,12 @@ pub fn connect(owner: f64, a: f64, b: f64, c: f64) -> f64 {
     socket::connect(owner, a, b, c)
 }
 
+/// A copy of a client options object's resolution options, for a dial that
+/// happens after the caller may have changed the object.
+pub fn resolution_options(options: f64) -> f64 {
+    crate::payload_lookup::resolution_options(options)
+}
+
 /// Dial `host:port` with the resolution options of a client's `options`
 /// object (`lookup`, `family`, `hints`, `autoSelectFamily`).
 pub fn connect_with_options(owner: f64, options: f64, port: u16, host: &str) -> f64 {

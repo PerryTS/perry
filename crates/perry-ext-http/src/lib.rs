@@ -444,8 +444,9 @@ pub struct ClientRequestHandle {
     socket_snapshot: Option<perry_ffi::turnloop_net::HandleSnapshot>,
     abort_signal_bits: u64,
     abort_listener_bits: u64,
-    /// The request's options object, whose `lookup`, `family`, `hints` and
-    /// `autoSelectFamily` a fresh dial passes to `Socket#connect`.
+    /// A copy of the request's resolution options (`lookup`, `family`,
+    /// `hints`, `autoSelectFamily*`), which a fresh dial passes to
+    /// `Socket#connect`.
     connect_options_bits: u64,
     /// Client-side TLS options (#4906): `rejectUnauthorized` / `ca` /
     /// `checkServerIdentity`. Default = no customization (pooled client).
@@ -814,8 +815,11 @@ unsafe fn note_connect_options(handle: Handle, opts_f64: f64) {
     if is_string_value(opts_f64) || !JsValue::from_bits(opts_f64.to_bits()).is_pointer() {
         return;
     }
+    // Node copies the request options; a later change to the caller's object
+    // must not reach this request's dial.
+    let snapshot = perry_ext_net::native_transport::resolution_options(opts_f64);
     with_handle_mut::<ClientRequestHandle, _, _>(handle, |request| {
-        request.connect_options_bits = opts_f64.to_bits();
+        request.connect_options_bits = snapshot.to_bits();
     });
 }
 
