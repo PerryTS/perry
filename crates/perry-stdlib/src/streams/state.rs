@@ -557,16 +557,20 @@ fn trace_expandos<V: StreamRootVisitor>(visitor: &mut V, entries: &mut Expandos)
 // Registries (private to this module)
 // ─────────────────────────────────────────────────────────────────────
 
+/// A record registry keyed by stream-family id (spelled out at each static so
+/// the registry audits see the id-keyed map).
 type Registry<T> = std::sync::LazyLock<Mutex<HashMap<usize, T>>>;
 
-static READABLE_STREAMS: Registry<ReadableStreamData> =
+static READABLE_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, ReadableStreamData>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-static WRITABLE_STREAMS: Registry<WritableStreamData> =
+static WRITABLE_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, WritableStreamData>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-static TRANSFORM_STREAMS: Registry<TransformStreamData> =
+static TRANSFORM_STREAMS: std::sync::LazyLock<Mutex<HashMap<usize, TransformStreamData>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-static READERS: Registry<ReaderData> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-static WRITERS: Registry<WriterData> = std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static READERS: std::sync::LazyLock<Mutex<HashMap<usize, ReaderData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
+static WRITERS: std::sync::LazyLock<Mutex<HashMap<usize, WriterData>>> =
+    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
 /// One record, borrowed: derefs to the record for as long as it lives
 /// (today it holds its registry's lock, so it must not outlive the statement
@@ -615,6 +619,7 @@ macro_rules! accessors {
 
         /// Run `f` on the record `r` names; None when there is none.
         #[inline]
+        #[allow(dead_code)]
         pub(super) fn $with<R>(r: $ref, f: impl FnOnce(&mut $data) -> R) -> Option<R> {
             $table.lock().unwrap().get_mut(&r.0).map(f)
         }
