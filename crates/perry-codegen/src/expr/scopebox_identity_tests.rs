@@ -146,6 +146,7 @@ fn a_local_hole_fill_checks_capacity_length_and_prototype() {
 #[test]
 fn a_factory_parameter_name_cannot_supply_allocation_provenance() {
     let factory = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 100,
         params: vec![perry_hir::Param {

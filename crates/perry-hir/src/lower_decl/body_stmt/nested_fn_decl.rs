@@ -78,6 +78,13 @@ pub(super) fn lower_nested_fn_decl(
     };
     ctx.record_local_source_span(local_id, fn_decl.ident.span);
 
+    let type_params = fn_decl
+        .function
+        .type_params
+        .as_ref()
+        .map(|tp| crate::lower_types::extract_type_params(tp))
+        .unwrap_or_default();
+
     let scope_mark = ctx.enter_scope();
     let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
@@ -316,6 +323,7 @@ pub(super) fn lower_nested_fn_decl(
         byte_offset: fn_decl.function.span.lo.0,
         func_id,
         params,
+        type_params,
         return_type: Type::Any,
         body,
         captures,

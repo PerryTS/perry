@@ -814,6 +814,7 @@ mod tests {
 
     fn arrow(func_id: u32, params: Vec<Param>, ret: Expr, captures_this: bool) -> Expr {
         Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id,
             params,
@@ -1127,6 +1128,7 @@ mod tests {
             },
             Stmt::Return(
                 Some(Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: 0,
                     func_id: 2,
                     params: vec![],

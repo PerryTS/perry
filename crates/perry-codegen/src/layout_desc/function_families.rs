@@ -489,6 +489,7 @@ mod tests {
     #[test]
     fn only_a_function_the_module_constructs_arms_a_run() {
         let closure = |func_id: u32| Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id,
             params: Vec::new(),

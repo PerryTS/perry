@@ -8168,6 +8168,7 @@ fn boxed_local_capture_module(name: &str) -> Module {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: 0,
                     func_id: 30,
                     params: Vec::new(),
@@ -8212,6 +8213,7 @@ fn boxed_local_storage_module(name: &str, init: Expr, replacement: Expr) -> Modu
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: 0,
                     func_id: 30,
                     params: Vec::new(),
@@ -10823,6 +10825,7 @@ fn typed_f64_closure_clone_module(case: &str) -> Module {
             }),
             mutable: false,
             init: Some(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 300,
                 params,
@@ -10986,6 +10989,7 @@ fn typed_i32_closure_clone_module(case: &str) -> Module {
             ty: local_ty,
             mutable: false,
             init: Some(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 303,
                 params,
@@ -11496,6 +11500,7 @@ fn typed_i1_closure_clone_module(case: &str) -> Module {
             ty: local_ty,
             mutable: false,
             init: Some(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 301,
                 params,
@@ -11601,6 +11606,7 @@ fn typed_string_closure_clone_module(case: &str) -> Module {
             ty: local_ty,
             mutable: false,
             init: Some(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 302,
                 params,

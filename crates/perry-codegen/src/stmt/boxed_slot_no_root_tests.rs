@@ -116,6 +116,7 @@ fn module_with_boxed_local() -> Module {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: 0,
                     func_id: 2,
                     params: Vec::new(),
