@@ -514,6 +514,20 @@ pub fn close_server(owner: f64) {
 pub fn connect(owner: f64, a: f64, b: f64, c: f64) -> f64 {
     socket::connect(owner, a, b, c)
 }
+
+/// Dial `host:port` with the resolution options of a client's `options`
+/// object (`lookup`, `family`, `hints`, `autoSelectFamily`).
+pub fn connect_with_options(owner: f64, options: f64, port: u16, host: &str) -> f64 {
+    let scope = TransientRootScope::enter();
+    let owner = scope.root_nanbox(owner);
+    let options = scope.root_nanbox(crate::payload_lookup::connect_options(
+        Some(options),
+        port,
+        host,
+    ));
+    let undefined = crate::payload_transport::undefined();
+    socket::connect(owner.get(), options.get(), undefined, undefined)
+}
 pub fn get(owner: f64, key: &str) -> f64 {
     socket::get(owner, key)
 }

@@ -51,6 +51,12 @@ pub(super) fn scan_http_roots(visitor: &mut GcRootVisitor<'_>) {
         visitor.visit_i64_slot(&mut req.end_callback);
         visit_value(visitor, full_mark, &mut req.abort_signal_bits, &mut named);
         visit_value(visitor, full_mark, &mut req.abort_listener_bits, &mut named);
+        visit_value(
+            visitor,
+            full_mark,
+            &mut req.connect_options_bits,
+            &mut named,
+        );
         for cb in &mut req.pending_write_callbacks {
             visitor.visit_i64_slot(cb);
         }
@@ -140,6 +146,7 @@ pub(super) extern "C" fn retire_client_roots(agent: u64) {
         req.request_create_connection = 0;
         req.abort_signal_bits = 0;
         req.abort_listener_bits = 0;
+        req.connect_options_bits = 0;
         req.pending_write_callbacks.clear();
         req.listeners.clear();
         req.tls.check_server_identity_callback = 0;

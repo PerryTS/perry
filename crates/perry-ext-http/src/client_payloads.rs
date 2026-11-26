@@ -88,7 +88,11 @@ fn request_edges(req: &ClientRequestHandle, out: &mut Vec<u64>) {
         ]
         .map(address_word),
     );
-    out.extend([req.abort_signal_bits, req.abort_listener_bits]);
+    out.extend([
+        req.abort_signal_bits,
+        req.abort_listener_bits,
+        req.connect_options_bits,
+    ]);
     out.extend(
         req.pending_write_callbacks
             .iter()

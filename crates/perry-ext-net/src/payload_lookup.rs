@@ -133,6 +133,28 @@ pub(crate) fn failed(owner: f64, error: f64) {
     );
 }
 
+/// The options a client that dials for `options` (a `tls.connect` or
+/// `http.request` options object) passes to `Socket#connect`: its endpoint and
+/// the resolution options, as Node passes them through.
+pub(crate) fn connect_options(options: Option<f64>, port: u16, host: &str) -> f64 {
+    let scope = TransientRootScope::enter();
+    let options = options.map(|options| scope.root_nanbox(options));
+    let connect = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    p::own_set(connect.get(), "port", f64::from(port));
+    let host = scope.root_nanbox(events::string(host));
+    p::own_set(connect.get(), "host", host.get());
+    for key in ["lookup", "family", "hints", "autoSelectFamily"] {
+        let Some(options) = options.as_ref() else {
+            break;
+        };
+        let value = scope.root_nanbox(field(options.get(), key));
+        if !JsValue::from_bits(value.get().to_bits()).is_undefined() {
+            p::own_set(connect.get(), key, value.get());
+        }
+    }
+    connect.get()
+}
+
 /// Call `lookup(host, dnsopts, callback)`. The callback may run before this
 /// returns, so the caller holds no payload borrow across it.
 pub(crate) fn start(owner: f64, options: f64, host: &str, port: u16, lookup: f64) {
