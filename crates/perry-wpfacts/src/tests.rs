@@ -105,6 +105,7 @@ mod dynamic_code;
 mod dynamic_import;
 mod dynamic_import_options;
 mod e20g2_self_store;
+mod globesc1;
 mod e20g_global_name;
 mod elem_undef;
 mod element_reads;

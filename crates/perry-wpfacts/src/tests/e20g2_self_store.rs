@@ -176,16 +176,89 @@ fn e20g2_bare_window_reads_the_store() {
     assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
-/// KEEP: any other value stored on the self-reference escapes (bare
-/// `globalThis` reads are the global object, not the stored value).
+/// RED (was KEEP "any other value stored on the self-reference escapes"):
+/// R-GLOBAL-SELF (owner 11-18 R-GLOBAL, 11-24 run-time-read names): the
+/// runtime never reads `globalThis` / `global` by name (it reaches the
+/// global object through `js_get_global_this`), so a store there is the
+/// program's own field of the global object, which only program reads see
+/// (bare `globalThis`, `globalThis.X`, `typeof globalThis`): no escape, no
+/// realm hold.
 #[test]
-fn e20g2_other_value_on_self_key_escapes() {
+fn e20g2_other_value_on_self_key_stays_the_programs() {
+    let mut bad = Vec::new();
     for s in [
         "(globalThis as any).globalThis = n;",
         "(globalThis as any).global = n;",
+        "const g = globalThis as Record<string, unknown>; g[\"globalThis\"] = n;",
     ] {
-        assert!(!v_proven(&plain(s)), "{s}: n.v proven although n escaped");
+        if !v_proven(&plain(s)) {
+            bad.push(format!("{s}: n.v not proven"));
+        }
+        if held(&plain(s)) {
+            bad.push(format!("{s}: realm held"));
+        }
     }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
+}
+
+/// `n` stored on the self key (or inside the object stored there), `read`
+/// handed to an unknown function (`Object[k]`), then `n.v`.
+fn self_read_handed(store: &str, read: &str) -> String {
+    format!(
+        "class N {{ v = 1; }}
+        const n = new N();
+        {store}
+        const w: any = {read};
+        const f: any = (Object as any)[process.argv[2]];
+        f(w);
+        console.log(/*A*/ n.v);"
+    )
+}
+
+/// Soundness of R-GLOBAL-SELF (precondition): every program read of the
+/// self name sees what the program stored there (ECMA-262 9.1.1.4.6 global
+/// environment GetBindingValue, 9.1.1.2.6: [[Get]](global, name); perry: bare
+/// `globalThis` is `globalThis["globalThis"]`, `globalThis.X` reads X off
+/// that value, measured on perry.i9 and node). The value read is handed to
+/// unknown code, so `n` reached through the read must leave `n.v`
+/// unproven; the controls (no store) keep it proven.
+#[test]
+fn e20g2_self_key_reads_see_the_store() {
+    let mut bad = Vec::new();
+    // The unknown call takes what it is handed: `n` itself is not proven.
+    if v_proven(&self_read_handed("", "n")) {
+        bad.push("control: f(n) keeps n.v proven".to_string());
+    }
+    for (store, read) in [
+        ("(globalThis as any).globalThis = n;", "globalThis"),
+        ("(globalThis as any).global = n;", "global"),
+        ("(globalThis as any).globalThis = { Math: n };", "globalThis.Math"),
+        ("(globalThis as any).globalThis = { k2: n };", "(globalThis as any).k2"),
+        ("(globalThis as any).globalThis = { k2: n };", "(globalThis as any)[\"k2\"]"),
+        ("(globalThis as any).globalThis = { k2: n };", "(globalThis as any)[process.argv[3]]"),
+        ("(globalThis as any).globalThis = N;", "typeof globalThis === \"function\" ? n : 0"),
+        ("(globalThis as any).global = N;", "typeof global === \"function\" ? n : 0"),
+        (
+            "const g = globalThis as Record<string, unknown>; g[\"globalThis\"] = n;",
+            "globalThis",
+        ),
+        (
+            "const g = globalThis as Record<string, unknown>; g[process.argv[3]] = n;",
+            "globalThis",
+        ),
+    ] {
+        if v_proven(&self_read_handed(store, read)) {
+            bad.push(format!("{store} / {read}: n.v proven although the read hands n on"));
+        }
+    }
+    // Controls: without the store the reads are the global object, and
+    // `n`, stored nowhere, stays proven.
+    for read in ["globalThis", "global", "globalThis.Math", "(globalThis as any).k2"] {
+        if !v_proven(&self_read_handed("", read)) {
+            bad.push(format!("control {read}: n.v not proven"));
+        }
+    }
+    assert!(bad.is_empty(), "{}", bad.join("\n"));
 }
 
 /// The m2 seed (audio/index.ts:27 beside browser.ts:228): a literal's own

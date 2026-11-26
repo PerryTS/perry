@@ -106,20 +106,11 @@ pub fn plain_namespace_own_store(m: &Model, t: Tok, key: Key) -> bool {
 /// `performance`, an undeclared global such as `web3d`) is an own property
 /// of the global object that only program code reads, through its field. A
 /// computed key may name any global.
-/// A named key the realm declares as the global object's reference to
-/// itself (`globalThis`, `global`). The runtime reaches the global object
-/// through `js_get_global_this`, never by reading these names, but a bare
-/// `globalThis` / `global` read is the global object in the model
-/// (`ns_by_name`), so only the global object itself may be stored there
-/// without escaping (`tok_store`).
-pub fn global_self_key(m: &Model, t: Tok, key: Key) -> bool {
-    let Key::Named(a) = key else {
-        return false;
-    };
-    let name = &m.atoms[a as usize];
-    matches!(ns_by_name(name), Some(BuiltinNs::GlobalThis)) && m.native_property(t, name).is_some()
-}
-
+/// The global object's self-references (`globalThis`, `global`, R-GLOBAL-SELF)
+/// are such keys: the runtime reaches the global object through
+/// `js_get_global_this`, never by reading these names, and a program read
+/// of the name (bare, `globalThis.X`, `typeof`) takes the field
+/// (`declared_global_value`), so what the program stores there is its own.
 pub fn global_store_escapes(m: &mut Model, t: Tok, key: Key) -> bool {
     let Key::Named(a) = key else {
         return true;
@@ -129,12 +120,6 @@ pub fn global_store_escapes(m: &mut Model, t: Tok, key: Key) -> bool {
     // `RUNTIME_GLOBAL_READS`) is the program's field too: the runtime's
     // whole use of it is the handler call `Gen::runtime_global_handlers`
     // hangs on that field (RTREAD14), no escape.
-    // The global object's self-reference (`globalThis`, `global`): a bare
-    // read of the name is the global object, so `tok_store` decides what a
-    // store there hands on (`global_self_key`).
-    if global_self_key(m, t, key) {
-        return true;
-    }
     let Some(p) = m.native_property(t, &name) else {
         return false;
     };
