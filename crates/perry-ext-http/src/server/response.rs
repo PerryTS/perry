@@ -1240,9 +1240,20 @@ pub(crate) fn finalize_buffered_end(
     let has_explicit_length = original_headers.iter().any(|(n, _)| {
         n.eq_ignore_ascii_case("content-length") || n.eq_ignore_ascii_case("transfer-encoding")
     });
+    let socket = response_socket(response_root.get());
+    let socket_destroyed = JsValue::from_bits(socket.to_bits()).is_pointer()
+        && heap::truthy(unsafe { perry_ffi::runtime_get(socket, b"destroyed") });
     let sr = response_state_mut(response_root.get())?;
     if sr.writable_ended {
         return None;
+    }
+    if socket_destroyed {
+        // node's `_writeRaw`: a destroyed socket takes nothing, and the write's
+        // callback (`onFinish`: the end callbacks, then `'finish'`) never runs.
+        // The response's `'close'` comes from its socket's.
+        sr.writable_ended = true;
+        heap::mark_ended(response_root.get());
+        return Some(EndOutcome::Deferred);
     }
 
     // P5 streaming: the head already went to the wire on this thread, so the

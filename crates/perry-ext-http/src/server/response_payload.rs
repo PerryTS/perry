@@ -292,7 +292,8 @@ pub(crate) fn add_listener(handle: i64, method: &'static [u8], event: &str, call
     unsafe { perry_ffi::runtime_call(owner.get(), method, &[event.get(), cb.get()]) };
     owner.get()
 }
-/// node's `emitCloseNT`: `'close'` fires once, latched by `_closed`.
+/// node's `emitCloseNT`: `'close'` fires once, latched by `_closed`, on a
+/// response marked `destroyed`.
 pub(crate) fn emit_close(handle: i64) {
     // Each property operation can run JS and move the response: re-read it.
     let roots = TransientRootScope::enter();
@@ -301,6 +302,7 @@ pub(crate) fn emit_close(handle: i64) {
     if field(h(), b"_closed").is_some_and(truthy) {
         return;
     }
+    set_field(h(), b"destroyed", bool_value(true));
     set_field(h(), b"_closed", bool_value(true));
     emit(h(), "close");
 }

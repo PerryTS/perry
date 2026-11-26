@@ -1543,37 +1543,52 @@ unsafe fn flush_after(link: OwnerLink, force: bool) {
     }
 }
 
-/// The kernel took a write whole and no driver write carries it: post its
-/// completion on the loop, so its `Wrote` comes on a later turn, after the
-/// caller's `write()` returned (Node runs that callback from the next tick).
-/// One post per socket at a time retires every such write in front. Returns
-/// whether the write is posted; with the post queue full, an empty driver
-/// write carries the completion instead.
+/// The kernel took a write whole and no driver write carries it: node's
+/// `onwrite` for a synchronous write defers `afterWrite` with
+/// `process.nextTick`, queued inside the caller's `write()`, so its `Wrote`
+/// comes from that tick, before ticks queued after the write and before the
+/// loop's next phase. One tick per socket at a time retires every such write
+/// in front. Returns whether the write is posted.
 unsafe fn post_whole(
-    driver: &mut turnloop::Loop,
+    _driver: &mut turnloop::Loop,
     entry: &mut Entry,
-    name: Name,
+    _name: Name,
     link: OwnerLink,
 ) -> Result<bool, Error> {
     if entry.posted {
         return Ok(true);
     }
-    match driver
-        .poster()
-        .post(name.token(OP_WRITE), turnloop::Payload::U64(0))
-    {
-        Ok(()) => {}
-        Err(e) if e.payload.is_none() => {}
-        Err(_) => {
-            write_queue::submit_bytes(driver, name, entry, Vec::new())?;
-            return Ok(false);
-        }
-    }
-    census::note_submit(OP_WRITE);
-    // The post's ref: its completion dereferences the cell.
+    // The tick's ref: its completion dereferences the cell.
     hold(link);
     entry.posted = true;
+    let tick = crate::closure::js_closure_alloc(crate::fn_info!(posted_tick, 0), 1);
+    crate::closure::js_closure_set_capture_f64(tick, 0, link.0 as f64);
+    crate::builtins::js_queue_next_tick(tick as i64);
     Ok(true)
+}
+
+extern "C" fn posted_tick(
+    c: *const crate::closure::ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let link = OwnerLink(crate::closure::js_closure_get_capture_f64(c, 0) as usize);
+    unsafe { complete_posted(link) };
+    f64::from_bits(crate::value::TAG_UNDEFINED)
+}
+
+/// The completion of writes the kernel took whole (`post_whole`). A retire
+/// may already have reported them; then nothing is left.
+unsafe fn complete_posted(link: OwnerLink) {
+    if let Some(c) = core_of(link) {
+        let route = c.route;
+        let mut retired = Vec::new();
+        if let Some(entry) = c.entry.as_mut() {
+            entry.posted = false;
+            retire_posted(entry, &mut retired);
+        }
+        emit_wrote(route, link, &retired);
+    }
+    release(link);
 }
 
 /// One retired caller write: `(user, len, the part of len the driver wrote,
@@ -2124,20 +2139,7 @@ unsafe fn dispatch_stream(
             flush_after(link, false);
             emit_wrote(route, link, &retired);
         }
-        OpResult::Posted(_) => {
-            // The completion of writes the kernel took whole (`post_whole`).
-            // A retire may already have reported them; then nothing is left.
-            if let Some(c) = core_of(link) {
-                let route = c.route;
-                let mut retired = Vec::new();
-                if let Some(entry) = c.entry.as_mut() {
-                    entry.posted = false;
-                    retire_posted(entry, &mut retired);
-                }
-                emit_wrote(route, link, &retired);
-            }
-            release(link);
-        }
+        OpResult::Posted(_) => complete_posted(link),
         OpResult::Shutdown => {
             let Some(c) = current(link, handle) else {
                 return;
