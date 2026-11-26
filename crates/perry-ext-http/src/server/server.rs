@@ -156,6 +156,8 @@ pub struct HttpServer {
     pub(crate) bun_promises: Vec<crate::server::bun_server::PendingPromise>,
     /// `createServer({ ServerResponse })`, or `undefined`.
     pub(crate) response_class: f64,
+    /// `createServer({ IncomingMessage })`, or `undefined`.
+    pub(crate) request_class: f64,
     /// Failures waiting for the pump to emit `'clientError'`.
     pub(crate) pending_client_errors:
         std::collections::VecDeque<crate::server::client_error::ClientError>,
@@ -209,6 +211,7 @@ impl HttpServer {
             in_flight: Vec::new(),
             bun_promises: Vec::new(),
             response_class: f64::from_bits(TAG_UNDEFINED),
+            request_class: f64::from_bits(TAG_UNDEFINED),
             pending_client_errors: std::collections::VecDeque::new(),
             activity_count: activity::current_count(),
         }
@@ -484,6 +487,14 @@ pub(crate) fn apply_server_options(server: &mut HttpServer, options_f64: f64) {
     let class = f64::from_bits(class.bits());
     if unsafe { js_is_truthy(class) } != 0 {
         server.response_class = class;
+    }
+    let class = perry_ffi::object_field_by_name(
+        JsValue::from_bits(options.get().to_bits()),
+        "IncomingMessage",
+    );
+    let class = f64::from_bits(class.bits());
+    if unsafe { js_is_truthy(class) } != 0 {
+        server.request_class = class;
     }
     let Some(json) = json else {
         return;

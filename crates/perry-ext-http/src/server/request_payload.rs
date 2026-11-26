@@ -48,12 +48,18 @@ pub(crate) unsafe fn state(handle: i64) -> Option<&'static mut IncomingMessage> 
 fn string_value(text: &str) -> f64 {
     f64::from_bits(JsValue::from_string_ptr(perry_ffi::alloc_string(text).as_raw()).bits())
 }
-/// node's parser: `new IncomingMessage(socket)`, then the head's fields, then
+/// node's parser: `new IncomingMessage(socket)` (or the server's
+/// `IncomingMessage` option: the birth is on its prototype), then the head's fields, then
 /// the payload. Returns the object word. Allocates and runs the constructor:
 /// the caller holds no borrow and roots what it keeps.
-pub(crate) unsafe fn alloc(im: IncomingMessage, socket: f64) -> f64 {
+pub(crate) unsafe fn alloc(im: IncomingMessage, socket: f64, class: f64) -> f64 {
     let roots = TransientRootScope::enter();
     let socket = roots.root_nanbox(socket);
+    let proto = roots.root_nanbox(if JsValue::from_bits(class.to_bits()).is_pointer() {
+        perry_ffi::runtime_get(class, b"prototype")
+    } else {
+        f64::from_bits(TAG_UNDEFINED)
+    });
     let mut raw = roots.root_nanbox(f64::from_bits(
         JsValue::from_object_ptr(
             perry_ffi::js_array_alloc((im.raw_headers.len() * 2) as u32).cast::<u8>(),
@@ -79,9 +85,7 @@ pub(crate) unsafe fn alloc(im: IncomingMessage, socket: f64) -> f64 {
     let version = roots.root_nanbox(string_value(&im.http_version));
     let url = roots.root_nanbox(string_value(&im.url));
     let method = roots.root_nanbox(string_value(&im.method));
-    let owner = roots.root_nanbox(js_node_http_incoming_message_create(f64::from_bits(
-        TAG_UNDEFINED,
-    )));
+    let owner = roots.root_nanbox(js_node_http_incoming_message_create(proto.get()));
     let bytes = retained_bytes(&im);
     if !payload::attach(owner.get(), &FAMILY, im, bytes) {
         return f64::from_bits(TAG_UNDEFINED);
