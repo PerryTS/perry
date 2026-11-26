@@ -577,6 +577,42 @@ pub(crate) fn component_turn_and_take(
     Ok(take(operations, closing))
 }
 
+/// One nonblocking turn that hands back the net `Closed` completions `select`
+/// picks, without dispatching anything. Every other completion stays in
+/// STAGED, in its original order, for the next dispatch.
+pub(crate) fn take_closed_completions(
+    select: impl Fn(&turnloop::Completion) -> bool,
+) -> Vec<turnloop::Completion> {
+    if STATE.with(Cell::get) != LoopState::Owner {
+        return Vec::new();
+    }
+    AGENT_LOOP.with(|slot| {
+        // Re-entry from inside a dispatch pass: that pass owns the turn.
+        let Ok(mut slot) = slot.try_borrow_mut() else {
+            return;
+        };
+        let Some(agent) = slot.as_mut() else {
+            return;
+        };
+        if let Ok(info) = agent.driver.turn(Timeout::Now, &mut agent.completions) {
+            agent.record(&info);
+        }
+    });
+    STAGED.with(|staged| {
+        staged
+            .borrow_mut()
+            .extract_if(.., |c| {
+                !is_component_io(c)
+                    && c.token != TIMER_TOKEN
+                    && !crate::turnloop_proc::owns(c.token)
+                    && !crate::turnloop_pool::owns(c.token)
+                    && !crate::turnloop_post::owns(c.token)
+                    && select(c)
+            })
+            .collect()
+    })
+}
+
 /// Whether this thread may take the precise park path. One TLS read once the
 /// slot is claimed; the claim itself is taken once, on the first ask.
 #[inline]
@@ -899,6 +935,11 @@ pub(super) fn park_until(deadline: Instant) -> Park {
 }
 
 fn park_turn(deadline: Instant) -> Park {
+    if STAGED.with(|staged| !staged.borrow().is_empty()) {
+        // A close-phase turn left completions for the poll phase: deliver
+        // them instead of blocking ahead of them.
+        return Park::Notified;
+    }
     AGENT_LOOP.with(|slot| {
         let mut slot = slot.borrow_mut();
         let Some(agent) = slot.as_mut() else {

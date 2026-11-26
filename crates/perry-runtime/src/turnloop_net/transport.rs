@@ -949,7 +949,7 @@ pub unsafe fn close(core: *mut TransportCore, link: OwnerLink) -> NetResult<bool
             }
             // Still resolving: owed like a handle's close.
             hold(link);
-            closing::queue(link, c.route);
+            closing::queue(link, c.route, None);
             return Ok(true);
         };
         #[cfg(windows)]
@@ -963,6 +963,8 @@ pub unsafe fn close(core: *mut TransportCore, link: OwnerLink) -> NetResult<bool
             // A failed connect attempt's close is already in flight; its
             // `Closed` no longer matches the core and is delivered as this
             // socket's close.
+            hold(link);
+            closing::queue(link, c.route, Some(entry.handle));
             return Ok(true);
         }
         census::note_submit(OP_CLOSE);
@@ -973,7 +975,11 @@ pub unsafe fn close(core: *mut TransportCore, link: OwnerLink) -> NetResult<bool
             }
         }
         match driver.close(entry.handle, name.token(OP_CLOSE)) {
-            Ok(()) => Ok(true),
+            Ok(()) => {
+                hold(link);
+                closing::queue(link, c.route, Some(entry.handle));
+                Ok(true)
+            }
             Err(e) => {
                 // The handle is still live: keep it (and its ref) so no
                 // completion can outlive the cell.
@@ -1726,6 +1732,8 @@ unsafe fn dispatch_stream(
             if retry {
                 // A failed attempt's handle, not the socket the caller sees.
                 attempt_next_address(link);
+            } else if closing::mark_closed(link, handle) {
+                // `close` queued it: the close-callbacks phase delivers it.
             } else {
                 let mut event = NetCompletion::closed(id).linked();
                 // Callback context belongs to the closing incarnation even if
@@ -1921,14 +1929,30 @@ pub(super) unsafe fn deliver_parked_eof(link: OwnerLink, handle: Option<Handle>)
     release(link);
 }
 
-/// Deliver the `Closed` that [`close`] queued for a socket still resolving.
+/// Whether `completion` is the `Closed` of a handle [`close`] queued.
+pub(super) fn is_queued_close(completion: &Completion) -> bool {
+    let (_, op, cell) = link_parts(completion.token);
+    owns(completion.token)
+        && op == OP_CLOSE
+        && matches!(completion.result, OpResult::Closed)
+        && closing::awaits(OwnerLink(cell), completion.handle)
+}
+
+/// Deliver a `Closed` that [`close`] queued, in the close-callbacks phase.
+/// A resolving connect's carries no handle parts.
 ///
 /// # Safety
 /// The queued ref pins `link`'s cell; this call releases it.
-pub(super) unsafe fn deliver_queued_closed(link: OwnerLink, route: u8) {
+pub(super) unsafe fn deliver_closed(link: OwnerLink, route: u8, handle: Option<Handle>) {
     if !TEARDOWN.with(Cell::get) && np::link_event_owner(link).is_some() {
         let mut event = NetCompletion::closed(link.0 as i64).linked();
-        if core_of(link).is_some() {
+        let parts = handle.map(handle_parts);
+        if let Some(parts) = parts.as_ref() {
+            event.flags |= sink::NET_FLAG_HANDLE_PARTS;
+            event.data = parts.as_ptr().cast();
+            event.len = std::mem::size_of_val(parts);
+        }
+        if core_of(link).is_some() && !sabotage("stale_closed_flag") {
             // The owner connected again: a new incarnation owns the cell.
             event.flags |= sink::NET_FLAG_STALE;
         }
