@@ -1552,7 +1552,8 @@ pub fn link_shutdown(core: &mut TransportCore, link: OwnerLink, user: u64) -> Re
 
 /// Release the transport: the handle moves into the driver's close, the
 /// deadline and a pending resolve go with it. `Ok(true)`: a [`NET_CLOSED`]
-/// for this link follows; `Ok(false)`: there was no handle, so a binding that
+/// for this link follows, without handle parts for a connect still resolving;
+/// `Ok(false)`: there was neither a handle nor a connect, so a binding that
 /// owes a `close` event schedules it itself. Then release the payload
 /// (`native_payload::close`); never close from `Drop`.
 pub fn link_close(core: &mut TransportCore, link: OwnerLink) -> Result<bool, NetError> {

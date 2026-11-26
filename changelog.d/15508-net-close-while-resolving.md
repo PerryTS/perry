@@ -1,0 +1,1 @@
+Destroying a `net.Socket` whose host name is still resolving emits `'close'` in the close-callbacks phase, after the ticks and the immediates queued before it, as Node does, instead of from the next tick.

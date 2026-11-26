@@ -178,6 +178,7 @@ pub(crate) fn try_desugar_reactive_text(
         inner_captures = ctx.filter_module_level_captures(inner_captures);
 
         let inner_closure = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: call.span.lo.0,
             func_id: inner_func_id,
             params: vec![v_param],
@@ -225,6 +226,7 @@ pub(crate) fn try_desugar_reactive_text(
     outer_captures = ctx.filter_module_level_captures(outer_captures);
 
     let outer_closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: call.span.lo.0,
         func_id: outer_func_id,
         params: vec![],

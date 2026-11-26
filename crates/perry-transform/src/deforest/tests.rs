@@ -168,6 +168,7 @@ fn rejects_producer_called_inside_closure() {
     let helper = make_simple_producer(); // id=1, the producer
 
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 2,
         params: vec![],

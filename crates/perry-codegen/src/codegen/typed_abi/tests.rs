@@ -183,6 +183,7 @@ fn string_clone_accepts_mixed_params_when_only_string_rep_flows_to_return() {
 #[test]
 fn closure_capture_representations_are_runtime_guard_candidates() {
     let expr = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 7,
         params: vec![param(20, "scale", Type::Number)],
@@ -219,6 +220,7 @@ fn closure_capture_representations_are_runtime_guard_candidates() {
 #[test]
 fn closure_capture_representations_follow_effective_slot_order() {
     let expr = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 8,
         params: vec![param(20, "scale", Type::Number)],
@@ -319,6 +321,7 @@ fn typed_number_remainder_keeps_integer_check_and_ieee_fallback() {
 fn numeric_captures_share_the_actual_value_ordered_entry_tier() {
     let mut module = perry_hir::Module::new("numeric_capture_entry");
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 2,
         params: vec![param(30, "x", Type::Number)],
