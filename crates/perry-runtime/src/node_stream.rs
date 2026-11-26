@@ -705,6 +705,15 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
         {
             return f64::from_bits(TAG_FALSE);
         }
+        // node's `endReadable` runs from the `read()` that finds the buffer
+        // empty after EOF. With chunks still waiting for the flow, that is
+        // the flow that drains them (`flush_pending_readable_chunks`), not
+        // this push: `r.push(x); r.push(null)` before the first `resume_`
+        // ends in that `resume_`, after an earlier stream's tick that pushed
+        // its own EOF to an empty buffer.
+        if pending_readable_chunk_count(stream) > 0 {
+            return f64::from_bits(TAG_FALSE);
+        }
         schedule_readable_end(stream);
         return f64::from_bits(TAG_FALSE);
     }
