@@ -177,6 +177,7 @@ fn scan_http_server_roots(visitor: &mut GcRootVisitor<'_>) {
                 }
             }
             visitor.visit_nanbox_f64_slot(&mut server.response_class);
+            visitor.visit_nanbox_f64_slot(&mut server.request_class);
             for error in server.pending_client_errors.iter_mut() {
                 visitor.visit_nanbox_f64_slot(&mut error.socket);
             }
@@ -289,6 +290,7 @@ extern "C" fn retire_transport_edges(agent: u64) {
             server.pending.clear();
             server.in_flight.clear();
             server.response_class = undefined;
+            server.request_class = undefined;
             server.with_client_errors(|errors| errors.clear());
             server.bun_promises.clear();
         }

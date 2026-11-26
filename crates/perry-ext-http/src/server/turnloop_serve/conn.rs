@@ -620,10 +620,14 @@ fn decode_after(id: &RootedSocket, mut initial: Option<Step>) {
                 let max_requests = with_conn(id, |c| c.server_handle)
                     .and_then(|server| with_base_server(server, |s| s.max_requests_per_socket))
                     .unwrap_or(0.0);
+                // node's `new server[kIncomingMessage](socket)`.
+                let request_class = with_conn(id, |c| c.server_handle)
+                    .and_then(|server| with_base_server(server, |s| s.request_class))
+                    .unwrap_or(f64::from_bits(perry_ffi::JsValue::UNDEFINED.bits()));
                 // node's `parserOnIncoming`: the request, then its response.
                 let roots = perry_ffi::TransientRootScope::enter();
                 let req = roots.root_nanbox(unsafe {
-                    crate::server::request_payload::alloc(*message, id.value())
+                    crate::server::request_payload::alloc(*message, id.value(), request_class)
                 });
                 let response = alloc_http1_server_response_for_turnloop(
                     id.value(),
