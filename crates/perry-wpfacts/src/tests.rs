@@ -1787,6 +1787,7 @@ mod w3k;
 mod nsprim;
 mod hostchain;
 mod wbound;
+mod widened_finite_keys;
 mod w3l;
 mod whyhold1;
 mod worker_msg;
