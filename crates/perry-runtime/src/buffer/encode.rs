@@ -85,7 +85,10 @@ pub(crate) struct StringTooLong;
 /// 3 = base64url, 4 = latin1, 5 = ascii, 6 = utf16le). The result length is
 /// known from the encoding before anything is built; UTF-8 is measured after
 /// decoding (see [`try_utf8_string`]).
-fn decode_bytes_to_string(bytes: &[u8], encoding: i32) -> Result<*mut StringHeader, StringTooLong> {
+pub(crate) fn decode_bytes_to_string(
+    bytes: &[u8],
+    encoding: i32,
+) -> Result<*mut StringHeader, StringTooLong> {
     let n = bytes.len();
     let units = match encoding {
         1 => n.saturating_mul(2),

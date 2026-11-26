@@ -7,6 +7,7 @@ use sync_run::{
     cp_run_to_completion,
 };
 
+use crate::buffer::StringTooLong;
 use crate::closure::{
     js_closure_alloc, js_closure_get_capture_ptr, js_closure_set_capture_ptr, ClosureHeader,
 };
@@ -24,6 +25,15 @@ pub extern "C" fn js_child_process_exec_sync(
     cmd_ptr: *const StringHeader,
     options_ptr: *const ObjectHeader,
 ) -> f64 {
+    cp_sync_settle(exec_sync(cmd_ptr, options_ptr))
+}
+
+/// The body of [`js_child_process_exec_sync`]; what it throws is returned so
+/// the captured output is released first.
+fn exec_sync(
+    cmd_ptr: *const StringHeader,
+    options_ptr: *const ObjectHeader,
+) -> Result<f64, CpSyncThrow> {
     cp_require_process_support();
     let opts_val = if options_ptr.is_null() {
         cp_undefined()
@@ -33,7 +43,7 @@ pub extern "C" fn js_child_process_exec_sync(
     let mode = cp_read_output_mode(opts_val, false);
 
     if cmd_ptr.is_null() {
-        return cp_box_output(b"", &mode);
+        return Ok(cp_box_output(b"", &mode));
     }
 
     let cmd_str = unsafe {
@@ -50,12 +60,25 @@ pub extern "C" fn js_child_process_exec_sync(
 
     let run_options = cp_read_sync_stdio_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);
-    let stdout_box = cp_box_run_output(&run.stdout, run.stdout_piped, &mode);
+    cp_sync_result(&run, &cmd_str, &mode)
+}
+
+/// Box a finished sync run's output and settle it: stdout, or the failure
+/// error. Node decodes both streams first, so either one too long to be a
+/// string throws `ERR_STRING_TOO_LONG` whatever the exit status.
+fn cp_sync_result(run: &sync_run::CpRun, cmd: &str, mode: &CpOutput) -> Result<f64, CpSyncThrow> {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let stdout_box = scope.root_nanbox_f64(cp_box_run_output(&run.stdout, run.stdout_piped, mode)?);
+    let stderr_box = scope.root_nanbox_f64(cp_box_run_output(&run.stderr, run.stderr_piped, mode)?);
     if run.success() {
-        return stdout_box;
+        return Ok(stdout_box.get_nanbox_f64());
     }
-    let stderr_box = cp_box_run_output(&run.stderr, run.stderr_piped, &mode);
-    cp_sync_throw_error(&run, &cmd_str, stdout_box, stderr_box);
+    Err(CpSyncThrow::Error(cp_sync_error(
+        run,
+        cmd,
+        stdout_box.get_nanbox_f64(),
+        stderr_box.get_nanbox_f64(),
+    )))
 }
 
 /// `child_process.spawnSync(command[, args][, options])` — run the file
@@ -69,9 +92,19 @@ pub extern "C" fn js_child_process_spawn_sync(
     args_ptr: *const crate::array::ArrayHeader,
     options_ptr: *const ObjectHeader,
 ) -> *mut ObjectHeader {
+    cp_sync_settle(spawn_sync(cmd_ptr, args_ptr, options_ptr))
+}
+
+/// The body of [`js_child_process_spawn_sync`]; an output too long to decode
+/// is returned so the captured output is released before the throw.
+fn spawn_sync(
+    cmd_ptr: *const StringHeader,
+    args_ptr: *const crate::array::ArrayHeader,
+    options_ptr: *const ObjectHeader,
+) -> Result<*mut ObjectHeader, CpSyncThrow> {
     cp_require_process_support();
     if cmd_ptr.is_null() {
-        return std::ptr::null_mut();
+        return Ok(std::ptr::null_mut());
     }
 
     let cmd_str = unsafe {
@@ -107,7 +140,7 @@ pub extern "C" fn js_child_process_spawn_sync(
     } else if !run.stdout_piped {
         TAG_NULL_F64
     } else {
-        cp_box_output(&run.stdout, &mode)
+        cp_try_box_output(&run.stdout, &mode)?
     };
     set(slot::STDOUT, stdout_box);
     let stderr_box = if spawn_failed_before_pid {
@@ -115,7 +148,7 @@ pub extern "C" fn js_child_process_spawn_sync(
     } else if !run.stderr_piped {
         TAG_NULL_F64
     } else {
-        cp_box_output(&run.stderr, &mode)
+        cp_try_box_output(&run.stderr, &mode)?
     };
     set(slot::STDERR, stderr_box);
     let output = if spawn_failed_before_pid {
@@ -169,7 +202,7 @@ pub extern "C" fn js_child_process_spawn_sync(
         );
         set(slot::ERROR, err);
     }
-    result.finish()
+    Ok(result.finish())
 }
 
 /// Spawn a process asynchronously
@@ -279,14 +312,31 @@ pub extern "C" fn js_child_process_exec(cmd_ptr: *const StringHeader, arg1: f64,
         // Legacy no-callback shape — run synchronously and return stdout
         // (Buffer or string per `encoding`). Node returns a ChildProcess here;
         // Perry keeps the historical buffered-stdout return for this form.
-        let run = cp_run_to_completion(command, &run_options);
-        let (stdout_bytes, _) = cp_exec_callback_output_bytes(&run, &run_options);
-        return cp_box_output(stdout_bytes, &mode);
+        return cp_exec_buffered_stdout(command, run_options, mode).unwrap_or_else(
+            |StringTooLong| {
+                drop(cmd_str);
+                crate::string::throw_invalid_string_length()
+            },
+        );
     }
 
     // With a callback, run asynchronously: off the main thread, with the
     // callback fired on a later event-loop tick (#4912).
     reactor::cp_exec_async(command, cmd_str, None, cb_val, run_options, mode)
+}
+
+/// The legacy no-callback `exec` / `execFile` form: run to completion and box
+/// stdout. Consumes the run's inputs so an over-long text releases the
+/// captured output before the caller throws `exec`'s `RangeError: Invalid
+/// string length` (node's join of the decoded chunks).
+fn cp_exec_buffered_stdout(
+    command: Command,
+    run_options: sync_run::CpRunOptions,
+    mode: CpOutput,
+) -> Result<f64, crate::buffer::StringTooLong> {
+    let run = cp_run_to_completion(command, &run_options);
+    let (stdout_bytes, _) = cp_exec_callback_output_bytes(&run, &run_options);
+    cp_try_box_output(stdout_bytes, &mode)
 }
 
 /// `child_process.execFile(file[, args][, options][, callback])` — like `exec`
@@ -348,9 +398,12 @@ pub extern "C" fn js_child_process_exec_file(
 
     if cb.is_null() {
         // Legacy no-callback shape — run synchronously, return stdout.
-        let run = cp_run_to_completion(command, &run_options);
-        let (stdout_bytes, _) = cp_exec_callback_output_bytes(&run, &run_options);
-        return cp_box_output(stdout_bytes, &mode);
+        return cp_exec_buffered_stdout(command, run_options, mode).unwrap_or_else(
+            |StringTooLong| {
+                drop((file_str, arg_strs));
+                crate::string::throw_invalid_string_length()
+            },
+        );
     }
 
     // With a callback, run asynchronously: off the main thread, callback on a
@@ -375,13 +428,19 @@ pub extern "C" fn js_child_process_exec_file_sync(
     args_val: f64,
     opts_val: f64,
 ) -> f64 {
+    cp_sync_settle(exec_file_sync(file_ptr, args_val, opts_val))
+}
+
+/// The body of [`js_child_process_exec_file_sync`]; what it throws is
+/// returned so the captured output is released first.
+fn exec_file_sync(file_ptr: i64, args_val: f64, opts_val: f64) -> Result<f64, CpSyncThrow> {
     cp_require_process_support();
     let file_str = unsafe { cp_read_string_header(file_ptr) };
     validate::cp_validate_no_null_bytes("file", &file_str);
     validate::cp_validate_args(args_val);
     let mode = cp_read_output_mode(opts_val, false);
     if file_str.is_empty() {
-        return cp_box_output(b"", &mode);
+        return Ok(cp_box_output(b"", &mode));
     }
     let arg_strs = cp_args_from_value(args_val);
     let mut command = cp_command_for_program(&file_str, opts_val);
@@ -390,18 +449,7 @@ pub extern "C" fn js_child_process_exec_file_sync(
     cp_apply_options(&mut command, opts_val);
     let run_options = cp_read_sync_stdio_run_options(opts_val);
     let run = cp_run_to_completion(command, &run_options);
-
-    let stdout_box = cp_box_run_output(&run.stdout, run.stdout_piped, &mode);
-    if run.success() {
-        return stdout_box;
-    }
-    let stderr_box = cp_box_run_output(&run.stderr, run.stderr_piped, &mode);
-    cp_sync_throw_error(
-        &run,
-        &cp_file_cmd_display(&file_str, &arg_strs),
-        stdout_box,
-        stderr_box,
-    );
+    cp_sync_result(&run, &cp_file_cmd_display(&file_str, &arg_strs), &mode)
 }
 
 // ============================================================================
