@@ -147,6 +147,7 @@ pub unsafe extern "C" fn js_request_new(
         signal,
         cached_headers_id: None,
         body_error: body_error.map(|error| error.get_nanbox_f64()),
+        read_body_stream_id: None,
     };
     super::gc::ensure_gc_registered();
     REQUEST_REGISTRY.lock().unwrap().insert(id, record);
