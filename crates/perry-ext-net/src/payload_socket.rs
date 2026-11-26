@@ -792,15 +792,16 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
     if p::socket_link(wrapper.get()).is_ok() {
         p::own_set(close_record.get(), "tlsWrapper", wrapper.get());
     }
-    let had_handle = own != socket
-        || parts.is_some()
-        // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle,
-        // and field/core access ends before allocation or JS.
-        || unsafe {
-            p::socket_ptr(socket)
-                .ok()
-                .is_some_and(|payload| (*payload).ext.connecting)
-        };
+    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle,
+    // and field/core access ends before allocation or JS.
+    let (connecting, opened) = unsafe {
+        p::socket_ptr(socket)
+            .ok()
+            .map_or((false, false), |payload| {
+                ((*payload).ext.connecting, (*payload).ext.opened)
+            })
+    };
+    let had_handle = own != socket || parts.is_some() || connecting;
     p::own_set(
         close_record.get(),
         "hadHandle",
@@ -849,8 +850,17 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
     if own != socket {
         cache_before_release(parent.get(), socket);
     }
+    // Node's pending writes: a connect that never completed fails them with
+    // ERR_SOCKET_CLOSED_BEFORE_CONNECTION, an open handle cancels them.
     let callback_error = if had_error {
         error_value.get()
+    } else if connecting {
+        error(
+            "ERR_SOCKET_CLOSED_BEFORE_CONNECTION",
+            "Socket closed before the connection was established",
+        )
+    } else if opened {
+        super::payload_io::socket_error_value("write", "ECANCELED", None)
     } else {
         error(
             "ERR_STREAM_DESTROYED",
