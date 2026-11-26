@@ -542,12 +542,35 @@ pub(crate) fn v8_serializer_write_double(recv: f64, value: f64) -> f64 {
 }
 
 pub(crate) fn v8_serializer_write_raw_bytes(recv: f64, buffer: f64) -> f64 {
-    if let Some(bytes) = unsafe { input_bytes(buffer) } {
-        crate::child_process::v8_class_serializer_write_raw_bytes(
-            v8_instance_id_from_value(recv),
-            &bytes,
+    let bytes = is_array_buffer_view(buffer)
+        .then(|| unsafe { input_bytes(buffer) })
+        .flatten();
+    let Some(bytes) = bytes else {
+        crate::fs::validate::throw_type_error_with_code(
+            "source must be a TypedArray or a DataView",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    };
+    crate::child_process::v8_class_serializer_write_raw_bytes(
+        v8_instance_id_from_value(recv),
+        &bytes,
+    );
+    undefined()
+}
+
+/// `serializer.transferArrayBuffer(id, arrayBuffer)`.
+pub(crate) fn v8_serializer_transfer_array_buffer(recv: f64, id: f64, buffer: f64) -> f64 {
+    if !buffer_address(buffer).is_some_and(crate::buffer::is_array_buffer) {
+        crate::fs::validate::throw_type_error_with_code(
+            "arrayBuffer must be an ArrayBuffer",
+            "ERR_INVALID_ARG_TYPE",
         );
     }
+    crate::child_process::v8_class_serializer_transfer_array_buffer(
+        v8_instance_id_from_value(recv),
+        as_u32(crate::builtins::js_number_coerce(id)),
+        buffer,
+    );
     undefined()
 }
 
@@ -564,18 +587,43 @@ pub(crate) fn v8_deserializer_read_header(recv: f64) -> f64 {
     f64::from_bits(0x7FFC_0000_0000_0004)
 }
 
+/// `deserializer.transferArrayBuffer(id, arrayBuffer)`.
+pub(crate) fn v8_deserializer_transfer_array_buffer(recv: f64, id: f64, buffer: f64) -> f64 {
+    if !buffer_address(buffer).is_some_and(crate::buffer::is_any_array_buffer) {
+        crate::fs::validate::throw_type_error_with_code(
+            "arrayBuffer must be an ArrayBuffer or SharedArrayBuffer",
+            "ERR_INVALID_ARG_TYPE",
+        );
+    }
+    crate::child_process::v8_class_deserializer_transfer_array_buffer(
+        v8_instance_id_from_value(recv),
+        as_u32(crate::builtins::js_number_coerce(id)),
+        buffer,
+    );
+    undefined()
+}
+
+/// `deserializer.getWireFormatVersion()`: `0` until `readHeader()` reads one.
+pub(crate) fn v8_deserializer_get_wire_format_version(recv: f64) -> f64 {
+    crate::child_process::v8_class_deserializer_wire_format_version(v8_instance_id_from_value(recv))
+        as f64
+}
+
 pub(crate) fn v8_deserializer_read_value(recv: f64) -> f64 {
     crate::child_process::v8_class_deserializer_read_value(v8_instance_id_from_value(recv))
+        .unwrap_or_else(|| read_failed("Unable to deserialize cloned data."))
 }
 
 pub(crate) fn v8_deserializer_read_uint32(recv: f64) -> f64 {
-    crate::child_process::v8_class_deserializer_read_uint32(v8_instance_id_from_value(recv)) as f64
+    crate::child_process::v8_class_deserializer_read_uint32(v8_instance_id_from_value(recv))
+        .unwrap_or_else(|| read_failed("ReadUint32() failed")) as f64
 }
 
 pub(crate) fn v8_deserializer_read_uint64(recv: f64) -> f64 {
     // Node returns `[hi, lo]`.
     let (hi, lo) =
-        crate::child_process::v8_class_deserializer_read_uint64(v8_instance_id_from_value(recv));
+        crate::child_process::v8_class_deserializer_read_uint64(v8_instance_id_from_value(recv))
+            .unwrap_or_else(|| read_failed("ReadUint64() failed"));
     {
         let arr = crate::array::js_array_alloc(2);
         crate::array::js_array_push_f64(arr, hi as f64);
@@ -586,15 +634,45 @@ pub(crate) fn v8_deserializer_read_uint64(recv: f64) -> f64 {
 
 pub(crate) fn v8_deserializer_read_double(recv: f64) -> f64 {
     crate::child_process::v8_class_deserializer_read_double(v8_instance_id_from_value(recv))
+        .unwrap_or_else(|| read_failed("ReadDouble() failed"))
 }
 
 pub(crate) fn v8_deserializer_read_raw_bytes(recv: f64, len: f64) -> f64 {
-    let n = as_u32(len) as usize;
-    let bytes = crate::child_process::v8_class_deserializer_read_raw_bytes(
-        v8_instance_id_from_value(recv),
-        n,
-    );
+    // Node reads `ToNumber(length)` bytes; a negative length, or one past the
+    // end of the buffer, fails.
+    let n = crate::builtins::js_number_coerce(len);
+    let n = if n.is_nan() { 0.0 } else { n.trunc() };
+    let bytes = (n >= 0.0)
+        .then(|| {
+            crate::child_process::v8_class_deserializer_read_raw_bytes(
+                v8_instance_id_from_value(recv),
+                n as usize,
+            )
+        })
+        .flatten()
+        .unwrap_or_else(|| read_failed("ReadRawBytes() failed"));
     bytes_to_buffer(&bytes)
+}
+
+/// The plain `Error` (no `code`) Node's Deserializer throws when a read fails:
+/// past the end of its buffer, or on a transfer id nobody registered.
+fn read_failed(message: &str) -> ! {
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::exception::throw_core(crate::error::CoreError::error(msg))
+}
+
+/// The heap address of a pointer-tagged `value`, if it is one.
+fn buffer_address(value: f64) -> Option<usize> {
+    let jsv = JSValue::from_bits(value.to_bits());
+    (jsv.is_pointer() && !jsv.is_any_string())
+        .then(|| (value.to_bits() & crate::value::POINTER_MASK) as usize)
+        .filter(|&addr| !crate::value::addr_class::is_handle_band(addr))
+}
+
+/// A Buffer, TypedArray or DataView (Node's `ArrayBufferView`); key
+/// material is not a view.
+fn is_array_buffer_view(value: f64) -> bool {
+    crate::object::view_brand::view_brand(value).is_some()
 }
 
 /// Coerce a NaN-boxed JS value to a u32 (int32-tagged fast path + double).
@@ -604,7 +682,8 @@ fn as_u32(value: f64) -> u32 {
     if jsv.is_number() {
         let n = jsv.as_number();
         if n.is_finite() {
-            return n as i64 as u32;
+            // ToUint32: modulo 2^32, so `2 ** 64` is 0 rather than saturating.
+            return n.trunc().rem_euclid(4294967296.0) as u32;
         }
     }
     0

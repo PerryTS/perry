@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1980 entries across 105 modules
+// Coverage: 1981 entries across 105 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -3054,6 +3054,8 @@ declare module "perry/ui" {
   export function onAppKeyDown(...args: any[]): any;
   /** stdlib */
   export function onAppKeyUp(...args: any[]): any;
+  /** stdlib */
+  export function onBackPressed(...args: any[]): any;
   /** stdlib */
   export function onKeyDown(...args: any[]): any;
   /** stdlib */

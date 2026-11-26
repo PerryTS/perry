@@ -2,7 +2,7 @@
 
 This page is auto-generated from Perry's compile-time API manifest (`perry-api-manifest::API_MANIFEST`). It is the source of truth for what `perry compile` accepts; references to symbols not listed here produce `R005 UnimplementedApi` (issue #463). Stubs (#464) are flagged ⚠ — they link cleanly but no-op at runtime on the chosen target.
 
-Total: 2732 entries across 107 modules.
+Total: 2736 entries across 107 modules.
 
 ## Modules
 
@@ -2562,6 +2562,7 @@ Total: 2732 entries across 107 modules.
 - `onActivate` — module
 - `onAppKeyDown` — module
 - `onAppKeyUp` — module
+- `onBackPressed` — module
 - `onKeyDown` — module
 - `onKeyUp` — module
 - `onTerminate` — module
@@ -3482,6 +3483,7 @@ Total: 2732 entries across 107 modules.
 - `getHeapSnapshot` — module
 - `getHeapSpaceStatistics` — module ⚠ **stub** — Node space names with all live usage attributed to old_space from Perry arenas; other spaces report 0 (#4916)
 - `getHeapStatistics` — module ⚠ **stub** — Node shape, Perry numbers: total_heap_size/used_heap_size/malloced_memory/total_allocated_bytes from Perry arenas, total_physical_size=RSS, heap_size_limit fixed ~2GB (not enforced); *_executable, external_memory, global-handles and zap fields are 0 (#4916)
+- `getWireFormatVersion` — instance *(class: `Deserializer`)*
 - `isBuildingSnapshot` — instance *(class: `startupSnapshot`)*
 - `isStringOneByteRepresentation` — module
 - `onAfter` — instance *(class: `promiseHooks`)*
@@ -3505,6 +3507,8 @@ Total: 2732 entries across 107 modules.
 - `stop` — instance *(class: `GCProfiler`)* ⚠ **stub** — report has the Node shape but the statistics array is always empty (#4916)
 - `stopCoverage` — module
 - `takeCoverage` — module
+- `transferArrayBuffer` — instance *(class: `Serializer`)*
+- `transferArrayBuffer` — instance *(class: `Deserializer`)*
 - `writeDouble` — instance *(class: `Serializer`)*
 - `writeHeader` — instance *(class: `Serializer`)*
 - `writeHeapSnapshot` — module

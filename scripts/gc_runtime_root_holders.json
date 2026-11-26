@@ -3251,14 +3251,6 @@
       "name": "CP_PUMPING"
     },
     {
-      "file": "crates/perry-runtime/src/child_process/v8_serde.rs",
-      "name": "DESERIALIZERS"
-    },
-    {
-      "file": "crates/perry-runtime/src/child_process/v8_serde.rs",
-      "name": "SERIALIZERS"
-    },
-    {
       "file": "crates/perry-runtime/src/closure/dispatch/errors.rs",
       "name": "THROW_NOT_CALLABLE_COUNT"
     },

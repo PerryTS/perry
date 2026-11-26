@@ -71,6 +71,7 @@ const TAG_ERROR_CAUSE: u8 = b'c';
 const TAG_ERROR_STACK: u8 = b's';
 const TAG_ERROR_END: u8 = b'.';
 const TAG_ARRAY_BUFFER: u8 = b'B';
+const TAG_ARRAY_BUFFER_TRANSFER: u8 = b't';
 const TAG_HOST_OBJECT: u8 = b'\\';
 
 const NODE_BUFFER_VIEW_INDEX: u64 = 10;
@@ -145,6 +146,9 @@ struct Serializer {
     out: Vec<u8>,
     depth: u32,
     refs: std::collections::HashMap<usize, u64>,
+    /// `transferArrayBuffer(id, buffer)` registrations: the NaN-boxed buffer
+    /// (a GC root, see [`scan_v8_serde_transfer_roots`]) and its transfer id.
+    transfers: Vec<(u64, u32)>,
 }
 
 const MAX_DEPTH: u32 = 512;
@@ -155,6 +159,7 @@ impl Serializer {
             out: Vec::with_capacity(64),
             depth: 0,
             refs: std::collections::HashMap::new(),
+            transfers: Vec::new(),
         }
     }
 
@@ -246,7 +251,18 @@ impl Serializer {
                 return true;
             }
             if crate::buffer::is_array_buffer(raw) {
-                self.write_array_buffer(raw as *const crate::buffer::BufferHeader);
+                // A transferred buffer is written as its transfer id; the
+                // receiving side supplies the buffer (V8 kArrayBufferTransfer).
+                let transfer = self
+                    .transfers
+                    .iter()
+                    .find(|(bits, _)| (bits & crate::value::POINTER_MASK) as usize == raw);
+                if let Some(&(_, id)) = transfer {
+                    self.out.push(TAG_ARRAY_BUFFER_TRANSFER);
+                    self.write_varint(id as u64);
+                } else {
+                    self.write_array_buffer(raw as *const crate::buffer::BufferHeader);
+                }
             } else {
                 self.write_host_buffer(value);
             }
@@ -686,6 +702,8 @@ struct Deserializer<'a> {
     pos: usize,
     /// Objects in V8 id-assignment order, for `kObjectReference`.
     id_table: Vec<f64>,
+    /// `(transfer id, NaN-boxed buffer)` pairs a `kArrayBufferTransfer` reads.
+    transfers: &'a [(u32, u64)],
 }
 
 impl<'a> Deserializer<'a> {
@@ -694,6 +712,7 @@ impl<'a> Deserializer<'a> {
             buf,
             pos: 0,
             id_table: Vec::new(),
+            transfers: &[],
         }
     }
 
@@ -749,11 +768,14 @@ impl<'a> Deserializer<'a> {
         Some(s)
     }
 
-    fn read_header(&mut self) {
+    /// Consume a version header if one is present (any version is accepted)
+    /// and return its version.
+    fn read_header(&mut self) -> Option<u64> {
         if self.peek_byte() == Some(TAG_VERSION) {
             self.pos += 1;
-            let _ = self.read_varint(); // version — accept any
+            return self.read_varint();
         }
+        None
     }
 
     fn read_value(&mut self) -> Option<f64> {
@@ -786,6 +808,13 @@ impl<'a> Deserializer<'a> {
                 TAG_REGEXP => self.read_regexp()?,
                 TAG_ERROR => self.read_error()?,
                 TAG_ARRAY_BUFFER => self.read_array_buffer()?,
+                TAG_ARRAY_BUFFER_TRANSFER => {
+                    let id = u32::try_from(self.read_varint()?).ok()?;
+                    let (_, bits) = self.transfers.iter().find(|(t, _)| *t == id)?;
+                    let buffer = f64::from_bits(*bits);
+                    self.id_table.push(buffer);
+                    buffer
+                }
                 TAG_HOST_OBJECT => self.read_host_object()?,
                 TAG_OBJECT_REFERENCE => {
                     let id = self.read_varint()? as usize;
@@ -1122,6 +1151,12 @@ struct OwnedDeserializer {
     buf: Vec<u8>,
     pos: usize,
     id_table: Vec<f64>,
+    /// The version `readHeader()` read; `0` before it (Node's
+    /// `getWireFormatVersion()`).
+    version: u32,
+    /// `transferArrayBuffer(id, buffer)` registrations: the transfer id and
+    /// the NaN-boxed buffer (a GC root, see [`scan_v8_serde_transfer_roots`]).
+    transfers: Vec<(u32, u64)>,
 }
 
 impl OwnedDeserializer {
@@ -1130,12 +1165,79 @@ impl OwnedDeserializer {
             buf: &self.buf,
             pos: self.pos,
             id_table: std::mem::take(&mut self.id_table),
+            transfers: &self.transfers,
         };
         let r = f(&mut de);
-        self.pos = de.pos;
-        self.id_table = std::mem::take(&mut de.id_table);
+        let pos = de.pos;
+        let id_table = std::mem::take(&mut de.id_table);
+        self.pos = pos;
+        self.id_table = id_table;
         r
     }
+}
+
+/// Keeps the buffers handed to `transferArrayBuffer` alive and current across
+/// collections, for as long as their serializer or deserializer lives.
+fn scan_v8_serde_transfer_roots(visitor: &mut crate::gc::RuntimeRootVisitor<'_>) {
+    SERIALIZERS.with(|s| {
+        for ser in s.borrow_mut().iter_mut() {
+            for (bits, _) in ser.transfers.iter_mut() {
+                visitor.visit_nanbox_u64_slot(bits);
+            }
+        }
+    });
+    DESERIALIZERS.with(|d| {
+        for de in d.borrow_mut().iter_mut() {
+            for (_, bits) in de.transfers.iter_mut() {
+                visitor.visit_nanbox_u64_slot(bits);
+            }
+        }
+    });
+}
+
+fn note_transfer_root(buffer: f64) {
+    crate::gc::gc_register_mutable_root_scanner_named_once(
+        "v8_serde_transfers",
+        scan_v8_serde_transfer_roots,
+    );
+    crate::gc::runtime_write_barrier_root_nanbox(buffer.to_bits());
+}
+
+/// `serializer.transferArrayBuffer(id, buffer)`: later writes of `buffer`
+/// emit `id` instead of its contents.
+pub(crate) fn v8_class_serializer_transfer_array_buffer(id: usize, transfer_id: u32, buffer: f64) {
+    note_transfer_root(buffer);
+    SERIALIZERS.with(|s| {
+        if let Some(ser) = s.borrow_mut().get_mut(id) {
+            let bits = buffer.to_bits();
+            match ser.transfers.iter_mut().find(|(b, _)| *b == bits) {
+                Some(entry) => entry.1 = transfer_id,
+                None => ser.transfers.push((bits, transfer_id)),
+            }
+        }
+    });
+}
+
+/// `deserializer.transferArrayBuffer(id, buffer)`: a transfer of `id` reads
+/// as `buffer` itself.
+pub(crate) fn v8_class_deserializer_transfer_array_buffer(
+    id: usize,
+    transfer_id: u32,
+    buffer: f64,
+) {
+    note_transfer_root(buffer);
+    DESERIALIZERS.with(|d| {
+        if let Some(de) = d.borrow_mut().get_mut(id) {
+            match de.transfers.iter_mut().find(|(t, _)| *t == transfer_id) {
+                Some(entry) => entry.1 = buffer.to_bits(),
+                None => de.transfers.push((transfer_id, buffer.to_bits())),
+            }
+        }
+    });
+}
+
+pub(crate) fn v8_class_deserializer_wire_format_version(id: usize) -> u32 {
+    DESERIALIZERS.with(|d| d.borrow().get(id).map_or(0, |de| de.version))
 }
 
 /// Allocate a fresh `Serializer` and return its registry id.
@@ -1216,6 +1318,8 @@ pub(crate) fn v8_class_deserializer_new(bytes: Vec<u8>) -> usize {
             buf: bytes,
             pos: 0,
             id_table: Vec::new(),
+            version: 0,
+            transfers: Vec::new(),
         });
         d.len() - 1
     })
@@ -1224,59 +1328,60 @@ pub(crate) fn v8_class_deserializer_new(bytes: Vec<u8>) -> usize {
 pub(crate) fn v8_class_deserializer_read_header(id: usize) {
     DESERIALIZERS.with(|d| {
         if let Some(de) = d.borrow_mut().get_mut(id) {
-            de.with(|inner| inner.read_header());
+            if let Some(version) = de.with(|inner| inner.read_header()) {
+                de.version = u32::try_from(version).unwrap_or(u32::MAX);
+            }
         }
     });
 }
 
-pub(crate) fn v8_class_deserializer_read_value(id: usize) -> f64 {
+/// `None` when the stream is truncated or names a transfer id nobody
+/// registered (Node throws `Unable to deserialize cloned data.`).
+pub(crate) fn v8_class_deserializer_read_value(id: usize) -> Option<f64> {
     let _gc = GcSuppressGuard::new();
     DESERIALIZERS.with(|d| {
         d.borrow_mut()
             .get_mut(id)
-            .map(|de| de.with(|inner| inner.read_value().unwrap_or_else(cp_undefined)))
-            .unwrap_or_else(cp_undefined)
+            .map_or(Some(cp_undefined()), |de| {
+                de.with(|inner| inner.read_value())
+            })
     })
 }
 
-pub(crate) fn v8_class_deserializer_read_uint32(id: usize) -> u32 {
+/// `None` when the bytes run out (Node throws `ReadUint32() failed`).
+pub(crate) fn v8_class_deserializer_read_uint32(id: usize) -> Option<u32> {
     DESERIALIZERS.with(|d| {
         d.borrow_mut()
             .get_mut(id)
-            .map(|de| de.with(|inner| inner.read_varint().unwrap_or(0) as u32))
-            .unwrap_or(0)
+            .and_then(|de| de.with(|inner| inner.read_varint()))
+            .map(|v| v as u32)
     })
 }
 
 /// Read a 64-bit value as Node does: `[hi, lo]` u32 pair.
-pub(crate) fn v8_class_deserializer_read_uint64(id: usize) -> (u32, u32) {
+pub(crate) fn v8_class_deserializer_read_uint64(id: usize) -> Option<(u32, u32)> {
     DESERIALIZERS.with(|d| {
         d.borrow_mut()
             .get_mut(id)
-            .map(|de| {
-                let v = de.with(|inner| inner.read_varint().unwrap_or(0));
-                ((v >> 32) as u32, (v & 0xFFFF_FFFF) as u32)
-            })
-            .unwrap_or((0, 0))
+            .and_then(|de| de.with(|inner| inner.read_varint()))
+            .map(|v| ((v >> 32) as u32, (v & 0xFFFF_FFFF) as u32))
     })
 }
 
-pub(crate) fn v8_class_deserializer_read_double(id: usize) -> f64 {
+pub(crate) fn v8_class_deserializer_read_double(id: usize) -> Option<f64> {
     DESERIALIZERS.with(|d| {
         d.borrow_mut()
             .get_mut(id)
-            .map(|de| de.with(|inner| inner.read_double().unwrap_or(0.0)))
-            .unwrap_or(0.0)
+            .and_then(|de| de.with(|inner| inner.read_double()))
     })
 }
 
-/// Read `len` raw bytes from the deserializer's cursor.
-pub(crate) fn v8_class_deserializer_read_raw_bytes(id: usize, len: usize) -> Vec<u8> {
+/// Read `len` raw bytes from the deserializer's cursor; `None` past the end.
+pub(crate) fn v8_class_deserializer_read_raw_bytes(id: usize, len: usize) -> Option<Vec<u8>> {
     DESERIALIZERS.with(|d| {
         d.borrow_mut()
             .get_mut(id)
-            .map(|de| de.with(|inner| inner.read_raw(len).map(|s| s.to_vec()).unwrap_or_default()))
-            .unwrap_or_default()
+            .and_then(|de| de.with(|inner| inner.read_raw(len).map(<[u8]>::to_vec)))
     })
 }
 
@@ -1332,6 +1437,10 @@ fn make_typed_array(kind: u8, bytes: &[u8]) -> f64 {
 #[cfg(test)]
 #[path = "v8_serde_canonical_tests.rs"]
 mod canonical_tests;
+
+#[cfg(test)]
+#[path = "v8_serde_class_tests.rs"]
+mod class_tests;
 
 /// The plain Array `arr` resolves to when it has a hole or is sparse
 /// (`length > capacity`): the arrays the serializer writes as a sparse record.
