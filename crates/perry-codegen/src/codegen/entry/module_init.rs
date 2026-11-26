@@ -445,6 +445,7 @@ pub(super) fn compile_module_init(
         imported_func_param_counts: &cross_module.imported_func_param_counts,
         imported_func_has_rest: &cross_module.imported_func_has_rest,
         imported_func_synthetic_arguments: &cross_module.imported_func_synthetic_arguments,
+        imported_func_rest_and_arguments: &cross_module.imported_func_rest_and_arguments,
         method_param_counts: &cross_module.method_param_counts,
         method_has_rest: &cross_module.method_has_rest,
         method_has_synthetic_arguments: &cross_module.method_has_synthetic_arguments,

@@ -333,6 +333,7 @@ pub struct CompileOptions {
     /// `arguments` rest. The cross-module call bundles ALL args into it (not
     /// just trailing), matching `arguments.length` semantics.
     pub imported_func_synthetic_arguments: std::collections::HashSet<String>,
+    pub imported_func_rest_and_arguments: std::collections::HashSet<String>,
     /// Imported function return types, keyed by local function name.
     pub imported_func_return_types: std::collections::HashMap<String, perry_hir::types::Type>,
     /// Names of imports that are exported VARIABLES (not functions). Bare keys
@@ -1011,6 +1012,7 @@ pub(crate) struct CrossModuleCtx<'a> {
     /// `arguments` rest. The cross-module call bundles ALL args into it (not
     /// just trailing), matching `arguments.length` semantics.
     pub imported_func_synthetic_arguments: std::collections::HashSet<String>,
+    pub imported_func_rest_and_arguments: std::collections::HashSet<String>,
     pub imported_func_return_types: std::collections::HashMap<String, perry_hir::types::Type>,
     /// Refs #915 (gap 3 / #321 follow-up): function ids in THIS module
     /// whose body unconditionally returns a `ClassRef` (or transitively

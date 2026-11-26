@@ -42,6 +42,7 @@ fn options(target: Option<&str>) -> CompileOptions {
         imported_func_param_counts: Default::default(),
         imported_func_has_rest: Default::default(),
         imported_func_synthetic_arguments: Default::default(),
+        imported_func_rest_and_arguments: Default::default(),
         imported_func_return_types: Default::default(),
         imported_vars: Default::default(),
         output_type: "executable".to_string(),

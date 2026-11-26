@@ -1490,6 +1490,7 @@ pub fn try_lower_extern_func_call(
     // (used everywhere) hit this; without it cross-package calls returned
     // undefined.
     let has_synthetic_args = ctx.imported_func_synthetic_arguments.contains(name);
+    let rest_and_arguments = ctx.imported_func_rest_and_arguments.contains(name);
     // Issue #608: when the imported callee declares a trailing
     // `...rest` parameter, the LLVM signature has exactly
     // `declared_count` doubles (rest counts as one slot — a
@@ -1511,7 +1512,28 @@ pub fn try_lower_extern_func_call(
         .push((fname.clone(), DOUBLE, param_types));
     let mut lowered: Vec<String> = Vec::with_capacity(target_arity);
     let arg_group: crate::rooting::RootedGroup<'_>;
-    if has_rest {
+    if rest_and_arguments {
+        // A real `...rest` AND a synthetic `arguments`, over the same argument
+        // list at two offsets: the same-module twin is `func_ref.rs`.
+        let fixed_count = declared_count.saturating_sub(2);
+        let (values, guard) = super::lower_rest_call_args_rooted(
+            ctx,
+            args,
+            fixed_count,
+            &[
+                super::RestBundle {
+                    from: fixed_count,
+                    mark_arguments_object: false,
+                },
+                super::RestBundle {
+                    from: 0,
+                    mark_arguments_object: false,
+                },
+            ],
+        )?;
+        arg_group = guard;
+        lowered.extend(values);
+    } else if has_rest {
         // #7154: the rest twin of the arm below. Fixed params were lowered into
         // bare registers and then held across `js_array_alloc` plus a
         // `js_array_push_f64` per trailing arg, and the accumulator itself was

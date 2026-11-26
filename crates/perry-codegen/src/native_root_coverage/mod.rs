@@ -158,6 +158,7 @@ pub(crate) fn ir_opts(target: &str, is_entry: bool) -> CompileOptions {
         imported_func_param_counts: std::collections::HashMap::new(),
         imported_func_has_rest: std::collections::HashSet::new(),
         imported_func_synthetic_arguments: std::collections::HashSet::new(),
+        imported_func_rest_and_arguments: std::collections::HashSet::new(),
         imported_func_return_types: std::collections::HashMap::new(),
         imported_vars: std::collections::HashSet::new(),
         output_type: "executable".to_string(),
