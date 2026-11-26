@@ -88,6 +88,8 @@ fn is_http_server_method(name: &str) -> bool {
             | "addListener"
             | "once"
             | "listeners"
+            | "listenerCount"
+            | "emit"
             | "setTimeout"
             | "closeAllConnections"
             | "closeIdleConnections"
