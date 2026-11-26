@@ -175,6 +175,42 @@ pub(crate) fn object_address(value: f64) -> usize {
     }
     (value.to_bits() & POINTER_MASK) as usize
 }
+// ─────────────────────────────────────────────────────────────────────
+// Refs held across JS
+// ─────────────────────────────────────────────────────────────────────
+
+/// A readable-family ref that a Rust frame still needs after a call that can
+/// run JS (an algorithm, a strategy `size()`, a sink, a microtask drain).
+/// Generated code reaches precise safepoints inside such a call, where a
+/// collection sees only precise roots and may move the object (production
+/// runs no conservative stack scan), so the frame roots the object in its
+/// `RuntimeHandleScope`, the runtime's mechanism for helper-held values, and
+/// reads the ref back with [`Held::id`] after the call. Band ids (the
+/// writable side) and sentinels are no heap objects and come back unchanged.
+pub(super) struct Held<'s> {
+    root: Option<perry_runtime::gc::RuntimeHandle<'s>>,
+    raw: usize,
+}
+
+impl<'s> Held<'s> {
+    #[inline]
+    pub(super) fn new(scope: &'s perry_runtime::gc::RuntimeHandleScope, id: usize) -> Self {
+        Self {
+            root: object_at(id).map(|value| scope.root_nanbox_f64(value)),
+            raw: id,
+        }
+    }
+
+    /// The ref now: the object's current address.
+    #[inline]
+    pub(super) fn id(&self) -> usize {
+        match &self.root {
+            Some(root) => (root.get_nanbox_f64().to_bits() & POINTER_MASK) as usize,
+            None => self.raw,
+        }
+    }
+}
+
 stream_ref!(
     /// A WritableStreamDefaultWriter.
     WriterRef
@@ -329,12 +365,15 @@ impl ReadableStreamData {
         }
     }
 
-    /// The stream object this payload belongs to.
+    /// The stream object this payload belongs to: its cell's owner edge (a
+    /// borrowed payload is open, on its creator thread).
     #[inline]
     pub(super) fn obj(&self) -> f64 {
-        self.link
-            .and_then(|link| unsafe { native_payload::link_owner(link) })
-            .unwrap_or_else(undefined)
+        match self.link {
+            // SAFETY: `self` is the cell's borrowed payload.
+            Some(link) => unsafe { native_payload::borrowed_link_owner(link) },
+            None => undefined(),
+        }
     }
 
     #[inline]
@@ -607,11 +646,11 @@ impl ReadableStreamData {
 
 impl Drop for ReadableStreamData {
     /// The stream object died (sweep or thread teardown): a native producer
-    /// still feeding it learns so through its `alive` flag and cancels. No
+    /// still feeding it learns so through its token and cancels. No
     /// allocation, no JS, no thread-locals.
     fn drop(&mut self) {
         if let Some(source) = self.native_source.as_ref() {
-            source.token.alive.set(false);
+            source.token.stream_died();
         }
     }
 }
@@ -1395,8 +1434,8 @@ fn release_web_streams_in_freed_ranges(freed: &FreedRanges) {
     evict(&batch);
 }
 
-/// #11471 test probe: which of the five registries hold `id`, as a bitmask
-/// (readable 1, writable 2, transform 4, reader 8, writer 16).
+/// #11471 test probe: which registries hold `id`, as a bitmask (writable 2,
+/// transform 4, writer 16; the readable family is GC objects, no registry).
 #[cfg(test)]
 pub(crate) fn stream_registry_presence_for_test(id: usize) -> u32 {
     let mut mask = 0;

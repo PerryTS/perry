@@ -289,6 +289,11 @@ extern "C" fn transform_write_job2(
         let promise = perry_runtime::closure::closure_capture_ref(closure, 3) as *mut Promise;
         let writable_id = super::captured_stream(closure, 4);
         let chunk = f64::from_bits(chunk_bits);
+        // transform() is JS: the readable and the write promise are rooted
+        // across it and read back.
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let held = super::state::Held::new(&scope, readable_id);
+        let promise_root = scope.root_raw_mut_ptr(promise);
         if transform_cb != 0 && readable_id != 0 {
             let ret = js_closure_call2(
                 transform_cb as *const ClosureHeader,
@@ -296,6 +301,8 @@ extern "C" fn transform_write_job2(
                 chunk,
                 controller_value(readable_id),
             );
+            let readable_id = held.id();
+            let promise = promise_root.get_raw_mut_ptr::<Promise>();
             // Spec PerformTransform: `Promise.resolve(transformer.transform(
             // chunk, controller))` — an async transform's returned promise
             // gates the write's settlement. Next's buffered transform returns
@@ -336,7 +343,7 @@ extern "C" fn transform_write_job2(
         // racing the stream (Next.js cold-start head reorder: node's pipe is
         // stalled here, so the flight branch's read #3 stays pending while
         // the module-require chain finishes).
-        settle_transform_write(readable_id, promise);
+        settle_transform_write(held.id(), promise_root.get_raw_mut_ptr());
         transform_write_job_done(writable_id);
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -677,6 +684,10 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
     // chunk (the #5989 Next.js `bytes=0` empty-body bug — the buffered HTML
     // never reached `res.write`). So when flush returns a still-pending
     // promise, defer the readable close until it settles.
+    // flush() is JS: the readable and the close promise are rooted across it.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held = super::state::Held::new(&scope, readable_id);
+    let promise_root = scope.root_raw_mut_ptr(promise);
     let flush_result = if !handled_native && flush_cb != 0 && readable_id != 0 {
         Some(js_closure_call1(
             flush_cb as *const ClosureHeader,
@@ -686,6 +697,8 @@ unsafe fn perform_transform_close(writable_id: usize, promise: *mut Promise) {
     } else {
         None
     };
+    let readable_id = held.id();
+    let promise = promise_root.get_raw_mut_ptr::<Promise>();
     clear_close_algorithms();
 
     if let Some(fv) = flush_result {

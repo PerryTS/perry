@@ -236,6 +236,7 @@ pub(crate) fn dispatch(dispatch: FetchDispatch, promise_ptr: usize) {
         promise_ptr as *mut perry_runtime::Promise,
         turnloop_client::resume_source,
         turnloop_client::cancel_source,
+        Some(turnloop_client::dropped_consumers()),
     );
     let sink = Sink {
         ctx,

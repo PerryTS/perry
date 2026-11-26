@@ -832,23 +832,29 @@ fn alloc_writable_with_strategy(
     id
 }
 
-unsafe fn invoke_start(stream_id: usize) {
+/// Run the source's `start(controller)`; returns the stream's ref after it
+/// (the call runs JS, so the stream is rooted across it and may have moved).
+unsafe fn invoke_start(stream_id: usize) -> usize {
     let (cb, controller) = {
         match rs_rec(RsRef(stream_id)).as_deref_mut() {
             Some(s) if !s.started => {
                 s.started = true;
                 (s.start_cb(), controller_value(stream_id))
             }
-            _ => return,
+            _ => return stream_id,
         }
     };
-    if cb != 0 {
-        js_closure_call1(
-            cb as *const ClosureHeader,
-            perry_runtime::closure::plain_call_receiver(),
-            controller,
-        );
+    if cb == 0 {
+        return stream_id;
     }
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held = state::Held::new(&scope, stream_id);
+    js_closure_call1(
+        cb as *const ClosureHeader,
+        perry_runtime::closure::plain_call_receiver(),
+        controller,
+    );
+    held.id()
 }
 
 extern "C" fn readable_pull_microtask(
@@ -878,6 +884,8 @@ extern "C" fn readable_pull_microtask(
             // concurrency, crashing the process. Catch it here and route to the
             // spec error path so `reader.read()` rejects and the consumer's own
             // handler surfaces the error, exactly as Node does.
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let held = state::Held::new(&scope, stream_id);
             let pull_outcome = perry_runtime::exception::js_call_catching(|| {
                 if pull_returns_byte_chunk {
                     pull_deferred_byte_chunk(stream_id, cb);
@@ -890,6 +898,8 @@ extern "C" fn readable_pull_microtask(
                     )
                 }
             });
+            // pull() ran JS: the stream may have moved.
+            let stream_id = held.id();
             match pull_outcome {
                 Ok(result) => {
                     if js_value_is_promise(result) != 0 {
@@ -1059,10 +1069,13 @@ unsafe fn maybe_pull_inner(stream_id: usize, force: bool) {
 }
 
 unsafe fn pull_deferred_byte_chunk(stream_id: usize, cb: i64) {
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held = state::Held::new(&scope, stream_id);
     let chunk = js_closure_call0(
         cb as *const ClosureHeader,
         perry_runtime::closure::plain_call_receiver(),
     );
+    let stream_id = held.id();
     if chunk.to_bits() == TAG_UNDEFINED {
         let _ = js_readable_stream_controller_close(controller_value(stream_id));
     } else {
@@ -1148,7 +1161,7 @@ pub unsafe extern "C" fn js_readable_stream_new_with_source_type(
         hwm,
         value_string_equals(source_type, b"bytes"),
     );
-    invoke_start(id);
+    let id = invoke_start(id);
     maybe_pull(id);
     stream_value(id)
 }
@@ -1202,7 +1215,7 @@ pub unsafe extern "C" fn js_readable_stream_new_with_strategy_and_source_type(
         is_byte_stream,
         size_cb,
     );
-    invoke_start(id);
+    let id = invoke_start(id);
     maybe_pull(id);
     stream_value(id)
 }
@@ -1228,7 +1241,7 @@ pub unsafe extern "C" fn js_readable_stream_new_from_source_object(
         is_byte_stream,
         size_cb,
     );
-    invoke_start(id);
+    let id = invoke_start(id);
     maybe_pull(id);
     stream_value(id)
 }
@@ -1428,29 +1441,44 @@ unsafe fn js_readable_stream_cancel_inner(
     }
     native::cancel_native(id);
     let tee_cancellation = tee::tee_cancel_branch(id, promise);
-    let mut actions = [std::ptr::null_mut(); 2];
-    let mut action_count = 0;
+    // The writable abort and the source's cancel() run JS: what this frame
+    // uses after them is rooted and read back.
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held = state::Held::new(&scope, id);
+    let promise_root = scope.root_raw_mut_ptr(promise);
+    let reason_root = scope.root_nanbox_f64(reason);
+    let mut abort_action = None;
     if let Some(writable_id) = transform_writable_for_readable(id) {
-        actions[action_count] =
-            js_writable_stream_abort_inner(stream_value(writable_id), reason, true);
-        action_count += 1;
+        abort_action = Some(scope.root_raw_mut_ptr(js_writable_stream_abort_inner(
+            stream_value(writable_id),
+            reason,
+            true,
+        )));
     }
+    let mut cancel_action = None;
     if cb != 0 {
-        match try_call_stream_action(cb, reason) {
-            Ok(result) => {
-                if let Some(action) = stream_action_promise(result) {
-                    actions[action_count] = action;
-                    action_count += 1;
-                }
-            }
+        match try_call_stream_action(cb, reason_root.get_nanbox_f64()) {
+            Ok(result) => cancel_action = stream_action_promise(result),
             Err(error) => {
-                close_pending(id);
+                let promise = promise_root.get_raw_mut_ptr();
+                close_pending(held.id());
                 js_promise_reject(promise, f64::from_bits(error));
                 return promise;
             }
         }
     }
-    close_pending(id);
+    let promise = promise_root.get_raw_mut_ptr();
+    let mut actions = [std::ptr::null_mut(); 2];
+    let mut action_count = 0;
+    for action in abort_action
+        .map(|a| a.get_raw_mut_ptr::<Promise>())
+        .into_iter()
+        .chain(cancel_action)
+    {
+        actions[action_count] = action;
+        action_count += 1;
+    }
+    close_pending(held.id());
     if !tee_cancellation {
         settle_stream_action_promise(promise, &actions[..action_count]);
     }
@@ -1906,20 +1934,24 @@ pub unsafe extern "C" fn js_readable_stream_controller_enqueue(
     } else {
         // Per spec the strategy's size(chunk) runs once at enqueue time; the
         // result is the chunk's contribution to desiredSize accounting.
-        let size = if strategy_size_cb != 0 {
+        let (size, id, chunk_bits) = if strategy_size_cb != 0 {
+            // size() is JS: the stream and the chunk are rooted across it.
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let held = state::Held::new(&scope, id);
+            let chunk_root = scope.root_nanbox_u64(chunk_bits);
             let size = readable_strategy_size_to_number(js_closure_call1(
                 strategy_size_cb as *const ClosureHeader,
                 perry_runtime::closure::plain_call_receiver(),
                 chunk,
             ));
             if size.is_nan() || size < 0.0 || size.is_infinite() {
-                throw_invalid_readable_strategy_size(id, size);
+                throw_invalid_readable_strategy_size(held.id(), size);
             }
-            size
+            (size, held.id(), chunk_root.get_nanbox_u64())
         } else if is_byte_stream {
-            byob::chunk_byte_length(chunk_bits)
+            (byob::chunk_byte_length(chunk_bits), id, chunk_bits)
         } else {
-            1.0
+            (1.0, id, chunk_bits)
         };
         if let Some(s) = rs_rec(RsRef(id)).as_deref_mut() {
             if s.state == ReadableState::Readable {

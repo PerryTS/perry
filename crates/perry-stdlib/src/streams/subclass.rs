@@ -68,13 +68,15 @@ pub unsafe extern "C" fn js_stream_unwrap_handle(value: f64) -> f64 {
     let Some(obj) = this_object_ptr(value) else {
         return value;
     };
-    // A readable-family object is its own handle (a subclass `this` carries
-    // the ReadableStream payload itself).
+    // A readable-family object is its own handle, and so is a subclass
+    // `this`, which carries the ReadableStream payload itself (its payload
+    // slot answers without a key lookup).
     if matches!(
         objects::class_id_of(value),
         perry_runtime::native_class_ids::WEB_READABLE_STREAM
             ..=perry_runtime::native_class_ids::WEB_RS_BYOB_READER
-    ) {
+    ) || objects::rs_payload::<ReadableStreamData>(value).is_some()
+    {
         return value;
     }
     let key = subclass_handle_key();
@@ -189,11 +191,11 @@ pub(super) fn object_kind(id: usize) -> u8 {
 /// to a generic method call that reaches `js_native_call_method` →
 /// `js_handle_method_dispatch` with the stream handle.
 ///
-/// Because every Web Streams handle now lives in one shared id space based at
-/// `STREAM_HANDLE_ID_START` (see `idalloc::next_stream_id`), the handle is (a)
-/// recognisable by range and (b) present in exactly one of the five registries,
-/// so routing by
-/// `(registry-membership, method-name)` is unambiguous and can never collide
+/// A readable-family member is a GC object whose class id says which member it
+/// is; every other Web Streams handle lives in one shared id space based at
+/// `STREAM_HANDLE_ID_START` (see `idalloc::next_stream_id`) and is present in
+/// exactly one of the writable-side registries, so routing by
+/// `(class id or registry membership, method name)` is unambiguous and can never collide
 /// with another handle subsystem. Returns `None` when the handle isn't a stream
 /// handle or the method isn't a stream method, so the generic dispatcher falls
 /// through to the next arm unchanged.
@@ -426,7 +428,7 @@ pub unsafe extern "C" fn js_readable_stream_subclass_init(
         id = alloc_readable(start, pull, cancel, hwm);
         attach_handle_to_this(this_bits, id);
     }
-    invoke_start(id);
+    let id = invoke_start(id);
     maybe_pull(id);
     f64::from_bits(TAG_UNDEFINED)
 }
@@ -499,8 +501,11 @@ pub(super) unsafe fn body_chunk_bytes(chunk_bits: u64) -> Option<Vec<u8>> {
 pub(crate) fn drain_readable_into_bytes(stream: RsRef) -> Vec<u8> {
     let stream_id = stream.0;
     unsafe {
+        // The loop runs microtasks (JS): the reader, which holds the stream,
+        // is rooted across them and read back each turn.
         let scope = perry_runtime::gc::RuntimeHandleScope::new();
-        let reader = js_readable_stream_get_reader(stream_value(stream_id));
+        let reader_root =
+            scope.root_nanbox_f64(js_readable_stream_get_reader(stream_value(stream_id)));
         let done_key = scope.root_string_ptr(js_string_from_bytes(b"done".as_ptr(), 4));
         let value_key = scope.root_string_ptr(js_string_from_bytes(b"value".as_ptr(), 5));
         let mut out = Vec::new();
@@ -508,7 +513,7 @@ pub(crate) fn drain_readable_into_bytes(stream: RsRef) -> Vec<u8> {
             // Keep only the current promise/result alive across producer
             // callbacks; previous chunks have already become native bytes.
             let pull_scope = perry_runtime::gc::RuntimeHandleScope::new();
-            let promise = pull_scope.root_raw_mut_ptr(js_reader_read(reader));
+            let promise = pull_scope.root_raw_mut_ptr(js_reader_read(reader_root.get_nanbox_f64()));
             // This read is private to the drain: polling `js_promise_state`
             // below IS its reaction, and an errored stream rejects it with the
             // error the drain's caller reports through its own path (fetch's
@@ -543,7 +548,7 @@ pub(crate) fn drain_readable_into_bytes(stream: RsRef) -> Vec<u8> {
                 out.extend_from_slice(&bytes);
             }
         }
-        let _ = js_reader_release_lock(reader);
+        let _ = js_reader_release_lock(reader_root.get_nanbox_f64());
         out
     }
 }

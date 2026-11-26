@@ -111,7 +111,7 @@ fn whole_body_collected_after_close_resolves() {
     }
     let _serial = serial_guard();
     for _ in 0..64 {
-        let (id, ctx) = alloc_native_readable(js_promise_new(), no_source, no_source);
+        let (id, ctx) = alloc_native_readable(js_promise_new(), no_source, no_source, None);
         take_native_promise(id);
         let body = js_promise_new();
         unsafe {
@@ -128,12 +128,17 @@ fn whole_body_collected_after_close_resolves() {
 /// Native bodies paused at zero credit whose only references are dropped on
 /// return: their sink contexts.
 #[inline(never)]
-fn paused_native_bodies(count: usize) -> Vec<usize> {
+fn paused_native_bodies(count: usize, dropped: &std::rc::Rc<std::cell::Cell<u32>>) -> Vec<usize> {
     fn no_source(_: usize) {}
     let chunk = vec![7u8; native::NATIVE_BODY_WINDOW];
     (0..count)
         .map(|_| {
-            let (id, ctx) = alloc_native_readable(js_promise_new(), no_source, no_source);
+            let (id, ctx) = alloc_native_readable(
+                js_promise_new(),
+                no_source,
+                no_source,
+                Some(dropped.clone()),
+            );
             take_native_promise(id);
             unsafe { native_enqueue(id, &chunk) };
             assert_eq!(native_capacity(ctx), 0, "a full window pauses the producer");
@@ -148,7 +153,7 @@ fn paused_native_bodies(count: usize) -> Vec<usize> {
 fn delivering_native_bodies(count: usize) -> Vec<usize> {
     fn no_source(_: usize) {}
     (0..count)
-        .map(|_| alloc_native_readable(js_promise_new(), no_source, no_source).1)
+        .map(|_| alloc_native_readable(js_promise_new(), no_source, no_source, None).1)
         .collect()
 }
 
@@ -165,12 +170,18 @@ fn scrub_stack() -> u64 {
 #[test]
 fn unreferenced_paused_native_body_is_reclaimed_and_reports_dead() {
     let _serial = serial_guard();
-    let paused = paused_native_bodies(32);
+    let dropped = std::rc::Rc::new(std::cell::Cell::new(0u32));
+    let paused = paused_native_bodies(32, &dropped);
     let delivering = delivering_native_bodies(8);
     scrub_stack();
     perry_runtime::gc::js_gc_collect();
     perry_runtime::gc::js_gc_collect();
     let dead = paused.iter().filter(|&&ctx| !native_alive(ctx)).count();
+    assert_eq!(
+        dropped.get() as usize,
+        dead,
+        "every reclaimed body counts its death on the producer's cell"
+    );
     // A stray conservative stack word may pin one; reclaim is the rule.
     assert!(
         dead >= 24,

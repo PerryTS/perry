@@ -16,8 +16,6 @@
 //! therefore re-reads the array from the object after it allocates, and no
 //! caller keeps an array pointer across an allocation or a JS call.
 
-#![allow(dead_code)]
-
 use super::*;
 use perry_runtime::native_class_ids as ids;
 use perry_runtime::native_payload::{self, NativePayloadFamily, PayloadPrototype};
@@ -83,8 +81,7 @@ pub(super) mod ctrl {
 /// ReadableStreamBYOBRequest slots.
 pub(super) mod req {
     pub(crate) const CONTROLLER: u32 = 0;
-    pub(crate) const VIEW: u32 = 1;
-    pub(crate) const LEN: u32 = 2;
+    pub(crate) const LEN: u32 = 1;
 }
 
 /// Default / BYOB reader slots.
@@ -185,6 +182,7 @@ pub(super) fn class_id_of(value: f64) -> u32 {
 }
 
 /// Is `value` a payload-less member of `class_id`?
+#[cfg(test)]
 #[inline]
 pub(super) fn is_member(value: f64, class_id: u32) -> bool {
     class_id_of(value) == class_id

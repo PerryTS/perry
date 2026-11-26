@@ -311,8 +311,13 @@ pub(crate) fn resume_source(ctx: usize) {
 }
 
 /// Abort every exchange whose consumer died (its `alive` answers false).
-/// Runs outside the engine borrow, before each drain.
+/// Runs outside the engine borrow, before each drain and at the loop's
+/// keep-alive check; a no-op unless a consumer died since the last look.
 fn cancel_dead_sources() {
+    let died = ENGINE.with(|e| e.borrow().dropped_consumers.replace(0));
+    if died == 0 {
+        return;
+    }
     loop {
         let dead = ENGINE.with(|e| {
             e.borrow()
@@ -452,6 +457,16 @@ struct Engine {
     /// Set while `drain_pending` is running, so a sink that submits a new
     /// request does not re-enter the drain.
     draining: bool,
+    /// How many streaming consumers died while their response sat paused at
+    /// zero credit (the GC's drop of a body stream counts here through its
+    /// token). Only a paused body can be dropped, so the engine looks for the
+    /// dead one (`Sink::alive`) only while this is non-zero.
+    dropped_consumers: std::rc::Rc<std::cell::Cell<u32>>,
+}
+
+/// The cell a streaming consumer's token counts its death on.
+pub(crate) fn dropped_consumers() -> std::rc::Rc<std::cell::Cell<u32>> {
+    ENGINE.with(|e| e.borrow().dropped_consumers.clone())
 }
 
 thread_local! {
@@ -544,6 +559,12 @@ unsafe extern "C" {
 }
 
 extern "C" fn aux_has_active() -> i32 {
+    // A response paused on a consumer that died gets no completion that
+    // would drain the engine: the loop's keep-alive check aborts it instead
+    // of keeping the loop alive for it.
+    if ENGINE.with(|e| e.borrow().dropped_consumers.get()) != 0 {
+        drain_pending();
+    }
     i32::from(has_pending_requests())
 }
 

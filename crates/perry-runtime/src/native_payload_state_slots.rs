@@ -101,13 +101,43 @@ pub unsafe extern "C" fn js_perry_slots_init(value: f64, slots: u32) -> i32 {
 /// The hidden slot array of `value` (null when it has none). Never
 /// allocates.
 ///
+/// The array's key sits at a fixed place of a family member's layout: a
+/// payload-less member is born with it as its first key, a ReadableStream
+/// right after its payload slot. The read checks those two places (one key
+/// compare each) and only a member that attached its state later (a subclass
+/// `this`) finds the key in its key list.
+///
 /// # Safety
 /// `value` is a live value.
 #[no_mangle]
 pub unsafe extern "C" fn js_perry_slots(value: f64) -> *mut ArrayHeader {
-    match any_object(value).and_then(|obj| raw_js_state(obj)) {
-        Some(state) => state as *mut ArrayHeader,
-        None => std::ptr::null_mut(),
+    let Some(obj) = any_object(value) else {
+        return std::ptr::null_mut();
+    };
+    let keys = crate::object::object_keys(obj);
+    let (listed, len) = keys.dense_slots();
+    let born = (keys.count() as usize).min(len).min(2);
+    let state = match (0..born).find(|&i| {
+        crate::string::js_string_key_matches_bytes(
+            crate::value::JSValue::from_bits((*listed.add(i)).to_bits()),
+            JS_STATE_KEY,
+        )
+    }) {
+        Some(position) => {
+            let live = crate::object::object_live_slot_count(obj);
+            let slot = keys.storage_slot(position as u32);
+            f64::from_bits(crate::object::object_field_at_with_live(obj, slot, live).bits())
+        }
+        None => match raw_js_state(obj) {
+            Some(state) => return state as *mut ArrayHeader,
+            None => return std::ptr::null_mut(),
+        },
+    };
+    let state = crate::value::JSValue::from_bits(state.to_bits());
+    if state.is_pointer() {
+        state.as_pointer::<ArrayHeader>() as *mut ArrayHeader
+    } else {
+        std::ptr::null_mut()
     }
 }
 

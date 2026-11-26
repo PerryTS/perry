@@ -1174,6 +1174,18 @@ pub unsafe fn link_owner(link: OwnerLink) -> Option<f64> {
     ((*cell).owner != 0).then(|| f64::from_bits((*cell).owner))
 }
 
+/// The owner of the cell `link` names, for a caller that holds the cell's
+/// payload borrowed, which already proves the cell open and on its creator
+/// thread: one load.
+///
+/// # Safety
+/// The caller borrows the live payload of `link`'s cell on its creator
+/// thread.
+#[inline]
+pub unsafe fn borrowed_link_owner(link: OwnerLink) -> f64 {
+    f64::from_bits((*(link.0 as *mut NativeHandleHeader)).owner)
+}
+
 /// Owner lookup for pump events, including terminal events after release.
 /// Never throws or allocates. Read listeners from JS state at dispatch time.
 ///

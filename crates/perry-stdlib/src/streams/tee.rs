@@ -181,7 +181,11 @@ pub(super) unsafe fn tee_source_enqueue(
             .map(|s| s.strategy_size_cb())
             .unwrap_or(0)
     };
-    let size = if size_cb != 0 {
+    let (size, id, chunk_bits) = if size_cb != 0 {
+        // size() is JS: the source and the chunk are rooted across it.
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let held = super::state::Held::new(&scope, id);
+        let chunk_root = scope.root_nanbox_u64(chunk_bits);
         let size =
             super::readable_strategy_size_to_number(perry_runtime::closure::js_closure_call1(
                 size_cb as *const ClosureHeader,
@@ -189,13 +193,13 @@ pub(super) unsafe fn tee_source_enqueue(
                 chunk,
             ));
         if size.is_nan() || size < 0.0 || size.is_infinite() {
-            super::throw_invalid_readable_strategy_size(id, size);
+            super::throw_invalid_readable_strategy_size(held.id(), size);
         }
-        size
+        (size, held.id(), chunk_root.get_nanbox_u64())
     } else if is_byte_stream {
-        byob::chunk_byte_length(chunk_bits)
+        (byob::chunk_byte_length(chunk_bits), id, chunk_bits)
     } else {
-        1.0
+        (1.0, id, chunk_bits)
     };
     {
         if let Some(s) = rs_rec(RsRef(id)).as_deref_mut() {

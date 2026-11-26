@@ -87,6 +87,45 @@ fn release_pipe_locks(readable_id: usize, writable_id: usize, locks: PipeLockIds
     }
 }
 
+/// What a pipe step still needs after a call that runs JS (a sink's write,
+/// close or abort, a source's cancel): its readable, reader, promise and
+/// signal values, rooted across the call and read back (see `state::Held`).
+struct HeldPipe<'s> {
+    readable: super::state::Held<'s>,
+    reader: super::state::Held<'s>,
+    promise: perry_runtime::gc::RuntimeHandle<'s>,
+    signal: perry_runtime::gc::RuntimeHandle<'s>,
+    abort_listener: perry_runtime::gc::RuntimeHandle<'s>,
+    state: PipeState,
+}
+
+impl<'s> HeldPipe<'s> {
+    fn new(
+        scope: &'s perry_runtime::gc::RuntimeHandleScope,
+        readable_id: usize,
+        promise: *mut Promise,
+        state: PipeState,
+    ) -> Self {
+        Self {
+            readable: super::state::Held::new(scope, readable_id),
+            reader: super::state::Held::new(scope, state.locks.reader_id),
+            promise: scope.root_raw_mut_ptr(promise),
+            signal: scope.root_nanbox_f64(state.signal),
+            abort_listener: scope.root_nanbox_f64(state.abort_listener),
+            state,
+        }
+    }
+
+    /// The readable, the pipe promise and the state now.
+    fn get(&self) -> (usize, *mut Promise, PipeState) {
+        let mut state = self.state;
+        state.locks.reader_id = self.reader.id();
+        state.signal = self.signal.get_nanbox_f64();
+        state.abort_listener = self.abort_listener.get_nanbox_f64();
+        (self.readable.id(), self.promise.get_raw_mut_ptr(), state)
+    }
+}
+
 #[inline]
 fn promise_from_capture(closure: *const ClosureHeader, idx: u32) -> *mut Promise {
     let bits = perry_runtime::closure::js_closure_get_capture_ptr(closure, idx) as u64;
@@ -243,24 +282,42 @@ extern "C" fn readable_stream_pipe_to_aborted(
         let w_id = stream_id(capture_f64(closure, 1));
         let state = pipe_state_from_capture(closure);
         let reason = pipe_signal_reason(state.signal);
+        // The abort and the cancel run JS: the pipe's values, the reason and
+        // the first action are rooted across them.
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let held = HeldPipe::new(&scope, r_id, promise, state);
+        let reason_root = scope.root_nanbox_u64(reason);
+        let mut abort_action = None;
+        if !state.prevent_abort && writable_can_abort(w_id) {
+            abort_action = Some(
+                scope.root_raw_mut_ptr(super::js_writable_stream_abort_inner(
+                    stream_value(w_id),
+                    f64::from_bits(reason),
+                    true,
+                )),
+            );
+        }
+        let mut cancel_action = None;
+        let r_id = held.readable.id();
+        if !state.prevent_cancel && readable_can_cancel(r_id) {
+            cancel_action = Some(super::js_readable_stream_cancel_inner(
+                stream_value(r_id),
+                f64::from_bits(reason_root.get_nanbox_u64()),
+                true,
+            ));
+        }
+        let (r_id, promise, state) = held.get();
         let mut actions = [std::ptr::null_mut(); 2];
         let mut action_count = 0;
-        if !state.prevent_abort && writable_can_abort(w_id) {
-            actions[action_count] = super::js_writable_stream_abort_inner(
-                stream_value(w_id),
-                f64::from_bits(reason),
-                true,
-            );
+        for action in abort_action
+            .map(|a| a.get_raw_mut_ptr::<Promise>())
+            .into_iter()
+            .chain(cancel_action)
+        {
+            actions[action_count] = action;
             action_count += 1;
         }
-        if !state.prevent_cancel && readable_can_cancel(r_id) {
-            actions[action_count] = super::js_readable_stream_cancel_inner(
-                stream_value(r_id),
-                f64::from_bits(reason),
-                true,
-            );
-            action_count += 1;
-        }
+        let reason = reason_root.get_nanbox_u64();
         wait_for_shutdown_actions(r_id, w_id, promise, state, reason, &actions[..action_count]);
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -338,11 +395,15 @@ unsafe fn finish_pipe(
         return;
     }
 
+    // The close runs the sink's close() / the transformer's flush() (JS).
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held = HeldPipe::new(&scope, readable_id, promise, state);
     let close_promise = if transform_of_writable(WsRef(writable_id)).is_some() {
         transform_close(writable_id)
     } else {
         js_writable_stream_close(stream_value(writable_id))
     };
+    let (readable_id, promise, state) = held.get();
     let fulfilled = pipe_closure(
         perry_runtime::fn_info!(readable_stream_pipe_to_close_fulfilled, 1; with_declared(1)),
         readable_id,
@@ -380,11 +441,16 @@ unsafe fn abort_destination_and_reject(
     reason: u64,
 ) {
     if !state.prevent_abort && writable_can_abort(writable_id) {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let held = HeldPipe::new(&scope, readable_id, promise, state);
+        let reason_root = scope.root_nanbox_u64(reason);
         let action = super::js_writable_stream_abort_inner(
             stream_value(writable_id),
             f64::from_bits(reason),
             true,
         );
+        let (readable_id, promise, state) = held.get();
+        let reason = reason_root.get_nanbox_u64();
         wait_for_shutdown_actions(readable_id, writable_id, promise, state, reason, &[action]);
         return;
     }
@@ -399,11 +465,16 @@ unsafe fn cancel_source_and_reject(
     reason: u64,
 ) {
     if !state.prevent_cancel && readable_can_cancel(readable_id) {
+        let scope = perry_runtime::gc::RuntimeHandleScope::new();
+        let held = HeldPipe::new(&scope, readable_id, promise, state);
+        let reason_root = scope.root_nanbox_u64(reason);
         let action = super::js_readable_stream_cancel_inner(
             stream_value(readable_id),
             f64::from_bits(reason),
             true,
         );
+        let (readable_id, promise, state) = held.get();
+        let reason = reason_root.get_nanbox_u64();
         wait_for_shutdown_actions(readable_id, writable_id, promise, state, reason, &[action]);
         return;
     }
@@ -549,8 +620,12 @@ unsafe fn pipe_write_then_continue(
     state: PipeState,
     chunk: u64,
 ) {
+    // The write runs the sink's write() (JS).
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let held = HeldPipe::new(&scope, readable_id, promise, state);
     let write_promise =
         writable_stream_write(writable_id, state.locks.writer_id, f64::from_bits(chunk));
+    let (readable_id, promise, state) = held.get();
     // Spec ReadableStreamPipeTo awaits only BACKPRESSURE (writer.ready), not
     // each write's completion. A sink that accepted the chunk synchronously
     // (write promise already fulfilled) must not cost an extra reaction tick —

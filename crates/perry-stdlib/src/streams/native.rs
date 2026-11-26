@@ -22,12 +22,29 @@ pub(super) struct NativeSource {
 /// credit) the stream object is pinned through its payload link, so a body
 /// nobody has read yet stays alive. Paused, it is unpinned: a body the
 /// program dropped is collected, `Drop for ReadableStreamData` clears
-/// `alive`, and the engine aborts the exchange (`Sink::alive`). A pull
-/// re-pins before it resumes the producer.
+/// `alive` and counts the death on the producer's `dropped` cell, and the
+/// producer aborts the exchange the next time it looks at that count
+/// (`Sink::alive` names which one). A pull re-pins before it resumes the
+/// producer.
 pub(crate) struct SourceToken {
     link: Cell<usize>,
     pub(super) alive: Cell<bool>,
     pinned: Cell<bool>,
+    /// The producer's count of consumers that died while it was paused on
+    /// them (one cell per producer engine), so the producer looks for a dead
+    /// consumer only after one died.
+    dropped: Option<Rc<Cell<u32>>>,
+}
+
+impl SourceToken {
+    /// The stream died (`Drop for ReadableStreamData`): no allocation, no JS,
+    /// no thread-locals.
+    pub(super) fn stream_died(&self) {
+        self.alive.set(false);
+        if let Some(dropped) = self.dropped.as_ref() {
+            dropped.set(dropped.get().wrapping_add(1));
+        }
+    }
 }
 
 impl SourceToken {
@@ -111,6 +128,7 @@ pub(crate) fn alloc_native_readable(
     promise: *mut Promise,
     pull: fn(usize),
     cancel: fn(usize),
+    dropped: Option<Rc<Cell<u32>>>,
 ) -> (RsRef, usize) {
     ensure_gc_registered();
     let stream = RsRef(alloc_readable_with_type(
@@ -124,6 +142,7 @@ pub(crate) fn alloc_native_readable(
         link: Cell::new(stream.link()),
         alive: Cell::new(true),
         pinned: Cell::new(false),
+        dropped,
     });
     token.pin();
     let ctx = Rc::into_raw(token.clone()) as usize;

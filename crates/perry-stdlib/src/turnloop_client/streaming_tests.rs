@@ -343,3 +343,100 @@ fn response_callback_does_not_resume_a_new_connecting_request() {
     });
     writer.join().unwrap();
 }
+
+thread_local! {
+    static CONSUMER_ALIVE: Cell<bool> = const { Cell::new(true) };
+    static DEAD_DONE: Cell<usize> = const { Cell::new(0) };
+}
+fn consumer_alive(_: usize) -> bool {
+    CONSUMER_ALIVE.with(Cell::get)
+}
+fn dead_done(_: usize, _: Outcome) {
+    DEAD_DONE.with(|v| v.set(v.get() + 1));
+}
+
+/// A body dropped mid-fetch: the response sits paused at zero credit, the
+/// GC's drop of its stream counts the death on the engine's cell, and the
+/// loop's keep-alive check aborts the exchange (the server sees the
+/// disconnect, `on_done` runs once). Until a death is counted the engine
+/// never asks a paused consumer whether it lives.
+#[test]
+fn dropped_paused_consumer_is_aborted_at_the_keep_alive_check() {
+    let _owner = become_the_owner_for_test();
+    QUEUED.with(|v| v.set(0));
+    CONSUMER_ALIVE.with(|v| v.set(true));
+    DEAD_DONE.with(|v| v.set(0));
+    let server = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", server.local_addr().unwrap());
+    let (send, receive) = mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        let (mut socket, _) = server.accept().unwrap();
+        socket
+            .set_write_timeout(Some(Duration::from_secs(3)))
+            .unwrap();
+        let mut request = [0; 4096];
+        socket.read(&mut request).unwrap();
+        socket
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 134217728\r\n\r\n")
+            .unwrap();
+        let bytes = [65; 16384];
+        let mut sent = 0;
+        while sent < 134217728 {
+            if socket.write_all(&bytes).is_err() {
+                send.send(sent).unwrap();
+                return;
+            }
+            sent += bytes.len();
+        }
+        send.send(sent).unwrap();
+    });
+    let ctx = 7654322;
+    submit(
+        RequestSpec {
+            url,
+            method: "GET".into(),
+            headers: vec![],
+            body: None,
+            redirect: RedirectMode::Follow,
+            abort_key: None,
+        },
+        Sink {
+            ctx,
+            on_head: Some(head),
+            capacity: Some(capacity),
+            on_chunk: Some(chunk),
+            on_done: dead_done,
+            alive: Some(consumer_alive),
+        },
+    )
+    .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while capacity(ctx) >= 8192 {
+        perry_runtime::event_pump::js_loop_turn_bounded(0);
+        assert!(Instant::now() < deadline, "did not fill the stream window");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    // Dead but not yet counted: the engine does not poll paused consumers.
+    CONSUMER_ALIVE.with(|v| v.set(false));
+    for _ in 0..10 {
+        perry_runtime::event_pump::js_loop_turn_bounded(0);
+    }
+    let present = || ENGINE.with(|e| e.borrow().requests.values().any(|r| r.sink.ctx == ctx));
+    assert!(present(), "no death counted: the paused exchange stays");
+    // The stream's drop counts the death (`SourceToken::stream_died`).
+    let dropped = dropped_consumers();
+    dropped.set(dropped.get() + 1);
+    let _ = aux_has_active();
+    assert!(
+        !present(),
+        "the keep-alive check aborts the dead consumer's exchange"
+    );
+    assert_eq!(dropped.get(), 0, "the count is consumed");
+    for _ in 0..20 {
+        perry_runtime::event_pump::js_loop_turn_bounded(0);
+    }
+    assert_eq!(DEAD_DONE.with(Cell::get), 1, "on_done runs once");
+    let sent = receive.recv_timeout(Duration::from_secs(5)).unwrap();
+    assert!(sent < 134217728, "the abort disconnects the server");
+    writer.join().unwrap();
+}
