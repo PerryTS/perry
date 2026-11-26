@@ -4575,7 +4575,8 @@ function perry_ui_widget_set_shadow(h, r, g, b, a, blur, offsetX, offsetY) {
 }
 function perry_ui_set_opacity(h, opacity) { const el = uiGet(h); if (el) el.style.opacity = opacity; }
 function perry_ui_set_enabled(h, enabled) {
-  const el = uiGet(h); if (el) { el.disabled = !enabled; el.style.pointerEvents = enabled ? "" : "none"; el.style.opacity = enabled ? "" : "0.5"; }
+  // On a Toggle the checkbox is the control: disabling its wrapper leaves the keyboard working.
+  const el = uiGet(h); if (el) { (el._inp || el).disabled = !enabled; el.style.pointerEvents = enabled ? "" : "none"; el.style.opacity = enabled ? "" : "0.5"; }
 }
 function perry_ui_set_tooltip(h, text) { const el = uiGet(h); if (el) el.title = text || ""; }
 // On a Toggle the name goes on the checkbox: a screen reader ignores one on its wrapper.
@@ -4698,13 +4699,14 @@ function perry_ui_on_frame(callback) {
 }
 function perry_ui_cancel_frame(id) { cancelAnimationFrame(id); }
 
+// On a Toggle, a click on the wrapper also clicks its checkbox and both reach the wrapper.
 function perry_ui_set_on_click(h, callback) {
-  const el = uiGet(h); if (el) el.addEventListener("click", () => callWasmClosure(callback));
+  const el = uiGet(h); if (el) (el._inp || el).addEventListener("click", () => callWasmClosure(callback));
 }
 function perry_ui_set_on_hover(h, callback) {
   const el = uiGet(h); if (!el) return;
-  el.addEventListener("mouseenter", () => callWasmClosure(callback, 1.0));
-  el.addEventListener("mouseleave", () => callWasmClosure(callback, 0.0));
+  el.addEventListener("mouseenter", () => callWasmClosure(callback, true));
+  el.addEventListener("mouseleave", () => callWasmClosure(callback, false));
 }
 function perry_ui_set_on_double_click(h, callback) {
   const el = uiGet(h); if (el) el.addEventListener("dblclick", () => callWasmClosure(callback));
@@ -4713,6 +4715,8 @@ function perry_ui_set_on_double_click(h, callback) {
 // focus, and Enter or Space to activate it, as a native button would.
 function perry_ui_widget_set_on_click(h, callback) {
   const el = uiGet(h); if (!el) return;
+  // A Toggle's checkbox is already a focusable control.
+  if (el._inp) return perry_ui_set_on_click(h, callback);
   el.addEventListener("click", () => callWasmClosure(callback));
   if (el.tagName === "BUTTON") return;
   el.style.cursor = "pointer";

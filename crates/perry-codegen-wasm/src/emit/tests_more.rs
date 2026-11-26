@@ -228,6 +228,59 @@ for (let i = 0; i < 7; i++) {
     );
 }
 
+// `widgetSetTooltip` gives the widget the browser's native tooltip: its `title`.
+#[test]
+fn widget_set_tooltip_sets_the_title() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Button, Text, widgetSetTooltip } from "perry/ui";
+const save = Button("Save", () => {});
+widgetSetTooltip(save, "Save the draft");
+const note = Text("Note");
+widgetSetTooltip(note, "Shown on hover");
+"#,
+            r#"
+for (const label of ["Save", "Note"]) {
+  const el = [...uiHandles.values()].find(e => e.textContent === label);
+  console.log(label + ": " + el.title);
+}
+"#
+        ),
+        "Save: Save the draft\nNote: Shown on hover"
+    );
+}
+
+// The `widget`-prefixed free functions reach the same web setters as their short names.
+#[test]
+fn widget_prefixed_setters_reach_the_web_setters() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { Button, Toggle, widgetSetEnabled, widgetSetControlSize, widgetSetOnClick, widgetSetOnHover, widgetSetOnDoubleClick } from "perry/ui";
+const b = Button("B", () => {});
+const t = Toggle("T", (on: boolean) => {});
+widgetSetEnabled(t, 0);
+widgetSetOnClick(t, () => { console.log("toggle click"); });
+widgetSetEnabled(b, 0);
+widgetSetControlSize(b, 1);
+widgetSetOnClick(b, () => { console.log("click"); });
+widgetSetOnHover(b, (inside: boolean) => { console.log("hover " + (inside === true) + " " + (inside === false)); });
+widgetSetOnDoubleClick(b, () => { console.log("dblclick"); });
+"#,
+            r#"
+const el = [...uiHandles.values()].find(e => e.textContent === "B");
+console.log(el.disabled + " " + el.style.fontSize);
+for (const type of ["click", "mouseenter", "mouseleave", "dblclick"]) el.dispatch(type);
+const toggle = [...uiHandles.values()].find(e => e.textContent === "T");
+console.log(toggle._inp.disabled);
+toggle._inp.dispatch("click");
+"#
+        ),
+        "true 0.85em\nclick\nhover true false\nhover false true\ndblclick\ntrue\ntoggle click"
+    );
+}
+
 // `Label(text, field)` is a `<label for>` naming the field's id, or the input inside a
 // composite widget such as a Toggle; `widgetSetAccessibilityLabel` sets that control's `aria-label`.
 #[test]
