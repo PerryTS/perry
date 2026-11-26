@@ -658,9 +658,9 @@ fn emit_uncaught_backtrace() {
 /// read, not at construction. That allocation is a GC point, and an
 /// evacuating scavenge moves the error out from under `eh` — a plain Rust
 /// local, which perry's collector neither scans nor pins, so afterwards it
-/// names from-space. Reading `(*eh).message` there to resolve the `ERR_*`
-/// code is an unsound read whose result is whatever the collector left in the
-/// vacated cell, and the address it yields is then used as a side-table key.
+/// names from-space. Reading `eh` there to resolve the `ERR_*` code is an
+/// unsound read whose result is whatever the collector left in the vacated
+/// cell.
 /// Reading everything first costs nothing and needs no root, which is why
 /// this is an ordering fix rather than a `RuntimeHandleScope`.
 ///

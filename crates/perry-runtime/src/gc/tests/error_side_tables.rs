@@ -1,8 +1,7 @@
 //! Error side-table GC integration (2026-07-02 audit, GC deep set).
 //!
-//! Node diagnostics live in one record keyed by the movable ErrorHeader and
-//! follow its `ErrorSideTables` move/finalize hook. User-assigned properties
-//! live on `ObjectMeta.expando` and follow ordinary heap tracing.
+//! Node diagnostics and user-assigned properties are the Error's own
+//! properties on `ObjectMeta.expando`, and follow ordinary heap tracing.
 
 use super::super::*;
 use super::support::*;
@@ -43,41 +42,36 @@ fn test_error_code_survives_message_and_error_move() {
         after_message, before_message,
         "test premise: the message must move"
     );
+    let moved_error = after_error as *const crate::error::ErrorHeader;
     assert_eq!(
-        crate::node_submodules::error_code_for_error(
-            after_error as *const crate::error::ErrorHeader,
-        ),
+        crate::node_submodules::error_code_for_error(moved_error).as_deref(),
         Some("ERR_TEST_9530"),
         "the moved error must retain its registered Node code"
     );
-    let moved_error = after_error as *const crate::error::ErrorHeader;
+    let keys: Vec<String> = crate::node_submodules::error_user_props(after_error)
+        .into_iter()
+        .map(|(key, _)| key)
+        .collect();
     assert_eq!(
-        crate::node_submodules::error_syscall_for_error(moved_error),
-        Some("open")
-    );
-    assert_eq!(
-        crate::node_submodules::error_errno_for_error(moved_error),
-        Some(-2)
-    );
-    assert_eq!(
-        crate::node_submodules::error_path_for_error(moved_error).as_deref(),
-        Some("/missing/source")
+        keys,
+        ["errno", "code", "syscall", "path", "dest", "hostname"],
+        "Node's uvException order"
     );
     assert_eq!(
-        crate::node_submodules::error_dest_for_error(moved_error).as_deref(),
-        Some("/missing/dest")
+        crate::node_submodules::error_user_prop(after_error, "errno"),
+        Some(-2.0)
     );
-    assert_eq!(
-        crate::node_submodules::error_hostname_for_error(moved_error).as_deref(),
-        Some("missing.test")
-    );
-    assert!(
-        crate::node_submodules::error_code_for_error(
-            before_error as *const crate::error::ErrorHeader,
-        )
-        .is_none(),
-        "the stale pre-move owner key must be gone"
-    );
+    for (key, value) in [
+        ("syscall", "open"),
+        ("path", "/missing/source"),
+        ("dest", "/missing/dest"),
+        ("hostname", "missing.test"),
+    ] {
+        assert_eq!(
+            crate::node_submodules::error_own_string(moved_error, key).as_deref(),
+            Some(value)
+        );
+    }
 
     // Exercise the actual `err.code` property path, not only the table API.
     // Suppress new automatic collections after the explicit positive-control
@@ -100,8 +94,6 @@ fn test_error_code_survives_message_and_error_move() {
         frames.contains("    at "),
         "report lost its frames: {report:?}"
     );
-
-    crate::node_submodules::diagnostics_gc::error_side_tables_clear_dead(after_error);
 }
 
 /// A real ENOENT Error keeps its enumerable Node fields through relocation and
@@ -180,9 +172,8 @@ fn test_error_user_props_survive_copied_minor_move() {
     );
 }
 
-/// A DEAD error's side-table entries must be dropped by the copied-minor
-/// from-space finalize so a fresh error at the recycled address doesn't
-/// inherit them.
+/// A fresh error at a dead error's recycled address inherits none of its
+/// diagnostics or user properties.
 #[test]
 fn test_dead_error_side_table_entries_cleared() {
     let _guard = CopyingNurseryTestGuard::new(1);
@@ -200,12 +191,6 @@ fn test_dead_error_side_table_entries_cleared() {
 
     let _ = gc_collect_minor();
 
-    assert!(
-        crate::node_submodules::error_code_for_error(err as *const crate::error::ErrorHeader,)
-            .is_none(),
-        "dead error's diagnostic record must be cleared, not left for a \
-         fresh error at the recycled address to inherit"
-    );
     // User properties live in the error's ordinary metadata. Check a fresh
     // error instead of dereferencing the dead error's unswept bytes.
     let fresh = crate::error::js_error_new() as usize;
@@ -214,6 +199,7 @@ fn test_dead_error_side_table_entries_cleared() {
         "dead error's user-prop entry must be cleared, not left for a \
          fresh error at the recycled address to inherit"
     );
+    assert!(crate::node_submodules::diagnostics::error_user_prop(fresh, "code").is_none());
 }
 
 /// An OBJECT-valued user prop must keep its referent alive across a

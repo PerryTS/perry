@@ -8,7 +8,7 @@ fn assert_rejected(action: impl FnOnce() -> f64, code: Option<&str>, message: &s
         .as_pointer::<crate::error::ErrorHeader>()
         .cast_mut();
     assert_eq!(
-        crate::node_submodules::diagnostics::error_code_for_error(ptr),
+        crate::node_submodules::diagnostics::error_code_for_error(ptr).as_deref(),
         code
     );
     assert_eq!(
