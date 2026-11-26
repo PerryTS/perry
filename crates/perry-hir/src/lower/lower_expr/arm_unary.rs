@@ -28,11 +28,23 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
             }
             e
         };
+        // A deferred non-export of a core module is a value use under `typeof`
+        // too, so it skips every ident fold and the ident arm raises U006.
+        let typeof_ident = match typeof_arg {
+            ast::Expr::Ident(id)
+                if !ctx
+                    .deferred_unknown_native_imports
+                    .contains_key(id.sym.as_ref()) =>
+            {
+                Some(id)
+            }
+            _ => None,
+        };
         // #677: bare `typeof Function` — Function is a JS built-in
         // constructor, so typeof is "function". Without this fold,
         // the bare ident lowers to `GlobalGet(0)` and typeof reads
         // "object" via the global-this short-circuit.
-        if let ast::Expr::Ident(id) = typeof_arg {
+        if let Some(id) = typeof_ident {
             if id.sym.as_ref() == "Function" && ctx.lookup_local("Function").is_none() {
                 return Ok(Expr::String("function".to_string()));
             }
@@ -134,9 +146,6 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                 // `l__class_expr_*` key, but `l` is still lexically bound in
                 // the class body.
                 && ctx.current_class_inner_name.as_deref() != Some(n)
-                // A deferred non-export of a core module is a value use here:
-                // the ident arm raises its U006 diagnostic.
-                && !ctx.deferred_unknown_native_imports.contains_key(n)
                 && !is_builtin_function(n)
                 && !is_known_global_identifier_name(n)
                 && !matches!(n, "undefined" | "null" | "NaN" | "Infinity")
