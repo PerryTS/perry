@@ -1629,6 +1629,8 @@ impl Model {
 
     pub(crate) fn proxy_apply(&mut self, n: NodeId, c: &Cons, p: u32) {
         match *c {
+            // Holds the global object only, never a Proxy.
+            Cons::InterpRuns { .. } => {}
             Cons::Load { key, dst } => self.proxy_get_into(p, key, NO_NODE, dst),
             Cons::IdxLoad { idx, dst, .. } => self.proxy_get_into(p, Key::any(), idx, dst),
             // `p.m( ... )` / `p[k]( ... )`: [[Get]], then Call( f, p, args ).

@@ -1473,7 +1473,7 @@ impl<'a> Gen<'a> {
                 self.load(recv, key)
             }
             "js_vm_module_call" => {
-                crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
+                self.interp_site("E14 node:vm");
                 self.extern_fail(name, &args, &spread)
             }
             // `module.createRequire` as a value call: the program's require.
@@ -1482,6 +1482,13 @@ impl<'a> Gen<'a> {
             "js_module_create_require_devirt" => {
                 let t = self.m.tok(TokKind::Builtin(BuiltinNs::Require));
                 self.tok_node(t)
+            }
+            // A direct eval (`perry-hir` `lower/dynamic_eval.rs`): its source
+            // runs once this body runs; its scope objects and `this` are
+            // handed to the interpreter (arguments of the entry).
+            "js_eval_in_scope" => {
+                self.interp_site("E14 direct eval");
+                self.extern_fail(name, &args, &spread)
             }
             _ => self.extern_fail(name, &args, &spread),
         }

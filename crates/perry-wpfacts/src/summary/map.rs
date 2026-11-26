@@ -95,6 +95,7 @@ pub fn map_cons(
             act: act_map(act, &mut n, &mut k),
         },
         TopSink { reason } => TopSink { reason },
+        InterpRuns { reason } => InterpRuns { reason },
         Raise { region } => Raise { region: n(region) },
         HandRaise { region } => HandRaise { region: n(region) },
         RuntimeStore { reason, retained } => RuntimeStore { reason, retained },

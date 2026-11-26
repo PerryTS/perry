@@ -46,6 +46,7 @@ impl Model {
                 format!("chain {n} {origin} {} {act:?}", self.key_name(*key))
             }
             Cons::TopSink { reason } => format!("top {n} {reason}"),
+            Cons::InterpRuns { reason } => format!("interpruns {n} {reason}"),
             Cons::Raise { region } => format!("raise {n} {region}"),
             Cons::HandRaise { region } => format!("handraise {n} {region}"),
             Cons::RuntimeStore { reason, retained } => {

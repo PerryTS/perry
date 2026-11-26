@@ -929,6 +929,16 @@ impl Model {
             return self.construct(call, TOP);
         }
         let c = self.calls[call as usize].clone();
+        // `new` of a `node:vm` function (`new vm.Script(src)`, its value
+        // through the module object): it compiles source text its methods
+        // run, so interpreted code runs where this construct runs (DECISIONS
+        // 225/235), as at a call of one (`builtins::ns_method_inner`).
+        if let TokKind::BuiltinFn(Native::Member { identity, .. }) = self.toks[t as usize] {
+            let root = identity.split('.').next().unwrap_or(identity);
+            if root.strip_prefix("node:").unwrap_or(root) == "vm" {
+                builtins::set_dyn_eval(self, "E14 node:vm");
+            }
+        }
         match self.toks[t as usize].clone() {
             TokKind::ClassObj(tm) => {
                 let ctx = self.birth_ctx(call);

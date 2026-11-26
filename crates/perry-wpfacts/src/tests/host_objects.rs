@@ -319,7 +319,6 @@ fn interpreted_code_opens_a_host_member() {
     ] {
         let cfg = FactsConfig {
             dynamic_code: Some("E14 test: dynamic code".into()),
-            interpreted_sources: true,
             ..FactsConfig::default()
         };
         let pf = facts_with(

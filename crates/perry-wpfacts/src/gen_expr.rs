@@ -27,6 +27,15 @@ impl<'a> Gen<'a> {
         n
     }
 
+    /// An eval-like source site runs interpreted code when its body runs
+    /// (`Cons::InterpRuns`), not from the start of the solve.
+    pub(crate) fn interp_site(&mut self, why: &str) {
+        let gt = self.m.tok(TokKind::Builtin(BuiltinNs::GlobalThis));
+        let n = self.tok_node(gt);
+        let r = self.m.reason(why);
+        self.m.cons(n, Cons::InterpRuns { reason: r });
+    }
+
     pub(crate) fn to_sink(&mut self, v: NodeId, why: &str) {
         let r = self.m.reason(why);
         self.m.sink_node(v, r);

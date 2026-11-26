@@ -126,15 +126,14 @@ pub(super) fn prune(
     let dynamic_code = perry_hir::has_deferred_dynamic_code_sites()
         || ctx.native_module_imports.contains("vm")
         || ctx.uses_data_url_dynamic_import;
-    // DECISIONS 235: a real eval-like source site.
-    let interpreted_sources = !perry_hir::interpreted_source_sites().is_empty()
-        || ctx.native_module_imports.contains("vm")
-        || ctx.uses_data_url_dynamic_import;
+    // A computed data-URL import runs interpreted code at no site of the
+    // facts model; every other source site runs it where its body runs.
+    let data_url_import = ctx.uses_data_url_dynamic_import;
     let Some(activation) = super::program_facts::activation(
         &ctx.native_modules,
         super::program_facts::export_sources(ctx),
         dynamic_code,
-        interpreted_sources,
+        data_url_import,
         &ctx.patched_builtins.dynamic_code_reach,
         roots.iter().map(|p| p.display().to_string()).collect(),
     ) else {
