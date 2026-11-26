@@ -376,6 +376,7 @@ fn initialize_open_state(owner: f64, state: f64) {
         "tlsWrapper",
         "tlsParent",
         super::payload_lookup::ATTEMPT,
+        super::payload_lookup::ERRORS,
     ] {
         p::record_set(state.get(), key, p::undefined());
     }
@@ -540,6 +541,7 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
         };
         (*payload).ext.connect_async_id = provider::id(connect.get());
     }
+    let path_connect = path.clone();
     let result = match (path, custom_lookup) {
         (None, true) => {
             super::payload_lookup::start(owner.get(), arg1.get(), &host, port as u16, lookup.get());
@@ -563,6 +565,16 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
         }
         provider::notify(connect.get());
         return owner.get();
+    }
+    let family = crate::ip::classify_ip(&host);
+    if path_connect.is_none() && family != 0 {
+        // Node's `internalConnect` for an IP host runs on the next tick.
+        let address = scope.root_nanbox(events::string(&host));
+        events::queue_emit(
+            owner.get(),
+            "connectionAttempt",
+            &[address.get(), port, f64::from(family)],
+        );
     }
     let snapshot = super::payload_io::snapshot(socket);
     if needs_tcp {
@@ -811,10 +823,12 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
         let group = scope.root_nanbox(p::record_get(state.get(), "serverGroup"));
         p::own_set(close_record.get(), "serverGroup", group.get());
     }
+    super::payload_lookup::cancel_attempt(owner.get(), socket);
     // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
     // field/core access ends before allocation or JS.
     let result = unsafe {
         let core = p::socket_core(socket).unwrap_or_else(super::payload_prototype::throw_miss);
+        let _ = tl::link_connect_cancel(&mut *core, socket);
         tl::link_close(&mut *core, socket)
     };
     let owed = match result {

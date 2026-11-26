@@ -8,7 +8,8 @@ use super::support::*;
 use crate::native_payload::{self as np, CloseOutcome, NativePayloadFamily, OwnerLink};
 use crate::turnloop_net::transport::{self, TransportCore, TransportPayload};
 use crate::turnloop_net::{
-    NetCompletion, NET_ACCEPT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_FLAG_LINK,
+    NetCompletion, NET_ACCEPT, NET_ATTEMPT, NET_ATTEMPT_FAILED, NET_ATTEMPT_START,
+    NET_ATTEMPT_TIMEOUT, NET_CLOSED, NET_CONNECT, NET_DATA, NET_FLAG_LINK,
 };
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -50,6 +51,7 @@ struct Event {
     owner: Option<u64>,
     bytes: Vec<u8>,
     rerouted: bool,
+    user: u64,
 }
 
 thread_local! {
@@ -88,12 +90,13 @@ extern "C" fn link_sink(completion: *const NetCompletion) {
             kind: c.kind,
             link: link.0,
             owner,
-            bytes: if c.kind == NET_DATA && c.len != 0 {
+            bytes: if (c.kind == NET_DATA || c.kind == NET_ATTEMPT) && c.len != 0 {
                 unsafe { std::slice::from_raw_parts(c.data, c.len) }.to_vec()
             } else {
                 Vec::new()
             },
             rerouted: REROUTED.with(Cell::get),
+            user: c.user,
         })
     });
 }
@@ -789,4 +792,113 @@ fn every_net_transport_sabotage_makes_its_witness_red() {
             output.status
         );
     }
+}
+
+/// The attempts a racing connect reported, as (kind, address).
+fn attempts(link: OwnerLink) -> Vec<(u64, String)> {
+    EVENTS.with(|events| {
+        events
+            .borrow()
+            .iter()
+            .filter(|e| e.kind == NET_ATTEMPT && e.link == link.0)
+            .map(|e| (e.user, String::from_utf8_lossy(&e.bytes).into_owned()))
+            .collect()
+    })
+}
+
+/// TEST-NET-1: never routed, so an attempt there hangs or fails at once.
+const BLACKHOLE: [u8; 4] = [192, 0, 2, 1];
+
+#[test]
+fn a_racing_connect_moves_past_a_stalled_attempt_and_disarms_its_timer_on_connect() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let scope = RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(socket.get_nanbox_f64(), &FAMILY).unwrap();
+    let addrs = vec![
+        std::net::SocketAddr::from((BLACKHOLE, port)),
+        std::net::SocketAddr::from(([127, 0, 0, 1], port)),
+    ];
+    unsafe {
+        transport::tcp_connect_addrs(
+            core(socket.get_nanbox_f64()),
+            link,
+            addrs,
+            true,
+            Some(Duration::from_millis(20)),
+        )
+        .unwrap();
+    }
+    assert!(
+        pump_until(|| count(NET_CONNECT, link) == 1),
+        "the second address connects"
+    );
+    let reported = attempts(link);
+    assert_eq!(reported[0], (NET_ATTEMPT_START, "192.0.2.1".into()));
+    assert!(
+        matches!(reported[1].0, NET_ATTEMPT_TIMEOUT | NET_ATTEMPT_FAILED),
+        "the stalled attempt is abandoned: {reported:?}"
+    );
+    assert_eq!(reported[2], (NET_ATTEMPT_START, "127.0.0.1".into()));
+    let _peer = listener.accept().unwrap();
+    // The connection is the only resource left: the timer and the abandoned
+    // attempt's handle are closed.
+    assert!(
+        pump_until(|| crate::turnloop_net::live_handles() == 1),
+        "no timer or abandoned handle outlives the connect"
+    );
+    assert_eq!(attempts(link).len(), 3, "nothing is reported after connect");
+    assert!(destroy(link));
+    assert!(pump_until(|| refs(link) == 0));
+    assert_eq!(crate::turnloop_net::live_handles(), 0);
+}
+
+#[test]
+fn closing_during_a_racing_attempt_cancels_its_timer_and_reports_nothing_after() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(socket.get_nanbox_f64(), &FAMILY).unwrap();
+    let addrs = vec![
+        std::net::SocketAddr::from((BLACKHOLE, 9)),
+        std::net::SocketAddr::from(([192, 0, 2, 2], 9)),
+    ];
+    unsafe {
+        transport::tcp_connect_addrs(
+            core(socket.get_nanbox_f64()),
+            link,
+            addrs,
+            true,
+            Some(Duration::from_millis(200)),
+        )
+        .unwrap();
+    }
+    assert_eq!(attempts(link)[0].0, NET_ATTEMPT_START);
+    unsafe {
+        transport::connect_cancel(core(socket.get_nanbox_f64()), link).unwrap();
+    }
+    let reported = attempts(link).len();
+    destroy(link);
+    assert!(
+        pump_until(|| refs(link) == 0),
+        "the attempt, its timer and the close release every ref"
+    );
+    // Past the attempt timeout: a leaked timer would have fired by now.
+    let limit = Instant::now() + Duration::from_millis(300);
+    while Instant::now() < limit {
+        crate::event_pump::pump_net_for_test(Duration::from_millis(10));
+    }
+    assert_eq!(
+        attempts(link).len(),
+        reported,
+        "nothing is reported after close"
+    );
+    assert_eq!(count(NET_CONNECT, link), 0);
+    assert_eq!(crate::turnloop_net::live_handles(), 0);
 }

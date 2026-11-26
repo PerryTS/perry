@@ -638,6 +638,7 @@ pub unsafe fn dispatch_common(event: &tl::NetCompletion) -> bool {
         tl::NET_SHUTDOWN => io::shutdown(owner.get(), event.user),
         tl::NET_CLOSED => io::socket_closed(owner.get(), event),
         tl::NET_LOOKUP => crate::payload_lookup::resolved(owner.get(), event.bytes()),
+        tl::NET_ATTEMPT => crate::payload_lookup::attempted(owner.get(), event),
         _ => return false,
     }
     true
