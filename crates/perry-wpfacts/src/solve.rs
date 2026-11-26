@@ -2247,7 +2247,7 @@ impl Model {
     /// and of the walk node itself). Made for every left side that meets
     /// InstanceofOperator, once per node: a superset where `@@hasInstance`
     /// is another function than Function.prototype's, which walks nothing.
-    fn instanceof_walk(&mut self, lhs: NodeId) {
+    pub(crate) fn instanceof_walk(&mut self, lhs: NodeId) {
         if !self.idx_done.insert((lhs, TOP, lhs, IDX_INSTANCEOF_WALK)) {
             return;
         }

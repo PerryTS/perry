@@ -120,6 +120,17 @@ impl Model {
             if fam == Family::Function && builtins::never_callable(self, r) {
                 return self.function_this_not_callable(call, t, r, key);
             }
+            if matches!(self.toks[r as usize], TokKind::Proxy(_))
+                && Self::proxy_this_model(fam, name)
+            {
+                if self.bind_done.insert((call, t, r)) {
+                    self.diagnostic_callee(call, t);
+                    self.with_native(call, |m, call| {
+                        builtins::native_prototype_call(m, fam, r, key, call)
+                    });
+                }
+                return true;
+            }
             if builtins::no_this_value(self, fam, what, r) {
                 return self.this_value_throws(call, t, r);
             }
@@ -252,6 +263,25 @@ impl Model {
             }
         }
         true
+    }
+
+    /// A native (family `fam`, member `name`) whose model holds for a Proxy
+    /// `this` (`function_method`), so the receiver rules hand it the Proxy
+    /// (`native_call`; `Cons::NativeThis` in `proxy_apply`). Only these
+    /// `Function.prototype` methods: `toString` tests IsCallable only, fixed at
+    /// ProxyCreate from the target (ECMA-262 20.2.3.5 steps 2-4, 10.5.15
+    /// step 7): a String, else the realm's TypeError; no trap runs (the
+    /// runtime's `function_prototype_to_string_thunk`: `proxy_wraps_callable`).
+    /// `call` and `apply` are Call(func, thisArg, args) after IsCallable
+    /// (20.2.3.3, 20.2.3.1): the Proxy's [[Call]] (`call_tok`, rule PXAPPLY:
+    /// the apply trap or the forward once the target is callable), else the
+    /// TypeError. `@@hasInstance` is OrdinaryHasInstance (20.2.3.6, 7.3.22):
+    /// false on a non-callable `this`, else the Proxy's [[Get]] of
+    /// `prototype` (its `get` trap) and the walk of the argument's chain.
+    /// Not `bind` (BoundFunctionCreate's [[GetPrototypeOf]], HasOwnProperty
+    /// and Get of `length`/`name` run the traps: no model yet).
+    pub(super) fn proxy_this_model(fam: Family, name: &str) -> bool {
+        fam == Family::Function && matches!(name, "call" | "apply" | "toString" | "@@hasInstance")
     }
 
     /// A `String.prototype` method called with a receiver `r` of another

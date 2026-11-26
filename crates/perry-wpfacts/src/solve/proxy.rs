@@ -1642,6 +1642,17 @@ impl Model {
                 let t = self.tok(TokKind::Proxy(p));
                 self.cons(f, Cons::CallThis { call, this: t });
             }
+            // A native's receiver rule (`Model::native_call` per receiver
+            // token) for a native whose model holds for a Proxy `this`
+            // (`Model::proxy_this_model`: `Function.prototype.{call, apply,
+            // toString}`): the Proxy is that receiver.
+            Cons::NativeThis { call, f }
+                if builtins::native_model(self, f)
+                    .is_some_and(|(fam, _, name)| Self::proxy_this_model(fam, name)) =>
+            {
+                let t = self.tok(TokKind::Proxy(p));
+                self.native_this(call, f, Tokens::Slice(&[t]), 0);
+            }
             // Rule PXDEFP: the value of a definition (a define site).
             Cons::Store {
                 key,

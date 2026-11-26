@@ -112,6 +112,20 @@ pub(super) fn function_method(m: &mut Model, t: Tok, name: Option<&str>, call: C
         // iteration) finds nothing there, a call of it throws.
         Some(n) if n.starts_with(WK_PREFIX) => {
             if n == crate::model::WK_HAS_INSTANCE {
+                // OrdinaryHasInstance( this, V ) (7.3.22): on a Proxy `this`
+                // step 4 is its [[Get]] of `prototype` (10.5.8: the `get`
+                // trap, Receiver the Proxy); steps 5-6 walk V's chain with
+                // [[GetPrototypeOf]] (a Proxy there runs its trap), as the
+                // `instanceof` operator's walk (`Model::instanceof_walk`).
+                // A superset where IsCallable(this) is false (step 1: false
+                // before anything runs).
+                if let Some(&v) = c.arg(0) {
+                    m.instanceof_walk(v);
+                }
+                if let TokKind::Proxy(p) = m.toks[t as usize] {
+                    let k = m.atom("prototype");
+                    m.proxy_get(p, Key::Named(k), NO_NODE);
+                }
                 ret_prim(m, call, prim::BOOL);
             }
         }
