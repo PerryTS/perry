@@ -1,0 +1,1 @@
+A `typeof` of a named import that a Node core module does not export (`import { notAThing } from "node:path"; typeof notAThing`) raises the same U006 "does not provide an export named" error as any other value use, instead of compiling to `undefined`.
