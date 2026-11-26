@@ -642,14 +642,14 @@ f().then((v) => console.log(v)).catch((e) => console.log("threw " + e));
 }
 
 // An expression the JS emitter has no arm for must reject, not run on with `undefined`:
-// a typed array has no arm in an async body, so iterating it throws.
+// `Buffer.alloc` has no arm in an async body, so iterating its result throws.
 #[test]
 fn async_body_rejects_iteration_it_cannot_emit() {
     let out = run_web_source(
         r#"
 async function each(): Promise<string> {
   let s = "";
-  for (const v of new Uint8Array([120, 121])) s = s + v;
+  for (const v of Buffer.alloc(2)) s = s + v;
   return s;
 }
 each().then((v) => console.log(v)).catch((e) => console.log("threw " + e.name));
@@ -1484,6 +1484,9 @@ mod array_from;
 
 #[path = "array_last_index_of_tests.rs"]
 mod array_last_index_of;
+
+#[path = "typed_array_tests.rs"]
+mod typed_array;
 
 #[path = "rest_param_tests.rs"]
 mod rest_param;
