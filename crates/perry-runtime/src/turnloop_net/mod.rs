@@ -63,6 +63,7 @@ use turnloop::{
 
 pub mod abi;
 pub mod census;
+mod closing;
 mod defer_eof;
 pub(crate) mod errors;
 mod sink;
@@ -75,6 +76,7 @@ mod write_queue;
 #[path = "tests.rs"]
 mod tests;
 
+pub(crate) use closing::{pending as close_queued, run as close_phase};
 pub(crate) use defer_eof::{check_phase_begin, check_phase_end, pending as eof_parked};
 pub use errors::{map_error, NodeError};
 pub use sink::{
@@ -1408,6 +1410,7 @@ fn accept_connection(subsystem: u8, server: i64, conn: Handle, peer: Option<Sock
 #[cfg(test)]
 pub(crate) fn reset_for_test() {
     defer_eof::take_all();
+    closing::take_all();
     transport::reset_for_test();
     NET.with(|net| net.borrow_mut().timers.clear());
     NET.with(|net| {
@@ -1429,8 +1432,9 @@ pub(crate) fn shutdown_current_thread() {
     // a thread that is going away (LIFECYCLE-DESIGN L8). `Loop::drop` releases
     // their descriptors.
     transport::begin_teardown();
-    for cell in defer_eof::take_all() {
-        // SAFETY: each parked link EOF holds the ref that pins its cell.
+    for cell in defer_eof::take_all().into_iter().chain(closing::take_all()) {
+        // SAFETY: each parked link EOF and queued Closed holds the ref that
+        // pins its cell.
         unsafe { transport::release_parked_eof(cell) };
     }
     let ids: Vec<i64> = NET.with(|net| net.borrow().entries.keys().copied().collect());
