@@ -201,6 +201,7 @@ fn an_opaque_test_receiver_is_counted_separately() {
 fn a_record_use_inside_a_closure_rejects() {
     let mut body = cc_body();
     body.push(Stmt::Expr(Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 1,
         params: vec![],

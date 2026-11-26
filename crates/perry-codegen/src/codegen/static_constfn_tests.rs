@@ -5,6 +5,7 @@ use perry_hir::{Function, Param};
 
 fn closure(id: u32, this: bool) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: id,
         params: Vec::new(),

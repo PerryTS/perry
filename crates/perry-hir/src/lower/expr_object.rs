@@ -241,6 +241,13 @@ fn lower_method_prop(
         .map(|(name, id, _)| (name.clone(), *id))
         .collect();
 
+    let type_params = method
+        .function
+        .type_params
+        .as_ref()
+        .map(|tp| crate::lower_types::extract_type_params(tp))
+        .unwrap_or_default();
+
     let scope_mark = ctx.enter_scope();
     let class_expr_capture_mark = ctx.body_class_expr_captures.len();
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
@@ -484,7 +491,7 @@ fn lower_method_prop(
             byte_offset: method.function.span.lo.0,
             id: func_id,
             name: func_name,
-            type_params: Vec::new(),
+            type_params,
             params,
             return_type,
             body,
@@ -515,6 +522,7 @@ fn lower_method_prop(
             byte_offset: method.function.span.lo.0,
             func_id,
             params,
+            type_params,
             return_type,
             body,
             captures,
@@ -714,6 +722,7 @@ fn lower_accessor_prop(
     // way `Object.defineProperty(obj, k, { get(){…} })` already worked), so the
     // closure must NOT capture it.
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: byte_offset,
         func_id,
         params,
@@ -1558,6 +1567,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
         let captures = iife_captures(ctx, &body, &inner_local_ids);
         let body_uses_this = body.iter().any(uses_this_stmt);
         let closure = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: obj.span.lo.0,
             func_id: iife_func_id,
             params: vec![param],
@@ -1783,6 +1793,7 @@ pub(super) fn lower_object(ctx: &mut LoweringContext, obj: &ast::ObjectLit) -> R
     let body_uses_this = body.iter().any(uses_this_stmt);
     let static_obj = Expr::object_literal(props);
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: obj.span.lo.0,
         func_id: iife_func_id,
         params: vec![param],

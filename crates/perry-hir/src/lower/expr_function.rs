@@ -464,6 +464,7 @@ pub(super) fn lower_arrow(ctx: &mut LoweringContext, arrow: &ast::ArrowExpr) -> 
         byte_offset: arrow.span.lo.0,
         func_id,
         params,
+        type_params: arrow_type_params,
         return_type: Type::Any,
         body,
         captures,
@@ -580,6 +581,7 @@ fn lower_named_fn_expr(
             byte_offset: fn_expr.function.span.lo.0,
             func_id: wrapper_func_id,
             params: Vec::new(),
+            type_params: Vec::new(),
             return_type: Type::Any,
             body,
             captures,
@@ -632,6 +634,12 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
     ctx.in_class_field_init = false;
     let saved_in_nonarrow_fn = ctx.in_nonarrow_fn;
     ctx.in_nonarrow_fn = true;
+    let type_params = fn_expr
+        .function
+        .type_params
+        .as_ref()
+        .map(|tp| crate::lower_types::extract_type_params(tp))
+        .unwrap_or_default();
 
     // Lower parameters and collect destructuring info.
     //
@@ -1447,6 +1455,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         byte_offset: fn_expr.function.span.lo.0,
         func_id,
         params,
+        type_params,
         return_type: Type::Any,
         body,
         captures,
@@ -1891,3 +1900,7 @@ pub(crate) fn insert_class_capture_refresh_after_assignments(
         i += 1;
     }
 }
+
+#[cfg(test)]
+#[path = "closure_type_params_tests.rs"]
+pub(crate) mod closure_type_params_tests;
