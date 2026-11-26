@@ -207,13 +207,15 @@ pub struct FactsConfig {
     /// interpreted code is the ⊤ summary node; see
     /// [`ProgramFacts::interp_guard`].
     pub dynamic_code: Option<String>,
-    /// DECISIONS 235: the program holds a real eval-like source site (a
-    /// deferred eval/Function source, `node:vm`, a dynamic import of a
-    /// computed data URL): interpreted code may run from the start. Without
-    /// one, it runs only once the solve finds a call or construct that may
-    /// be the Function constructor (`builtins::interpreted_code_runs`). The
-    /// link decision (`dynamic_code`) does not feed the facts.
-    pub interpreted_sources: bool,
+    /// The program imports a computed `data:text/javascript,` URL
+    /// (`uses_data_url_dynamic_import`): the driver resolves the module
+    /// interpreted, at no site of the model, so interpreted code may run from
+    /// the start. Every other eval-like source site runs it once its body
+    /// runs (DECISIONS 225/235: a direct eval, a `node:vm` function, a call
+    /// or construct that may be the Function constructor:
+    /// `builtins::interpreted_code_runs`). The link decision
+    /// (`dynamic_code`) does not feed the facts.
+    pub data_url_import: bool,
     pub dynamic_code_reach: perry_hir::dynamic_code::DynamicCodeReach,
     /// Diagnostics: name where ⊤ came from in each ⊤ site verdict.
     pub explain: bool,
@@ -655,15 +657,16 @@ fn generate<'a>(
         && cfg.dynamic_code_reach.lexical_modules.is_empty()
         && cfg.dynamic_code_reach.sites.is_empty();
     // Interpreted code reads and writes any global (E20; the prototype-write
-    // guard does not cover it) and catches what compiled code throws. A real
-    // source site runs it from the start; otherwise only a solved call that
-    // may be the Function constructor does (DECISIONS 235). Per unit another
-    // unit's solve can be that call, so the link decision stands for it.
+    // guard does not cover it) and catches what compiled code throws. Code
+    // runs only in a body that runs (DECISIONS 225): an eval-like source
+    // site runs it once its body does (`Cons::InterpRuns`, a solved call of
+    // a `node:vm` function or of what may be the Function constructor:
+    // DECISIONS 235). A computed `import(...)` loads compiled modules (the
+    // driver resolves the specifier set) except a `data:` URL, which runs
+    // interpreted at no site: from the start. Per unit another unit's solve
+    // can be any of those, so the link decision stands for it.
     g.m.interp_linked = cfg.dynamic_code.is_some() || cfg.dynamic_code_reach.globals;
-    if cfg.interpreted_sources
-        || cfg.dynamic_code_reach.globals
-        || (cfg.unit && cfg.dynamic_code.is_some())
-    {
+    if cfg.data_url_import || (cfg.unit && cfg.dynamic_code.is_some()) {
         g.m.interp_linked = true;
         builtins::interpreted_code_runs(&mut g.m);
     }

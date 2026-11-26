@@ -221,6 +221,11 @@ pub enum Cons {
     },
     /// Every token escapes (goes to ⊤), with the reason.
     TopSink { reason: u32 },
+    /// DECISIONS 225: an eval-like source site (a direct `eval`, a `vm`
+    /// call) of the body that owns the node runs interpreted code once that
+    /// body runs: the site's node holds the global object (what the code can
+    /// name) and delivers when the body is active (`Model::wake_activated`).
+    InterpRuns { reason: u32 },
     /// An operation on the node runs in throw region `region` (DESIGN SEEDE
     /// section 8): once ⊤ is here, unknown code may run (a getter, a trap,
     /// ToPrimitive, a callee) and throw anything into the region.
@@ -1220,6 +1225,7 @@ impl Cons {
             Cons::MCall { .. } => "mcall",
             Cons::Chain { .. } => "chain",
             Cons::TopSink { .. } | Cons::RuntimeStore { .. } => "top",
+            Cons::InterpRuns { .. } => "interpruns",
             Cons::Raise { .. } => "raise",
             Cons::HandRaise { .. } => "handraise",
             Cons::HandOver { .. } => "handover",

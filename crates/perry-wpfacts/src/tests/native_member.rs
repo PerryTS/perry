@@ -552,7 +552,6 @@ fn a_buffer_reader_is_a_native_member_until_buffer_prototype_is_written() {
             let cfg = if dynamic {
                 FactsConfig {
                     dynamic_code: Some("E14 test: dynamic code".into()),
-                    interpreted_sources: true,
                     ..FactsConfig::default()
                 }
             } else {

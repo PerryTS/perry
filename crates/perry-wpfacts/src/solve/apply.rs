@@ -327,6 +327,12 @@ impl Model {
                     );
                 }
             }
+            Cons::InterpRuns { reason } => {
+                if !toks.is_empty() {
+                    let why = self.reasons[reason as usize].clone();
+                    crate::builtins::set_dyn_eval(self, &why);
+                }
+            }
             Cons::TopSink { reason } | Cons::RuntimeStore { reason, .. } => {
                 let retained = if let Cons::RuntimeStore { retained, .. } = c {
                     Some(*retained)

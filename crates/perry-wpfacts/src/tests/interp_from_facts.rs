@@ -1,8 +1,10 @@
 //! DECISIONS 235: "interpreted code may run" (E14) comes from the solved
 //! facts. The link decision (the dyn-eval interpreter is kept because some
 //! member is named `Function`, as in `SymbolFlags.Function`) runs no code by
-//! itself. Interpreted code runs from a real eval-like source site, or from a
-//! solved call or construct whose callee may be the Function constructor: the
+//! itself. Interpreted code runs from a real eval-like source site once its
+//! body runs (DECISIONS 225: a direct eval, a `node:vm` function, whether the
+//! HIR calls it directly or through the module object), or from a solved
+//! call or construct whose callee may be the Function constructor: the
 //! constructor itself, reached through `.constructor` of a function value,
 //! passed to a function that calls it, read under a computed key, or given
 //! to unknown code (then a ⊤ callee may be it).
@@ -18,8 +20,13 @@
 use super::*;
 
 /// The interpreter is linked; `thr` throws a `Thr` and is a program field
-/// of `Math`, which interpreted code reads once it may run; then `{body}`.
+/// of `Math`, which interpreted code reads once it may run; then `{body}`,
+/// and with `sources` a real source site in a body that runs.
 fn verdict(body: &str, sources: bool) -> Verdict {
+    let body = match sources {
+        true => format!("{body}\nfunction run(s: string) {{ return eval(s); }} run(process.argv[2]);"),
+        false => body.to_string(),
+    };
     let src = format!(
         r#"
         const SymbolFlags = {{ Function: 16, Class: 32 }};
@@ -33,7 +40,6 @@ fn verdict(body: &str, sources: bool) -> Verdict {
     );
     let cfg = FactsConfig {
         dynamic_code: Some("E14 test: a member named Function".into()),
-        interpreted_sources: sources,
         ..Default::default()
     };
     site(&facts_with(&src, cfg), "code").verdict.clone()
@@ -67,11 +73,85 @@ fn the_constructor_called_through_a_parameter_runs_interpreted_code() {
     assert!(!proven(&v), "{v:?}");
 }
 
-/// A real source site (the driver found one) runs it from the start.
+/// A real source site runs it once its body runs: node prints `16 4` and
+/// the evaluated source may call `Math.thr` and catch the `Thr`.
 #[test]
 fn a_real_source_site_runs_interpreted_code() {
     let v = verdict("", true);
     assert!(!proven(&v), "{v:?}");
+}
+
+/// A source site in a body that never runs runs no code (DECISIONS 225):
+/// node prints `16 4`; `never` is never called.
+#[test]
+fn a_source_site_in_a_body_that_never_runs_runs_no_interpreted_code() {
+    let v = verdict("function never(s: string) { return eval(s); }", false);
+    assert!(proven(&v), "{v:?}");
+}
+
+/// node: `(0, vm.runInNewContext)(src, ctx)` through the module object
+/// runs the source; prints `16 4`.
+#[test]
+fn a_vm_call_through_the_module_object_runs_interpreted_code() {
+    let v = verdict(
+        r#"const _vm: any = require("vm"); function run(s: string, c: any) { return (0, _vm.runInNewContext)(s, c); } run(process.argv[2], {});"#,
+        false,
+    );
+    assert!(!proven(&v), "{v:?}");
+}
+
+/// node: the HIR's direct `vm.runInThisContext(src)`; prints `16 4`.
+#[test]
+fn a_direct_vm_call_runs_interpreted_code() {
+    let v = verdict(
+        r#"import * as vm from "node:vm"; function run(s: string) { return vm.runInThisContext(s); } run(process.argv[2]);"#,
+        false,
+    );
+    assert!(!proven(&v), "{v:?}");
+}
+
+/// node: `new vm.Script(src)` compiles the source its methods run.
+#[test]
+fn a_vm_script_runs_interpreted_code() {
+    let v = verdict(
+        r#"const _vm: any = require("vm"); function run(s: string) { return new _vm.Script(s).runInThisContext(); } run(process.argv[2]);"#,
+        false,
+    );
+    assert!(!proven(&v), "{v:?}");
+}
+
+/// A computed `require` holds every builtin module object, `node:vm`'s
+/// included; `os.platform()` through it names no member the realm declares
+/// on `node:vm`, so it runs no code; node prints `16 4` and the platform.
+#[test]
+fn a_computed_require_calling_a_key_vm_lacks_runs_no_interpreted_code() {
+    let v = verdict(
+        r#"import { createRequire } from "node:module"; const req: any = createRequire(import.meta.url); function load(n: string): any { return req(n); } const os: any = load(["o", "s"].join("")); console.log(os.platform());"#,
+        false,
+    );
+    assert!(proven(&v), "{v:?}");
+}
+
+/// The same computed `require` naming `vm`: `runInNewContext` is a member
+/// the realm declares on `node:vm`, so the call runs the source; node
+/// prints `16 4`.
+#[test]
+fn a_computed_require_calling_a_vm_member_runs_interpreted_code() {
+    let v = verdict(
+        r#"import { createRequire } from "node:module"; const req: any = createRequire(import.meta.url); function load(n: string): any { return req(n); } const vm: any = load(["v", "m"].join("")); vm.runInNewContext(process.argv[2], {});"#,
+        false,
+    );
+    assert!(!proven(&v), "{v:?}");
+}
+
+/// A `node:vm` call in a body that never runs runs no code; prints `16 4`.
+#[test]
+fn a_vm_call_in_a_body_that_never_runs_runs_no_interpreted_code() {
+    let v = verdict(
+        r#"const _vm: any = require("vm"); function never(s: string, c: any) { return (0, _vm.runInNewContext)(s, c); }"#,
+        false,
+    );
+    assert!(proven(&v), "{v:?}");
 }
 
 /// A value from unmodeled code that no one gave the Function constructor is

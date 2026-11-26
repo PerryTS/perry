@@ -360,12 +360,14 @@ fn undeclared_global_function_value_stays_unproven() {
 #[test]
 fn linked_dynamic_code_keeps_global_function_value_unproven() {
     let src = timer_source(
-        "eval('globalThis.setTimeout = function (f) { f({}); }');",
+        // A literal source is compiled as program code (its store is a
+        // program store); an unknown one runs interpreted, and may replace
+        // the global function.
+        "eval(process.argv[2]);",
         "const t=setTimeout; t(cb,0);",
     );
     let cfg = FactsConfig {
         dynamic_code: Some("test linked interpreter".into()),
-        interpreted_sources: true,
         ..Default::default()
     };
     let pf = facts_with(&src, cfg);

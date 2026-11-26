@@ -282,6 +282,7 @@ fn classify(m: &Model, n: NodeId, c: &Cons) -> Use {
         | Cons::BoundCall { .. }
         | Cons::Miss { .. }
         | Cons::TopSink { .. }
+        | Cons::InterpRuns { .. }
         | Cons::RuntimeStore { .. }
         | Cons::HandOver { .. }
         | Cons::StoreOut { .. }

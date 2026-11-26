@@ -331,7 +331,7 @@ impl<'a> Gen<'a> {
                     ret
                 } else {
                     if module == "vm" || module == "node:vm" {
-                        crate::builtins::set_dyn_eval(&mut self.m, "E14 node:vm");
+                        self.interp_site("E14 node:vm");
                     }
                     let why = format!("argument of native module {module}.{method}");
                     for n in o.into_iter().chain(a) {

@@ -124,3 +124,24 @@ fn a_computed_key_of_a_namespace_reads_every_export() {
     // `g` is among the callees: its result has no `A`.
     assert!(!proven(&pf, "A"), "{}", pf.dump_text());
 }
+
+/// `export { local as name }` binds `name` to `local` (ECMA-262 16.2.1.6.3
+/// ResolveExport), where `name` is no binding of the module (the CJS
+/// snapshot `export { __cjsexp_fetch as fetch }` of a module exporting
+/// `fetch`): the importer reads the local's value, and no scope name
+/// `fetch` is looked up (node: prints `3`).
+#[test]
+fn an_export_alias_with_no_binding_of_its_name_holds_the_local() {
+    let pf = whole(&[
+        (
+            "x".to_string(),
+            "const __cjsexp_fetch = { size: 3 };\nexport { __cjsexp_fetch as fetch };\n"
+                .to_string(),
+        ),
+        (
+            "main".to_string(),
+            "import { fetch } from \"./x\";\nconsole.log(fetch.size);\n".to_string(),
+        ),
+    ]);
+    assert!(proven(&pf, "size"), "{}", pf.dump_text());
+}

@@ -190,6 +190,15 @@ fn same_builtin(name: &str, spec: &str) -> bool {
     name.strip_prefix("node:").unwrap_or(name) == spec.strip_prefix("node:").unwrap_or(spec)
 }
 
+/// Does the realm declare `key` as an own member of the `node:vm` module
+/// object (`Script`, `runInNewContext`, ...)?
+fn vm_member(m: &Model, key: &str) -> bool {
+    m.declarations
+        .named("node:vm", m)
+        .and_then(|h| m.declarations.property(h, key, m))
+        .is_some()
+}
+
 /// E14: interpreted code may run; it can patch `Object.prototype`.
 pub fn set_dyn_eval(m: &mut Model, why: &str) {
     interpreted_code_runs(m);
@@ -3861,6 +3870,21 @@ fn ns_method_inner(
         {
             m.diagnostic_builtin(call, |_| format!("{ns:?}.{name}"));
         }
+    }
+    // A solved call through the `node:vm` module object (`const vm =
+    // require("vm"); (0, vm.runInNewContext)(src, ctx)`): its functions
+    // compile and run source text, so interpreted code runs where this call
+    // runs (DECISIONS 225/235), as at the HIR's direct `node:vm` call
+    // (`gen_rest.rs`). Only a member the realm declares on `node:vm` is one
+    // of them: a key it does not declare (`platform`, read through a
+    // computed `require` that holds every builtin module object) is no vm
+    // function. The realm does not say which of its members take a source,
+    // so every declared member counts (`createContext` and `isContext`
+    // too). A computed key may name any of them.
+    if matches!(ns, BuiltinNs::Module(n) if same_builtin(n, "vm"))
+        && name.is_none_or(|k| vm_member(m, k))
+    {
+        set_dyn_eval(m, "E14 node:vm");
     }
 
     // R-HOSTREPORT: a process listener ("uncaughtException",
