@@ -39,6 +39,10 @@ struct ErrorHeader {
     _opaque: [u8; 0],
 }
 
+extern "C-unwind" {
+    fn js_throw(value: f64) -> !;
+}
+
 extern "C" {
     fn js_node_http_server_close(server_handle: i64, callback: i64);
     fn js_node_http_server_close_all_connections(handle: i64);
@@ -258,6 +262,45 @@ pub(crate) extern "C" fn http_server_handle_kind(handle: i64) -> u8 {
     0
 }
 
+/// The event name argument of an emitter method.
+unsafe fn event_arg(args: &[f64]) -> String {
+    args.first()
+        .and_then(|value| read_string_header(string_arg(*value) as *mut StringHeader))
+        .unwrap_or_default()
+}
+
+/// node's `server.listeners(event)` over the server's listener maps: the
+/// persistent listeners, then the one-shot ones (detached when `take_once`,
+/// as `emit` does before it calls them); the `createServer` handler is the
+/// first `'request'` listener.
+fn server_listeners(handle: i64, is_https: bool, is_h2: bool, event: &str, take_once: bool) -> Vec<i64> {
+    let mut listeners = crate::server::server::with_base_server_mut(handle, |server| {
+        let mut listeners = server.listeners.get(event).cloned().unwrap_or_default();
+        let once = if take_once {
+            server.once_listeners.remove(event)
+        } else {
+            server.once_listeners.get(event).cloned()
+        };
+        listeners.extend(once.unwrap_or_default());
+        listeners
+    })
+    .unwrap_or_default();
+    if event == "request" {
+        let handler = if is_h2 {
+            get_handle::<Http2SecureServer>(handle).map(|server| server.handler)
+        } else if is_https {
+            get_handle::<HttpsServer>(handle).map(|server| server.handler)
+        } else {
+            get_handle::<HttpServer>(handle).map(|server| server.handler)
+        }
+        .unwrap_or(0);
+        if handler != 0 && !listeners.contains(&handler) {
+            listeners.insert(0, handler);
+        }
+    }
+    listeners
+}
+
 fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
     match name {
         "listen" => Some(b"listen"),
@@ -269,6 +312,8 @@ fn http_server_method_bytes(name: &str) -> Option<&'static [u8]> {
         "addListener" => Some(b"addListener"),
         "once" => Some(b"once"),
         "listeners" => Some(b"listeners"),
+        "listenerCount" => Some(b"listenerCount"),
+        "emit" => Some(b"emit"),
         "removeAllListeners" => Some(b"removeAllListeners"),
         "removeListener" => Some(b"removeListener"),
         "off" => Some(b"off"),
@@ -436,46 +481,8 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
             self_ref
         }
         "listeners" => {
-            let event = args
-                .first()
-                .and_then(|value| read_string_header(string_arg(*value) as *mut StringHeader))
-                .unwrap_or_default();
-            let mut listeners = if is_h2 {
-                get_handle::<Http2SecureServer>(handle)
-                    .and_then(|server| server.base.listeners.get(&event).cloned())
-            } else if is_https {
-                get_handle::<HttpsServer>(handle)
-                    .and_then(|server| server.base.listeners.get(&event).cloned())
-            } else {
-                get_handle::<HttpServer>(handle)
-                    .and_then(|server| server.listeners.get(&event).cloned())
-            }
-            .unwrap_or_default();
-            let once = if is_h2 {
-                get_handle::<Http2SecureServer>(handle)
-                    .and_then(|server| server.base.once_listeners.get(&event).cloned())
-            } else if is_https {
-                get_handle::<HttpsServer>(handle)
-                    .and_then(|server| server.base.once_listeners.get(&event).cloned())
-            } else {
-                get_handle::<HttpServer>(handle)
-                    .and_then(|server| server.once_listeners.get(&event).cloned())
-            }
-            .unwrap_or_default();
-            listeners.extend(once);
-            if event == "request" {
-                let handler = if is_h2 {
-                    get_handle::<Http2SecureServer>(handle).map(|server| server.handler)
-                } else if is_https {
-                    get_handle::<HttpsServer>(handle).map(|server| server.handler)
-                } else {
-                    get_handle::<HttpServer>(handle).map(|server| server.handler)
-                }
-                .unwrap_or(0);
-                if handler != 0 && !listeners.contains(&handler) {
-                    listeners.insert(0, handler);
-                }
-            }
+            let event = event_arg(args);
+            let listeners = server_listeners(handle, is_https, is_h2, &event, false);
             let scope = perry_ffi::TransientRootScope::enter();
             let listeners = scope.root_addrs(&listeners);
             let array = perry_ffi::js_array_alloc(listeners.len() as u32);
@@ -488,6 +495,34 @@ pub unsafe extern "C" fn js_ext_http_server_dispatch_method(
                 );
             }
             array.get()
+        }
+        // EventEmitter's `listenerCount(event)` over the same lists.
+        "listenerCount" => {
+            let event = event_arg(args);
+            server_listeners(handle, is_https, is_h2, &event, false).len() as f64
+        }
+        // EventEmitter's `emit(event, ...args)`: every listener in order with
+        // `this` = the server (one-shot ones detached first); true when one
+        // ran. An unheard `'error'` throws its argument.
+        "emit" => {
+            let event = event_arg(args);
+            let rest = args.get(1..).unwrap_or(&[]);
+            let listeners = server_listeners(handle, is_https, is_h2, &event, true);
+            if listeners.is_empty() {
+                if event == "error" {
+                    js_throw(rest.first().copied().unwrap_or(f64::from_bits(TAG_UNDEFINED)));
+                }
+                return f64::from_bits(JsValue::FALSE.bits());
+            }
+            let scope = perry_ffi::TransientRootScope::enter();
+            let listeners = scope.root_addrs(&listeners);
+            let rest: Vec<_> = rest.iter().map(|v| scope.root_nanbox(*v)).collect();
+            for callback in &listeners {
+                let func = f64::from_bits(POINTER_TAG | (callback.get() as u64 & PTR_MASK));
+                let call_args: Vec<f64> = rest.iter().map(|v| v.get()).collect();
+                perry_ffi::call_value(func, perry_ffi::JsThis::from_f64(self_ref), &call_args);
+            }
+            f64::from_bits(JsValue::TRUE.bits())
         }
         "removeAllListeners" => {
             let event_ptr = args
