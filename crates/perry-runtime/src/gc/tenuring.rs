@@ -285,11 +285,38 @@ const _: () = assert!(NURSERY_CAP_SCALE_MAX == 4 * NURSERY_CAP_SCALE_UNIT);
 const FIXED_COST_GROW_PERCENT: u128 = 2;
 
 /// The fixed-cost floor shrinks only to a size at which the reading predicts
-/// a fixed share at or below this. Half the grow edge: a growth lands above
-/// 1% (the step below was above 2%), a shrink at or below 1%, so a steady
+/// a fixed share at or below this. Half the grow edge: a growth step is taken
+/// from above 2% and lands above 1%, a shrink at or below 1%, so a steady
 /// reading cannot oscillate, and a reading must halve or double before the
 /// floor moves again.
 const FIXED_COST_SHRINK_PERCENT: u128 = 1;
+
+/// The fixed-cost floor's state between readings ([`retune_fixed_cost_scale`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FixedCostDial {
+    /// The previous reading at the floor's size: its share there (parts per
+    /// million of the mutator time) and its shrink destination. `None` before
+    /// the first reading and after a move.
+    prev: Option<(u64, u8)>,
+    /// Readings since the floor last moved.
+    readings: u8,
+    /// A growth step not checked yet: the floor before it and the share the
+    /// readings that took it measured at that size.
+    step: Option<(u8, u64)>,
+    /// A growth step that bought nothing: the floor it was taken from and
+    /// the share measured there. The floor grows past that size again only
+    /// once a reading there is at least twice that share.
+    hold: Option<(u8, u64)>,
+}
+
+impl FixedCostDial {
+    const START: Self = FixedCostDial {
+        prev: None,
+        readings: 0,
+        step: None,
+        hold: None,
+    };
+}
 
 /// Thread CPU clock marks of the minor collections, for the fixed-cost floor
 /// ([`retune_fixed_cost_scale`]). Policy state of the same kind as the
@@ -344,9 +371,8 @@ crate::perry_thread_local! {
     /// the floor; see [`retune_fixed_cost_scale`].
     static FIXED_COST_SCALE: super::TriggerInput<u8> =
         const { super::TriggerInput::new(NURSERY_CAP_SCALE_MIN) };
-    /// The previous fixed-cost reading's grow and shrink destinations, the
-    /// debounce of [`retune_fixed_cost_scale`]; `None` before the first.
-    static FIXED_COST_PREV: Cell<Option<(u8, u8)>> = const { Cell::new(None) };
+    /// The debounce and step check of [`retune_fixed_cost_scale`].
+    static FIXED_COST_DIAL: Cell<FixedCostDial> = const { Cell::new(FixedCostDial::START) };
     static FIXED_COST_CLOCK: Cell<FixedCostClock> = const { Cell::new(FixedCostClock::START) };
     /// The influx readings of the ladder's current phase: their sum and their
     /// count. A phase starts at a move, or at a reading on the far side of
@@ -1392,39 +1418,48 @@ pub(super) fn note_minor_fixed_cost(entry_cap: usize, full_eden_window: bool) {
 /// set, pruning, finalization; everything but the worklist drain) against
 /// `mutator_ns` of program time that filled an Eden of `cap_now` bytes.
 ///
-/// The fixed cost of a minor is paid once per Eden, so at an Eden of `C`
-/// bytes its share of the program's time is `fixed / mutator * cap_now / C`.
+/// If the fixed cost of a minor is paid once per Eden, its share of the
+/// program's time at an Eden of `C` bytes is `fixed / mutator * cap_now / C`.
 /// The floor grows while that share is above [`FIXED_COST_GROW_PERCENT`] at
-/// the current size, straight to the smallest size at which this reading
-/// predicts it at or below the edge; it shrinks, to the smallest size at
-/// which the reading predicts at most [`FIXED_COST_SHRINK_PERCENT`], only
-/// when that is below the floor. Both need the previous reading to agree
-/// (the same [`RAISE_DEBOUNCE_CYCLES`] of two as the influx ladder), and move
-/// to the nearer of the two readings' destinations, so one slow minor (a page
-/// fault storm, a first-touch rebuild) moves nothing.
+/// the current size, one doubling per move, and stops at the first size where
+/// it is not; it shrinks, to the smallest size at which the reading predicts
+/// at most [`FIXED_COST_SHRINK_PERCENT`], when that is below the floor. Every
+/// move needs the previous reading to agree (the same
+/// [`RAISE_DEBOUNCE_CYCLES`] of two as the influx ladder), so one slow minor
+/// (a page fault storm, a first-touch rebuild) moves nothing.
+///
+/// # Each step is checked
+///
+/// Part of what the reading calls fixed is not: work that walks Eden itself
+/// grows with it, and the first minors of a thread pay first-touch costs
+/// that later ones do not. A step whose readings do not fall buys nothing
+/// and only costs the memory. So a growth is a single doubling, and the
+/// second reading at the new size checks it (the first window after a
+/// growth also pays the first touch of the new Eden pages, so it is not a
+/// reading of the size): a doubled Eden halves a fixed share, and a step
+/// whose share fell by less than a quarter is mostly not fixed cost. Such a
+/// step is taken back, and the floor does not grow past that size again
+/// until a reading there is at least twice the share that took the step
+/// (the program's minors changed). A step that halved the share is kept and
+/// the floor goes on from there while the share stays above the edge.
 ///
 /// The floor is bounded by the ladder's ceiling (`NURSERY_CAP_SCALE_MAX`,
 /// 64 MB) and never takes a step that cannot enlarge the cap: where the
 /// tenured-proportional term or the influx scale already sets a larger Eden
-/// the floor stays put. The effective cap is the larger of the influx and
-/// fixed-cost scales ([`ladder_nursery_cap_bytes`]), and each dial keeps its
-/// own hysteresis, so a program whose fixed cost falls gives the memory back
-/// to whatever the influx ladder holds on its own, instead of the influx
-/// ladder's dead band keeping a size neither rule would choose.
-///
-/// The fixed cost is assumed not to grow with Eden. Where part of it does (a
-/// walk over Eden's pages), a growth lands short of the prediction and the
-/// next readings move again; it costs minors and never overshoots.
+/// the floor steps from that size. The effective cap is the larger of the
+/// influx and fixed-cost scales ([`ladder_nursery_cap_bytes`]), and each dial
+/// keeps its own hysteresis, so a program whose fixed cost falls gives the
+/// memory back to whatever the influx ladder holds on its own, instead of the
+/// influx ladder's dead band keeping a size neither rule would choose.
 ///
 /// # Noise
 ///
 /// The readings are thread CPU time, so they vary from run to run by the
 /// cache and frequency noise of a few milliseconds of work, a few percent.
-/// A move needs two readings beyond an edge, and the edges are a factor 2
-/// apart with every landing inside them (a growth lands above 1%, a shrink
-/// at or below 1% and only from a reading at or below 0.5%), so the floor of
-/// a program whose share is not within that noise of 2% is the same on every
-/// run.
+/// A move needs two readings beyond an edge, the edges are a factor 2 apart,
+/// a kept step halved its share and a taken-back one holds until its share
+/// doubles, so the floor of a program whose share is not within that noise
+/// of an edge is the same on every run.
 pub(super) fn retune_fixed_cost_scale(fixed_ns: u64, mutator_ns: u64, cap_now: usize) {
     if mutator_ns == 0 || cap_now == 0 {
         return;
@@ -1437,6 +1472,13 @@ pub(super) fn retune_fixed_cost_scale(fixed_ns: u64, mutator_ns: u64, cap_now: u
             ladder_nursery_cap_bytes_at(scale.max(influx)),
             old_reclaimable,
         )
+    };
+    // This reading's share, in parts per million, predicted at the cap of
+    // `scale`.
+    let share_at = |scale: u8| {
+        let ppm = u128::from(fixed_ns) * 1_000_000 * cap_now as u128
+            / (u128::from(mutator_ns) * cap_at(scale).max(1) as u128);
+        ppm.min(u128::from(u64::MAX)) as u64
     };
     let ceiling = cap_at(NURSERY_CAP_SCALE_MAX);
     // The smallest floor at which this reading predicts a fixed share of at
@@ -1452,20 +1494,61 @@ pub(super) fn retune_fixed_cost_scale(fixed_ns: u64, mutator_ns: u64, cap_now: u
         }
         scale
     };
-    let grow_to = destination(FIXED_COST_GROW_PERCENT);
+    let share = share_at(floor);
     let shrink_to = destination(FIXED_COST_SHRINK_PERCENT);
-    let prev = FIXED_COST_PREV.with(|p| p.replace(Some((grow_to, shrink_to))));
-    let next = match prev {
-        Some((prev_grow, _)) if grow_to > floor && prev_grow > floor => grow_to.min(prev_grow),
-        Some((_, prev_shrink)) if shrink_to < floor && prev_shrink < floor => {
-            shrink_to.max(prev_shrink)
-        }
-        _ => floor,
+    let mut dial = FIXED_COST_DIAL.with(Cell::get);
+    dial.readings = dial.readings.saturating_add(1);
+    let moved = |dial: &mut FixedCostDial, to: u8, why: &str| {
+        *dial = FixedCostDial {
+            prev: None,
+            readings: 0,
+            ..*dial
+        };
+        FIXED_COST_SCALE.with(|s| s.set(to));
+        diag_fixed_cost_scale(floor, to, why, fixed_ns, mutator_ns, cap_now);
     };
-    if next != floor {
-        FIXED_COST_SCALE.with(|s| s.set(next));
-        diag_fixed_cost_scale(floor, next, fixed_ns, mutator_ns, cap_now);
+    if let Some((before, before_share)) = dial.step {
+        if dial.readings == 1 {
+            // The first window at the new size: see "Each step is checked".
+            FIXED_COST_DIAL.with(|d| d.set(dial));
+            return;
+        }
+        dial.step = None;
+        if share.saturating_mul(4) > before_share.saturating_mul(3) {
+            dial.hold = Some((before, before_share));
+            moved(&mut dial, before, "step bought nothing, back");
+            FIXED_COST_DIAL.with(|d| d.set(dial));
+            return;
+        }
     }
+    let prev = dial.prev.replace((share, shrink_to));
+    let edge = (FIXED_COST_GROW_PERCENT * 10_000) as u64;
+    let from = floor.max(influx).min(NURSERY_CAP_SCALE_MAX);
+    let grow_to = from.saturating_mul(2);
+    let held = dial
+        .hold
+        .is_some_and(|(at, held_share)| floor <= at && share_at(at) < held_share.saturating_mul(2));
+    if !held {
+        dial.hold = None;
+    }
+    match prev {
+        Some((prev_share, _))
+            if share > edge
+                && prev_share > edge
+                && !held
+                && grow_to <= NURSERY_CAP_SCALE_MAX
+                && cap_at(grow_to) > cap_at(from) =>
+        {
+            dial.step = Some((floor, share.min(prev_share)));
+            moved(&mut dial, grow_to, "grow");
+        }
+        Some((_, prev_shrink)) if shrink_to < floor && prev_shrink < floor => {
+            dial.step = None;
+            moved(&mut dial, shrink_to.max(prev_shrink), "shrink");
+        }
+        _ => {}
+    }
+    FIXED_COST_DIAL.with(|d| d.set(dial));
 }
 
 /// Minimum Eden survival rate, in tenths, for a mark-sweep to seed the
@@ -1564,10 +1647,17 @@ pub(super) fn report_nursery_policy(eden_live_bytes: usize) {
     );
 }
 
-fn diag_fixed_cost_scale(from: u8, to: u8, fixed_ns: u64, mutator_ns: u64, cap_now: usize) {
+fn diag_fixed_cost_scale(
+    from: u8,
+    to: u8,
+    why: &str,
+    fixed_ns: u64,
+    mutator_ns: u64,
+    cap_now: usize,
+) {
     if crate::gc::diagnostic_hooks::enabled() {
         eprintln!(
-            "[gc-tenuring] nursery fixed-cost scale {from}/{unit} -> {to}/{unit} of base \
+            "[gc-tenuring] nursery fixed-cost scale {from}/{unit} -> {to}/{unit} of base, {why} \
              (fixed_ns={fixed_ns} mutator_ns={mutator_ns} cap={cap_now})",
             unit = NURSERY_CAP_SCALE_UNIT
         );
@@ -1628,7 +1718,7 @@ pub(super) fn reset_for_test() {
     CAP_SHRINK_STREAK.with(|s| s.set(0));
     start_cap_phase();
     FIXED_COST_SCALE.with(|s| s.set(NURSERY_CAP_SCALE_MIN));
-    FIXED_COST_PREV.with(|p| p.set(None));
+    FIXED_COST_DIAL.with(|d| d.set(FixedCostDial::START));
     FIXED_COST_CLOCK.with(|c| c.set(FixedCostClock::START));
     MEAN_SURVIVING_OBJECT_BYTES.with(|s| s.set(NURSERY_CAP_REFERENCE_OBJECT_BYTES));
     OBJECT_CENSUS_SEEDED.with(|s| s.set(false));
