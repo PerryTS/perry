@@ -1,1 +1,1 @@
-`--target web`: closures inherit from `Function.prototype` and have `call`, `apply` and `bind` (#15271).
+`--target web`: closures inherit from `Function.prototype` and have `call`, `apply` and `bind`; a bound function works as a timer, UI or array-method callback, and `new` on a bound arrow, async or generator function throws a TypeError (#15271).
