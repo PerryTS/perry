@@ -302,3 +302,38 @@ fn double_bits_equal_to_live_address_are_never_rewritten() {
         assert_eq!(*fields, bits);
     }
 }
+
+/// S4: an owned-state bag's elements sit right after its header after a
+/// grow and after a copying move, so `owned_state_bag::slot_word` reads the
+/// slot the array accessors name.
+#[test]
+fn moving_owned_state_bag_stays_exact() {
+    use crate::object::owned_state_bag as osb;
+    unsafe fn exact(owner: usize, slots: &[(u32, f64)]) -> usize {
+        let bag = osb::bag(owner, false, 0);
+        assert!(!bag.is_null(), "no bag");
+        assert_eq!(
+            crate::array::array_elements_ptr(bag),
+            osb::slot_word(bag, 0),
+            "bag elements are not at the fixed offset"
+        );
+        for &(slot, v) in slots {
+            assert!(slot < (*bag).length);
+            assert_eq!(f64::from_bits(*osb::slot_word(bag, slot)), v, "slot {slot}");
+        }
+        bag as usize
+    }
+    let _gc = CopyingNurseryTestGuard::new(1);
+    let _triggers = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let obj = crate::object::js_object_alloc(0, 2) as usize;
+    unsafe {
+        osb::store(obj, 1, 1.5);
+        let small = exact(obj, &[(1, 1.5)]);
+        osb::store(obj, osb::CHAIN_NODE, 2.5);
+        let grown = exact(obj, &[(1, 1.5), (osb::CHAIN_NODE, 2.5)]);
+        assert_ne!(grown, small, "the grow must reallocate the bag");
+        let moved = move_root(obj, 2);
+        let after = exact(moved, &[(1, 1.5), (osb::CHAIN_NODE, 2.5)]);
+        assert_ne!(after, grown, "the live bag must move");
+    }
+}

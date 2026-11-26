@@ -1423,6 +1423,8 @@ use own_store::probe_get_underived;
 pub(crate) use own_store::store_own_derived;
 pub(crate) use own_store::OwnStore;
 
+#[path = "layout_probe/chain_glue.rs"]
+pub(crate) mod chain_glue;
 #[path = "layout_probe/inherited.rs"]
 mod inherited;
 use inherited::absent_from;

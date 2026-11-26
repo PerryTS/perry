@@ -1198,6 +1198,9 @@ pub(crate) unsafe fn prototype_image(
             value,
         );
     }
+    // The image is born a marked prototype, so the binding's later mark is a
+    // repeat: its chain node comes here, once its slots hold the values.
+    super::layout_probe::chain_glue::establish(image as usize);
     Some(crate::value::js_nanbox_pointer(image as i64))
 }
 

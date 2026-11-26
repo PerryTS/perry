@@ -96,6 +96,10 @@ pub(crate) unsafe fn mark_born_prototype(obj: *mut crate::object::ObjectHeader) 
     // GC_STORE_AUDIT(POINTER_FREE): scalar classification bit.
     (*meta).flags |= crate::object::OBJECT_META_FLAG_IS_PROTOTYPE;
     keep_prototype_in_record(obj, meta);
+    // The birth is the transition: the node is built from the layout's key
+    // list (its slots are holes until population fills them, and a desc hit
+    // on a hole continues in the walk at the holder).
+    crate::object::layout_probe::chain_glue::establish(obj as usize);
 }
 
 /// Serials below this are reserved for INTRINSIC prototypes, assigned at
@@ -382,6 +386,12 @@ unsafe fn ensure_meta_for_mark(obj: usize, flag: u64) -> Option<*mut crate::obje
         }
         if flag == crate::object::OBJECT_META_FLAG_IS_PROTOTYPE {
             keep_prototype_in_record(object, meta);
+            // The 0 -> 1 transition gives the prototype its chain node, here,
+            // where every marking writer passes (the caller's flag store
+            // follows; no mutation hook runs in between). A repeat mark
+            // (`new F` re-marks F.prototype) returns above and runs no chain
+            // code.
+            crate::object::layout_probe::chain_glue::establish(object as usize);
         }
         return Some(meta);
     }
@@ -529,6 +539,7 @@ unsafe fn note_marked_object_shape_stamping(
 /// `obj` is a live object with a `GcHeader`.
 #[inline]
 pub(crate) unsafe fn note_marked_object_shape_stamped(obj: usize) {
+    crate::object::layout_probe::chain_glue::on_mutation(obj);
     crate::dyn_eval_hooks::note_proto_write();
     crate::object::builtin_proto::note_write(
         obj as *const crate::object::ObjectHeader,
@@ -547,6 +558,7 @@ pub(crate) unsafe fn note_marked_object_shape_stamped(obj: usize) {
 #[inline]
 pub(crate) unsafe fn note_object_own_keys_changed(obj: usize) {
     if any_prototype_marked() && object_is_marked_prototype(obj) {
+        crate::object::layout_probe::chain_glue::on_mutation(obj);
         crate::dyn_eval_hooks::note_proto_write();
         crate::object::builtin_proto::note_write(
             obj as *const crate::object::ObjectHeader,
