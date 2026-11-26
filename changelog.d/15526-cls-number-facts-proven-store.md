@@ -1,0 +1,1 @@
+`crates/perry/tests/cls_number_facts.rs` asserts the facts-proven `s.x` store as a slot store with no by-name site, now that an in-bounds `shapes[i]` receiver needs no nullish test, and covers the nullable receiver test with an out-of-bounds read.
