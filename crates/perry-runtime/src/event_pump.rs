@@ -311,7 +311,7 @@ fn event_loop_poll(may_block: bool) {
     // later (`turnloop_net::defer_eof`).
     #[cfg(not(target_arch = "wasm32"))]
     while crate::turnloop_net::deliver_due_eof() {
-        crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
+        crate::promise::microtasks::run_poll_callback_checkpoint();
     }
     let previous = POLL_CHECKPOINT.with(|c| c.replace(true));
     if may_block {

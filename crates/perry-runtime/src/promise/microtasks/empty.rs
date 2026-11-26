@@ -33,6 +33,19 @@ pub(super) fn can_skip_callback_phases() -> bool {
         || crate::timer::timer_phase_work_pending())
 }
 
+/// Whether the poll phase's per-callback checkpoint has a job to run: a
+/// nextTick or queueMicrotask callback, a promise reaction, a scheduled
+/// resolve, or a rejection to report. Node's `processTicksAndRejections` after
+/// an I/O callback does nothing when those queues are empty, and neither does
+/// Perry's: the iteration's own checkpoint still owns the foreign queues and
+/// the GC boundary, so an I/O callback that queued nothing pays no drain.
+pub(super) fn poll_checkpoint_has_work() -> bool {
+    TASK_QUEUE.with(|queue| !queue.borrow().is_empty())
+        || crate::builtins::queued_microtasks_pending()
+        || super::super::combinators::SCHEDULED_RESOLVES.with(|queue| !queue.borrow().is_empty())
+        || super::super::rejection::checkpoint_work_pending()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

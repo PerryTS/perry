@@ -178,6 +178,17 @@ pub fn js_promise_run_microtasks_checkpoint() -> i32 {
     run_microtasks(MicrotaskDrainMode::MicrotasksOnly)
 }
 
+/// The checkpoint after one I/O callback of the generated loop's poll phase
+/// (node's `processTicksAndRejections` after a `MakeCallback`): the ticks,
+/// the microtasks and the rejection report, when one of them is queued, and
+/// nothing otherwise (`empty::poll_checkpoint_has_work`). See
+/// `MicrotaskDrainMode::PollCallback`.
+pub(crate) fn run_poll_callback_checkpoint() {
+    if empty::poll_checkpoint_has_work() {
+        run_microtasks(MicrotaskDrainMode::PollCallback);
+    }
+}
+
 /// Guest errors must leave the runner reusable before the C frame catches them.
 /// The ordinary pump has throw-capable cleanup phases outside its job trap.
 /// Save only native counters here; the existing landing pad restores JS scopes.
@@ -222,6 +233,16 @@ enum MicrotaskDrainMode {
     /// callbacks and timers stay pending for the next event-loop iteration.
     BeforeExit,
     MicrotasksOnly,
+    /// The checkpoint after one I/O callback of the generated loop's poll
+    /// phase (`run_poll_callback_checkpoint`): ticks, microtasks and the
+    /// unhandled-rejection report, as node's `processTicksAndRejections`
+    /// after each callback. The foreign queues (threadsafe callbacks, native
+    /// async settlements, thread results, GC destroy and finalization jobs)
+    /// and the GC boundary stay with the iteration's own checkpoint
+    /// (`EventLoop`), which runs right after this poll's check phase: they are
+    /// callbacks and work of their own, not part of this callback's
+    /// checkpoint.
+    PollCallback,
     /// Promise/queueMicrotask jobs only — no nextTick drain, no timers.
     PromiseJobsOnly,
     /// The synchronous `await` busy-wait loop (codegen `Expr::Await`
@@ -317,22 +338,26 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
         reentrant
     });
     let mut ran = 0;
+    let poll_callback = matches!(mode, MicrotaskDrainMode::PollCallback);
+    let foreign = !guest_task && !poll_callback && !matches!(mode, MicrotaskDrainMode::BeforeExit);
 
-    if !guest_task && !matches!(mode, MicrotaskDrainMode::BeforeExit) {
+    if foreign {
         ran += crate::bun_ffi::callback::drain_threadsafe_callbacks();
     }
 
-    ran += crate::async_hook_slots::drain_gc_destroy_queue();
+    if !poll_callback {
+        ran += crate::async_hook_slots::drain_gc_destroy_queue();
 
-    // FinalizationRegistry cleanup jobs recorded by any collection cycle
-    // (automatic or explicit `gc()`). This
-    // converts each job into a nextTick callback invocation, which the tick
-    // drain later in this same pump runs — matching the spec's "cleanup
-    // callbacks run as their own jobs" timing.
-    ran += crate::weakref::drain_pending_finalization_jobs();
+        // FinalizationRegistry cleanup jobs recorded by any collection cycle
+        // (automatic or explicit `gc()`). This
+        // converts each job into a nextTick callback invocation, which the tick
+        // drain later in this same pump runs — matching the spec's "cleanup
+        // callbacks run as their own jobs" timing.
+        ran += crate::weakref::drain_pending_finalization_jobs();
+    }
 
     // Native async tokens settle only through the main-thread handoff path.
-    if !guest_task && !matches!(mode, MicrotaskDrainMode::BeforeExit) {
+    if foreign {
         ran += super::native_async::js_native_async_process_pending();
     }
 
@@ -342,7 +367,7 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     }
 
     // Process diagnostics_channel publishes queued by perry/thread workers.
-    if !guest_task && !matches!(mode, MicrotaskDrainMode::BeforeExit) {
+    if foreign {
         ran += crate::thread_hook_slots::diagnostics_channel_process_pending();
 
         // Process pending thread results (from perry/thread spawn)
@@ -378,7 +403,9 @@ fn run_microtasks(mode: MicrotaskDrainMode) -> i32 {
     }
     crate::node_submodules::diagnostics_channel_drain_uncaught();
 
-    finish_gc_boundary();
+    if !poll_callback {
+        finish_gc_boundary();
+    }
 
     ASYNC_BOX_EXECUTION_REF_BASES.with(|bases| {
         let base = bases
@@ -1184,7 +1211,9 @@ fn pump_protected(mode: MicrotaskDrainMode, reentrant: bool, landed: bool, ran: 
     // checkpoint boundary.
     if matches!(
         mode,
-        MicrotaskDrainMode::EventLoop | MicrotaskDrainMode::BeforeExit
+        MicrotaskDrainMode::EventLoop
+            | MicrotaskDrainMode::BeforeExit
+            | MicrotaskDrainMode::PollCallback
     ) && !reentrant
     {
         super::rejection::process_rejections();

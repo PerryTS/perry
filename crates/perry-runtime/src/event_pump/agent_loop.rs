@@ -506,7 +506,7 @@ fn dispatch_staged() {
             super::service_hooks::net_dispatch(completion);
         }
         if checkpoint {
-            crate::promise::microtasks::js_promise_run_microtasks_checkpoint();
+            crate::promise::microtasks::run_poll_callback_checkpoint();
         }
     }
     super::restore_poll_checkpoint(checkpoint);
