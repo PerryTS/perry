@@ -496,9 +496,10 @@ pub(super) fn schedule_readable_resume(stream: f64) {
         hidden_readable_resume_scheduled_key(),
         f64::from_bits(TAG_TRUE),
     );
-    let closure = js_closure_alloc(crate::fn_info!(ns_readable_resume_microtask, 0), 1);
+    // node's `resume()`: `process.nextTick(resume_, stream, state)`.
+    let closure = js_closure_alloc(crate::fn_info!(ns_readable_resume_tick, 0), 1);
     js_closure_set_capture_ptr(closure, 0, stream.to_bits() as i64);
-    crate::builtins::js_queue_microtask(closure as i64);
+    crate::builtins::js_queue_next_tick(closure as i64);
 }
 
 pub(super) fn pause_readable_stream(stream: f64) -> f64 {
