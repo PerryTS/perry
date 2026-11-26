@@ -1263,6 +1263,38 @@ fn get_field_by_name_past_data_probe(
                 // recursion otherwise answered with the BASE class's `.name`
                 // for every capture-carrying subclass — bundled zod's
                 // identity collapse to "ZodType").
+                // A static accessor the class body declares is this class's
+                // own property, so it answers before the pinned parent too
+                // (#15178: `static get min()` on a function-local
+                // `class Second extends ns.Field` ran Field's getter). The
+                // per-evaluation object carries no key for it; the class's
+                // registration is the own property.
+                let class_id = (*obj).class_id;
+                if class_id != 0
+                    && !want.starts_with(b"#")
+                    && !crate::object::class_registry::class_static_key_deleted_bytes(
+                        class_id, want,
+                    )
+                {
+                    if let Some((get, _)) =
+                        crate::object::class_registry::class_registered_static_accessor_ptrs_bytes(
+                            class_id, want,
+                        )
+                    {
+                        if get == 0 {
+                            return JSValue::undefined();
+                        }
+                        let receiver =
+                            f64::from_bits(crate::value::js_nanbox_pointer(obj as i64).to_bits());
+                        if let Some(v) =
+                            crate::object::class_registry::class_static_accessor_getter_value_bytes(
+                                class_id, want, receiver,
+                            )
+                        {
+                            return JSValue::from_bits(v.to_bits());
+                        }
+                    }
+                }
                 if want != b"name" && want != b"prototype" {
                     if let Some(parent) =
                         crate::object::class_registry::class_object_pinned_parent(obj)

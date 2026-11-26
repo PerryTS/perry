@@ -1,0 +1,1 @@
+A class declared inside a function with an evaluated heritage (`class Second extends ns.Field`, or the `extends base_1.Field` a CommonJS package compiles to) reads its own `static get` before the parent's, as Node does; it used to run the parent's getter, so cron-parser threw "min must be overridden" for every expression (#15178).
