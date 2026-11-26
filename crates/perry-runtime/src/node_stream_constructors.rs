@@ -221,7 +221,6 @@ pub(super) fn set_visible_writable_finished(stream: f64, finished: bool) {
 }
 
 pub(super) fn mark_writable_ended(stream: f64) {
-    set_hidden_value(stream, hidden_ended_key(), f64::from_bits(TAG_TRUE));
     set_visible_writable(stream, false);
     set_visible_writable_ended(stream, true);
 }

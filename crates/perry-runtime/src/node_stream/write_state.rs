@@ -51,7 +51,7 @@ pub(super) fn writable_sync(stream: f64) -> bool {
 
 /// `writable.write(chunk, encoding, cb)`.
 pub(super) fn write_writable_chunk(stream: f64, chunk: f64, enc: f64, cb: f64) -> f64 {
-    if stream_hidden_ended(stream)
+    if writable_side_ended(stream)
         || has_truthy_hidden(stream, hidden_transform_end_pending_key())
         || has_truthy_hidden(stream, hidden_transform_finishing_key())
     {
@@ -216,7 +216,7 @@ fn after_write(stream: f64, callback: f64) {
     let callback = scope.root_nanbox_f64(callback);
     if writable_length(s.get_nanbox_f64()) == 0.0 {
         let should_emit_drain = writable_need_drain_raw(s.get_nanbox_f64())
-            && !stream_hidden_ended(s.get_nanbox_f64())
+            && !writable_side_ended(s.get_nanbox_f64())
             && !has_truthy_hidden(s.get_nanbox_f64(), hidden_transform_end_pending_key())
             && !has_truthy_hidden(s.get_nanbox_f64(), hidden_stream_pipe_end_pending_key())
             && !has_truthy_hidden(s.get_nanbox_f64(), hidden_transform_finishing_key())
