@@ -284,7 +284,11 @@ pub(super) fn collect_exported_names(
             perry_hir::ir::Export::ExportAll { source } => {
                 if let Some(si) = resolve_module_idx_by_source(modules, source) {
                     if si != mod_idx {
-                        collect_exported_names(modules, si, depth - 1, out);
+                        // `export *` passes on every name but `default`.
+                        let mut star = std::collections::BTreeSet::new();
+                        collect_exported_names(modules, si, depth - 1, &mut star);
+                        star.remove("default");
+                        out.extend(star);
                     }
                 }
             }
@@ -297,11 +301,18 @@ pub(super) fn collect_exported_names(
             }
         }
     }
-    for (n, _) in &m.exported_functions {
-        out.insert(n.clone());
-    }
-    for n in &m.exported_objects {
-        out.insert(n.clone());
+    // `exported_objects` also holds the local a `export { local as name }` renames, which
+    // is not a public name of its own.
+    let renamed = |n: &str| {
+        m.exports
+            .iter()
+            .any(|e| matches!(e, perry_hir::ir::Export::Named { local, .. } if local == n))
+    };
+    let functions = m.exported_functions.iter().map(|(n, _)| n);
+    for n in functions.chain(&m.exported_objects) {
+        if !renamed(n) {
+            out.insert(n.clone());
+        }
     }
 }
 

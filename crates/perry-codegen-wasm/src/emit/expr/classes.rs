@@ -140,6 +140,9 @@ impl<'a> FuncEmitCtx<'a> {
                     func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
                 }
             }
+            Expr::ExternFuncRef { name, .. } if self.emitter.namespace_import(name).is_some() => {
+                self.emit_namespace_value(func, name);
+            }
             Expr::ExternFuncRef { name, .. } => {
                 // Issue #1071: an `ExternFuncRef` used as a value can resolve
                 // either to (a) a cross-module function — its one value

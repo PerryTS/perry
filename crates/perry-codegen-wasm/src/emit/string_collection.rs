@@ -163,6 +163,7 @@ impl WasmModuleEmitter {
             "math_imul",
             "closure_new",
             "function_value",
+            "module_namespace",
             "function_set_prototype",
             "closure_this",
             "closure_set_capture",

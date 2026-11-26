@@ -272,6 +272,9 @@ impl<'a> FuncEmitCtx<'a> {
                 // including .length: `W.length` is a module member here, not
                 // a string/array length.
                 if let Expr::ExternFuncRef { name, .. } = object.as_ref() {
+                    if self.emit_namespace_class_member(func, name, property) {
+                        return true;
+                    }
                     let key = (
                         self.emitter.current_mod_idx,
                         format!("{}.{}", name, property),

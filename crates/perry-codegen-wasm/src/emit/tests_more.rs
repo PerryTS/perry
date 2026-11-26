@@ -1488,6 +1488,9 @@ mod array_last_index_of;
 #[path = "rest_param_tests.rs"]
 mod rest_param;
 
+#[path = "module_namespace_tests.rs"]
+mod module_namespace;
+
 #[path = "thread_callback_tests.rs"]
 mod thread_callback;
 
