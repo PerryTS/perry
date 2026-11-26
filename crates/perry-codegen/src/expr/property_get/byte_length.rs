@@ -80,10 +80,7 @@ pub(super) fn emit_byte_cell_length_guard(
         );
         let view_ok = ctx.block().and(I1, &fixed, &plain_owner);
         let view_ok = ctx.block().and(I1, &view_ok, not_forwarded);
-        let named_invalidated =
-            ctx.block()
-                .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
-        let named_pristine = ctx.block().icmp_eq(I8, &named_invalidated, "0");
+        let named_pristine = crate::expr::property_get::typed_named::emit_named_props_pristine(ctx);
         let view_ok = ctx.block().and(I1, &view_ok, &named_pristine);
         ctx.block().cond_br(&view_ok, fast_label, slow_label);
     }
@@ -98,10 +95,7 @@ pub(super) fn emit_byte_cell_length_guard(
     let link = ctx.block().load(PTR, &link_ptr);
     let empty = ctx.block().icmp_eq(PTR, &link, "null");
     let ta_header_ok = ctx.block().and(I1, &empty, not_forwarded);
-    let named_invalidated =
-        ctx.block()
-            .load_atomic_acquire(I8, "@PERRY_TYPED_NAMED_PROPS_INVALIDATED", 1);
-    let named_pristine = ctx.block().icmp_eq(I8, &named_invalidated, "0");
+    let named_pristine = crate::expr::property_get::typed_named::emit_named_props_pristine(ctx);
     let ta_ok = ctx.block().and(I1, &ta_header_ok, &named_pristine);
     ctx.block().cond_br(&ta_ok, fast_label, slow_label);
 }

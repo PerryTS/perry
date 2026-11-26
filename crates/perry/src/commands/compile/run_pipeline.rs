@@ -1959,6 +1959,10 @@ pub fn run_with_parse_cache(
             ctx.native_libraries.iter().flat_map(|l| l.functions.iter()),
         ),
     );
+    {
+        let (index, methods) = super::program_facts::array_chain_facts(program_facts.as_deref());
+        perry_codegen::set_program_array_chain_facts(index, methods);
+    }
     // The optional-feature scan read each pair as its intrinsic arm
     // (`feature_detect::detect_program_optional_feature_usage`); a module
     // whose pick keeps a generic call, or whose pairs stay for codegen, is

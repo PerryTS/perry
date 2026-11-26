@@ -146,6 +146,7 @@ mod fresh_static_blocks;
 mod assign_source_kinds;
 mod shaped_key_accessors;
 mod function_call_value;
+mod guards1;
 mod written_global_ctor;
 mod function_ctor_without_interp;
 mod function_values;

@@ -684,6 +684,16 @@ fn note_write(
     if k.is_none() && !m.shared_replay && t != TOP {
         m.global_written_own |= super::global_object(m, t);
     }
+    if t != TOP
+        && matches!(m.toks[t as usize], TokKind::ObjectProto)
+        && !m.objproto_alias
+        && !m.objproto_direct.contains_key(&k)
+    {
+        let r = m.reason(&format!(
+            "native prototype may be written: {what} on Object.prototype"
+        ));
+        m.objproto_direct.insert(k, r);
+    }
     if m.explain && !m.shared_replay && t == TOP && k.is_none() {
         eprintln!("perry: wpfacts explain: computed write on ⊤: {what}");
     }
@@ -2059,4 +2069,97 @@ fn typed_array_proto_declares(m: &Model, native: &str, name: &str) -> bool {
         || declared(m.declarations.named("Uint8Array.prototype", m))
         || (native != "%TypedArray%"
             && declared(m.declarations.named(&format!("{native}.prototype"), m)))
+}
+
+/// GUARDS1 class 3: may a write the program can make reach a typed view's
+/// structural metadata accessors (`length`, `byteLength`, `byteOffset`,
+/// `buffer` on `%TypedArray%.prototype`, a kind's own prototype or
+/// `Buffer.prototype`) or change one of those prototypes' [[Prototype]]?
+/// The runtime withdraws its default-accessor proof
+/// (`PERRY_TYPED_NAMED_PROPS_INVALIDATED`, perry-runtime
+/// `typedarray_named::note_named_mutation` / `note_prototype_mutation`)
+/// exactly on such a mutation. `None`: compiled code never makes one. Every
+/// write onto a builtin prototype is a `native_writes` entry (a key of
+/// `None`, `*` or a number: any of these keys), every prototype change of a
+/// builtin object a `native_given` entry; `Object.prototype` is counted as
+/// standing for every builtin prototype, a write onto ⊤ is recorded only
+/// when foreign code exists (P-N1), and unknown code holding the realm may
+/// write these keys (they are not final under the lock, `realm_replaced`).
+pub(crate) fn typed_metadata_writes(m: &Model) -> Option<String> {
+    let holder = |t: Tok| {
+        t == TOP
+            || match &m.toks[t as usize] {
+                TokKind::ObjectProto => true,
+                TokKind::NativeProto(n, _) => typed_array_proto_name(n) || n == "Buffer",
+                _ => false,
+            }
+    };
+    let keyed = |k: Option<Atom>| {
+        k.is_none_or(|a| {
+            matches!(
+                m.atoms[a as usize].as_str(),
+                "length" | "byteLength" | "byteOffset" | "buffer" | "__proto__"
+            ) || m.atoms[a as usize] == crate::STAR_KEY
+                || m.atoms[a as usize] == crate::model::NUM_KEY
+        })
+    };
+    chain_writes(m, &holder, &keyed)
+}
+
+/// GUARDS1 class 2: may a write the program can make modify
+/// `%Array.prototype%` or `%Object.prototype%` (any key, or their
+/// [[Prototype]])? The runtime records exactly that in
+/// `ARRAY_METHODS_MODIFIED` (perry-runtime `builtin_proto::note_write` for the
+/// Array and Object families), the bit the inline `push`/`pop` admission and
+/// the confined element guard test. `None`: compiled code never makes one.
+pub(crate) fn array_methods_writes(m: &Model) -> Option<String> {
+    let holder = |t: Tok| {
+        t == TOP
+            || match &m.toks[t as usize] {
+                TokKind::ObjectProto => true,
+                TokKind::NativeProto(n, _) => n == "Array",
+                _ => false,
+            }
+    };
+    chain_writes(m, &holder, &|_| true)
+}
+
+/// The first reason (by id, independent of hashing) of a write onto a
+/// `holder` under a `keyed` key, of a prototype change of a `holder`, or
+/// unknown code holding the realm.
+fn chain_writes(
+    m: &Model,
+    holder: &dyn Fn(Tok) -> bool,
+    keyed: &dyn Fn(Option<Atom>) -> bool,
+) -> Option<String> {
+    if m.realm_held {
+        return Some("unknown code holds the realm".to_string());
+    }
+    // An `ObjectProto` entry counts only where the write may land on
+    // `%Object.prototype%` itself (`Model::objproto_direct`); one made only
+    // through another builtin prototype is recorded under that prototype.
+    let op = |t: Tok| t != TOP && matches!(m.toks[t as usize], TokKind::ObjectProto);
+    let op_held = m
+        .tok_index
+        .get(&TokKind::ObjectProto)
+        .is_some_and(|&t| holder(t));
+    let direct = m
+        .objproto_direct
+        .iter()
+        .filter(|&(&k, _)| op_held && keyed(k))
+        .map(|(_, &r)| r);
+    let first = m
+        .native_writes
+        .iter()
+        .filter(|(&(t, k), _)| !op(t) && holder(t) && keyed(k))
+        .map(|(_, w)| w.reason)
+        .chain(direct)
+        .min();
+    if let Some(r) = first {
+        return Some(m.reasons[r as usize].clone());
+    }
+    m.native_given
+        .iter()
+        .find(|&&(t, _)| holder(t))
+        .map(|&(t, _)| format!("E6 prototype given to {}", m.tok_name(t)))
 }

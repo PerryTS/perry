@@ -414,6 +414,15 @@ pub(crate) fn run(
                 .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
         );
         eprintln!(
+            "perry: wpfacts: typed-array metadata {}; Array/Object.prototype {}",
+            pf.typed_metadata_written
+                .as_deref()
+                .map_or("unwritten".to_string(), |r| format!("may be written: {r}")),
+            pf.array_methods_written
+                .as_deref()
+                .map_or("unwritten".to_string(), |r| format!("may be written: {r}"))
+        );
+        eprintln!(
             "perry: wpfacts: array @@iterator {}; array iterator next/return {}",
             pf.array_iteration_written
                 .as_deref()
@@ -733,6 +742,13 @@ fn elision_for(
     out.zero_sign_tolerated = pf.zero_sign_tolerated > 0;
     out.family_never = pf.family_reach.as_ref().map_or(0, |f| f.never());
     out.indexed_metadata_pristine = pf.indexed_metadata_pristine();
+    // GUARDS1 class 3. `PERRY_FACTS_SABOTAGE=typed-metadata-unwritten`:
+    // claim it for every program (the gap tests that redefine a typed-array
+    // prototype's `length` must fail).
+    out.typed_metadata_unwritten = pf.sabotage.as_deref() == Some("typed-metadata-unwritten")
+        || (!pf.stats.aborted
+            && pf.interp_guard.is_none()
+            && pf.typed_metadata_written.is_none());
     // `PERRY_FACTS_SABOTAGE=fnproto-unwritten`: claim the fact for every
     // program (the bind gap tests that write Function.prototype must fail).
     out.fnproto_bind_unwritten =
@@ -1430,6 +1446,28 @@ pub(crate) fn namespace_pair_inactive(
 /// MATHC1: with the whole-program facts on every
 /// direct builtin namespace call is lowered as the pair whose one arm the
 /// call site's verdict picks; `PERRY_NS_PAIRS=0` keeps the old lowering.
+/// GUARDS1 class 2: the program-wide array chain facts codegen's inline
+/// element and method guards read (`perry_codegen::
+/// set_program_array_chain_facts`): `.0` the default chain's index bit
+/// needs no test (DEC 250 locks index adds and relinks of
+/// `%Array.prototype%`/`%Object.prototype%`; a relinked array carries its own
+/// `GC_ARRAY_CUSTOM_PROTO` bit, which stays tested), claimed for a
+/// whole-program facts build; `.1` neither prototype is ever modified
+/// (wpfacts `array_methods_written`, no interpreted code), so the
+/// `ARRAY_METHODS_MODIFIED` bit needs no test either.
+/// `PERRY_FACTS_SABOTAGE=array-chain-unwritten` claims both.
+pub(crate) fn array_chain_facts(pf: Option<&perry_wpfacts::ProgramFacts>) -> (bool, bool) {
+    let Some(pf) = pf else {
+        return (false, false);
+    };
+    if pf.sabotage.as_deref() == Some("array-chain-unwritten") {
+        return (true, true);
+    }
+    let index = !pf.stats.aborted;
+    let methods = index && pf.interp_guard.is_none() && pf.array_methods_written.is_none();
+    (index, methods)
+}
+
 pub(crate) fn namespace_pairs_on() -> bool {
     perry_wpfacts::enabled_from_env() && std::env::var("PERRY_NS_PAIRS").as_deref() != Ok("0")
 }
