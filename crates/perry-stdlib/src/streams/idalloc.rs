@@ -273,8 +273,8 @@ pub(super) fn retire_writer_if_released(writer_id: usize) {
     }
 }
 
-/// Retire an id that was minted but never got a record (a failed pipeTo
-/// lock acquisition).
+/// Retire an id that owns no record: a failed pipeTo lock acquisition, or a
+/// released pipe reader/writer whose record `release_pipe_locks` removed.
 pub(super) fn retire_unused_id(id: usize) {
     retire(id);
 }

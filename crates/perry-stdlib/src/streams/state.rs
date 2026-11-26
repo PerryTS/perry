@@ -680,6 +680,19 @@ accessors!(
     insert_writer
 );
 
+/// Remove a pipe reader's record at release. pipeTo's reader is never handed
+/// to JS, so no wrapper can observe it afterwards: only its bare id goes
+/// through the quarantine (the record would keep its closed promise alive for
+/// the whole quarantine window).
+pub(super) fn remove_reader(r: ReaderRef) -> Option<ReaderData> {
+    READERS.lock().unwrap().remove(&r.0)
+}
+
+/// Writer counterpart of [`remove_reader`] (pipeTo's writer).
+pub(super) fn remove_writer(w: WriterRef) -> Option<WriterData> {
+    WRITERS.lock().unwrap().remove(&w.0)
+}
+
 /// Run `f` on the expando list of any stream-family value id: a stream,
 /// reader, writer or transform, or a readable's controller / BYOB request
 /// (those keep theirs on the readable's record).
