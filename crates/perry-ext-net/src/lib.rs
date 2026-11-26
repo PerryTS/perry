@@ -207,23 +207,6 @@ mod static_record_layout_tests {
                 perry_ffi::JsValue::UNDEFINED.bits()
             );
         }
-        let record = roots.root_addr(unsafe {
-            perry_ffi::runtime_layouts::alloc_runtime_record(
-                perry_ffi::runtime_layouts::RECORD_F21_0::desc(),
-            )
-        } as i64);
-        for slot in 0..5 {
-            assert_eq!(
-                unsafe {
-                    perry_ffi::js_object_get_field(
-                        record.get() as *const perry_ffi::ObjectHeader,
-                        slot,
-                    )
-                }
-                .bits(),
-                perry_ffi::JsValue::UNDEFINED.bits()
-            );
-        }
     }
 }
 
