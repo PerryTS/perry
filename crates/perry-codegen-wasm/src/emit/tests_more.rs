@@ -784,6 +784,70 @@ toggle._inp.dispatch("change");
     );
 }
 
+// RadioGroup takes Picker's API: one radio per item, sharing a name, and onChange
+// receives the chosen index.
+#[test]
+fn radio_group_items_are_radios_and_report_the_chosen_index() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { RadioGroup, radioGroupAddItem, radioGroupGetSelected, radioGroupSetSelected } from "perry/ui";
+const group = RadioGroup((index: number) => { console.log("chose " + index + " " + radioGroupGetSelected(group)); });
+radioGroupAddItem(group, "Today");
+radioGroupAddItem(group, "This week");
+radioGroupAddItem(group, "Any time");
+console.log(radioGroupGetSelected(group));
+radioGroupSetSelected(group, 2);
+console.log(radioGroupGetSelected(group));
+"#,
+            r#"
+const fieldset = [...uiHandles.values()].find(e => e.tagName === "FIELDSET");
+const radios = fieldset.children.map(label => label.children[0]);
+console.log(radios.map(r => r.type + ":" + (r.name === radios[0].name) + ":" + r.checked).join(" "));
+console.log(fieldset.children.map(label => label.textContent).join("|"));
+radios[2].checked = false;
+radios[1].checked = true;
+radios[1].dispatch("change");
+"#
+        ),
+        "-1\n2\nradio:true:false radio:true:false radio:true:true\nToday|This week|Any time\nchose 1 1"
+    );
+}
+
+// An index coerces as Picker's does, clearing the group leaves nothing selected and
+// restarts its indices, and the fieldset is a radiogroup a label can name.
+#[test]
+fn radio_group_coerces_indices_and_forgets_cleared_items() {
+    assert_eq!(
+        run_web_ui_source_then(
+            r#"
+import { RadioGroup, radioGroupAddItem, radioGroupGetSelected, radioGroupSetSelected, widgetClearChildren, widgetSetAccessibilityLabel } from "perry/ui";
+const group = RadioGroup((index: number) => { console.log("chose " + index + " " + radioGroupGetSelected(group)); });
+widgetSetAccessibilityLabel(group, "Urgency");
+const selectAll = (...indices: any[]) => indices.map(i => { radioGroupSetSelected(group, i); return radioGroupGetSelected(group); }).join(" ");
+radioGroupAddItem(group, "A");
+radioGroupAddItem(group, "B");
+console.log(selectAll(1.5, "0", 9, 1, -1, 1));
+widgetClearChildren(group);
+console.log(radioGroupGetSelected(group));
+radioGroupAddItem(group, "C");
+radioGroupAddItem(group, "D");
+console.log(radioGroupGetSelected(group));
+console.log(selectAll(0, 1));
+radioGroupSetSelected(group, -1);
+"#,
+            r#"
+const fieldset = [...uiHandles.values()].find(e => e.tagName === "FIELDSET");
+console.log(fieldset.role + " " + fieldset["aria-label"] + " " + fieldset.style.minWidth);
+const radio = fieldset.children[0].children[0];
+radio.checked = true;
+radio.dispatch("change");
+"#
+        ),
+        "1 0 -1 1 -1 1\n-1\n-1\n0 1\nradiogroup Urgency 0\nchose 0 0"
+    );
+}
+
 #[test]
 fn a_class_declared_in_a_function_keeps_its_methods() {
     assert_eq!(

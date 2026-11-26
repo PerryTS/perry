@@ -5024,6 +5024,39 @@ function perry_ui_wheel_picker_add_item(h, title) {
 }
 function perry_ui_wheel_picker_set_selected(h, index) { const el = uiGet(h); if (el) el.selectedIndex = index; }
 function perry_ui_wheel_picker_get_selected(h) { const el = uiGet(h); return el ? el.selectedIndex : -1; }
+// RadioGroup: one `<fieldset>` whose radios share a name, each inside its own `<label>`;
+// onChange receives the chosen index, as Picker's does. An index is a radio's place among
+// the labels the group holds now, so clearing the group leaves no stale radio.
+let radioGroupSeq = 0;
+const radioGroupRadios = (fs) => [...fs.children].map(label => label._radio).filter(Boolean);
+function perry_ui_radio_group_create(callback) {
+  const fs = document.createElement("fieldset");
+  fs.setAttribute("role", "radiogroup");
+  fs.style.display = "flex"; fs.style.flexDirection = "column"; fs.style.gap = "4px";
+  fs.style.border = "none"; fs.style.padding = "0"; fs.style.margin = "0"; fs.style.minWidth = "0";
+  fs._perryCallback = callback;
+  fs._radioName = "perry-radio-" + (++radioGroupSeq);
+  return uiAlloc(fs);
+}
+function perry_ui_radio_group_add_item(h, title) {
+  const fs = uiGet(h); if (!fs) return;
+  const label = document.createElement("label");
+  label.style.display = "flex"; label.style.alignItems = "center"; label.style.gap = "8px";
+  const input = document.createElement("input"); input.type = "radio"; input.name = fs._radioName;
+  input.addEventListener("change", () => {
+    if (input.checked && fs._perryCallback !== undefined) callWasmClosure(fs._perryCallback, radioGroupRadios(fs).indexOf(input));
+  });
+  label.appendChild(input);
+  label._radio = input;
+  const text = document.createElement("span"); text.textContent = title; label.appendChild(text);
+  fs.appendChild(label);
+}
+function perry_ui_radio_group_set_selected(h, index) {
+  const fs = uiGet(h); if (fs) radioGroupRadios(fs).forEach((r, i) => { r.checked = i === (index | 0); });
+}
+function perry_ui_radio_group_get_selected(h) {
+  const fs = uiGet(h); return fs ? radioGroupRadios(fs).findIndex(r => r.checked) : -1;
+}
 
 // ---------- Image ----------
 // A symbol is `symbols/<name>.svg` beside the page, drawn as a mask over the current
@@ -6496,6 +6529,8 @@ const __perryUiDispatch = {
   // Picker
   perry_ui_picker_add_item, perry_ui_picker_set_selected, perry_ui_picker_get_selected,
   perry_ui_wheel_picker_add_item, perry_ui_wheel_picker_set_selected, perry_ui_wheel_picker_get_selected,
+  perry_ui_radio_group_create, perry_ui_radio_group_add_item,
+  perry_ui_radio_group_set_selected, perry_ui_radio_group_get_selected,
   // Image
   perry_ui_image_create_symbol, perry_ui_image_create_url,
     perry_ui_load_image, perry_ui_image_set_size, perry_ui_image_set_tint,

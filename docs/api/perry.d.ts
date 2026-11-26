@@ -1,6 +1,6 @@
 // Auto-generated from Perry's API manifest (#465). Do not edit by hand.
 // Source: perry-api-manifest::API_MANIFEST
-// Coverage: 1976 entries across 105 modules
+// Coverage: 1980 entries across 105 modules
 
 type PerryI8 = number & { readonly __perryI8?: never };
 type PerryI16 = number & { readonly __perryI16?: never };
@@ -2911,6 +2911,8 @@ declare module "perry/ui" {
   /** stdlib */
   export function ProgressView(...args: any[]): any;
   /** stdlib */
+  export function RadioGroup(...args: any[]): any;
+  /** stdlib */
   export function ScrollView(...args: any[]): any;
   /** stdlib */
   export function Section(...args: any[]): any;
@@ -3064,6 +3066,12 @@ declare module "perry/ui" {
   export function openFolderDialog(...args: any[]): any;
   /** stdlib */
   export function pollOpenFile(...args: any[]): any;
+  /** stdlib */
+  export function radioGroupAddItem(...args: any[]): any;
+  /** stdlib */
+  export function radioGroupGetSelected(...args: any[]): any;
+  /** stdlib */
+  export function radioGroupSetSelected(...args: any[]): any;
   /** stdlib */
   export function registerGlobalHotkey(...args: any[]): any;
   /** stdlib */
