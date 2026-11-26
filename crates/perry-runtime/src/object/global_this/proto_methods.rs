@@ -1540,7 +1540,7 @@ pub(super) fn web_text_proto_methods(builtin_name: &str, proto_obj: *mut ObjectH
             install_proto_method(
                 proto_obj,
                 "decode",
-                crate::fn_info!(#[realm(TextDecoder.prototype.decode)] export crate::text::text_decoder_decode_thunk, 1; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
+                crate::fn_info!(#[realm(TextDecoder.prototype.decode)] export crate::text::text_decoder_decode_thunk, 2; with_declared(1), with_flags(crate::closure::FN_BUILTIN | crate::closure::FN_NON_CONSTRUCTOR)),
                 1,
             );
             install_web_getter_accessor(

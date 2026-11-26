@@ -156,12 +156,20 @@ fn buffer_last_index_of_bytes(buf: *const BufferHeader, needle: &[u8], start: i3
         if needle.len() > len {
             return -1;
         }
+        // A negative `start` counts from the end; one below `-len` leaves no
+        // position to search (ECMA-262 %TypedArray%.prototype.lastIndexOf
+        // step 7, and Node's `Buffer#lastIndexOf`). Every candidate clamps to
+        // `max_start` so the needle window stays inside the data.
         let max_start = len - needle.len();
-        let from = if start < 0 {
-            ((len as i32) + start).max(0) as usize
+        let resolved = if start < 0 {
+            len as i64 + start as i64
         } else {
-            (start as usize).min(max_start)
+            start as i64
         };
+        if resolved < 0 {
+            return -1;
+        }
+        let from = (resolved as usize).min(max_start);
         for i in (0..=from).rev() {
             if &data[i..i + needle.len()] == needle {
                 return i as i32;
@@ -400,5 +408,48 @@ fn ordering(order: std::cmp::Ordering) -> i32 {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `[7, 8, 7]` as a registered `Uint8Array`, NaN-boxed as a receiver.
+    fn subject() -> f64 {
+        let values = [7.0, 8.0, 7.0];
+        let arr = crate::array::js_array_from_f64(values.as_ptr(), values.len() as u32);
+        let buf = crate::buffer::js_uint8array_new(crate::value::js_nanbox_pointer(arr as i64));
+        f64::from_bits(crate::value::JSValue::pointer(buf as *const u8).bits())
+    }
+
+    #[test]
+    fn last_index_of_start_below_minus_len_searches_nothing() {
+        let _serialized = crate::array::test_serialize();
+        let buf = subject();
+        assert_eq!(js_buffer_last_index_of(buf, 7.0, -10), -1);
+        assert_eq!(js_buffer_last_index_of(buf, 7.0, -4), -1);
+        assert_eq!(js_buffer_last_index_of(buf, 7.0, i32::MIN), -1);
+        // `-len` is still index 0, and in-range negatives count from the end.
+        assert_eq!(js_buffer_last_index_of(buf, 7.0, -3), 0);
+        assert_eq!(js_buffer_last_index_of(buf, 7.0, -1), 2);
+        assert_eq!(js_buffer_last_index_of(buf, 7.0, 10), 2);
+    }
+
+    #[test]
+    fn last_index_of_multi_byte_needle_clamps_a_negative_start() {
+        let _serialized = crate::array::test_serialize();
+        let buf = buffer_ptr(subject());
+        // `len + start` lands past `len - needle.len()`; the window must not
+        // run off the end of the data.
+        assert_eq!(buffer_last_index_of_bytes(buf, &[7, 8], -1), 0);
+        assert_eq!(buffer_last_index_of_bytes(buf, &[8, 7], -1), 1);
+        assert_eq!(buffer_last_index_of_bytes(buf, &[7, 8], -4), -1);
+        // An empty needle keeps Node's clamp-to-zero answer.
+        assert_eq!(buffer_last_index_of_bytes(buf, &[], -10), 0);
+    }
+
+    fn buffer_ptr(boxed: f64) -> *const BufferHeader {
+        unbox_buffer_ptr(boxed.to_bits()) as *const BufferHeader
     }
 }

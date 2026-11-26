@@ -1,0 +1,1 @@
+`TextDecoder.prototype.decode` consumes one leading byte-order mark for UTF-8 and UTF-16LE as it already did for UTF-16BE, unless the decoder was built with `ignoreBOM: true`; an options argument that is not an object literal (a variable, an object with getters) now reaches the decoder, so its `fatal` and `ignoreBOM` take effect (#15462).

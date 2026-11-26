@@ -5,6 +5,42 @@
 
 use super::*;
 
+/// The typed-array constructors, interned so each is a host global the emitter can name.
+pub(in crate::emit) const TYPED_ARRAY_CTORS: [&str; 12] = [
+    "Int8Array",
+    "Uint8Array",
+    "Uint8ClampedArray",
+    "Int16Array",
+    "Uint16Array",
+    "Int32Array",
+    "Uint32Array",
+    "Float16Array",
+    "Float32Array",
+    "Float64Array",
+    "BigInt64Array",
+    "BigUint64Array",
+];
+
+/// `new Int32Array(arg)` and its siblings as `new globalThis.Int32Array(arg)`: the host's
+/// constructor for that `TYPED_ARRAY_KIND_*` tag.
+pub(in crate::emit) fn typed_array_new(kind: u8, arg: Option<&Expr>) -> Option<Expr> {
+    let name = TYPED_ARRAY_CTORS
+        .into_iter()
+        .find(|name| perry_hir::ir::typed_array_kind_for_name(name) == Some(kind))?;
+    let callee = Expr::PropertyGet {
+        byte_offset: 0,
+        byte_end: 0,
+        object: Box::new(Expr::GlobalGet(0)),
+        property: name.to_string(),
+    };
+    Some(Expr::NewDynamic {
+        callee: Box::new(callee),
+        args: arg.into_iter().cloned().collect(),
+        byte_offset: 0,
+        byte_end: 0,
+    })
+}
+
 impl<'a> FuncEmitCtx<'a> {
     pub(super) fn try_emit_expr_buffers(&mut self, func: &mut Function, expr: &Expr) -> bool {
         match expr {
@@ -361,6 +397,14 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_store_arg(func, 2, value);
                 self.emit_memcall_void(func, "uint8array_set", 3);
                 func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
+            }
+            // A typed array is the host's own, made by its constructor: its elements,
+            // `length`, `buffer` and methods are the host's.
+            Expr::TypedArrayNew { kind, arg } => {
+                let Some(new) = typed_array_new(*kind, arg.as_deref()) else {
+                    return false;
+                };
+                self.emit_expr(func, &new);
             }
             _ => return false,
         }

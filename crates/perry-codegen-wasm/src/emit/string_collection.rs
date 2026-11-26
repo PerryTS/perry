@@ -76,6 +76,12 @@ impl WasmModuleEmitter {
             "reflect_get_own_property_descriptor",
             "reflect_has",
             "reflect_own_keys",
+            "reflect_get",
+            "reflect_set",
+            "reflect_delete_property",
+            "reflect_is_extensible",
+            "reflect_prevent_extensions",
+            "reflect_set_prototype_of",
             "object_entries",
             "object_rest",
             "object_has_property",
@@ -159,6 +165,7 @@ impl WasmModuleEmitter {
             "function_value",
             "fn_info",
             "class_set_ctor_length",
+            "module_namespace",
             "function_set_prototype",
             "closure_this",
             "closure_set_capture",
@@ -245,6 +252,8 @@ impl WasmModuleEmitter {
             "json_stringify",
             "map_new",
             "WeakMap",
+            "ArrayBuffer",
+            "DataView",
             "weakref_new",
             "weakref_deref",
             "finreg_new",
@@ -413,6 +422,7 @@ impl WasmModuleEmitter {
         for name in bridge_names
             .iter()
             .chain(super::expr::ITERATOR_RECORD_BRIDGES)
+            .chain(&super::expr::TYPED_ARRAY_CTORS)
         {
             self.intern_string(name);
         }

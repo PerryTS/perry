@@ -135,6 +135,8 @@ pub(super) struct WasmModuleEmitter {
     /// serializer helper `vec3(v): string` must not capture the math
     /// library's `vec3(x,y,z)` for every caller in the program).
     pub(super) imported_func_indices: BTreeMap<(usize, String), u32>,
+    /// `import * as <local>` per consumer: `(consumer_module_idx, local)`.
+    pub(super) namespace_imports: BTreeMap<(usize, String), NamespaceImport>,
 }
 
 impl WasmModuleEmitter {
@@ -193,6 +195,7 @@ impl WasmModuleEmitter {
             imported_var_globals: BTreeMap::new(),
             imported_ns_funcs: BTreeMap::new(),
             imported_func_indices: BTreeMap::new(),
+            namespace_imports: BTreeMap::new(),
         }
     }
 

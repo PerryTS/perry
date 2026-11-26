@@ -1,0 +1,1 @@
+`new v8.Serializer()`, `new v8.Deserializer(buf)` and their `Default*` subclasses install the `node:v8` method dispatch where they are constructed, so `writeHeader`, `writeUint32`, `writeRawBytes`, `readHeader` and the other serializer methods no longer throw `is not supported` in a program whose other `node:v8` uses never install it (#15227).

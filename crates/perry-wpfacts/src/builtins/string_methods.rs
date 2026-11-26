@@ -412,11 +412,18 @@ pub(super) fn string_method(m: &mut Model, call: CallId, name: &str) -> bool {
                 .get(&call)
                 .copied()
                 .filter(|_| matches!(name, "indexOf" | "lastIndexOf"));
-            let saved = (one_unit || index_len.is_some()).then(|| {
+            // Rule CU: a code unit at a text-proven index (`Model::code_unit_calls`).
+            let code_unit = name == "charCodeAt" && m.code_unit_calls.contains(&call);
+            let saved = (one_unit || index_len.is_some() || code_unit).then(|| {
+                let num = match index_len {
+                    Some(l) => crate::model::Iv::int(-1, l),
+                    None if code_unit => crate::model::Iv::int(0, 65535),
+                    None => crate::model::Iv::TOP,
+                };
                 m.cur_range.replace(crate::model::Rg {
-                    num: index_len.map_or(crate::model::Iv::TOP, |l| crate::model::Iv::int(-1, l)),
+                    num,
                     chr: crate::model::range::CHAR_ANY,
-                    frac: index_len.is_none(),
+                    frac: index_len.is_none() && !code_unit,
                 })
             });
             ret_prim(m, call, r);
