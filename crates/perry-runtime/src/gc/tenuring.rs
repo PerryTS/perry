@@ -407,6 +407,9 @@ struct FixedCostClock {
     begin_ns: Option<u64>,
     /// The minor in progress's survivor work: its worklist drains.
     drain_ns: u64,
+    /// The minor in progress's page returns: the idle Eden pages it advised
+    /// back to the kernel ([`fixed_cost_note_page_return`]).
+    returned_ns: u64,
 }
 
 impl FixedCostClock {
@@ -414,7 +417,44 @@ impl FixedCostClock {
         last_end_ns: None,
         begin_ns: None,
         drain_ns: 0,
+        returned_ns: 0,
     };
+
+    /// The minor in progress has, from its begin until `now`, returned pages.
+    fn page_returned(self, now: u64) -> Self {
+        match self.begin_ns {
+            Some(begin) => FixedCostClock {
+                returned_ns: now.saturating_sub(begin),
+                ..self
+            },
+            None => self,
+        }
+    }
+
+    /// Work that is neither minor nor program ran after the last reading
+    /// closed: the next mutator interval starts at `now`.
+    fn mutator_restarted(self, now: u64) -> Self {
+        match self.last_end_ns {
+            Some(_) => FixedCostClock {
+                last_end_ns: Some(now),
+                ..self
+            },
+            None => self,
+        }
+    }
+
+    /// The reading of the minor in progress finishing at `now`:
+    /// `(fixed_ns, minor_ns, mutator_ns)`. Fixed is the minor's time less its
+    /// survivor drains and its page returns.
+    fn reading(self, now: u64) -> Option<(u64, u64, u64)> {
+        let begin = self.begin_ns?;
+        let minor_ns = now.saturating_sub(begin);
+        let fixed_ns = minor_ns
+            .saturating_sub(self.drain_ns)
+            .saturating_sub(self.returned_ns);
+        let mutator_ns = begin.saturating_sub(self.last_end_ns.unwrap_or(0));
+        Some((fixed_ns, minor_ns, mutator_ns))
+    }
 }
 
 crate::perry_thread_local! {
@@ -1449,9 +1489,36 @@ pub(super) fn fixed_cost_minor_begin() {
         c.set(FixedCostClock {
             begin_ns,
             drain_ns: 0,
+            returned_ns: 0,
             ..c.get()
         })
     });
+}
+
+/// The minor that began at [`fixed_cost_minor_begin`] has, from its start
+/// until now, advised idle Eden pages back to the kernel. Call it right after
+/// that discard, and only when the discard returned bytes.
+///
+/// Returning pages is not fixed cost: it is paid once per byte a smaller Eden
+/// gives up, the price of a shrink as first touch is the price of a growth.
+/// A hugepage-backed Eden block costs ~150-180 us of thread CPU to advise
+/// (low-survival fixture, 2 MiB THP blocks), ~3x the ~65 us minor around it,
+/// so charging it to the minors right after a take-back read as the share
+/// having doubled and released the hold that take-back set.
+pub(super) fn fixed_cost_note_page_return() {
+    if let Some(now) = thread_cpu_ns() {
+        FIXED_COST_CLOCK.with(|c| c.set(c.get().page_returned(now)));
+    }
+}
+
+/// A copying minor's reading has closed and the collector then advised pooled
+/// blocks back to the kernel (their reuse window expired). That time is
+/// neither the minor's nor the program's: the next mutator interval starts
+/// now. Call it only when pages were returned.
+pub(super) fn fixed_cost_restart_mutator() {
+    if let Some(now) = thread_cpu_ns() {
+        FIXED_COST_CLOCK.with(|c| c.set(c.get().mutator_restarted(now)));
+    }
 }
 
 /// The copying minor's worklist drain ran from `started` (a [`thread_cpu_ns`]
@@ -1466,8 +1533,8 @@ pub(super) fn note_fixed_cost_drain(started: Option<u64>) {
     }
 }
 
-/// A copying minor finished. Its fixed cost is its CPU time minus its drains;
-/// the mutator time is the thread's CPU time since the previous copying minor
+/// A copying minor finished. Its fixed cost is its CPU time minus its drains
+/// and its page returns; the mutator time is the thread's CPU time since the previous copying minor
 /// finished. Only a minor that collected a whole Eden allocation window
 /// (`full_eden_window`) is a reading: an early minor (a forced or explicit
 /// collection) did not wait for an Eden to fill, so its interval says nothing
@@ -1480,15 +1547,12 @@ pub(super) fn note_minor_fixed_cost(entry_cap: usize, full_eden_window: bool) {
             ..FixedCostClock::START
         })
     });
-    let (Some(now), Some(begin)) = (now, clock.begin_ns) else {
+    let Some((fixed_ns, minor_ns, mutator_ns)) = now.and_then(|now| clock.reading(now)) else {
         return;
     };
     if !full_eden_window {
         return;
     }
-    let minor_ns = now.saturating_sub(begin);
-    let fixed_ns = minor_ns.saturating_sub(clock.drain_ns);
-    let mutator_ns = begin.saturating_sub(clock.last_end_ns.unwrap_or(0));
     retune_fixed_cost_scale(fixed_ns, minor_ns, mutator_ns, entry_cap);
 }
 

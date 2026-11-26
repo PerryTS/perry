@@ -1570,3 +1570,45 @@ fn a_single_outlier_does_not_release_the_fixed_cost_hold() {
     );
     reset_for_test();
 }
+
+/// NXGC9: the idle Eden pages a minor advises back to the kernel after a
+/// take-back (a 2 MiB THP block: ~150-180 us beside ~65 us of minor) are the
+/// price of the shrink, not fixed cost; nor is a pooled block's later advice
+/// mutator time.
+#[test]
+fn page_returns_are_neither_fixed_cost_nor_mutator_time() {
+    let minor = FixedCostClock {
+        last_end_ns: Some(1_000_000),
+        begin_ns: Some(1_400_000),
+        drain_ns: 5_000,
+        returned_ns: 0,
+    };
+    // The discard right after the begin took 160 us; the minor ends 225 us in.
+    let returned = minor.page_returned(1_560_000);
+    assert_eq!(
+        returned.reading(1_625_000),
+        Some((60_000, 225_000, 400_000))
+    );
+    // Without the page return the same minor reads 220 us of fixed cost.
+    assert_eq!(minor.reading(1_625_000), Some((220_000, 225_000, 400_000)));
+    // No minor in progress: nothing to charge.
+    assert_eq!(
+        FixedCostClock::START.page_returned(9),
+        FixedCostClock::START
+    );
+    // A pooled block's advice after the reading closed at 1_625_000 ran until
+    // 1_790_000; the next minor begins at 2_000_000: 210 us of mutator.
+    let closed = FixedCostClock {
+        last_end_ns: Some(1_625_000),
+        ..FixedCostClock::START
+    };
+    let next = FixedCostClock {
+        begin_ns: Some(2_000_000),
+        ..closed.mutator_restarted(1_790_000)
+    };
+    assert_eq!(next.reading(2_050_000), Some((50_000, 50_000, 210_000)));
+    assert_eq!(
+        FixedCostClock::START.mutator_restarted(9),
+        FixedCostClock::START
+    );
+}
