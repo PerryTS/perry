@@ -101,21 +101,30 @@ pub unsafe extern "C" fn js_writable_stream_throw_invalid_sink() -> f64 {
 pub unsafe extern "C" fn js_writable_stream_get_writer(stream_handle: f64) -> f64 {
     ensure_gc_registered();
     let id = stream_id(stream_handle);
-    let Some(mut rec) = ws_rec(WsRef(id)) else {
-        return f64::from_bits(TAG_UNDEFINED);
-    };
-    let s = &mut *rec;
-    if s.writer_handle.is_some() {
-        drop(rec);
-        throw_type_error("WritableStream is locked");
+    match acquire_writer(WsRef(id)) {
+        Ok(writer) => writer.value(),
+        Err(AcquireError::Locked) => throw_type_error("WritableStream is locked"),
+        Err(AcquireError::Missing) => f64::from_bits(TAG_UNDEFINED),
     }
-    let writer_id = next_stream_id();
-    s.writer_handle = Some(writer_id);
-    let closed_p = s.closed_promise;
-    let ready_p = s.ready_promise;
-    drop(rec);
-    insert_writer(WriterRef(writer_id), WriterData::new(id, closed_p, ready_p));
-    stream_value(writer_id)
+}
+
+/// AcquireWritableStreamDefaultWriter: mint a writer record locked to `w`
+/// (getWriter() and pipeTo share it).
+pub(super) fn acquire_writer(w: WsRef) -> Result<WriterRef, AcquireError> {
+    let (closed_p, ready_p, writer) = {
+        let Some(mut rec) = ws_rec(w) else {
+            return Err(AcquireError::Missing);
+        };
+        let s = &mut *rec;
+        if s.writer_handle.is_some() {
+            return Err(AcquireError::Locked);
+        }
+        let writer = WriterRef(next_stream_id());
+        s.writer_handle = Some(writer.0);
+        (s.closed_promise, s.ready_promise, writer)
+    };
+    insert_writer(writer, WriterData::new(w.0, closed_p, ready_p));
+    Ok(writer)
 }
 
 #[no_mangle]

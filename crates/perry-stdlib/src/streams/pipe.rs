@@ -1,13 +1,14 @@
 //! `ReadableStream.pipeTo` implementation details.
 
 use super::state::{
-    insert_reader, insert_writer, remove_reader, remove_writer, rs_rec, transform_of_writable,
-    ws_rec, ReaderData, ReaderRef, RsRef, WriterData, WriterRef, WsRef,
+    remove_reader, remove_writer, rs_rec, transform_of_writable, ws_rec, ReaderRef, RsRef,
+    WriterRef, WsRef,
 };
+use super::writable::acquire_writer;
 use super::{
-    box_promise, idalloc, internal_promise, js_writable_stream_close, maybe_pull, next_stream_id,
-    reject_type_error, stream_id, stream_value, transform_close, writable_stream_write,
-    ReadableState, WritableState, TAG_UNDEFINED,
+    acquire_reader, box_promise, idalloc, js_writable_stream_close, maybe_pull, reject_type_error,
+    stream_id, stream_value, transform_close, writable_stream_write, AcquireError, ReadableState,
+    WritableState, TAG_UNDEFINED,
 };
 use perry_runtime::{
     js_nanbox_get_pointer, js_object_get_field_by_name, js_promise_new, js_promise_reject,
@@ -31,78 +32,42 @@ struct PipeState {
 }
 
 /// pipeTo's AcquireReadableStreamDefaultReader + AcquireWritableStreamDefault-
-/// Writer: a real reader and writer record lock the pair for the pipe's life
-/// (`release_pipe_locks` releases them, drops the records and retires the ids).
+/// Writer: the same reader and writer records getReader() / getWriter() mint
+/// lock the pair for the pipe's life (`release_pipe_locks` releases them,
+/// drops the records and retires the ids). A writable that cannot be locked
+/// releases the reader again.
 fn acquire_pipe_locks(readable_id: usize, writable_id: usize) -> Result<PipeLockIds, &'static str> {
-    let reader_id = next_stream_id();
-    let writer_id = next_stream_id();
-    // #6602: on failure the two freshly minted ids were never stamped (or were
-    // just unstamped) and own no record — recycle them. Runs after every
-    // record borrow in `try_acquire_pipe_locks` is released; a quarantine
-    // overflow inside the retire takes registry locks for eviction cleanup.
-    if let Err(message) = try_acquire_pipe_locks(readable_id, writable_id, reader_id, writer_id) {
-        idalloc::retire_unused_id(reader_id);
-        idalloc::retire_unused_id(writer_id);
-        return Err(message);
+    let reader = unsafe { acquire_reader(RsRef(readable_id), false) }.map_err(|e| match e {
+        AcquireError::Locked => "ReadableStream is locked",
+        AcquireError::Missing => "Invalid ReadableStream",
+    })?;
+    match acquire_writer(WsRef(writable_id)) {
+        Ok(writer) => Ok(PipeLockIds {
+            reader_id: reader.0,
+            writer_id: writer.0,
+        }),
+        Err(e) => {
+            release_pipe_reader(readable_id, reader.0);
+            Err(match e {
+                AcquireError::Locked => "WritableStream is locked",
+                AcquireError::Missing => "Invalid WritableStream",
+            })
+        }
     }
-    let reader_closed = internal_promise();
-    let (writer_closed, writer_ready) = ws_rec(WsRef(writable_id))
-        .as_deref()
-        .map(|s| (s.closed_promise, s.ready_promise))
-        .unwrap_or((std::ptr::null_mut(), std::ptr::null_mut()));
-    insert_reader(
-        ReaderRef(reader_id),
-        ReaderData::new(readable_id, reader_closed, false),
-    );
-    insert_writer(
-        WriterRef(writer_id),
-        WriterData::new(writable_id, writer_closed, writer_ready),
-    );
-    Ok(PipeLockIds {
-        reader_id,
-        writer_id,
-    })
 }
 
-fn try_acquire_pipe_locks(
-    readable_id: usize,
-    writable_id: usize,
-    reader_id: usize,
-    writer_id: usize,
-) -> Result<(), &'static str> {
-    {
-        match rs_rec(RsRef(readable_id)).as_deref_mut() {
-            Some(s) if s.reader_handle.is_none() => {
-                s.reader_handle = Some(reader_id);
-            }
-            Some(_) => return Err("ReadableStream is locked"),
-            None => return Err("Invalid ReadableStream"),
+/// ReadableStreamDefaultReaderRelease for a pipe reader: unlock the readable,
+/// drop the record (no wrapper of it exists, so the quarantine has nothing to
+/// keep) and retire the bare id. A second release finds no record.
+fn release_pipe_reader(readable_id: usize, reader_id: usize) {
+    if let Some(s) = rs_rec(RsRef(readable_id)).as_deref_mut() {
+        if s.reader_handle == Some(reader_id) {
+            s.reader_handle = None;
         }
     }
-    {
-        match ws_rec(WsRef(writable_id)).as_deref_mut() {
-            Some(s) if s.writer_handle.is_none() => {
-                s.writer_handle = Some(writer_id);
-            }
-            Some(_) => {
-                if let Some(s) = rs_rec(RsRef(readable_id)).as_deref_mut() {
-                    if s.reader_handle == Some(reader_id) {
-                        s.reader_handle = None;
-                    }
-                }
-                return Err("WritableStream is locked");
-            }
-            None => {
-                if let Some(s) = rs_rec(RsRef(readable_id)).as_deref_mut() {
-                    if s.reader_handle == Some(reader_id) {
-                        s.reader_handle = None;
-                    }
-                }
-                return Err("Invalid WritableStream");
-            }
-        }
+    if remove_reader(ReaderRef(reader_id)).is_some() {
+        idalloc::retire_unused_id(reader_id);
     }
-    Ok(())
 }
 
 /// Release the pipe's reader and writer (ReadableStreamDefaultReaderRelease /
@@ -111,18 +76,11 @@ fn try_acquire_pipe_locks(
 /// quarantine has nothing to keep for them. A duplicate release
 /// (close-fulfilled then a late rejection) finds no record and does nothing.
 fn release_pipe_locks(readable_id: usize, writable_id: usize, locks: PipeLockIds) {
-    if let Some(s) = rs_rec(RsRef(readable_id)).as_deref_mut() {
-        if s.reader_handle == Some(locks.reader_id) {
-            s.reader_handle = None;
-        }
-    }
+    release_pipe_reader(readable_id, locks.reader_id);
     if let Some(s) = ws_rec(WsRef(writable_id)).as_deref_mut() {
         if s.writer_handle == Some(locks.writer_id) {
             s.writer_handle = None;
         }
-    }
-    if remove_reader(ReaderRef(locks.reader_id)).is_some() {
-        idalloc::retire_unused_id(locks.reader_id);
     }
     if remove_writer(WriterRef(locks.writer_id)).is_some() {
         idalloc::retire_unused_id(locks.writer_id);

@@ -1121,48 +1121,10 @@
       "why": "Five identically-named per-function AtomicUsize call counters inside streams.rs (one entry covers all five: this inventory keys on file+name). Telemetry, no JS values."
     },
     {
-      "file": "crates/perry-stdlib/src/streams.rs",
-      "name": "READABLE_STREAMS",
-      "verdict": "covered_elsewhere",
-      "scanner": "streams::gc::scan_stream_roots_with (streams/gc.rs, registered through perry_ffi_gc_register_mutable_root_scanner_named as \"stdlib:streams\")",
-      "why": "Chunks, callbacks, pending-read promises and error values are all visited from the child module, so the same-file rule misses it."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams/tee.rs",
-      "name": "TEE_PULLING",
-      "verdict": "not_a_gc_pointer",
-      "why": "HashSet of tee SOURCE stream ids (READABLE_STREAMS keys), not addresses."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams/tee.rs",
-      "name": "TEE_STARTED",
-      "verdict": "not_a_gc_pointer",
-      "why": "HashSet of tee source stream ids, not addresses."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams/transform.rs",
-      "name": "TRANSFORM_BACKPRESSURED_JOBS",
-      "verdict": "covered_elsewhere",
-      "scanner": "streams::gc::scan_transform_deferred_roots (streams/gc.rs, visit_raw_mut_ptr_slot on each job closure)",
-      "why": "The values are ClosureHeader addresses of parked write jobs; visited from streams/gc.rs, so the same-file rule misses it."
-    },
-    {
       "file": "crates/perry-stdlib/src/streams/transform.rs",
       "name": "TRANSFORM_CALLS",
       "verdict": "not_a_gc_pointer",
       "why": "Telemetry call counter for the transform path. Holds a count, never an address; no JS value ever reaches it."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams/transform.rs",
-      "name": "TRANSFORM_PAIRS",
-      "verdict": "not_a_gc_pointer",
-      "why": "Transform readable id -> writable id: both are stream HANDLE IDS."
-    },
-    {
-      "file": "crates/perry-stdlib/src/streams/transform.rs",
-      "name": "TRANSFORM_PENDING_WRITES",
-      "verdict": "not_a_gc_pointer",
-      "why": "Transform writable id -> COUNT of queued write jobs (#6607). No address."
     },
     {
       "file": "crates/perry-stdlib/src/tls/turnloop_server.rs",
