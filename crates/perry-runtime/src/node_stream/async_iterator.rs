@@ -655,7 +655,14 @@ fn iterator_ensure_attached(iterator: f64, stream: f64) {
             return;
         }
     }
-    if has_truthy_hidden(stream, hidden_end_emitted_key()) || stream_destroyed(stream) {
+    // A `net.Socket` (child pipes included) keeps its EOF in its own payload
+    // state, which only its public `readableEnded` getter exposes.
+    if has_truthy_hidden(stream, hidden_end_emitted_key())
+        || stream_destroyed(stream)
+        || crate::value::js_is_truthy(
+            crate::runtime_state_key!(b"readableEnded").read_value(stream),
+        ) != 0
+    {
         iterator_set_stream_ended(iterator);
         return;
     }
@@ -1220,6 +1227,9 @@ pub(crate) fn install_method_listener_readable_async_iterator_symbol(stream: f64
 // The foreign readable under test is child_process's pre-socket stdout.
 #[cfg(all(test, not(unix)))]
 mod foreign_eof_tests;
+
+#[cfg(test)]
+mod public_eof_tests;
 
 #[cfg(test)]
 mod fifo_pending_tests {
