@@ -78,6 +78,9 @@ pub(crate) unsafe fn nm_dispatch_v8(ctx: &NmCtx, module_name: &str, method_name:
                 "writeUint64" => crate::node_v8::v8_serializer_write_uint64(recv, arg(0), arg(1)),
                 "writeDouble" => crate::node_v8::v8_serializer_write_double(recv, arg(0)),
                 "writeRawBytes" => crate::node_v8::v8_serializer_write_raw_bytes(recv, arg(0)),
+                "transferArrayBuffer" => {
+                    crate::node_v8::v8_serializer_transfer_array_buffer(recv, arg(0), arg(1))
+                }
                 "releaseBuffer" => crate::node_v8::v8_serializer_release_buffer(recv),
                 // `_setTreatArrayBufferViewsAsHostObjects` is a no-op for us
                 // (our writer always treats them as host objects).
@@ -95,6 +98,12 @@ pub(crate) unsafe fn nm_dispatch_v8(ctx: &NmCtx, module_name: &str, method_name:
                 "readUint64" => crate::node_v8::v8_deserializer_read_uint64(recv),
                 "readDouble" => crate::node_v8::v8_deserializer_read_double(recv),
                 "readRawBytes" => crate::node_v8::v8_deserializer_read_raw_bytes(recv, arg(0)),
+                "transferArrayBuffer" => {
+                    crate::node_v8::v8_deserializer_transfer_array_buffer(recv, arg(0), arg(1))
+                }
+                "getWireFormatVersion" => {
+                    crate::node_v8::v8_deserializer_get_wire_format_version(recv)
+                }
                 _ => f64::from_bits(JSValue::undefined().bits()),
             }
         }
