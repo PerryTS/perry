@@ -556,6 +556,13 @@ pub(crate) fn for_in_keys_with(value: f64, lazy_shadow: bool) -> *mut ArrayHeade
         current.set_nanbox_f64(super::super::object_ops::js_object_get_prototype_of(
             current.get_nanbox_f64(),
         ));
+        // ChainDesc: a prototype whose descriptor proves no enumerable string
+        // key up to the null prototype contributes nothing.
+        if unsafe {
+            crate::object::layout_probe::chain_glue::for_in_proves_empty(current.get_nanbox_f64())
+        } {
+            break;
+        }
         level += 1;
     }
     out.with_mut_ptr(|out: *mut ArrayHeader| out)

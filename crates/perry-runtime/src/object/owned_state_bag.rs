@@ -29,6 +29,25 @@ pub(crate) const COMPONENT_ASYNC_WRITER: u32 = 27;
 pub(crate) const WASM_TABLE: u32 = 28;
 /// An Intl service instance's internal-slot record (`intl/slot_record.rs`).
 pub(crate) const INTL_SLOTS: u32 = 29;
+/// A marked prototype's ChainDesc node (`layout_probe/chain_glue.rs`): the
+/// malloc address as a plain number word, so the tracer skips it.
+pub(crate) const CHAIN_NODE: u32 = 30;
+
+/// Words from a bag to its element zero. A bag is exact: this function is the
+/// only place that allocates or regrows one; the allocation records exactly
+/// `ArrayHeader` plus `capacity` words (8-aligned, no padding), a bag is never
+/// shifted and never carries named properties (no front offset), and every GC
+/// copy reallocates the recorded size and copies it verbatim. So its elements
+/// start right after its header, and a slot read needs no header-derived base.
+pub(crate) const ELEMENTS_WORDS: usize = std::mem::size_of::<ArrayHeader>() / 8;
+const _: () = assert!(std::mem::size_of::<ArrayHeader>().is_multiple_of(8));
+
+/// The word of `slot` in `bag`, at a fixed offset. The caller has checked
+/// `slot < (*bag).length`.
+#[inline(always)]
+pub(crate) unsafe fn slot_word(bag: *mut ArrayHeader, slot: u32) -> *mut u64 {
+    (bag as *mut u64).add(ELEMENTS_WORDS + slot as usize)
+}
 
 pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut ArrayHeader {
     let _publication = crate::gc::GcSuppressScope::new();
@@ -45,6 +64,11 @@ pub(crate) unsafe fn bag(owner: usize, create: bool, last_slot: u32) -> *mut Arr
     let mut bag = (*meta).owned_state as *mut ArrayHeader;
     if create && (bag.is_null() || (*bag).length <= last_slot) {
         let new = crate::array::js_array_alloc_with_length(last_slot + 1);
+        debug_assert_eq!(
+            crate::array::array_elements_ptr(new),
+            slot_word(new, 0),
+            "a bag's elements start right after its header"
+        );
         if !bag.is_null() {
             for i in 0..(*bag).length {
                 crate::array::js_array_set(new, i, crate::array::js_array_get(bag, i));

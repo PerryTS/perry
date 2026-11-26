@@ -50,7 +50,7 @@ crates/perry-stdlib/src/streams.rs	2171
 # Collection policy and debt accounting share phase state; decomposition is tracked in #1435.
 crates/perry-runtime/src/gc/policy.rs	2892
 # Shape registry table and publication invariants require a coordinated split.
-crates/perry-runtime/src/object/shapes.rs	5628
+crates/perry-runtime/src/object/shapes.rs	5642
 # Generated upstream WinRT collections bindings; preserve the vendor snapshot.
 third_party/windows-winui/windows-collections/src/bindings.rs	3094
 # Generated upstream WinRT async bindings; preserve the vendor snapshot.
@@ -70,7 +70,7 @@ crates/perry-wpfacts/src/gen_expr.rs	2508
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
 crates/perry-wpfacts/src/diagnostics.rs	2102
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
-crates/perry-wpfacts/src/gen/walk.rs	2068
+crates/perry-wpfacts/src/gen/walk.rs	2086
 # Whole-program facts under daily churn while PERRY_FACTS_UNITS stage B prunes the per-unit residue; split once it lands.
 crates/perry-wpfacts/src/solve/lookup.rs	2013
 EOF

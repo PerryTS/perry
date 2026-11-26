@@ -4152,11 +4152,28 @@ unsafe fn install_cached_object_shape_version_impl(
         // descriptor probe (see the function doc above). The proof retire
         // (R5) is not skipped: it is one header load without a proof.
         store_kind::retire_proof_before_stamp(obj, target_shape_id);
+        // A marked prototype's structural change is reported before and
+        // published after the stamp, exactly as the funnel does (DEC 250, the
+        // prototype-validity bump and the ChainDesc rebuild).
         let previous = (*obj).parent_class_id;
+        let marked = crate::object::proto_validity::note_object_shape_stamping(
+            obj as usize,
+            previous,
+            target_shape_id.0,
+            added_key,
+        );
+        let previous = if marked {
+            (*obj).parent_class_id
+        } else {
+            previous
+        };
         (*obj).parent_class_id = match added_key {
             Some(key) => super::shadow::publish_key_add_word(obj, previous, target_shape_id, key).0,
             None => super::shadow::publish_word(obj, previous, target_shape_id).0,
         };
+        if marked {
+            crate::object::proto_validity::note_marked_object_shape_stamped(obj as usize);
+        }
     } else if let Some(key) = added_key {
         stamp_key_add_shape_id_with_carrier_note(obj, target_shape_id, key);
     } else {
