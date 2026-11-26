@@ -895,7 +895,9 @@ pub fn close(id: i64) -> NetResult<()> {
             let mut net = net.borrow_mut();
             let Some(entry) = net.entries.get_mut(&id) else {
                 // Nothing to close (a connect still resolving, or a second
-                // close): whatever was waiting to be written goes with it.
+                // close): the connect and whatever was waiting to be written
+                // go with it, so a later lookup answer finds no plan.
+                net.plans.remove(&id);
                 net.backlogs.remove(&id);
                 return Err(not_found("close"));
             };
@@ -1283,11 +1285,14 @@ fn resolve_completed(subsystem: u8, id: i64, result: OpResult) {
             }
         }
         OpResult::Err(err) => {
-            NET.with(|net| {
+            let had_plan = NET.with(|net| {
                 let mut net = net.borrow_mut();
-                net.plans.remove(&id);
                 net.backlogs.remove(&id);
+                net.plans.remove(&id).is_some()
             });
+            if !had_plan {
+                return;
+            }
             let mut mapped = map_error(err, "getaddrinfo");
             // libuv (and therefore Node) reports a failed name lookup as
             // ENOTFOUND whatever the resolver's own errno was, and Node's own
