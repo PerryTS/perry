@@ -794,11 +794,12 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
     }
     // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle,
     // and field/core access ends before allocation or JS.
-    let (connecting, opened) = unsafe {
+    let (connecting, submitted) = unsafe {
         p::socket_ptr(socket)
             .ok()
             .map_or((false, false), |payload| {
-                ((*payload).ext.connecting, (*payload).ext.opened)
+                let fields = &(*payload).ext;
+                (fields.connecting, fields.queued > fields.cork_bytes.len())
             })
     };
     let had_handle = own != socket || parts.is_some() || connecting;
@@ -850,22 +851,20 @@ pub(crate) fn destroy(owner: f64, error_value: f64) -> f64 {
     if own != socket {
         cache_before_release(parent.get(), socket);
     }
-    // Node's pending writes: a connect that never completed fails them with
-    // ERR_SOCKET_CLOSED_BEFORE_CONNECTION, an open handle cancels them.
+    // Data handed to the transport fails every pending callback as Node's
+    // handle does: ERR_SOCKET_CLOSED_BEFORE_CONNECTION while connecting,
+    // ECANCELED once open. Otherwise each callback gets its own stream error.
     let callback_error = if had_error {
         error_value.get()
-    } else if connecting {
+    } else if submitted && connecting {
         error(
             "ERR_SOCKET_CLOSED_BEFORE_CONNECTION",
             "Socket closed before the connection was established",
         )
-    } else if opened {
+    } else if submitted {
         super::payload_io::socket_error_value("write", "ECANCELED", None)
     } else {
-        error(
-            "ERR_STREAM_DESTROYED",
-            "Cannot call write after a stream was destroyed",
-        )
+        p::undefined()
     };
     cancel_callbacks(owner.get(), state.get(), callback_error);
     // Logical failure follows pending callbacks, independently of the native
@@ -1034,8 +1033,20 @@ unsafe extern "C" fn cancel_tick(closure: *const RawClosureHeader, _: JsThis) ->
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 0));
     let callbacks = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 1));
-    let error = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 2));
+    let failure = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 2));
     let resource = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 3));
+    // An undefined failure is the stream's own destroyed error, named for the
+    // call each callback belongs to.
+    let failure_for = |end: bool| {
+        if !JsValue::from_bits(failure.get().to_bits()).is_undefined() {
+            return failure.get();
+        }
+        let call = if end { "end" } else { "write" };
+        error(
+            "ERR_STREAM_DESTROYED",
+            &format!("Cannot call {call} after a stream was destroyed"),
+        )
+    };
     // End callbacks use their actual dispatch array as `this`, as Node does.
     // Move them out of the detached queue entries, leaving only their indices;
     // the array below is the invocation source, not a receiver-only copy.
@@ -1076,7 +1087,7 @@ unsafe extern "C" fn cancel_tick(closure: *const RawClosureHeader, _: JsThis) ->
             events::call(
                 callback.get(),
                 JsThis::from_f64(p::boxed_addr(end_callbacks.get())),
-                &[error.get()],
+                &[failure_for(true)],
             );
         } else {
             let callback = scope.root_nanbox(f64::from_bits(
@@ -1086,7 +1097,7 @@ unsafe extern "C" fn cancel_tick(closure: *const RawClosureHeader, _: JsThis) ->
                 resource.get(),
                 callback.get(),
                 JsThis::UNDEFINED,
-                &[error.get()],
+                &[failure_for(false)],
             );
         }
     }

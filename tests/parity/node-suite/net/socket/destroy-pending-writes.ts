@@ -1,5 +1,7 @@
-// destroy() fails the writes still pending: before the connection exists they
-// get ERR_SOCKET_CLOSED_BEFORE_CONNECTION, on an open handle ECANCELED.
+// destroy() fails the callbacks still pending. Data already handed to the
+// socket fails them all with ERR_SOCKET_CLOSED_BEFORE_CONNECTION before the
+// connection exists and ECANCELED once open; otherwise (only corked data, or
+// only end()) each gets the stream's own ERR_STREAM_DESTROYED.
 import * as net from "node:net";
 
 const show = (label: string) => (error: any) =>
@@ -26,6 +28,31 @@ open.write("y", show("queued write"));
 open.end(show("end"));
 setTimeout(() => open.destroy(), 20);
 await new Promise((resolve) => open.once("close", resolve));
+
+const endOnly = net.connect(port, "127.0.0.1");
+endOnly.end(show("pre-connect end only"));
+endOnly.destroy();
+await new Promise((resolve) => endOnly.once("close", resolve));
+
+const corkedEarly = net.connect(port, "127.0.0.1");
+corkedEarly.cork();
+corkedEarly.write("x", show("pre-connect corked write"));
+corkedEarly.destroy();
+await new Promise((resolve) => corkedEarly.once("close", resolve));
+
+for (const make of [
+  (socket: net.Socket) => {
+    socket.cork();
+    socket.write("x", show("corked write"));
+  },
+  (socket: net.Socket) => socket.end(show("open end only")),
+]) {
+  const socket = net.connect(port, "127.0.0.1");
+  await new Promise((resolve) => socket.once("connect", resolve));
+  make(socket);
+  socket.destroy();
+  await new Promise((resolve) => socket.once("close", resolve));
+}
 
 for (const peer of peers) peer.destroy();
 server.close(() => console.log("server closed"));
