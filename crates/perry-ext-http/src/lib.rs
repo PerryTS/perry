@@ -203,6 +203,8 @@ pub(crate) enum PendingHttpEvent {
         code: String,
         syscall: String,
         errno: i64,
+        /// The host and port a connect or lookup was attempting.
+        peer: Option<(String, u16)>,
     },
     /// #4905 — the transport deadline from `req.setTimeout(ms)` /
     /// `options.timeout` fired. Drains to the request's `'timeout'`
