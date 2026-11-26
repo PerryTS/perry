@@ -84,8 +84,8 @@
     {
       "path": "crates/perry-runtime/src/string/concat.rs",
       "function": "append_chain_all_heap_strings",
-      "body_sha256": "f0495c8c29ff12b765cce3e18cf4dab3bb7a25fdf2afc59d3dcc6ac8ead1d137",
-      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings. Re-audited #13411: the numeric formatting helper extraction does not change these admission checks or the full-coercion chain fallback.",
+      "body_sha256": "2121c5c5cb77338d6bfa1506d1a4381f0129c287b1f168e0f19e9120a9e6b389",
+      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings. Re-audited #13411: the numeric formatting helper extraction does not change these admission checks or the full-coercion chain fallback. Re-audited 2026-11-26 (string-length-cap): append_chain_all_heap_strings gains one check_string_length(total_u16) after the admission loop, so every non-heap operand has already returned through js_string_concat_chain; no header read or admission check changed.",
       "rule": "mask-cast",
       "support_files": [
         "crates/perry-runtime/src/string/concat.rs"
@@ -94,8 +94,8 @@
     {
       "path": "crates/perry-runtime/src/string/concat.rs",
       "function": "append_chain_all_heap_strings",
-      "body_sha256": "f0495c8c29ff12b765cce3e18cf4dab3bb7a25fdf2afc59d3dcc6ac8ead1d137",
-      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings. Re-audited #13411: the numeric formatting helper extraction does not change these admission checks or the full-coercion chain fallback.",
+      "body_sha256": "2121c5c5cb77338d6bfa1506d1a4381f0129c287b1f168e0f19e9120a9e6b389",
+      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings. Re-audited #13411: the numeric formatting helper extraction does not change these admission checks or the full-coercion chain fallback. Re-audited 2026-11-26 (string-length-cap): append_chain_all_heap_strings gains one check_string_length(total_u16) after the admission loop, so every non-heap operand has already returned through js_string_concat_chain; no header read or admission check changed.",
       "rule": "heap-tag-only",
       "support_files": [
         "crates/perry-runtime/src/string/concat.rs"
@@ -104,8 +104,8 @@
     {
       "path": "crates/perry-runtime/src/string/concat.rs",
       "function": "concat_chain_all_heap_strings_no_collect",
-      "body_sha256": "cd53748a877b7d63ebca7409e753063110393111942e50634b300c97086077ed",
-      "claim": "The admission pass returns None for every non-heap tag before dereferencing; concat_chain_sized continues into the rooted full-coercion path.",
+      "body_sha256": "3df53bd3070d380183c71198a4be91ea745458800040d98dcb0c809d43121f14",
+      "claim": "The admission pass returns None for every non-heap tag before dereferencing; concat_chain_sized continues into the rooted full-coercion path. Re-audited 2026-11-26 (string-length-cap): one check_string_length(total_u16) after the size loop, before the no-collect allocation; every part has already passed the heap-tag admission, no header read or admission check changed.",
       "rule": "mask-cast",
       "support_files": [
         "crates/perry-runtime/src/string/concat.rs"
@@ -114,8 +114,8 @@
     {
       "path": "crates/perry-runtime/src/string/concat.rs",
       "function": "concat_chain_all_heap_strings_no_collect",
-      "body_sha256": "cd53748a877b7d63ebca7409e753063110393111942e50634b300c97086077ed",
-      "claim": "The admission pass returns None for every non-heap tag before dereferencing; concat_chain_sized continues into the rooted full-coercion path.",
+      "body_sha256": "3df53bd3070d380183c71198a4be91ea745458800040d98dcb0c809d43121f14",
+      "claim": "The admission pass returns None for every non-heap tag before dereferencing; concat_chain_sized continues into the rooted full-coercion path. Re-audited 2026-11-26 (string-length-cap): one check_string_length(total_u16) after the size loop, before the no-collect allocation; every part has already passed the heap-tag admission, no header read or admission check changed.",
       "rule": "heap-tag-only",
       "support_files": [
         "crates/perry-runtime/src/string/concat.rs"
@@ -238,8 +238,8 @@
     {
       "path": "crates/perry-runtime/src/string/concat_parts.rs",
       "function": "concat_parts_general",
-      "body_sha256": "0658ecb822e513a89f022ab0fe667f667c01c1cf3380d2f2bfc4a293c6677be2",
-      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number arm, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header. Re-audited 2026-11-15 against d0f763f475 (#14658): the INT32 digit arm is deleted (a Number has one encoding); the exact-STRING_TAG arm and the js_jsvalue_to_string fallback are unchanged. Re-audited 2026-11-23 (raw-handle ratchet): the rooted piece is read through with_const_ptr at its use; the STRING_TAG + is_valid_string_ptr admission and the js_jsvalue_to_string fallback are unchanged.",
+      "body_sha256": "48c0d927a667a6a3c2321fbf64d4676f9647e583c8b1930d83624827b7cd2fcc",
+      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number arm, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header. Re-audited 2026-11-15 against d0f763f475 (#14658): the INT32 digit arm is deleted (a Number has one encoding); the exact-STRING_TAG arm and the js_jsvalue_to_string fallback are unchanged. Re-audited 2026-11-23 (raw-handle ratchet): the rooted piece is read through with_const_ptr at its use; the STRING_TAG + is_valid_string_ptr admission and the js_jsvalue_to_string fallback are unchanged. Re-audited 2026-11-26 (string-length-cap): one check_string_length(total_u16) after the part loop, before the allocation; no part read changed.",
       "rule": "mask-cast",
       "support_files": []
     },
@@ -372,15 +372,15 @@
     {
       "path": "crates/perry-runtime/src/string/concat_parts.rs",
       "function": "concat_parts_general",
-      "body_sha256": "0658ecb822e513a89f022ab0fe667f667c01c1cf3380d2f2bfc4a293c6677be2",
-      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number arm, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header. Re-audited 2026-11-15 against d0f763f475 (#14658): the INT32 digit arm is deleted (a Number has one encoding); the exact-STRING_TAG arm and the js_jsvalue_to_string fallback are unchanged. Re-audited 2026-11-23 (raw-handle ratchet): the rooted piece is read through with_const_ptr at its use; the STRING_TAG + is_valid_string_ptr admission and the js_jsvalue_to_string fallback are unchanged.",
+      "body_sha256": "48c0d927a667a6a3c2321fbf64d4676f9647e583c8b1930d83624827b7cd2fcc",
+      "claim": "Only a part tagged exactly 0x7FFF (STRING_TAG) that passes is_valid_string_ptr is read as a StringHeader. Inline strings carry SHORT_STRING_TAG, miss that arm and the number arm, and reach js_jsvalue_to_string, which materializes a heap string that is then rooted; no inline payload is dereferenced as a header. Re-audited 2026-11-15 against d0f763f475 (#14658): the INT32 digit arm is deleted (a Number has one encoding); the exact-STRING_TAG arm and the js_jsvalue_to_string fallback are unchanged. Re-audited 2026-11-23 (raw-handle ratchet): the rooted piece is read through with_const_ptr at its use; the STRING_TAG + is_valid_string_ptr admission and the js_jsvalue_to_string fallback are unchanged. Re-audited 2026-11-26 (string-length-cap): one check_string_length(total_u16) after the part loop, before the allocation; no part read changed.",
       "rule": "heap-tag-only",
       "support_files": []
     }
   ],
   "support_files": {
     "crates/perry-runtime/src/node_stream_event_emitter.rs": "9b1b4341af484d21ad59d70c2ec44513821d5b599ebcb681b2d0b0c6061fbeb8",
-    "crates/perry-runtime/src/string/concat.rs": "d5e1e8718c228edda41eac6cbbb31d634a64f64248f4209c25c90099f02388f5",
+    "crates/perry-runtime/src/string/concat.rs": "a9bc2bd38f4f23f4e177bf154e99d7cb58dbbde2495db9b30efca79e2f89ce40",
     "crates/perry-runtime/src/object/builtin_proto_entries.rs": "958ee4c11de504d165af8cceedecd3f0fd41f6585cf92645afa3087ecef3edae",
     "crates/perry-runtime/src/object/property_ops/put_value.rs": "ff25dbdcced834a1a9704b95b70b1baf7bd018b793d18c789efc1cd328318269",
     "crates/perry-runtime/src/array/join.rs": "c292af7990171f08b140aad3a2c88dd775dd47d098ad5e2f6f1a1e37a5785041",

@@ -1659,7 +1659,7 @@
     "IDALLOC"
    ],
    "verdict": "no_heap_address",
-   "why": "Web Streams handle-id allocator state (next id, free/retired VecDeques, pooled/pipe HashSets of ids) in the fixed STREAM_HANDLE_ID band; ids index the process-global READABLE_STREAMS/WRITERS/... tables (streams.rs:575), no addresses."
+   "why": "Web Streams handle-id allocator state (next id, free/retired VecDeques, pooled HashSet of ids) in the fixed STREAM_HANDLE_ID band; ids index the process-global record registries in streams/state.rs, no addresses."
   },
   {
    "file": "crates/perry-stdlib/src/streams/idalloc.rs",
@@ -1838,25 +1838,25 @@
    "why": "Counter of js_iter_result_set calls; fetch_add only, never an address."
   },
   {
-   "file": "crates/perry-stdlib/src/streams.rs",
+   "file": "crates/perry-stdlib/src/streams/state.rs",
    "names": [
     "READABLE_STREAMS"
    ],
    "verdict": "thread_exit_invalidated",
-   "why": "Entries hold the creating thread's source callbacks, queued chunks, pending read promises and error values; dropped when any lies in the freed blocks or a linked reader/transform is dead.",
+   "why": "Entries hold the creating thread's source callbacks, queued chunks, pending read promises, error values, and the folded per-stream state (tee links, parked BYOB reads, transform parked write promises and backpressured write jobs, expandos); dropped when any lies in the freed blocks or a linked reader/writer/transform is dead.",
    "hook": "release_web_streams_in_freed_ranges"
   },
   {
-   "file": "crates/perry-stdlib/src/streams.rs",
+   "file": "crates/perry-stdlib/src/streams/state.rs",
    "names": [
     "WRITABLE_STREAMS"
    ],
    "verdict": "thread_exit_invalidated",
-   "why": "Entries hold sink callbacks, queued chunk bits with write promises, and ready/closed promises from the creating thread's arena; dropped with the dead stream family.",
+   "why": "Entries hold sink callbacks, queued chunk bits with write promises, ready/closed promises, the transform pending-close promise and expandos from the creating thread's arena; dropped with the dead stream family.",
    "hook": "release_web_streams_in_freed_ranges"
   },
   {
-   "file": "crates/perry-stdlib/src/streams.rs",
+   "file": "crates/perry-stdlib/src/streams/state.rs",
    "names": [
     "TRANSFORM_STREAMS"
    ],
@@ -1865,16 +1865,16 @@
    "hook": "release_web_streams_in_freed_ranges"
   },
   {
-   "file": "crates/perry-stdlib/src/streams.rs",
+   "file": "crates/perry-stdlib/src/streams/state.rs",
    "names": [
     "READERS"
    ],
    "verdict": "thread_exit_invalidated",
-   "why": "Entries hold the closed promise from the thread that called getReader(); released with their stream.",
+   "why": "Entries hold the closed promise from the thread that called getReader() (or ran pipeTo) and expandos; released with their stream.",
    "hook": "release_web_streams_in_freed_ranges"
   },
   {
-   "file": "crates/perry-stdlib/src/streams.rs",
+   "file": "crates/perry-stdlib/src/streams/state.rs",
    "names": [
     "WRITERS"
    ],
@@ -2651,16 +2651,6 @@
    "why": "OnceLock of the embedded update-notifier config (owned Strings / u64s) parsed from the compiled-in blob at startup; Rust-owned data."
   },
   {
-   "file": "crates/perry-stdlib/src/streams/byob.rs",
-   "names": [
-    "BYOB_PENDING"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Parked read(view) entries hold the reading thread's promise and view; a freed one kills its stream and the queue is evicted with it.",
-   "hook": "release_web_streams_in_freed_ranges",
-   "hook_file": "crates/perry-stdlib/src/streams.rs"
-  },
-  {
    "file": "crates/perry-runtime/src/os_process_streams.rs",
    "names": [
     "STDIN_DATA_LISTENERS"
@@ -3014,38 +3004,6 @@
    "hook": "release_media_callbacks_in_freed_ranges"
   },
   {
-   "file": "crates/perry-stdlib/src/streams/tee.rs",
-   "names": [
-    "TEE_SOURCE_BRANCHES"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Map source stream id -> (branch id, branch id); ids minted by process-global streams IDALLOC (next_stream_id) indexing the process-global READABLE_STREAMS table."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/tee.rs",
-   "names": [
-    "TEE_BRANCH_SOURCE"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Map branch stream id -> source stream id; process-global stream ids into the process-global READABLE_STREAMS table."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/tee.rs",
-   "names": [
-    "TEE_PULLING"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Set of tee source stream ids with a pull job queued; process-global stream ids."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/tee.rs",
-   "names": [
-    "TEE_STARTED"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Set of tee source stream ids whose pull pipeline delivered once; process-global stream ids."
-  },
-  {
    "file": "crates/perry-runtime/src/messaging.rs",
    "names": [
     "WORKER_THREADS_MESSAGE_CHANNEL_FACTORY"
@@ -3168,15 +3126,6 @@
    "verdict": "thread_exit_invalidated",
    "why": "v8.promiseHooks records hold raw closure pointers from any thread; a record with a freed callback is disabled at thread exit (kept in place, its stop function indexes it).",
    "hook": "release_promise_hooks_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/expando.rs",
-   "names": [
-    "STREAM_EXPANDO"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Expando values live in the setting thread's heap though the stream id is process-global; freed values are removed property by property.",
-   "hook": "release_stream_expandos_in_freed_ranges"
   },
   {
    "file": "crates/perry-runtime/src/symbol.rs",
@@ -3385,52 +3334,6 @@
    ],
    "verdict": "no_heap_address",
    "why": "u64 handle -> Vec<ImageInfo> (Strings + u64 size); Rust-owned."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/transform.rs",
-   "names": [
-    "TRANSFORM_PAIRS"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Writable stream id -> transform stream id (transform.rs:126); both ids come from the process-global IDALLOC band allocator (streams/idalloc.rs) indexing process-global stream registries."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/transform.rs",
-   "names": [
-    "TRANSFORM_WRITE_RELEASES"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Raw addresses of write promises parked on backpressure; a freed one kills the transform family and its side-table rows.",
-   "hook": "release_web_streams_in_freed_ranges",
-   "hook_file": "crates/perry-stdlib/src/streams.rs"
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/transform.rs",
-   "names": [
-    "TRANSFORM_PENDING_WRITES"
-   ],
-   "verdict": "no_heap_address",
-   "why": "Writable stream id -> count of queued transform write jobs (transform.rs:261-265, 413); ids and counts only."
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/transform.rs",
-   "names": [
-    "TRANSFORM_BACKPRESSURED_JOBS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Raw closure addresses of deferred write jobs from the writing thread's arena; evicted with the dead transform family.",
-   "hook": "release_web_streams_in_freed_ranges",
-   "hook_file": "crates/perry-stdlib/src/streams.rs"
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/transform.rs",
-   "names": [
-    "TRANSFORM_PENDING_CLOSE"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Raw close-request promise address from the calling thread's arena; evicted with the dead transform family.",
-   "hook": "release_web_streams_in_freed_ranges",
-   "hook_file": "crates/perry-stdlib/src/streams.rs"
   },
   {
    "file": "crates/perry-runtime/src/node_submodules/mod.rs",

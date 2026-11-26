@@ -1059,8 +1059,9 @@ pub(super) fn validate_windows_subsystem(
 
 /// #6125: resolve the CPU-baseline knob into the canonical `PERRY_TARGET_CPU`
 /// env var, which codegen (`clang -march`/`-mcpu`), the object/build cache
-/// keys, and the auto-optimize runtime/stdlib rebuild (`-C target-cpu`) all
-/// honor uniformly.
+/// keys honor uniformly. Unset, codegen uses the target triple's fixed
+/// baseline (`linker::baseline_cpu_for_target`); `native` is only ever an
+/// explicit choice.
 ///
 /// Precedence: `--march` → `PERRY_TARGET_CPU` already in the environment →
 /// perry.toml `[build] march` → `[build] native_tuning` (`false` is shorthand

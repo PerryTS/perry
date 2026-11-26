@@ -610,9 +610,9 @@ fn test_server_is_local() {
 }
 
 #[test]
-fn test_resolve_build_march_precedence_and_linux_default() {
+fn test_resolve_build_march_precedence_and_unset_default() {
     // #6125 — CLI --march > [build] march > [build] native_tuning shorthand
-    // > linux portable default > nothing.
+    // > nothing (target baseline).
     fn bc(march: Option<&str>, native_tuning: Option<bool>) -> config_types::BuildConfig {
         config_types::BuildConfig {
             out_dir: None,
@@ -624,33 +624,28 @@ fn test_resolve_build_march_precedence_and_linux_default() {
     // CLI flag wins over everything.
     let cfg = bc(Some("x86-64-v3"), Some(false));
     assert_eq!(
-        resolve_build_march(Some("znver2"), Some(&cfg), true).as_deref(),
+        resolve_build_march(Some("znver2"), Some(&cfg)).as_deref(),
         Some("znver2")
     );
     // [build] march wins over native_tuning.
     assert_eq!(
-        resolve_build_march(None, Some(&cfg), true).as_deref(),
+        resolve_build_march(None, Some(&cfg)).as_deref(),
         Some("x86-64-v3")
     );
     // native_tuning shorthand: false → generic, true → native.
     assert_eq!(
-        resolve_build_march(None, Some(&bc(None, Some(false))), true).as_deref(),
+        resolve_build_march(None, Some(&bc(None, Some(false)))).as_deref(),
         Some("generic")
     );
     assert_eq!(
-        resolve_build_march(None, Some(&bc(None, Some(true))), true).as_deref(),
+        resolve_build_march(None, Some(&bc(None, Some(true)))).as_deref(),
         Some("native")
     );
-    // Unset on linux → portable x86-64-v2 default (whitespace-only march
-    // counts as unset).
+    // Unset (whitespace-only march counts as unset) → nothing is sent, on
+    // every target: the worker uses the target's fixed baseline.
+    assert_eq!(resolve_build_march(None, None), None);
     assert_eq!(
-        resolve_build_march(None, None, true).as_deref(),
-        Some("x86-64-v2")
+        resolve_build_march(Some("  "), Some(&bc(Some(" "), None))),
+        None
     );
-    assert_eq!(
-        resolve_build_march(Some("  "), Some(&bc(Some(" "), None)), true).as_deref(),
-        Some("x86-64-v2")
-    );
-    // Unset on a non-linux target → nothing is sent.
-    assert_eq!(resolve_build_march(None, None, false), None);
 }

@@ -1658,8 +1658,9 @@ fn assemble(
 ) -> Result<()> {
     // Mirror the codegen's CPU selection onto the assembler.
     //
-    // Perry compiles with `-mcpu=native`, so on a host with SVE (Graviton, and
-    // any aarch64 server part) LLVM emits SVE instructions -- `mov z1.d, #…`.
+    // With `--march native` (or a CPU name such as `neoverse-n2`) on a host
+    // with SVE (Graviton, and any aarch64 server part) LLVM emits SVE
+    // instructions -- `mov z1.d, #…`.
     // Assembling that text with a clang that was given no `-mcpu` fails with
     // `instruction requires: sve or sme`, because the assembler defaults to the
     // portable baseline while the code generator did not.

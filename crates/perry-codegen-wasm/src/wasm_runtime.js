@@ -701,9 +701,9 @@ function buildImports() {
       // class_set_method(class_id_str, method_name_str, func_table_idx, proto_kind)
       class_set_method: (classId, methodName, funcIdx, protoKind) => {
         const cls = getString(classId);
+        const name = getString(methodName);
         if (!classMethodTable[cls]) classMethodTable[cls] = {};
-        classMethodTable[cls][getString(methodName)] = funcIdx | 0;
-        if (protoKind) __methodProtoKinds.set(funcIdx | 0, protoKind | 0);
+        classMethodTable[cls][name] = new __FnInfo(name, 0, protoKind, funcIdx);
       },
       // class_call_method(handle, method_name_id, args_array_handle) -> result
       // method_name_id is a plain f64 string table index (not NaN-boxed).
@@ -717,7 +717,7 @@ function buildImports() {
           while (cls) {
             const methods = classMethodTable[cls];
             if (methods && mname in methods) {
-              const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
+              const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname].funcIdx);
               if (fn) {
                 const args = getHandle(argsHandle) || [];
                 // Pad for omitted TS optional params (Issue #1035).
@@ -1686,13 +1686,16 @@ class __PerryClosure {
     return #info in this ? this.#info?.length : undefined;
   }
 }
-// A compiled function's own facts, made once per function by `fn_info` when the
-// program starts; every closure of the function points at the one record.
+// A compiled function's own facts. `fn_info` makes a declaration's or closure's once when
+// the program starts, and every closure of the function points at it. A class member's is
+// made by its registration and held by its class's method table or template, with the
+// member's table index.
 class __FnInfo {
-  constructor(name, length, protoKind) {
+  constructor(name, length, protoKind, funcIdx) {
     this.name = name;
     this.length = length;
     this.protoKind = protoKind | 0;
+    this.funcIdx = funcIdx | 0;
     Object.freeze(this);
   }
 }
@@ -1728,8 +1731,6 @@ const __fnKindProtos = [
   Object.getPrototypeOf(function* () {}),
   Object.getPrototypeOf(async function* () {}),
 ];
-// A compiled method's `__fnKindProtos` index by table index, when not plain.
-const __methodProtoKinds = new Map();
 // A host function standing for a function of `kind` has that kind's prototype.
 function __withKindProto(fn, kind) {
   if (kind) Object.setPrototypeOf(fn, __fnKindProtos[kind]);
@@ -1742,13 +1743,9 @@ function __programPrototype(obj, proto) {
     : proto;
 }
 
-// Class method/static/parent tables
+// Class method/static/parent tables. A class's instance methods: name -> the method's
+// `__FnInfo` (`class_set_method`, `class_define_computed`).
 const classMethodTable = {};
-// A class's constructor `length`, and its methods' by name (instance and static): facts
-// of the class's members, registered with them.
-const classCtorLengthTable = Object.create(null);
-const classMethodLengthTable = Object.create(null);
-const classStaticMethodLengthTable = Object.create(null);
 // A class's named and computed instance accessors, and its named static ones: key ->
 // { get, set } function table indices, -1 for none (`class_set_accessor`).
 const classAccessorTable = Object.create(null);
@@ -1756,7 +1753,7 @@ const classStaticAccessorTable = Object.create(null);
 // The resolved keys of a class's computed fields (`__perry_computed_field_key_*`, see
 // `lower_class_prop`); its static fields are properties of its class value.
 const classStaticTable = {};
-// A class's named static methods: name -> function table index (`class_set_static_method`).
+// A class's named static methods: name -> the method's `__FnInfo` (`class_set_static_method`).
 // Null-prototype, so a method named `__proto__` is an own entry.
 const classStaticMethodTable = Object.create(null);
 const classParentTable = {};
@@ -1956,7 +1953,7 @@ function __classCtor(className, ctorIdx, caps, base, init = 0) {
     return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
   };
   Object.defineProperty(ctor, 'name', { value: className });
-  Object.defineProperty(ctor, 'length', { value: ctorIdx < 0 ? 0 : classCtorLengthTable[className] ?? 0 });
+  Object.defineProperty(ctor, 'length', { value: ctorIdx < 0 ? 0 : __classTemplate(className).ctor?.length ?? 0 });
   // Host `instanceof` walks the class table as class_instanceof does; an instance of
   // an evaluated template answers for its evaluation, as class_instanceof_value does.
   Object.defineProperty(ctor, Symbol.hasInstance, {
@@ -1994,8 +1991,8 @@ function __classCtor(className, ctorIdx, caps, base, init = 0) {
   }
   // Own named static members only: an inherited one is found along [[Prototype]]
   // (`__linkClassParent`), where a nearer static field shadows it.
-  for (const [m, idx] of Object.entries(classStaticMethodTable[className] || {})) {
-    __defineHidden(ctor, m, evaluated ? __classStaticMethodFn(className, m, idx, ctor) : __classStaticMethodValue(className, m));
+  for (const [m, info] of Object.entries(classStaticMethodTable[className] || {})) {
+    __defineHidden(ctor, m, evaluated ? __classStaticMethodFn(className, m, info, ctor) : __classStaticMethodValue(className, m));
   }
   for (const [key, { get, set }] of Object.entries(classStaticAccessorTable[className] || {})) {
     __defineAccessor(ctor, key, get, set, evaluated ? ctor : undefined);
@@ -2031,11 +2028,13 @@ function __isInternalKey(obj, key) {
   return __isComputedKeySlot(key) && __perryClassCtors.has(obj)
     && !__reflectApply(Object.prototype.propertyIsEnumerable, obj, [key]);
 }
+// A class's template, by name: its first evaluation, capture slots, prototype, fields,
+// and its constructor's `__FnInfo` (`class_set_ctor`).
 const __classTemplates = new Map();
 let __classEnvCall = null;
 function __classTemplate(className) {
   let t = __classTemplates.get(className);
-  if (!t) __classTemplates.set(className, (t = { first: undefined, slots: [], proto: undefined, fields: new Set() }));
+  if (!t) __classTemplates.set(className, (t = { first: undefined, slots: [], proto: undefined, fields: new Set(), ctor: undefined }));
   return t;
 }
 function __classEvaluate(className, ctorIdx, caps, base, init) {
@@ -2079,9 +2078,9 @@ function __defineHidden(target, key, value) {
 // the receiver it is called with is armed for that one method, which takes it on
 // entry (`class_static_method_this`), so a direct `C.m()` it makes sees `C`.
 // `evaluation`, a class expression's evaluation, supplies its captures.
-function __classStaticMethodFn(template, name, funcIdx, evaluation) {
+function __classStaticMethodFn(template, name, info, evaluation) {
   const fn = function (...args) {
-    const impl = wasmInstance.exports.__indirect_function_table.get(funcIdx);
+    const impl = wasmInstance.exports.__indirect_function_table.get(info.funcIdx);
     const bits = args.map(__jsValueToBits);
     const outerThis = __classStaticThis;
     const outerCall = __classEnvCall;
@@ -2095,9 +2094,9 @@ function __classStaticMethodFn(template, name, funcIdx, evaluation) {
     }
   };
   Object.defineProperty(fn, 'name', { value: name });
-  Object.defineProperty(fn, 'length', { value: classStaticMethodLengthTable[template]?.[name] ?? 0 });
+  Object.defineProperty(fn, 'length', { value: info.length });
   __classMethodFns.add(fn);
-  return __withKindProto(fn, __methodProtoKinds.get(funcIdx));
+  return __withKindProto(fn, info.protoKind);
 }
 // The i64 entry an array bridge calls for `cb`: a Perry closure's compiled function
 // after its captures, or a class method value with no table entry of its own through
@@ -2160,17 +2159,16 @@ function __classAccessorPair(table, className, key, computed) {
 // A computed member (`RegisterClassComputedMethod` / `...Accessor`). An instance
 // member goes in the template's method table, so every evaluation's instances
 // dispatch it; a static one is a property of the class value.
-function __classDefineComputed(className, ctorIdx, key, kind, isStatic, a, b, protoKind, length) {
+function __classDefineComputed(className, ctorIdx, key, kind, isStatic, a, b, info) {
   const evaluation = __classDefiningOf(className);
-  if (protoKind) __methodProtoKinds.set(a, protoKind);
   if (isStatic) {
     const target = evaluation || __classRef(className, ctorIdx);
     if (kind === 0) {
       const fn = function (...args) { return __classMemberCall(a, evaluation, this, args); };
       Object.defineProperty(fn, 'name', { value: __methodKeyName(key) });
-      Object.defineProperty(fn, 'length', { value: length });
+      Object.defineProperty(fn, 'length', { value: info.length });
       __classMethodFns.add(fn);
-      __defineHidden(target, key, __withKindProto(fn, protoKind));
+      __defineHidden(target, key, __withKindProto(fn, info.protoKind));
       return;
     }
     __defineAccessor(target, key, a, b, evaluation);
@@ -2178,8 +2176,7 @@ function __classDefineComputed(className, ctorIdx, key, kind, isStatic, a, b, pr
   }
   const methods = (classMethodTable[className] ||= {});
   if (kind === 0) {
-    methods[key] = a;
-    (classMethodLengthTable[className] ||= Object.create(null))[key] = length;
+    methods[key] = info;
     if (evaluation) __defineHidden(evaluation.prototype, key, __classMethodValue(className, key, evaluation));
     // A prototype made before this member was defined gets it too.
     const proto = __classTemplate(className).proto;
@@ -2784,10 +2781,11 @@ const __memDispatch = {
     receivesThis
       ? new __PerryReceiverClosure(funcIdx, captureCount, info)
       : new __PerryClosure(funcIdx, captureCount, info),
-  // A class constructor's `length` (see __classCtor), registered with the class's
-  // methods and the same arguments.
-  class_set_ctor_length: (classId, _name, _funcIdx, _protoKind, length) => {
-    classCtorLengthTable[String(classId)] = length;
+  // A class constructor's `__FnInfo`, registered with the class's methods and the same
+  // arguments, kept on the class's template (see __classCtor).
+  class_set_ctor: (classId, _name, funcIdx, _protoKind, length) => {
+    const cls = String(classId);
+    __classTemplate(cls).ctor = new __FnInfo(cls, length, 0, funcIdx);
   },
   // A function declaration used as a value: one closure per function, so it keeps its
   // identity and properties across reads, with the `prototype` object an ordinary
@@ -3029,7 +3027,8 @@ const __memDispatch = {
   },
   class_eval_end: (className) => __classDefining.pop(),
   class_define_computed: (className, ctorIdx, key, kind, isStatic, a, b, protoKind, length) =>
-    __classDefineComputed(String(className), ctorIdx | 0, key, kind | 0, !!isStatic, a | 0, b | 0, protoKind | 0, length | 0),
+    __classDefineComputed(String(className), ctorIdx | 0, key, kind | 0, !!isStatic, a | 0, b | 0,
+      (kind | 0) === 0 ? new __FnInfo(__methodKeyName(key), length | 0, protoKind, a | 0) : undefined),
   // `static [key] = value` of a class declared once.
   class_static_define: (className, ctorIdx, key, value) => {
     const cls = String(className);
@@ -3112,18 +3111,15 @@ const __memDispatch = {
   },
   class_set_method: (classId, methodName, funcIdx, protoKind, length) => {
     const cls = String(classId);
+    const name = String(methodName);
     if (!classMethodTable[cls]) classMethodTable[cls] = {};
-    classMethodTable[cls][String(methodName)] = funcIdx | 0;
-    if (protoKind) __methodProtoKinds.set(funcIdx | 0, protoKind | 0);
-    (classMethodLengthTable[cls] ||= Object.create(null))[String(methodName)] = length;
+    classMethodTable[cls][name] = new __FnInfo(name, length, protoKind, funcIdx);
   },
   // A class value made before registration gets the method too.
   class_set_static_method: (classId, methodName, funcIdx, protoKind, length) => {
     const cls = String(classId);
-    if (protoKind) __methodProtoKinds.set(funcIdx | 0, protoKind | 0);
     const name = String(methodName);
-    (classStaticMethodLengthTable[cls] ||= Object.create(null))[name] = length;
-    (classStaticMethodTable[cls] ||= Object.create(null))[name] = funcIdx | 0;
+    (classStaticMethodTable[cls] ||= Object.create(null))[name] = new __FnInfo(name, length, protoKind, funcIdx);
     __classStaticMethodValues.get(cls)?.delete(name);
     const ref = __classRefs.get(cls);
     if (ref) __defineHidden(ref, name, __classStaticMethodValue(cls, name));
@@ -3148,7 +3144,7 @@ const __memDispatch = {
       while (cls) {
         const methods = classMethodTable[cls];
         if (methods && mname in methods) {
-          const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
+          const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname].funcIdx);
           if (fn) {
             const args = Array.isArray(argsArr) ? argsArr : [];
             // WASM functions use i64 (BigInt) params/returns.
@@ -6887,16 +6883,17 @@ function __classMethodValue(cls, mname, evaluation) {
   const values = cache ? (cache.methods ||= new Map()) : __classMethodValues;
   let byName = values.get(cls);
   if (!byName) values.set(cls, (byName = new Map()));
-  const funcIdx = classMethodTable[cls][mname];
+  const info = classMethodTable[cls][mname];
+  const funcIdx = info.funcIdx;
   let fn = byName.get(mname);
   if (!fn || fn.funcIdx !== funcIdx) {
     fn = function (...args) { return __classMemberCall(funcIdx, evaluation, this, args); };
     Object.defineProperty(fn, 'name', { value: __methodKeyName(mname) });
-    Object.defineProperty(fn, 'length', { value: classMethodLengthTable[cls]?.[mname] ?? 0 });
+    Object.defineProperty(fn, 'length', { value: info.length });
     __defineHidden(fn, 'funcIdx', funcIdx);
     __defineHidden(fn, 'captures', [TAG_UNDEFINED]);
     __classMethodFns.add(fn);
-    __withKindProto(fn, __methodProtoKinds.get(funcIdx));
+    __withKindProto(fn, info.protoKind);
     byName.set(mname, fn);
   }
   return fn;
@@ -7053,7 +7050,7 @@ function __classDispatch(objVal, mname, rawArgs) {
       // Own keys only (see __classHasMethod): `in` finds Object.prototype's `toString`
       // in a subclass's table and hands a host function to Table.get.
       if (methods && __hasOwn(methods, mname)) {
-        const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname]);
+        const fn = wasmInstance?.exports.__indirect_function_table?.get(methods[mname].funcIdx);
         if (fn) {
           // Pad for omitted TS optional params (Issue #1035).
           const padded = __padBigintArgs(fn, 1, rawArgs.map(v => __jsValueToBits(v)));

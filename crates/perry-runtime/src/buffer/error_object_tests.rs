@@ -2,7 +2,7 @@
 //! range or fd are real error objects (`ErrorHeader`, `GC_TYPE_ERROR`) of
 //! the right kind, with the message they always had and an own `code`.
 
-use crate::error::{ErrorHeader, ERROR_KIND_RANGE_ERROR, ERROR_KIND_TYPE_ERROR};
+use crate::error::{ErrorHeader, ERROR_KIND_ERROR, ERROR_KIND_RANGE_ERROR, ERROR_KIND_TYPE_ERROR};
 use crate::string::StringHeader;
 
 unsafe fn text(s: *const StringHeader) -> String {
@@ -100,4 +100,25 @@ fn buffer_concat_decodes_list_elements_by_their_tag() {
     let list = crate::array::js_array_push_f64(list, crate::value::js_nanbox_pointer(part as i64));
     let joined = super::js_buffer_concat(list);
     assert_eq!(unsafe { super::store::length(joined as usize) }, 3);
+}
+
+#[test]
+fn decode_past_the_string_limit_is_a_plain_error() {
+    // Node: `Error [ERR_STRING_TOO_LONG]`, not the RangeError string ops throw.
+    let caught = crate::exception::catch_thrown(|| crate::string::throw_string_too_long())
+        .expect_err("the helper throws");
+    let addr = crate::value::js_nanbox_get_pointer(caught.value()) as usize;
+    unsafe {
+        assert!(
+            crate::error::ptr_is_native_error(addr),
+            "not an ErrorHeader"
+        );
+        let err = addr as *const ErrorHeader;
+        assert_eq!((*err).error_kind, ERROR_KIND_ERROR);
+        assert_eq!(
+            text((*err).message),
+            "Cannot create a string longer than 0x1fffffe8 characters"
+        );
+    }
+    assert_eq!(crate::exception::js_has_exception(), 0);
 }

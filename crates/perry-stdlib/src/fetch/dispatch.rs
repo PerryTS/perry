@@ -36,9 +36,14 @@ pub extern "C" fn js_response_body_init_reset() -> f64 {
 /// must be DRAINED from the stream's buffered chunks instead. Any non-stream
 /// value falls back to the normal coercion, so plain string bodies
 /// (`c.json`/`c.text`) are unaffected.
+///
+/// A binary body (Buffer / typed array / ArrayBuffer / Blob / IncomingMessage)
+/// returns null and leaves its bytes in `PENDING_FETCH_BODY_BYTES` for the
+/// constructor, so a body over the maximum string length is still accepted.
 #[no_mangle]
 pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
     let _fetch_roots = lifecycle::pin_handles(&[value]);
+    set_pending_fetch_body_bytes(None);
     set_pending_fetch_body_content_type(
         JSValue::from_bits(value.to_bits())
             .is_any_string()
@@ -48,10 +53,12 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
     // copy its RAW bytes. Such a value is a BufferHeader/TypedArrayHeader
     // pointer, NOT a StringHeader; passing it straight to `string_from_header`
     // read the byte length but data at the wrong offset (zero-fill), so the
-    // payload came back all zeroes (#5435). Materialize the bytes into a heap
-    // StringHeader so `js_response_new`'s lossless byte read recovers them.
+    // payload came back all zeroes (#5435). The copied bytes go to the
+    // constructor out of band (null pointer here), never as a StringHeader: a
+    // binary body may exceed the maximum string length.
     if let Some(bytes) = unsafe { body_value_buffer_bytes(value) } {
-        return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
+        set_pending_fetch_body_bytes(Some(bytes));
+        return 0;
     }
     // A Blob / File body contributes its raw bytes. Blob handles are handle-band
     // ids (>= FETCH_HANDLE_BAND_START, 0x40000), NOT real pointers, so they must
@@ -64,7 +71,8 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
             let addr = jsval.as_handle();
             {
                 if let Some(bytes) = crate::fetch::blob_bytes_clone(addr) {
-                    return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
+                    set_pending_fetch_body_bytes(Some(bytes));
+                    return 0;
                 }
             }
         }
@@ -76,7 +84,7 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
         // requested the body-init conversion: Request drains it to bytes, while
         // Response preserves it lazily because transformed SSR streams often
         // produce data only when the downstream consumer pulls.
-        if crate::streams::js_stream_handle_kind(id) == 1 {
+        if crate::streams::is_readable_stream(crate::streams::RsRef(id)) {
             PENDING_FETCH_BODY_STREAM_ID.with(|pending| pending.set(id));
             return 0;
         }
@@ -88,7 +96,8 @@ pub extern "C" fn js_response_body_init_ptr(value: f64) -> i64 {
         let jsval = JSValue::from_bits(value.to_bits());
         if jsval.is_handle() {
             if let Some(bytes) = unsafe { incoming_message_raw_body_bytes(jsval.as_handle()) } {
-                return js_string_from_bytes(bytes.as_ptr(), bytes.len() as u32) as i64;
+                set_pending_fetch_body_bytes(Some(bytes));
+                return 0;
             }
         }
     }

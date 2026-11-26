@@ -1,47 +1,11 @@
 //! #5437: expando properties on live Web Stream handles. React's
 //! `renderToReadableStream` attaches `stream.allReady = promise`; JS objects
 //! accept arbitrary properties, so a live stream-band handle must too. Split
-//! out of `streams.rs` to keep that file under the file-size gate.
+//! out of `streams.rs` to keep that file under the file-size gate. The values
+//! live on the record of the handle they were set on (`state::with_expandos`).
 
-use super::gc::{visit_stream_value_slot, StreamRootVisitor};
+use super::state::with_expandos;
 use super::subclass::js_stream_handle_kind;
-use std::collections::HashMap;
-use std::sync::Mutex;
-
-/// #5437: expando properties attached to live stream handles
-/// (`stream.allReady = promise` in React's renderToReadableStream).
-/// Keyed by stream id; values are NaN-boxed u64 bits, GC-traced in
-/// `scan_expando_roots`.
-static STREAM_EXPANDO: std::sync::LazyLock<Mutex<HashMap<usize, Vec<(String, u64)>>>> =
-    std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// #11471: register [`release_stream_expandos_in_freed_ranges`] before the
-/// first expando insert.
-fn ensure_expando_thread_exit_hook() {
-    static REGISTER: std::sync::Once = std::sync::Once::new();
-    REGISTER.call_once(|| {
-        perry_runtime::arena::thread_exit::register_thread_exit_range_hook(
-            release_stream_expandos_in_freed_ranges,
-        )
-    });
-}
-
-/// #11471: drop every expando value that lies in an exiting thread's freed
-/// blocks. The stream id is process-global but the value lives in the setting
-/// thread's heap; left behind it would be returned by `stream_expando_get` and
-/// traced by every surviving thread's `scan_expando_roots`. Only the offending
-/// properties go (the stream itself may belong to another thread; if it was
-/// the dead thread's, `release_web_streams_in_freed_ranges` clears the rest).
-/// Runs in a TLS destructor: one poison-tolerant lock, no JS heap access.
-fn release_stream_expandos_in_freed_ranges(freed: &perry_runtime::arena::thread_exit::FreedRanges) {
-    let mut map = STREAM_EXPANDO
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner);
-    map.retain(|_, entries| {
-        entries.retain(|(_, bits)| !freed.holds_bits(*bits));
-        !entries.is_empty()
-    });
-}
 
 /// #5437: store an expando property on a live stream handle. Returns 1 when
 /// stored. Any live stream-band handle kind accepts expandos (streams,
@@ -59,50 +23,30 @@ pub(crate) unsafe extern "C" fn stream_expando_set_hook(
     let Ok(key) = std::str::from_utf8(bytes) else {
         return 0;
     };
-    ensure_expando_thread_exit_hook();
-    if let Ok(mut map) = STREAM_EXPANDO.lock() {
-        let entry = map.entry(id).or_default();
-        if let Some(slot) = entry.iter_mut().find(|(k, _)| k == key) {
+    let stored = with_expandos(id, |entries| {
+        if let Some(slot) = entries.iter_mut().find(|(k, _)| k == key) {
             slot.1 = value.to_bits();
         } else {
-            entry.push((key.to_string(), value.to_bits()));
+            entries.push((key.to_string(), value.to_bits()));
         }
-        return 1;
-    }
-    0
+    });
+    i32::from(stored.is_some())
 }
 
 /// #5437: read an expando property off a stream handle (undefined bits when
 /// absent).
 pub(crate) fn stream_expando_get(id: usize, key: &str) -> Option<f64> {
-    let map = STREAM_EXPANDO.lock().ok()?;
-    let entry = map.get(&id)?;
-    entry
-        .iter()
-        .find(|(k, _)| k == key)
-        .map(|(_, bits)| f64::from_bits(*bits))
+    with_expandos(id, |entries| {
+        entries
+            .iter()
+            .find(|(k, _)| k == key)
+            .map(|(_, bits)| f64::from_bits(*bits))
+    })
+    .flatten()
 }
 
-/// #5437: drop a handle's expando entry when the stream is torn down
-/// (closed/errored). Stream ids are monotonic (never reused), so without this
-/// the table would grow one entry per stream ever created — an unbounded leak
-/// over a long-running SSR server's lifetime, and `scan_expando_roots` would
-/// keep those values alive forever. Called from the readable-stream terminal
-/// paths, after any `stream.allReady`-style expando has already been consumed
-/// during the render.
+/// #5437: drop the expandos set on `id` itself (a stream reaching its
+/// terminal state, a released reader or writer).
 pub(crate) fn stream_expando_clear(id: usize) {
-    if let Ok(mut map) = STREAM_EXPANDO.lock() {
-        map.remove(&id);
-    }
-}
-
-/// #5437: GC-trace expando values. Called from `scan_stream_roots_mut`.
-pub(crate) fn scan_expando_roots<V: StreamRootVisitor>(visitor: &mut V) {
-    if let Ok(mut map) = STREAM_EXPANDO.lock() {
-        for entries in map.values_mut() {
-            for (_, bits) in entries.iter_mut() {
-                visit_stream_value_slot(visitor, bits);
-            }
-        }
-    }
+    with_expandos(id, |entries| entries.clear());
 }

@@ -349,7 +349,7 @@ extern "C" fn install(family: u8, proto: *mut ObjectHeader) {
         // byob.rs): `queue` also holds the Uint8Array remainders the runtime
         // makes (fill_view_from_queue, service_pending_with_chunk; the
         // constructor declares them born with the stream), `pendingView` is the
-        // parked BYOB read's view (BYOB_PENDING, byobRequest.view),
+        // parked BYOB read's view (the record's byob_pending, byobRequest.view),
         // `filledView` the view respondWithNewView fulfills that read with, and
         // the controller's `byobRequest` is the request object it hands out.
         BYTE_CONTROLLER => {

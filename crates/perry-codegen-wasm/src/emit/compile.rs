@@ -1763,12 +1763,14 @@ impl WasmModuleEmitter {
                         .get(&class.name)
                         .into_iter()
                         .flatten();
-                    // The constructor registers its `length` for the class value.
+                    // The constructor registers its `__FnInfo` for the class value.
                     let ctor = self
                         .class_ctor_map
                         .get(&class.name)
-                        .map(|&idx| ("class_set_ctor_length", class.name.clone(), idx, 0.0));
-                    // The last argument is a method's `fn_proto_code` or an `accessor_code`.
+                        .map(|&idx| ("class_set_ctor", class.name.clone(), idx, 0.0));
+                    // The fourth argument is a member's `fn_proto_code` or an `accessor_code`,
+                    // the fifth its `length`: a method's and the constructor's make its
+                    // `__FnInfo` (`class_set_method`).
                     let registrations: Vec<(&str, String, u32, f64)> = methods
                         .map(|(name, &idx)| ("class_set_method", name, idx))
                         .chain(statics.map(|(name, &idx)| ("class_set_static_method", name, idx)))
