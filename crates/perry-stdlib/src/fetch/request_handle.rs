@@ -25,26 +25,44 @@ struct RequestFetchFields {
     redirect: String,
 }
 
+/// The Request's body was read before `fetch(request)` inherited it.
+struct RequestBodyUsed;
+
 /// Recover url/method/body/headers from a live `Request` handle, or `None` when
 /// the id isn't a live Request handle (e.g. a genuinely bad/undefined first arg).
-fn request_fields_from_handle(maybe_handle: usize) -> Option<RequestFetchFields> {
-    let guard = super::REQUEST_REGISTRY.lock().unwrap();
-    let req = guard.get(&maybe_handle)?;
+/// Without an `init.body` (`inherit_body`), the fetch takes the Request's body
+/// the way Node's `new Request(input, init)` does: the bytes move out and the
+/// Request is used, and a Request whose body was already used is refused.
+fn request_fields_from_handle(
+    maybe_handle: usize,
+    inherit_body: bool,
+) -> Option<Result<RequestFetchFields, RequestBodyUsed>> {
+    let mut guard = super::REQUEST_REGISTRY.lock().unwrap();
+    let req = guard.get_mut(&maybe_handle)?;
+    let body = if inherit_body && req.body.is_some() {
+        if req.body_used {
+            return Some(Err(RequestBodyUsed));
+        }
+        req.body_used = true;
+        req.body.as_mut().map(std::mem::take)
+    } else {
+        None
+    };
     let headers = req
         .headers
         .entries
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
-    Some(RequestFetchFields {
+    Some(Ok(RequestFetchFields {
         url: req.url.clone(),
         method: req.method.clone(),
         // Keep the body as raw bytes; never lossy-convert to `String` (which
         // would replace invalid UTF-8 with U+FFFD and corrupt binary bodies).
-        body: req.body.clone(),
+        body,
         headers,
         redirect: req.redirect.clone(),
-    })
+    }))
 }
 
 /// Resolve the final fetch inputs from the pre-extracted `init` header strings,
@@ -59,8 +77,19 @@ pub(crate) fn resolve_fetch_inputs(
     url_handle: usize,
     pending_redirect: i32,
 ) -> Result<FetchInputs, u64> {
-    let request_fields = if url_from_header.is_none() {
-        request_fields_from_handle(url_handle)
+    let mut request_fields = if url_from_header.is_none() {
+        match request_fields_from_handle(url_handle, body_bytes.is_none()) {
+            Some(Err(RequestBodyUsed)) => {
+                // Allocated after the registry guard is released (#8163).
+                return Err(unsafe {
+                    super::fetch_type_error_bits(
+                        "Cannot construct a Request with a Request object that has already been used.",
+                    )
+                });
+            }
+            Some(Ok(fields)) => Some(fields),
+            None => None,
+        }
     } else {
         None
     };
@@ -80,7 +109,7 @@ pub(crate) fn resolve_fetch_inputs(
     // `body_bytes` is already raw bytes (binary bodies preserved byte-for-byte by
     // the caller's buffer/typed-array probe; string bodies read as their UTF-8
     // bytes), so use it as-is and only fall back to the Request's own body.
-    let body = body_bytes.or_else(|| request_fields.as_ref().and_then(|rf| rf.body.clone()));
+    let body = body_bytes.or_else(|| request_fields.as_mut().and_then(|rf| rf.body.take()));
 
     // Start from the `Request`'s own headers (the `fetch(Request)` form), then
     // let any `init.headers` override per-key. WHATWG says init headers win, but

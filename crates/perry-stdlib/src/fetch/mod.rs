@@ -1086,6 +1086,11 @@ struct RequestRecord {
     /// The error the body's stream ended with; consuming the body rejects
     /// with it. A GC root, visited with `signal`.
     body_error: Option<f64>,
+    /// `request.body` once the body was read: the stream that read it,
+    /// closed, disturbed and still locked to its reader (Node's
+    /// `fullyReadBody`), allocated on the first `.body` read after use so
+    /// repeat reads return the same stream.
+    read_body_stream_id: Option<crate::streams::RsRef>,
 }
 
 static HEADERS_REGISTRY: std::sync::LazyLock<Mutex<HashMap<usize, HeadersRecord>>> =
@@ -1431,21 +1436,49 @@ pub extern "C" fn js_request_get_method(handle: f64) -> *mut StringHeader {
     js_string_from_bytes(method.as_ptr(), method.len() as u32)
 }
 
-/// req.body — returns a string body or null. NaN-boxed return.
+/// req.body — the unread body as a string, the read body's stream, or null.
+/// NaN-boxed return.
 #[no_mangle]
 pub extern "C" fn js_request_get_body(handle: f64) -> f64 {
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
-    let id = handle_id(handle);
+    request_body_value(handle_id(handle))
+}
+
+/// `request.body` of the Request record `id` (both the typed getter and the
+/// dynamic property read). A read body is a `ReadableStream` that is closed,
+/// disturbed and locked, as Node leaves it after `text()` and friends, so
+/// `getReader()` on it throws and `bodyUsed` agrees with it; it used to be the
+/// emptied bytes as `""`.
+pub(super) fn request_body_value(id: usize) -> f64 {
+    enum Body {
+        Bytes(Vec<u8>),
+        Stream(crate::streams::RsRef),
+        ReadNoStream,
+    }
     // #8163: snapshot under the guard, allocate after (see `js_request_get_url`).
     let body = match REQUEST_REGISTRY.lock().unwrap().get(&id) {
-        Some(req) => match &req.body {
-            Some(b) => b.clone(),
-            None => return f64::from_bits(TAG_NULL),
+        Some(req) => match (&req.body, req.body_used, req.read_body_stream_id) {
+            (None, _, _) => return f64::from_bits(TAG_NULL),
+            (Some(_), true, Some(stream)) => Body::Stream(stream),
+            (Some(_), true, None) => Body::ReadNoStream,
+            (Some(b), false, _) => Body::Bytes(b.clone()),
         },
         None => return f64::from_bits(TAG_NULL),
     };
-    let s = js_string_from_bytes(body.as_ptr(), body.len() as u32);
-    f64::from_bits(JSValue::string_ptr(s).bits())
+    match body {
+        Body::Bytes(body) => {
+            let s = js_string_from_bytes(body.as_ptr(), body.len() as u32);
+            f64::from_bits(JSValue::string_ptr(s).bits())
+        }
+        Body::Stream(stream) => crate::streams::stream_value(stream.0),
+        Body::ReadNoStream => {
+            let stream = crate::streams::alloc_read_body_stream();
+            if let Some(req) = REQUEST_REGISTRY.lock().unwrap().get_mut(&id) {
+                req.read_body_stream_id = Some(stream);
+            }
+            crate::streams::stream_value(stream.0)
+        }
+    }
 }
 
 /// request.bodyUsed -> boolean
@@ -1494,6 +1527,7 @@ pub extern "C" fn js_request_clone(handle: f64) -> f64 {
                 signal: req.signal,
                 cached_headers_id: None,
                 body_error: req.body_error,
+                read_body_stream_id: None,
             })
         })
     };

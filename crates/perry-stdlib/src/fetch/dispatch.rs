@@ -397,6 +397,10 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
         /// An answer that needed no allocation.
         Ready(f64),
     }
+    if prop == "body" {
+        REQUEST_REGISTRY.lock().unwrap().get(&req_id)?;
+        return Some(request_body_value(req_id));
+    }
     let snapshot = {
         let guard = REQUEST_REGISTRY.lock().unwrap();
         let req = guard.get(&req_id)?;
@@ -412,10 +416,6 @@ pub fn dispatch_request_property(req_id: usize, prop: &str) -> Option<f64> {
             "redirect" => RequestProp::Bytes(req.redirect.as_bytes().to_vec()),
             "integrity" => RequestProp::Bytes(req.integrity.as_bytes().to_vec()),
             "duplex" => RequestProp::Bytes(req.duplex.as_bytes().to_vec()),
-            "body" => match &req.body {
-                Some(b) => RequestProp::Bytes(b.clone()),
-                None => RequestProp::Ready(f64::from_bits(TAG_NULL)),
-            },
             "bodyUsed" => RequestProp::Ready(tagged_bool(req.body_used)),
             "keepalive" => RequestProp::Ready(tagged_bool(req.keepalive)),
             "signal" => RequestProp::Ready(req.signal),

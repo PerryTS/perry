@@ -2511,7 +2511,8 @@ unsafe fn pipe_through_rooted_pair(readable_handle: f64, pair: f64, options: f64
 }
 
 pub(crate) use self::subclass::{
-    drain_readable_into_bytes, is_readable_stream, readable_body_state,
+    drain_readable_into_bytes, alloc_read_body_stream, is_readable_stream,
+    readable_body_state,
 };
 
 #[cfg(test)]

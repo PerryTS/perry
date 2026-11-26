@@ -42,6 +42,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
             signal: f64::from_bits(TAG_UNDEFINED),
             cached_headers_id: None,
             body_error: None,
+            read_body_stream_id: None,
         }
     });
     let signal_root = scope.root_nanbox_f64(request.signal);
@@ -53,6 +54,7 @@ pub unsafe extern "C" fn js_request_new_from_input(input: f64, init: f64) -> f64
     let mut body_error = request.body_error.is_some();
     request.headers = request_headers_snapshot(&request);
     request.cached_headers_id = None;
+    request.read_body_stream_id = None;
     request.body_used = false;
 
     // Re-read the rooted init after allocating the key: a getter may allocate

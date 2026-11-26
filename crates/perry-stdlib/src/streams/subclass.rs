@@ -545,6 +545,18 @@ pub(crate) fn readable_body_state(stream: RsRef) -> (bool, bool) {
     with_rs(stream, |s| (s.reader_handle.is_some(), s.disturbed)).unwrap_or((false, false))
 }
 
+/// The stream of a body that was read to its end (`request.body` after
+/// `text()`): closed, empty, disturbed, and locked to the reader that read it,
+/// which Node's `fullyReadBody` never releases.
+pub(crate) fn alloc_read_body_stream() -> RsRef {
+    let stream = alloc_readable_from_bytes(Vec::new());
+    unsafe {
+        js_readable_stream_get_reader(stream_value(stream.0));
+    }
+    with_rs(stream, |s| s.disturbed = true);
+    stream
+}
+
 /// True while `stream` names a ReadableStream (a body handed to fetch).
 pub(crate) fn is_readable_stream(stream: RsRef) -> bool {
     js_stream_handle_kind(stream.0) == 1
