@@ -2302,6 +2302,11 @@ pub struct Model {
     /// stored under: a shaped key creates only the names its shape admits
     /// (`Model::key_may_name`).
     pub any_writers: FxHashMap<TmplId, AnyWriters>,
+    /// Which objects of a template each computed-key store of `any_writers`
+    /// stored into, from the store's own receiver set: bit 1 an instance,
+    /// bit 2 the class object, bit 4 the prototype (different objects: a
+    /// store into one writes no other).
+    pub any_writer_objs: FxHashMap<(TmplId, SiteId), u8>,
     /// ONCHANGE1 rule U: per instance key, the instance tokens a named store
     /// of it reaches (`writers` counts the stores per template). A birth
     /// site no store of the key reaches holds no own property of it for

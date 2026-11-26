@@ -1182,6 +1182,12 @@ impl Model {
                 self.rel(|| format!("anystore {t} {src} {f} site={site} fn={sf} m={sm}"));
                 self.edge(src, f);
                 if let Some(tm) = tm {
+                    let bit = match self.toks[t as usize] {
+                        TokKind::Obj(..) => 1,
+                        TokKind::ClassObj(_) => 2,
+                        _ => 4,
+                    };
+                    *self.any_writer_objs.entry((tm, site)).or_default() |= bit;
                     let birth = self.stores[site as usize].birth;
                     let w = self.any_writers.entry(tm).or_default();
                     if birth {

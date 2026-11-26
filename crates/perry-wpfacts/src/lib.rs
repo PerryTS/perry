@@ -64,6 +64,8 @@ pub mod records;
 mod rest_elems;
 mod rest_fields;
 mod rooted;
+mod shadow_writes;
+pub use shadow_writes::ShadowWrites;
 pub mod signatures;
 mod solve;
 mod summary;
@@ -445,6 +447,10 @@ pub struct ProgramFacts {
     pub bindings: Vec<ModuleBindings>,
     /// No solved native-prototype/global write in any contributing unit.
     pub indexed_metadata_unwritten: bool,
+    /// GUARDS3: per class id, what a program write may give its instances
+    /// or its prototype (`shadow_writes`): the shadow-test proof codegen
+    /// reads. Empty when the solve aborted.
+    pub shadow_writes: std::collections::BTreeMap<u32, ShadowWrites>,
     module_digests: Vec<u64>,
 }
 
@@ -1481,6 +1487,11 @@ fn compute_act<'a>(
             })
             .collect()
     };
+    let shadow_writes = if stats.aborted {
+        Default::default()
+    } else {
+        shadow_writes::shadow_writes(&g.m)
+    };
     let diagnostics = if cfg.diagnostics {
         vec![(view.map_or("<whole>", |v| v.key.as_str()).to_owned(), {
             let rows = diagnostics::collect(&g);
@@ -1579,6 +1590,7 @@ fn compute_act<'a>(
         array_iterator_close_written,
         typed_metadata_written,
         array_methods_written,
+        shadow_writes,
         fnproto_borrow_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,
