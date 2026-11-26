@@ -146,7 +146,7 @@ pub(in crate::node_stream) fn schedule_pending_writable_finish_if_ready(stream: 
         }
         return;
     }
-    if !stream_hidden_ended(stream)
+    if !writable_side_ended(stream)
         || has_truthy_hidden(stream, Slot::ConstructPending)
         || writable_length(stream) > 0.0
         || has_truthy_hidden(stream, hidden_finish_emitted_key())

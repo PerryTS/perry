@@ -1012,6 +1012,13 @@ pub(super) fn stream_hidden_ended(value: f64) -> bool {
     get_hidden_value(value, hidden_ended_key()).is_some_and(|v| crate::value::js_is_truthy(v) != 0)
 }
 
+/// node's `_writableState.ending`: `end()` was called on the writable side.
+/// A Duplex keeps it apart from the readable side's `ended`
+/// ([`stream_hidden_ended`]); the two sides end independently.
+pub(super) fn writable_side_ended(stream: f64) -> bool {
+    has_truthy_hidden(stream, Slot::WritableEnded)
+}
+
 pub(super) fn readable_aborted_value(stream: f64) -> f64 {
     if get_hidden_value(stream, hidden_readable_flag_key()).is_none() {
         return f64::from_bits(TAG_FALSE);

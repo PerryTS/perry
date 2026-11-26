@@ -72,7 +72,7 @@ pub extern "C" fn js_node_stream_is_writable(stream: f64) -> f64 {
     if get_hidden_value(stream, hidden_writable_flag_key()).is_none() {
         return f64::from_bits(TAG_NULL);
     }
-    let ended = stream_hidden_ended(stream);
+    let ended = writable_side_ended(stream);
     let errored = readable_hidden_error(stream).is_some();
     if ended || errored {
         f64::from_bits(TAG_FALSE)
