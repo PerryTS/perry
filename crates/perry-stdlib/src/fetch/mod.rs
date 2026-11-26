@@ -913,8 +913,7 @@ pub unsafe extern "C" fn js_fetch_response_text(handle: f64) -> *mut perry_runti
 /// order for non-index object keys; `serde_json::Value` uses a sorted map in
 /// this build and silently reordered them (#10392).
 unsafe fn parse_json_body(body: &[u8]) -> Result<JSValue, f64> {
-    let text = String::from_utf8_lossy(body);
-    let text_ptr = js_string_from_bytes(text.as_ptr(), text.len() as u32);
+    let text_ptr = perry_runtime::buffer::utf8_string_or_too_long_error(body)?;
     perry_runtime::json::js_json_parse_result(text_ptr)
 }
 
@@ -1258,10 +1257,13 @@ unsafe fn blob_text_impl(handle: f64) -> *mut perry_runtime::Promise {
         .get(&id)
         .map(|b| b.body.clone())
         .unwrap_or_default();
-    let s = String::from_utf8_lossy(&body).into_owned();
-    let str_ptr = js_string_from_bytes(s.as_ptr(), s.len() as u32);
-    let val = JSValue::string_ptr(str_ptr);
-    perry_runtime::js_promise_resolve(promise, f64::from_bits(val.bits()));
+    match perry_runtime::buffer::utf8_string_or_too_long_error(&body) {
+        Ok(str_ptr) => {
+            let val = JSValue::string_ptr(str_ptr);
+            perry_runtime::js_promise_resolve(promise, f64::from_bits(val.bits()));
+        }
+        Err(error) => perry_runtime::js_promise_reject(promise, error),
+    }
     promise
 }
 
@@ -1542,12 +1544,13 @@ pub unsafe extern "C" fn js_request_text(handle: f64) -> *mut perry_runtime::Pro
     let _fetch_roots = lifecycle::pin_handles(&[handle]);
     let promise = perry_runtime::js_promise_new_cross_thread();
     match consume_request_body(handle) {
-        Ok(body) => {
-            let text = String::from_utf8_lossy(&body).to_string();
-            let result_str = js_string_from_bytes(text.as_ptr(), text.len() as u32);
-            let result_nan = f64::from_bits(JSValue::string_ptr(result_str).bits());
-            perry_runtime::js_promise_resolve(promise, result_nan);
-        }
+        Ok(body) => match perry_runtime::buffer::utf8_string_or_too_long_error(&body) {
+            Ok(result_str) => {
+                let result_nan = f64::from_bits(JSValue::string_ptr(result_str).bits());
+                perry_runtime::js_promise_resolve(promise, result_nan);
+            }
+            Err(error) => perry_runtime::js_promise_reject(promise, error),
+        },
         Err(err) => reject_request_body(promise, err),
     }
     promise

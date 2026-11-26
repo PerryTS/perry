@@ -60,6 +60,14 @@ pub(crate) fn bytes_to_text_value(bytes: &[u8]) -> f64 {
     f64::from_bits(JSValue::string_ptr(ptr).bits())
 }
 
+/// [`bytes_to_text_value`] that reports text longer than `MAX_STRING_LENGTH`
+/// instead of throwing: a JS throw skips Rust drops, so a caller holding the
+/// byte buffer drops it first and then rejects or throws.
+pub(crate) fn try_bytes_to_text_value(bytes: &[u8]) -> Result<f64, crate::buffer::StringTooLong> {
+    let ptr = crate::buffer::try_utf8_string(bytes)?;
+    Ok(f64::from_bits(JSValue::string_ptr(ptr).bits()))
+}
+
 #[derive(Clone, Copy)]
 enum ConsumerKind {
     Text = 0,
@@ -355,9 +363,16 @@ fn chunks_to_bytes(chunks: f64, mode: ChunkMode) -> Result<Vec<u8>, f64> {
 fn finish_consumer_from_chunks(kind: ConsumerKind, chunks: f64) -> Result<f64, f64> {
     let bytes = chunks_to_bytes(chunks, kind.chunk_mode())?;
     match kind {
-        ConsumerKind::Text => Ok(bytes_to_text_value(&bytes)),
-        ConsumerKind::Json => {
-            let text = bytes_to_text_value(&bytes);
+        // Node's consumers build the text by `+=`, so an over-long result
+        // rejects with `RangeError: Invalid string length`; the collected
+        // bytes are released first.
+        ConsumerKind::Text | ConsumerKind::Json => {
+            let text = try_bytes_to_text_value(&bytes);
+            drop(bytes);
+            let text = text.map_err(|_| crate::string::invalid_string_length_error().value())?;
+            if matches!(kind, ConsumerKind::Text) {
+                return Ok(text);
+            }
             let text_ptr = crate::value::js_get_string_pointer_unified(text) as *const StringHeader;
             unsafe { crate::json::js_json_parse_result(text_ptr).map(|v| f64::from_bits(v.bits())) }
         }

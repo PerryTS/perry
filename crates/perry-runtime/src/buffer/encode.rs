@@ -166,7 +166,7 @@ pub(crate) fn buf_bytes_to_utf8_string(bytes: &[u8]) -> *mut StringHeader {
 
 /// [`buf_bytes_to_utf8_string`] that reports an over-long result instead of
 /// throwing, with the decoded text already dropped.
-fn try_utf8_string(bytes: &[u8]) -> Result<*mut StringHeader, StringTooLong> {
+pub(crate) fn try_utf8_string(bytes: &[u8]) -> Result<*mut StringHeader, StringTooLong> {
     if bytes.is_ascii() {
         if bytes.len() > crate::string::MAX_STRING_LENGTH {
             return Err(StringTooLong);
@@ -181,6 +181,15 @@ fn try_utf8_string(bytes: &[u8]) -> Result<*mut StringHeader, StringTooLong> {
         return Err(StringTooLong);
     }
     Ok(js_string_from_bytes(cow.as_ptr(), cow.len() as u32))
+}
+
+/// UTF-8 (lossy) text of `bytes` for a reader that settles a promise
+/// (`Blob#text`, `Response#text`, `Request#text`, body `json()`): text
+/// longer than `MAX_STRING_LENGTH` gives node's `ERR_STRING_TOO_LONG` error
+/// value to reject with. Nothing is thrown, so the caller's byte buffer is
+/// released as usual.
+pub fn utf8_string_or_too_long_error(bytes: &[u8]) -> Result<*mut StringHeader, f64> {
+    try_utf8_string(bytes).map_err(|StringTooLong| crate::string::string_too_long_error().value())
 }
 
 /// Does `toString(encoding)` decode this byte view? Only `Buffer.prototype`

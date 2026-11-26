@@ -139,7 +139,8 @@ pub use query::{
 };
 
 // ---- Re-exports: toString / print / length / to-array ----
-pub(crate) use encode::buf_bytes_to_utf8_string;
+pub use encode::utf8_string_or_too_long_error;
+pub(crate) use encode::{buf_bytes_to_utf8_string, try_utf8_string, StringTooLong};
 pub use encode::{
     buffer_to_array, js_buffer_length, js_buffer_print, js_buffer_to_string,
     js_buffer_to_string_range, js_value_to_string_with_encoding,

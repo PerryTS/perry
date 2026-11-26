@@ -263,13 +263,20 @@ fn alloc_text_object(class_id: u32, builtin_name: &str, state: u64) -> i64 {
 /// same encoding semantics without creating a user-visible decoder object.
 /// Returns the allocated StringHeader pointer, or `None` for an unsupported
 /// label so the caller can raise its API-specific error.
-pub(crate) fn decode_bytes_with_label(bytes: &[u8], raw_label: &str) -> Option<i64> {
+/// An over-long result is reported, not thrown: the caller throws once its
+/// own Rust values are dropped.
+pub(crate) fn decode_bytes_with_label(
+    bytes: &[u8],
+    raw_label: &str,
+) -> Option<Result<i64, crate::buffer::StringTooLong>> {
     let (encoding, _) = resolve_decoder_label(raw_label)?;
-    match decode_bytes(strip_bom(bytes, encoding), encoding, false) {
-        Ok(decoded) => Some(decoded),
-        Err(DecodeFailure::TooLong) => crate::string::throw_string_too_long(),
-        Err(DecodeFailure::Malformed) => unreachable!("a non-fatal decode is never malformed"),
-    }
+    Some(
+        match decode_bytes(strip_bom(bytes, encoding), encoding, false) {
+            Ok(decoded) => Ok(decoded),
+            Err(DecodeFailure::TooLong) => Err(crate::buffer::StringTooLong),
+            Err(DecodeFailure::Malformed) => unreachable!("a non-fatal decode is never malformed"),
+        },
+    )
 }
 
 /// Consume one leading BOM, as TextDecoder's default `ignoreBOM: false` does.
@@ -1278,8 +1285,9 @@ mod tests {
     #[test]
     fn utf_16be_labels_decode_big_endian_and_consume_their_bom() {
         for label in ["utf-16be", "unicodefffe"] {
-            let decoded =
-                decode_bytes_with_label(&[0xFE, 0xFF, 0x00, 0x41, 0x20, 0xAC], label).unwrap();
+            let decoded = decode_bytes_with_label(&[0xFE, 0xFF, 0x00, 0x41, 0x20, 0xAC], label)
+                .unwrap()
+                .unwrap_or_else(|_| unreachable!("six bytes are never too long"));
             assert_eq!(
                 text_string_header_to_string(decoded as *const StringHeader),
                 "A€",
