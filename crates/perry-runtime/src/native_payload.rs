@@ -1153,6 +1153,24 @@ pub fn owner_link(value: f64, family: &NativePayloadFamily) -> Result<OwnerLink,
     Ok(OwnerLink(cell as usize))
 }
 
+/// [`owner_link`] for any instance carrying a payload of `family`, including
+/// a subclass instance that attached it in `super()` (its own class id is
+/// the subclass's).
+pub fn owner_link_attached(
+    value: f64,
+    family: &NativePayloadFamily,
+) -> Result<OwnerLink, PayloadMiss> {
+    if !family.links_owner || attached_family_class_id(value) != Some(family.class_id) {
+        return Err(PayloadMiss::Foreign);
+    }
+    let cell = payload_cell_of_value(value).ok_or(PayloadMiss::Foreign)?;
+    assert!(
+        (cell as u64) < LINK_ADDRESS_LIMIT && cell as usize & 7 == 0,
+        "a payload cell must be 8-aligned below 2^56 to travel in a link token"
+    );
+    Ok(OwnerLink(cell as usize))
+}
+
 /// Never allocates or throws, including during finalization and on a wrong thread.
 ///
 /// # Safety

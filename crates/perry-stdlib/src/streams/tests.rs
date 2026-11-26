@@ -1066,3 +1066,22 @@ fn writable_requests_settle_across_a_moving_sink() {
         );
     }
 }
+
+/// A subclass `this` that attached the ReadableStream payload in `super()`
+/// carries its own class id; its payload still names it (the link), so the
+/// payload's slot reads reach `this`.
+#[test]
+fn attached_subclass_stream_payload_names_its_object() {
+    let _serial = serial_guard();
+    let scope = perry_runtime::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(perry_runtime::value::js_nanbox_pointer(
+        perry_runtime::object::js_object_alloc(0, 0) as i64,
+    ));
+    let id = attach_readable(this.get_nanbox_f64(), 0, 0, 0, 1.0);
+    assert_ne!(id, 0, "a plain object takes the payload");
+    assert_eq!(
+        with_rs(RsRef(id), |s| s.obj().to_bits()),
+        Some(this.get_nanbox_f64().to_bits()),
+        "the payload reaches its subclass object"
+    );
+}

@@ -1063,7 +1063,8 @@ fn controller_kind(data: &ReadableStreamData) -> (u32, &'static str) {
 /// algorithms (`[start, pull, cancel, size]` raw closure pointers, 0 = none).
 fn born_rs(value: f64, controller: (u32, &'static str), algorithms: [i64; 4]) -> RsRef {
     let r = RsRef::from_value(value);
-    let link = native_payload::owner_link(value, &objects::RS_FAMILY).ok();
+    // A subclass `this` carries the payload under its own class id.
+    let link = native_payload::owner_link_attached(value, &objects::RS_FAMILY).ok();
     let Some(owner_transform) = with_rs(r, |s| {
         s.link = link;
         s.owner_transform
