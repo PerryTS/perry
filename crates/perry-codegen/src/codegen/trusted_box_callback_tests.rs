@@ -118,6 +118,7 @@ fn callback_body() -> Vec<Stmt> {
 
 fn callback_with(func_id: u32, params: Vec<Param>, body: Vec<Stmt>) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id,
         params,
@@ -736,6 +737,7 @@ fn captured_scope_callee_resolution_uses_a_decoded_base() {
             init: Some(Expr::LocalGet(2)),
         },
         Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: CALLBACK_FUNC,
             params: Vec::new(),

@@ -175,7 +175,10 @@ pub(crate) fn run_check_phase() -> i32 {
     // notifies on each keypress; this is a cheap empty-buffer check otherwise.
     crate::os_hook_slots::pump_process_stdin();
     #[cfg(not(target_arch = "wasm32"))]
-    crate::turnloop_net::check_phase_end();
+    {
+        crate::turnloop_net::check_phase_end();
+        crate::turnloop_net::close_phase();
+    }
     if fired != 0 && crate::promise::mt_profile_enabled() {
         use std::sync::atomic::Ordering;
         PROFILE_CALLBACK_TIMERS_FIRED.fetch_add(fired as u64, Ordering::Relaxed);

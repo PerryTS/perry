@@ -3978,6 +3978,21 @@ fn gc_budgeted_due_trigger_probe() -> (Option<BudgetedGcTrigger>, bool, TriggerW
 /// and nothing was due. A blocked safepoint consumes no schedule slot, so the
 /// caller must not charge it a pacing stride either.
 pub(crate) fn gc_safepoint_moving_minor() -> bool {
+    gc_safepoint_moving_minor_for(gc_budgeted_due_trigger)
+}
+
+/// [`gc_safepoint_moving_minor`] right after a boundary poll that found
+/// nothing due ([`gc_boundary_safepoint_poll`]): no mutator code and no
+/// collector step ran in between, so the trigger ladder's answer is still
+/// "nothing due" and is not derived a second time. The entry guards, the
+/// schedule tick, the pending-flag clear and a seed-selected collection run
+/// exactly as on the evaluating path.
+pub(crate) fn gc_safepoint_moving_minor_nothing_due() -> bool {
+    gc_safepoint_moving_minor_for(|| None)
+}
+
+#[inline(always)]
+fn gc_safepoint_moving_minor_for(due: impl FnOnce() -> Option<BudgetedGcTrigger>) -> bool {
     // Same start guards the budgeted collector uses, minus the (here
     // irrelevant) scanner block: never collect mid-allocation, inside a
     // runtime handle scope, in an unsafe FFI zone, or during a budgeted cycle.
@@ -4009,7 +4024,7 @@ pub(crate) fn gc_safepoint_moving_minor() -> bool {
     // whichever arm reached us (loop back-edge poll or microtask-pump boundary).
     // Inert (one cached-`Option` load) unless `PERRY_GC_SCHEDULE_SEED` is set.
     let scheduled = super::schedule::schedule_tick();
-    let due = gc_budgeted_due_trigger();
+    let due = due();
     if !scheduled
         && matches!(
             due,
@@ -4938,8 +4953,31 @@ fn gc_budgeted_step_work_units_inner_with_progress(
     start_progress_kind: GcProgressKind,
     automatic: bool,
 ) -> GcStepReport {
+    match gc_budgeted_poll(work_units, start_progress_kind, automatic) {
+        BudgetedPoll::Stepped(report) => report,
+        BudgetedPoll::NothingDue => gc_idle_step_result(),
+    }
+}
+
+/// What one budgeted step did.
+enum BudgetedPoll {
+    /// The step ran, was skipped by a guard, or acted on a trigger.
+    Stepped(GcStepReport),
+    /// No cycle was active and the trigger ladder answered "nothing due" —
+    /// from the published watermark or from a repeatable evaluation — and
+    /// the step wrote no collector state. Asking the ladder again before the
+    /// mutator runs gives the same answer.
+    NothingDue,
+}
+
+#[inline(always)]
+fn gc_budgeted_poll(
+    work_units: usize,
+    start_progress_kind: GcProgressKind,
+    automatic: bool,
+) -> BudgetedPoll {
     if work_units == 0 {
-        return gc_budgeted_status_result();
+        return BudgetedPoll::Stepped(gc_budgeted_status_result());
     }
 
     // "Nothing due" is the allocation point's question too, and is answered
@@ -4955,14 +4993,14 @@ fn gc_budgeted_step_work_units_inner_with_progress(
         super::instruments::note_budgeted_step_skip(
             super::instruments::BudgetedStepSkip::NoTrigger,
         );
-        return gc_idle_step_result();
+        return BudgetedPoll::NothingDue;
     }
 
     let Some(_guard) = BudgetedGcStepGuard::enter() else {
         super::instruments::note_budgeted_step_skip(
             super::instruments::BudgetedStepSkip::Reentrant,
         );
-        return gc_budgeted_skipped_result();
+        return BudgetedPoll::Stepped(gc_budgeted_skipped_result());
     };
 
     // The common host poll: no cycle, nothing due. Everything past this point
@@ -4972,7 +5010,7 @@ fn gc_budgeted_step_work_units_inner_with_progress(
     let due = if gc_budgeted_cycle_active() {
         None
     } else {
-        let (due, _, watermark) = gc_budgeted_due_trigger_probe();
+        let (due, repeatable, watermark) = gc_budgeted_due_trigger_probe();
         // A "nothing due" answers the next poll (above) and the next
         // allocation point, published under the conditions
         // `gc_check_trigger` publishes under: no cycle active, no root lock.
@@ -4983,11 +5021,20 @@ fn gc_budgeted_step_work_units_inner_with_progress(
             super::instruments::note_budgeted_step_skip(
                 super::instruments::BudgetedStepSkip::NoTrigger,
             );
-            return gc_idle_step_result();
+            return if repeatable {
+                BudgetedPoll::NothingDue
+            } else {
+                BudgetedPoll::Stepped(gc_idle_step_result())
+            };
         };
         Some(due)
     };
-    gc_budgeted_start_or_step(due, work_units, start_progress_kind, automatic)
+    BudgetedPoll::Stepped(gc_budgeted_start_or_step(
+        due,
+        work_units,
+        start_progress_kind,
+        automatic,
+    ))
 }
 
 /// The part of [`gc_budgeted_step_work_units_inner_with_progress`] that starts
@@ -5140,6 +5187,23 @@ pub(crate) fn gc_runtime_safepoint() -> JsGcStepResult {
 #[inline]
 pub(crate) fn gc_runtime_safepoint_poll() {
     let _ = gc_runtime_safepoint_report();
+}
+
+/// [`gc_runtime_safepoint_poll`] for the outermost microtask-drain boundary:
+/// the same step, returning whether it was [`BudgetedPoll::NothingDue`] — no
+/// cycle active, the trigger ladder answered "nothing due" repeatably, and
+/// no collector state written — so the precise safepoint that follows can
+/// act on that answer instead of deriving it again.
+pub(crate) fn gc_boundary_safepoint_poll() -> bool {
+    let budget = gc_progress_contract().budget_for(GcProgressKind::NormalIncremental);
+    let Some(work_units) = budget.work_units else {
+        let _ = gc_budgeted_status_result();
+        return false;
+    };
+    matches!(
+        gc_budgeted_poll(work_units, GcProgressKind::NormalIncremental, true),
+        BudgetedPoll::NothingDue
+    )
 }
 
 fn gc_runtime_safepoint_report() -> GcStepReport {

@@ -544,6 +544,7 @@ mod tests {
     #[test]
     fn object_assign_sources_visible_to_id_scans() {
         let closure = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 7,
             params: vec![Param {
@@ -601,6 +602,7 @@ mod tests {
             key_expr: None,
             ty: Type::Any,
             init: Some(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id,
                 params: Vec::new(),
@@ -698,6 +700,7 @@ mod tests {
             key_expr: None,
             ty: Type::Any,
             init: Some(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 3,
                 params: vec![Param {
@@ -747,6 +750,7 @@ mod tests {
     #[test]
     fn default_param_closure_ids_visible_to_max_scans() {
         let default_closure = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 42,
             params: vec![Param {
@@ -817,6 +821,7 @@ mod tests {
     #[test]
     fn method_default_param_closure_ids_visible_to_max_scans() {
         let default_closure = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 60,
             params: Vec::new(),
@@ -883,6 +888,7 @@ mod tests {
         let dec_with_closure = |func_id: FuncId, local_id: LocalId| Decorator {
             name: "dec".to_string(),
             args: vec![Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id,
                 params: Vec::new(),

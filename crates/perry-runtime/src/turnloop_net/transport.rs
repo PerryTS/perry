@@ -1102,9 +1102,11 @@ pub unsafe fn shutdown(core: *mut TransportCore, link: OwnerLink, user: u64) -> 
 /// Release the core's driver resources (rule 3). Takes the handle out and
 /// submits its close under the cell's token, closes the deadline, cancels a
 /// pending resolve and drops the backlog. Returns whether a `Closed` (a
-/// `NET_CLOSED` completion for this link) will follow; when it is `false`
-/// there was no handle, and a binding that owes a `close` event emits it
-/// itself. The binding releases the payload afterwards.
+/// `NET_CLOSED` completion for this link) will follow: a resolving connect's
+/// comes from the close-callbacks phase (`closing`), carrying no handle parts.
+/// When it is `false` there was neither a handle nor a connect, and a binding
+/// that owes a `close` event emits it itself. The binding releases the payload
+/// afterwards.
 ///
 /// # Safety
 /// See [`bind`].
@@ -1116,15 +1118,20 @@ pub unsafe fn close(core: *mut TransportCore, link: OwnerLink) -> NetResult<bool
                 release(link);
             }
         }
-        if let Some(plan) = c.plan.take() {
-            if let Some(op) = plan.op {
-                // Its terminal (`Cancelled`) result carries the resolve's ref.
-                driver.cancel(op);
-            }
+        let plan = c.plan.take();
+        if let Some(op) = plan.as_ref().and_then(|plan| plan.op) {
+            // Its terminal (`Cancelled`) result carries the resolve's ref.
+            driver.cancel(op);
         }
         c.backlog = Backlog::default();
         let Some(mut entry) = c.entry.take() else {
-            return Ok(false);
+            if plan.is_none() {
+                return Ok(false);
+            }
+            // Still resolving: owed like a handle's close.
+            hold(link);
+            closing::queue(link, c.route);
+            return Ok(true);
         };
         #[cfg(windows)]
         {
@@ -2155,7 +2162,24 @@ pub(super) unsafe fn deliver_parked_eof(link: OwnerLink, handle: Option<Handle>)
     release(link);
 }
 
-/// Drop the ref of an EOF `defer_eof` parked and will never deliver.
+/// Deliver the `Closed` that [`close`] queued for a socket still resolving.
+///
+/// # Safety
+/// The queued ref pins `link`'s cell; this call releases it.
+pub(super) unsafe fn deliver_queued_closed(link: OwnerLink, route: u8) {
+    if !TEARDOWN.with(Cell::get) && np::link_event_owner(link).is_some() {
+        let mut event = NetCompletion::closed(link.0 as i64).linked();
+        if core_of(link).is_some() {
+            // The owner connected again: a new incarnation owns the cell.
+            event.flags |= sink::NET_FLAG_STALE;
+        }
+        sink::emit(route, event);
+    }
+    release(link);
+}
+
+/// Drop the ref of an EOF `defer_eof` parked, or of a `Closed` `closing`
+/// queued, that will never be delivered.
 ///
 /// # Safety
 /// As [`deliver_parked_eof`].

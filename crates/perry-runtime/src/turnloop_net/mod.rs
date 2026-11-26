@@ -63,6 +63,7 @@ use turnloop::{
 
 pub mod abi;
 pub mod census;
+mod closing;
 mod defer_eof;
 pub(crate) mod errors;
 mod sink;
@@ -75,6 +76,7 @@ mod write_queue;
 #[path = "tests.rs"]
 mod tests;
 
+pub(crate) use closing::{pending as close_queued, run as close_phase};
 pub(crate) use defer_eof::{check_phase_begin, check_phase_end, pending as eof_parked};
 pub use errors::{map_error, NodeError};
 pub use sink::{
@@ -903,7 +905,9 @@ pub fn close(id: i64) -> NetResult<()> {
             let mut net = net.borrow_mut();
             let Some(entry) = net.entries.get_mut(&id) else {
                 // Nothing to close (a connect still resolving, or a second
-                // close): whatever was waiting to be written goes with it.
+                // close): the connect and whatever was waiting to be written
+                // go with it, so a later lookup answer finds no plan.
+                net.plans.remove(&id);
                 net.backlogs.remove(&id);
                 return Err(not_found("close"));
             };
@@ -1291,11 +1295,14 @@ fn resolve_completed(subsystem: u8, id: i64, result: OpResult) {
             }
         }
         OpResult::Err(err) => {
-            NET.with(|net| {
+            let had_plan = NET.with(|net| {
                 let mut net = net.borrow_mut();
-                net.plans.remove(&id);
                 net.backlogs.remove(&id);
+                net.plans.remove(&id).is_some()
             });
+            if !had_plan {
+                return;
+            }
             let mut mapped = map_error(err, "getaddrinfo");
             // libuv (and therefore Node) reports a failed name lookup as
             // ENOTFOUND whatever the resolver's own errno was, and Node's own
@@ -1416,6 +1423,7 @@ fn accept_connection(subsystem: u8, server: i64, conn: Handle, peer: Option<Sock
 #[cfg(test)]
 pub(crate) fn reset_for_test() {
     defer_eof::take_all();
+    closing::take_all();
     transport::reset_for_test();
     NET.with(|net| net.borrow_mut().timers.clear());
     NET.with(|net| {
@@ -1437,8 +1445,9 @@ pub(crate) fn shutdown_current_thread() {
     // a thread that is going away (LIFECYCLE-DESIGN L8). `Loop::drop` releases
     // their descriptors.
     transport::begin_teardown();
-    for cell in defer_eof::take_all() {
-        // SAFETY: each parked link EOF holds the ref that pins its cell.
+    for cell in defer_eof::take_all().into_iter().chain(closing::take_all()) {
+        // SAFETY: each parked link EOF and queued Closed holds the ref that
+        // pins its cell.
         unsafe { transport::release_parked_eof(cell) };
     }
     let ids: Vec<i64> = NET.with(|net| net.borrow().entries.keys().copied().collect());
