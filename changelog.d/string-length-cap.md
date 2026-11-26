@@ -1,0 +1,1 @@
+Enforce the maximum string length (536,870,888 UTF-16 units) on every string allocation path: concatenation, appends, templates and JSON.stringify throw node's RangeError: Invalid string length instead of building an over-long string (a doubling concat past 2^31 bytes used to crash), and Buffer#toString / TextDecoder#decode throw node's Error [ERR_STRING_TOO_LONG].

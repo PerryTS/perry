@@ -142,6 +142,8 @@ pub(crate) mod wtf8;
 #[cfg(test)]
 mod case_tests;
 #[cfg(test)]
+mod length_cap_tests;
+#[cfg(test)]
 mod number_to_string_box_tests;
 #[cfg(test)]
 mod slice_tests;
@@ -838,6 +840,8 @@ pub(crate) fn json_leaf_prefers_arena(capacity: u32) -> bool {
 pub(crate) const MAX_STRING_LENGTH: usize = 536_870_888;
 
 /// Throw the common V8-compatible error used by exact-size string builders.
+#[cold]
+#[inline(never)]
 pub(crate) fn throw_invalid_string_length() -> ! {
     let message = "Invalid string length";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
@@ -962,6 +966,42 @@ pub(crate) unsafe fn init_string_header(
         & (STRING_FLAG_HAS_LONE_SURROGATES
             | STRING_FLAG_JSON_ESCAPE_FREE
             | STRING_FLAG_WTF8_VALIDATED);
+    // Every heap string is born here, so this one check bounds `.length` of
+    // every string a program can observe. It runs after the header is
+    // written: the unreachable block stays a well-formed string for any heap
+    // walk. The only direct header writers (in-place appends, join) check
+    // before they write.
+    check_string_length(utf16_len as usize);
+}
+
+/// Node's `Error [ERR_STRING_TOO_LONG]`: a byte decode (`Buffer#toString`,
+/// `TextDecoder#decode`) whose result would exceed [`MAX_STRING_LENGTH`].
+/// Node refuses it before any string exists, with a plain `Error`, not the
+/// `RangeError` string operations throw. A JS throw skips Rust drops, so
+/// callers throw only once no Rust owner (decoded `String`, byte lease) is
+/// pending.
+#[cold]
+#[inline(never)]
+pub(crate) fn throw_string_too_long() -> ! {
+    crate::validators::received::throw_error_with_code(
+        "Cannot create a string longer than 0x1fffffe8 characters",
+        "ERR_STRING_TOO_LONG",
+    )
+}
+
+/// Whether decoded text `s` is longer than [`MAX_STRING_LENGTH`] UTF-16
+/// units. Units never exceed UTF-8 bytes, so only text this long is counted.
+pub(crate) fn decoded_text_over_limit(s: &str) -> bool {
+    s.len() > MAX_STRING_LENGTH && s.encode_utf16().count() > MAX_STRING_LENGTH
+}
+
+/// Throw node's `RangeError: Invalid string length` when a string of
+/// `utf16_len` code units would exceed [`MAX_STRING_LENGTH`].
+#[inline(always)]
+pub(crate) fn check_string_length(utf16_len: usize) {
+    if utf16_len > MAX_STRING_LENGTH {
+        throw_invalid_string_length();
+    }
 }
 
 #[inline]

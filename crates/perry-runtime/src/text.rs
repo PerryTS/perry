@@ -265,7 +265,11 @@ fn alloc_text_object(class_id: u32, builtin_name: &str, state: u64) -> i64 {
 /// label so the caller can raise its API-specific error.
 pub(crate) fn decode_bytes_with_label(bytes: &[u8], raw_label: &str) -> Option<i64> {
     let (encoding, _) = resolve_decoder_label(raw_label)?;
-    decode_bytes(strip_bom(bytes, encoding), encoding, false)
+    match decode_bytes(strip_bom(bytes, encoding), encoding, false) {
+        Ok(decoded) => Some(decoded),
+        Err(DecodeFailure::TooLong) => crate::string::throw_string_too_long(),
+        Err(DecodeFailure::Malformed) => unreachable!("a non-fatal decode is never malformed"),
+    }
 }
 
 /// Consume one leading BOM, as TextDecoder's default `ignoreBOM: false` does.
@@ -721,7 +725,7 @@ fn incomplete_tail_len(bytes: &[u8], encoding: DecoderEncoding) -> usize {
 }
 
 /// One `decode` call over `input` with the decoder's state `word`: the decoded
-/// string (`None` when `fatal` rejects the input) and the word to store. A
+/// string (an error when `fatal` rejects the input or the text is too long) and the word to store. A
 /// `stream: true` call keeps an unfinished sequence for the next one and
 /// consumes the BOM once per stream; any other call ends the stream, so what
 /// is still pending decodes now and the next call starts a new stream. A
@@ -731,7 +735,7 @@ fn decode_with_state(
     word: u64,
     input: &[u8],
     stream: bool,
-) -> (Option<i64>, u64) {
+) -> (Result<i64, DecodeFailure>, u64) {
     let (pending, pending_len) = stream_pending(word);
     let joined;
     let mut bytes = if pending_len == 0 {
@@ -747,7 +751,7 @@ fn decode_with_state(
             if stream && bytes.len() < bom.len() && bom.starts_with(bytes) {
                 // Too few bytes yet to tell a BOM from content.
                 let empty = js_string_from_bytes(std::ptr::null(), 0) as i64;
-                return (Some(empty), with_stream_state(word, false, bytes));
+                return (Ok(empty), with_stream_state(word, false, bytes));
             }
             bytes = bytes.strip_prefix(bom).unwrap_or(bytes);
         }
@@ -760,7 +764,7 @@ fn decode_with_state(
     };
     let (body, tail) = bytes.split_at(bytes.len() - keep);
     let decoded = decode_bytes(body, state.encoding, state.fatal);
-    let next = if stream && decoded.is_some() {
+    let next = if stream && decoded.is_ok() {
         with_stream_state(word, started, tail)
     } else {
         with_stream_state(word, false, &[])
@@ -853,7 +857,11 @@ fn text_decoder_decode(handle: f64, value: f64, stream: bool) -> i64 {
     if next != word {
         store_decoder_word(handle, next);
     }
-    decoded.unwrap_or_else(|| throw_invalid_encoded_data(state.label))
+    match decoded {
+        Ok(decoded) => decoded,
+        Err(DecodeFailure::Malformed) => throw_invalid_encoded_data(state.label),
+        Err(DecodeFailure::TooLong) => crate::string::throw_string_too_long(),
+    }
 }
 
 fn throw_invalid_decode_input() -> ! {
@@ -864,20 +872,40 @@ fn throw_invalid_decode_input() -> ! {
     )
 }
 
-/// Decode `bytes` per `encoding`; returns a `*mut StringHeader` as i64, or
-/// `None` when `fatal` is set and the input is malformed. The caller throws:
-/// a JS throw skips Rust drops, so none may be pending at the throw.
-fn decode_bytes(bytes: &[u8], encoding: DecoderEncoding, fatal: bool) -> Option<i64> {
+/// Why [`decode_bytes`] produced no string. The caller throws: a JS throw
+/// skips Rust drops, so none may be pending at the throw.
+enum DecodeFailure {
+    /// `fatal` is set and the input is malformed.
+    Malformed,
+    /// The text is longer than `MAX_STRING_LENGTH` units (node:
+    /// `ERR_STRING_TOO_LONG`).
+    TooLong,
+}
+
+/// Text past the string limit is refused before it becomes a string.
+fn decoded_string(s: &str) -> Result<i64, DecodeFailure> {
+    if crate::string::decoded_text_over_limit(s) {
+        return Err(DecodeFailure::TooLong);
+    }
+    Ok(js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64)
+}
+
+/// Decode `bytes` per `encoding`; returns a `*mut StringHeader` as i64.
+fn decode_bytes(
+    bytes: &[u8],
+    encoding: DecoderEncoding,
+    fatal: bool,
+) -> Result<i64, DecodeFailure> {
     let decoded = match encoding {
         DecoderEncoding::Utf8 => {
             if fatal {
-                let s = std::str::from_utf8(bytes).ok()?;
-                js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64
+                let s = std::str::from_utf8(bytes).map_err(|_| DecodeFailure::Malformed)?;
+                decoded_string(s)?
             } else {
                 // Lossy decode: invalid sequences become U+FFFD, exactly
                 // like Node's non-fatal TextDecoder.
                 let s = String::from_utf8_lossy(bytes);
-                js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64
+                decoded_string(&s)?
             }
         }
         DecoderEncoding::SingleByte(table) => {
@@ -892,12 +920,12 @@ fn decode_bytes(bytes: &[u8], encoding: DecoderEncoding, fatal: bool) -> Option<
                     table[(b - 0x80) as usize] as u32
                 };
                 if fatal && cp == 0xFFFD {
-                    return None;
+                    return Err(DecodeFailure::Malformed);
                 }
                 // Single-byte tables only hold BMP scalars (never surrogates).
                 out.push(char::from_u32(cp).unwrap_or('\u{FFFD}'));
             }
-            js_string_from_bytes(out.as_ptr(), out.len() as u32) as i64
+            decoded_string(&out)?
         }
         DecoderEncoding::Utf16Le | DecoderEncoding::Utf16Be => {
             let to_unit = match encoding {
@@ -909,7 +937,7 @@ fn decode_bytes(bytes: &[u8], encoding: DecoderEncoding, fatal: bool) -> Option<
             let mut units: Vec<u16> = pairs.map(|p| to_unit([p[0], p[1]])).collect();
             let s = match String::from_utf16(&units) {
                 Ok(s) if !odd_byte => s,
-                _ if fatal => return None,
+                _ if fatal => return Err(DecodeFailure::Malformed),
                 _ => {
                     // A trailing high surrogate and the odd byte after it are
                     // one end-of-input error, so they share one U+FFFD.
@@ -919,10 +947,10 @@ fn decode_bytes(bytes: &[u8], encoding: DecoderEncoding, fatal: bool) -> Option<
                     String::from_utf16_lossy(&units)
                 }
             };
-            js_string_from_bytes(s.as_ptr(), s.len() as u32) as i64
+            decoded_string(&s)?
         }
     };
-    Some(decoded)
+    Ok(decoded)
 }
 
 fn throw_invalid_encoded_data(encoding: &str) -> ! {
