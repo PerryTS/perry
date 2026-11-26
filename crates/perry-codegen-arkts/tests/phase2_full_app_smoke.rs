@@ -86,6 +86,7 @@ fn nmc(method: &str, args: Vec<Expr>) -> Expr {
 
 fn closure(params: Vec<Param>, body: Vec<Stmt>) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 0 as FuncId,
         params,

@@ -188,6 +188,7 @@ fn call0(callee: u32) -> Expr {
 fn closure_module() -> Module {
     let mut m = Module::new("p6_closure.ts");
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 30,
         params: vec![param(20, Type::Any)],

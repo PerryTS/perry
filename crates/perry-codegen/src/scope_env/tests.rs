@@ -34,6 +34,7 @@ fn mutating_closure(func_id: u32, ids: &[u32]) -> Expr {
         .collect();
     body.push(Stmt::Return(ids.last().map(|id| Expr::LocalGet(*id)), 0));
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id,
         params: Vec::new(),
@@ -402,6 +403,7 @@ fn writes_before_every_capture_need_no_cell() {
         let_num(1, 0.0),
         Stmt::Expr(Expr::LocalSet(1, Box::new(Expr::Number(5.0)))),
         Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 100,
             params: Vec::new(),

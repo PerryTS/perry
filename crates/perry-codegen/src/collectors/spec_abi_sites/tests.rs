@@ -337,6 +337,7 @@ fn reassignment_in_another_function_rejects_binding() {
 #[test]
 fn closure_reference_rejects_binding() {
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 99,
         params: vec![],
@@ -413,6 +414,7 @@ fn sites_inside_closures_are_judged_as_their_own_body() {
     // its literals are judged, and no binding of the enclosing body is ready
     // there unless `definite_init` proves it for the closure at entry.
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 99,
         params: vec![],
@@ -533,6 +535,7 @@ fn boxed_prealloc_binding_is_rejected() {
 #[test]
 fn local_is_reassigned_sees_closure_writes() {
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 99,
         params: vec![],

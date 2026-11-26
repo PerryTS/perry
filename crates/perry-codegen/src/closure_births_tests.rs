@@ -20,6 +20,7 @@ fn hoisted_run(ids: &[u32]) -> Vec<Stmt> {
             ty: Type::Any,
             mutable: true,
             init: Some(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 100 + id,
                 params: Vec::new(),

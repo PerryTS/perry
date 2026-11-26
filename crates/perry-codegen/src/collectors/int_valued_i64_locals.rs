@@ -660,6 +660,7 @@ mod tests {
         let stmts = vec![
             let_int(1, 0),
             Stmt::Expr(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 0,
                 params: vec![],
@@ -688,6 +689,7 @@ mod tests {
         let stmts = vec![
             let_int(1, 0),
             Stmt::Expr(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 0,
                 params: vec![],

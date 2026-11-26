@@ -348,6 +348,7 @@ fn update_result_used_as_a_value_escapes() {
 #[test]
 fn hash_captured_by_a_closure_escapes() {
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 9,
         params: vec![],
@@ -463,6 +464,7 @@ fn module_init_nested_var_keeps_the_handle() {
 
 fn closure(func_id: u32, params: Vec<Param>, body: Vec<Stmt>, captures: Vec<u32>) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id,
         params,

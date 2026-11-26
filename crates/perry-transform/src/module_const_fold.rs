@@ -842,6 +842,7 @@ mod tests {
         let mut m = module_with_const(false, Expr::Integer(5));
         m.functions[0].body = vec![Stmt::Return(
             Some(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 77,
                 params: Vec::new(),
@@ -1060,6 +1061,7 @@ mod tests {
     fn a_local_const_key_read_before_its_declaration_keeps_its_tdz() {
         let mut m = Module::new("k.ts");
         let closure = Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 78,
             params: Vec::new(),
@@ -1173,6 +1175,7 @@ mod tests {
     #[test]
     fn a_written_mutable_or_index_local_key_is_left_alone() {
         let write_in_closure = Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 79,
             params: Vec::new(),

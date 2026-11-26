@@ -522,6 +522,7 @@ fn a_boxed_local_self_append_uses_the_amortized_path() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: 0,
                     func_id: 2,
                     params: Vec::new(),
@@ -580,6 +581,7 @@ fn a_boxed_capture_self_append_uses_the_amortized_path() {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: 0,
                     func_id: 2,
                     params: Vec::new(),
