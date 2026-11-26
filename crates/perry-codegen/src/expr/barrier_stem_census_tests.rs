@@ -773,6 +773,7 @@ fn idxset_recv_captured_ir() -> String {
                 ty: Type::Any,
                 mutable: false,
                 init: Some(Expr::Closure {
+                    type_params: Vec::new(),
                     byte_offset: 0,
                     func_id: 2,
                     params: Vec::new(),
@@ -1231,6 +1232,7 @@ fn generator_state_ir() -> String {
             Stmt::Return(
                 Some(Expr::LinkGeneratorPrototype {
                     obj: Box::new(Expr::Closure {
+                        type_params: Vec::new(),
                         byte_offset: 0,
                         func_id: 2,
                         params: vec![Param {

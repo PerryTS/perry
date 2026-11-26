@@ -11,6 +11,7 @@ use perry_hir::{Expr, Function, Module as HirModule, Stmt, UpdateOp};
 /// the read and the write.
 fn one_capture_closure_ir() -> String {
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 1,
         params: Vec::new(),
@@ -86,6 +87,7 @@ fn one_capture_closure_ir() -> String {
 /// writer (`js_closure_set_capture_bits`) does no bounds check at all.
 fn unboxed_capture_update_ir() -> String {
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 1,
         params: Vec::new(),

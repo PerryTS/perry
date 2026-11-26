@@ -954,6 +954,7 @@ fn non_numeric_writes_and_bindings_are_excluded() {
             init: Some(Expr::Number(0.0)),
         },
         Stmt::Expr(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 99,
             params: Vec::new(),

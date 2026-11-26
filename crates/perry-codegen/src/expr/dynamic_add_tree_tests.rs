@@ -351,6 +351,7 @@ fn left_chain_declines_when_a_late_leaf_is_captured_and_assigned() {
             ty: Type::Any,
             mutable: false,
             init: Some(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 2,
                 params: Vec::new(),

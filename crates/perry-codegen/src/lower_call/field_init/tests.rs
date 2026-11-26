@@ -700,6 +700,7 @@ fn captures_this_arrow_field() -> ClassField {
         key_expr: None,
         ty: Type::Any,
         init: Some(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 8693,
             params: Vec::new(),

@@ -43,6 +43,7 @@ pub(super) fn ir() -> String {
         Stmt::Return(Some(Expr::LocalGet(7)), 0),
     ];
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 1,
         params,

@@ -349,6 +349,7 @@ fn closure_scoped_temps_are_activation_local() {
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 10,
             params: vec![param(20, "n", None)],

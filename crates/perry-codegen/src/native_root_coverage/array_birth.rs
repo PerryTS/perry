@@ -51,6 +51,7 @@ fn array_elements_and_reduce_callback_are_live_across_inline_births() {
         module.init.push(Stmt::Expr(Expr::ArrayReduceRight {
             array: Box::new(Expr::Array(vec![Expr::Integer(1)], None)),
             callback: Box::new(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 7,
                 params: Vec::new(),

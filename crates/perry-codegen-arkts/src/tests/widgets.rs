@@ -612,6 +612,7 @@ fn for_each_lowers_array_map_in_vstack() {
             None,
         )),
         callback: Box::new(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 0 as perry_hir::types::FuncId,
             params: vec![item_param],
