@@ -191,8 +191,11 @@ extern "C" fn im_read(
 }
 
 /// node's `_destroy(err, cb)`: an incomplete message is aborted (`aborted`
-/// set, `'aborted'` emitted), then node's `onError`: the error goes to `cb`
-/// only when an `'error'` listener is attached, else `cb()`.
+/// set, `'aborted'` emitted). An aborted message destroys its live socket and
+/// answers once `finished(socket)` does (the next tick, the socket being
+/// destroyed); otherwise it answers on the next tick. The answer is node's
+/// `onError`, one tick later: the error goes to `cb` only when an `'error'`
+/// listener is attached, else `cb()`.
 extern "C" fn im_destroy(
     closure: *const ClosureHeader,
     this: crate::closure::JsThis,
@@ -221,28 +224,115 @@ extern "C" fn im_destroy(
     if incomplete {
         abort(r());
     }
-    if JSValue::from_bits(cb.get_nanbox_u64()).is_pointer() {
+    let socket = scope.root_nanbox_f64(get(r(), b"socket"));
+    let live = JSValue::from_bits(socket.get_nanbox_u64()).is_pointer()
+        && !truthy(get(socket.get_nanbox_f64(), b"destroyed"));
+    if live && truthy(get(r(), b"aborted")) {
+        call(socket.get_nanbox_f64(), b"destroy", &[err.get_nanbox_f64()]);
+        // `finished(socket, ...)` on a destroyed socket: its callback runs on
+        // the next tick, with `'error'` swallowed meanwhile (eos's `nop`).
+        let nop = scope.root_nanbox_f64(boxed_closure(js_closure_alloc(
+            crate::fn_info!(im_destroy_nop, 0),
+            0,
+        )));
         let event = scope.root_nanbox_f64(literal_string_value(b"error"));
-        let listened = if pristine(r()).is_some() {
-            event_emitter::stream_listener_count_for_event(r(), event.get_nanbox_f64()) > 0
-        } else {
-            let n = call(r(), b"listenerCount", &[event.get_nanbox_f64()]);
-            JSValue::from_bits(n.to_bits()).is_number() && n > 0.0
-        };
-        let undef = f64::from_bits(TAG_UNDEFINED);
-        if listened {
-            crate::object::property_ops::common::call_with_this_and_args(
-                cb.get_nanbox_f64(),
-                undef,
-                &[err.get_nanbox_f64()],
-            );
-        } else {
-            crate::object::property_ops::common::call_with_this_and_args(
-                cb.get_nanbox_f64(),
-                undef,
-                &[],
-            );
-        }
+        call(
+            socket.get_nanbox_f64(),
+            b"on",
+            &[event.get_nanbox_f64(), nop.get_nanbox_f64()],
+        );
+        let tick = destroy_tick(
+            crate::fn_info!(im_destroy_socket_finished, 0),
+            &[r(), err.get_nanbox_f64(), cb.get_nanbox_f64(), socket.get_nanbox_f64()],
+        );
+        crate::builtins::js_queue_next_tick(tick as i64);
+    } else {
+        let tick = destroy_tick(
+            crate::fn_info!(im_destroy_on_error, 0),
+            &[r(), err.get_nanbox_f64(), cb.get_nanbox_f64()],
+        );
+        crate::builtins::js_queue_next_tick(tick as i64);
+    }
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+fn boxed_closure(c: *mut ClosureHeader) -> f64 {
+    f64::from_bits(JSValue::pointer(c as *const u8).bits())
+}
+
+/// A tick closure carrying `values` (rooted across its allocation).
+fn destroy_tick(
+    info: *const crate::closure::JsFunctionInfo,
+    values: &[f64],
+) -> *mut ClosureHeader {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let rooted: Vec<_> = values.iter().map(|v| scope.root_nanbox_f64(*v)).collect();
+    let tick = js_closure_alloc(info, rooted.len() as u32);
+    for (i, v) in rooted.iter().enumerate() {
+        js_closure_set_capture_f64(tick, i as u32, v.get_nanbox_f64());
+    }
+    tick
+}
+
+extern "C" fn im_destroy_nop(_c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// eos's callback: `e` (the socket's error; a premature close is none), then
+/// `process.nextTick(onError, this, e || err, cb)`.
+extern "C" fn im_destroy_socket_finished(
+    c: *const ClosureHeader,
+    _this: crate::closure::JsThis,
+) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(js_closure_get_capture_f64(c, 0));
+    let err = scope.root_nanbox_f64(js_closure_get_capture_f64(c, 1));
+    let cb = scope.root_nanbox_f64(js_closure_get_capture_f64(c, 2));
+    let socket = js_closure_get_capture_f64(c, 3);
+    let errored = scope.root_nanbox_f64(get(socket, b"errored"));
+    let e = if truthy(errored.get_nanbox_f64()) {
+        errored.get_nanbox_f64()
+    } else {
+        err.get_nanbox_f64()
+    };
+    let tick = destroy_tick(
+        crate::fn_info!(im_destroy_on_error, 0),
+        &[this.get_nanbox_f64(), e, cb.get_nanbox_f64()],
+    );
+    crate::builtins::js_queue_next_tick(tick as i64);
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+/// node's `onError(self, error, cb)`.
+extern "C" fn im_destroy_on_error(c: *const ClosureHeader, _this: crate::closure::JsThis) -> f64 {
+    let scope = crate::gc::RuntimeHandleScope::new();
+    let this = scope.root_nanbox_f64(js_closure_get_capture_f64(c, 0));
+    let err = scope.root_nanbox_f64(js_closure_get_capture_f64(c, 1));
+    let cb = scope.root_nanbox_f64(js_closure_get_capture_f64(c, 2));
+    let r = || this.get_nanbox_f64();
+    if !JSValue::from_bits(cb.get_nanbox_u64()).is_pointer() {
+        return f64::from_bits(TAG_UNDEFINED);
+    }
+    let event = scope.root_nanbox_f64(literal_string_value(b"error"));
+    let listened = if pristine(r()).is_some() {
+        event_emitter::stream_listener_count_for_event(r(), event.get_nanbox_f64()) > 0
+    } else {
+        let n = call(r(), b"listenerCount", &[event.get_nanbox_f64()]);
+        JSValue::from_bits(n.to_bits()).is_number() && n > 0.0
+    };
+    let undef = f64::from_bits(TAG_UNDEFINED);
+    if listened {
+        crate::object::property_ops::common::call_with_this_and_args(
+            cb.get_nanbox_f64(),
+            undef,
+            &[err.get_nanbox_f64()],
+        );
+    } else {
+        crate::object::property_ops::common::call_with_this_and_args(
+            cb.get_nanbox_f64(),
+            undef,
+            &[],
+        );
     }
     f64::from_bits(TAG_UNDEFINED)
 }

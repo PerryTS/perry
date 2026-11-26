@@ -64,13 +64,11 @@ pub unsafe extern "C" fn js_node_http_res_end_full(handle: i64, chunk: f64, arg2
         &finish_listeners,
         &close_listeners,
     );
-    // Node order: queued write callbacks flush, then `'finish'` listeners, then
-    // the end callback, then `'close'`. The end cb fires *after* `'finish'` so
-    // a `res.on('finish')` handler that inspects end-callback state sees the
-    // same interleaving as Node.
+    // node's `onFinish`: queued write callbacks, the end callbacks
+    // (`flushEndCallbacks`), then `'finish'`, then `'close'`.
     tail.run_write_callbacks();
-    tail.emit_finish();
     tail.run_end_callback();
+    tail.emit_finish();
     tail.emit_close();
 }
 
@@ -122,9 +120,8 @@ pub unsafe extern "C" fn js_node_http_res_end_with_cb(handle: i64, chunk: f64, c
         return;
     }
     // #4909 — Node's flush ordering, matching `js_node_http_res_end_full`:
-    // queued write callbacks → `'finish'` → end callback → `'close'`. The
-    // previous code fired `'finish'`/`'close'` (via `js_node_http_res_end`)
-    // before any callback ran.
+    // queued write callbacks → end callback → `'finish'` → `'close'` (node's
+    // `onFinish` flushes the end callbacks before it emits).
     let (finish_listeners, close_listeners) =
         match finalize_buffered_end(response_root.get(), chunk, callback_root.get()) {
             Some(EndOutcome::Deferred) => return,
@@ -143,8 +140,8 @@ pub unsafe extern "C" fn js_node_http_res_end_with_cb(handle: i64, chunk: f64, c
         &close_listeners,
     );
     tail.run_write_callbacks();
-    tail.emit_finish();
     tail.run_end_callback();
+    tail.emit_finish();
     tail.emit_close();
 }
 
@@ -382,6 +379,15 @@ impl<'a> EndTail<'a> {
         call_closure0(self.callback.get());
     }
 
+    fn run_end_callback_with(&self, error: f64) {
+        let callback = self.callback.get();
+        if callback == 0 {
+            return;
+        }
+        let func = f64::from_bits(JsValue::from_object_ptr(callback as *mut RawClosureHeader).bits());
+        unsafe { perry_ffi::call_value(func, perry_ffi::JsThis::UNDEFINED, &[error]) };
+    }
+
     fn emit_finish(&self) {
         self.emit("finish", &self.finish);
     }
@@ -532,10 +538,15 @@ extern "C" fn tail_after_flush(closure: *const RawClosureHeader, _this: JsThis, 
         &array_addrs(finish.get()),
         &array_addrs(close.get()),
     );
-    if !failed {
+    if failed {
+        // node's `onFinish(outmsg, err)`: the end callbacks get the error and
+        // the message never finishes.
+        tail.run_end_callback_with(error);
+    } else {
+        // node's `onFinish`: `flushEndCallbacks`, then `emit('finish')`.
         tail.run_write_callbacks();
-        tail.emit_finish();
         tail.run_end_callback();
+        tail.emit_finish();
     }
     tail.emit_close();
     f64::from_bits(TAG_UNDEFINED)
