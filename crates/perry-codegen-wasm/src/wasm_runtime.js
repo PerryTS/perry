@@ -2395,19 +2395,21 @@ const __memDispatch = {
   // SameValue: NaN is itself and 0 is not -0, unlike `===`.
   object_is: (a, b) => Object.is(a, b),
   // `import * as ns` used as a value: the source module's exports sorted on a null
-  // prototype, tagged `Module`, not extensible. `globals` names the wasm global of each
-  // promoted-let export, read on every access so the binding stays live.
+  // prototype, tagged `Module`, not extensible. `values` pairs each export with its
+  // value and `globals` each promoted-let export with its wasm global, read on every
+  // access so the binding stays live.
   module_namespace: (id, values, globals) => {
     let ns = __moduleNamespaces.get(id);
     if (ns) return ns;
     ns = Object.create(null);
-    for (const key of [...Object.keys(values), ...Object.keys(globals)].sort()) {
-      if (Object.hasOwn(globals, key)) {
-        const cell = wasmInstance.exports[`__wasm_global_${globals[key]}`];
+    const members = [...values, ...globals.map(([key, g]) => [key, undefined, g])];
+    for (const [key, value, g] of members.sort(([a], [b]) => (a < b ? -1 : 1))) {
+      if (g !== undefined) {
+        const cell = wasmInstance.exports[`__wasm_global_${g}`];
         Object.defineProperty(ns, key, { get: () => toJsValue(u64ToF64(cell.value)), enumerable: true });
       } else {
         // Not writable, as an importer cannot assign an export.
-        Object.defineProperty(ns, key, { value: values[key], enumerable: true });
+        Object.defineProperty(ns, key, { value, enumerable: true });
       }
     }
     Object.defineProperty(ns, Symbol.toStringTag, { value: 'Module' });

@@ -124,16 +124,16 @@ impl WasmModuleEmitter {
         for name in &ns.members {
             let key = (self.current_mod_idx, format!("{local}.{name}"));
             if let Some(&gidx) = self.imported_var_globals.get(&key) {
-                globals.push(format!("{}: {gidx}", js_string_literal(name)));
+                globals.push(format!("[{}, {gidx}]", js_string_literal(name)));
             } else {
                 let value = self
                     .js_namespace_member(local, name)
                     .map_or_else(|| "undefined".to_string(), |v| format!("toJsValue({v})"));
-                values.push(format!("{}: {value}", js_string_literal(name)));
+                values.push(format!("[{}, {value}]", js_string_literal(name)));
             }
         }
         Some(format!(
-            "fromJsValue(__memDispatch.module_namespace({}, {{{}}}, {{{}}}))",
+            "fromJsValue(__memDispatch.module_namespace({}, [{}], [{}]))",
             ns.source,
             values.join(", "),
             globals.join(", ")
@@ -143,8 +143,9 @@ impl WasmModuleEmitter {
 
 impl<'a> FuncEmitCtx<'a> {
     /// `W` as a value: `module_namespace(source, values, globals)`, where `values`
-    /// holds the function and class members and `globals` the wasm global index of
-    /// each promoted-let member.
+    /// pairs each function and class member with its value and `globals` each
+    /// promoted-let member with its wasm global index. Pairs, not an object literal,
+    /// so an export named `__proto__` stays a key.
     pub(super) fn emit_namespace_value(&mut self, func: &mut Function, local: &str) {
         let Some(ns) = self.emitter.namespace_import(local) else {
             func.instruction(&Instruction::I64Const(TAG_UNDEFINED as i64));
@@ -177,8 +178,14 @@ impl<'a> FuncEmitCtx<'a> {
         }
         self.emit_frame_begin(func, 3);
         self.emit_store_const(func, 0, source as f64);
-        self.emit_store_arg(func, 1, &Expr::Object(values));
-        self.emit_store_arg(func, 2, &Expr::Object(globals));
+        let pairs = |members: Vec<(String, Expr)>| {
+            let pairs = members
+                .into_iter()
+                .map(|(name, value)| Expr::Array(vec![Expr::String(name), value], None));
+            Expr::Array(pairs.collect(), None)
+        };
+        self.emit_store_arg(func, 1, &pairs(values));
+        self.emit_store_arg(func, 2, &pairs(globals));
         self.emit_memcall(func, "module_namespace", 3);
     }
 

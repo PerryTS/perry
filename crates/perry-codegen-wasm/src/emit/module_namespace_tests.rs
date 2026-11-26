@@ -88,3 +88,27 @@ console.log(typeof ns.f, ns.f());
         "K,default,f,renamed K,PublicK,f,own,renamed\n3 8 false\nfunction 2"
     );
 }
+
+// An export named `__proto__` is a key like any other. Expected output is Node's.
+#[test]
+fn an_export_named_proto_is_a_namespace_key() {
+    assert_eq!(
+        run_web_modules(&[
+            (
+                "lib",
+                "const p = 5;\nexport { p as __proto__ };\nexport const a = 1;\n"
+            ),
+            (
+                "main",
+                r#"
+import * as m from "./lib";
+const v: any = m;
+console.log(Object.keys(v).join(","), v.__proto__);
+async function run() { const w: any = m; return Object.keys(w).join(","); }
+run().then((k) => console.log(k));
+"#
+            ),
+        ]),
+        "__proto__,a 5\n__proto__,a"
+    );
+}
