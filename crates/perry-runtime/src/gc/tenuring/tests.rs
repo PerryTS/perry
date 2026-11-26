@@ -1260,9 +1260,20 @@ fn fixed_cost_scale() -> u8 {
 }
 
 /// One fixed-cost reading at the current effective cap: `fixed_permille` of
-/// the mutator time that filled it.
+/// the mutator time that filled it. The mutator runs 1 us per Eden byte, so
+/// the window's time scales with the cap and a minor's fixed cost is many
+/// times the first touch of a doubling's pages (the price is paid at once).
 fn fixed_cost_reading(fixed_permille: u64) {
-    retune_fixed_cost_scale(fixed_permille, 1000, scavenge_nursery_cap_effective_bytes());
+    let cap = scavenge_nursery_cap_effective_bytes();
+    let mutator_ns = cap as u64 * 1000;
+    let fixed_ns = mutator_ns * fixed_permille / 1000;
+    retune_fixed_cost_scale(fixed_ns, fixed_ns, mutator_ns, cap);
+}
+
+/// One reading at the current effective cap with explicit times.
+fn fixed_cost_reading_ns(fixed_ns: u64, mutator_ns: u64) {
+    let cap = scavenge_nursery_cap_effective_bytes();
+    retune_fixed_cost_scale(fixed_ns, fixed_ns, mutator_ns, cap);
 }
 
 /// F4: a minor whose fixed cost is 4% of the mutator time that filled its
@@ -1412,5 +1423,56 @@ fn the_fixed_cost_floor_composes_with_the_influx_scale() {
     fixed_cost_reading(40);
     assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 16);
     assert_eq!(scavenge_nursery_cap_effective_bytes(), cap8 * 2);
+    reset_for_test();
+}
+
+/// NXGC7: a doubling costs the first touch of the pages it adds. A short
+/// program with cheap minors (0.1 ns of mutator per Eden byte, a 4% fixed
+/// share) grows only once the fixed cost the doubling would have saved, over
+/// its readings at this size, adds up to that price.
+#[test]
+fn the_fixed_cost_floor_grows_only_once_the_saved_minors_pay_the_first_touch() {
+    reset_for_test();
+    let cap = scavenge_nursery_cap_effective_bytes();
+    let mutator_ns = cap as u64 / 10;
+    let fixed_ns = (mutator_ns * 4 / 100) & !1;
+    // The doubling adds `cap` bytes and would save half of every fixed cost.
+    let price_ns = first_touch_price_ns(cap);
+    let readings = price_ns.div_ceil(fixed_ns / 2);
+    assert!(
+        readings > 2,
+        "the price must outweigh the debounce: {readings}"
+    );
+    for _ in 1..readings {
+        fixed_cost_reading_ns(fixed_ns, mutator_ns);
+    }
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "not paid yet");
+    fixed_cost_reading_ns(fixed_ns, mutator_ns);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2, "paid");
+    assert_eq!(scavenge_nursery_cap_effective_bytes(), cap * 2);
+    reset_for_test();
+}
+
+/// A step whose fixed share halves but whose window costs more thread CPU per
+/// Eden byte (the larger Eden made the mutator dearer) saved less than it
+/// cost: taken back and held like a step that bought nothing.
+#[test]
+fn a_fixed_cost_step_whose_total_cpu_does_not_fall_is_taken_back() {
+    reset_for_test();
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    let cap2 = scavenge_nursery_cap_effective_bytes();
+    // The first window pays the first touch; not a reading of the size.
+    fixed_cost_reading_ns(cap2 as u64 * 4000, cap2 as u64 * 2000);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    // 2% of a mutator 10% slower per byte: 1100 * 1.02 > 1000 * 1.04.
+    let mutator_ns = cap2 as u64 * 1100;
+    fixed_cost_reading_ns(mutator_ns * 2 / 100, mutator_ns);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "taken back");
+    for _ in 0..4 {
+        fixed_cost_reading(40);
+    }
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "held");
     reset_for_test();
 }

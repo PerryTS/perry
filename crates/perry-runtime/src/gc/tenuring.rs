@@ -291,18 +291,55 @@ const FIXED_COST_GROW_PERCENT: u128 = 2;
 /// floor moves again.
 const FIXED_COST_SHRINK_PERCENT: u128 = 1;
 
+/// What the first write to a page of fresh anonymous memory costs the thread
+/// that faults it in, in nanoseconds per page: the price of the Eden pages a
+/// growth of the fixed-cost floor adds ([`first_touch_price_ns`]).
+///
+/// Measured with a fresh mapping and the thread CPU clock, one write per
+/// page: x86-64 Linux 4 KiB pages 0.9 us, Apple M 16 KiB pages 1.05 us. The
+/// fault, not the zeroing, dominates at base pages, so the price is per page,
+/// not per byte. A THP-backed Eden (2 MiB pages) costs about half of this per
+/// byte, so the constant over-prices it: the floor then grows later, never
+/// further. A constant, not a measurement at run time, so a floor move depends
+/// only on the minors' own readings.
+const FIRST_TOUCH_NS_PER_PAGE: u64 = 1_000;
+
+/// The one-time CPU cost of faulting in `bytes` of Eden the thread has not
+/// touched yet ([`FIRST_TOUCH_NS_PER_PAGE`] per OS page).
+fn first_touch_price_ns(bytes: usize) -> u64 {
+    (bytes.div_ceil(os_page_bytes()) as u64).saturating_mul(FIRST_TOUCH_NS_PER_PAGE)
+}
+
+fn os_page_bytes() -> usize {
+    #[cfg(unix)]
+    {
+        // SAFETY: sysconf reads a constant of the running system.
+        let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+        if page > 0 {
+            return page as usize;
+        }
+    }
+    4096
+}
+
 /// The fixed-cost floor's state between readings ([`retune_fixed_cost_scale`]).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct FixedCostDial {
     /// The previous reading at the floor's size: its share there (parts per
-    /// million of the mutator time) and its shrink destination. `None` before
-    /// the first reading and after a move.
-    prev: Option<(u64, u8)>,
+    /// million of the mutator time), its shrink destination and its window's
+    /// whole thread CPU per MiB of Eden. `None` before the first reading and
+    /// after a move.
+    prev: Option<(u64, u8, u64)>,
     /// Readings since the floor last moved.
     readings: u8,
-    /// A growth step not checked yet: the floor before it and the share the
-    /// readings that took it measured at that size.
-    step: Option<(u8, u64)>,
+    /// The fixed cost, in nanoseconds, that the next doubling would have saved
+    /// over the readings since the floor last moved: what the program has
+    /// paid toward the first touch of the pages that doubling adds.
+    saved_ns: u64,
+    /// A growth step not checked yet: the floor before it, the share the
+    /// readings that took it measured at that size, and their mean thread CPU
+    /// per MiB of Eden.
+    step: Option<(u8, u64, u64)>,
     /// A growth step that bought nothing: the floor it was taken from and
     /// the share measured there. The floor grows past that size again only
     /// once a reading there is at least twice that share.
@@ -313,6 +350,7 @@ impl FixedCostDial {
     const START: Self = FixedCostDial {
         prev: None,
         readings: 0,
+        saved_ns: 0,
         step: None,
         hold: None,
     };
@@ -1408,15 +1446,17 @@ pub(super) fn note_minor_fixed_cost(entry_cap: usize, full_eden_window: bool) {
     if !full_eden_window {
         return;
     }
-    let fixed_ns = now.saturating_sub(begin).saturating_sub(clock.drain_ns);
+    let minor_ns = now.saturating_sub(begin);
+    let fixed_ns = minor_ns.saturating_sub(clock.drain_ns);
     let mutator_ns = begin.saturating_sub(clock.last_end_ns.unwrap_or(0));
-    retune_fixed_cost_scale(fixed_ns, mutator_ns, entry_cap);
+    retune_fixed_cost_scale(fixed_ns, minor_ns, mutator_ns, entry_cap);
 }
 
 /// Retune the ladder's fixed-cost floor from one copying minor: `fixed_ns` of
 /// work that does not scale with survivors (root scanning, the remembered
-/// set, pruning, finalization; everything but the worklist drain) against
-/// `mutator_ns` of program time that filled an Eden of `cap_now` bytes.
+/// set, pruning, finalization; everything but the worklist drain) of the
+/// minor's `minor_ns`, against `mutator_ns` of program time that filled an
+/// Eden of `cap_now` bytes.
 ///
 /// If the fixed cost of a minor is paid once per Eden, its share of the
 /// program's time at an Eden of `C` bytes is `fixed / mutator * cap_now / C`.
@@ -1427,6 +1467,21 @@ pub(super) fn note_minor_fixed_cost(entry_cap: usize, full_eden_window: bool) {
 /// move needs the previous reading to agree (the same
 /// [`RAISE_DEBOUNCE_CYCLES`] of two as the influx ladder), so one slow minor
 /// (a page fault storm, a first-touch rebuild) moves nothing.
+///
+/// # Each step is paid for first
+///
+/// A doubling saves part of every later minor's fixed cost, but it costs at
+/// once: the first touch of the Eden pages it adds
+/// ([`first_touch_price_ns`]). On a short program with cheap minors that price
+/// is many times what the saved minors are worth (low-survival fixture: 46
+/// minors of ~40 us, 21 ms of CPU; doubled four times it paid ~10k page faults
+/// and 17 ms more for 1 ms of minors). So the dial adds up, over its readings
+/// at the current size, the fixed cost the doubling would have saved, and
+/// grows only once that sum covers the price: the program has then paid the
+/// price in minors already, and if it runs as long again as it has at this
+/// size it gets it back. It never pays more than twice the best choice in
+/// hindsight (the rent-or-buy bound), and a long-running program with costly
+/// minors (a server: minors of milliseconds) pays it within a window or two.
 ///
 /// # Each step is checked
 ///
@@ -1440,8 +1495,13 @@ pub(super) fn note_minor_fixed_cost(entry_cap: usize, full_eden_window: bool) {
 /// whose share fell by less than a quarter is mostly not fixed cost. Such a
 /// step is taken back, and the floor does not grow past that size again
 /// until a reading there is at least twice the share that took the step
-/// (the program's minors changed). A step that halved the share is kept and
-/// the floor goes on from there while the share stays above the edge.
+/// (the program's minors changed). The check also prices the whole thread:
+/// the window's mutator time plus the whole minor, per byte of Eden, must
+/// fall below the mean of the readings that took the step. A larger Eden can
+/// make every allocation dearer (a working set out of cache); a step whose
+/// total does not fall saved less than it cost and is taken back the same
+/// way. A step that passes both is kept and the floor goes on from there
+/// while the share stays above the edge.
 ///
 /// The floor is bounded by the ladder's ceiling (`NURSERY_CAP_SCALE_MAX`,
 /// 64 MB) and never takes a step that cannot enlarge the cap: where the
@@ -1460,7 +1520,12 @@ pub(super) fn note_minor_fixed_cost(entry_cap: usize, full_eden_window: bool) {
 /// a kept step halved its share and a taken-back one holds until its share
 /// doubles, so the floor of a program whose share is not within that noise
 /// of an edge is the same on every run.
-pub(super) fn retune_fixed_cost_scale(fixed_ns: u64, mutator_ns: u64, cap_now: usize) {
+pub(super) fn retune_fixed_cost_scale(
+    fixed_ns: u64,
+    minor_ns: u64,
+    mutator_ns: u64,
+    cap_now: usize,
+) {
     if mutator_ns == 0 || cap_now == 0 {
         return;
     }
@@ -1496,35 +1561,66 @@ pub(super) fn retune_fixed_cost_scale(fixed_ns: u64, mutator_ns: u64, cap_now: u
     };
     let share = share_at(floor);
     let shrink_to = destination(FIXED_COST_SHRINK_PERCENT);
+    // The window's whole thread CPU (mutator and the whole minor) per MiB of
+    // the Eden it filled.
+    let total_per_mib = {
+        let total = u128::from(mutator_ns.saturating_add(minor_ns)) << 20;
+        (total / cap_now as u128).min(u128::from(u64::MAX)) as u64
+    };
     let mut dial = FIXED_COST_DIAL.with(Cell::get);
     dial.readings = dial.readings.saturating_add(1);
     let moved = |dial: &mut FixedCostDial, to: u8, why: &str| {
         *dial = FixedCostDial {
             prev: None,
             readings: 0,
+            saved_ns: 0,
             ..*dial
         };
         FIXED_COST_SCALE.with(|s| s.set(to));
         diag_fixed_cost_scale(floor, to, why, fixed_ns, mutator_ns, cap_now);
     };
-    if let Some((before, before_share)) = dial.step {
+    if let Some((before, before_share, before_total)) = dial.step {
         if dial.readings == 1 {
             // The first window at the new size: see "Each step is checked".
             FIXED_COST_DIAL.with(|d| d.set(dial));
             return;
         }
         dial.step = None;
-        if share.saturating_mul(4) > before_share.saturating_mul(3) {
+        let why = if share.saturating_mul(4) > before_share.saturating_mul(3) {
+            Some("step bought nothing, back")
+        } else if total_per_mib >= before_total {
+            Some("step cost more than it saved, back")
+        } else {
+            None
+        };
+        if let Some(why) = why {
             dial.hold = Some((before, before_share));
-            moved(&mut dial, before, "step bought nothing, back");
+            moved(&mut dial, before, why);
             FIXED_COST_DIAL.with(|d| d.set(dial));
             return;
         }
     }
-    let prev = dial.prev.replace((share, shrink_to));
+    let prev = dial.prev.replace((share, shrink_to, total_per_mib));
     let edge = (FIXED_COST_GROW_PERCENT * 10_000) as u64;
     let from = floor.max(influx).min(NURSERY_CAP_SCALE_MAX);
     let grow_to = from.saturating_mul(2);
+    // What the doubling would have saved of this minor, and what its added
+    // pages cost to touch: see "Each step is paid for first".
+    let grow_cap = cap_at(grow_to.min(NURSERY_CAP_SCALE_MAX));
+    let saved_here = u128::from(fixed_ns) * cap_now as u128 / grow_cap.max(1) as u128;
+    dial.saved_ns = dial
+        .saved_ns
+        .saturating_add(fixed_ns.saturating_sub(saved_here.min(u128::from(u64::MAX)) as u64));
+    let price_ns = first_touch_price_ns(grow_cap.saturating_sub(cap_now));
+    diag_fixed_cost_reading(
+        fixed_ns,
+        minor_ns,
+        mutator_ns,
+        cap_now,
+        total_per_mib,
+        dial.saved_ns,
+        price_ns,
+    );
     let held = dial
         .hold
         .is_some_and(|(at, held_share)| floor <= at && share_at(at) < held_share.saturating_mul(2));
@@ -1532,17 +1628,19 @@ pub(super) fn retune_fixed_cost_scale(fixed_ns: u64, mutator_ns: u64, cap_now: u
         dial.hold = None;
     }
     match prev {
-        Some((prev_share, _))
+        Some((prev_share, _, prev_total))
             if share > edge
                 && prev_share > edge
                 && !held
                 && grow_to <= NURSERY_CAP_SCALE_MAX
-                && cap_at(grow_to) > cap_at(from) =>
+                && cap_at(grow_to) > cap_at(from)
+                && dial.saved_ns >= price_ns =>
         {
-            dial.step = Some((floor, share.min(prev_share)));
+            let before_total = (total_per_mib / 2).saturating_add(prev_total / 2);
+            dial.step = Some((floor, share.min(prev_share), before_total));
             moved(&mut dial, grow_to, "grow");
         }
-        Some((_, prev_shrink)) if shrink_to < floor && prev_shrink < floor => {
+        Some((_, prev_shrink, _)) if shrink_to < floor && prev_shrink < floor => {
             dial.step = None;
             moved(&mut dial, shrink_to.max(prev_shrink), "shrink");
         }
@@ -1660,6 +1758,24 @@ fn diag_fixed_cost_scale(
             "[gc-tenuring] nursery fixed-cost scale {from}/{unit} -> {to}/{unit} of base, {why} \
              (fixed_ns={fixed_ns} mutator_ns={mutator_ns} cap={cap_now})",
             unit = NURSERY_CAP_SCALE_UNIT
+        );
+    }
+}
+
+fn diag_fixed_cost_reading(
+    fixed_ns: u64,
+    minor_ns: u64,
+    mutator_ns: u64,
+    cap_now: usize,
+    total_per_mib: u64,
+    saved_ns: u64,
+    price_ns: u64,
+) {
+    if crate::gc::diagnostic_hooks::enabled() {
+        eprintln!(
+            "[gc-tenuring] fixed-cost reading fixed_ns={fixed_ns} minor_ns={minor_ns} \
+             mutator_ns={mutator_ns} cap={cap_now} total_ns_per_mib={total_per_mib} \
+             saved_ns={saved_ns} price_ns={price_ns}"
         );
     }
 }
