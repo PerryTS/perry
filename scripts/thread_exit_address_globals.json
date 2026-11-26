@@ -1840,15 +1840,6 @@
   {
    "file": "crates/perry-stdlib/src/streams/state.rs",
    "names": [
-    "READABLE_STREAMS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Entries hold the creating thread's source callbacks, queued chunks, pending read promises, error values, and the folded per-stream state (tee links, parked BYOB reads, transform parked write promises and backpressured write jobs, expandos); dropped when any lies in the freed blocks or a linked reader/writer/transform is dead.",
-   "hook": "release_web_streams_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/state.rs",
-   "names": [
     "WRITABLE_STREAMS"
    ],
    "verdict": "thread_exit_invalidated",
@@ -1862,15 +1853,6 @@
    ],
    "verdict": "thread_exit_invalidated",
    "why": "Entries hold transform/flush closure pointers; dropped together with their readable and writable sides.",
-   "hook": "release_web_streams_in_freed_ranges"
-  },
-  {
-   "file": "crates/perry-stdlib/src/streams/state.rs",
-   "names": [
-    "READERS"
-   ],
-   "verdict": "thread_exit_invalidated",
-   "why": "Entries hold the closed promise from the thread that called getReader() (or ran pipeTo) and expandos; released with their stream.",
    "hook": "release_web_streams_in_freed_ranges"
   },
   {
