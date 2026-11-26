@@ -527,14 +527,31 @@ impl Model {
 
     /// [[GetOwnProperty]] (10.5.5) of `key` (key node `idx`): trap
     /// `getOwnPropertyDescriptor( t, key )`, and the forward. The class
-    /// (`ProxyOp::OwnProp`) is the caller's.
+    /// (`ProxyOp::OwnProp`) is the caller's. The trap result is read only
+    /// by ToPropertyDescriptor (step 9, 6.2.6.5: HasProperty and Get of its
+    /// six fields, getters run) and handed to no code; a result that is
+    /// neither an Object nor `undefined` throws a realm TypeError (step 7).
+    /// What a descriptor hands out (`value`, `get`, `set`) is
+    /// `Cons::OwnDescValues` / `Cons::OwnDescAcc`'s.
     fn proxy_own_prop(&mut self, p: u32, key: Key, idx: NodeId) {
         let t = self.proxies[p as usize].target;
         let k = self.proxy_key_arg(key, idx);
         let ret = self.node_l("proxy-gopd-ret");
         let r = self.reason("Proxy getOwnPropertyDescriptor trap result");
-        self.sink_node(ret, r);
         self.proxy_trap(p, "getOwnPropertyDescriptor", Some(key), vec![t, k], ret);
+        self.proxy_result_reads(
+            ret,
+            &[
+                "enumerable",
+                "configurable",
+                "value",
+                "writable",
+                "get",
+                "set",
+            ],
+            false,
+            r,
+        );
         self.cons(t, Cons::OwnProp { key, idx });
         self.proxy_inv(p, None, true);
     }
@@ -1846,8 +1863,7 @@ impl Model {
             }
             // [[GetOwnProperty]] (10.5.5): trap `getOwnPropertyDescriptor( t,
             // key )`. ToPropertyDescriptor reads the returned object's fields
-            // by HasProperty / Get (6.2.6.5): program code on a value this
-            // model does not follow, so the result is sunk.
+            // by HasProperty / Get (6.2.6.5, `proxy_own_prop`).
             Cons::OwnProp { key, idx } => {
                 if self.proxy_made(p, ProxyOp::OwnProp(key, idx)) {
                     return;
