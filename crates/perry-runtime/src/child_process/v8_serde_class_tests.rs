@@ -26,9 +26,14 @@ fn a_transferred_array_buffer_is_written_as_its_id_and_read_as_the_given_buffer(
     assert_eq!(v8_class_deserializer_wire_format_version(de), 15);
     v8_class_deserializer_transfer_array_buffer(de, 7, target);
     assert_eq!(
-        v8_class_deserializer_read_value(de).to_bits(),
-        target.to_bits()
+        v8_class_deserializer_read_value(de).map(f64::to_bits),
+        Some(target.to_bits())
     );
+    // A transfer id the receiving side never registered fails the read.
+    let unregistered =
+        v8_class_deserializer_new(vec![TAG_VERSION, 15, TAG_ARRAY_BUFFER_TRANSFER, 9]);
+    v8_class_deserializer_read_header(unregistered);
+    assert_eq!(v8_class_deserializer_read_value(unregistered), None);
 }
 
 #[test]

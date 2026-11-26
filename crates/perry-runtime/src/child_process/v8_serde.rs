@@ -1335,13 +1335,16 @@ pub(crate) fn v8_class_deserializer_read_header(id: usize) {
     });
 }
 
-pub(crate) fn v8_class_deserializer_read_value(id: usize) -> f64 {
+/// `None` when the stream is truncated or names a transfer id nobody
+/// registered (Node throws `Unable to deserialize cloned data.`).
+pub(crate) fn v8_class_deserializer_read_value(id: usize) -> Option<f64> {
     let _gc = GcSuppressGuard::new();
     DESERIALIZERS.with(|d| {
         d.borrow_mut()
             .get_mut(id)
-            .map(|de| de.with(|inner| inner.read_value().unwrap_or_else(cp_undefined)))
-            .unwrap_or_else(cp_undefined)
+            .map_or(Some(cp_undefined()), |de| {
+                de.with(|inner| inner.read_value())
+            })
     })
 }
 

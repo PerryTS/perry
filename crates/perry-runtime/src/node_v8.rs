@@ -611,6 +611,7 @@ pub(crate) fn v8_deserializer_get_wire_format_version(recv: f64) -> f64 {
 
 pub(crate) fn v8_deserializer_read_value(recv: f64) -> f64 {
     crate::child_process::v8_class_deserializer_read_value(v8_instance_id_from_value(recv))
+        .unwrap_or_else(|| read_failed("Unable to deserialize cloned data."))
 }
 
 pub(crate) fn v8_deserializer_read_uint32(recv: f64) -> f64 {
@@ -653,8 +654,8 @@ pub(crate) fn v8_deserializer_read_raw_bytes(recv: f64, len: f64) -> f64 {
     bytes_to_buffer(&bytes)
 }
 
-/// The plain `Error` (no `code`) Node's Deserializer throws when a read runs
-/// past the end of its buffer.
+/// The plain `Error` (no `code`) Node's Deserializer throws when a read fails:
+/// past the end of its buffer, or on a transfer id nobody registered.
 fn read_failed(message: &str) -> ! {
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
     crate::exception::throw_core(crate::error::CoreError::error(msg))
@@ -668,13 +669,10 @@ fn buffer_address(value: f64) -> Option<usize> {
         .filter(|&addr| !crate::value::addr_class::is_handle_band(addr))
 }
 
-/// A Buffer, TypedArray or DataView (Node's `ArrayBufferView`).
+/// A Buffer, TypedArray or DataView (Node's `ArrayBufferView`); key
+/// material is not a view.
 fn is_array_buffer_view(value: f64) -> bool {
-    buffer_address(value).is_some_and(|addr| {
-        crate::typedarray_hook_slots::lookup_typed_array_kind(addr).is_some()
-            || (crate::buffer::is_registered_buffer(addr)
-                && !crate::buffer::is_any_array_buffer(addr))
-    })
+    crate::object::view_brand::view_brand(value).is_some()
 }
 
 /// Coerce a NaN-boxed JS value to a u32 (int32-tagged fast path + double).
@@ -684,7 +682,8 @@ fn as_u32(value: f64) -> u32 {
     if jsv.is_number() {
         let n = jsv.as_number();
         if n.is_finite() {
-            return n as i64 as u32;
+            // ToUint32: modulo 2^32, so `2 ** 64` is 0 rather than saturating.
+            return n.trunc().rem_euclid(4294967296.0) as u32;
         }
     }
     0
