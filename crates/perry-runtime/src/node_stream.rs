@@ -697,9 +697,11 @@ fn push_chunk(stream: f64, chunk: f64) -> f64 {
         // nothing delivered) ends on its first `read()` / `resume()`.
         mark_readable_eof(stream);
         refresh_readable_aborted_flag(stream);
-        // A reader waiting in `readable` learns of EOF while data it has not
-        // drained is still buffered.
-        schedule_readable_event(stream);
+        // node's `onEofChunk` -> `emitReadable_`: `'readable'` fires for the
+        // EOF itself (`state.length || state.ended`), so a reader waiting in
+        // `readable` learns of it with or without data still buffered; its
+        // `read()` then finds the end.
+        queue_readable_event(stream);
         if JSValue::from_bits(readable_flowing_value(stream).to_bits()).is_null()
             && !has_truthy_hidden(stream, hidden_disturbed_key())
         {
