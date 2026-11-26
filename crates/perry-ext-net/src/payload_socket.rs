@@ -23,14 +23,45 @@ pub(crate) fn is_callback(value: f64) -> bool {
     unsafe { js_value_is_closure(value.to_bits() as i64) != 0 }
 }
 
+/// The `Error` a socket emits: `.code`, plus `.errno` and `.syscall` when the
+/// message has libuv's `"<syscall> <CODE>"` shape, in Node's property order.
 pub(crate) fn error(code: &str, message: &str) -> f64 {
     let scope = TransientRootScope::enter();
-    // SAFETY: Error allocation runs on this agent with no payload borrow; its result is rooted
-    // before the code string is allocated.
-    let value = scope.root_nanbox(unsafe { crate::build_error_object(message) });
-    let code = events::string(code);
-    p::own_set(value.get(), "code", code);
-    value.get()
+    let value = perry_ffi::error_value_with_code(message, "", perry_ffi::ErrorKind::Error);
+    let error = scope.root_nanbox(f64::from_bits(value.bits()));
+    let libuv = libuv_message_parts(message);
+    // Looked up in the runtime's table so `code` and `errno` cannot disagree
+    // across platforms; Node leaves `errno` off a code libuv does not know.
+    if let Some(errno) = libuv
+        .map(|(_, code)| tl::errno_for_code(code))
+        .filter(|&e| e != 0)
+    {
+        p::own_set(error.get(), "errno", f64::from(errno));
+    }
+    p::own_set(error.get(), "code", events::string(code));
+    if let Some((syscall, _)) = libuv {
+        p::own_set(error.get(), "syscall", events::string(syscall));
+    }
+    error.get()
+}
+
+/// Split libuv's socket-error message shape, `"<syscall> <CODE>"`, into its
+/// two halves. Parsing the message keeps it the one source of truth for
+/// `.syscall` and `.errno` instead of threading them through every event.
+fn libuv_message_parts(msg: &str) -> Option<(&str, &str)> {
+    let mut parts = msg.split(' ');
+    let syscall = parts.next()?;
+    let code = parts.next()?;
+    let is_code = code.len() >= 2
+        && code.starts_with('E')
+        && code
+            .chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_');
+    let is_syscall = !syscall.is_empty()
+        && syscall
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_');
+    (is_code && is_syscall).then_some((syscall, code))
 }
 
 pub(crate) fn link(owner: f64) -> OwnerLink {

@@ -180,6 +180,7 @@ fn body_contains_yield_sees_nested_loop_headers() {
 fn body_contains_yield_ignores_header_yield_in_nested_closure() {
     // A `yield` inside a closure in the loop condition belongs to that closure.
     let closure = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 9,
         params: Vec::new(),

@@ -225,6 +225,7 @@ fn release_boxes_lowers_each_kind_to_its_entry_point() {
 fn release_boxes_lowers_through_closure_captures() {
     let mut body = activation_frame();
     body.push(Stmt::Expr(Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 900,
         params: Vec::new(),
@@ -270,12 +271,14 @@ fn release_boxes_lowers_through_closure_captures() {
 fn escaped_user_closure_inside_step_keeps_its_box_capture_edge() {
     let mut body = activation_frame();
     body.push(Stmt::Expr(Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 900,
         params: Vec::new(),
         return_type: Type::Any,
         body: vec![
             Stmt::Expr(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 901,
                 params: Vec::new(),

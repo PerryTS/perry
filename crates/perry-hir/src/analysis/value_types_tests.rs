@@ -51,6 +51,7 @@ fn class_field(name: &str, ty: Type) -> ClassField {
 
 fn closure_returning(return_type: Type) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 99,
         params: Vec::new(),

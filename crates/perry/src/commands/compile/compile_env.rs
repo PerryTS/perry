@@ -382,6 +382,10 @@ pub(super) fn compile_env_value(name: &str) -> Option<String> {
 #[cfg(test)]
 const COMPILE_ENV_EXCLUSIONS: &[(&str, &str)] = &[
     ("PERRY_FACTS_ABORT_TOP", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
+    ("PERRY_FACTS_STOP_ON_TOP", "Facts-solver diagnostic: prints one ⊤-creation block to stderr and exits the process; no lowering decision or emitted byte depends on it."),
+    ("PERRY_FACTS_STOP_ON_TOP_CLASS", "Facts-solver diagnostic: prints one ⊤-creation block to stderr and exits the process; no lowering decision or emitted byte depends on it."),
+    ("PERRY_FACTS_STOP_ON_TOP_SKIP", "Facts-solver diagnostic: prints one ⊤-creation block to stderr and exits the process; no lowering decision or emitted byte depends on it."),
+    ("PERRY_HIRPOS_SAMPLE", "Facts-solver diagnostic print only, read under PERRY_FACTS_STOP_ON_TOP; stderr output, no emitted byte depends on it."),
     ("PERRY_FACTS_ARR_WHY", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
     ("PERRY_FACTS_FORIN_PATH_COUNT", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),
     ("PERRY_FACTS_LEDGER", "Facts-solver diagnostic print or check only; stderr or dump output, no lowering decision or emitted byte depends on it."),

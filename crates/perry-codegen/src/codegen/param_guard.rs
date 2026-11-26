@@ -1631,6 +1631,7 @@ mod tests {
         assert!(body_contains_await(&direct));
 
         let nested = vec![perry_hir::Stmt::Expr(perry_hir::Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 9,
             params: Vec::new(),

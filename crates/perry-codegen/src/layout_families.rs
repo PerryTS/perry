@@ -1120,9 +1120,7 @@ fn own_keys(
     for k in &reserved {
         if let Some(at) = stored.iter().position(|(x, _)| *x == k.as_str()) {
             for (d, open) in &stored[..at] {
-                if !reserved.iter().any(|r| r == d)
-                    && !keys.iter().any(|(x, _)| x == *d)
-                {
+                if !reserved.iter().any(|r| r == d) && !keys.iter().any(|(x, _)| x == *d) {
                     keys.push((key_of(d), *open));
                 }
             }

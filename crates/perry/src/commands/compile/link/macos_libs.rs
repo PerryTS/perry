@@ -43,6 +43,8 @@ pub(super) fn add_ui_frameworks(cmd: &mut Command) {
         "WebKit",
         "CoreGraphics",
         "QuartzCore",
+        // perry/ui `onFrame` on macOS 13 and earlier — CVDisplayLink.
+        "CoreVideo",
         "AVFoundation",
         "Metal",
         "IOKit",

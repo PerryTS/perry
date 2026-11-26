@@ -199,6 +199,7 @@ fn concat_with_a_string_is_a_string_and_unknown_operands_stay_unknown() {
 #[test]
 fn a_closure_capturing_before_the_write_disqualifies_the_local() {
     let clo = Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 50,
         params: Vec::new(),
@@ -275,6 +276,7 @@ fn a_literal_array_local_stays_an_array_through_in_place_pushes() {
 
 fn closure(func_id: u32, body: Vec<Stmt>) -> Expr {
     Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id,
         params: Vec::new(),

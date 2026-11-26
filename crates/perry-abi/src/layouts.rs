@@ -513,7 +513,6 @@ pub const NATIVE_LAYOUT_DESCRIPTORS: &[&str] = &[
     "RECORD_F13_0",
     "RECORD_F17_0",
     "RECORD_F20_0",
-    "RECORD_F21_0",
     "RECORD_F28_0",
     "RECORD_F29_0",
     "RECORD_F30_0",

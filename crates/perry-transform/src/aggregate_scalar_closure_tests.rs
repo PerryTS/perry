@@ -53,6 +53,7 @@ fn reference_from_generated_function_keeps_materialized_aggregate() {
 fn module_local_reference_from_closure_body_keeps_materialized_aggregate() {
     let mut module = tests::aggregate_fixture(false);
     *module.init.last_mut().expect("observer statement") = Stmt::Expr(Expr::Closure {
+        type_params: Vec::new(),
         byte_offset: 0,
         func_id: 99,
         params: Vec::new(),
