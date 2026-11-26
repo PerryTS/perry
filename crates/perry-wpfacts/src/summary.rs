@@ -1425,7 +1425,11 @@ impl Model {
             // the run of its key shape (10.5.8 step 8: the trap gets that
             // access's P, never another access's).
             _ if let Some(&sh) = self.sum.trap_shape.get(&call) => (8, self.trap_ctx(lay, sh), ft),
-            _ if lay == LAY_NONE && let Some(site) = self.shared_run_site(call) => (9, site, ft),
+            _ if lay == LAY_NONE
+                && let Some(site) = self.shared_run_site(call) =>
+            {
+                (9, site, ft)
+            }
             _ => (1, lay, ft),
         };
         // Widened (`past_work_bound`, above): no new calling context. The call
