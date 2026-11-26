@@ -1507,6 +1507,9 @@ mod random_uuid_v7;
 #[path = "get_prototype_of_tests.rs"]
 mod get_prototype_of;
 
+#[path = "function_bind_tests.rs"]
+mod function_bind;
+
 #[path = "overwritten_call_tests.rs"]
 mod overwritten_call;
 

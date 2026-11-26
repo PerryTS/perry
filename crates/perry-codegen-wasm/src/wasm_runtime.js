@@ -1678,6 +1678,10 @@ class __PerryClosure {
   static protoKindOf(closure) {
     return #info in closure ? closure.#info?.protoKind ?? 0 : 0;
   }
+  // A closure without a record (none was emitted for its function) keeps `new`.
+  static isConstructor(closure) {
+    return #info in closure ? closure.#info?.constructible ?? true : false;
+  }
   // A closure reads its function's name and length from the record it points at.
   get name() {
     return #info in this ? this.#info?.name : undefined;
@@ -1691,11 +1695,13 @@ class __PerryClosure {
 // made by its registration and held by its class's method table or template, with the
 // member's table index.
 class __FnInfo {
-  constructor(name, length, protoKind, funcIdx) {
+  constructor(name, length, protoKind, funcIdx, constructible = false) {
     this.name = name;
     this.length = length;
     this.protoKind = protoKind | 0;
     this.funcIdx = funcIdx | 0;
+    // `new` may make an instance: not an arrow, a method, or an async or generator function.
+    this.constructible = constructible;
     Object.freeze(this);
   }
 }
@@ -1723,6 +1729,7 @@ function __callClosureMethod(closure, receiver, args) {
 function __typeOf(v) {
   return __isPerryClosure(v) ? 'function' : typeof v;
 }
+
 // The prototype a function of each kind has: plain, async, generator, async generator.
 const __fnKindProtos = [
   Function.prototype,
@@ -2098,10 +2105,10 @@ function __classStaticMethodFn(template, name, info, evaluation) {
   return __withKindProto(fn, info.protoKind);
 }
 // The i64 entry an array bridge calls for `cb`: a Perry closure's compiled function
-// after its captures, or a class method value with no table entry of its own through
-// its host wrapper, which supplies its `this` and class evaluation.
+// after its captures, or a host function (a class method value, a bound function) called
+// with the values, which supplies its own `this` and class evaluation.
 function __arrayCallback(cb) {
-  if (typeof cb === 'function' && cb.funcIdx === undefined && __classMethodFns.has(cb)) {
+  if (typeof cb === 'function' && cb.funcIdx === undefined) {
     return (...bits) => __jsValueToBits(cb(...bits.map(__bitsToJsValue)));
   }
   if (!cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return undefined;
@@ -2775,7 +2782,8 @@ const __memDispatch = {
   // __jsValueToBits converts JS values to BigInt for WASM calls.
   // __bitsToJsValue converts BigInt return values back to JS.
   // A function's `__FnInfo`, made once per function before any of its closures.
-  fn_info: (name, length, protoKind) => new __FnInfo(name, length, protoKind),
+  fn_info: (name, length, protoKind, constructible) =>
+    new __FnInfo(name, length, protoKind, 0, constructible === true || constructible === 1),
   closure_new: (funcIdx, captureCount, receivesThis, info) =>
     receivesThis
       ? new __PerryReceiverClosure(funcIdx, captureCount, info)
@@ -3580,11 +3588,14 @@ const __memDispatch = {
 
   // Timers — closure arg is the closure object itself (decoded from POINTER_TAG)
   // Captures are already BigInt from closure_set_capture.
+  // A host function (a bound one) is the host's own callback.
   set_timeout: (closure, delay) => {
+    if (typeof closure === 'function') return setTimeout(closure, delay);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return 0;
     return setTimeout(() => { const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0); if (fn) fn(...__padBigintArgs(fn, 0, [...closure.captures])); }, delay);
   },
   set_interval: (closure, delay) => {
+    if (typeof closure === 'function') return setInterval(closure, delay);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return 0;
     return setInterval(() => { const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0); if (fn) fn(...__padBigintArgs(fn, 0, [...closure.captures])); }, delay);
   },
@@ -4032,6 +4043,8 @@ function __invokeConstructor(fn, caps, ...bigintArgs) {
 // Convert them once to i64: boxing strings through f64 can erase NaN payloads.
 function callWasmClosure(closureVal, ...extraArgs) {
   let closure;
+  // A host function (a bound one) takes and returns plain values.
+  if (typeof closureVal === 'function') return closureVal(...extraArgs);
   if (typeof closureVal === 'object' && closureVal !== null) {
     // Already a JS closure object (came through toJsValue)
     closure = closureVal;
@@ -6810,6 +6823,67 @@ function __hostCallback(value) {
 // value per evaluation and runs in that evaluation's environment whatever its `this`.
 const __classMethodValues = new Map();
 const __classMethodFns = new WeakSet();
+// A closure is not a host function, so it inherits Function.prototype's methods but
+// cannot use its call / apply / bind / toString, which need a callable receiver: these
+// stand in for them, and `instanceof Function` holds for a closure as for a function.
+// ToLength: a negative or NaN length is 0, a huge one throws when the list is made.
+function __toLength(v) {
+  const n = Math.trunc(Number(v)) || 0;
+  return n <= 0 ? 0 : Math.min(n, Number.MAX_SAFE_INTEGER);
+}
+function __closureReceiverCheck(fn, method) {
+  if (!__isPerryClosure(fn)) {
+    throw new TypeError(`Function.prototype.${method} called on a value that is not a function`);
+  }
+}
+// `new` on a closure (from a bound function): an object on the closure's `prototype`,
+// unless the closure returns an object.
+function __constructClosure(closure, args) {
+  const proto = closure.prototype;
+  const self = Object.create(proto !== null && typeof proto === 'object' ? proto : Object.prototype);
+  const result = __callClosureMethod(closure, self, args);
+  return result !== null && (typeof result === 'object' || typeof result === 'function') ? result : self;
+}
+Object.setPrototypeOf(__PerryClosure.prototype, Function.prototype);
+for (const [key, value] of Object.entries({
+  call(thisArg, ...args) {
+    __closureReceiverCheck(this, 'call');
+    return __callClosureMethod(this, thisArg, args);
+  },
+  apply(thisArg, list) {
+    __closureReceiverCheck(this, 'apply');
+    if (list !== null && list !== undefined && typeof list !== 'object' && typeof list !== 'function') {
+      throw new TypeError('CreateListFromArrayLike called on non-object');
+    }
+    return __callClosureMethod(this, thisArg, list == null ? [] : Array.from({ length: __toLength(list.length) }, (_, i) => list[i]));
+  },
+  // There is no source text to give back: a native function's form, with the name.
+  toString() {
+    __closureReceiverCheck(this, 'toString');
+    return `function ${typeof this.name === 'string' ? this.name : ''}() { [native code] }`;
+  },
+  bind(thisArg, ...bound) {
+    __closureReceiverCheck(this, 'bind');
+    const target = this;
+    const fn = function (...args) {
+      if (!new.target) return __callClosureMethod(target, thisArg, [...bound, ...args]);
+      if (!__PerryClosure.isConstructor(target)) throw new TypeError(`${fn.name} is not a constructor`);
+      return __constructClosure(target, [...bound, ...args]);
+    };
+    const length = typeof target.length === 'number' ? Math.max(0, target.length - bound.length) : 0;
+    Object.defineProperty(fn, 'length', { value: length, configurable: true });
+    Object.defineProperty(fn, 'name', {
+      value: `bound ${typeof target.name === 'string' ? target.name : ''}`,
+      configurable: true,
+    });
+    __classMethodFns.add(fn);
+    return fn;
+  },
+})) {
+  // They take Perry values as a compiled method does (see __jsMethodInvoke).
+  __classMethodFns.add(value);
+  Object.defineProperty(__PerryClosure.prototype, key, { value, writable: true, configurable: true });
+}
 // Keyed by class, then by method name, which a computed member may make a Symbol.
 // SetFunctionName: a symbol key names a method by its bracketed description.
 function __methodKeyName(key) {
