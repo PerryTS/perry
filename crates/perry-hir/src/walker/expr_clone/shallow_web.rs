@@ -137,6 +137,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
         Expr::Closure {
             func_id,
             params,
+            type_params,
             return_type,
             body,
             captures,
@@ -151,6 +152,7 @@ pub(super) fn shallow(e: &Expr, n: &mut usize) -> Expr {
             construct_only,
             byte_offset,
         } => Expr::Closure {
+            type_params: type_params.clone(),
             byte_offset: *byte_offset,
             func_id: func_id.clone(),
             params: Shallow::shallow(params, n),

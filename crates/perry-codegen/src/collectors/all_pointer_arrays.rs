@@ -443,6 +443,7 @@ mod tests {
             let_array(1, vec![]),
             push(1, object_literal()),
             Stmt::Expr(Expr::Closure {
+                type_params: Vec::new(),
                 byte_offset: 0,
                 func_id: 9,
                 params: vec![],

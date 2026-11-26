@@ -2475,6 +2475,9 @@ pub enum Expr {
         byte_offset: u32,
         /// Parameter definitions
         params: Vec<Param>,
+        /// Type parameters the closure declares (`<T>`); a `TypeVar` in its
+        /// signature or body names the nearest enclosing declaration of it.
+        type_params: Vec<crate::types::TypeParam>,
         /// Return type
         return_type: Type,
         /// Function body

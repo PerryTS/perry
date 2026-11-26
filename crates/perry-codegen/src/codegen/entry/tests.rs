@@ -637,6 +637,7 @@ fn dylib_closures_keep_native_roots() {
         ty: Type::Any,
         mutable: false,
         init: Some(Expr::Closure {
+            type_params: Vec::new(),
             byte_offset: 0,
             func_id: 1,
             params: Vec::new(),

@@ -299,6 +299,7 @@ impl Callers {
             Expr::Closure {
                 func_id,
                 params,
+                type_params,
                 return_type,
                 body,
                 captures,
@@ -318,7 +319,7 @@ impl Callers {
                     byte_offset: *byte_offset,
                     id: *func_id,
                     name: format!("closure#{func_id}"),
-                    type_params: Vec::new(),
+                    type_params: type_params.clone(),
                     params: params.clone(),
                     return_type: return_type.clone(),
                     body: body.clone(),
