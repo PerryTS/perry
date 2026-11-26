@@ -1432,14 +1432,16 @@ impl Model {
             }
             _ => (1, lay, ft),
         };
-        // Widened (`past_work_bound`, above): no new calling context. The call
-        // runs the function's shared instance, which gets this receiver
-        // and these arguments by the same edges (below): a merge of
-        // callers. A birth's run (5) stays per object: its key is what
-        // it births.
+        // Widened (`past_work_bound`, above): no new calling context the
+        // solve itself made. The call runs the function's shared instance,
+        // which gets this receiver and these arguments by the same edges
+        // (below): a merge of callers. A birth's run (5) stays per object:
+        // its key is what it births. A key the program text bounds before
+        // the solve stays too (`text_key`, owner 11-26).
         let key = match key.0 {
             0 | 1 | 7 | 8 | 9
                 if widened
+                    && !Self::text_key(key, self.sum.n_prog)
                     && !self
                         .sum
                         .inst_key
@@ -1478,6 +1480,19 @@ impl Model {
             self.val_runs.push((call, ft, x, prim, v));
             self.bind_instance(call, f, key, v, x, prim);
         }
+    }
+
+    /// WIDEN9 (owner 11-26): a run key whose count the program text fixes
+    /// before the solve, so a widened solve keeps it: a kind-0 run at a
+    /// program site, a rule-C run (7) and a SHARED-SITE-RUN run (9) of a
+    /// call that exists when summaries are built (`n_prog`: program calls
+    /// and summary templates), times a function token. What such a run
+    /// births is per (birth site, that call) (`made_ctx`), so the tokens a
+    /// widened solve makes are bounded too. A key the solve made (a
+    /// nested-site chain copy, a solver call, a receiver or trap context)
+    /// has no such bound and merges.
+    fn text_key(key: (u8, u32, Tok), n_prog: usize) -> bool {
+        matches!(key.0, 0 | 7 | 9) && (key.1 as usize) < n_prog
     }
 
     fn bind_instance(
