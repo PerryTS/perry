@@ -336,14 +336,54 @@ struct FixedCostDial {
     /// over the readings since the floor last moved: what the program has
     /// paid toward the first touch of the pages that doubling adds.
     saved_ns: u64,
-    /// A growth step not checked yet: the floor before it, the share the
-    /// readings that took it measured at that size, and their mean thread CPU
-    /// per MiB of Eden.
-    step: Option<(u8, u64, u64)>,
-    /// A growth step that bought nothing: the floor it was taken from and
-    /// the share measured there. The floor grows past that size again only
-    /// once a reading there is at least twice that share.
-    hold: Option<(u8, u64)>,
+    /// A growth step not checked yet.
+    step: Option<FixedCostStep>,
+    /// A growth step that bought nothing. The floor grows past its size
+    /// again only once readings there are at least twice its share.
+    hold: Option<FixedCostHold>,
+}
+
+/// A growth of the fixed-cost floor, from the readings that took it until the
+/// second reading at the new size checks it ([`retune_fixed_cost_scale`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FixedCostStep {
+    /// The floor before the step.
+    floor: u8,
+    /// The fixed share, parts per million of the mutator time, the readings
+    /// that took the step measured with an Eden of `cap_bytes`.
+    share_ppm: u64,
+    /// The Eden cap before the step.
+    cap_bytes: usize,
+    /// The readings' mean thread CPU (mutator and minor) per MiB of Eden.
+    total_per_mib: u64,
+}
+
+impl FixedCostStep {
+    /// Did the step buy nothing, by a reading of `share_after_ppm` with an
+    /// Eden of `cap_after` bytes? Growing Eden from B to A bytes scales a
+    /// fixed share by B/A; the step bought nothing when the share stayed
+    /// above the midpoint between no change and that full fall,
+    /// `share * (A + B) / 2A`. For a doubling that is F4's three quarters,
+    /// and a step the old-gen term or the influx scale cut short (4.19 to
+    /// 5.58 MB, +33%) is judged by the fall that step can buy.
+    fn bought_nothing(self, share_after_ppm: u64, cap_after: usize) -> bool {
+        u128::from(share_after_ppm) * 2 * cap_after as u128
+            > u128::from(self.share_ppm) * (cap_after as u128 + self.cap_bytes as u128)
+    }
+}
+
+/// A growth step of the fixed-cost floor that bought nothing, holding the
+/// floor at the size it was taken back to ([`retune_fixed_cost_scale`]).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct FixedCostHold {
+    /// The floor the step was taken from.
+    floor: u8,
+    /// The share measured there, as in [`FixedCostStep::share_ppm`].
+    share_ppm: u64,
+    /// Readings in a row at that floor whose share was at least twice
+    /// `share_ppm`. [`RAISE_DEBOUNCE_CYCLES`] of them release the hold, so
+    /// one slow minor does not.
+    doubled_readings: u8,
 }
 
 impl FixedCostDial {
@@ -1491,11 +1531,13 @@ pub(super) fn note_minor_fixed_cost(entry_cap: usize, full_eden_window: bool) {
 /// and only costs the memory. So a growth is a single doubling, and the
 /// second reading at the new size checks it (the first window after a
 /// growth also pays the first touch of the new Eden pages, so it is not a
-/// reading of the size): a doubled Eden halves a fixed share, and a step
-/// whose share fell by less than a quarter is mostly not fixed cost. Such a
-/// step is taken back, and the floor does not grow past that size again
-/// until a reading there is at least twice the share that took the step
-/// (the program's minors changed). The check also prices the whole thread:
+/// reading of the size): an Eden grown from B to A bytes scales a fixed share
+/// by B/A, and a step whose share stayed above the midpoint of that fall
+/// ([`FixedCostStep::bought_nothing`]; a doubling: fell by less than a
+/// quarter) is mostly not fixed cost. Such a step is taken back, and the
+/// floor does not grow past that size again until two readings in a row
+/// there are each at least twice the share that took the step (the
+/// program's minors changed; one slow minor is not that). The check also prices the whole thread:
 /// the window's mutator time plus the whole minor, per byte of Eden, must
 /// fall below the mean of the readings that took the step. A larger Eden can
 /// make every allocation dearer (a working set out of cache); a step whose
@@ -1517,9 +1559,9 @@ pub(super) fn note_minor_fixed_cost(entry_cap: usize, full_eden_window: bool) {
 /// The readings are thread CPU time, so they vary from run to run by the
 /// cache and frequency noise of a few milliseconds of work, a few percent.
 /// A move needs two readings beyond an edge, the edges are a factor 2 apart,
-/// a kept step halved its share and a taken-back one holds until its share
-/// doubles, so the floor of a program whose share is not within that noise
-/// of an edge is the same on every run.
+/// a kept step lowered its share and a taken-back one holds until two
+/// readings in a row double its share, so the floor of a program whose share
+/// is not within that noise of an edge is the same on every run.
 pub(super) fn retune_fixed_cost_scale(
     fixed_ns: u64,
     minor_ns: u64,
@@ -1579,23 +1621,31 @@ pub(super) fn retune_fixed_cost_scale(
         FIXED_COST_SCALE.with(|s| s.set(to));
         diag_fixed_cost_scale(floor, to, why, fixed_ns, mutator_ns, cap_now);
     };
-    if let Some((before, before_share, before_total)) = dial.step {
+    if let Some(step) = dial.step {
         if dial.readings == 1 {
             // The first window at the new size: see "Each step is checked".
             FIXED_COST_DIAL.with(|d| d.set(dial));
             return;
         }
         dial.step = None;
-        let why = if share.saturating_mul(4) > before_share.saturating_mul(3) {
+        let measured_ppm = {
+            let ppm = u128::from(fixed_ns) * 1_000_000 / u128::from(mutator_ns);
+            ppm.min(u128::from(u64::MAX)) as u64
+        };
+        let why = if step.bought_nothing(measured_ppm, cap_now) {
             Some("step bought nothing, back")
-        } else if total_per_mib >= before_total {
+        } else if total_per_mib >= step.total_per_mib {
             Some("step cost more than it saved, back")
         } else {
             None
         };
         if let Some(why) = why {
-            dial.hold = Some((before, before_share));
-            moved(&mut dial, before, why);
+            dial.hold = Some(FixedCostHold {
+                floor: step.floor,
+                share_ppm: step.share_ppm,
+                doubled_readings: 0,
+            });
+            moved(&mut dial, step.floor, why);
             FIXED_COST_DIAL.with(|d| d.set(dial));
             return;
         }
@@ -1621,12 +1671,21 @@ pub(super) fn retune_fixed_cost_scale(
         dial.saved_ns,
         price_ns,
     );
-    let held = dial
+    dial.hold = dial
         .hold
-        .is_some_and(|(at, held_share)| floor <= at && share_at(at) < held_share.saturating_mul(2));
-    if !held {
-        dial.hold = None;
-    }
+        .filter(|hold| floor <= hold.floor)
+        .and_then(|hold| {
+            let doubled_readings = if share_at(hold.floor) >= hold.share_ppm.saturating_mul(2) {
+                hold.doubled_readings.saturating_add(1)
+            } else {
+                0
+            };
+            (doubled_readings < RAISE_DEBOUNCE_CYCLES).then_some(FixedCostHold {
+                doubled_readings,
+                ..hold
+            })
+        });
+    let held = dial.hold.is_some();
     match prev {
         Some((prev_share, _, prev_total))
             if share > edge
@@ -1636,8 +1695,12 @@ pub(super) fn retune_fixed_cost_scale(
                 && cap_at(grow_to) > cap_at(from)
                 && dial.saved_ns >= price_ns =>
         {
-            let before_total = (total_per_mib / 2).saturating_add(prev_total / 2);
-            dial.step = Some((floor, share.min(prev_share), before_total));
+            dial.step = Some(FixedCostStep {
+                floor,
+                share_ppm: share.min(prev_share),
+                cap_bytes: cap_at(floor),
+                total_per_mib: (total_per_mib / 2).saturating_add(prev_total / 2),
+            });
             moved(&mut dial, grow_to, "grow");
         }
         Some((_, prev_shrink, _)) if shrink_to < floor && prev_shrink < floor => {

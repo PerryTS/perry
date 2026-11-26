@@ -1476,3 +1476,97 @@ fn a_fixed_cost_step_whose_total_cpu_does_not_fall_is_taken_back() {
     assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "held");
     reset_for_test();
 }
+
+/// One reading with an Eden of `cap` bytes (the minor's own entry cap, not
+/// the ladder's): a fixed share of `share_ppm` of a mutator running 1 us per
+/// Eden byte.
+fn fixed_cost_reading_at(share_ppm: u64, cap: usize) {
+    let mutator_ns = cap as u64 * 1000;
+    let fixed_ns = mutator_ns * share_ppm / 1_000_000;
+    retune_fixed_cost_scale(fixed_ns, fixed_ns, mutator_ns, cap);
+}
+
+/// The step check scales with the cap the step actually bought: from B to A
+/// bytes a fixed share falls to B/A, and the step bought nothing above the
+/// midpoint `(A + B) / 2A`. A doubling keeps F4's three quarters.
+#[test]
+fn the_step_check_is_the_midpoint_of_the_fall_the_cap_ratio_buys() {
+    let step = FixedCostStep {
+        floor: NURSERY_CAP_SCALE_MIN,
+        share_ppm: 40_000,
+        cap_bytes: 3 << 20,
+        total_per_mib: 0,
+    };
+    assert!(
+        !step.bought_nothing(30_000, 6 << 20),
+        "doubling: 3/4 is kept"
+    );
+    assert!(
+        step.bought_nothing(30_001, 6 << 20),
+        "doubling: above 3/4 is not"
+    );
+    // +33%: the midpoint is 7/8 of the share.
+    assert!(!step.bought_nothing(35_000, 4 << 20));
+    assert!(step.bought_nothing(35_001, 4 << 20));
+}
+
+/// A step the ladder cut short (+33%, as the old-gen term cut low's 4.19 MB
+/// to 5.58 MB) whose share fell by a fifth paid off and is kept, though a
+/// fixed three quarters would take it back; one whose share fell by a
+/// twentieth bought nothing and is taken back.
+#[test]
+fn a_short_fixed_cost_step_is_judged_by_its_own_cap_ratio() {
+    for (share_after_ppm, kept) in [(32_000, true), (38_000, false)] {
+        reset_for_test();
+        let cap = scavenge_nursery_cap_effective_bytes();
+        fixed_cost_reading_at(40_000, cap);
+        fixed_cost_reading_at(40_000, cap);
+        assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+        let short = cap / 3 * 4;
+        // The first window pays the first touch; not a reading of the size.
+        fixed_cost_reading_at(share_after_ppm, short);
+        fixed_cost_reading_at(share_after_ppm, short);
+        let expected = if kept {
+            NURSERY_CAP_SCALE_MIN * 2
+        } else {
+            NURSERY_CAP_SCALE_MIN
+        };
+        assert_eq!(
+            fixed_cost_scale(),
+            expected,
+            "share after {share_after_ppm} ppm"
+        );
+    }
+    reset_for_test();
+}
+
+/// One slow minor at the held size does not release the hold of a step that
+/// bought nothing; two readings in a row at twice the held share do.
+#[test]
+fn a_single_outlier_does_not_release_the_fixed_cost_hold() {
+    reset_for_test();
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "taken back");
+    for _ in 0..4 {
+        fixed_cost_reading(80);
+        fixed_cost_reading(40);
+    }
+    assert_eq!(
+        fixed_cost_scale(),
+        NURSERY_CAP_SCALE_MIN,
+        "one outlier at a time holds"
+    );
+    fixed_cost_reading(80);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN);
+    fixed_cost_reading(80);
+    assert_eq!(
+        fixed_cost_scale(),
+        NURSERY_CAP_SCALE_MIN * 2,
+        "two doubled readings in a row release it"
+    );
+    reset_for_test();
+}
