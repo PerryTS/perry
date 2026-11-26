@@ -579,9 +579,12 @@ pub(crate) fn component_turn_and_take(
 
 /// One nonblocking turn that hands back the net `Closed` completions `select`
 /// picks, without dispatching anything. Every other completion stays in
-/// STAGED, in its original order, for the next dispatch.
+/// STAGED, in its original order, for the next dispatch. A `Closed` behind a
+/// completion `link_of` names the same cell for stays too: the `Closed`
+/// releases the cell's ref, so it must be dispatched after that completion.
 pub(crate) fn take_closed_completions(
     select: impl Fn(&turnloop::Completion) -> bool,
+    link_of: impl Fn(&turnloop::Completion) -> Option<usize>,
 ) -> Vec<turnloop::Completion> {
     if STATE.with(Cell::get) != LoopState::Owner {
         return Vec::new();
@@ -598,16 +601,22 @@ pub(crate) fn take_closed_completions(
             agent.record(&info);
         }
     });
+    let mut behind = Vec::new();
     STAGED.with(|staged| {
         staged
             .borrow_mut()
             .extract_if(.., |c| {
-                !is_component_io(c)
+                let net = !is_component_io(c)
                     && c.token != TIMER_TOKEN
                     && !crate::turnloop_proc::owns(c.token)
                     && !crate::turnloop_pool::owns(c.token)
-                    && !crate::turnloop_post::owns(c.token)
-                    && select(c)
+                    && !crate::turnloop_post::owns(c.token);
+                let cell = if net { link_of(c) } else { None };
+                if net && select(c) && cell.is_none_or(|cell| !behind.contains(&cell)) {
+                    return true;
+                }
+                behind.extend(cell);
+                false
             })
             .collect()
     })
@@ -868,6 +877,21 @@ pub(super) fn turn_for_test(budget: std::time::Duration) {
         }
     });
     dispatch_staged();
+}
+
+/// How many staged completions `link_of` names `cell` for.
+#[cfg(test)]
+pub(crate) fn staged_for_test(
+    cell: usize,
+    link_of: impl Fn(&turnloop::Completion) -> Option<usize>,
+) -> usize {
+    STAGED.with(|staged| {
+        staged
+            .borrow()
+            .iter()
+            .filter(|c| link_of(c) == Some(cell))
+            .count()
+    })
 }
 
 /// Drop this thread's loop and any staged completions, so the next test starts

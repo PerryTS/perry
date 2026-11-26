@@ -1929,6 +1929,11 @@ pub(super) unsafe fn deliver_parked_eof(link: OwnerLink, handle: Option<Handle>)
     release(link);
 }
 
+/// The payload cell a link completion names.
+pub(crate) fn link_cell(completion: &Completion) -> Option<usize> {
+    owns(completion.token).then(|| link_parts(completion.token).2)
+}
+
 /// Whether `completion` is the `Closed` of a handle [`close`] queued.
 pub(super) fn is_queued_close(completion: &Completion) -> bool {
     let (_, op, cell) = link_parts(completion.token);

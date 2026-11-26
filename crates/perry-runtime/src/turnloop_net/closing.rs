@@ -97,7 +97,10 @@ pub(crate) fn ready() -> bool {
 pub(crate) fn run() {
     let waiting = QUEUE.with(|q| q.borrow().entries.iter().any(|e| !e.ready));
     if waiting {
-        for completion in crate::event_pump::take_closed_completions(transport::is_queued_close) {
+        for completion in crate::event_pump::take_closed_completions(
+            transport::is_queued_close,
+            transport::link_cell,
+        ) {
             transport::dispatch(completion);
         }
     }

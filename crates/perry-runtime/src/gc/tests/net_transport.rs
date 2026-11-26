@@ -755,6 +755,58 @@ fn the_close_phase_turn_leaves_other_completions_for_the_poll_phase() {
     crate::turnloop_net::close_phase();
 }
 
+/// A `Closed` read in the same turn as an earlier completion of its socket
+/// stays behind it: delivering it first would release the cell while that
+/// completion still names it.
+#[test]
+fn a_closed_behind_its_sockets_staged_completion_keeps_the_cell() {
+    use std::io::Write;
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let server = scope.root_nanbox_f64(fresh());
+    let listener = np::owner_link(server.get_nanbox_f64(), &FAMILY).unwrap();
+    let addr = unsafe {
+        let c = core(server.get_nanbox_f64());
+        let addr =
+            transport::tcp_listen(c, listener, "127.0.0.1:0".parse().unwrap(), 16, false, true)
+                .unwrap();
+        transport::accept_start(c, listener).unwrap();
+        addr
+    };
+    INSTALL_ACCEPTED.with(|flag| flag.set(true));
+    let mut peer = std::net::TcpStream::connect(addr).unwrap();
+    assert!(pump_until(|| CHILD.with(Cell::get) != 0));
+    let reader = OwnerLink(CHILD.with(Cell::get));
+    let owner = scope.root_nanbox_f64(unsafe { np::link_event_owner(reader) }.unwrap());
+    unsafe { transport::read_start(core(owner.get_nanbox_f64()), reader).unwrap() };
+    peer.write_all(b"before close").unwrap();
+    std::thread::sleep(Duration::from_millis(50));
+    assert!(destroy(reader));
+    let mut staged_seen = false;
+    for _ in 0..100 {
+        crate::turnloop_net::close_phase();
+        let staged = crate::event_pump::staged_for_test(reader.0, transport::link_cell);
+        staged_seen |= staged > 0;
+        assert!(
+            staged == 0 || refs(reader) > 0,
+            "a staged completion names a cell nothing pins"
+        );
+        if count(NET_CLOSED, reader) == 1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(1));
+        crate::event_pump::pump_net_for_test(Duration::from_millis(1));
+    }
+    assert!(staged_seen, "the read must be staged in a close-phase turn");
+    assert!(pump_until(
+        || count(NET_CLOSED, reader) == 1 && refs(reader) == 0
+    ));
+    assert!(destroy(listener));
+    assert!(pump_until(|| refs(listener) == 0));
+}
+
 /// Agent teardown drops a queued `Closed` undelivered and releases its ref.
 #[test]
 fn teardown_releases_the_ref_of_a_queued_closed() {
