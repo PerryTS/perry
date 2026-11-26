@@ -641,8 +641,14 @@ fn normalize_timer_delay(delay_value: f64) -> u64 {
             );
         }
         1
+    } else if delay_ms < 1.0 {
+        // node's `Timeout`: `if (!(after >= 1 && after <= TIMEOUT_MAX)) after
+        // = 1`. A `setTimeout(f, 0)` is a 1 ms timer, so one scheduled from a
+        // close callback waits for the clock to move and runs after the next
+        // check phase's immediates, not in the very next timers phase.
+        1
     } else {
-        delay_ms.max(0.0) as u64
+        delay_ms as u64
     }
 }
 
