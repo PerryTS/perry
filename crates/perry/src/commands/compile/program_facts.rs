@@ -1446,6 +1446,43 @@ pub(crate) fn namespace_pair_inactive(
 /// MATHC1: with the whole-program facts on every
 /// direct builtin namespace call is lowered as the pair whose one arm the
 /// call site's verdict picks; `PERRY_NS_PAIRS=0` keeps the old lowering.
+/// GUARDS3: per class id, what a program write may give its instances or
+/// its prototype (wpfacts `shadow_writes`), for codegen's prototype-census
+/// binding sites: a chain none of them reaches needs no shadow-bit test.
+/// `None` (every site keeps its tests) without whole-program facts, with
+/// interpreted code, or with elision off. `PERRY_FACTS_SABOTAGE=
+/// shadow-unwritten` claims every class the solver saw unwritten.
+pub(crate) fn shadow_writes(
+    pf: Option<&perry_wpfacts::ProgramFacts>,
+) -> Option<std::collections::BTreeMap<u32, perry_codegen::ClassShadowWrites>> {
+    let pf = pf?;
+    if !elide_enabled() || pf.stats.aborted {
+        return None;
+    }
+    let sabotage = pf.sabotage.as_deref() == Some("shadow-unwritten");
+    if !sabotage && pf.interp_guard.is_some() {
+        return None;
+    }
+    Some(
+        pf.shadow_writes
+            .iter()
+            .map(|(&cid, w)| {
+                let w = match sabotage {
+                    true => perry_codegen::ClassShadowWrites::default(),
+                    false => perry_codegen::ClassShadowWrites {
+                        inst_names: w.inst_names.clone(),
+                        inst_any: w.inst_any.clone(),
+                        proto_names: w.proto_names.clone(),
+                        proto_any: w.proto_any.clone(),
+                        proto_relinked: w.proto_relinked.clone(),
+                    },
+                };
+                (cid, w)
+            })
+            .collect(),
+    )
+}
+
 /// GUARDS1 class 2: the program-wide array chain facts codegen's inline
 /// element and method guards read (`perry_codegen::
 /// set_program_array_chain_facts`): `.0` the default chain's index bit

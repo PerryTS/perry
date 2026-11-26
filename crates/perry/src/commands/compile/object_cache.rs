@@ -428,6 +428,7 @@ fn compute_object_cache_key_with_env(
     // whole program's write census proves.
     h.field("proto_census", &perry_codegen::program_proto_census_key());
     h.field("array_chain", &perry_codegen::program_array_chain_facts_key());
+    h.field("shadow_writes", &perry_codegen::program_shadow_writes_key());
     h.field("proto_exports", &perry_codegen::program_proto_exports_key());
     // A module's native-module namespaces and wrapper calls lower differently
     // depending on which library the compile routes each module to.

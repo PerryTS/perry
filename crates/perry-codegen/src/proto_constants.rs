@@ -50,6 +50,144 @@ fn with_census<R>(f: impl FnOnce(&perry_hir::ProtoCensus) -> R) -> Option<R> {
     PROGRAM_PROTO_CENSUS.read().unwrap().as_ref().map(f)
 }
 
+/// GUARDS3: what a program write may give one class's instances or its
+/// prototype (wpfacts `ShadowWrites`, the solver's own record): the proof
+/// that replaces a binding site's shadow-bit tests. `Some(why)` for a write
+/// that may give any key (or, `proto_relinked`, a new [[Prototype]]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct ClassShadowWrites {
+    pub inst_names: std::collections::BTreeSet<String>,
+    pub inst_any: Option<String>,
+    pub proto_names: std::collections::BTreeSet<String>,
+    pub proto_any: Option<String>,
+    pub proto_relinked: Option<String>,
+}
+
+type ShadowWritesMap = std::collections::BTreeMap<u32, ClassShadowWrites>;
+
+static PROGRAM_SHADOW_WRITES: RwLock<Option<(std::sync::Arc<ShadowWritesMap>, String)>> =
+    RwLock::new(None);
+
+/// Install the program's shadow-write facts (driver, before module codegen;
+/// `None`: no whole-program facts, every site keeps its tests).
+pub fn set_program_shadow_writes(writes: Option<ShadowWritesMap>) {
+    *PROGRAM_SHADOW_WRITES.write().unwrap() = writes.map(|w| {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        w.hash(&mut h);
+        let key = format!("{}:{:016x}", w.len(), h.finish());
+        (std::sync::Arc::new(w), key)
+    });
+}
+
+/// The object-cache key of the installed shadow-write facts.
+pub fn program_shadow_writes_key() -> String {
+    PROGRAM_SHADOW_WRITES
+        .read()
+        .unwrap()
+        .as_ref()
+        .map(|(_, k)| k.clone())
+        .unwrap_or_default()
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_SHADOW_WRITES: std::cell::RefCell<Option<std::sync::Arc<ShadowWritesMap>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_shadow_writes<R>(writes: ShadowWritesMap, f: impl FnOnce() -> R) -> R {
+    let was = TEST_SHADOW_WRITES.with(|c| c.replace(Some(std::sync::Arc::new(writes))));
+    let out = f();
+    TEST_SHADOW_WRITES.with(|c| *c.borrow_mut() = was);
+    out
+}
+
+fn shadow_writes() -> Option<std::sync::Arc<ShadowWritesMap>> {
+    #[cfg(test)]
+    if let Some(w) = TEST_SHADOW_WRITES.with(|c| c.borrow().clone()) {
+        return Some(w);
+    }
+    PROGRAM_SHADOW_WRITES.read().unwrap().as_ref().map(|(w, _)| w.clone())
+}
+
+/// GUARDS3: why a lookup of `method` along `chain` (prototype class ids,
+/// holder last), on a receiver of class `receiver` when given, may not find
+/// the holder's member: `None` when no write the solver saw can make it
+/// otherwise. The receiver gains no own key `method` and keeps its
+/// [[Prototype]]; each prototype before the holder gains no `method` and
+/// keeps its [[Prototype]]; the holder keeps its `method` (its own
+/// [[Prototype]] is past the member).
+pub(crate) fn chain_blocker(receiver: Option<u32>, chain: &[u32], method: &str) -> Option<String> {
+    let Some(w) = shadow_writes() else {
+        return Some("no facts".into());
+    };
+    let class = |id: u32| w.get(&id).ok_or_else(|| format!("no entry {id}"));
+    if let Some(cid) = receiver {
+        let c = match class(cid) {
+            Ok(c) => c,
+            Err(e) => return Some(e),
+        };
+        if let Some(why) = &c.inst_any {
+            return Some(format!("instance any: {why}"));
+        }
+        if c.inst_names.contains(method) {
+            return Some("instance named write".into());
+        }
+    }
+    let (&holder, before) = chain.split_last()?;
+    for &id in before {
+        let c = match class(id) {
+            Ok(c) => c,
+            Err(e) => return Some(e),
+        };
+        if let Some(why) = &c.proto_any {
+            return Some(format!("prototype any: {why}"));
+        }
+        if let Some(why) = &c.proto_relinked {
+            return Some(format!("prototype relinked: {why}"));
+        }
+        if c.proto_names.contains(method) {
+            return Some("prototype named write".into());
+        }
+    }
+    let c = match class(holder) {
+        Ok(c) => c,
+        Err(e) => return Some(e),
+    };
+    if let Some(why) = &c.proto_any {
+        return Some(format!("holder any: {why}"));
+    }
+    if c.proto_names.contains(method) {
+        return Some("holder named write".into());
+    }
+    None
+}
+
+/// GUARDS3: [`chain_blocker`] finds nothing.
+pub(crate) fn chain_unshadowed(receiver: Option<u32>, chain: &[u32], method: &str) -> bool {
+    !chain.is_empty() && chain_blocker(receiver, chain, method).is_none()
+}
+
+/// GUARDS3: every instance of `class` (class id `cid`) finds `method` where its static chain
+/// says, for the whole run ([`chain_unshadowed`] with the receiver).
+pub(crate) fn class_unshadowed(
+    ctx: &crate::expr::FnCtx<'_>,
+    cid: u32,
+    class: &str,
+    method: &str,
+) -> bool {
+    if !method_is_constant(method) {
+        return false;
+    }
+    let Some(chain) = crate::codegen::static_prototype::chain(ctx, class, method) else {
+        return false;
+    };
+    let ids: Vec<u32> = chain.iter().map(|&(id, _)| id).collect();
+    chain_unshadowed(Some(cid), &ids, method)
+}
+
 /// Is every prototype slot named `name` written exactly once in the program,
 /// and can no object gain an own property of that name except through a
 /// write that sets its shadow bit?
@@ -255,7 +393,12 @@ fn chain_proof(method: &str, chain: &[(u32, u32)]) -> Vec<u32> {
     if method_is_constant(method) && !shadow_tests() {
         return Vec::new();
     }
-    chain.iter().map(|&(id, _)| id).collect()
+    let ids: Vec<u32> = chain.iter().map(|&(id, _)| id).collect();
+    // GUARDS3: no write the solver saw reaches a prototype of the chain.
+    if method_is_constant(method) && chain_unshadowed(None, &ids, method) {
+        return Vec::new();
+    }
+    ids
 }
 
 fn class_value_dir(ctx: &mut crate::expr::FnCtx<'_>) -> String {
