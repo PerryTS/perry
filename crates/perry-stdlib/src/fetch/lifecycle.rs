@@ -315,6 +315,10 @@ extern "C" fn observe(bits: u64, mark: Mark, ctx: *mut c_void) -> bool {
         if let Some(headers) = response.cached_headers_id {
             edges.push(handle_to_f64(headers).to_bits());
         }
+        // The ReadableStream body is an ordinary GC object the response
+        // holds (the minor scanner visits the same two slots).
+        edges.extend(response.cached_body_stream);
+        edges.extend(response.body_stream);
     }
     if let Some(request) = REQUEST_REGISTRY.lock().unwrap().get(&id) {
         edges.push(request.signal.to_bits());
@@ -400,6 +404,27 @@ mod tests {
             collect();
             // The bound-method cache lives in the record and died with it.
             assert!(!HEADERS_REGISTRY.lock().unwrap().contains_key(&header_id));
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn full_collection_retains_a_live_response_body_stream() {
+        let _band = crate::fetch::handle_band_test_lock();
+        std::thread::spawn(|| unsafe {
+            perry_runtime::gc::gc_init();
+            let scope = perry_runtime::gc::RuntimeHandleScope::new();
+            let text = perry_runtime::js_string_from_bytes(b"hi".as_ptr(), 2);
+            let response = js_response_new(text, 200.0, std::ptr::null(), 0.0);
+            let root = scope.root_nanbox_f64(response);
+            // The stream is held by the response record alone.
+            let _ = super::super::body_clone::js_response_body(response);
+            collect();
+            let body = super::super::body_clone::js_response_body(root.get_nanbox_f64());
+            let stream = crate::streams::RsRef::from_value(body);
+            assert!(crate::streams::is_readable_stream(stream));
+            assert_eq!(crate::streams::drain_readable_into_bytes(stream), b"hi");
         })
         .join()
         .unwrap();
