@@ -1186,6 +1186,9 @@ impl Model {
                         TokKind::ClassObj(_) => 2,
                         _ => 4,
                     };
+                    // Rule NUMAPP: this application names a non-numeric key
+                    // only if its key is not a number-only key.
+                    let bit = if num_only { bit } else { bit | 8 };
                     *self.any_writer_objs.entry((tm, site)).or_default() |= bit;
                     let birth = self.stores[site as usize].birth;
                     let w = self.any_writers.entry(tm).or_default();

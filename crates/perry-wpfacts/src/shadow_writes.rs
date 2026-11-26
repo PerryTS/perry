@@ -71,6 +71,13 @@ pub(crate) fn shadow_writes(m: &Model) -> BTreeMap<u32, ShadowWrites> {
             })
     };
     let atom = |a: crate::model::Atom| m.atoms[a as usize].clone();
+    // The prototype keys a store under a number-only key may name: the
+    // numeric ones (`Model::numeric_atom`: a Number's ToString form).
+    let num_names: Vec<String> = proto_keys
+        .iter()
+        .filter(|&&a| m.numeric_atom(a))
+        .map(|&a| atom(a))
+        .collect();
     // Keys a computed-key store under `key` may name (`None`: any key).
     let named_by = |key: Option<Key>| -> Option<Vec<String>> {
         match key {
@@ -165,15 +172,21 @@ pub(crate) fn shadow_writes(m: &Model) -> BTreeMap<u32, ShadowWrites> {
                 .map(|&s| (s, None))
                 .chain(aw.post.iter().map(|&(s, k)| (s, Some(k))));
             for (s, k) in sites {
-                if numeric_key(s) {
-                    continue;
-                }
                 // The store writes only the objects its receiver set held:
                 // an instance, the class object (on no instance's chain), or
-                // the prototype.
-                let objs = m.any_writer_objs.get(&(tm, s)).copied().unwrap_or(7);
+                // the prototype; bit 8: some application on this template
+                // stored under a key that may be non-numeric (NUMAPP). An
+                // absent entry is every object and any key.
+                let objs = m.any_writer_objs.get(&(tm, s)).copied().unwrap_or(15);
                 let (inst, proto) = (objs & 1 != 0, objs & 4 != 0);
-                match named_by(k) {
+                // A number-only key (every application on the template, or
+                // the site's own key) writes the numeric names only.
+                let names = if numeric_key(s) || objs & 8 == 0 {
+                    Some(num_names.clone())
+                } else {
+                    named_by(k)
+                };
+                match names {
                     Some(ns) => {
                         if inst {
                             w.inst_names.extend(ns.iter().cloned());
