@@ -375,6 +375,7 @@ fn initialize_open_state(owner: f64, state: f64) {
         "cipher",
         "tlsWrapper",
         "tlsParent",
+        super::payload_lookup::ATTEMPT,
     ] {
         p::record_set(state.get(), key, p::undefined());
     }
@@ -450,9 +451,9 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
     let callback = scope.root_nanbox(callback);
     let lookup = scope.root_nanbox(lookup);
     let wanted = super::payload_lookup::wanted(arg1.get());
-    let lookup = (path.is_none() && crate::ip::classify_ip(&host) == 0)
-        .then(|| super::payload_lookup::validate(lookup.get()))
-        .flatten();
+    let custom_lookup = path.is_none()
+        && crate::ip::classify_ip(&host) == 0
+        && super::payload_lookup::validate(lookup.get());
     if path.is_none() {
         // SAFETY: The validator consumes scalar arguments on this agent; no payload borrow is held
         // when it throws.
@@ -539,9 +540,9 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
         };
         (*payload).ext.connect_async_id = provider::id(connect.get());
     }
-    let result = match (path, lookup) {
-        (None, Some(lookup)) => {
-            super::payload_lookup::start(owner.get(), arg1.get(), &host, port as u16, lookup);
+    let result = match (path, custom_lookup) {
+        (None, true) => {
+            super::payload_lookup::start(owner.get(), arg1.get(), &host, port as u16, lookup.get());
             Ok(())
         }
         // SAFETY: The retained link belongs to this agent; projection checks family/open
