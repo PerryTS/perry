@@ -2950,6 +2950,11 @@ pub struct Model {
     /// Lookups that visited a holder token: replayed when an accessor is
     /// installed on it later.
     pub visits: FxHashMap<Tok, crate::pts::FxHashSet<(Tok, Key, ChainAct)>>,
+    /// SPREADOWN: the copies (spread, rest, `Object.assign`) from a builtin
+    /// function value, by source: the any-key node each copies into. A
+    /// native minted later that may denote the source joins them
+    /// (`builtin_token_created`).
+    pub own_copies: FxHashMap<Tok, Vec<NodeId>>,
     /// An accessor was installed on `Object.prototype` while solving: every
     /// lookup in the program may run it. Kills every fact (derive).
     pub objproto_accessor: bool,
