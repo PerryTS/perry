@@ -94,27 +94,6 @@ impl<'a> Gen<'a> {
         Some((class_name, args, arg("get"), arg("set")))
     }
 
-    /// The key a literal shape's constructor stores its argument `i` under
-    /// (`this.k = p_i`), when it stores it so.
-    pub(crate) fn shape_arg_key(&self, mi: u32, class_name: &str, i: usize) -> Option<String> {
-        let module = self.modules[mi as usize].1;
-        let ctor = module.classes.iter().find(|c| c.name == class_name)?.constructor.as_ref()?;
-        let p = ctor.params.get(i)?.id;
-        ctor.body.iter().find_map(|s| match s {
-            Stmt::Expr(Expr::PropertySet {
-                object,
-                property,
-                value,
-                ..
-            }) if matches!(object.as_ref(), Expr::This)
-                && matches!(value.as_ref(), Expr::LocalGet(q) if *q == p) =>
-            {
-                Some(property.clone())
-            }
-            _ => None,
-        })
-    }
-
     /// The class whose method home `home` reads, when it is that home.
     fn class_home_of(&self, fx: &Fx, home: &Expr) -> Option<TmplId> {
         match home {

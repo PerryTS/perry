@@ -222,7 +222,6 @@ impl Model {
         self.nodes[n as usize].frame = self.fam_home(t);
         self.nodes[n as usize].of_marker = self.is_marker(t);
         self.fields.insert((t, a), n);
-        self.rfam_watch(n, t, a, crate::solve::recv_family::WATCH_FIELD);
         // A view's [[ViewedArrayBuffer]] is an internal slot, no property:
         // only its birth writes it and only `.buffer` reads it; no key
         // lists, copies or reads it (`VIEWED_BUFFER`).
@@ -571,7 +570,6 @@ impl Model {
                 self.nodes[n as usize].frame = self.fam_home(t);
                 self.nodes[n as usize].of_marker = self.is_marker(t);
                 self.fields.insert((t, a), n);
-                self.rfam_watch(n, t, a, crate::solve::recv_family::WATCH_FIELD);
                 self.rel(|| format!("fieldnode {n} {t} {a}"));
                 n
             }
@@ -612,12 +610,6 @@ impl Model {
         self.nodes[n as usize].frame = self.fam_home(t);
         self.nodes[n as usize].of_marker = self.is_marker(t);
         self.field_any.insert(t, n);
-        self.rfam_watch(
-            n,
-            t,
-            crate::solve::recv_family::NO_HOME_KEY,
-            crate::solve::recv_family::WATCH_FIELD,
-        );
         self.rel(|| format!("fieldany {n} {t}"));
         // A JSON object's properties under keys no read names, or an
         // array's elements: their own position class (`json_pos`).
@@ -743,12 +735,6 @@ impl Model {
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.nodes[n as usize].frame = self.fam_home(t);
         self.named_any.insert(t, n);
-        self.rfam_watch(
-            n,
-            t,
-            crate::solve::recv_family::NO_HOME_KEY,
-            crate::solve::recv_family::WATCH_FIELD,
-        );
         self.rel(|| format!("namedany {n} {t}"));
         let any = self.field_any(t);
         self.edge(n, any);

@@ -163,13 +163,8 @@ fn an_escaped_value_binds_no_layout_instance() {
         .stats
         .instances;
     assert!(esc > base, "the value must escape: {base} -> {esc}");
-    // K3 holder rule (CWN, family premise 11-23): `r` holds `a`, `b`, `c`
-    // (computed keys), so unknown code that holds `r` calls them on `r`:
-    // their entry instances run with `this` = `r`, and `a`'s `this.b()`
-    // there reads `r`'s computed-key field (`a` | `b` | `c`): one instance
-    // of each at that site. Linear: no instance per layout and method.
     assert!(
-        esc - base <= 4 + 3,
+        esc - base <= 4,
         "{base} -> {esc}: more than one entry instance per function"
     );
 }

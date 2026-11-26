@@ -559,7 +559,6 @@ fn generate<'a>(
     g.m.record_signatures = cfg.value_records && !cfg.no_record_signatures;
     g.m.array_fields = !cfg.no_array_fields;
     g.m.k3_held = std::env::var_os("PERRY_K3_CENSUS").map(|_| Default::default());
-    g.m.rfam.explain_off = std::env::var_os("PERRY_K3_FAMOFF").is_some();
     g.m.arr_field_sabotage = cfg.sabotage.as_deref() == Some("arrfield");
     g.m.rest_field_sabotage = cfg.sabotage.as_deref() == Some("restfield");
     g.m.rest_elems = rest_elems::enabled();
@@ -1172,7 +1171,6 @@ fn compute_act<'a>(
         derive::derive(&mut g)
     };
     k3_census::write(&g);
-    g.m.rfam_report();
     // Value records: a verdict per literal template, after
     // the templates and sites, before any representation reads them.
     g.m.record_array_join_sabotage = cfg.sabotage.as_deref() == Some("vrarrjoin");
