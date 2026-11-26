@@ -38,7 +38,8 @@
 //! position) prints one `CENSUS-SEED` line; every first ⊤ arrival in a node
 //! is booked to the seed its ⊤ came from (an S creation books itself, a
 //! propagation or an A creation books the seed of its ⊤ input). At `n`
-//! distinct seeds, or past `PERRY_FACTS_STOP_ON_TOP_WORK=<w>` work when that
+//! distinct seeds, or past `PERRY_FACTS_STOP_ON_TOP_WORK=<w>` work (or
+//! `PERRY_FACTS_STOP_ON_TOP_SECS=<s>` seconds) when that
 //! is set (keys past `n` are then booked together as `later`), or at the end
 //! of the solve, one `CENSUS-REACH` line per seed gives the nodes booked to
 //! it, and the process exits with code 86. A seed whose rule input already
@@ -206,6 +207,11 @@ pub(crate) struct Census {
     /// Distinct seeds to list, and the work bound (0 = none).
     max: u64,
     work: u64,
+    /// `PERRY_FACTS_STOP_ON_TOP_SECS`: the time bound (0 = none), its
+    /// start, and the checks since the last clock read.
+    secs: u64,
+    start: Option<std::time::Instant>,
+    ticks: std::cell::Cell<u32>,
     seeds: Vec<CensusSeed>,
     by_key: FxHashMap<(&'static str, u32, (u32, u32)), u32>,
     /// By node: the seed its first ⊤ arrival is booked to (`C_*` else).
@@ -288,6 +294,8 @@ impl StopTop {
             Box::new(Census {
                 max,
                 work,
+                secs: num("PERRY_FACTS_STOP_ON_TOP_SECS").map_or(0, |v| v as u64),
+                start: Some(std::time::Instant::now()),
                 ..Default::default()
             })
         });
@@ -318,9 +326,20 @@ impl StopTop {
         )
     }
 
-    /// The census is past its work bound.
+    /// The census is past its work bound, or past its time bound (read
+    /// once per 2^16 checks).
     pub(crate) fn census_due(&self, work: u64) -> bool {
-        self.census.as_ref().is_some_and(|c| c.work != 0 && work > c.work)
+        self.census.as_ref().is_some_and(|c| {
+            if c.work != 0 && work > c.work {
+                return true;
+            }
+            if c.secs == 0 {
+                return false;
+            }
+            let k = c.ticks.get().wrapping_add(1);
+            c.ticks.set(k);
+            k & 0xffff == 0 && c.start.is_some_and(|t| t.elapsed().as_secs() > c.secs)
+        })
     }
 
     pub(crate) fn leave_rule(&mut self, r: RuleSaved) {
@@ -1030,7 +1049,7 @@ impl Model {
         };
         let c = self.stop_top.as_mut().unwrap().census.as_mut().unwrap();
         book(c, r);
-        if c.work == 0 && c.seeds.len() as u64 >= c.max {
+        if c.work == 0 && c.secs == 0 && c.seeds.len() as u64 >= c.max {
             self.census_finish("seed count");
         }
     }
