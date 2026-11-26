@@ -265,7 +265,7 @@ cause_test!(
     "escaped-this",
     "property",
     "y",
-    // A plain function: a method's `this` is its class family (K3 (B)).
+    // A function handed to unknown code: its `this` is ⊤.
     r#"
         declare function external(x?: unknown): any;const g: any = external(); g(function (this: any) { return this.y; });"#
 );

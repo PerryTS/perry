@@ -800,7 +800,6 @@ impl Model {
             }
         }
         if t == TOP {
-            self.rfam_top_holder(src);
             // DECISIONS 149b: ⊤ reached from the receiver is the reader's.
             if self.rooted_store(t, key, src, site) {
                 return;

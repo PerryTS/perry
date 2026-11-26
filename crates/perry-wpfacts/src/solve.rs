@@ -36,7 +36,6 @@ mod apply;
 mod arr_len;
 mod builtin_fields;
 pub(crate) mod proxy;
-pub(crate) mod recv_family;
 
 #[path = "solve/store.rs"]
 mod store;
@@ -236,7 +235,7 @@ impl Model {
         if !later.is_empty() {
             if top_new || node.pts.contains_tok(TOP) {
                 node.dropped = true;
-                if self.ledger.is_some() || self.k3_held.is_some() || node.fam_watch != 0 {
+                if self.ledger.is_some() || self.k3_held.is_some() {
                     ledger_gone = std::mem::take(&mut later);
                 }
             } else {
@@ -284,13 +283,6 @@ impl Model {
                 self.charge_work(before as u64);
             }
         }
-        // K3 (B): a field or prototypes node the receiver families read
-        // (`recv_family`), the dropped tokens included.
-        let fam_new = if self.nodes[n as usize].fam_watch != 0 {
-            self.rfam_filter(n, &mut fresh.iter().chain(&ledger_gone).copied())
-        } else {
-            Vec::new()
-        };
         if !ledger_gone.is_empty() && (self.ledger.is_some() || self.k3_held.is_some()) {
             self.ledger_again_beside_top(n, &ledger_gone);
         }
@@ -300,9 +292,6 @@ impl Model {
         }
         self.fresh = fresh;
         self.fresh_seen = seen;
-        if !fam_new.is_empty() {
-            self.rfam_arrived(n, &fam_new);
-        }
         if top_new && self.diagnostic.is_some() {
             self.diagnostic_predecessor(n, self.cur_src, self.cur_why);
         }
@@ -1378,7 +1367,6 @@ impl Model {
                     && !self.settle_record_entry()
                     && !self.settle_not_error()
                     && !self.settle_ta_len()
-                    && !self.settle_family()
                     && !crate::builtins::settle_native_given(self)
                 {
                     break;
@@ -1588,7 +1576,6 @@ impl Model {
         }
         self.nodes[n as usize].obs = self.obs_toks.contains(&t);
         self.proto_node.insert(t, n);
-        self.rfam_watch(n, t, 0, recv_family::WATCH_PROTO);
         self.rel(|| format!("protonode {n} {t}"));
         // Rule PXNEWT: an object made with a Proxy new target has the
         // prototype its `prototype` [[Get]] gives (`proxy_nt_inst`) only.

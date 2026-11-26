@@ -60,12 +60,10 @@ fn a_method_returning_this_hands_no_known_receiver_out() {
     assert!(p, "a escaped through the shared return of add\n{dump}");
 }
 
-/// Unknown code calls the escaped `add` only with `this` = an object of
-/// its class family it holds, or nullish (owner premise 11-23, receiver
-/// family; the runtime checks it at the invoke point): no `N` escaped, so
-/// the read in its body holds no unknown receiver.
+/// Unknown code calls the escaped `add` with any `this`: the read in its
+/// body holds an unknown receiver (proven only behind its entry guard).
 #[test]
-fn the_escaped_method_runs_only_on_a_held_member_of_its_family() {
+fn the_escaped_method_still_runs_on_an_unknown_receiver() {
     let src = returns_this("");
     let pf = facts_of(&src);
     let at = src.find("/*B*/").expect("marker") as u32;
@@ -79,8 +77,8 @@ fn the_escaped_method_runs_only_on_a_held_member_of_its_family() {
     let line = format!("S 0 {} .tag ", s.byte_offset);
     assert!(
         dump.lines()
-            .any(|l| l.starts_with(&line) && !l.contains(" top=1 ")),
-        "this of the escaped add holds an unknown receiver\n{dump}"
+            .any(|l| l.starts_with(&line) && l.contains(" top=1 ")),
+        "this of the escaped add holds no unknown receiver\n{dump}"
     );
 }
 

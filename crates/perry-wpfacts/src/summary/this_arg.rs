@@ -209,20 +209,11 @@ impl Model {
                 .or_default()
                 .extend(dsts.iter().copied());
         }
-        // K3 (B), receiver family (owner 11-23): a method or accessor
-        // runs, for code outside the program's view, only on its class
-        // family or nullish (`recv_family`); a plain function on anything.
-        let family = !contract_only && self.rfam_escape_this(f, &dsts);
-        if family {
-            for &i in &insts {
-                self.rfam_extra(f, i);
-            }
-            if let Some(mk) = mk {
-                self.rfam_extra(f, mk);
-            }
-        }
+        // A method or accessor unknown code holds runs on any receiver that
+        // code hands it, as a plain function does (owner 11-26: no class
+        // family narrowing until a proof exists; no runtime check backs it).
         for d in dsts {
-            if !contract_only && !family {
+            if !contract_only {
                 self.add_top(d, why);
                 self.add_prim(d, prim::ALL);
             }
