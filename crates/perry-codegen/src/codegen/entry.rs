@@ -1519,6 +1519,10 @@ pub(super) fn compile_module_entry(
                 // guards. See the comment on `body_check` below.
                 let body_check_idx = ctx.new_block("event_loop.body_check");
                 let body_wait_idx = ctx.new_block("event_loop.body_wait");
+                // NXH13: the zero-timeout poll, and the poll-callback + check
+                // half that both poll arms join.
+                let body_poll_now_idx = ctx.new_block("event_loop.body_poll_now");
+                let body_after_poll_idx = ctx.new_block("event_loop.body_after_poll");
                 let exit_idx = ctx.new_block("event_loop.exit");
                 let finalize_idx = ctx.new_block("event_loop.finalize");
                 let header_label = ctx.block_label(header_idx);
@@ -1527,6 +1531,8 @@ pub(super) fn compile_module_entry(
                 let body_label = ctx.block_label(body_idx);
                 let body_check_label = ctx.block_label(body_check_idx);
                 let body_wait_label = ctx.block_label(body_wait_idx);
+                let body_poll_now_label = ctx.block_label(body_poll_now_idx);
+                let body_after_poll_label = ctx.block_label(body_after_poll_idx);
                 let exit_label = ctx.block_label(exit_idx);
                 let finalize_label = ctx.block_label(finalize_idx);
 
@@ -1584,17 +1590,18 @@ pub(super) fn compile_module_entry(
                 ctx.block().cond_br(&cmp, &body_label, &exit_label);
 
                 // loop_body: one event-loop iteration in Node's phase order
-                // (turnloop P3; DESIGN §9). Checkpoint (nextTick + microtasks +
+                // (turnloop P3; DESIGN §9): checkpoint (nextTick + microtasks +
                 // the unhandled-rejection report, which no longer fires
-                // timers), then timers, cron, poll (the I/O pump and the native
-                // completion callbacks it carries), then check (setImmediate).
-                // The park at the end IS the poll block: its deadline is the
-                // timer heap's root, so "park, then run the next iteration's
-                // timers phase" is libuv's "block in poll until the next
-                // deadline, then run timers". Before P3 the drain fired the
-                // timeout AND immediate queues in one batch ahead of the pump,
-                // so an immediate scheduled inside an I/O callback ran before a
-                // `setTimeout(…, 0)` beside it — the reverse of Node.
+                // timers), timers, cron, the stdlib pumps, then POLL — the
+                // turnloop turn that delivers socket and http I/O callbacks —
+                // then the native completion callbacks, then check
+                // (setImmediate). The poll turn sits BETWEEN timers and check,
+                // as libuv's does: an I/O callback's `setImmediate` runs in the
+                // same iteration, ahead of a `setTimeout(…, 0)` scheduled beside
+                // it, which waits for the next iteration's timers phase. Until
+                // NXH13 the turn was the iteration's last block (after check),
+                // so every I/O callback's immediate waited a whole iteration
+                // and ran after that timeout — the reverse of Node.
                 ctx.current_block = body_idx;
                 let _ = ctx
                     .block()
@@ -1605,52 +1612,35 @@ pub(super) fn compile_module_entry(
                     let _ = ctx.block().call(I32, "js_cron_timer_tick", &[]);
                 }
                 ctx.block().call_void("js_run_stdlib_pump", &[]);
-                let _ = ctx.block().call(I32, "js_event_loop_poll_callbacks", &[]);
-                let _ = ctx.block().call(I32, "js_event_loop_check_phase", &[]);
                 ctx.block().br(&body_check_label);
 
-                // #9441 — body_check: ask the liveness question AGAIN, now that
-                // the body has run.
+                // #9441 — body_check: ask the liveness question AGAIN before
+                // the poll wait.
                 //
-                // The body's last act used to be an unconditional
-                // `js_wait_for_event`, which parks for up to `IDLE_CAP_MS`
-                // (1 s) when no timer deadline is nearer. That park happened
-                // even on the iteration that CONSUMED the last event source —
-                // the drain that fired the final timer, or dispatched stdin's
-                // `'end'` — so the header discovered "nothing left to do" a
-                // second after the answer was already known. A program whose
-                // only work was a 20 ms `setTimeout` measured 1082 ms against
-                // node's 132 ms; the same binary exits in 45 ms when
-                // `process.exit(0)` runs in the first tick.
+                // The wait used to be unconditional: `js_wait_for_event` parks
+                // for up to `IDLE_CAP_MS` (1 s) when no timer deadline is
+                // nearer, even on the iteration that CONSUMED the last event
+                // source — the timers phase that fired the final timer — so the
+                // header discovered "nothing left to do" a second after the
+                // answer was already known. A program whose only work was a
+                // 20 ms `setTimeout` measured 1082 ms against node's 132 ms.
                 //
                 // No wake can shorten that sleep, which is why the fix is a
-                // look and not a notify. Every off-main producer in the runtime
-                // already notifies when its source goes away (the stdin
-                // reader's EOF path, the child-process and pty reactors, dgram,
-                // signals), so the removals left unserved are exactly the ones
-                // the MAIN thread performed itself — inside the very iteration
-                // that then parks. For those a wake is not an available shape:
-                // the main thread is the pump. It has to look before it sleeps.
-                //
-                // Asking here rather than inside `js_wait_for_event` is what
-                // makes the question EXACT: `has_cron` is a stdlib symbol the
-                // runtime cannot call (perry-runtime's archive does not define
-                // it), so a runtime-side predicate would have had to omit cron
-                // and would then spin on a cron-only program instead of
-                // parking. Here the predicate is literally the header's, by
-                // construction.
-                //
-                // Branching to the header rather than to the exit block keeps
-                // the host-driven return (`js_event_loop_host_driven`) and the
-                // exit epilogue on exactly one path each; the header re-runs a
-                // cheap predicate and leaves.
+                // look and not a notify: the removals left unserved are the ones
+                // the MAIN thread performed itself, inside the very iteration
+                // that then parks. Asking here rather than inside
+                // `js_wait_for_event` is what makes the question EXACT:
+                // `has_cron` is a stdlib symbol the runtime cannot call, so a
+                // runtime-side predicate would omit cron and spin on a
+                // cron-only program instead of parking. Here the predicate is
+                // literally the header's, by construction.
                 ctx.current_block = body_check_idx;
-                // The park is taken only when something is still live AND
-                // nothing must run on the very next turn. The second condition
-                // is a queued immediate, or a native completion callback
-                // awaiting its poll phase: Node computes a zero poll timeout
-                // while the immediate queue is non-empty, and a park here would
-                // cost up to the next timer deadline (or the 1 s idle cap).
+                // The wait is taken only when something is still live AND
+                // nothing must run in this iteration's check phase. A queued
+                // immediate (or a native completion awaiting the poll-callback
+                // half) makes Node compute a ZERO poll timeout: it still polls,
+                // and still runs the ready I/O callbacks before check, but does
+                // not block. That is `body_poll_now`.
                 let check_queued = ctx.block().call(I32, "js_immediate_has_pending", &[]);
                 let still_live = emit_event_loop_liveness(&mut ctx, cross_module.needs_stdlib);
                 let check_cmp = ctx.block().icmp_ne(I32, &check_queued, &zero);
@@ -1664,15 +1654,29 @@ pub(super) fn compile_module_entry(
                 let no_check_work = ctx.block().xor(I1, &check_cmp, "true");
                 let may_park = ctx.block().and(I1, &no_check_work, &still_live_cmp);
                 ctx.block()
-                    .cond_br(&may_park, &body_wait_label, &header_label);
+                    .cond_br(&may_park, &body_wait_label, &body_poll_now_label);
 
-                // body_wait: something is still live, so park until it moves.
-                // Issue #84: condvar-backed wait. Returns immediately when
-                // a tokio worker (net/ws/http/fetch/redis/spawn) notifies
-                // after pushing to its queue; otherwise blocks until the
-                // next timer/interval deadline or a 1 s safety cap.
+                // body_wait: something is still live, so park until it moves
+                // (the poll phase with a timeout). Issue #84: returns
+                // immediately when a worker notifies after pushing to its
+                // queue; otherwise blocks until the next timer deadline or a
+                // 1 s safety cap. The turn it takes dispatches the ready I/O
+                // callbacks before returning.
                 ctx.current_block = body_wait_idx;
-                ctx.block().call_void("js_wait_for_event", &[]);
+                ctx.block().call_void("js_event_loop_poll_wait", &[]);
+                ctx.block().br(&body_after_poll_label);
+
+                // body_poll_now: the zero-timeout poll — collect and dispatch
+                // the I/O that is already ready, without blocking.
+                ctx.current_block = body_poll_now_idx;
+                ctx.block().call_void("js_event_loop_poll_nowait", &[]);
+                ctx.block().br(&body_after_poll_label);
+
+                // body_after_poll: the native completion callbacks (the rest of
+                // poll), then check (setImmediate), then the next iteration.
+                ctx.current_block = body_after_poll_idx;
+                let _ = ctx.block().call(I32, "js_event_loop_poll_callbacks", &[]);
+                let _ = ctx.block().call(I32, "js_event_loop_check_phase", &[]);
                 ctx.block().br(&header_label);
 
                 // loop_exit: fire beforeExit with the would-be exit code,

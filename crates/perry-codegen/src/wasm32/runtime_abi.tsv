@@ -1414,6 +1414,8 @@ js_event_emitter_subclass_init	f64	f64,f64
 js_event_loop_check_phase	i32s	
 js_event_loop_host_driven	i32s	
 js_event_loop_poll_callbacks	i32s	
+js_event_loop_poll_nowait	void	
+js_event_loop_poll_wait	void	
 js_event_loop_timers_phase	i32s	
 js_event_new	ptr	f64,f64,i32u
 js_event_subclass_init	f64	f64,f64,f64,i32u,i32u
