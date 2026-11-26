@@ -1301,19 +1301,66 @@ fn one_heavy_fixed_cost_reading_moves_nothing() {
     reset_for_test();
 }
 
-/// A move takes every step the readings justify at once, to the nearer of
-/// the two readings' destinations, and stops at the ladder's ceiling.
+/// A truly fixed cost halves with every doubling: the floor grows one
+/// doubling per move, each step checked by the second reading at the new
+/// size, and stops at the first size where the share is at the edge.
 #[test]
-fn the_fixed_cost_floor_jumps_to_its_destination_and_stops_at_the_ceiling() {
+fn the_fixed_cost_floor_grows_one_checked_doubling_at_a_time() {
     reset_for_test();
-    // 16% at the floor predicts 2% three doublings up; 20% would need four.
-    fixed_cost_reading(200);
+    // 16% at the floor is 2% three doublings up.
     fixed_cost_reading(160);
-    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 8);
-    // At 8x the cap, 100% predicts 50% at the ceiling: the floor stops there.
+    fixed_cost_reading(160);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2, "one step");
+    for scale in [2, 4] {
+        // The first window at the new size is not a reading of it, the
+        // second checks the step, the third (with the second) moves on.
+        let permille = 160 / scale as u64;
+        fixed_cost_reading(permille);
+        fixed_cost_reading(permille);
+        assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * scale);
+        fixed_cost_reading(permille);
+        assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * scale * 2);
+    }
+    for _ in 0..4 {
+        fixed_cost_reading(20);
+    }
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 8, "2% holds");
+    // It never passes the ladder's ceiling.
     fixed_cost_reading(1000);
     fixed_cost_reading(1000);
     assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MAX);
+    for _ in 0..4 {
+        fixed_cost_reading(500);
+    }
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MAX);
+    reset_for_test();
+}
+
+/// A cost that grows with Eden is not bought down by a larger one: the step
+/// whose share does not fall is taken back, and the floor stays there until
+/// the share at that size doubles.
+#[test]
+fn a_fixed_cost_step_that_buys_nothing_is_taken_back_and_held() {
+    reset_for_test();
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 2);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "taken back");
+    for _ in 0..4 {
+        fixed_cost_reading(40);
+        fixed_cost_reading(70);
+    }
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN, "held");
+    fixed_cost_reading(80);
+    fixed_cost_reading(80);
+    assert_eq!(
+        fixed_cost_scale(),
+        NURSERY_CAP_SCALE_MIN * 2,
+        "a doubled share grows again"
+    );
     reset_for_test();
 }
 
@@ -1324,6 +1371,12 @@ fn a_small_fixed_cost_shrinks_the_floor_back() {
     reset_for_test();
     fixed_cost_reading(80);
     fixed_cost_reading(80);
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    fixed_cost_reading(40);
+    assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 4);
+    fixed_cost_reading(20);
+    fixed_cost_reading(20);
     assert_eq!(fixed_cost_scale(), NURSERY_CAP_SCALE_MIN * 4);
     // 0.8% at 4x is 1.6% at 2x and 3.2% at 1x: it only shrinks to where 1%
     // still holds, which is 4x itself. No move.
