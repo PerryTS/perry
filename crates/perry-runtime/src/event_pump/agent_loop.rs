@@ -371,6 +371,11 @@ crate::perry_thread_local! {
     /// [`dispatch_staged`] once no borrow on `AGENT_LOOP` is held.
     #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_loop")]
     static STAGED: RefCell<Vec<turnloop::Completion>> = const { RefCell::new(Vec::new()) };
+    /// Handle closes the generated loop's poll phase received, waiting for
+    /// its close phase ([`run_close_phase`]): libuv runs every `uv_close`
+    /// callback in `uv__run_closing_handles`, after check.
+    #[cfg_attr(target_vendor = "apple", link_section = "__DATA,__perry_loop")]
+    static CLOSING: RefCell<Vec<turnloop::Completion>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Take this agent's route slot for this thread, without building a loop.
@@ -481,30 +486,16 @@ fn dispatch_staged() {
             STAGED.with(|staged| staged.borrow_mut().push(completion));
             continue;
         }
-        if completion.token == TIMER_TOKEN {
-            // The JS timer heap's deadline. Nothing to deliver: the expiry IS
-            // the wake, and the timers phase reads the heap. Counted so a
-            // `PERRY_LOOP_STATS` line can say the arming was live.
-            if matches!(completion.result, turnloop::OpResult::Timer) {
-                note_timer_expiry();
-            }
+        // A handle's close (a socket, a pipe, a descriptor) is not a poll
+        // callback: node's `'close'` runs from the `uv_close` callback, in the
+        // close phase after check, so an immediate it sees queued runs before
+        // a timeout scheduled beside it. The generated loop's poll holds it
+        // for `run_close_phase`; every other turn delivers it here.
+        if checkpoint && matches!(completion.result, turnloop::OpResult::Closed) {
+            CLOSING.with(|closing| closing.borrow_mut().push(completion));
             continue;
         }
-        // One router, five token spaces. P1's classes are 1..=7, P2's are
-        // 0x10..=0x1F, P4's are 0x20..=0x2F, P10's posted host jobs are
-        // 0x30..=0x3F and P3 owns TIMER_TOKEN above, so `owns` is a range test
-        // and no module can be handed another's completion (`turnloop_proc`'s
-        // module note). P1 is the fall-through, so every other class must be
-        // branched on here or its completions land in the net subsystem.
-        if crate::turnloop_proc::owns(completion.token) {
-            crate::turnloop_proc::dispatch(completion);
-        } else if crate::turnloop_pool::owns(completion.token) {
-            crate::turnloop_pool::dispatch(completion);
-        } else if crate::turnloop_post::owns(completion.token) {
-            crate::turnloop_post::dispatch(completion);
-        } else {
-            super::service_hooks::net_dispatch(completion);
-        }
+        route(completion);
         if checkpoint {
             crate::promise::microtasks::run_poll_callback_checkpoint();
         }
@@ -518,6 +509,55 @@ fn dispatch_staged() {
             *slot = batch;
         }
     });
+}
+
+/// The generated loop's close phase: deliver the handle closes its poll
+/// phase held, in arrival order, each followed by the tick + microtask
+/// checkpoint. Closes that arrive meanwhile wait for the next iteration, as
+/// libuv's closing list does.
+pub(crate) fn run_close_phase() {
+    let mut batch = CLOSING.with(|closing| std::mem::take(&mut *closing.borrow_mut()));
+    if batch.is_empty() {
+        return;
+    }
+    for completion in batch.drain(..) {
+        route(completion);
+        crate::promise::microtasks::run_poll_callback_checkpoint();
+    }
+    CLOSING.with(|closing| {
+        let mut slot = closing.borrow_mut();
+        if slot.is_empty() && slot.capacity() < batch.capacity() {
+            *slot = batch;
+        }
+    });
+}
+
+/// Route one completion to its subsystem.
+fn route(completion: turnloop::Completion) {
+    if completion.token == TIMER_TOKEN {
+        // The JS timer heap's deadline. Nothing to deliver: the expiry IS
+        // the wake, and the timers phase reads the heap. Counted so a
+        // `PERRY_LOOP_STATS` line can say the arming was live.
+        if matches!(completion.result, turnloop::OpResult::Timer) {
+            note_timer_expiry();
+        }
+        return;
+    }
+    // One router, five token spaces. P1's classes are 1..=7, P2's are
+    // 0x10..=0x1F, P4's are 0x20..=0x2F, P10's posted host jobs are
+    // 0x30..=0x3F and P3 owns TIMER_TOKEN above, so `owns` is a range test
+    // and no module can be handed another's completion (`turnloop_proc`'s
+    // module note). P1 is the fall-through, so every other class must be
+    // branched on here or its completions land in the net subsystem.
+    if crate::turnloop_proc::owns(completion.token) {
+        crate::turnloop_proc::dispatch(completion);
+    } else if crate::turnloop_pool::owns(completion.token) {
+        crate::turnloop_pool::dispatch(completion);
+    } else if crate::turnloop_post::owns(completion.token) {
+        crate::turnloop_post::dispatch(completion);
+    } else {
+        super::service_hooks::net_dispatch(completion);
+    }
 }
 
 /// Component completions belong to their native operation owners. They are

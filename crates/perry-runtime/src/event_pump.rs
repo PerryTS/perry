@@ -339,6 +339,15 @@ pub extern "C" fn js_event_loop_poll_nowait() {
     event_loop_poll(false);
 }
 
+/// The generated loop's close phase, after check: the `'close'` callbacks of
+/// the handles whose close the poll phase received (libuv's
+/// `uv__run_closing_handles`), each followed by its checkpoint.
+#[no_mangle]
+pub extern "C" fn js_event_loop_close_phase() {
+    #[cfg(not(target_arch = "wasm32"))]
+    agent_loop::run_close_phase();
+}
+
 /// Test-only: install an unrouted net-profile loop on this thread.
 #[cfg(all(test, not(target_arch = "wasm32")))]
 pub(crate) fn install_net_loop_for_test() -> bool {

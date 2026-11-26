@@ -312,6 +312,7 @@ fn executable_exit_block_emits_the_process_exit_event() {
         "js_event_loop_timers_phase",
         "js_event_loop_poll_callbacks",
         "js_event_loop_check_phase",
+        "js_event_loop_close_phase",
         "js_wait_for_event",
         "js_event_loop_poll_wait",
         "js_event_loop_poll_nowait",
@@ -368,6 +369,7 @@ fn event_loop_body_emits_nodes_phase_order() {
         ("poll: zero-timeout turn", "@js_event_loop_poll_nowait()"),
         ("poll: native callbacks", "@js_event_loop_poll_callbacks()"),
         ("check", "@js_event_loop_check_phase()"),
+        ("close", "@js_event_loop_close_phase()"),
     ] {
         let at = body
             .find(call)
