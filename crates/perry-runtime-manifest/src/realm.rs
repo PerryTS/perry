@@ -279,6 +279,10 @@ pub struct RealmOwn {
     /// Ordinary spelling, or `@@species` for a symbol key.
     pub key: &'static str,
     pub symbol: bool,
+    /// Its [[Enumerable]] attribute (`RealmProperty::attributes` bit 1):
+    /// a copy of own enumerable properties (`Object.assign`, `{...o}`,
+    /// 7.3.25 CopyDataProperties) reads it.
+    pub enumerable: bool,
     pub value: RealmOwnValue,
 }
 
@@ -336,8 +340,10 @@ impl RealmProperty {
             (get, set, _) => format!("Accessor {{ get: {get:?}, set: {set:?} }}"),
         };
         format!(
-            "{p}RealmOwn {{ key: {:?}, symbol: {}, value: {p}RealmOwnValue::{value} }}",
-            self.key, self.symbol
+            "{p}RealmOwn {{ key: {:?}, symbol: {}, enumerable: {}, value: {p}RealmOwnValue::{value} }}",
+            self.key,
+            self.symbol,
+            self.attributes & 2 != 0
         )
     }
 }
