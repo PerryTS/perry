@@ -3403,7 +3403,16 @@ impl Model {
                 expected,
                 reason,
             } => {
-                let mut other = prim & prim::NULL != 0;
+                // Rule NULLPARENT: a `null` among the values makes no
+                // instance. ClassDefinitionEvaluation (ECMA-262 15.7.14 step
+                // 8.b) gives the class object %Function.prototype% as its
+                // [[Prototype]]; the derived [[Construct]] binds no `this`
+                // before `super()` (10.2.2), and SuperCall finds no
+                // constructor there and throws a TypeError (13.3.7.1 steps
+                // 4-5). No instance exists under the null and nothing reaches
+                // unknown code; the instances the other values make are the
+                // only ones.
+                let mut other = false;
                 let mut class_parent = false;
                 for &t in toks {
                     if t == expected {
