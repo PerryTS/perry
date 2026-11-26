@@ -1412,6 +1412,7 @@ js_event_emitter_async_resource_subclass_init	f64	f64,f64
 js_event_emitter_object_new	f64	f64
 js_event_emitter_subclass_init	f64	f64,f64
 js_event_loop_check_phase	i32s	
+js_event_loop_close_phase	void	
 js_event_loop_host_driven	i32s	
 js_event_loop_poll_callbacks	i32s	
 js_event_loop_poll_nowait	void	

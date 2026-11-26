@@ -1677,6 +1677,9 @@ pub(super) fn compile_module_entry(
                 ctx.current_block = body_after_poll_idx;
                 let _ = ctx.block().call(I32, "js_event_loop_poll_callbacks", &[]);
                 let _ = ctx.block().call(I32, "js_event_loop_check_phase", &[]);
+                // The close phase: the `'close'` callbacks of the handles
+                // whose close this poll received (libuv's closing handles).
+                ctx.block().call_void("js_event_loop_close_phase", &[]);
                 ctx.block().br(&header_label);
 
                 // loop_exit: fire beforeExit with the would-be exit code,
