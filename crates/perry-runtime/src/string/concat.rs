@@ -1199,6 +1199,10 @@ fn append_chain_all_heap_strings<const MAX_PARTS: usize>(
         piece_flags = combine_string_flags(piece_flags, unsafe { (*piece).flags });
     }
 
+    // The in-place arm below writes the header directly (no
+    // `init_string_header`); the saturating sums keep an over-long total
+    // over the limit.
+    super::check_string_length(total_u16 as usize);
     let dest = piece_ptrs[0] as *mut StringHeader;
     let dest_blen = piece_lens[0];
     let suffix_blen = total_blen.saturating_sub(dest_blen);

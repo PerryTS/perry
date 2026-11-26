@@ -84,8 +84,8 @@
     {
       "path": "crates/perry-runtime/src/string/concat.rs",
       "function": "append_chain_all_heap_strings",
-      "body_sha256": "f0495c8c29ff12b765cce3e18cf4dab3bb7a25fdf2afc59d3dcc6ac8ead1d137",
-      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings. Re-audited #13411: the numeric formatting helper extraction does not change these admission checks or the full-coercion chain fallback.",
+      "body_sha256": "2121c5c5cb77338d6bfa1506d1a4381f0129c287b1f168e0f19e9120a9e6b389",
+      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings. Re-audited #13411: the numeric formatting helper extraction does not change these admission checks or the full-coercion chain fallback. Re-audited 2026-11-26 (string-length-cap): append_chain_all_heap_strings gains one check_string_length(total_u16) after the admission loop, so every non-heap operand has already returned through js_string_concat_chain; no header read or admission check changed.",
       "rule": "mask-cast",
       "support_files": [
         "crates/perry-runtime/src/string/concat.rs"
@@ -94,8 +94,8 @@
     {
       "path": "crates/perry-runtime/src/string/concat.rs",
       "function": "append_chain_all_heap_strings",
-      "body_sha256": "f0495c8c29ff12b765cce3e18cf4dab3bb7a25fdf2afc59d3dcc6ac8ead1d137",
-      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings. Re-audited #13411: the numeric formatting helper extraction does not change these admission checks or the full-coercion chain fallback.",
+      "body_sha256": "2121c5c5cb77338d6bfa1506d1a4381f0129c287b1f168e0f19e9120a9e6b389",
+      "claim": "Every non-heap operand returns through js_string_concat_chain before any header dereference; that full coercion path handles inline strings. Re-audited #13411: the numeric formatting helper extraction does not change these admission checks or the full-coercion chain fallback. Re-audited 2026-11-26 (string-length-cap): append_chain_all_heap_strings gains one check_string_length(total_u16) after the admission loop, so every non-heap operand has already returned through js_string_concat_chain; no header read or admission check changed.",
       "rule": "heap-tag-only",
       "support_files": [
         "crates/perry-runtime/src/string/concat.rs"
@@ -380,7 +380,7 @@
   ],
   "support_files": {
     "crates/perry-runtime/src/node_stream_event_emitter.rs": "9b1b4341af484d21ad59d70c2ec44513821d5b599ebcb681b2d0b0c6061fbeb8",
-    "crates/perry-runtime/src/string/concat.rs": "d5e1e8718c228edda41eac6cbbb31d634a64f64248f4209c25c90099f02388f5",
+    "crates/perry-runtime/src/string/concat.rs": "4a2308402a782f9c2de4d83578f4e3d06ae6f7e7007af6c68f4b0e9eb8b93aa5",
     "crates/perry-runtime/src/object/builtin_proto_entries.rs": "958ee4c11de504d165af8cceedecd3f0fd41f6585cf92645afa3087ecef3edae",
     "crates/perry-runtime/src/object/property_ops/put_value.rs": "ff25dbdcced834a1a9704b95b70b1baf7bd018b793d18c789efc1cd328318269",
     "crates/perry-runtime/src/array/join.rs": "c292af7990171f08b140aad3a2c88dd775dd47d098ad5e2f6f1a1e37a5785041",
