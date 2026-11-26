@@ -574,6 +574,21 @@ fn native_instanceof(
         || class_id == CLASS_ID_WRITABLE_STREAM
         || class_id == CLASS_ID_TRANSFORM_STREAM
     {
+        if class_id == CLASS_ID_READABLE_STREAM && crate::object::stream_handle_id(value).is_none()
+        {
+            // A ReadableStream is an ordinary GC object (streams P2a): an
+            // instance or subclass instance has the realm's
+            // `ReadableStream.prototype` on its chain.
+            let proto = crate::object::builtin_prototype_value("ReadableStream");
+            let mut link = value;
+            while crate::value::JSValue::from_bits(link.to_bits()).is_pointer() {
+                link = crate::object::js_object_get_prototype_of(link);
+                if link.to_bits() == proto.to_bits() {
+                    return true_val;
+                }
+            }
+            return false_val;
+        }
         if let Some(id) = crate::object::stream_handle_id(value) {
             if let Some(probe) = crate::object::stream_handle_kind_probe() {
                 let kind = unsafe { probe(id) };

@@ -1102,6 +1102,23 @@ pub fn close(value: f64, family: &NativePayloadFamily) -> CloseOutcome {
 #[repr(transparent)]
 pub struct OwnerLink(pub(crate) usize);
 
+impl OwnerLink {
+    /// The link as a transport word (a native producer's sink context).
+    #[inline]
+    pub fn as_raw(self) -> usize {
+        self.0
+    }
+
+    /// A link back from [`Self::as_raw`].
+    ///
+    /// # Safety
+    /// `raw` came from `as_raw` of a link whose cell is still alive.
+    #[inline]
+    pub unsafe fn from_raw(raw: usize) -> Self {
+        Self(raw)
+    }
+}
+
 /// Cell addresses carried in transport tokens must fit below 2^56.
 pub(crate) const LINK_ADDRESS_LIMIT: u64 = 1 << 56;
 

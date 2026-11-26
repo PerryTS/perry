@@ -413,7 +413,11 @@ fn promise_ptr_from_value(value: f64) -> Option<*mut crate::Promise> {
 }
 
 fn registered_readable_stream_reader(stream: f64) -> Option<f64> {
-    if crate::object::stream_handle_id(stream).is_none() {
+    // A Web Streams band handle, or (P2a) a readable-family GC object: the
+    // registered stdlib helper checks the family and answers a miss.
+    if crate::object::stream_handle_id(stream).is_none()
+        && !crate::value::JSValue::from_bits(stream.to_bits()).is_pointer()
+    {
         return None;
     }
     let f = STREAM_CONSUMER_GET_READER.load(Ordering::Acquire);
@@ -433,7 +437,11 @@ fn registered_readable_stream_reader(stream: f64) -> Option<f64> {
 }
 
 fn registered_reader_read_promise(reader: f64) -> Option<*mut crate::Promise> {
-    if crate::object::stream_handle_id(reader).is_none() {
+    // A Web Streams band handle, or (P2a) a readable-family GC object: the
+    // registered stdlib helper checks the family and answers a miss.
+    if crate::object::stream_handle_id(reader).is_none()
+        && !crate::value::JSValue::from_bits(reader.to_bits()).is_pointer()
+    {
         return None;
     }
     let f = STREAM_CONSUMER_READER_READ.load(Ordering::Acquire);
