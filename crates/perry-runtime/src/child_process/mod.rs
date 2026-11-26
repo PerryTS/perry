@@ -130,7 +130,8 @@ pub(crate) use options::{
 pub(crate) use output::{
     cp_abort_error, cp_box_output, cp_box_run_output, cp_decode_status, cp_errno_number,
     cp_exec_callback_args, cp_exec_callback_output_bytes, cp_file_cmd_display, cp_io_error_code,
-    cp_make_error, cp_output_array, cp_read_output_mode, cp_sync_throw_error, CpExit, CpOutput,
+    cp_make_error, cp_output_array, cp_read_output_mode, cp_sync_error, cp_sync_settle,
+    cp_try_box_output, CpExit, CpOutput, CpSyncThrow,
 };
 
 // exec.rs — exec / execFile / spawnSync / execSync FFI + promisify wrappers.
