@@ -1678,6 +1678,10 @@ class __PerryClosure {
   static protoKindOf(closure) {
     return #info in closure ? closure.#info?.protoKind ?? 0 : 0;
   }
+  // A closure without a record (none was emitted for its function) keeps `new`.
+  static isConstructor(closure) {
+    return #info in closure ? closure.#info?.constructible ?? true : false;
+  }
   // A closure reads its function's name and length from the record it points at.
   get name() {
     return #info in this ? this.#info?.name : undefined;
@@ -1691,11 +1695,13 @@ class __PerryClosure {
 // made by its registration and held by its class's method table or template, with the
 // member's table index.
 class __FnInfo {
-  constructor(name, length, protoKind, funcIdx) {
+  constructor(name, length, protoKind, funcIdx, constructible = false) {
     this.name = name;
     this.length = length;
     this.protoKind = protoKind | 0;
     this.funcIdx = funcIdx | 0;
+    // `new` may make an instance: not an arrow, a method, or an async or generator function.
+    this.constructible = constructible;
     Object.freeze(this);
   }
 }
@@ -2099,10 +2105,10 @@ function __classStaticMethodFn(template, name, info, evaluation) {
   return __withKindProto(fn, info.protoKind);
 }
 // The i64 entry an array bridge calls for `cb`: a Perry closure's compiled function
-// after its captures, or a class method value with no table entry of its own through
-// its host wrapper, which supplies its `this` and class evaluation.
+// after its captures, or a host function (a class method value, a bound function) called
+// with the values, which supplies its own `this` and class evaluation.
 function __arrayCallback(cb) {
-  if (typeof cb === 'function' && cb.funcIdx === undefined && __classMethodFns.has(cb)) {
+  if (typeof cb === 'function' && cb.funcIdx === undefined) {
     return (...bits) => __jsValueToBits(cb(...bits.map(__bitsToJsValue)));
   }
   if (!cb || typeof cb.funcIdx === 'undefined' || !wasmInstance) return undefined;
@@ -2776,7 +2782,8 @@ const __memDispatch = {
   // __jsValueToBits converts JS values to BigInt for WASM calls.
   // __bitsToJsValue converts BigInt return values back to JS.
   // A function's `__FnInfo`, made once per function before any of its closures.
-  fn_info: (name, length, protoKind) => new __FnInfo(name, length, protoKind),
+  fn_info: (name, length, protoKind, constructible) =>
+    new __FnInfo(name, length, protoKind, 0, constructible === true || constructible === 1),
   closure_new: (funcIdx, captureCount, receivesThis, info) =>
     receivesThis
       ? new __PerryReceiverClosure(funcIdx, captureCount, info)
@@ -3581,11 +3588,14 @@ const __memDispatch = {
 
   // Timers — closure arg is the closure object itself (decoded from POINTER_TAG)
   // Captures are already BigInt from closure_set_capture.
+  // A host function (a bound one) is the host's own callback.
   set_timeout: (closure, delay) => {
+    if (typeof closure === 'function') return setTimeout(closure, delay);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return 0;
     return setTimeout(() => { const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0); if (fn) fn(...__padBigintArgs(fn, 0, [...closure.captures])); }, delay);
   },
   set_interval: (closure, delay) => {
+    if (typeof closure === 'function') return setInterval(closure, delay);
     if (!closure || typeof closure.funcIdx === 'undefined' || !wasmInstance) return 0;
     return setInterval(() => { const fn = wasmInstance.exports.__indirect_function_table?.get(closure.funcIdx | 0); if (fn) fn(...__padBigintArgs(fn, 0, [...closure.captures])); }, delay);
   },
@@ -4033,6 +4043,8 @@ function __invokeConstructor(fn, caps, ...bigintArgs) {
 // Convert them once to i64: boxing strings through f64 can erase NaN payloads.
 function callWasmClosure(closureVal, ...extraArgs) {
   let closure;
+  // A host function (a bound one) takes and returns plain values.
+  if (typeof closureVal === 'function') return closureVal(...extraArgs);
   if (typeof closureVal === 'object' && closureVal !== null) {
     // Already a JS closure object (came through toJsValue)
     closure = closureVal;
@@ -6854,9 +6866,9 @@ for (const [key, value] of Object.entries({
     __closureReceiverCheck(this, 'bind');
     const target = this;
     const fn = function (...args) {
-      return new.target
-        ? __constructClosure(target, [...bound, ...args])
-        : __callClosureMethod(target, thisArg, [...bound, ...args]);
+      if (!new.target) return __callClosureMethod(target, thisArg, [...bound, ...args]);
+      if (!__PerryClosure.isConstructor(target)) throw new TypeError(`${fn.name} is not a constructor`);
+      return __constructClosure(target, [...bound, ...args]);
     };
     const length = typeof target.length === 'number' ? Math.max(0, target.length - bound.length) : 0;
     Object.defineProperty(fn, 'length', { value: length, configurable: true });

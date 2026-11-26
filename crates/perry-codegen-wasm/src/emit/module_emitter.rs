@@ -99,6 +99,9 @@ pub(super) struct WasmModuleEmitter {
     /// The start function fills each once (`fn_info`); `closure_new` and
     /// `function_value` pass the record.
     pub(super) fn_info_globals: BTreeMap<u32, u32>,
+    /// The declarations and closures `new` may call (`__FnInfo.constructible`): neither
+    /// an arrow nor an async or generator function.
+    pub(super) fn_constructors: std::collections::BTreeSet<u32>,
     /// Set of WASM function indices that return void (no return value).
     /// Used to push TAG_UNDEFINED after calling void functions via FuncRef.
     pub(super) void_funcs: std::collections::BTreeSet<u32>,
@@ -187,6 +190,7 @@ impl WasmModuleEmitter {
             fn_names: BTreeMap::new(),
             fn_lengths: BTreeMap::new(),
             fn_info_globals: BTreeMap::new(),
+            fn_constructors: std::collections::BTreeSet::new(),
             void_funcs: std::collections::BTreeSet::new(),
             func_param_counts: BTreeMap::new(),
             rest_params: BTreeMap::new(),

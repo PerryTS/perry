@@ -578,8 +578,8 @@ impl WasmModuleEmitter {
         let mut closure_class: std::collections::HashMap<(usize, FuncId), String> =
             Default::default();
         let mut proto_kinds = Vec::new();
-        // (mod_idx, FuncId, name, length) of every closure.
-        let mut closure_names: Vec<(usize, FuncId, String, u32)> = Vec::new();
+        // (mod_idx, FuncId, name, length, constructible) of every closure.
+        let mut closure_names: Vec<(usize, FuncId, String, u32, bool)> = Vec::new();
         for (mod_idx, (_, module)) in modules.iter().enumerate() {
             for f in &module.functions {
                 proto_kinds.push((mod_idx, f.id, FnProtoKind::of_function(module, f)));
@@ -666,7 +666,7 @@ impl WasmModuleEmitter {
             // One function per FuncId: a closure the HIR reaches by two paths (a static
             // field initializer is also in `init`) is emitted once.
             let mut seen = std::collections::HashSet::new();
-            for (fid, params, body, caps, mut_caps, this, _, (is_async, is_generator)) in
+            for (fid, params, body, caps, mut_caps, this, is_arrow, (is_async, is_generator)) in
                 module_closures
             {
                 if seen.insert(fid) {
@@ -678,6 +678,7 @@ impl WasmModuleEmitter {
                         fid,
                         name.unwrap_or_default(),
                         fn_length(&params),
+                        !is_arrow && kind == FnProtoKind::Function,
                     ));
                     closure_funcs.push((fid, params, body, caps, mut_caps, this, mod_idx));
                 }
@@ -1002,15 +1003,21 @@ impl WasmModuleEmitter {
                     self.fn_names.insert(idx, id);
                     self.fn_lengths.insert(idx, fn_length(&f.params));
                     self.fn_info_globals.insert(idx, 0);
+                    if FnProtoKind::of_function(module, f) == FnProtoKind::Function {
+                        self.fn_constructors.insert(idx);
+                    }
                 }
             }
         }
-        for (mod_idx, fid, name, length) in closure_names {
+        for (mod_idx, fid, name, length, constructible) in closure_names {
             if let Some(&idx) = self.module_func_maps[mod_idx].get(&fid) {
                 let id = self.intern_string(&name);
                 self.fn_names.insert(idx, id);
                 self.fn_lengths.insert(idx, length);
                 self.fn_info_globals.insert(idx, 0);
+                if constructible {
+                    self.fn_constructors.insert(idx);
+                }
             }
         }
         // One global per function a value is made of, for its `__FnInfo` record.
@@ -1693,7 +1700,8 @@ impl WasmModuleEmitter {
                     let name = ctx.emitter.fn_names.get(&func_idx).copied().unwrap_or(0);
                     let length = ctx.emitter.fn_lengths.get(&func_idx).copied().unwrap_or(0);
                     let proto = ctx.emitter.fn_proto_code(func_idx);
-                    ctx.emit_frame_begin(&mut func, 3);
+                    let constructible = ctx.emitter.fn_constructors.contains(&func_idx);
+                    ctx.emit_frame_begin(&mut func, 4);
                     ctx.emit_store_const(
                         &mut func,
                         0,
@@ -1701,7 +1709,8 @@ impl WasmModuleEmitter {
                     );
                     ctx.emit_store_const(&mut func, 1, f64::from(length));
                     ctx.emit_store_const(&mut func, 2, proto);
-                    ctx.emit_memcall(&mut func, "fn_info", 3);
+                    ctx.emit_store_const(&mut func, 3, f64::from(u8::from(constructible)));
+                    ctx.emit_memcall(&mut func, "fn_info", 4);
                     func.instruction(&Instruction::GlobalSet(gidx));
                 }
             }
