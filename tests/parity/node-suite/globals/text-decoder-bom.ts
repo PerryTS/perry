@@ -40,3 +40,10 @@ for (const [label, bom, body] of cases) {
   console.log("  BOM later    ", show(new TextDecoder(label).decode(middle)));
 }
 console.log("getter read", reads > 0);
+// `globalThis.TextDecoder` is the global even where a parameter shadows the
+// name, with non-literal options too.
+function viaGlobal(TextDecoder: unknown, options: TextDecoderOptions) {
+  return new globalThis.TextDecoder("utf-8", options);
+}
+const shadowed = viaGlobal(class {}, { fatal: true });
+console.log("globalThis shadowed", shadowed.constructor.name, shadowed.fatal);

@@ -1506,6 +1506,16 @@ pub(super) fn lower_new(ctx: &mut LoweringContext, new_expr: &ast::NewExpr) -> R
                 {
                     return Ok(decoder);
                 }
+                // `new globalThis.TextDecoder(...)` reaches here with a bare
+                // callee a same-named user binding would capture.
+                if force_global_intrinsic {
+                    let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
+                    return Ok(global_property_new_dynamic(
+                        "TextDecoder",
+                        args,
+                        new_byte_offset,
+                    ));
+                }
                 let callee = lower_expr(ctx, &new_expr.callee)?;
                 let args = lower_optional_args(ctx, new_expr.args.as_deref())?;
                 return Ok(Expr::NewDynamic {
