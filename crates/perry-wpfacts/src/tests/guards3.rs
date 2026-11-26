@@ -35,10 +35,17 @@ fn class(pf: &crate::ProgramFacts, name: &str) -> crate::ShadowWrites {
         .templates
         .iter()
         .filter(|t| t.class_id.is_some())
-        .find(|t| t.display.split(|c: char| !c.is_alphanumeric()).any(|w| w == name))
+        .find(|t| {
+            t.display
+                .split(|c: char| !c.is_alphanumeric())
+                .any(|w| w == name)
+        })
         .and_then(|t| t.class_id)
         .unwrap_or_else(|| panic!("class {name}"));
-    pf.shadow_writes.get(&id).cloned().unwrap_or_else(|| panic!("no entry for {name}"))
+    pf.shadow_writes
+        .get(&id)
+        .cloned()
+        .unwrap_or_else(|| panic!("no entry for {name}"))
 }
 
 fn inst_free(w: &crate::ShadowWrites, m: &str) -> bool {
@@ -63,7 +70,9 @@ fn guards3_plain_program_shadows_nothing() {
 
 #[test]
 fn guards3_own_store_blocks_instance() {
-    let pf = facts(&format!("{BASE} (xs[1] as any).foo = function () {{ return 50; }};"));
+    let pf = facts(&format!(
+        "{BASE} (xs[1] as any).foo = function () {{ return 50; }};"
+    ));
     let w = class(&pf, "B");
     assert!(!inst_free(&w, "foo"), "{w:?}");
 }
@@ -108,7 +117,69 @@ fn guards3_prototype_computed_store_blocks_prototype() {
 
 #[test]
 fn guards3_prototype_relink_blocks_prototype() {
-    let pf = facts(&format!("{BASE} Object.setPrototypeOf(B.prototype, {{ bar() {{ return 5; }} }});"));
+    let pf = facts(&format!(
+        "{BASE} Object.setPrototypeOf(B.prototype, {{ bar() {{ return 5; }} }});"
+    ));
     let w = class(&pf, "B");
     assert!(w.proto_relinked.is_some(), "{w:?}");
+}
+
+// TOARRAY2 (rule NUMAPP): a computed-key store whose every application on a
+// class's instances stores under a number-only key writes only numeric
+// names there, although other applications of the same body store under a
+// string key into other objects.
+const PUT: &str =
+    "function put(a: any, o: any, v: number): any { a[o] = v; a[o + 1] = v; return a; }";
+const VEC: &str = "class V { x = 1; toArray(a: any = [], o: any = 0): any { a[o] = this.x; a[o + 1] = this.x; return a; } } const v = new V();";
+
+#[test]
+fn numapp_number_key_application_leaves_class_free() {
+    let pf = facts(&format!(
+        "{BASE} {PUT} put(xs[1], 0, 1); put([], keys[0], 2);"
+    ));
+    let w = class(&pf, "B");
+    assert!(inst_free(&w, "foo"), "{w:?}");
+}
+
+#[test]
+fn numapp_method_number_key_application_leaves_class_free() {
+    // Two receivers: a method body has one context per receiver, so the
+    // String-key call is another application than the B one.
+    let pf = facts(&format!(
+        "{BASE} {VEC} const u = new V(); v.toArray(xs[1], 0); u.toArray([], keys[0]);"
+    ));
+    let w = class(&pf, "B");
+    assert!(inst_free(&w, "foo"), "{w:?}");
+}
+
+#[test]
+fn numapp_string_key_application_blocks_class() {
+    let pf = facts(&format!("{BASE} {PUT} put(xs[1], keys[0], 1);"));
+    let w = class(&pf, "B");
+    assert!(!inst_free(&w, "foo"), "{w:?}");
+}
+
+#[test]
+fn numapp_number_key_only_and_escaped_leave_class_free() {
+    for extra in [
+        format!("{PUT} put(xs[1], 0, 1);"),
+        format!("{PUT} put(xs[1], 0, 1); (globalThis as any).put = put;"),
+        format!("{VEC} v.toArray(xs[1], 0); (globalThis as any).V = V;"),
+    ] {
+        let pf = facts(&format!("{BASE} {extra}"));
+        let w = class(&pf, "B");
+        assert!(inst_free(&w, "foo"), "{extra}: {w:?}");
+    }
+}
+
+#[test]
+fn numapp_number_key_writes_numeric_prototype_name() {
+    let pf = facts(&format!(
+        "{BASE} {PUT} class N {{ 0(): number {{ return 1; }} foo(): number {{ return 2; }} }} const n: any = new N(); put(n, 0, 1); console.log(n.foo());"
+    ));
+    let w = class(&pf, "N");
+    assert!(
+        w.inst_any.is_none() && w.inst_names.contains("0") && !w.inst_names.contains("foo"),
+        "{w:?}"
+    );
 }

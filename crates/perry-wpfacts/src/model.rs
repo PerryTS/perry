@@ -2305,7 +2305,10 @@ pub struct Model {
     /// Which objects of a template each computed-key store of `any_writers`
     /// stored into, from the store's own receiver set: bit 1 an instance,
     /// bit 2 the class object, bit 4 the prototype (different objects: a
-    /// store into one writes no other).
+    /// store into one writes no other); bit 8: an application stored under
+    /// a key that may be non-numeric (rule NUMAPP: an application whose key
+    /// names a number only, `num_only` in `store_into`, writes the numeric
+    /// range only, never a non-numeric name).
     pub any_writer_objs: FxHashMap<(TmplId, SiteId), u8>,
     /// ONCHANGE1 rule U: per instance key, the instance tokens a named store
     /// of it reaches (`writers` counts the stores per template). A birth
