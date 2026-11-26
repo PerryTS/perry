@@ -7,6 +7,7 @@ use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
 use objc2_foundation::NSDefaultRunLoopMode;
+use std::cell::Cell;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 
@@ -81,27 +82,54 @@ impl Link {
         unsafe { CVDisplayLinkSetCurrentCGDisplay(self.0, display) };
     }
 
-    pub(super) fn set_paused(&self, paused: bool) {
+    /// Whether the link is now in the requested state; only a start can fail.
+    pub(super) fn set_paused(&self, paused: bool) -> bool {
         unsafe {
             if paused {
                 CVDisplayLinkStop(self.0);
+                true
             } else {
-                CVDisplayLinkStart(self.0);
+                CVDisplayLinkStart(self.0) == 0
             }
         }
     }
 }
 
+thread_local! {
+    /// The host time last handed to the main thread.
+    static LAST_DELIVERED: Cell<f64> = const { Cell::new(f64::NEG_INFINITY) };
+}
+
 /// Called on the main thread for each forwarded vsync: its host time, in
-/// seconds.
-pub(super) fn take_queued_host_seconds() -> f64 {
+/// seconds, or `None` when that vsync was already delivered. A vsync published
+/// between clearing `QUEUED` and loading `HOST_SECONDS` queues a second
+/// selector that would otherwise read the same time again.
+pub(super) fn take_queued_host_seconds() -> Option<f64> {
     QUEUED.store(false, Ordering::Release);
-    f64::from_bits(HOST_SECONDS.load(Ordering::Acquire))
+    let seconds = f64::from_bits(HOST_SECONDS.load(Ordering::Acquire));
+    LAST_DELIVERED.with(|last| {
+        if seconds <= last.get() {
+            return None;
+        }
+        last.set(seconds);
+        Some(seconds)
+    })
+}
+
+/// The latest vsync at or before `now`, on the grid of `output` (a later vsync)
+/// spaced by `period`: the instant `CADisplayLink.timestamp` reports.
+/// `inOutputTime` lies one or more periods ahead of `inNow`, and `inNow` itself
+/// is when the callback thread woke, which jitters by a millisecond.
+fn last_vsync(output: f64, now: f64, period: f64) -> f64 {
+    if period <= 0.0 || output <= now {
+        return output.min(now);
+    }
+    output - ((output - now) / period).ceil() * period
 }
 
 extern "C" fn output(
     _link: CVDisplayLinkRef,
-    _now: *const CVTimeStamp,
+    now: *const CVTimeStamp,
     output_time: *const CVTimeStamp,
     _flags_in: u64,
     _flags_out: *mut u64,
@@ -109,20 +137,20 @@ extern "C" fn output(
 ) -> i32 {
     let target = TARGET.load(Ordering::Acquire);
     let modes = MODES.load(Ordering::Acquire);
-    if target.is_null() || modes.is_null() || output_time.is_null() {
+    if target.is_null() || modes.is_null() || now.is_null() || output_time.is_null() {
         return 0;
     }
-    // `inOutputTime` is the next vsync, on the display's clock; one refresh
-    // period earlier is the vsync that just happened, the instant
-    // `CADisplayLink.timestamp` reports. `inNow` is when this thread woke,
-    // which jitters by a millisecond.
-    let output = unsafe { &*output_time };
+    let (now, output) = unsafe { (&*now, &*output_time) };
     let period = if output.video_time_scale > 0 {
         output.video_refresh_period as f64 / output.video_time_scale as f64
     } else {
         0.0
     };
-    let seconds = super::host_ticks_to_seconds(output.host_time) - period;
+    let seconds = last_vsync(
+        super::host_ticks_to_seconds(output.host_time),
+        super::host_ticks_to_seconds(now.host_time),
+        period,
+    );
     HOST_SECONDS.store(seconds.to_bits(), Ordering::Release);
     if !QUEUED.swap(true, Ordering::AcqRel) {
         // This thread has no autorelease pool of its own.
@@ -137,4 +165,39 @@ extern "C" fn output(
         });
     }
     0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn publish(seconds: f64) {
+        HOST_SECONDS.store(seconds.to_bits(), Ordering::Release);
+        QUEUED.store(true, Ordering::Release);
+    }
+
+    #[test]
+    fn the_timestamp_is_the_last_vsync_on_the_output_grid_not_in_the_future() {
+        let period = 1.0 / 120.0;
+        // Output one and two periods ahead of a `now` that woke 0.3 ms late.
+        let vsync = 50.0;
+        let now = vsync + 0.0003;
+        for ahead in [1.0, 2.0] {
+            let output = vsync + ahead * period;
+            assert!((last_vsync(output, now, period) - vsync).abs() < 1e-9);
+        }
+        assert_eq!(last_vsync(vsync, vsync, period), vsync);
+        assert_eq!(last_vsync(51.0, 50.5, 0.0), 50.5);
+    }
+
+    #[test]
+    fn a_vsync_read_by_two_queued_selectors_is_delivered_once() {
+        publish(100.0);
+        assert_eq!(take_queued_host_seconds(), Some(100.0));
+        assert_eq!(take_queued_host_seconds(), None);
+        assert!(!QUEUED.load(Ordering::Acquire));
+
+        publish(100.0 + 1.0 / 60.0);
+        assert_eq!(take_queued_host_seconds(), Some(100.0 + 1.0 / 60.0));
+    }
 }

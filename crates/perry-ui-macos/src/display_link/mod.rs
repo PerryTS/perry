@@ -27,7 +27,6 @@ use std::sync::OnceLock;
 extern "C" {
     fn js_frame_tick(timestamp_ms: f64) -> i32;
     fn js_frame_has_pending() -> i32;
-    fn js_frame_pump_default() -> i32;
     fn js_performance_now() -> f64;
     fn js_promise_run_microtasks() -> i32;
     fn mach_absolute_time() -> u64;
@@ -64,10 +63,12 @@ enum Source {
 }
 
 impl Source {
-    fn set_paused(&self, paused: bool) {
+    /// Whether the source is now in the requested state.
+    fn set_paused(&self, paused: bool) -> bool {
         match self {
             Source::Native { link, .. } => unsafe {
                 let _: () = msg_send![&**link, setPaused: paused];
+                true
             },
             Source::CoreVideo(link) => link.set_paused(paused),
         }
@@ -81,7 +82,9 @@ impl Drop for Source {
             Source::Native { link, .. } => unsafe {
                 let _: () = msg_send![&**link, invalidate];
             },
-            Source::CoreVideo(link) => link.set_paused(true),
+            Source::CoreVideo(link) => {
+                link.set_paused(true);
+            }
         }
     }
 }
@@ -107,7 +110,9 @@ define_class!(
 
         #[unsafe(method(coreVideoFrame:))]
         fn core_video_frame(&self, _arg: Option<&AnyObject>) {
-            tick(core_video::take_queued_host_seconds());
+            if let Some(seconds) = core_video::take_queued_host_seconds() {
+                tick(seconds);
+            }
         }
     }
 );
@@ -133,12 +138,28 @@ fn host_ticks_to_seconds(ticks: u64) -> f64 {
     ticks as f64 * info.numer as f64 / info.denom as f64 / 1e9
 }
 
+/// `performance.now()` minus the host clock, in milliseconds. Both count mach
+/// time, so the offset is constant: it is sampled once, from the tightest of a
+/// few bracketed reads, so a preemption between two reads cannot skew it.
+fn performance_minus_host_ms() -> f64 {
+    static OFFSET: OnceLock<f64> = OnceLock::new();
+    *OFFSET.get_or_init(|| {
+        (0..8)
+            .map(|_| unsafe {
+                let before = js_performance_now();
+                let host = host_ticks_to_seconds(mach_absolute_time()) * 1000.0;
+                let after = js_performance_now();
+                (after - before, (before + after) / 2.0 - host)
+            })
+            .min_by(|a, b| a.0.total_cmp(&b.0))
+            .map_or(0.0, |(_, offset)| offset)
+    })
+}
+
 /// Map a vsync's host time (seconds, the `CACurrentMediaTime` clock) onto the
 /// `performance.now()` timeline: sub-millisecond, and comparable with it.
 fn vsync_ms(host_seconds: f64) -> f64 {
-    let now_ms = unsafe { js_performance_now() };
-    let now_s = host_ticks_to_seconds(unsafe { mach_absolute_time() });
-    now_ms + (host_seconds - now_s) * 1000.0
+    host_seconds * 1000.0 + performance_minus_host_ms()
 }
 
 fn tick(host_seconds: f64) {
@@ -155,12 +176,15 @@ fn tick(host_seconds: f64) {
 }
 
 fn set_paused(paused: bool) {
-    if PAUSED.with(|p| p.replace(paused)) != paused {
-        SOURCE.with(|source| {
-            if let Some(source) = source.borrow().as_ref() {
-                source.set_paused(paused);
-            }
-        });
+    if PAUSED.with(|p| p.replace(paused)) == paused {
+        return;
+    }
+    let applied = SOURCE.with(|slot| slot.borrow().as_ref().is_none_or(|s| s.set_paused(paused)));
+    if !applied {
+        // A source that cannot start is dropped, so the pump ticks frames.
+        PAUSED.with(|p| p.set(true));
+        let failed = SOURCE.with(|slot| slot.borrow_mut().take());
+        drop(failed);
     }
 }
 
@@ -239,10 +263,10 @@ fn select(closing: *const AnyObject) {
         SOURCE.with(|slot| {
             let mut slot = slot.borrow_mut();
             if slot.is_none() {
-                *slot = core_video::Link::new(target()).map(Source::CoreVideo);
-                if let Some(source) = slot.as_ref() {
-                    source.set_paused(PAUSED.with(Cell::get));
-                }
+                // Without a link that starts, the pump ticks frames.
+                *slot = core_video::Link::new(target())
+                    .map(Source::CoreVideo)
+                    .filter(|source| source.set_paused(PAUSED.with(Cell::get)));
             }
             if let Some(Source::CoreVideo(link)) = slot.as_ref() {
                 link.set_display(display);
@@ -308,7 +332,9 @@ pub(crate) fn install() {
 /// pending, or tick frames directly when there is no source.
 pub(crate) fn pump() {
     if SOURCE.with(|slot| slot.borrow().is_none()) {
-        unsafe { js_frame_pump_default() };
+        // The display-link clock, so a callback keeps one timeline when its
+        // source goes away.
+        unsafe { js_frame_tick(js_performance_now()) };
     } else if unsafe { js_frame_has_pending() } != 0 {
         set_paused(false);
     }
