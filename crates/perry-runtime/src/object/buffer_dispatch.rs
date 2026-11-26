@@ -111,8 +111,9 @@ fn throw_unknown_encoding(value: f64) -> ! {
 /// `indexOf` / `lastIndexOf` / `includes`: `(start, encoding_tag)`.
 ///
 /// A string `byteOffset` is the encoding. Any other offset is `+byteOffset`;
-/// NaN (`undefined`, `{}`, `"x"` …) searches the whole buffer: from the start
-/// for `indexOf`, from the end for `lastIndexOf`. The encoding applies to a
+/// NaN (`undefined`, `{}`, `"x"` …) searches the whole buffer: from 0 for
+/// `indexOf`, from `len` for `lastIndexOf` (an empty needle answers `len`;
+/// the search clamps any other needle into the data). The encoding applies to a
 /// string needle only, and there an unknown encoding name throws
 /// `ERR_UNKNOWN_ENCODING`.
 fn node_buffer_search_args(args: &[f64], len: i32, last: bool) -> (i32, i32) {
@@ -127,7 +128,7 @@ fn node_buffer_search_args(args: &[f64], len: i32, last: bool) -> (i32, i32) {
     let offset = crate::builtins::js_number_coerce(offset);
     let start = if offset.is_nan() {
         if last {
-            len - 1
+            len
         } else {
             0
         }
