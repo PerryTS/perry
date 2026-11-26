@@ -405,8 +405,13 @@ fn realm_chain_load(
 /// The primitive kind of the realm's own data property `p`; `None` for
 /// any other value.
 fn realm_prim(p: &perry_hir::realm_manifest::RealmOwn) -> Option<u16> {
+    realm_value_prim(p.value)
+}
+
+/// The primitive kind of the realm value `v`; `None` for any other value.
+fn realm_value_prim(v: perry_hir::realm_manifest::RealmOwnValue) -> Option<u16> {
     use perry_hir::realm_manifest::RealmOwnValue as V;
-    Some(match p.value {
+    Some(match v {
         V::Undefined => prim::UNDEF,
         V::Null => prim::NULL,
         V::Boolean => prim::BOOL,
@@ -2202,12 +2207,7 @@ pub fn worker_global_member(m: &mut Model, n: &str, dst: NodeId) {
         }
         (K::Alias, _) if e.births == ["%Global%"] => m.add_tok(dst, g),
         (K::Constant, Some(v)) => {
-            let own = perry_hir::realm_manifest::RealmOwn {
-                key: e.name,
-                symbol: false,
-                value: v,
-            };
-            match realm_prim(&own) {
+            match realm_value_prim(v) {
                 Some(p) => m.add_prim(dst, p),
                 None => unreachable!("REALMVAL: {} holds no primitive ({v:?})", e.name),
             }
