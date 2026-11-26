@@ -203,16 +203,38 @@ pub(crate) fn connect_options(options: Option<f64>, port: u16, host: &str) -> f6
     p::own_set(connect.get(), "port", f64::from(port));
     let host = scope.root_nanbox(events::string(host));
     p::own_set(connect.get(), "host", host.get());
-    for key in ["lookup", "family", "hints", "autoSelectFamily"] {
-        let Some(options) = options.as_ref() else {
-            break;
-        };
-        let value = scope.root_nanbox(field(options.get(), key));
-        if !JsValue::from_bits(value.get().to_bits()).is_undefined() {
-            p::own_set(connect.get(), key, value.get());
-        }
+    if let Some(options) = options {
+        copy_resolution(options.get(), connect.get());
     }
     connect.get()
+}
+
+/// A copy of `options`' resolution options, which later changes to the
+/// caller's object do not reach.
+pub(crate) fn resolution_options(options: f64) -> f64 {
+    let scope = TransientRootScope::enter();
+    let options = scope.root_nanbox(options);
+    let copy = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    copy_resolution(options.get(), copy.get());
+    copy.get()
+}
+
+fn copy_resolution(from: f64, into: f64) {
+    let scope = TransientRootScope::enter();
+    let from = scope.root_nanbox(from);
+    let into = scope.root_nanbox(into);
+    for key in [
+        "lookup",
+        "family",
+        "hints",
+        "autoSelectFamily",
+        "autoSelectFamilyAttemptTimeout",
+    ] {
+        let value = scope.root_nanbox(field(from.get(), key));
+        if !JsValue::from_bits(value.get().to_bits()).is_undefined() {
+            p::own_set(into.get(), key, value.get());
+        }
+    }
 }
 
 /// Call `lookup(host, dnsopts, callback)`. The callback may run before this

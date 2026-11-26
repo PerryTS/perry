@@ -49,4 +49,29 @@ for (const [label, extra] of [
   });
 }
 
+// The request copies its options: replacing `lookup` afterwards does not
+// reach its dial.
+await new Promise<void>((resolve) => {
+  const options: any = {
+    host: "http-lookup.test",
+    port,
+    agent: false,
+    lookup(_host: string, dnsOptions: any, callback: any) {
+      console.log("copied original lookup");
+      setTimeout(() => {
+        callback(null, dnsOptions.all ? [{ address: "127.0.0.1", family: 4 }] : "127.0.0.1", 4);
+      }, 1);
+    },
+  };
+  const req = http.request(options, (res) => {
+    res.resume();
+    res.on("end", () => {
+      console.log("copied", res.statusCode);
+      resolve();
+    });
+  });
+  options.lookup = () => console.log("copied replacement lookup");
+  req.end();
+});
+
 server.close();
