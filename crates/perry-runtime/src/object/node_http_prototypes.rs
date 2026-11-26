@@ -1715,6 +1715,28 @@ mod tests {
                 "the payload is in the slot the layout lists"
             );
             assert_eq!(get(obj, "statusCode"), 200.0f64.to_bits());
+            // node's `_maxRequestsPerSocket`, `statusMessage` and
+            // `statusCode` stores after the attach: the written payload is a
+            // private field with no enumeration order, so each fills its
+            // slot in place and the response stays on its layout.
+            for (key, value) in [
+                ("_maxRequestsPerSocket", 0.0f64),
+                ("statusMessage", 1.0),
+                ("statusCode", 404.0),
+            ] {
+                crate::runtime_state_key::js_runtime_state_key_set(
+                    res,
+                    key.as_ptr(),
+                    key.len(),
+                    value,
+                );
+                assert_eq!(get(obj, key), value.to_bits());
+            }
+            assert_eq!(
+                (*(obj as *const ObjectHeader)).parent_class_id,
+                word,
+                "late member stores after the attach keep the response on its layout"
+            );
         });
     }
 }
