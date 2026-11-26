@@ -272,12 +272,20 @@ const DIAGNOSTICS_INSTALL_SYMBOL: &str = "js_runtime_install_diagnostics";
 /// (perry-runtime `js_runtime_install_gc_diagnostics`). The plain install
 /// selects it at the program's first heap snapshot or `process.report`.
 fn installer_symbol(symbol: &str) -> String {
-    if symbol == DIAGNOSTICS_INSTALL_SYMBOL
-        && crate::commands::compile::gc_collector_diagnostics_requested()
-    {
-        "js_runtime_install_gc_diagnostics".to_string()
+    installer_symbol_for(
+        symbol,
+        crate::commands::compile::gc_collector_diagnostics_requested(),
+    )
+    .to_string()
+}
+
+/// [`installer_symbol`] for a known knob state: the one place that names the
+/// diagnostics install's variant.
+fn installer_symbol_for(symbol: &str, gc_collector_diagnostics: bool) -> &str {
+    if symbol == DIAGNOSTICS_INSTALL_SYMBOL && gc_collector_diagnostics {
+        "js_runtime_install_gc_diagnostics"
     } else {
-        symbol.to_string()
+        symbol
     }
 }
 
@@ -740,9 +748,13 @@ mod tests {
                 .strip_prefix("pub extern \"C\" fn js_runtime_install_")
             {
                 let symbol = format!("js_runtime_install_{}", rest.split('(').next().unwrap());
+                // A listed install, or the variant the installer calls for
+                // one of them (`installer_symbol_for`).
                 assert!(
                     symbol == RUNTIME_INSTALL_COMPILED_SYMBOL
-                        || RUNTIME_INSTALLS.iter().any(|(s, _)| *s == symbol),
+                        || RUNTIME_INSTALLS.iter().any(|(s, _)| {
+                            *s == symbol || installer_symbol_for(s, true) == symbol
+                        }),
                     "perry-runtime defines {symbol} but RUNTIME_INSTALLS does not list it"
                 );
             }
