@@ -640,6 +640,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
         .as_ref()
         .map(|tp| crate::lower_types::extract_type_params(tp))
         .unwrap_or_default();
+    ctx.enter_type_param_scope(&type_params);
 
     // Lower parameters and collect destructuring info.
     //
@@ -1430,6 +1431,7 @@ fn lower_fn_expr_anon(ctx: &mut LoweringContext, fn_expr: &ast::FnExpr) -> Resul
 
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.exit_type_param_scope();
     ctx.in_class_field_init = saved_field_init;
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 

@@ -247,6 +247,7 @@ fn lower_method_prop(
         .as_ref()
         .map(|tp| crate::lower_types::extract_type_params(tp))
         .unwrap_or_default();
+    ctx.enter_type_param_scope(&type_params);
 
     let scope_mark = ctx.enter_scope();
     let class_expr_capture_mark = ctx.body_class_expr_captures.len();
@@ -413,6 +414,7 @@ fn lower_method_prop(
     crate::lower::expr_function::apply_class_expr_capture_refreshes(&mut body, class_expr_entries);
     ctx.exit_strict_mode();
     ctx.exit_scope(scope_mark);
+    ctx.exit_type_param_scope();
     ctx.in_nonarrow_fn = saved_in_nonarrow_fn;
 
     // #5846: retain the method's own source for `Function.prototype.toString`.
