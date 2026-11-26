@@ -224,10 +224,17 @@ extern "C" fn im_destroy(
     if incomplete {
         abort(r());
     }
-    let socket = scope.root_nanbox_f64(get(r(), b"socket"));
+    // `this.socket && !this.socket.destroyed && this.aborted`: a pristine
+    // request's own `socket` and `aborted` are data in their slots.
+    let own = |slot_index: u32, name: &'static [u8]| match pristine(r()) {
+        // SAFETY: a pristine request.
+        Some(obj) => unsafe { slot(obj, slot_index) },
+        None => get(r(), name),
+    };
+    let socket = scope.root_nanbox_f64(own(s::SOCKET, b"socket"));
     let live = JSValue::from_bits(socket.get_nanbox_u64()).is_pointer()
         && !truthy(get(socket.get_nanbox_f64(), b"destroyed"));
-    if live && truthy(get(r(), b"aborted")) {
+    if live && truthy(own(s::ABORTED, b"aborted")) {
         call(socket.get_nanbox_f64(), b"destroy", &[err.get_nanbox_f64()]);
         // `finished(socket, ...)` on a destroyed socket: its callback runs on
         // the next tick, with `'error'` swallowed meanwhile (eos's `nop`).
