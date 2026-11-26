@@ -6,7 +6,7 @@ use super::payload_events as events;
 use super::payload_socket::{self as socket, error};
 use super::payload_transport::{self as p, undefined};
 use perry_ffi::turnloop_net as tl;
-use perry_ffi::{JsThis, JsValue, RawClosureHeader, TransientRootScope};
+use perry_ffi::{JsThis, JsValue, RawClosureHeader, TransientRootScope, TransientRootedNanbox};
 use std::net::IpAddr;
 
 extern "C" {
@@ -17,14 +17,14 @@ extern "C" {
     fn js_array_is_array(value: f64) -> f64;
 }
 
-/// The callable `options.lookup`, or `None` when it is absent.
-pub(crate) fn validate(lookup: f64) -> Option<f64> {
+/// Whether `options.lookup` is set; a value that is not a function throws.
+pub(crate) fn validate(lookup: f64) -> bool {
     let value = JsValue::from_bits(lookup.to_bits());
     if value.is_undefined() || value.is_null() {
-        return None;
+        return false;
     }
     if socket::is_callback(lookup) {
-        return Some(lookup);
+        return true;
     }
     // SAFETY: The describer reads a live JS value on this agent and returns a string value.
     let received = unsafe { display(js_runtime_describe_received(lookup)) };
@@ -82,6 +82,8 @@ pub(crate) fn start(owner: f64, options: f64, host: &str, port: u16, lookup: f64
         perry_ffi::set_closure_capture_f64(callback_ptr, 2, f64::from(port));
         perry_ffi::set_closure_capture_f64(callback_ptr, 3, if all { 1.0 } else { 0.0 });
     }
+    let state = scope.root_nanbox(socket::state(owner.get()));
+    p::record_set(state.get(), ATTEMPT, p::boxed_addr(callback.get()));
     events::call(
         lookup.get(),
         JsThis::UNDEFINED,
@@ -101,6 +103,10 @@ unsafe extern "C" fn answer(
     let host = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 1));
     let port = perry_ffi::closure_capture_f64(closure, 2) as u16;
     let all = perry_ffi::closure_capture_f64(closure, 3) == 1.0;
+    let attempt = Attempt {
+        owner,
+        token: scope.root_nanbox(p::boxed_addr(closure as i64)),
+    };
     let err = scope.root_nanbox(err);
     let address = scope.root_nanbox(address);
     let family = scope.root_nanbox(family);
@@ -108,51 +114,88 @@ unsafe extern "C" fn answer(
     if all {
         answer_all(
             &scope,
-            owner.get(),
-            host.get(),
+            &attempt,
+            &host,
             &host_text,
             port,
-            err.get(),
+            &err,
             address.get(),
         );
     } else {
         events::emit(
-            owner.get(),
+            attempt.owner.get(),
             "lookup",
             &[err.get(), address.get(), family.get(), host.get()],
         );
-        if !connecting(owner.get()) {
+        if !attempt.current() {
             return undefined();
         }
         if js_is_truthy(err.get()) != 0 {
-            fail(owner.get(), err.get());
+            attempt.fail(err.get());
         } else if let Some(problem) = invalid(address.get(), family.get(), &host_text, port) {
-            fail(owner.get(), problem);
+            attempt.fail(problem);
         } else if let Some(ip) = ip(address.get()) {
-            connect(owner.get(), &[ip], port);
+            connect(attempt.owner.get(), &[ip], port);
         }
     }
     undefined()
+}
+
+/// The `connect` a lookup answers, named by its answer callback, which the
+/// socket state holds until the socket reopens. A late answer or error for an
+/// earlier connect must not touch a later one.
+struct Attempt {
+    owner: TransientRootedNanbox,
+    token: TransientRootedNanbox,
+}
+
+impl Attempt {
+    fn current(&self) -> bool {
+        is_current(self.owner.get(), self.token.get())
+    }
+
+    /// The error waits a tick: `net.connect()` callers attach `'error'` after it returns.
+    fn fail(&self, err: f64) {
+        let scope = TransientRootScope::enter();
+        let err = scope.root_nanbox(err);
+        let job = scope.root_addr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(fail_tick, 0; with_flags(perry_ffi::FN_BUILTIN)),
+            3,
+        ) as i64);
+        // SAFETY: The rooted job was allocated above with three capture slots, which trace the
+        // owner and error until it runs.
+        unsafe {
+            let job_ptr = job.get() as *mut RawClosureHeader;
+            perry_ffi::set_closure_capture_f64(job_ptr, 0, self.owner.get());
+            perry_ffi::set_closure_capture_f64(job_ptr, 1, err.get());
+            perry_ffi::set_closure_capture_f64(job_ptr, 2, self.token.get());
+            js_queue_next_tick(job.get());
+        }
+    }
 }
 
 /// `all: true` answers with `{ address, family }` entries. Valid addresses
 /// are tried once each, alternating families from the first one's.
 fn answer_all(
     scope: &TransientRootScope,
-    owner: f64,
-    host: f64,
+    attempt: &Attempt,
+    host: &TransientRootedNanbox,
     host_text: &str,
     port: u16,
-    err: f64,
+    err: &TransientRootedNanbox,
     addresses: f64,
 ) {
-    if !connecting(owner) {
+    if !attempt.current() {
         return;
     }
     // SAFETY: Truthiness reads a rooted JS value on this agent.
-    if unsafe { js_is_truthy(err) } != 0 {
-        events::emit(owner, "lookup", &[err, undefined(), undefined(), host]);
-        fail(owner, err);
+    if unsafe { js_is_truthy(err.get()) } != 0 {
+        events::emit(
+            attempt.owner.get(),
+            "lookup",
+            &[err.get(), undefined(), undefined(), host.get()],
+        );
+        attempt.fail(err.get());
         return;
     }
     let addresses = scope.root_nanbox(addresses);
@@ -184,8 +227,12 @@ fn answer_all(
     let mut index = 0;
     while index < length() {
         let (address, family) = entry(index);
-        events::emit(owner, "lookup", &[err, address.get(), family.get(), host]);
-        if !connecting(owner) {
+        events::emit(
+            attempt.owner.get(),
+            "lookup",
+            &[err.get(), address.get(), family.get(), host.get()],
+        );
+        if !attempt.current() {
             return;
         }
         if let (Some(ip), Some(family)) = (ip(address.get()), family_number(family.get())) {
@@ -199,11 +246,17 @@ fn answer_all(
     }
     let [preferred, other] = groups;
     if preferred.is_empty() && other.is_empty() {
-        if length() > 0 {
-            let (address, family) = entry(0);
-            if let Some(problem) = invalid(address.get(), family.get(), host_text, port) {
-                fail(owner, problem);
-            }
+        if length() == 0 {
+            // Node destructures `addresses[0]`, which throws to whoever called back.
+            perry_ffi::throw_with_code(
+                &empty_answer_message(addresses.get()),
+                "",
+                perry_ffi::ErrorKind::TypeError,
+            );
+        }
+        let (address, family) = entry(0);
+        if let Some(problem) = invalid(address.get(), family.get(), host_text, port) {
+            attempt.fail(problem);
         }
         return;
     }
@@ -212,7 +265,7 @@ fn answer_all(
         order.extend(preferred.get(index));
         order.extend(other.get(index));
     }
-    connect(owner, &order, port);
+    connect(attempt.owner.get(), &order, port);
 }
 
 /// Node's rejection of a single answer, checked address first.
@@ -246,38 +299,40 @@ fn connect(owner: f64, ips: &[IpAddr], port: u16) {
     }
 }
 
-/// A lookup answered after `destroy()` is ignored.
-fn connecting(owner: f64) -> bool {
-    socket::transport_link(owner).is_ok_and(|link| {
+/// The socket state key naming the pending lookup's answer callback.
+pub(crate) const ATTEMPT: &str = "lookupAttempt";
+
+/// A lookup answered after `destroy()`, or for an earlier connect, is ignored.
+fn is_current(owner: f64, token: f64) -> bool {
+    let connecting = socket::transport_link(owner).is_ok_and(|link| {
         // SAFETY: The projection checks family and lifecycle; the field read ends before any JS.
         unsafe { p::socket_ptr(link).is_ok_and(|payload| (*payload).ext.connecting) }
-    })
+    });
+    connecting && p::record_get(socket::state(owner), ATTEMPT).to_bits() == token.to_bits()
 }
 
 unsafe extern "C" fn fail_tick(closure: *const RawClosureHeader, _: JsThis) -> f64 {
     let scope = TransientRootScope::enter();
     let owner = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 0));
     let err = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 1));
-    socket::destroy(owner.get(), err.get());
+    let token = scope.root_nanbox(perry_ffi::closure_capture_f64(closure, 2));
+    if is_current(owner.get(), token.get()) {
+        socket::destroy(owner.get(), err.get());
+    }
     undefined()
 }
 
-/// The error waits a tick: `net.connect()` callers attach `'error'` after it returns.
-fn fail(owner: f64, err: f64) {
-    let scope = TransientRootScope::enter();
-    let owner = scope.root_nanbox(owner);
-    let err = scope.root_nanbox(err);
-    let job = scope.root_addr(perry_ffi::alloc_closure(
-        perry_ffi::js_function_info!(fail_tick, 0; with_flags(perry_ffi::FN_BUILTIN)),
-        2,
-    ) as i64);
-    // SAFETY: The rooted job was allocated above with two capture slots, which trace the owner
-    // and error until it runs.
-    unsafe {
-        let job_ptr = job.get() as *mut RawClosureHeader;
-        perry_ffi::set_closure_capture_f64(job_ptr, 0, owner.get());
-        perry_ffi::set_closure_capture_f64(job_ptr, 1, err.get());
-        js_queue_next_tick(job.get());
+/// V8's message for destructuring `addresses[0]` of an empty answer, or
+/// reading `length` of a nullish one.
+fn empty_answer_message(addresses: f64) -> String {
+    let value = JsValue::from_bits(addresses.to_bits());
+    if value.is_undefined() || value.is_null() {
+        format!(
+            "Cannot read properties of {} (reading 'length')",
+            display(addresses)
+        )
+    } else {
+        "Cannot destructure property 'address' of 'addresses[0]' as it is undefined.".into()
     }
 }
 

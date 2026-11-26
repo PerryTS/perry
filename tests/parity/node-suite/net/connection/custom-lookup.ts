@@ -100,6 +100,24 @@ await attempt("ip-host", {
   },
 });
 
+// An empty answer throws to whoever called back and leaves the socket connecting.
+const empty = net.connect({
+  port,
+  host: "custom.test",
+  lookup(_host: string, _options: any, callback: any) {
+    setTimeout(() => {
+      try {
+        callback(null, []);
+      } catch (err: any) {
+        console.log("empty throws", err.name, err.message);
+      }
+    }, 1);
+  },
+});
+await new Promise((resolve) => setTimeout(resolve, 20));
+console.log("empty connecting", empty.connecting);
+empty.destroy();
+
 try {
   net.connect({ port, host: "custom.test", lookup: 1 as any });
 } catch (err: any) {
