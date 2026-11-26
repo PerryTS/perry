@@ -413,6 +413,11 @@ pub struct ProgramFacts {
     /// runtime's `PERRY_TYPED_NAMED_PROPS_INVALIDATED` stays clear for compiled
     /// code. Interpreted code is [`ProgramFacts::interp_guard`]'s.
     pub typed_metadata_written: Option<String>,
+    /// GUARDS1: compiled code may modify `%Array.prototype%` or
+    /// `%Object.prototype%` (any key, or the [[Prototype]]), and why
+    /// (`builtins::array_methods_writes`); `None`: it never does, and the
+    /// runtime's `ARRAY_METHODS_MODIFIED` bit stays clear for compiled code.
+    pub array_methods_written: Option<String>,
     /// #13645: `%ArrayIteratorPrototype%`'s chain may gain or change `next`
     /// or `return`, and why; `None`: compiled code never does.
     pub array_iterator_close_written: Option<String>,
@@ -1400,10 +1405,16 @@ fn compute_act<'a>(
     } else {
         Vec::new()
     };
-    let typed_metadata_written = if stats.aborted {
-        Some("solve aborted".to_string())
+    let (typed_metadata_written, array_methods_written) = if stats.aborted {
+        (
+            Some("solve aborted".to_string()),
+            Some("solve aborted".to_string()),
+        )
     } else {
-        builtins::typed_metadata_writes(&g.m)
+        (
+            builtins::typed_metadata_writes(&g.m),
+            builtins::array_methods_writes(&g.m),
+        )
     };
     let (array_iteration_written, array_iterator_close_written) = if stats.aborted {
         (
@@ -1567,6 +1578,7 @@ fn compute_act<'a>(
         array_iteration_written,
         array_iterator_close_written,
         typed_metadata_written,
+        array_methods_written,
         fnproto_borrow_written,
         module_paths: sorted.iter().map(|(p, _)| p.to_string()).collect(),
         templates,

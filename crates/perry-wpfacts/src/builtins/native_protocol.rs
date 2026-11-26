@@ -2106,6 +2106,24 @@ pub(crate) fn typed_metadata_writes(m: &Model) -> Option<String> {
     chain_writes(m, &holder, &keyed)
 }
 
+/// GUARDS1 class 2: may a write the program can make modify
+/// `%Array.prototype%` or `%Object.prototype%` (any key, or their
+/// [[Prototype]])? The runtime records exactly that in
+/// `ARRAY_METHODS_MODIFIED` (perry-runtime `builtin_proto::note_write` for the
+/// Array and Object families), the bit the inline `push`/`pop` admission and
+/// the confined element guard test. `None`: compiled code never makes one.
+pub(crate) fn array_methods_writes(m: &Model) -> Option<String> {
+    let holder = |t: Tok| {
+        t == TOP
+            || match &m.toks[t as usize] {
+                TokKind::ObjectProto => true,
+                TokKind::NativeProto(n, _) => n == "Array",
+                _ => false,
+            }
+    };
+    chain_writes(m, &holder, &|_| true)
+}
+
 /// The first reason (by id, independent of hashing) of a write onto a
 /// `holder` under a `keyed` key, of a prototype change of a `holder`, or
 /// unknown code holding the realm.
