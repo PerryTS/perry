@@ -124,6 +124,7 @@ use native_addon_sidecar::stage_native_addon_sidecar;
 pub use object_cache::ObjectCache;
 pub use object_cache::{cache_dir_override, resolve_cache_dir};
 use object_cache::{compute_object_cache_key, djb2_hash};
+pub(crate) use optimized_libs::gc_collector_diagnostics_requested;
 use optimized_libs::{build_optimized_libs, OptimizedLibs};
 use parse_cache::parse_cached;
 pub use parse_cache::ParseCache;

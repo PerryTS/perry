@@ -506,6 +506,7 @@ fn gc_collect_minor_with_diagnostics<const DIAGNOSTICS: bool>(
         None
     };
     let start = Instant::now();
+    tenuring::fixed_cost_minor_begin();
     crate::arena::discard_previously_idle_eden_pages();
     crate::arena::old_pages_begin_gc_cycle();
     let previous_pause_us = gc_last_pause_us();

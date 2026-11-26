@@ -13,9 +13,16 @@ fn register_roots() {
     );
 }
 pub(crate) fn install() {
-    REPORT_VALUE.set(crate::process::report::process_report_value);
+    REPORT_VALUE.set(report_value_installing_collector);
     REGISTER_ROOTS.set(register_roots);
     register_installed_roots();
+}
+
+/// `process.report.getReport()`: the first report selects the diagnostic
+/// collector body (`gc::diagnostic_hooks::install_collector`), as a snapshot does.
+fn report_value_installing_collector() -> f64 {
+    crate::gc::diagnostic_hooks::install_collector();
+    crate::process::report::process_report_value()
 }
 
 static REPORT_VALUE: Hook<fn() -> f64> = Hook::empty();

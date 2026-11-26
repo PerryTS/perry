@@ -3690,6 +3690,7 @@ js_runtime_install_date	void
 js_runtime_install_diagnostics	void	
 js_runtime_install_dyn_eval	void	
 js_runtime_install_event_target	void	
+js_runtime_install_gc_diagnostics	void	
 js_runtime_install_global_atomics	void	
 js_runtime_install_global_json	void	
 js_runtime_install_global_math	void	

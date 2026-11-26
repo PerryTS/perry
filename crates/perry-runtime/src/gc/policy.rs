@@ -226,7 +226,7 @@ fn scavenge_nursery_cap_dueness_bytes_with(old_reclaimable: impl FnOnce() -> usi
     if let Some(bytes) = GC_NURSERY_CAP_TEST_DUE_BYTES.with(TriggerInput::get) {
         return bytes;
     }
-    let influx_driven = super::tenuring::influx_driven_nursery_cap_bytes();
+    let influx_driven = super::tenuring::ladder_nursery_cap_bytes();
     let old_reclaimable = old_reclaimable();
     debug_assert_eq!(
         old_reclaimable,
@@ -495,7 +495,7 @@ pub(super) fn tiny_parse_pressure_headroom_bytes(step: usize) -> usize {
     let ceiling = gc_trigger_absolute_ceiling_bytes();
     // 64-bit intermediate on purpose: `step` reaches 1 GiB and `floor` 16 MiB,
     // whose product does not fit a 32-bit `usize` (watchOS/visionOS are ILP32;
-    // see `influx_driven_nursery_cap_bytes` for the same trap).
+    // see `ladder_nursery_cap_bytes` for the same trap).
     let scaled = (step as u64).saturating_mul(floor as u64) / (GC_THRESHOLD_INITIAL_BYTES as u64);
     let scaled = scaled.min(usize::MAX as u64) as usize;
     scaled.max(floor).min(ceiling.max(floor))

@@ -257,8 +257,27 @@ pub fn runtime_installer_callees(installs: &FeatureInstalls) -> Vec<String> {
         FeatureInstalls::Selected(features) => RUNTIME_INSTALLS
             .iter()
             .filter(|(_, triggers)| triggers.iter().any(|t| features.contains(*t)))
-            .map(|(symbol, _)| (*symbol).to_string())
+            .map(|(symbol, _)| installer_symbol(symbol))
             .collect(),
+    }
+}
+
+/// The diagnostics install as [`RUNTIME_INSTALLS`] names it.
+const DIAGNOSTICS_INSTALL_SYMBOL: &str = "js_runtime_install_diagnostics";
+
+/// The entry point the installer calls for a [`RUNTIME_INSTALLS`] symbol: the
+/// symbol itself, except that a compile with a GC collector diagnostics knob
+/// on (`gc_collector_diagnostics_requested`) calls the diagnostics install
+/// that also selects the diagnostic collector body from the first collection
+/// (perry-runtime `js_runtime_install_gc_diagnostics`). The plain install
+/// selects it at the program's first heap snapshot or `process.report`.
+fn installer_symbol(symbol: &str) -> String {
+    if symbol == DIAGNOSTICS_INSTALL_SYMBOL
+        && crate::commands::compile::gc_collector_diagnostics_requested()
+    {
+        "js_runtime_install_gc_diagnostics".to_string()
+    } else {
+        symbol.to_string()
     }
 }
 
@@ -352,7 +371,7 @@ fn callees_by_fact(
     let mut never = 0;
     let mut callees = Vec::new();
     for (symbol, _) in RUNTIME_INSTALLS {
-        let selected = detector.iter().any(|d| d == symbol);
+        let selected = detector.iter().any(|d| *d == installer_symbol(symbol));
         let family = RUNTIME_FAMILIES
             .iter()
             .find(|f| install_symbol(f) == *symbol && FACT_LINKED_FAMILIES.contains(&f.id));
@@ -367,7 +386,7 @@ fn callees_by_fact(
             None => selected,
         };
         if wanted {
-            callees.push((*symbol).to_string());
+            callees.push(installer_symbol(symbol));
         }
     }
     (callees, never)
