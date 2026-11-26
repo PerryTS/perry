@@ -593,6 +593,22 @@ fn rewrite_expr(expr: &mut Expr, consts: &HashMap<LocalId, String>, visible: &Ha
             };
         }
     }
+    // The store spelling: `o[K] = v` with `K` a visible string constant is
+    // `o["name"] = v`, whose key the lowering already gives `o.name = v` too
+    // (`lower::expr_assign`). The key read has no effect and cannot throw, so
+    // only the key operand changes; an index-like literal keeps the indexed
+    // path, as its source spelling does.
+    if let Expr::PutValueSet { key, .. } = expr {
+        if let Expr::LocalGet(id) = key.as_ref() {
+            let name = consts
+                .get(id)
+                .filter(|name| visible.contains(id) && !is_numeric_index_string(name))
+                .cloned();
+            if let Some(name) = name {
+                **key = Expr::String(name);
+            }
+        }
+    }
     // `walk_expr_children_mut` does not descend into a closure's STATEMENT
     // body; phase 1 has the same explicit arm for the same reason.
     if let Expr::Closure { body, .. } = expr {
@@ -1106,6 +1122,49 @@ mod tests {
             panic!("closure expected");
         };
         assert!(is_property_get(&late[0], "c"), "{late:?}");
+    }
+
+    fn store_k(id: u32) -> Stmt {
+        Stmt::Expr(Expr::PutValueSet {
+            target: Box::new(Expr::LocalGet(8)),
+            key: Box::new(Expr::LocalGet(id)),
+            value: Box::new(Expr::Integer(1)),
+            receiver: Box::new(Expr::LocalGet(8)),
+            strict: true,
+            byte_offset: 0,
+            byte_end: 0,
+            element_offset: 0,
+        })
+    }
+
+    fn store_key(stmt: &Stmt) -> &Expr {
+        match stmt {
+            Stmt::Expr(Expr::PutValueSet { key, .. }) => key,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// `const K = "c"; o[K] = 1` stores with the key `o.c = 1` has; a store
+    /// before the declaration keeps its dead-zone read, and an index-like
+    /// literal keeps the indexed path.
+    #[test]
+    fn a_function_local_const_key_store_takes_the_literal_key() {
+        let mut m = Module::new("k.ts");
+        m.functions.push(func(
+            1,
+            vec![
+                store_k(5),
+                local_const_k(5, "c"),
+                store_k(5),
+                local_const_k(6, "7"),
+                store_k(6),
+            ],
+        ));
+        run(&mut m);
+        let body = &m.functions[0].body;
+        assert!(matches!(store_key(&body[0]), Expr::LocalGet(5)));
+        assert!(matches!(store_key(&body[2]), Expr::String(k) if k == "c"));
+        assert!(matches!(store_key(&body[4]), Expr::LocalGet(6)));
     }
 
     /// A binding something writes (here from a closure), a mutable one, a
