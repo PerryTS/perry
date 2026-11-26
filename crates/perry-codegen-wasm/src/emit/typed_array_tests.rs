@@ -183,3 +183,23 @@ main();
         "object 16 0 true true\n-2 65534 3735928559 4022250974 1.5 -1 255\n8 4 173 4\n0.5 0,0,0,63 [object DataView]\n16909060 770\nasync 2 1 4"
     );
 }
+
+// `Uint8Array.from` takes any array-like or iterable source, `slice` coerces its
+// arguments, and `find` returns the element its predicate saw. Expected output is Node's.
+#[test]
+fn typed_array_from_slice_and_find_match_node() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const t = new Int16Array([3, 1, 2]);
+const a: any = [5, 6];
+console.log(Uint8Array.from(new Uint8Array([7, 8])).join(","), Uint8Array.from(t).join(","), Uint8Array.from(new Set([4, 9])).join(","));
+console.log(t.slice("1" as any).join(","), a.slice("1" as any).join(","), t.slice(0, "2" as any).join(","));
+console.log(t.find((x: number) => { t[0] = 9; return true; }), a.find((x: number) => { a[0] = 0; return true; }));
+async function run(): Promise<string> { return Uint8Array.from(new Int16Array([1, 2])).join(","); }
+run().then((s) => console.log(s));
+"#
+        ),
+        "7,8 3,1,2 4,9\n1,2 6 3,1\n3 5\n1,2"
+    );
+}

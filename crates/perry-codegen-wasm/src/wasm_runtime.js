@@ -2610,12 +2610,7 @@ const __memDispatch = {
   },
   array_set: (arr, index, value) => { if (Array.isArray(arr)) arr[typeof index === 'number' ? index : index] = value; },
   array_length: (arr) => Array.isArray(arr) ? arr.length : 0,
-  array_slice: (arr, start, end) => {
-    if (!__arrayOrTyped(arr)) return [];
-    const s = typeof start === 'number' ? start : 0;
-    const e = end === undefined ? undefined : (typeof end === 'number' ? end : end);
-    return arr.slice(s, e);
-  },
+  array_slice: (arr, start, end) => (__arrayOrTyped(arr) ? arr.slice(start, end) : []),
   array_splice: (arr, start, deleteCount, ...items) => {
     if (!Array.isArray(arr)) return [];
     const s = typeof start === 'number' ? start : 0;
@@ -2846,8 +2841,9 @@ const __memDispatch = {
     const call = __arrayOrTyped(arr) ? __arrayCallback(cb) : undefined;
     if (!call) return undefined;
     for (let i = 0; i < arr.length; i++) {
-      const vBits = __jsValueToBits(arr[i]);
-      if (__bitsToJsValue(call(vBits, __jsValueToBits(i), __jsValueToBits(arr)))) return arr[i];
+      // The element the predicate saw, whatever the predicate writes.
+      const v = arr[i];
+      if (__bitsToJsValue(call(__jsValueToBits(v), __jsValueToBits(i), __jsValueToBits(arr)))) return v;
     }
     return undefined;
   },
@@ -3495,7 +3491,7 @@ const __memDispatch = {
     return result;
   },
   uint8array_new: (size) => new Uint8Array(size),
-  uint8array_from: (val) => Uint8Array.from(Array.isArray(val) ? val : []),
+  uint8array_from: (val) => Uint8Array.from(val),
   uint8array_length: (buf) => (buf instanceof Uint8Array) ? buf.length : 0,
   uint8array_get: (buf, idx) => (buf instanceof Uint8Array) ? buf[idx] : 0,
   uint8array_set: (buf, idx, val) => { if (buf instanceof Uint8Array) buf[idx] = val; },
