@@ -1960,6 +1960,9 @@ pub fn run_with_parse_cache(
     {
         let (index, methods) = super::program_facts::array_chain_facts(program_facts.as_deref());
         perry_codegen::set_program_array_chain_facts(index, methods);
+        perry_codegen::set_program_shadow_writes(super::program_facts::shadow_writes(
+            program_facts.as_deref(),
+        ));
     }
     // The optional-feature scan read each pair as its intrinsic arm
     // (`feature_detect::detect_program_optional_feature_usage`); a module

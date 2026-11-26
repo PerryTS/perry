@@ -516,9 +516,23 @@ fn lower_instance_method_call(
         // reach some object the facts must also name each receiver's method.
         let unshadowed = !crate::proto_constants::shadow_tests()
             || crate::expr::wpfacts_access::closed_methods(ctx, member, property);
+        // GUARDS3: or the solver saw no write that gives a receiver class's
+        // instance or chain the name, or relinks one.
         let proven: Option<(Vec<(u32, usize)>, bool)> =
             crate::expr::wpfacts_access::proven_receiver_classes(ctx, object)
-                .filter(|_| unshadowed)
+                .filter(|(cids, _)| {
+                    unshadowed
+                        || cids.iter().all(|&cid| {
+                            implementors.iter().zip(&impl_class).zip(&cased).any(
+                                |(((c, _), class), &k)| {
+                                    k && *c == cid
+                                        && crate::proto_constants::class_unshadowed(
+                                            ctx, cid, class, property,
+                                        )
+                                },
+                            )
+                        })
+                })
                 .and_then(|(cids, nullable)| {
                     cids.iter()
                         .map(|&cid| {
@@ -1446,7 +1460,12 @@ fn lower_instance_method_call(
             // the shadow-bit test; the guarded direct call below makes it
             // (exact receiver word compare + `holder_constant`).
             if ctx.exact_receiver_class(object).as_deref() == Some(class_name.as_str())
-                && !crate::proto_constants::shadow_tests()
+                && (!crate::proto_constants::shadow_tests()
+                    || ctx.class_ids.get(&class_name).is_some_and(|&cid| {
+                        crate::proto_constants::class_unshadowed(
+                            ctx, cid, &class_name, property,
+                        )
+                    }))
                 && ctx.ptr_shape_receiver_fact(object).is_none()
                 && !fallback_fn.starts_with("perry_static_")
                 && !class_chain_has_field_named(ctx, &class_name, property)
