@@ -12,7 +12,7 @@ extern "C" {
 }
 
 /// Issue #811 — `net.isIP(s)` returns 0/4/6 (number).
-fn classify_ip(s: &str) -> i32 {
+pub(crate) fn classify_ip(s: &str) -> i32 {
     if is_ipv4_str(s) {
         4
     } else if is_ipv6_str(s) {
@@ -82,10 +82,13 @@ static AUTO_SELECT_FAMILY: std::sync::atomic::AtomicBool = std::sync::atomic::At
 static AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS: std::sync::atomic::AtomicI32 =
     std::sync::atomic::AtomicI32::new(500);
 
+pub(crate) fn auto_select_family_default() -> bool {
+    AUTO_SELECT_FAMILY.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn js_net_get_default_auto_select_family() -> f64 {
-    let v = AUTO_SELECT_FAMILY.load(std::sync::atomic::Ordering::Relaxed);
-    f64::from_bits(JsValue::from_bool(v).0)
+    f64::from_bits(JsValue::from_bool(auto_select_family_default()).0)
 }
 
 #[no_mangle]

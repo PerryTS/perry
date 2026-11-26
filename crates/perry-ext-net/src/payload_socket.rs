@@ -414,16 +414,23 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
         scope.root_nanbox(unsafe { np::link_event_owner(socket) }.unwrap_or(owner.get()));
     // SAFETY: The argument is a live JS value on this agent; conversions finish before any payload
     // projection, and allocating paths retain their rooted operands.
-    let (host, port, path, callback) = unsafe {
+    let (host, port, path, callback, lookup) = unsafe {
         if let Some(path) = crate::jsvalue_to_owned_string(arg1.get()) {
-            (String::new(), 0.0, Some(path), arg2.get())
+            (String::new(), 0.0, Some(path), arg2.get(), p::undefined())
         } else if JsValue::from_bits(arg1.get().to_bits()).is_pointer() {
             let path = crate::get_object_string_field(arg1.get(), "path");
             let port = crate::get_object_number_field(arg1.get(), "port").unwrap_or(0.0);
             let host = crate::get_object_string_field(arg1.get(), "host")
                 .or_else(|| crate::get_object_string_field(arg1.get(), "hostname"))
                 .unwrap_or_else(|| "localhost".into());
-            (host, port, path, arg2.get())
+            let lookup = crate::get_object_value_field(arg1.get(), "lookup");
+            (
+                host,
+                port,
+                path,
+                arg2.get(),
+                lookup.unwrap_or_else(p::undefined),
+            )
         } else {
             let host = crate::jsvalue_to_owned_string(arg2.get());
             let callback = if host.is_some() {
@@ -436,10 +443,15 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
                 JsValue::from_bits(arg1.get().to_bits()).to_number(),
                 None,
                 callback,
+                p::undefined(),
             )
         }
     };
     let callback = scope.root_nanbox(callback);
+    let lookup = scope.root_nanbox(lookup);
+    let lookup = (path.is_none() && crate::ip::classify_ip(&host) == 0)
+        .then(|| super::payload_lookup::validate(lookup.get()))
+        .flatten();
     if path.is_none() {
         // SAFETY: The validator consumes scalar arguments on this agent; no payload borrow is held
         // when it throws.
@@ -525,14 +537,20 @@ pub(crate) fn connect(owner: f64, arg1: f64, arg2: f64, arg3: f64) -> f64 {
         };
         (*payload).ext.connect_async_id = provider::id(connect.get());
     }
-    // SAFETY: The retained link belongs to this agent; projection checks family/open lifecycle, and
-    // field/core access ends before allocation or JS.
-    let result = unsafe {
-        let core = p::socket_core(socket).unwrap_or_else(super::payload_prototype::throw_miss);
-        match path {
-            Some(path) => tl::link_pipe_connect(&mut *core, socket, &path),
-            None => tl::link_tcp_connect(&mut *core, socket, &host, port as u16, true),
+    let result = match (path, lookup) {
+        (None, Some(lookup)) => {
+            super::payload_lookup::start(owner.get(), arg1.get(), &host, port as u16, lookup);
+            Ok(())
         }
+        // SAFETY: The retained link belongs to this agent; projection checks family/open
+        // lifecycle, and field/core access ends before allocation or JS.
+        (path, _) => unsafe {
+            let core = p::socket_core(socket).unwrap_or_else(super::payload_prototype::throw_miss);
+            match path {
+                Some(path) => tl::link_pipe_connect(&mut *core, socket, &path),
+                None => tl::link_tcp_connect(&mut *core, socket, &host, port as u16, true),
+            }
+        },
     };
     if let Err(failure) = result {
         let error = error(&failure.code, &failure.message());

@@ -1103,3 +1103,93 @@ fn tls_wrapper_close_listener_can_reopen_its_parent_before_the_parent_close_list
         perry_runtime::agent::retire_agent(agent);
     }).join().unwrap();
 }
+
+unsafe extern "C" fn refused_then_live_lookup(
+    _: *const RawClosureHeader,
+    _: JsThis,
+    _host: f64,
+    _options: f64,
+    callback: f64,
+) -> f64 {
+    let scope = TransientRootScope::enter();
+    let callback = scope.root_nanbox(callback);
+    let mut addresses = scope.root_addr(perry_ffi::js_array_alloc(0) as i64);
+    for (address, family) in [("::1", 6.0), ("127.0.0.1", 4.0)] {
+        let entry = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+        p::own_set(entry.get(), "address", events::string(address));
+        p::own_set(entry.get(), "family", family);
+        let grown = perry_ffi::js_array_push(
+            addresses.get() as *mut perry_ffi::ArrayHeader,
+            perry_ffi::JsValue::from_bits(entry.get().to_bits()),
+        );
+        addresses = scope.root_addr(grown as i64);
+    }
+    let null = f64::from_bits(perry_ffi::JsValue::NULL.bits());
+    events::call(
+        callback.get(),
+        JsThis::UNDEFINED,
+        &[null, p::boxed_addr(addresses.get())],
+    );
+    p::undefined()
+}
+
+unsafe extern "C" fn destroy_on_connect(_: *const RawClosureHeader, this: JsThis) -> f64 {
+    ECHO_BYTES.with(|count| count.set(count.get() + 1));
+    socket::destroy(this.as_f64(), p::undefined());
+    p::undefined()
+}
+
+#[test]
+fn caller_lookup_plan_skips_the_resolver_and_releases_every_attempt_ref() {
+    let _serial = crate::test_serial();
+    std::thread::spawn(|| {
+        use perry_runtime::turnloop_net::transport as core_test;
+        let agent = perry_runtime::agent::enter_worker_agent();
+        assert!(io::enabled());
+        CLOSES.with(|count| count.set(0));
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let peer = std::thread::spawn(move || listener.accept().map(|_| ()));
+        let scope = TransientRootScope::enter();
+        let owner = scope.root_nanbox(socket::new_socket(io::ROUTE, p::undefined()));
+        let cell = socket::link(owner.get());
+        ECHO_BYTES.with(|count| count.set(0));
+        let options = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+        p::own_set(options.get(), "host", events::string("custom.test"));
+        p::own_set(options.get(), "port", f64::from(port));
+        let lookup = scope.root_addr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(refused_then_live_lookup, 3; with_flags(perry_ffi::FN_BUILTIN)),
+            0,
+        ) as i64);
+        p::own_set(options.get(), "lookup", p::boxed_addr(lookup.get()));
+        let connected = scope.root_addr(perry_ffi::alloc_closure(
+            perry_ffi::js_function_info!(destroy_on_connect, 0; with_flags(perry_ffi::FN_BUILTIN)),
+            0,
+        ) as i64);
+        close_listener(owner.get());
+        socket::connect(owner.get(), options.get(), p::boxed_addr(connected.get()), p::undefined());
+        assert_eq!(
+            unsafe { core_test::pending_resolve_for_test(cell.raw()) },
+            None,
+            "the caller's answer replaces the resolver"
+        );
+        let limit = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while CLOSES.with(Cell::get) < 1 {
+            assert!(std::time::Instant::now() < limit, "lookup fallback stalled");
+            perry_runtime::event_pump::js_loop_turn_bounded(2);
+            perry_runtime::promise::js_promise_run_microtasks();
+        }
+        peer.join().unwrap().expect("the live address was accepted");
+        assert_eq!(
+            ECHO_BYTES.with(Cell::get),
+            1,
+            "the refused address fell back to the live one"
+        );
+        let header = cell.raw() as *const perry_runtime::native_handle::NativeHandleHeader;
+        assert_eq!(unsafe { (*header).refs }, 0, "every attempt released its ref");
+        assert_eq!(perry_runtime::turnloop_net::live_handles(), 0);
+        perry_runtime::agent::retire_agent(agent);
+    })
+    .join()
+    .unwrap();
+}

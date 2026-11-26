@@ -1116,6 +1116,15 @@ extern "C" {
         nodelay: i32,
         err: *mut RawNetError,
     ) -> i32;
+    fn js_perry_net_link_tcp_connect_addrs(
+        core: *mut std::ffi::c_void,
+        link: usize,
+        ips: *const [u8; 16],
+        count: usize,
+        port: u16,
+        nodelay: i32,
+        err: *mut RawNetError,
+    ) -> i32;
     fn js_perry_net_link_pipe_connect(
         core: *mut std::ffi::c_void,
         link: usize,
@@ -1353,6 +1362,42 @@ pub fn link_tcp_connect(
         },
         {
             let _ = (core, link, host, port, nodelay);
+            Err(unavailable())
+        }
+    )
+}
+
+/// Connect a TCP client to addresses already resolved, tried in order.
+pub fn link_tcp_connect_addrs(
+    core: &mut TransportCore,
+    link: OwnerLink,
+    ips: &[std::net::IpAddr],
+    port: u16,
+    nodelay: bool,
+) -> Result<(), NetError> {
+    runtime_call!(
+        {
+            let octets: Vec<[u8; 16]> = ips
+                .iter()
+                .map(|ip| match ip {
+                    std::net::IpAddr::V4(v4) => v4.to_ipv6_mapped().octets(),
+                    std::net::IpAddr::V6(v6) => v6.octets(),
+                })
+                .collect();
+            link_call(|err| unsafe {
+                js_perry_net_link_tcp_connect_addrs(
+                    core.raw(),
+                    link.raw(),
+                    octets.as_ptr(),
+                    octets.len(),
+                    port,
+                    i32::from(nodelay),
+                    err,
+                )
+            })
+        },
+        {
+            let _ = (core, link, ips, port, nodelay);
             Err(unavailable())
         }
     )

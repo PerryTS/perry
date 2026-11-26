@@ -677,6 +677,39 @@ pub unsafe fn tcp_connect(
     .unwrap_or_else(|| Err(no_loop()))
 }
 
+/// Connect a TCP client to addresses the caller resolved, tried in order as a
+/// resolved hostname's are.
+///
+/// # Safety
+/// See [`bind`].
+pub unsafe fn tcp_connect_addrs(
+    core: *mut TransportCore,
+    link: OwnerLink,
+    addrs: Vec<SocketAddr>,
+    nodelay: bool,
+) -> NetResult<()> {
+    let (c, _) = bind(core, link, "connect")?;
+    idle_or(c, "connect")?;
+    let mut remaining = std::collections::VecDeque::from(addrs);
+    let first = remaining
+        .pop_front()
+        .ok_or_else(|| super::errors::invalid_input("connect"))?;
+    c.plan = Some(Box::new(ConnectPlan {
+        subsystem: c.route,
+        nodelay,
+        remaining,
+        retrying: false,
+        last_error: None,
+        op: None,
+    }));
+    let submitted = with_driver(|driver| connect_addr(driver, c, link, first, nodelay))
+        .unwrap_or_else(|| Err(no_loop()));
+    if submitted.is_err() {
+        c.plan = None;
+    }
+    submitted
+}
+
 /// One connect attempt: a fresh handle, installed (+1 ref).
 unsafe fn connect_addr(
     driver: &mut turnloop::Loop,

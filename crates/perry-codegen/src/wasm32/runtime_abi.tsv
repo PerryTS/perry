@@ -3071,6 +3071,7 @@ js_perry_net_link_set_route	i32s	ptr,usize,i32s,ptr
 js_perry_net_link_shutdown	i32s	ptr,usize,i64,ptr
 js_perry_net_link_snapshot_handle	i32s	ptr,usize,ptr
 js_perry_net_link_tcp_connect	i32s	ptr,usize,ptr,usize,i16u,i32s,ptr
+js_perry_net_link_tcp_connect_addrs	i32s	ptr,usize,ptr,usize,i16u,i32s,ptr
 js_perry_net_link_tcp_listen	i32s	ptr,usize,ptr,usize,i16u,i32u,i32s,i32s,ptr
 js_perry_net_link_write	i32s	ptr,usize,ptr,usize,i64,ptr,ptr
 js_perry_net_live_handles	usize	
