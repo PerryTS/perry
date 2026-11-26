@@ -1072,6 +1072,19 @@ unsafe fn incoming_init(
         ),
         _ => (null, null, null, null, 0.0),
     };
+    // The stores below run in the layout's key order, from `socket` on, and
+    // the one later key (`_eventsCount`, the first listener's) is absent:
+    // each store's later keys are all still holes, so it fills its slot in
+    // place (`birth_store`'s decision, made once for the whole sequence).
+    let in_order = match receiver() {
+        Some(obj) if on_layout => {
+            let fields = (obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64;
+            *fields.add(crate::object::runtime_layouts::emitter_slot::EVENTS_COUNT as usize)
+                == crate::value::TAG_HOLE
+                && *fields.add(s::SOCKET as usize) == crate::value::TAG_HOLE
+        }
+        _ => false,
+    };
     let put = |slot: u32, name: &'static [u8], value: f64| match receiver() {
         Some(obj)
             if on_layout
@@ -1079,7 +1092,11 @@ unsafe fn incoming_init(
                     .add(slot as usize)
                     == crate::value::TAG_HOLE =>
         {
-            crate::node_stream::instance_birth::birth_store(obj, slot, value)
+            if in_order {
+                crate::object::store_object_field_slot(obj, slot as usize, value.to_bits())
+            } else {
+                crate::node_stream::instance_birth::birth_store(obj, slot, value)
+            }
         }
         _ => crate::runtime_state_key::js_runtime_state_key_set(
             this.get_nanbox_f64(),
@@ -1097,7 +1114,11 @@ unsafe fn incoming_init(
                     .add(slot as usize)
                     == crate::value::TAG_HOLE =>
         {
-            crate::node_stream::instance_birth::birth_store(obj, slot, value)
+            if in_order {
+                crate::object::store_object_field_slot(obj, slot as usize, value.to_bits())
+            } else {
+                crate::node_stream::instance_birth::birth_store(obj, slot, value)
+            }
         }
         _ => {
             let symbol = layouts::runtime_symbol_value(atom);

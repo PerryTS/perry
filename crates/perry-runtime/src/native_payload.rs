@@ -547,8 +547,30 @@ pub fn payload_cell_of_word(word: u64) -> Option<*mut NativeHandleHeader> {
 /// sequence instead of the local-dynamic one.
 #[inline(never)]
 pub unsafe fn payload_cell_of_object(obj: *const ObjectHeader) -> Option<*mut NativeHandleHeader> {
+    // An object still exactly on a layout that lists the key (its word is
+    // the layout's: no shadow bit, no overflow) holds it in the layout's
+    // inline slot; the hole is its absence.
+    if let Some(slot) = layout_payload_slot((*obj).parent_class_id) {
+        let bits = *((obj as *const u8).add(std::mem::size_of::<ObjectHeader>()) as *const u64)
+            .add(slot as usize);
+        return payload_cell_of_word(bits);
+    }
     let key = crate::object::runtime_layouts::bound_runtime_symbol(&PAYLOAD_ATOM)?;
     payload_cell_of_word(crate::object::shaped_symbols::own_private(obj, key)?)
+}
+
+/// The inline slot of `[[NativePayload]]` on the runtime layout `word`
+/// names, for the layouts that list it (`http_instances.rs`).
+#[inline(always)]
+fn layout_payload_slot(word: u32) -> Option<u32> {
+    use crate::object::runtime_layouts as rl;
+    if word == rl::INCOMING_MESSAGE::WORD {
+        Some(rl::incoming_slot::PAYLOAD)
+    } else if word == rl::SERVER_RESPONSE::WORD {
+        Some(rl::response_slot::PAYLOAD)
+    } else {
+        None
+    }
 }
 
 /// [`payload_cell_of_object`] for a value (`None` for a non-object).
