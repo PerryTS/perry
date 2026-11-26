@@ -84,6 +84,10 @@ async function main(): Promise<void> {
     return Promise.resolve(result);
   }));
   console.log("async values are not awaited:", values[0] instanceof Promise);
+  class StaticIterable {
+    static *[Symbol.iterator]() { yield "s"; }
+  }
+  await show("class with static @@iterator", () => Array.fromAsync(StaticIterable as unknown as Iterable<string>));
   await show("done read before value", () => Array.fromAsync(rawAsync(() => ({
     get done() { log.push("get done"); return true; },
     get value() { log.push("get value"); return 1; },
