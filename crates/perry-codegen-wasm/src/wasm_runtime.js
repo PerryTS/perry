@@ -4691,6 +4691,8 @@ function perry_ui_set_on_double_click(h, callback) {
 // focus, and Enter or Space to activate it, as a native button would.
 function perry_ui_widget_set_on_click(h, callback) {
   const el = uiGet(h); if (!el) return;
+  // A Toggle's checkbox is already a focusable control.
+  if (el._inp) return perry_ui_set_on_click(h, callback);
   el.addEventListener("click", () => callWasmClosure(callback));
   if (el.tagName === "BUTTON") return;
   el.style.cursor = "pointer";

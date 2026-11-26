@@ -114,7 +114,7 @@ pub(super) fn map_ui_method(method: &str, class_name: Option<&str>) -> &'static 
         "widgetAnimateOpacity" => "perry_ui_animate_opacity",
         "widgetAnimatePosition" => "perry_ui_animate_position",
         // Events
-        "setOnClick" | "set_on_click" | "widgetSetOnClick" => "perry_ui_set_on_click",
+        "setOnClick" | "set_on_click" => "perry_ui_set_on_click",
         "setOnHover" | "set_on_hover" | "widgetSetOnHover" => "perry_ui_set_on_hover",
         "setOnDoubleClick" | "set_on_double_click" | "widgetSetOnDoubleClick" => {
             "perry_ui_set_on_double_click"
