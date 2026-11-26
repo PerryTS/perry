@@ -1450,6 +1450,9 @@ mod parse_int_radix;
 #[path = "async_operator_tests.rs"]
 mod async_operator;
 
+#[path = "node_path_tests.rs"]
+mod node_path;
+
 #[path = "async_array_method_tests.rs"]
 mod async_array_method;
 

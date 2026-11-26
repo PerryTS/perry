@@ -306,6 +306,15 @@ impl WasmModuleEmitter {
     }
 
     pub(super) fn emit_js_expr(&self, expr: &Expr, locals: &BTreeMap<u32, String>) -> String {
+        if let Some(bridge) = expr::path_module_bridge(expr) {
+            return self.emit_js_bridge_call(bridge, &[], locals);
+        }
+        if let Some([module, name]) = expr::path_export_operands(expr) {
+            return self.emit_js_bridge_call("path_module_export", &[module, name], locals);
+        }
+        if let Some((bridge, operands)) = expr::path_operands(expr) {
+            return self.emit_js_bridge_call(bridge, &operands, locals);
+        }
         if let Some((bridge, args)) = super::expr::reflection_bridge(expr) {
             let args: Vec<String> = args.iter().map(|a| self.emit_js_expr(a, locals)).collect();
             return format!("fromJsValue(__memDispatch.{bridge}({}))", host_args(&args));
@@ -1283,6 +1292,34 @@ impl WasmModuleEmitter {
                 self.emit_js_expr(&Expr::LocalGet(*set_id), locals),
                 self.emit_js_expr(value, locals)
             ),
+            // `node:path` calls the bridges its WASM arms call (`emit/expr/url_process_path.rs`).
+            Expr::PathSep => self.emit_js_bridge_call("path_sep", &[], locals),
+            Expr::PathDelimiter => self.emit_js_bridge_call("path_delimiter", &[], locals),
+            Expr::PathResolveJoin(a, b) => {
+                self.emit_js_bridge_call("path_resolve_join", &[a, b], locals)
+            }
+            Expr::PathRelative(a, b) => self.emit_js_bridge_call("path_relative", &[a, b], locals),
+            Expr::PathMatchesGlob(a, b) => {
+                self.emit_js_bridge_call("path_matches_glob", &[a, b], locals)
+            }
+            Expr::PathBasenameExt(a, b) => {
+                self.emit_js_bridge_call("path_basename", &[a, b], locals)
+            }
+            Expr::PathDirname(p) => self.emit_js_bridge_call("path_dirname", &[p], locals),
+            Expr::PathBasename(p) => self.emit_js_bridge_call("path_basename", &[p], locals),
+            Expr::PathExtname(p) => self.emit_js_bridge_call("path_extname", &[p], locals),
+            Expr::PathIsAbsolute(p) => self.emit_js_bridge_call("path_is_absolute", &[p], locals),
+            Expr::PathNormalize(p) => self.emit_js_bridge_call("path_normalize", &[p], locals),
+            Expr::PathParse(p) => self.emit_js_bridge_call("path_parse", &[p], locals),
+            Expr::PathFormat(p) => self.emit_js_bridge_call("path_format", &[p], locals),
+            Expr::PathToNamespacedPath(p) => {
+                self.emit_js_bridge_call("path_to_namespaced_path", &[p], locals)
+            }
+            Expr::PathWin32 { method, args } => {
+                let (bridge, arity) = expr::path_win32_bridge(*method);
+                let operands: Vec<&Expr> = args.iter().take(arity as usize).collect();
+                self.emit_js_bridge_call(bridge, &operands, locals)
+            }
             Expr::Sequence(exprs) => {
                 if exprs.is_empty() {
                     "u64ToF64(TAG_UNDEFINED)".to_string()
@@ -1300,7 +1337,9 @@ impl WasmModuleEmitter {
                 // population below). Reading the global returns the i64 NaN-box
                 // bits matching the source module's let slot.
                 let mod_key = (self.current_mod_idx, name.clone());
-                if let Some(&gidx) = self.imported_var_globals.get(&mod_key) {
+                if let Some(&bridge) = self.path_namespace_imports.get(&mod_key) {
+                    self.emit_js_bridge_call(bridge, &[], locals)
+                } else if let Some(&gidx) = self.imported_var_globals.get(&mod_key) {
                     format!(
                         "u64ToF64(wasmInstance.exports.__wasm_global_{}.value)",
                         gidx

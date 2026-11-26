@@ -2,9 +2,9 @@
 //! filesystem strings are borrowed directly; no JS subject copy is required.
 use super::perex_api as api;
 use super::perex_memory::MemoryBudget;
-use super::perex_owner::{GcProgram, HeapSubject, OwnerError};
+use super::perex_owner::{GcProgram, OwnerError};
 use super::perex_runtime::{self as host, CaptureMode, EngineError};
-use crate::gc::{RuntimeHandle, RuntimeHandleScope};
+use crate::gc::RuntimeHandleScope;
 use perex::binding::{BoundProgram, BoundSubject, ImmutableSubject, Subject};
 use perex::Budget;
 
@@ -28,6 +28,15 @@ impl<'s> GlobProgram<'s> {
             .unwrap()
     }
     pub(crate) fn new(scope: &'s RuntimeHandleScope, source: &str) -> Result<Self, EngineError> {
+        Self::new_with_flags(scope, source, "u")
+    }
+
+    /// A program for `source` under RegExp `flags` (`""` matches by UTF-16 code unit).
+    pub(crate) fn new_with_flags(
+        scope: &'s RuntimeHandleScope,
+        source: &str,
+        flags: &str,
+    ) -> Result<Self, EngineError> {
         let pattern =
             BoundSubject::new(NativeText(source)).map_err(|e| EngineError::Subject(e.error))?;
         let mut budget = Budget::new(api::WORK);
@@ -35,7 +44,7 @@ impl<'s> GlobProgram<'s> {
         let program = host::compile(
             scope,
             &pattern,
-            super::validate_and_canonicalize_flags("u"),
+            super::validate_and_canonicalize_flags(flags),
             &mut budget,
             &memory,
             api::PROGRAM_BYTES,
@@ -49,13 +58,6 @@ impl<'s> GlobProgram<'s> {
     pub(crate) fn is_match(&self, input: &str) -> Result<bool, EngineError> {
         let subject =
             BoundSubject::new(NativeText(input)).map_err(|e| EngineError::Subject(e.error))?;
-        self.test(&subject)
-    }
-
-    pub(crate) fn test_heap(&self, input: RuntimeHandle<'_>) -> Result<bool, EngineError> {
-        let owner = unsafe { HeapSubject::new(input) }
-            .map_err(|e| EngineError::Subject(perex::binding::SubjectError::Resource(e)))?;
-        let subject = BoundSubject::new(owner).map_err(|e| EngineError::Subject(e.error))?;
         self.test(&subject)
     }
 

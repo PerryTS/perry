@@ -150,17 +150,18 @@ impl<'a> FuncEmitCtx<'a> {
                 self.emit_memcall(func, "array_shift", 1);
                 true
             }
-            "join" => {
-                self.emit_frame_begin(func, 2);
+            // Array `join` takes one separator; a call with more arguments is some other
+            // object's `join` (`path.win32.join(a, b)` on a namespace value).
+            // With no separator the bridge gets none, so an array joins with "," and a
+            // namespace value's `join()` answers ".".
+            "join" if args.len() <= 1 => {
+                let argc = 1 + args.len() as u32;
+                self.emit_frame_begin(func, argc);
                 self.emit_store_arg(func, 0, object);
-                if !args.is_empty() {
-                    self.emit_store_arg(func, 1, &args[0]);
-                } else {
-                    let comma_id = self.emitter.string_map.get(",").copied().unwrap_or(0);
-                    let bits = (STRING_TAG << 48) | (comma_id as u64);
-                    self.emit_store_const(func, 1, f64::from_bits(bits));
+                if let Some(separator) = args.first() {
+                    self.emit_store_arg(func, 1, separator);
                 }
-                self.emit_memcall(func, "array_join", 2);
+                self.emit_memcall(func, "array_join", argc);
                 true
             }
             "map" if !args.is_empty() => {

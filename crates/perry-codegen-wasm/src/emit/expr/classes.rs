@@ -150,7 +150,10 @@ impl<'a> FuncEmitCtx<'a> {
                 // the lookup tables are disjoint because a HIR symbol can
                 // only be one or the other.
                 let mod_key = (self.emitter.current_mod_idx, name.clone());
-                if let Some(&gidx) = self.emitter.imported_var_globals.get(&mod_key) {
+                if let Some(&bridge) = self.emitter.path_namespace_imports.get(&mod_key) {
+                    self.emit_frame_begin(func, 0);
+                    self.emit_memcall(func, bridge, 0);
+                } else if let Some(&gidx) = self.emitter.imported_var_globals.get(&mod_key) {
                     func.instruction(&Instruction::GlobalGet(gidx));
                 } else if let Some(&func_idx) = self
                     .emitter

@@ -1142,6 +1142,12 @@ impl WasmModuleEmitter {
                         // the whole-program name map, which made the failure
                         // maddeningly partial).
                         if let perry_hir::ir::ImportSpecifier::Namespace { local } = spec {
+                            if let Some(bridge) =
+                                expr::path_namespace_bridge(&modules[src_idx].1.name)
+                            {
+                                self.path_namespace_imports
+                                    .insert((consumer_idx, local.clone()), bridge);
+                            }
                             // Register `W.<member>` for exactly the source
                             // module's PUBLIC surface — its named/re-exported/
                             // function/object exports, plus everything reached
