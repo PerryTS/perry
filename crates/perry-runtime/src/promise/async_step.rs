@@ -1335,69 +1335,61 @@ fn resolve_from_async_map_fn(map_fn: f64) -> Result<Option<*const crate::Closure
     )))
 }
 
-/// `GetMethod(items, @@<name>)` and, when present, `GetIteratorFromMethod`.
-/// Throws when the method is not callable or its result is not an object.
-fn call_iterator_method(items: f64, name: &str) -> Option<f64> {
+/// `GetMethod(V, @@<name>)`: the lookup starts at `holder` (`ToObject(V)`)
+/// while getters see `receiver` (`V` itself). `None` when absent.
+fn get_iterator_method(holder: f64, receiver: f64, name: &str) -> Option<f64> {
     let sym = crate::symbol::well_known_symbol(name);
     if sym.is_null() {
         return None;
     }
-    // A getter or the method itself is user code.
-    let scope = crate::gc::RuntimeHandleScope::new();
-    let items = scope.root_nanbox_f64(items);
     let sym = f64::from_bits(crate::value::JSValue::pointer(sym as *const u8).bits());
-    let method =
-        unsafe { crate::symbol::js_object_get_symbol_property(items.get_nanbox_f64(), sym) };
-    if crate::collection_iter::is_null_or_undefined(method) {
-        return None;
-    }
+    let method = unsafe {
+        crate::symbol::js_object_get_symbol_property_with_receiver(holder, sym, receiver)
+    };
+    (!crate::collection_iter::is_null_or_undefined(method)).then_some(method)
+}
+
+/// `GetIteratorFromMethod(V, method)` for `@@asyncIterator`.
+fn async_iterator_from_method(receiver: f64, method: f64) -> f64 {
     if !crate::collection_iter::is_callable(method) {
-        crate::collection_iter::throw_type_error(&format!("Symbol.{name} is not a function"));
+        crate::collection_iter::throw_type_error("Symbol.asyncIterator is not a function");
     }
     let iterator = unsafe {
         crate::closure::native_call_value_this(
             method,
-            crate::closure::JsThis::from_f64(items.get_nanbox_f64()),
+            crate::closure::JsThis::from_f64(receiver),
             std::ptr::null(),
             0,
         )
     };
     if !crate::collection_iter::is_entry_object(iterator) {
-        crate::collection_iter::throw_type_error(&format!(
-            "Result of the Symbol.{name} method is not an object"
-        ));
+        crate::collection_iter::throw_type_error(
+            "Result of the Symbol.asyncIterator method is not an object",
+        );
     }
-    Some(iterator)
-}
-
-/// A built-in iterable whose `@@iterator` dispatches by class id, so the
-/// symbol read above answers `undefined` for it.
-fn is_intrinsic_sync_iterable(items: f64) -> bool {
-    let raw = crate::value::js_nanbox_get_pointer(items) as usize;
-    crate::value::JSValue::from_bits(items.to_bits()).is_any_string()
-        || crate::array::js_array_is_array(items).to_bits() == crate::value::TAG_TRUE
-        || crate::map::is_registered_map(raw)
-        || crate::set::is_registered_set(raw)
-        || crate::array::is_builtin_iterator_class_id(raw)
-        || crate::object::fixed_generator_state(items).is_some()
+    iterator
 }
 
 /// The async iterator `Array.fromAsync` drains (a sync iterable's wrapped by
-/// `CreateAsyncFromSyncIterator`), or `None` for an array-like. Each
-/// iterator method is read once.
-fn iterator_value_for_from_async(items: f64) -> Option<f64> {
+/// `CreateAsyncFromSyncIterator`), or `None` for an array-like. `holder` is
+/// `ToObject(source)`; each iterator method is read once.
+fn iterator_value_for_from_async(holder: f64, source: f64) -> Option<f64> {
+    // Getters and iterator methods are user code.
     let scope = crate::gc::RuntimeHandleScope::new();
-    let items = scope.root_nanbox_f64(items);
-    if let Some(iter) = call_iterator_method(items.get_nanbox_f64(), "asyncIterator") {
-        return Some(iter);
+    let holder = scope.root_nanbox_f64(holder);
+    let source = scope.root_nanbox_f64(source);
+    if let Some(method) = get_iterator_method(
+        holder.get_nanbox_f64(),
+        source.get_nanbox_f64(),
+        "asyncIterator",
+    ) {
+        return Some(async_iterator_from_method(source.get_nanbox_f64(), method));
     }
-    if crate::object::is_async_generator_instance_value(items.get_nanbox_f64()) {
-        return Some(items.get_nanbox_f64());
+    if crate::object::is_async_generator_instance_value(holder.get_nanbox_f64()) {
+        return Some(holder.get_nanbox_f64());
     }
-    let iter = call_iterator_method(items.get_nanbox_f64(), "iterator").or_else(|| {
-        is_intrinsic_sync_iterable(items.get_nanbox_f64())
-            .then(|| crate::symbol::js_get_iterator(items.get_nanbox_f64()))
-    })?;
+    let method = get_iterator_method(holder.get_nanbox_f64(), source.get_nanbox_f64(), "iterator")?;
+    let iter = crate::symbol::iterator_from_method(source.get_nanbox_f64(), method)?;
     Some(crate::array::async_from_sync_wrap_iterator(iter))
 }
 
@@ -1434,29 +1426,30 @@ pub(crate) fn array_from_async_full(c: f64, input: f64, map_fn: f64, this_arg: f
     let map_fn = scope.root_nanbox_f64(map_fn);
     let this_arg = scope.root_nanbox_f64(this_arg);
     let c = scope.root_nanbox_f64(c);
-    // GetMethod and the array-like reads see a primitive source's wrapper.
-    let source = input.get_nanbox_f64();
-    let input = if crate::array::boxed_primitive_source(source, source.to_bits()) {
-        scope.root_nanbox_f64(crate::object::js_object_coerce(input.get_nanbox_f64()))
-    } else {
-        input
-    };
-    let source = crate::exception::catch_js_throw(|| {
-        match iterator_value_for_from_async(input.get_nanbox_f64()) {
+    // GetMethod and the array-like reads start at a primitive source's
+    // wrapper; getters and iterator methods still receive the primitive.
+    let source = input;
+    let holder =
+        if crate::array::boxed_primitive_source(source.get_nanbox_f64(), source.get_nanbox_u64()) {
+            scope.root_nanbox_f64(crate::object::js_object_coerce(source.get_nanbox_f64()))
+        } else {
+            scope.root_nanbox_f64(source.get_nanbox_f64())
+        };
+    let probed = crate::exception::catch_js_throw(|| {
+        match iterator_value_for_from_async(holder.get_nanbox_f64(), source.get_nanbox_f64()) {
             Some(iter) => (Some(iter), None),
             None => (
                 None,
-                Some(crate::array::array_like_length(input.get_nanbox_f64())),
+                Some(crate::array::array_like_length_f64(holder.get_nanbox_f64())),
             ),
         }
     });
-    let (iter_value, len) = match source {
-        Ok(source) => source,
+    let (iter_value, len) = match probed {
+        Ok(probed) => probed,
         Err(reason) => return boxed_promise(js_promise_rejected(reason)),
     };
-    let c_value = c.get_nanbox_f64();
-    if len.is_some_and(|len| len > u32::MAX as usize)
-        && !crate::object::js_value_is_constructor(c_value)
+    if len.is_some_and(|len| len > u32::MAX as f64)
+        && !crate::object::js_value_is_constructor(c.get_nanbox_f64())
     {
         let msg = crate::string::js_string_from_bytes(b"Invalid array length".as_ptr(), 20);
         let err = crate::error::js_rangeerror_new(msg);
@@ -1464,7 +1457,7 @@ pub(crate) fn array_from_async_full(c: f64, input: f64, map_fn: f64, this_arg: f
             err as i64,
         )));
     }
-    let len = len.map(|len| len as f64);
+    let input = holder;
     let iter_value = scope.root_nanbox_f64(iter_value.unwrap_or_else(undefined_value));
     let c = c.get_nanbox_f64();
     let constructed = if crate::object::js_value_is_constructor(c) {

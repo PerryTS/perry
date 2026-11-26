@@ -45,6 +45,15 @@ async function main(): Promise<void> {
     C.prototype[1] = "y";
   }
   await show("number", () => from(1));
+  Object.defineProperty(Number.prototype, Symbol.iterator, {
+    configurable: true,
+    value: function (this: unknown) {
+      "use strict";
+      return [typeof this][Symbol.iterator]();
+    },
+  });
+  await show("strict @@iterator receives the primitive", () => from(2));
+  delete (Number.prototype as unknown as Record<symbol, unknown>)[Symbol.iterator];
   await show("boolean", () => from(true));
   await show("bigint", () => from(1n));
   await show("symbol", () => from(Symbol("s")));
@@ -62,6 +71,9 @@ async function main(): Promise<void> {
   await show("typed array", () => from(new Uint8Array([5, 6])));
   await show("generator", () => from(gen()));
   await show("async generator", () => from(agen()));
+  await show("own nullish @@iterator on an array", () =>
+    from(Object.defineProperty([1, 2], Symbol.iterator, { value: undefined })));
+  await show("headers", () => from(new Headers([["x", "y"]])));
   await show("iterable class", () => from(new (class { *[Symbol.iterator]() { yield 9; } })()));
 }
 
