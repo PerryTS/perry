@@ -1777,6 +1777,9 @@ impl Model {
                         }
                         continue;
                     }
+                    if !self.accessors.contains_key(&(t, key)) {
+                        builtins::note_global_holder(self, t);
+                    }
                     let entry = self.accessors.entry((t, key)).or_default();
                     let list = if setter { &mut entry.1 } else { &mut entry.0 };
                     if list.contains(&f) {
@@ -3510,6 +3513,7 @@ impl Model {
             && !self.native_given.contains(&(t, given))
         {
             self.native_given.push((t, given));
+            builtins::note_global_holder(self, t);
             self.census_given(t, given);
             // GP1: setting a built-in's [[Prototype]] reads and calls
             // nothing (ECMA-262 10.1.2); a later [[Get]] on it continues at

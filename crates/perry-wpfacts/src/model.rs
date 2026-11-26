@@ -3027,6 +3027,25 @@ pub struct Model {
     /// Profile counters of the answered lookups: replays run, values fed.
     pub native_replays: u64,
     pub native_fed: u64,
+    /// The lookups of [`Model::native_missing`] a replay found unwritten,
+    /// by (key, native prototype): a write replays only the groups whose
+    /// answer it may change (`builtins::native_protocol::reached`).
+    /// `native_missing` holds the lookups no replay has seen yet.
+    pub native_parked: std::collections::BTreeMap<(Atom, Tok), Vec<NativeMiss>>,
+    /// The keys of [`Model::native_answer_nodes`], by (key, native
+    /// prototype), with the same node: what a write may refill.
+    pub native_answer_keys: std::collections::BTreeMap<(Atom, Tok), NodeId>,
+    /// An accessor or a prototype was given to the global object: the
+    /// next replay runs every parked lookup (a global binding's write
+    /// entries count by them, `written_by`'s `stored_key`).
+    pub native_replay_all: bool,
+    /// Bumped by each replay and by `native_replay_all`: lookups a replay
+    /// kept while another ran (or the flag was set) wait for the next one.
+    pub native_replay_seq: u64,
+    /// `note_realm_held` ran its replay (until then every replay is full).
+    pub native_realm_replayed: bool,
+    /// [`crate::solve::numeric_key`] of each atom, by atom.
+    pub atom_numeric: Vec<bool>,
     /// Rule R1 (`solve/builtin_fields.rs`): the built-in objects holding
     /// fields under keys they do not declare.
     pub r1_holders: crate::pts::FxHashSet<Tok>,
