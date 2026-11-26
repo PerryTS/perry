@@ -138,6 +138,11 @@ pub(crate) fn deliver_body(handle: i64) {
             JsValue::from_object_ptr(buf as usize as *mut u8).bits(),
         ));
         unsafe { perry_ffi::runtime_call(owner.get(), b"push", &[chunk.get()]) };
+        // node's parser reaches JS once per callback (`kOnBody`, then
+        // `kOnMessageComplete`), and each callback ends with the tick and
+        // microtask drain: what the handler scheduled (`resume_` -> `read(0)`
+        // -> `_read`) runs on the buffered body before the message completes.
+        unsafe { super::types::js_promise_run_microtasks() };
     }
     unsafe {
         perry_ffi::runtime_set(owner.get(), b"complete", bool_value(true));

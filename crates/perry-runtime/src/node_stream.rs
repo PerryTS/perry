@@ -352,7 +352,7 @@ extern "C" fn ns_readable_end_microtask(
     f64::from_bits(TAG_UNDEFINED)
 }
 
-extern "C" fn ns_readable_resume_microtask(
+extern "C" fn ns_readable_resume_tick(
     closure: *const ClosureHeader,
     _this: crate::closure::JsThis,
 ) -> f64 {
