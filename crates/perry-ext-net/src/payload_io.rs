@@ -682,13 +682,13 @@ pub(crate) fn wrote(owner: f64, user: u64, len: usize, queued: usize, sync: bool
         }
         if sync {
             // Node's `onwrite` for a write the kernel took at once defers
-            // `afterWrite` with `process.nextTick`: the callback runs as a
-            // `TickObject` in the socket's async context.
-            let tick =
-                scope.root_nanbox(provider::new(b"TickObject", provider::id(resource.get())));
-            provider::notify(tick.get());
-            events::call_in(tick.get(), callback.get(), JsThis::UNDEFINED, &[null]);
-            provider::retire(tick.get());
+            // `afterWrite` with `process.nextTick`. The transport already
+            // queued that tick inside the caller's `write()`
+            // (`turnloop_net::transport::post_whole`), and this completion
+            // runs in it: the real queued TickObject owns the job's async
+            // context, hooks and exception restoration, so the callback is a
+            // plain call, not a second TickObject.
+            events::call(callback.get(), JsThis::UNDEFINED, &[null]);
         } else {
             events::call_in(resource.get(), callback.get(), JsThis::UNDEFINED, &[null]);
         }
