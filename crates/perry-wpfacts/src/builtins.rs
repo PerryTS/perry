@@ -2344,10 +2344,21 @@ pub(crate) fn realm_own_props_unenumerable(ns: BuiltinNs) -> bool {
 /// `name` are defined non-enumerable (10.2.9 SetFunctionName, 10.2.10
 /// SetFunctionLength), as is a constructor's `prototype`. Its owner decides:
 /// a function of a host object (`fs.realpath` owns an enumerable `native`)
-/// keeps its own properties out of the model.
+/// keeps its own properties out of the model, unless the realm's
+/// declaration of the function itself gives it none: the runtime makes a
+/// function object it declares with the own properties of that
+/// declaration (`RealmEntry::own`, as rule R1 reads them), so a callable
+/// declaration (`parseFloat`, 19.2.5: `length` and `name`, non-enumerable)
+/// whose own properties are all non-enumerable, string and symbol keys
+/// alike (20.1.2.1 step 3.a.ii copies both), has none to copy.
 pub(crate) fn realm_function_own_props_unenumerable(identity: &str) -> bool {
     let owner = identity.split(['.', '[']).next().unwrap_or("");
     ns_by_name(owner).is_some_and(realm_own_props_unenumerable)
+        || members::realm_entry(identity).is_some_and(|e| {
+            use perry_hir::realm_manifest::RealmKind as K;
+            matches!(e.kind, K::Function | K::Method | K::Constructor)
+                && e.own.iter().all(|p| !p.enumerable)
+        })
 }
 
 /// Does the realm create a builtin object of kind `what` with no enumerable
