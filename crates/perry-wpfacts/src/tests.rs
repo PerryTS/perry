@@ -1554,6 +1554,7 @@ mod method_this_escape;
 mod native_parent;
 mod e11_null_parent;
 mod native_parent_program_class;
+mod nparg_error_args;
 mod native_proto_member;
 mod native_push;
 mod native_value_call;

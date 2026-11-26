@@ -63,8 +63,14 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
         unknown_method(m, call, "E21 native parent constructor argument");
         return;
     }
-    implicit_args(m, call, "native parent constructor argument", Protocol::Any);
+    let error_family = error_family_parent(m, tm);
+    if !error_family {
+        implicit_args(m, call, "native parent constructor argument", Protocol::Any);
+    }
     let site = m.anon_birth_site(&format!("{name} constructor"));
+    if error_family {
+        error_parent_args(m, call, inst, site);
+    }
     for k in native_parent_keys(&name) {
         let a = m.atom(k);
         let v = m.node_l("native-key");
@@ -87,6 +93,90 @@ pub fn native_parent_ctor(m: &mut Model, tm: TmplId, call: CallId, inst: Tok) {
             },
         );
     }
+}
+
+/// Is `tm`'s native parent the realm's Error family: the global object's
+/// `Error` or one of its NativeErrors, as the realm namespaces declare them
+/// (`ns_by_name`: `BuiltinNs::Error` / `BuiltinNs::NativeError`, the
+/// identities the runtime's `init_error_family_receiver` initializes)?
+fn error_family_parent(m: &Model, tm: TmplId) -> bool {
+    m.tmpls[tm as usize]
+        .native_parent
+        .as_ref()
+        .is_some_and(|(module, name)| {
+            module == "builtin"
+                && matches!(
+                    ns_by_name(name),
+                    Some(BuiltinNs::Error | BuiltinNs::NativeError(_))
+                )
+        })
+}
+
+/// Rule NPARG: `super(message, options, ...)` into an Error-family parent
+/// acts on its arguments only per the constructor's contract (ECMA-262
+/// 20.5.1.1 Error / 20.5.6.1.1 NativeError, 20.5.8.1 InstallErrorCause; the
+/// runtime's `js_error_subclass_default_init_with_options`, `message` =
+/// `js_jsvalue_to_string(arg0)`, and `js_error_apply_cause_to_object`, a
+/// [[Get]] of `cause` on a pointer `arg1` whose result, when not undefined,
+/// is the instance's own `cause`):
+/// - `message`: ToString (Protocol::ToPrimitive: a program `toString`,
+///   `valueOf` or `@@toPrimitive` runs with `this` = the message, nothing
+///   else of it is read or called);
+/// - `options`: one [[Get]] of `cause` (an accessor or a Proxy `get` trap
+///   runs), stored on the instance under `cause`;
+/// - later arguments: never read.
+/// A call the spread view did not reach (`reach_spread_args` off) still
+/// holds its spread arrays: each element may stand at either position.
+fn error_parent_args(m: &mut Model, call: CallId, inst: Tok, site: SiteId) {
+    let c = m.calls[call as usize].clone();
+    let mut message: Vec<NodeId> = c.arg(0).copied().into_iter().collect();
+    let mut options: Vec<NodeId> = c.arg(1).copied().into_iter().collect();
+    if !c.spread.is_empty() && !m.reach_spread_args {
+        let ek = m.elem_key();
+        for &s in &c.spread {
+            let e = m.node_l("error-arg-spread");
+            m.cons(s, Cons::Load { key: ek, dst: e });
+            message.push(e);
+            options.push(e);
+        }
+    }
+    let r = m.reason("Error message ToString");
+    for &a in &message {
+        m.why_implicit(a, r, call);
+        m.cons(
+            a,
+            Cons::Implicit {
+                reason: r,
+                proto: Protocol::ToPrimitive,
+                region: m.thrown,
+            },
+        );
+    }
+    if options.is_empty() {
+        return;
+    }
+    let ca = m.atom("cause");
+    let cause = m.node_l("error-cause");
+    for &o in &options {
+        m.cons(
+            o,
+            Cons::Load {
+                key: Key::Named(ca),
+                dst: cause,
+            },
+        );
+    }
+    let n = m.node_l("inst");
+    m.add_tok(n, inst);
+    m.cons(
+        n,
+        Cons::Store {
+            key: Key::Named(ca),
+            src: cause,
+            site,
+            region: m.thrown,
+        },
+    );
 }
 
 /// The own keys of a summarized native parent's prototypes below
