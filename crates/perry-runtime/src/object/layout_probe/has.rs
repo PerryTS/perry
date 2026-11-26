@@ -22,9 +22,23 @@ unsafe fn accessor_defers_to_overflow(cur: *const ObjectHeader) -> bool {
 /// names, an unknown prototype). A hole slot is an absent key (the key view);
 /// an accessor is present. GC leaf.
 ///
+/// Own-only presence and chain presence are two instances
+/// ([`probe_has_impl`]): every caller passes a literal, so this folds to one
+/// call, and the own-only instance carries no prototype hop.
+///
 /// # Safety
 /// `obj_bits` and `key_bits` any NaN-boxed values.
+#[inline(always)]
 pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> i32 {
+    if own_only {
+        probe_has_impl::<true>(obj_bits, key_bits)
+    } else {
+        probe_has_impl::<false>(obj_bits, key_bits)
+    }
+}
+
+/// [`probe_has`] for one `OWN_ONLY`.
+unsafe fn probe_has_impl<const OWN_ONLY: bool>(obj_bits: u64, key_bits: u64) -> i32 {
     if obj_bits & TAG_MASK != POINTER_TAG {
         return -1;
     }
@@ -57,7 +71,7 @@ pub(crate) unsafe fn probe_has(obj_bits: u64, key_bits: u64, own_only: bool) -> 
     if exact && computed::own_slot_holds(dir, payload as *const ObjectHeader, key) {
         return 1;
     }
-    probe_has_walk(dir, payload, key, hash, exact, own_only)
+    probe_has_walk_in::<OWN_ONLY>(dir, payload, key, hash, exact)
 }
 
 /// [`probe_has`]'s presence walk for the resolved key `key` (its hash
@@ -73,6 +87,24 @@ pub(crate) unsafe fn probe_has_walk(
     hash: u64,
     exact: bool,
     own_only: bool,
+) -> i32 {
+    if own_only {
+        probe_has_walk_in::<true>(dir, payload, key, hash, exact)
+    } else {
+        probe_has_walk_in::<false>(dir, payload, key, hash, exact)
+    }
+}
+
+/// [`probe_has_walk`] for one `OWN_ONLY`: the own-only instance answers at
+/// the receiver and has no prototype hop, so none of the chain arms (the
+/// link, the descriptor lookup) lives in its code.
+#[inline(always)]
+unsafe fn probe_has_walk_in<const OWN_ONLY: bool>(
+    dir: *const u8,
+    payload: usize,
+    key: u64,
+    hash: u64,
+    exact: bool,
 ) -> i32 {
     let absent = if exact { 0 } else { -1 };
     let mut cur = payload as *const ObjectHeader;
@@ -155,7 +187,7 @@ pub(crate) unsafe fn probe_has_walk(
         if !walks_from(cur, r) {
             return -1;
         }
-        if own_only {
+        if OWN_ONLY {
             // A1_UNPROVEN: record-first: probe receiver before its record (kind-A/B question for S0f).
             // An Array subclass's elements store holds its own index keys and
             // `length`, which no key list names.
@@ -170,8 +202,29 @@ pub(crate) unsafe fn probe_has_walk(
             Next::End => return absent,
             Next::Unknown => return -1,
         };
+        // ChainDesc: an exact string key's presence at and above a marked
+        // prototype is one lookup in its descriptor. A symbol keeps the walk
+        // (a class prototype's declared symbol methods are not in its list).
+        if exact && key & TAG_MASK == STRING_TAG {
+            let desc = super::chain_glue::desc_of(cur);
+            if !desc.is_null() {
+                return super::chain_glue::has(dir, cur, desc, key, hash, absent);
+            }
+        }
     }
     -1
+}
+
+/// [`probe_has_walk`] from the prototype hop `from` (a descriptor's holder or
+/// boundary), out of line for [`super::chain_glue::has`].
+#[inline(never)]
+pub(super) unsafe fn probe_has_walk_from(
+    dir: *const u8,
+    from: *const ObjectHeader,
+    key: u64,
+    hash: u64,
+) -> i32 {
+    probe_has_walk_in::<false>(dir, from as usize, key, hash, true)
 }
 
 /// Is `obj` (class id nonzero) a class declaration's or a class

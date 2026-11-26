@@ -238,6 +238,26 @@ pub(super) unsafe fn inherited_get<const ABSENT: bool>(
 #[inline(always)]
 pub(super) unsafe fn chain_from<const ABSENT: bool>(
     dir: *const u8,
+    cur: *const ObjectHeader,
+    next: *const ObjectHeader,
+    key_bits: u64,
+    hash: u64,
+) -> f64 {
+    // ChainDesc: one exact lookup in the first prototype's descriptor; what
+    // it does not settle continues in the hop loop at the hop it names.
+    let desc = super::chain_glue::desc_of(next);
+    if !desc.is_null() {
+        return super::chain_glue::read::<ABSENT>(dir, cur, next, desc, key_bits, hash);
+    }
+    chain_loop::<ABSENT>(dir, cur, next, key_bits, hash)
+}
+
+/// The hop loop of [`chain_from`] from hop `next`, the link of `cur` (a null
+/// `cur` declines where the complete walk would run). Out of line, so the
+/// desc read's leaf frame carries none of it.
+#[inline(never)]
+pub(super) unsafe fn chain_loop<const ABSENT: bool>(
+    dir: *const u8,
     mut cur: *const ObjectHeader,
     mut next: *const ObjectHeader,
     key_bits: u64,

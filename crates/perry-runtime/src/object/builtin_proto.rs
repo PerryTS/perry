@@ -232,6 +232,7 @@ pub(crate) unsafe fn seal_object_family(obj: *mut ObjectHeader, family: usize) {
     (*meta).flags |= super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC
         | (((family as u64) & super::meta_flags::OBJECT_META_SEALED_FAMILY_MASK)
             << super::meta_flags::OBJECT_META_SEALED_FAMILY_SHIFT);
+    crate::object::layout_probe::chain_glue::on_seal(obj as usize);
 }
 
 /// Seal one family's intrinsic the moment its builder completes it, before
@@ -491,6 +492,7 @@ pub(crate) unsafe fn seal_runtime_prototype(proto: *mut ObjectHeader, serial: u6
     // GC_STORE_AUDIT(POINTER_FREE): scalar flag bits, never a reference.
     (*meta).flags |= super::meta_flags::OBJECT_META_FLAG_SEALED_INTRINSIC
         | ((RUNTIME_FAMILY as u64) << super::meta_flags::OBJECT_META_SEALED_FAMILY_SHIFT);
+    crate::object::layout_probe::chain_glue::on_seal(proto as usize);
 }
 
 /// Give a runtime prototype its reserved intrinsic `serial` as its identity
