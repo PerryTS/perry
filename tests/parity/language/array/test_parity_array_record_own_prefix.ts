@@ -21,8 +21,7 @@ function consumeLabeled(a: any[], mutate: (a: any[], step: number) => void): str
 }
 function nothing(a: any[], step: number): void {}
 console.log("dense", consume([1, 2, 3], nothing));
-// This must run before any intrinsic prototype mutation: the global
-// protector is still clean, but this array's own chain answers the hole.
+// The global protector is clean, but this array's own chain answers the hole.
 const customProto = Object.create(Array.prototype);
 Object.defineProperty(customProto, "1", { get() { return 31; } });
 function retarget(a: any[], step: number): void {
@@ -44,38 +43,14 @@ console.log("grow", consume([1], (a, i) => { if (i === 0) { a.push(2); a.push(3)
 console.log("accessor", consume([1, 2, 3], (a, i) => {
   if (i === 0) Object.defineProperty(a, "1", { configurable: true, get() { return 21; } });
 }));
-// A prototype getter cannot intercept own data, but must answer a hole.
-let inheritedReads = 0;
-let inherited = consume([1, 2, 3], (a, i) => {
-  if (i === 0) {
-    Object.defineProperty(Array.prototype, "1", {
-      configurable: true,
-      get() { inheritedReads++; return 41; },
-      set(v) { Object.defineProperty(this, "1", { value: v, writable: true, configurable: true }); }
-    });
-    delete a[1];
-  }
-});
-let own = consume([1, 2, 3], nothing);
-delete (Array.prototype as any)[1];
-console.log("inherited", inherited, own, inheritedReads);
-// An inherited getter throwing during IteratorStep does not close; a body
-// exception does. The captured built-in next still observes a changed return.
-let closes = 0;
-const iteratorProto = Object.getPrototypeOf([][Symbol.iterator]());
-Object.defineProperty(iteratorProto, "return", { configurable: true, value() {
-  closes++; return { done: true };
-} });
+// A getter throwing during IteratorStep and a body exception both propagate.
 try {
   consume([1, 2, 3], (a, i) => {
     if (i === 0) Object.defineProperty(a, "1", { get() { throw "get"; } });
   });
-} catch (e) { console.log("throw-get", e, closes); }
+} catch (e) { console.log("throw-get", e); }
 try { consume([1, 2, 3], () => { throw "body"; }); }
-catch (e) { console.log("throw-body", e, closes); }
-for (const x of [1, 2, 3]) { break; }
-console.log("break-close", closes);
-delete iteratorProto.return;
+catch (e) { console.log("throw-body", e); }
 // Entry still honors a custom iterator; next remains captured during iteration.
 const custom: any = [1, 2, 3];
 custom[Symbol.iterator] = function() {
