@@ -854,31 +854,46 @@ pub unsafe extern "C" fn js_perry_net_link_tcp_connect(
     )
 }
 
-/// Link form of a TCP connect to caller-resolved addresses: `count` IPv6
-/// octet arrays, IPv4 ones as IPv4-mapped addresses.
+/// One caller-resolved address: IPv4 as an IPv4-mapped IPv6 address, which
+/// carries no scope.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+pub struct PerrySocketAddr {
+    pub octets: [u8; 16],
+    pub scope_id: u32,
+    pub port: u16,
+}
+
+impl From<PerrySocketAddr> for SocketAddr {
+    fn from(addr: PerrySocketAddr) -> Self {
+        let ip = std::net::Ipv6Addr::from(addr.octets);
+        match ip.to_ipv4_mapped() {
+            Some(v4) => SocketAddr::new(v4.into(), addr.port),
+            None => std::net::SocketAddrV6::new(ip, addr.port, 0, addr.scope_id).into(),
+        }
+    }
+}
+
+/// Link form of a TCP connect to `count` caller-resolved addresses.
 ///
 /// # Safety
-/// As [`js_perry_net_link_tcp_listen`]; `ips` names `count` readable arrays.
+/// As [`js_perry_net_link_tcp_listen`]; `addrs` names `count` readable records.
 #[no_mangle]
 pub unsafe extern "C" fn js_perry_net_link_tcp_connect_addrs(
     core: *mut c_void,
     link: usize,
-    ips: *const [u8; 16],
+    addrs: *const PerrySocketAddr,
     count: usize,
-    port: u16,
     nodelay: i32,
     err: *mut PerryNetError,
 ) -> i32 {
-    let ips = if count == 0 {
+    let addrs = if count == 0 {
         &[][..]
     } else {
         // SAFETY: forwarded contract.
-        unsafe { std::slice::from_raw_parts(ips, count) }
+        unsafe { std::slice::from_raw_parts(addrs, count) }
     };
-    let addrs = ips
-        .iter()
-        .map(|octets| SocketAddr::new(std::net::Ipv6Addr::from(*octets).to_canonical(), port))
-        .collect();
+    let addrs = addrs.iter().map(|&addr| addr.into()).collect();
     finish(
         unsafe { transport::tcp_connect_addrs(core.cast(), link_arg(link), addrs, nodelay != 0) },
         err,

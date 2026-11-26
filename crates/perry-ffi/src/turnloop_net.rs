@@ -1119,9 +1119,8 @@ extern "C" {
     fn js_perry_net_link_tcp_connect_addrs(
         core: *mut std::ffi::c_void,
         link: usize,
-        ips: *const [u8; 16],
+        addrs: *const RawSocketAddr,
         count: usize,
-        port: u16,
         nodelay: i32,
         err: *mut RawNetError,
     ) -> i32;
@@ -1367,37 +1366,52 @@ pub fn link_tcp_connect(
     )
 }
 
+/// The runtime's `PerrySocketAddr`.
+#[repr(C)]
+#[derive(Clone, Copy, Debug)]
+struct RawSocketAddr {
+    octets: [u8; 16],
+    scope_id: u32,
+    port: u16,
+}
+
 /// Connect a TCP client to addresses already resolved, tried in order.
 pub fn link_tcp_connect_addrs(
     core: &mut TransportCore,
     link: OwnerLink,
-    ips: &[std::net::IpAddr],
-    port: u16,
+    addrs: &[std::net::SocketAddr],
     nodelay: bool,
 ) -> Result<(), NetError> {
     runtime_call!(
         {
-            let octets: Vec<[u8; 16]> = ips
+            let addrs: Vec<RawSocketAddr> = addrs
                 .iter()
-                .map(|ip| match ip {
-                    std::net::IpAddr::V4(v4) => v4.to_ipv6_mapped().octets(),
-                    std::net::IpAddr::V6(v6) => v6.octets(),
+                .map(|addr| match addr {
+                    std::net::SocketAddr::V4(v4) => RawSocketAddr {
+                        octets: v4.ip().to_ipv6_mapped().octets(),
+                        scope_id: 0,
+                        port: v4.port(),
+                    },
+                    std::net::SocketAddr::V6(v6) => RawSocketAddr {
+                        octets: v6.ip().octets(),
+                        scope_id: v6.scope_id(),
+                        port: v6.port(),
+                    },
                 })
                 .collect();
             link_call(|err| unsafe {
                 js_perry_net_link_tcp_connect_addrs(
                     core.raw(),
                     link.raw(),
-                    octets.as_ptr(),
-                    octets.len(),
-                    port,
+                    addrs.as_ptr(),
+                    addrs.len(),
                     i32::from(nodelay),
                     err,
                 )
             })
         },
         {
-            let _ = (core, link, ips, port, nodelay);
+            let _ = (core, link, addrs, nodelay);
             Err(unavailable())
         }
     )
