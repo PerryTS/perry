@@ -134,6 +134,9 @@ pub(crate) fn lower_unary_expr(ctx: &mut LoweringContext, unary: &ast::UnaryExpr
                 // `l__class_expr_*` key, but `l` is still lexically bound in
                 // the class body.
                 && ctx.current_class_inner_name.as_deref() != Some(n)
+                // A deferred non-export of a core module is a value use here:
+                // the ident arm raises its U006 diagnostic.
+                && !ctx.deferred_unknown_native_imports.contains_key(n)
                 && !is_builtin_function(n)
                 && !is_known_global_identifier_name(n)
                 && !matches!(n, "undefined" | "null" | "NaN" | "Infinity")
