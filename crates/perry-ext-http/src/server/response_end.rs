@@ -547,7 +547,51 @@ extern "C" fn tail_after_flush(closure: *const RawClosureHeader, _this: JsThis, 
         tail.run_write_callbacks();
         tail.run_end_callback();
         tail.emit_finish();
+        // node's `resOnFinish` (the first `'finish'` listener) then queues
+        // `process.nextTick(emitCloseNT, res)`: `'close'` comes a tick later,
+        // after the request's `resume_` tick its `_dump()` queued.
+        queue_close_tick(close.get(), capture(4).get());
+        return f64::from_bits(TAG_UNDEFINED);
     }
+    tail.emit_close();
+    f64::from_bits(TAG_UNDEFINED)
+}
+
+extern "C" {
+    fn js_queue_next_tick(callback: i64);
+}
+
+/// node's `process.nextTick(emitCloseNT, res)`: the tail's `'close'` (its
+/// listener snapshot `close`, its response `owner`) on the next tick.
+fn queue_close_tick(close: f64, owner: f64) {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let close = scope.root_nanbox(close);
+    let owner = scope.root_nanbox(owner);
+    let job = scope.root_addr(perry_ffi::alloc_closure(
+        perry_ffi::js_function_info!(close_tick, 0; with_flags(perry_ffi::FN_BUILTIN)),
+        2,
+    ) as i64);
+    // SAFETY: the rooted closure has two traced capture slots; the values
+    // are reloaded from their roots after the allocation.
+    unsafe {
+        perry_ffi::set_closure_capture_f64(job.get() as *mut RawClosureHeader, 0, close.get());
+        perry_ffi::set_closure_capture_f64(job.get() as *mut RawClosureHeader, 1, owner.get());
+        js_queue_next_tick(job.get());
+    }
+}
+
+/// node's `emitCloseNT(res)` for a tail [`queue_close_tick`] queued.
+extern "C" fn close_tick(closure: *const RawClosureHeader, _this: JsThis) -> f64 {
+    let scope = perry_ffi::TransientRootScope::enter();
+    // SAFETY: the closure was allocated with two capture slots.
+    let close = scope.root_nanbox(unsafe { perry_ffi::closure_capture_f64(closure, 0) });
+    let owner_bits = unsafe { perry_ffi::closure_capture_f64(closure, 1) }.to_bits();
+    let owner = if JsValue::from_bits(owner_bits).is_pointer() {
+        (owner_bits & PTR_MASK) as i64
+    } else {
+        0
+    };
+    let tail = EndTail::root(&scope, owner, &[], 0, &[], &array_addrs(close.get()));
     tail.emit_close();
     f64::from_bits(TAG_UNDEFINED)
 }
