@@ -159,6 +159,16 @@ atom!(
     "perry_image_literal_0_656e636f64696e67",
     "perry_atom_656e636f64696e67"
 );
+// node 26's `ReadableState.prototype.readingMore`: an accessor over the
+// state's kReadingMore bit, like the other flags.
+atom!(
+    S60,
+    A60,
+    b"readingMore",
+    b"readingMore\0",
+    "perry_image_literal_0_72656164696e674d6f7265",
+    "perry_atom_72656164696e674d6f7265"
+);
 atom!(
     S16,
     A16,
@@ -264,7 +274,7 @@ atom!(
     "perry_atom_6173796e635265736f75726365"
 );
 
-runtime_layout!(READABLE_STATE_PROTO, 0x53500001, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [A0 => 58, A1 => 58, A2 => 58, A3 => 58, A4 => 58, A5 => 58, A6 => 58, A7 => 58, A8 => 58, A9 => 58, A10 => 58, A11 => 58, A12 => 58, A13 => 58, A14 => 58, A15 => 58], realm = ["node:stream.Readable", "node:stream.Duplex", "node:stream.Transform", "node:stream.PassThrough"]);
+runtime_layout!(READABLE_STATE_PROTO, 0x53500001, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [A0 => 58, A1 => 58, A2 => 58, A3 => 58, A4 => 58, A5 => 58, A6 => 58, A7 => 58, A8 => 58, A9 => 58, A10 => 58, A11 => 58, A12 => 58, A13 => 58, A14 => 58, A15 => 58, A60 => 58], realm = ["node:stream.Readable", "node:stream.Duplex", "node:stream.Transform", "node:stream.PassThrough"]);
 runtime_layout!(WRITABLE_STATE_PROTO, 0x53500002, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [A0 => 58, A16 => 58, A17 => 58, A18 => 58, A3 => 58, A19 => 58, A10 => 58, A20 => 58, A7 => 58, A8 => 58, A9 => 58, A11 => 58, A12 => 58, A14 => 58, A21 => 58, A22 => 58], realm = ["node:stream.Writable", "node:stream.Duplex", "node:stream.Transform", "node:stream.PassThrough"]);
 runtime_layout!(EE_ASYNC_RESOURCE_PROTO, 0x53500008, 0, crate::object::layout_desc::LAYOUT_PROTO_OBJECT, [A23 => 2, A46 => 2, A56 => 2, A57 => 26, A58 => 26, A59 => 26], realm = ["node:events.EventEmitterAsyncResource.prototype"]);
 
@@ -297,10 +307,11 @@ mod source_equivalence_tests {
                     (A13.hash, 13, 58),
                     (A14.hash, 14, 58),
                     (A15.hash, 15, 58),
+                    (A60.hash, 16, 58),
                 ],
                 &[
                     u32::MAX,
-                    0,
+                    u32::MAX,
                     u32::MAX,
                     u32::MAX,
                     u32::MAX,
@@ -312,10 +323,10 @@ mod source_equivalence_tests {
                     4,
                     2,
                     10,
-                    13,
+                    u32::MAX,
+                    16,
                     u32::MAX,
                     u32::MAX,
-                    15,
                     6,
                     u32::MAX,
                     u32::MAX,
@@ -325,12 +336,44 @@ mod source_equivalence_tests {
                     u32::MAX,
                     u32::MAX,
                     u32::MAX,
-                    5,
+                    u32::MAX,
                     3,
                     u32::MAX,
                     1,
                     u32::MAX,
                     7,
+                    u32::MAX,
+                    0,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    13,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    15,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    5,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
+                    u32::MAX,
                 ],
             );
             super::super::source_equivalence_tests::check(

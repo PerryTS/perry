@@ -37,6 +37,7 @@ const READABLE_FIELDS: &[&str] = &[
     "dataEmitted",
     "errored",
     "encoding",
+    "readingMore",
 ];
 
 /// `WritableState` fields.
@@ -145,6 +146,7 @@ fn readable_field(stream: f64, field: &str) -> f64 {
             stream,
             hidden_readable_resume_scheduled_key(),
         )),
+        "readingMore" => bool_bits(has_truthy_hidden(stream, Slot::ReadableReadingMore)),
         _ => common_field(stream, field),
     }
 }
@@ -245,6 +247,13 @@ extern "C" fn stream_state_set(
             let key = hidden_disturbed_key();
             set_hidden_value(stream.get_nanbox_f64(), key, bool_bits(emitted));
             set_visible_readable_did_read(stream.get_nanbox_f64(), emitted);
+        }
+    }
+    // node's setter: the kReadingMore bit takes the value's truthiness.
+    if field == "readingMore" {
+        if let Some(stream) = view_owner(this) {
+            let on = crate::value::js_is_truthy(value) != 0;
+            set_hidden_value(stream, Slot::ReadableReadingMore, bool_bits(on));
         }
     }
     f64::from_bits(TAG_UNDEFINED)
@@ -522,7 +531,7 @@ mod layout_tests {
                     (*desc).layout_id,
                     "accessor installation must not mint another shape"
                 );
-                assert_eq!(crate::object::object_inline_capacity(ptr), 16);
+                assert_eq!(crate::object::object_inline_capacity(ptr), fields.len() as u32);
             }
             for name in fields {
                 let attrs = crate::object::get_property_attrs(ptr as usize, name).unwrap();
