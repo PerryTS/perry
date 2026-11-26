@@ -4,7 +4,7 @@
 import * as net from "node:net";
 
 function resolving(label: string, next: () => void): net.Socket {
-  const socket = net.connect(1, "a.slow.invalid");
+  const socket = net.connect(1, "localhost");
   socket.on("error", (error: any) => console.log(label, "error", error.message));
   socket.on("close", (hadError) => {
     console.log(label, "close", hadError, socket.destroyed);

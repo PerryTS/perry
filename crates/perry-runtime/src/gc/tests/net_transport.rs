@@ -553,11 +553,48 @@ fn a_socket_closed_while_resolving_gets_its_closed_from_the_close_phase() {
         "the cancelled resolve's ref goes"
     );
     assert_eq!(count(NET_CLOSED, link), 0, "no driver turn delivers it");
+    assert!(
+        !crate::turnloop_net::loop_alive(),
+        "only the queue owes work"
+    );
+    assert_eq!(
+        crate::stdlib_pump::js_stdlib_has_active_handles(),
+        1,
+        "the queued Closed keeps the loop alive"
+    );
+    assert_eq!(
+        crate::timer::js_immediate_has_pending(),
+        1,
+        "and keeps it from parking ahead of the check phase"
+    );
     crate::turnloop_net::close_phase();
     assert_eq!(count(NET_CLOSED, link), 1);
     assert_eq!(count(NET_ERROR, link) + count(NET_CONNECT, link), 0);
     assert!(!crate::turnloop_net::close_queued());
     assert_eq!(refs(link), 0, "delivery released the queued ref");
+}
+
+/// Agent teardown drops a queued `Closed` undelivered and releases its ref.
+#[test]
+fn teardown_releases_the_ref_of_a_queued_closed() {
+    let _guard = CopyingNurseryTestGuard::new(0);
+    let _fixture = Fixture::start();
+    let _trigger = GcTriggerThresholdTestGuard::suppress_automatic_triggers();
+    let scope = RuntimeHandleScope::new();
+    let socket = scope.root_nanbox_f64(fresh());
+    let link = np::owner_link(socket.get_nanbox_f64(), &FAMILY).unwrap();
+    unsafe {
+        transport::tcp_connect(core(socket.get_nanbox_f64()), link, "localhost", 1, true).unwrap();
+    }
+    assert!(destroy(link));
+    assert!(
+        pump_until(|| refs(link) == 1),
+        "only the queued ref is left"
+    );
+    crate::turnloop_net::shutdown_current_thread();
+    assert!(!crate::turnloop_net::close_queued());
+    assert_eq!(refs(link), 0);
+    assert_eq!(count(NET_CLOSED, link), 0, "no JS runs for a dying thread");
 }
 
 /// N11: the pipe server path. `close()`, a synchronous unlink (the binding's
