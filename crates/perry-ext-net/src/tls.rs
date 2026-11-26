@@ -815,11 +815,15 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         defer_failure(owner.get(), preflight_error(preflight));
         return crate::payload_transport::raw_owner(owner.get());
     }
-    let host_value = root_scope.root_nanbox(crate::payload_events::string(&host));
+    let connect_options = root_scope.root_nanbox(connect_options(
+        metadata_options_arg.map(|index| rooted_args[index].get()),
+        port,
+        &host,
+    ));
     crate::payload_socket::connect(
         owner.get(),
-        port as f64,
-        host_value.get(),
+        connect_options.get(),
+        crate::payload_transport::undefined(),
         crate::payload_transport::undefined(),
     );
     if let Ok(payload) =
@@ -833,6 +837,29 @@ pub unsafe extern "C" fn js_tls_connect(arg1: f64, arg2: f64, arg3: f64, arg4: f
         });
     }
     crate::payload_transport::raw_owner(owner.get())
+}
+
+/// The `net` connect options a TLS client dials with: its endpoint, plus the
+/// resolution options `tls.connect` forwards to `net.Socket#connect`.
+unsafe fn connect_options(options: Option<f64>, port: u16, host: &str) -> f64 {
+    let scope = perry_ffi::TransientRootScope::enter();
+    let options = options.map(|options| scope.root_nanbox(options));
+    let connect = scope.root_nanbox(f64::from_bits(perry_ffi::alloc_object().bits()));
+    crate::payload_transport::own_set(connect.get(), "port", f64::from(port));
+    let host = scope.root_nanbox(crate::payload_events::string(host));
+    crate::payload_transport::own_set(connect.get(), "host", host.get());
+    for key in ["lookup", "family", "hints", "autoSelectFamily"] {
+        let value = options
+            .as_ref()
+            .and_then(|options| crate::get_object_value_field(options.get(), key));
+        if let Some(value) =
+            value.filter(|value| !JsValue::from_bits(value.to_bits()).is_undefined())
+        {
+            let value = scope.root_nanbox(value);
+            crate::payload_transport::own_set(connect.get(), key, value.get());
+        }
+    }
+    connect.get()
 }
 
 /// Collision-proof entry point for AOT calls. Both bundled stdlib net and
