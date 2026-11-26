@@ -427,7 +427,12 @@ pub(super) fn flush_pending_readable_chunks(stream: f64) {
     let chunk = scope.root_nanbox_f64(f64::from_bits(TAG_UNDEFINED));
     while readable_is_flowing(s.get_nanbox_f64()) && !stream_destroyed(s.get_nanbox_f64()) {
         if crate::array::js_array_length(pending()) == 0 {
-            if super::read_in_flight(s.get_nanbox_f64()) || !has_hook(s.get_nanbox_f64()) {
+            // node's `read()` never calls `_read` after EOF: an ended stream
+            // does not even look its hook up.
+            if super::read_in_flight(s.get_nanbox_f64())
+                || stream_hidden_ended(s.get_nanbox_f64())
+                || !has_hook(s.get_nanbox_f64())
+            {
                 break;
             }
             super::read_ahead(s.get_nanbox_f64(), 0.0);
@@ -436,7 +441,10 @@ pub(super) fn flush_pending_readable_chunks(stream: f64) {
             }
             continue;
         }
-        if !super::read_in_flight(s.get_nanbox_f64()) && has_hook(s.get_nanbox_f64()) {
+        if !super::read_in_flight(s.get_nanbox_f64())
+            && !stream_hidden_ended(s.get_nanbox_f64())
+            && has_hook(s.get_nanbox_f64())
+        {
             let head = crate::array::js_array_get_f64(pending(), 0);
             super::read_ahead(
                 s.get_nanbox_f64(),
@@ -1507,20 +1515,21 @@ fn invoke_read_once_inner(stream: f64, emit_default_error: bool) {
         return;
     }
 
-    let Some(read) = resolve_read_callback(stream) else {
-        if emit_default_error {
-            maybe_emit_default_read_error(stream);
-        }
-        return;
-    };
     // node's `read()`: no `_read` while one is in flight (cleared by its
-    // `push()`), after EOF, or once destroyed.
+    // `push()`), after EOF, or once destroyed. It is not looked up then
+    // either, so a stream with none raises no not-implemented error.
     if get_hidden_value(stream, hidden_read_invoked_key()).is_some()
         || stream_hidden_ended(stream)
         || stream_destroyed(stream)
     {
         return;
     }
+    let Some(read) = resolve_read_callback(stream) else {
+        if emit_default_error {
+            maybe_emit_default_read_error(stream);
+        }
+        return;
+    };
     let scope = crate::gc::RuntimeHandleScope::new();
     let stream = scope.root_nanbox_f64(stream);
     let read = scope.root_nanbox_f64(read);
