@@ -75,6 +75,15 @@ pub(crate) const COMPONENT_CALL_OPERATION: u32 = 0xFFFF_2434;
 pub(crate) const COMPONENT_GUEST_FRAME: u32 = 0xFFFF_2435;
 pub(crate) const COMPONENT_DRIVER_PUMP: u32 = 0xFFFF_2436;
 
+// Web Streams as ordinary GC objects (design 2026-11-25, P2a): the readable
+// family. Every member is refused by the worker transfer guard.
+pub const WEB_READABLE_STREAM: u32 = 0xFFFF_2438;
+pub const WEB_RS_DEFAULT_CONTROLLER: u32 = 0xFFFF_2439;
+pub const WEB_RS_BYTE_CONTROLLER: u32 = 0xFFFF_243A;
+pub const WEB_RS_BYOB_REQUEST: u32 = 0xFFFF_243B;
+pub const WEB_RS_DEFAULT_READER: u32 = 0xFFFF_243C;
+pub const WEB_RS_BYOB_READER: u32 = 0xFFFF_243D;
+
 /// #10926: `AsyncResource` is native-backed too, but keeps its LEGACY
 /// `0xFFFF_0079`, which `instanceof` and `class_registry::parent_static`
 /// already bake into emitted code -- moving a live class id is #10824's hazard
@@ -87,7 +96,7 @@ pub const ASYNC_LOCAL_STORAGE_LEGACY: u32 = 0xFFFF_0078;
 /// family between them carries a `native_state` word the far side of a
 /// `postMessage` could not reconstruct.
 const NATIVE_BACKED_FIRST: u32 = ABORT_CONTROLLER;
-const NATIVE_BACKED_LAST: u32 = HTTP_SERVER_INCOMING_MESSAGE;
+const NATIVE_BACKED_LAST: u32 = WEB_RS_BYOB_READER;
 
 /// Class ids whose instances are ordinary objects carrying native state that
 /// cannot cross a thread boundary (#340/#341).
@@ -175,6 +184,12 @@ const ALL: &[u32] = &[
     COMPONENT_GUEST_FRAME,
     COMPONENT_DRIVER_PUMP,
     HTTP_SERVER_INCOMING_MESSAGE,
+    WEB_READABLE_STREAM,
+    WEB_RS_DEFAULT_CONTROLLER,
+    WEB_RS_BYTE_CONTROLLER,
+    WEB_RS_BYOB_REQUEST,
+    WEB_RS_DEFAULT_READER,
+    WEB_RS_BYOB_READER,
 ];
 
 /// Strictly ascending ⟹ no two families share an id, and the block stays
@@ -269,6 +284,12 @@ mod tests {
             COMPONENT_GUEST_FRAME,
             COMPONENT_DRIVER_PUMP,
             HTTP_SERVER_INCOMING_MESSAGE,
+            WEB_READABLE_STREAM,
+            WEB_RS_DEFAULT_CONTROLLER,
+            WEB_RS_BYTE_CONTROLLER,
+            WEB_RS_BYOB_REQUEST,
+            WEB_RS_DEFAULT_READER,
+            WEB_RS_BYOB_READER,
             ASYNC_LOCAL_STORAGE_LEGACY,
             ASYNC_RESOURCE_LEGACY,
         ] {

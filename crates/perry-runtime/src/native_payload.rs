@@ -739,12 +739,18 @@ fn alloc_with_cell(
 
 #[path = "native_payload_attach.rs"]
 mod attach;
+#[path = "native_payload_state_slots.rs"]
+mod state_slots;
 pub(crate) use attach::{any_object, attach_external_rooted, set_own};
 pub use attach::{
     attach_stream_to_object, attach_to_object, define_own_accessor, iter_result_done_value,
     iterator_prototype, prototype, state_get, state_set,
 };
 use attach::{link_cell, new_cell, store_payload_word};
+pub use state_slots::{
+    js_perry_intrinsic_prototype, js_perry_object_class_id, js_perry_slots, js_perry_slots_init,
+    js_perry_slots_object_alloc,
+};
 
 /// A fresh instance of `class_id` linked to its family prototype `proto`,
 /// with `slots` live inline slots.

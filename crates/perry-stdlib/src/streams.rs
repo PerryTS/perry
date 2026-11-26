@@ -352,6 +352,7 @@ pub(crate) use native_properties::{native_property_bag, set_native_property_bag}
 mod gc;
 mod idalloc;
 mod native;
+mod objects;
 mod pipe;
 pub(crate) use native::{
     alloc_native_readable, collect_body, native_capacity, native_enqueue, take_native_promise,

@@ -3033,6 +3033,7 @@ js_perry_event_emit_span_in_resource	f64	f64,f64,ptr,usize,ptr,usize
 js_perry_event_emit_span_rooted	f64	usize,usize,usize,ptr,usize,ptr,usize
 js_perry_event_get	f64	f64,f64
 js_perry_event_uncaught	f64	f64
+js_perry_intrinsic_prototype	f64	ptr,usize
 js_perry_native_f32	f64	f64
 js_perry_native_f64	f64	f64
 js_perry_native_i16	f64	f64
@@ -3101,6 +3102,7 @@ js_perry_net_timer_cancel	i32s	i64,ptr
 js_perry_net_timer_park	i32s	i64,ptr
 js_perry_net_transfer	i32s	i64,i32s,ptr
 js_perry_net_write	i32s	i64,ptr,usize,i64,ptr,ptr
+js_perry_object_class_id	i32u	f64
 js_perry_payload_abi_layout	i64	
 js_perry_payload_alloc	f64	ptr,ptr,f64,usize
 js_perry_payload_attach	i32s	f64,ptr,ptr,usize
@@ -3141,6 +3143,9 @@ js_perry_payload_receiver_link	usize	f64,ptr,ptr
 js_perry_payload_reopen	i32s	f64,ptr,ptr,usize
 js_perry_read_embedded	ptr	f64
 js_perry_schedule_native_timeout	i64	i64,f64
+js_perry_slots	ptr	f64
+js_perry_slots_init	i32s	f64,i32u
+js_perry_slots_object_alloc	f64	i32u,f64,i32u
 js_perry_stream_abi_layout	i64	
 js_perry_stream_flush	i32s	f64,i32s,f64
 js_perry_stream_init_transform	i32s	f64,f64
