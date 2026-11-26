@@ -843,9 +843,16 @@ pub(crate) const MAX_STRING_LENGTH: usize = 536_870_888;
 #[cold]
 #[inline(never)]
 pub(crate) fn throw_invalid_string_length() -> ! {
+    crate::exception::throw_core(invalid_string_length_error())
+}
+
+/// The `RangeError: Invalid string length` value, for a path that rejects a
+/// promise with it or must release Rust-owned buffers before it throws.
+#[cold]
+pub(crate) fn invalid_string_length_error() -> crate::error::CoreError {
     let message = "Invalid string length";
     let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
-    crate::exception::throw_core(crate::error::CoreError::range_error(msg))
+    crate::error::CoreError::range_error(msg)
 }
 
 /// [`string_storage_alloc`] with **no collection point**: `Some` means the
@@ -983,10 +990,17 @@ pub(crate) unsafe fn init_string_header(
 #[cold]
 #[inline(never)]
 pub(crate) fn throw_string_too_long() -> ! {
-    crate::validators::received::throw_error_with_code(
-        "Cannot create a string longer than 0x1fffffe8 characters",
-        "ERR_STRING_TOO_LONG",
-    )
+    crate::exception::throw_core(string_too_long_error())
+}
+
+/// The `Error [ERR_STRING_TOO_LONG]` value of [`throw_string_too_long`], for
+/// a reader that rejects its promise with it (`Blob#text`).
+#[cold]
+pub(crate) fn string_too_long_error() -> crate::error::CoreError {
+    let message = "Cannot create a string longer than 0x1fffffe8 characters";
+    let msg = js_string_from_bytes(message.as_ptr(), message.len() as u32);
+    crate::node_submodules::register_error_code_pub(msg, "ERR_STRING_TOO_LONG");
+    crate::error::CoreError::error(msg)
 }
 
 /// Whether decoded text `s` is longer than [`MAX_STRING_LENGTH`] UTF-16
