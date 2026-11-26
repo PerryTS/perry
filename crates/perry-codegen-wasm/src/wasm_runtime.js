@@ -6729,6 +6729,11 @@ const __classMethodFns = new WeakSet();
 // A closure is not a host function, so it inherits Function.prototype's methods but
 // cannot use its call / apply / bind / toString, which need a callable receiver: these
 // stand in for them, and `instanceof Function` holds for a closure as for a function.
+// ToLength: a negative or NaN length is 0, a huge one throws when the list is made.
+function __toLength(v) {
+  const n = Math.trunc(Number(v)) || 0;
+  return n <= 0 ? 0 : Math.min(n, Number.MAX_SAFE_INTEGER);
+}
 function __closureReceiverCheck(fn, method) {
   if (!__isPerryClosure(fn)) {
     throw new TypeError(`Function.prototype.${method} called on a value that is not a function`);
@@ -6753,7 +6758,7 @@ for (const [key, value] of Object.entries({
     if (list !== null && list !== undefined && typeof list !== 'object' && typeof list !== 'function') {
       throw new TypeError('CreateListFromArrayLike called on non-object');
     }
-    return __callClosureMethod(this, thisArg, list == null ? [] : Array.from({ length: list.length >>> 0 }, (_, i) => list[i]));
+    return __callClosureMethod(this, thisArg, list == null ? [] : Array.from({ length: __toLength(list.length) }, (_, i) => list[i]));
   },
   // There is no source text to give back: a native function's form, with the name.
   toString() {

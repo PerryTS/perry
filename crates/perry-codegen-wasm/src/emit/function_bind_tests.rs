@@ -36,3 +36,19 @@ inAsync();
         "function function function true true\n103 107 12 30 6\nfunction 103 bound add 1 bound plain 6 0\n106 bound bound add 0\n7 8\n31,32,33 string true\nasync 115 102 104 bound add 1"
     );
 }
+
+// `apply` reads an array-like's `length` as ToLength does. Expected output is Node's.
+#[test]
+fn apply_reads_an_array_like_length_as_to_length() {
+    assert_eq!(
+        run_web_source(
+            r#"
+const f = function (...a: number[]) { return a.length; };
+let e = "none";
+try { f.apply(null, { length: 2 ** 32 } as any); } catch (x: any) { e = x.name; }
+console.log(f.apply(null, { length: -1 } as any), f.apply(null, { length: NaN } as any), f.apply(null, { length: "2", 0: 1, 1: 2 } as any), f.apply(null, { length: 2.7 } as any), e);
+"#
+        ),
+        "0 0 2 2 RangeError"
+    );
+}
