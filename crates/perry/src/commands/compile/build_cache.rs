@@ -50,35 +50,43 @@ mod tests {
         let cases = [
             (
                 &[][..],
-                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=false",
+                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=false,gc-collector-diagnostics=false",
             ),
             (
                 &[("PERRY_GC_INSTRUMENTS", "1")][..],
-                "gc-instruments=true,hot-diag=true,gc-trace=false,gc-diagnostics=false",
+                "gc-instruments=true,hot-diag=true,gc-trace=false,gc-diagnostics=false,gc-collector-diagnostics=false",
             ),
             (
                 &[("PERRY_GC_SCHEDULE_SEED", "1")][..],
-                "gc-instruments=true,hot-diag=false,gc-trace=false,gc-diagnostics=false",
+                "gc-instruments=true,hot-diag=false,gc-trace=false,gc-diagnostics=false,gc-collector-diagnostics=false",
             ),
             (
                 &[("PERRY_GC_SCHEDULE_SEED", "7")][..],
-                "gc-instruments=true,hot-diag=false,gc-trace=false,gc-diagnostics=false",
+                "gc-instruments=true,hot-diag=false,gc-trace=false,gc-diagnostics=false,gc-collector-diagnostics=false",
             ),
             (
                 &[("PERRY_ENUM_DIAG", "1")][..],
-                "gc-instruments=false,hot-diag=true,gc-trace=false,gc-diagnostics=false",
+                "gc-instruments=false,hot-diag=true,gc-trace=false,gc-diagnostics=false,gc-collector-diagnostics=false",
             ),
             (
                 &[("PERRY_GC_TRACE", "1")][..],
-                "gc-instruments=false,hot-diag=false,gc-trace=true,gc-diagnostics=true",
+                "gc-instruments=false,hot-diag=false,gc-trace=true,gc-diagnostics=true,gc-collector-diagnostics=true",
             ),
             (
                 &[("PERRY_GC_LOG", "1")][..],
-                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=true",
+                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=true,gc-collector-diagnostics=false",
+            ),
+            (
+                &[("PERRY_GC_DIAG", "1")][..],
+                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=true,gc-collector-diagnostics=true",
+            ),
+            (
+                &[("PERRY_GC_VERIFY_EVACUATION", "1")][..],
+                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=true,gc-collector-diagnostics=true",
             ),
             (
                 &[("PERRY_GC_DIAG", "0")][..],
-                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=false",
+                "gc-instruments=false,hot-diag=false,gc-trace=false,gc-diagnostics=false,gc-collector-diagnostics=false",
             ),
         ];
 
